@@ -1,7 +1,56 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { fs, randomBytes, APP_SLUG, APP_VERSION, CLAUDE_BRIDGE_PORT, CODEX_BRIDGE_PORT, CURSOR_ACP_BRIDGE_PORT, CODEX_MAX_CONCURRENT_THREADS_ENV, GROK_ACP_BRIDGE_PORT, OPENCODE_SERVER_PORT, resolveCodexMaxConcurrentThreads, ORKESTRATOR_AGENT_MCP_TOKEN_ENV, ORKESTRATOR_AGENT_MCP_URL_ENV, homePath, pathExists, isSelectableOpenCodeProvider, normalizeOpenCodeModelProviders } from "./commands-dependencies.js";
+import {
+  fs,
+  randomBytes,
+  APP_SLUG,
+  APP_VERSION,
+  CLAUDE_BRIDGE_PORT,
+  CODEX_BRIDGE_PORT,
+  CURSOR_ACP_BRIDGE_PORT,
+  CODEX_MAX_CONCURRENT_THREADS_ENV,
+  GROK_ACP_BRIDGE_PORT,
+  OPENCODE_SERVER_PORT,
+  resolveCodexMaxConcurrentThreads,
+  ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
+  ORKESTRATOR_AGENT_MCP_URL_ENV,
+  homePath,
+  pathExists,
+  isSelectableOpenCodeProvider,
+  normalizeOpenCodeModelProviders,
+} from "./commands-dependencies.js";
 import type { ClaudeModelCatalogSnapshot } from "./commands-dependencies.js";
-import { BRIDGE_TOKEN_PATTERN, CONTAINER_CURSOR_API_KEY_FILE, CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE, CONTAINER_CURSOR_CREDENTIAL_DIR, asString, assertOnlyKeys, resolveCursorApiKey, cursorApiKeyFingerprint, asNonBlankString, asOpenCodeModelCatalog, quoteShell, getHostPort, dockerExec, resolveContainerAgentToolConnection, checkHttpHealth, waitForUnhealthy, enqueueContainerBridgeOperation, openCodeHealthHeaders, claudeBridgeAuthHeaders, agentToolConnectionFingerprint, openCodeAgentToolsState, scheduleOpenCodeAgentToolsConfiguration, cancelOpenCodeAgentToolsConfiguration, syncContainerCursorApiKey, startContainerServer, startContainerOpenCodeServer, startContainerClaudeServer, isFreshClaudeModelCatalog, conciseError, refreshClaudeModelCatalog } from "./commands-helpers.js";
+import {
+  BRIDGE_TOKEN_PATTERN,
+  CONTAINER_CURSOR_API_KEY_FILE,
+  CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE,
+  CONTAINER_CURSOR_CREDENTIAL_DIR,
+  asString,
+  assertOnlyKeys,
+  resolveCursorApiKey,
+  cursorApiKeyFingerprint,
+  asNonBlankString,
+  asOpenCodeModelCatalog,
+  quoteShell,
+  getHostPort,
+  dockerExec,
+  resolveContainerAgentToolConnection,
+  checkHttpHealth,
+  waitForUnhealthy,
+  enqueueContainerBridgeOperation,
+  openCodeHealthHeaders,
+  claudeBridgeAuthHeaders,
+  agentToolConnectionFingerprint,
+  openCodeAgentToolsState,
+  scheduleOpenCodeAgentToolsConfiguration,
+  cancelOpenCodeAgentToolsConfiguration,
+  syncContainerCursorApiKey,
+  startContainerServer,
+  startContainerOpenCodeServer,
+  startContainerClaudeServer,
+  isFreshClaudeModelCatalog,
+  conciseError,
+  refreshClaudeModelCatalog,
+} from "./commands-helpers.js";
 
 export function registerServerCommands(
   register: CommandRegistrar,
@@ -33,7 +82,7 @@ export function registerServerCommands(
       return dockerExec(
         id,
         "pkill -f '[o]pencode serve' || true; rm -f /tmp/opencode-server-password",
-      ).then(() => undefined)
+      ).then(() => undefined);
     });
   });
   register("get_opencode_server_status", async ({ containerId }, context) => {
@@ -42,13 +91,10 @@ export function registerServerCommands(
     const authToken = hostPort
       ? (await dockerExec(id, "cat /tmp/opencode-server-password 2>/dev/null || true")).trim()
       : "";
-    const running = !!hostPort
-      && BRIDGE_TOKEN_PATTERN.test(authToken)
-      && await checkHttpHealth(
-        hostPort,
-        "/global/health",
-        openCodeHealthHeaders(authToken),
-      );
+    const running =
+      !!hostPort &&
+      BRIDGE_TOKEN_PATTERN.test(authToken) &&
+      (await checkHttpHealth(hostPort, "/global/health", openCodeHealthHeaders(authToken)));
     if (running && context.agentTools) {
       const connection = await resolveContainerAgentToolConnection(context, id);
       if (connection && hostPort) {
@@ -81,7 +127,7 @@ export function registerServerCommands(
       return { recent: [], favorite: [], variant: {} };
     }
     const modelPath = homePath(".local", "state", "opencode", "model.json");
-    if (!await pathExists(modelPath)) return { recent: [], favorite: [], variant: {} };
+    if (!(await pathExists(modelPath))) return { recent: [], favorite: [], variant: {} };
     return JSON.parse(await fs.readFile(modelPath, "utf8"));
   });
   register("get_opencode_model_catalog_cache", async (args, { storage }) => {
@@ -99,7 +145,7 @@ export function registerServerCommands(
     return {
       ...snapshot,
       models: snapshot.models.filter((model) =>
-        isSelectableOpenCodeProvider(model.provider, allowedProviders)
+        isSelectableOpenCodeProvider(model.provider, allowedProviders),
       ),
     };
   });
@@ -125,7 +171,7 @@ export function registerServerCommands(
       dockerExec(
         id,
         "pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token /tmp/claude-agent-tools-fingerprint",
-      ).then(() => undefined)
+      ).then(() => undefined),
     );
   });
   register("get_claude_server_status", async ({ containerId }, context) => {
@@ -136,18 +182,18 @@ export function registerServerCommands(
       ? (await dockerExec(id, "cat /tmp/claude-bridge-token 2>/dev/null || true")).trim()
       : "";
     const authToken =
-      running
-      && BRIDGE_TOKEN_PATTERN.test(persistedToken)
-      && await checkHttpHealth(
+      running &&
+      BRIDGE_TOKEN_PATTERN.test(persistedToken) &&
+      (await checkHttpHealth(
         hostPort!,
         "/global/auth-check",
         claudeBridgeAuthHeaders(persistedToken),
-      )
+      ))
         ? persistedToken
         : "";
     if (running && authToken && context.agentTools) {
       const start = commands.get("start_claude_server");
-      const reconciled = await start?.({ containerId: id }, context) as
+      const reconciled = (await start?.({ containerId: id }, context)) as
         | { hostPort: number; authToken: string }
         | undefined;
       if (reconciled) {
@@ -221,10 +267,7 @@ export function registerServerCommands(
       const maxConcurrentThreads = resolveCodexMaxConcurrentThreads(
         config.global.codexMaxConcurrentThreads,
       );
-      const agentToolConnection = await resolveContainerAgentToolConnection(
-        context,
-        id,
-      );
+      const agentToolConnection = await resolveContainerAgentToolConnection(context, id);
       const expectedAgentToolsFingerprint = agentToolConnection
         ? agentToolConnectionFingerprint(agentToolConnection)
         : null;
@@ -237,10 +280,7 @@ export function registerServerCommands(
       const hasCurrentAgentTools = async (): Promise<boolean> => {
         if (!expectedAgentToolsFingerprint) return true;
         const persisted = (
-          await dockerExec(
-            id,
-            "cat /tmp/codex-agent-tools-fingerprint 2>/dev/null || true",
-          )
+          await dockerExec(id, "cat /tmp/codex-agent-tools-fingerprint 2>/dev/null || true")
         ).trim();
         return persisted === expectedAgentToolsFingerprint;
       };
@@ -248,17 +288,27 @@ export function registerServerCommands(
         await dockerExec(id, "pkill -f '[c]odex-bridge/dist/index.js' || true");
         await waitForUnhealthy(port);
       };
-      const startWithFreshToken = async (): Promise<{ hostPort: number; wasRunning: boolean; authToken: string }> => {
+      const startWithFreshToken = async (): Promise<{
+        hostPort: number;
+        wasRunning: boolean;
+        authToken: string;
+      }> => {
         const authToken = randomBytes(32).toString("base64url");
-        const started = await startContainerServer(id, CODEX_BRIDGE_PORT, "codex", `
+        const started = await startContainerServer(
+          id,
+          CODEX_BRIDGE_PORT,
+          "codex",
+          `
           cd /workspace
           rm -f /tmp/codex-bridge.log
           mkdir -p /tmp/${APP_SLUG}
           umask 077
           printf '%s' ${quoteShell(authToken)} > /tmp/codex-bridge-token
-          ${expectedAgentToolsFingerprint
-            ? `printf '%s' ${quoteShell(expectedAgentToolsFingerprint)} > /tmp/codex-agent-tools-fingerprint`
-            : "rm -f /tmp/codex-agent-tools-fingerprint"}
+          ${
+            expectedAgentToolsFingerprint
+              ? `printf '%s' ${quoteShell(expectedAgentToolsFingerprint)} > /tmp/codex-agent-tools-fingerprint`
+              : "rm -f /tmp/codex-agent-tools-fingerprint"
+          }
           source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
           orkestrator_source_runtime_env 2>/dev/null || true
           export PORT=${CODEX_BRIDGE_PORT}
@@ -266,21 +316,25 @@ export function registerServerCommands(
           export CWD=/workspace
           export CODEX_PATH="$(command -v codex 2>/dev/null || echo codex)"
           export CODEX_BRIDGE_TOKEN=${quoteShell(authToken)}
-          ${agentToolConnection
-            ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
+          ${
+            agentToolConnection
+              ? `export ${ORKESTRATOR_AGENT_MCP_URL_ENV}=${quoteShell(agentToolConnection.url)}
           export ${ORKESTRATOR_AGENT_MCP_TOKEN_ENV}=${quoteShell(agentToolConnection.token)}`
-            : ""}
+              : ""
+          }
           export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}
           export ORKESTRATOR_VERSION="${APP_VERSION}"
           setsid bun /opt/codex-bridge/dist/index.js > /tmp/codex-bridge.log 2>&1 &
-        `, [authToken, agentToolConnection?.token]);
+        `,
+          [authToken, agentToolConnection?.token],
+        );
         return { ...started, authToken };
       };
 
       const hostPort = await getHostPort(id, CODEX_BRIDGE_PORT);
-      if (hostPort && await checkHttpHealth(hostPort)) {
+      if (hostPort && (await checkHttpHealth(hostPort))) {
         const persistedToken = await readPersistedToken();
-        if (persistedToken && await hasCurrentAgentTools()) {
+        if (persistedToken && (await hasCurrentAgentTools())) {
           return { hostPort, wasRunning: true, authToken: persistedToken };
         }
         // A bridge from before per-process authentication cannot safely serve the
@@ -295,7 +349,7 @@ export function registerServerCommands(
       // bridge arrived late). The fresh token was never written, so return the
       // token that bridge actually holds — or replace the bridge if it has none.
       const persistedToken = await readPersistedToken();
-      if (persistedToken && await hasCurrentAgentTools()) {
+      if (persistedToken && (await hasCurrentAgentTools())) {
         return { ...started, authToken: persistedToken };
       }
       await replaceRunningBridge(started.hostPort);
@@ -310,7 +364,7 @@ export function registerServerCommands(
       dockerExec(
         id,
         "pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token /tmp/codex-agent-tools-fingerprint",
-      ).then(() => undefined)
+      ).then(() => undefined),
     );
   });
   register("get_codex_server_status", async ({ containerId }, context) => {
@@ -322,7 +376,7 @@ export function registerServerCommands(
       : "";
     if (running && BRIDGE_TOKEN_PATTERN.test(authToken) && context.agentTools) {
       const start = commands.get("start_codex_server");
-      const reconciled = await start?.({ containerId: id }, context) as
+      const reconciled = (await start?.({ containerId: id }, context)) as
         | { hostPort: number; authToken: string }
         | undefined;
       if (reconciled) {
@@ -339,50 +393,62 @@ export function registerServerCommands(
       ...(BRIDGE_TOKEN_PATTERN.test(authToken) ? { authToken } : {}),
     };
   });
-  register("get_codex_server_log", ({ containerId }) => dockerExec(asString(containerId, "containerId"), "cat /tmp/codex-bridge.log 2>/dev/null || true"));
+  register("get_codex_server_log", ({ containerId }) =>
+    dockerExec(
+      asString(containerId, "containerId"),
+      "cat /tmp/codex-bridge.log 2>/dev/null || true",
+    ),
+  );
 
   for (const acpProvider of ["cursor", "grok"] as const) {
-    const containerPort = acpProvider === "cursor"
-      ? CURSOR_ACP_BRIDGE_PORT
-      : GROK_ACP_BRIDGE_PORT;
+    const containerPort = acpProvider === "cursor" ? CURSOR_ACP_BRIDGE_PORT : GROK_ACP_BRIDGE_PORT;
     const acpExecutable = acpProvider === "cursor" ? "cursor-agent" : "grok";
     const tokenFile = `/tmp/${acpProvider}-acp-bridge-token`;
     const logFile = `/tmp/${acpProvider}-acp-bridge.log`;
     register(`start_${acpProvider}_server`, ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       return enqueueContainerBridgeOperation(acpProvider, id, async () => {
-        const cursorApiKey = acpProvider === "cursor"
-          ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
-          : undefined;
-        const expectedCredentialFingerprint = acpProvider === "cursor"
-          ? cursorApiKeyFingerprint(cursorApiKey)
-          : undefined;
+        const cursorApiKey =
+          acpProvider === "cursor"
+            ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
+            : undefined;
+        const expectedCredentialFingerprint =
+          acpProvider === "cursor" ? cursorApiKeyFingerprint(cursorApiKey) : undefined;
         if (acpProvider === "cursor") {
           await syncContainerCursorApiKey(id, cursorApiKey);
         }
         const hostPort = await getHostPort(id, containerPort);
-        if (hostPort && await checkHttpHealth(hostPort)) {
-          const credentialFingerprint = acpProvider === "cursor"
-            ? (await dockerExec(
-                id,
-                `cat ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE} 2>/dev/null || true`,
-              )).trim()
-            : undefined;
-          const existingToken = (await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)).trim();
+        if (hostPort && (await checkHttpHealth(hostPort))) {
+          const credentialFingerprint =
+            acpProvider === "cursor"
+              ? (
+                  await dockerExec(
+                    id,
+                    `cat ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE} 2>/dev/null || true`,
+                  )
+                ).trim()
+              : undefined;
+          const existingToken = (
+            await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)
+          ).trim();
           if (
-            BRIDGE_TOKEN_PATTERN.test(existingToken)
-            && (
-              acpProvider !== "cursor"
-              || credentialFingerprint === expectedCredentialFingerprint
-            )
+            BRIDGE_TOKEN_PATTERN.test(existingToken) &&
+            (acpProvider !== "cursor" || credentialFingerprint === expectedCredentialFingerprint)
           ) {
             return { hostPort, wasRunning: true, authToken: existingToken };
           }
-          await dockerExec(id, `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true`);
+          await dockerExec(
+            id,
+            `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true`,
+          );
           await waitForUnhealthy(hostPort);
         }
         const token = randomBytes(32).toString("base64url");
-        const started = await startContainerServer(id, containerPort, acpProvider, `
+        const started = await startContainerServer(
+          id,
+          containerPort,
+          acpProvider,
+          `
           cd /workspace
           rm -f ${logFile}
           umask 077
@@ -397,13 +463,17 @@ export function registerServerCommands(
           ${acpProvider === "cursor" ? "export ACP_APPROVE_PROJECT_MCPS=1" : ""}
           export ACP_AGENT_PATH="$(command -v ${acpExecutable} 2>/dev/null || echo ${acpExecutable})"
           export ACP_BRIDGE_TOKEN=${quoteShell(token)}
-          ${acpProvider === "cursor"
-            ? `mkdir -p ${quoteShell(CONTAINER_CURSOR_CREDENTIAL_DIR)}
+          ${
+            acpProvider === "cursor"
+              ? `mkdir -p ${quoteShell(CONTAINER_CURSOR_CREDENTIAL_DIR)}
           if [ -s ${CONTAINER_CURSOR_API_KEY_FILE} ]; then export CURSOR_API_KEY="$(cat ${CONTAINER_CURSOR_API_KEY_FILE})"; else unset CURSOR_API_KEY; fi
           printf '%s' ${quoteShell(expectedCredentialFingerprint!)} > ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
-            : ""}
+              : ""
+          }
           setsid bun /opt/acp-bridge/dist/index.js --provider=${acpProvider} > ${logFile} 2>&1 &
-        `, [token]);
+        `,
+          [token],
+        );
         return { ...started, authToken: token };
       });
     });
@@ -412,11 +482,11 @@ export function registerServerCommands(
       return enqueueContainerBridgeOperation(acpProvider, id, () =>
         dockerExec(
           id,
-          `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true; rm -f ${tokenFile}`
-          + (acpProvider === "cursor"
-            ? ` ${CONTAINER_CURSOR_API_KEY_FILE} ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
-            : ""),
-        ).then(() => undefined)
+          `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true; rm -f ${tokenFile}` +
+            (acpProvider === "cursor"
+              ? ` ${CONTAINER_CURSOR_API_KEY_FILE} ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
+              : ""),
+        ).then(() => undefined),
       );
     });
     register(`get_${acpProvider}_server_status`, async ({ containerId }) => {
@@ -425,8 +495,10 @@ export function registerServerCommands(
       const authToken = hostPort
         ? (await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)).trim()
         : "";
-      const running = !!hostPort && BRIDGE_TOKEN_PATTERN.test(authToken)
-        && await checkHttpHealth(hostPort, "/global/health");
+      const running =
+        !!hostPort &&
+        BRIDGE_TOKEN_PATTERN.test(authToken) &&
+        (await checkHttpHealth(hostPort, "/global/health"));
       return {
         running,
         hostPort,
@@ -434,8 +506,7 @@ export function registerServerCommands(
       };
     });
     register(`get_${acpProvider}_server_log`, ({ containerId }) =>
-      dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`));
+      dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`),
+    );
   }
-
-
 }

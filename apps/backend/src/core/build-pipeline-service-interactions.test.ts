@@ -1,71 +1,46 @@
-import { describe,expect,test } from "bun:test";
-
+import { describe, expect, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
 
-
 import { tmpdir } from "node:os";
-
 
 import path from "node:path";
 
-
 import type { OpencodeClient } from "@opencode-ai/sdk/v2/client";
 
-
 import type {
-BuildPipeline,
-PendingPipelineInteractionResolution,
-PipelineSession,
-PipelineSessionPhase,
+  BuildPipeline,
+  PendingPipelineInteractionResolution,
+  PipelineSession,
+  PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 
-
-
-
 import {
-AGENT_INTERACTION_CLAIM_RETENTION_MS,
-AGENT_INTERACTION_CONTRACT_VERSION,
-AGENT_INTERACTION_JOURNAL_VERSION,
-AGENT_INTERACTION_LIMITS,
-AGENT_INTERACTION_SUMMARY_VERSION,
-UNATTENDED_AGENT_INTERACTION_POLICY,
-type AgentInteractionRequest,
+  AGENT_INTERACTION_CLAIM_RETENTION_MS,
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  AGENT_INTERACTION_LIMITS,
+  AGENT_INTERACTION_SUMMARY_VERSION,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
 
+import { type StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
-import {
-type StructuredReviewReport
-} from "@orkestrator/protocol/structured-review";
-
-
-import type {
-JsonSchema,
-StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-
+import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { StorageService } from "./storage.js";
 
+import { BuildPipelineService } from "./build-pipeline-service.js";
 
-import {
-BuildPipelineService,
-} from "./build-pipeline-service.js";
-
-
-import {
-ProviderUnavailableError
-} from "./build-pipeline-provider.js";
-
+import { ProviderUnavailableError } from "./build-pipeline-provider.js";
 
 import type {
-BuildPipelineProvider,
-ProviderCreateSessionOptions,
-ProviderSessionRegistration,
-ProviderStatus,
+  BuildPipelineProvider,
+  ProviderCreateSessionOptions,
+  ProviderSessionRegistration,
+  ProviderStatus,
 } from "./build-pipeline-provider.js";
-
-
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -83,11 +58,13 @@ const cleanReview: StructuredReviewReport = {
     overview: "Implemented the task.",
     before: "Missing.",
     after: "Present.",
-    keyCodeChanges: [{
-      file: "src/app.ts",
-      line: 1,
-      description: "Adds the feature.",
-    }],
+    keyCodeChanges: [
+      {
+        file: "src/app.ts",
+        line: 1,
+        description: "Adds the feature.",
+      },
+    ],
     userImpact: "The feature is available.",
   },
   riskProfile: {
@@ -111,8 +88,6 @@ const cleanReview: StructuredReviewReport = {
   reviewSummary: "No findings.",
 };
 
-
-
 class FakeProvider implements BuildPipelineProvider {
   readonly agent = "claude" as const;
   readonly phases = new Map<string, PipelineSessionPhase>();
@@ -134,10 +109,7 @@ class FakeProvider implements BuildPipelineProvider {
   }> = [];
   private counter = 0;
 
-  registerSession(
-    sessionId: string,
-    interaction?: ProviderSessionRegistration,
-  ): void {
+  registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.registered.push({ sessionId, interaction });
   }
 
@@ -171,17 +143,16 @@ class FakeProvider implements BuildPipelineProvider {
   }
 
   async messages(sessionId: string): Promise<unknown[]> {
-    return [{
-      id: `${sessionId}-assistant`,
-      role: "assistant",
-      parts: [{ type: "text", content: "Finished" }],
-    }];
+    return [
+      {
+        id: `${sessionId}-assistant`,
+        role: "assistant",
+        parts: [{ type: "text", content: "Finished" }],
+      },
+    ];
   }
 
-  async structured<T>(
-    sessionId: string,
-    requestId: string,
-  ): Promise<StructuredOutputResult<T>> {
+  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
     const phase = this.phases.get(sessionId);
     return {
       ok: true,
@@ -195,8 +166,6 @@ class FakeProvider implements BuildPipelineProvider {
 
   async abort(_sessionId: string): Promise<void> {}
 }
-
-
 
 async function withService(
   run: (
@@ -215,13 +184,16 @@ async function withService(
       failCommandsOnce: Map<string, number>;
       currentHead: string;
       uncommittedPaths: string[];
-      kanbanTasks: Map<string, {
-        id: string;
-        status: string;
-        prUrl?: string;
-        prState?: string;
-        comments: Array<{ text: string }>;
-      }>;
+      kanbanTasks: Map<
+        string,
+        {
+          id: string;
+          status: string;
+          prUrl?: string;
+          prState?: string;
+          comments: Array<{ text: string }>;
+        }
+      >;
     },
   ) => Promise<void>,
 ): Promise<void> {
@@ -250,13 +222,16 @@ async function withService(
     command: string;
     args: Record<string, unknown>;
   }> = [];
-  const kanbanTasks = new Map<string, {
-    id: string;
-    status: string;
-    prUrl?: string;
-    prState?: string;
-    comments: Array<{ text: string }>;
-  }>();
+  const kanbanTasks = new Map<
+    string,
+    {
+      id: string;
+      status: string;
+      prUrl?: string;
+      prState?: string;
+      comments: Array<{ text: string }>;
+    }
+  >();
   const controls = {
     dataDir,
     detection: {
@@ -276,10 +251,7 @@ async function withService(
     uncommittedPaths: [] as string[],
     kanbanTasks,
   };
-  const invoke = async <T>(
-    command: string,
-    args: Record<string, unknown> = {},
-  ): Promise<T> => {
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push({ command, args });
     if (controls.failCommands.has(command)) {
       throw new Error(`${command} failed`);
@@ -332,8 +304,8 @@ async function withService(
     if (command === "update_feature_plan") return undefined as T;
     if (command === "pr_monitor_watch") return undefined as T;
     if (
-      command === "post_linear_completion_comment"
-      || command === "post_github_completion_comment"
+      command === "post_linear_completion_comment" ||
+      command === "post_github_completion_comment"
     ) {
       return {
         commentId: "comment-1",
@@ -354,18 +326,11 @@ async function withService(
   }
 }
 
-
-
-async function pipeline(
-  storage: StorageService,
-  id: string,
-): Promise<BuildPipeline> {
+async function pipeline(storage: StorageService, id: string): Promise<BuildPipeline> {
   const stored = await storage.getBuildPipeline(id);
   if (!stored) throw new Error("Pipeline disappeared");
   return stored.snapshot as BuildPipeline;
 }
-
-
 
 function startInput(
   overrides: Partial<Parameters<BuildPipelineService["start"]>[0]> = {},
@@ -388,12 +353,7 @@ function startInput(
   };
 }
 
-
-
-function pendingQuestion(
-  sessionId: string,
-  id = "question-1",
-): AgentInteractionRequest {
+function pendingQuestion(sessionId: string, id = "question-1"): AgentInteractionRequest {
   const now = Date.now();
   return {
     version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -413,22 +373,12 @@ function pendingQuestion(
   };
 }
 
-
-
 type ProviderInteractions = NonNullable<BuildPipelineProvider["interactions"]>;
 
-
-
 /** The cast every interaction test needs to bolt a capability onto the fake. */
-function installInteractions(
-  provider: FakeProvider,
-  interactions: ProviderInteractions,
-): void {
-  (provider as unknown as { interactions: ProviderInteractions })
-    .interactions = interactions;
+function installInteractions(provider: FakeProvider, interactions: ProviderInteractions): void {
+  (provider as unknown as { interactions: ProviderInteractions }).interactions = interactions;
 }
-
-
 
 /** Runs the two provisioning passes and returns the live build session. */
 async function startBuilding(
@@ -443,8 +393,6 @@ async function startBuilding(
   expect(running.phase).toBe("building");
   return { started, session: running.sessions[running.currentSessionIndex]! };
 }
-
-
 
 /** Writes durable state the way another process would, outside the service. */
 async function mutateStored(
@@ -466,8 +414,6 @@ async function mutateStored(
   );
   return snapshot;
 }
-
-
 
 function pendingEnvelope(
   session: PipelineSession,
@@ -493,16 +439,11 @@ function pendingEnvelope(
 }
 
 describe("BuildPipelineService", () => {
-
-
-
   test("rejects failed-stage retry for cancellation and interaction failures", async () => {
     await withService(async (service, storage) => {
       const { started } = await startBuilding(service, storage);
       await service.cancel(started.id);
-      await expect(service.retryStage(started.id)).rejects.toThrow(
-        "no failed stage to retry",
-      );
+      await expect(service.retryStage(started.id)).rejects.toThrow("no failed stage to retry");
 
       await mutateStored(storage, started.id, (candidate) => {
         candidate.failureContext = {
@@ -512,13 +453,9 @@ describe("BuildPipelineService", () => {
           requestId: "question-1",
         };
       });
-      await expect(service.retryStage(started.id)).rejects.toThrow(
-        "no failed stage to retry",
-      );
+      await expect(service.retryStage(started.id)).rejects.toThrow("no failed stage to retry");
     });
   });
-
-
 
   test("forwards unattended interaction metadata and keeps pending blocked work parked", async () => {
     await withService(async (service, storage, provider) => {
@@ -539,17 +476,19 @@ describe("BuildPipelineService", () => {
           }),
         }),
       });
-      expect(provider.registered).toContainEqual(expect.objectContaining({
-        sessionId: "build-1",
-        interaction: expect.objectContaining({
-          origin: "build-pipeline",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: "build",
-          workflowId: started.id,
-          provider: "claude",
-          fence: expect.any(String),
+      expect(provider.registered).toContainEqual(
+        expect.objectContaining({
+          sessionId: "build-1",
+          interaction: expect.objectContaining({
+            origin: "build-pipeline",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            phase: "build",
+            workflowId: started.id,
+            provider: "claude",
+            fence: expect.any(String),
+          }),
         }),
-      }));
+      );
       provider.status = async () => "blocked";
       await service.advanceNow(started.id);
       await service.advanceNow(started.id);
@@ -577,8 +516,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("production OpenCode uses journaled decline/deny enforcement without a grant-once stream", async () => {
     await withService(async (service, storage) => {
       const started = await service.start(startInput({ agentType: "opencode" }));
@@ -590,14 +527,18 @@ describe("BuildPipelineService", () => {
       const rejected: string[] = [];
       const permissionReplies: Array<{ requestID: string; reply: string }> = [];
       const phaseAtRejection: string[] = [];
-      let pendingQuestions: Array<Record<string, unknown>> = [{
-        id: "question-1",
-        sessionID: session.sdkSessionId,
-        questions: [{
-          question: "Choose a safe implementation",
-          options: [{ label: "Conservative", description: "Smallest change" }],
-        }],
-      }];
+      let pendingQuestions: Array<Record<string, unknown>> = [
+        {
+          id: "question-1",
+          sessionID: session.sdkSessionId,
+          questions: [
+            {
+              question: "Choose a safe implementation",
+              options: [{ label: "Conservative", description: "Smallest change" }],
+            },
+          ],
+        },
+      ];
       let pendingPermissions: Array<Record<string, unknown>> = [];
       let subscriptions = 0;
       const client = {
@@ -613,9 +554,7 @@ describe("BuildPipelineService", () => {
           },
           async reply(parameters: { requestID: string; reply: string }) {
             permissionReplies.push(parameters);
-            pendingPermissions = pendingPermissions.filter(
-              ({ id }) => id !== parameters.requestID,
-            );
+            pendingPermissions = pendingPermissions.filter(({ id }) => id !== parameters.requestID);
             return { data: true };
           },
         },
@@ -625,9 +564,7 @@ describe("BuildPipelineService", () => {
           },
           async reject(parameters: { requestID: string }) {
             const currentPhase = (await pipeline(storage, started.id)).phase;
-            pendingQuestions = pendingQuestions.filter(
-              ({ id }) => id !== parameters.requestID,
-            );
+            pendingQuestions = pendingQuestions.filter(({ id }) => id !== parameters.requestID);
             phaseAtRejection.push(currentPhase);
             rejected.push(parameters.requestID);
             return { data: true };
@@ -660,34 +597,44 @@ describe("BuildPipelineService", () => {
         expect(await pipeline(storage, started.id)).toMatchObject({
           phase: "building",
           autoDeclineCount: 1,
-          sessions: [expect.objectContaining({
-            autoDeclineCount: 1,
-            interactionTranscript: [expect.objectContaining({
-              id: `opencode:question:${encodeURIComponent(session.sdkSessionId)}:question-1`,
-              outcome: "auto-declined-headless",
-            })],
-          })],
+          sessions: [
+            expect.objectContaining({
+              autoDeclineCount: 1,
+              interactionTranscript: [
+                expect.objectContaining({
+                  id: `opencode:question:${encodeURIComponent(session.sdkSessionId)}:question-1`,
+                  outcome: "auto-declined-headless",
+                }),
+              ],
+            }),
+          ],
         });
         const firstJournal = await storage.getAgentInteractionResolutionJournal();
-        expect(firstJournal.entries).toContainEqual(expect.objectContaining({
-          state: "workflow-recorded",
-          outcome: "auto-declined",
-        }));
+        expect(firstJournal.entries).toContainEqual(
+          expect.objectContaining({
+            state: "workflow-recorded",
+            outcome: "auto-declined",
+          }),
+        );
 
-        pendingPermissions = [{
-          id: "permission-1",
-          sessionID: session.sdkSessionId,
-          permission: "edit",
-          patterns: ["**"],
-          title: "Edit files",
-          metadata: {},
-          time: { created: Date.now() },
-        }];
+        pendingPermissions = [
+          {
+            id: "permission-1",
+            sessionID: session.sdkSessionId,
+            permission: "edit",
+            patterns: ["**"],
+            title: "Edit files",
+            metadata: {},
+            time: { created: Date.now() },
+          },
+        ];
         await production.advanceNow(started.id);
-        expect(permissionReplies).toEqual([expect.objectContaining({
-          requestID: "permission-1",
-          reply: "reject",
-        })]);
+        expect(permissionReplies).toEqual([
+          expect.objectContaining({
+            requestID: "permission-1",
+            reply: "reject",
+          }),
+        ]);
         expect(await pipeline(storage, started.id)).toMatchObject({
           phase: "failed",
           failureContext: {
@@ -701,8 +648,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("declines three Claude questions exactly once and never consumes a queued message as an answer", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start(startInput());
@@ -711,41 +656,44 @@ describe("BuildPipelineService", () => {
       const running = await pipeline(storage, started.id);
       const session = running.sessions[running.currentSessionIndex]!;
       const now = Date.now();
-      let requests: AgentInteractionRequest[] = Array.from(
-        { length: 3 },
-        (_, index) => ({
-          version: AGENT_INTERACTION_CONTRACT_VERSION,
-          id: `question-${index + 1}`,
-          provider: "claude" as const,
-          kind: "question" as const,
-          origin: "build-pipeline" as const,
-          sessionId: session.sdkSessionId,
-          state: "pending" as const,
-          revision: 1,
-          presentation: {
-            title: `Question ${index + 1}`,
-            questions: [{
+      let requests: AgentInteractionRequest[] = Array.from({ length: 3 }, (_, index) => ({
+        version: AGENT_INTERACTION_CONTRACT_VERSION,
+        id: `question-${index + 1}`,
+        provider: "claude" as const,
+        kind: "question" as const,
+        origin: "build-pipeline" as const,
+        sessionId: session.sdkSessionId,
+        state: "pending" as const,
+        revision: 1,
+        presentation: {
+          title: `Question ${index + 1}`,
+          questions: [
+            {
               id: "choice",
               prompt: "Choose safely",
               required: true,
               multiple: false,
               secret: false,
               allowFreeText: false,
-              options: [{
-                id: "safe",
-                label: "Safe",
-                providerValue: "safe",
-              }],
-            }],
-          },
-          createdAt: now + index,
-          updatedAt: now + index,
-        }),
-      );
+              options: [
+                {
+                  id: "safe",
+                  label: "Safe",
+                  providerValue: "safe",
+                },
+              ],
+            },
+          ],
+        },
+        createdAt: now + index,
+        updatedAt: now + index,
+      }));
       const resolutions: Array<{ id: string; action: string }> = [];
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           return {
             version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -785,27 +733,29 @@ describe("BuildPipelineService", () => {
         ],
       });
       const journal = await storage.getAgentInteractionResolutionJournal();
-      expect(journal.entries.filter((entry) => entry.claim.workflowId === started.id))
-        .toHaveLength(3);
-      expect(journal.entries.every((entry) => entry.state === "workflow-recorded"))
-        .toBe(true);
+      expect(journal.entries.filter((entry) => entry.claim.workflowId === started.id)).toHaveLength(
+        3,
+      );
+      expect(journal.entries.every((entry) => entry.state === "workflow-recorded")).toBe(true);
 
-      requests = [{
-        version: AGENT_INTERACTION_CONTRACT_VERSION,
-        id: "permission-1",
-        provider: "claude",
-        kind: "permission",
-        origin: "build-pipeline",
-        sessionId: session.sdkSessionId,
-        state: "pending",
-        revision: 2,
-        presentation: {
-          title: "Authorize an unexpected privilege",
-          questions: [],
+      requests = [
+        {
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          id: "permission-1",
+          provider: "claude",
+          kind: "permission",
+          origin: "build-pipeline",
+          sessionId: session.sdkSessionId,
+          state: "pending",
+          revision: 2,
+          presentation: {
+            title: "Authorize an unexpected privilege",
+            questions: [],
+          },
+          createdAt: now + 10,
+          updatedAt: now + 10,
         },
-        createdAt: now + 10,
-        updatedAt: now + 10,
-      }];
+      ];
       await service.advanceNow(started.id);
       expect(resolutions.at(-1)).toEqual({ id: "permission-1", action: "deny" });
       expect(await pipeline(storage, started.id)).toMatchObject({
@@ -827,8 +777,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("retries an addressing interaction with the findings prompt in build mode", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start(startInput());
@@ -842,19 +790,21 @@ describe("BuildPipelineService", () => {
       const failed = record.snapshot as BuildPipeline;
       const report: StructuredReviewReport = {
         ...cleanReview,
-        issues: [{
-          severity: "P1",
-          confidence: 90,
-          category: "correctness",
-          title: "Address this exact finding",
-          file: "src/app.ts",
-          line: 12,
-          symbol: "run",
-          description: "The result is wrong.",
-          evidence: "The boundary test fails.",
-          suggestion: "Correct the boundary.",
-          verification: "Run the boundary test.",
-        }],
+        issues: [
+          {
+            severity: "P1",
+            confidence: 90,
+            category: "correctness",
+            title: "Address this exact finding",
+            file: "src/app.ts",
+            line: 12,
+            symbol: "run",
+            description: "The result is wrong.",
+            evidence: "The boundary test fails.",
+            suggestion: "Correct the boundary.",
+            verification: "Run the boundary test.",
+          },
+        ],
         verdict: { ready: "with-fixes", reasoning: "One fix is required." },
       };
       failed.phase = "failed";
@@ -888,8 +838,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("reconciles stale provider outcomes and fails safely while the request is still live", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start(startInput());
@@ -900,9 +848,11 @@ describe("BuildPipelineService", () => {
       const request = pendingQuestion(session.sdkSessionId, "stale-question");
       let listCalls = 0;
       let resolveCalls = 0;
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           listCalls += 1;
           return {
@@ -928,13 +878,11 @@ describe("BuildPipelineService", () => {
         },
       });
       const journal = await storage.getAgentInteractionResolutionJournal();
-      expect(journal.entries.find((entry) =>
-        entry.interactionId === "stale-question"
-      )).toMatchObject({ state: "workflow-recorded", outcome: "failed" });
+      expect(
+        journal.entries.find((entry) => entry.interactionId === "stale-question"),
+      ).toMatchObject({ state: "workflow-recorded", outcome: "failed" });
     });
   });
-
-
 
   test("two backends race a new live interaction claim and converge on one response", async () => {
     await withService(async (service, storage, provider) => {
@@ -951,9 +899,11 @@ describe("BuildPipelineService", () => {
         releaseInitialLists = resolve;
       });
       let resolveCalls = 0;
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           initialListCalls += 1;
           if (initialListCalls <= 2) {
@@ -981,34 +931,31 @@ describe("BuildPipelineService", () => {
       );
       try {
         expect(running.pendingInteractionResolution).toBeUndefined();
-        expect((await storage.getAgentInteractionResolutionJournal()).entries)
-          .toHaveLength(0);
+        expect((await storage.getAgentInteractionResolutionJournal()).entries).toHaveLength(0);
 
-        await Promise.all([
-          service.advanceNow(started.id),
-          second.advanceNow(started.id),
-        ]);
+        await Promise.all([service.advanceNow(started.id), second.advanceNow(started.id)]);
 
         const resolved = await pipeline(storage, started.id);
         expect(resolveCalls).toBe(1);
         expect(resolved.phase).toBe("building");
         expect(resolved.error).toBeUndefined();
         expect(resolved.autoDeclineCount).toBe(1);
-        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
-          .toEqual([expect.objectContaining({ id: request.id })]);
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript).toEqual([
+          expect.objectContaining({ id: request.id }),
+        ]);
         const journal = await storage.getAgentInteractionResolutionJournal();
-        expect(journal.entries).toContainEqual(expect.objectContaining({
-          interactionId: request.id,
-          state: "workflow-recorded",
-          outcome: "auto-declined",
-        }));
+        expect(journal.entries).toContainEqual(
+          expect.objectContaining({
+            interactionId: request.id,
+            state: "workflow-recorded",
+            outcome: "auto-declined",
+          }),
+        );
       } finally {
         await second.shutdown();
       }
     });
   });
-
-
 
   test("a losing pending-envelope CAS re-reads after the winner records the outcome", async () => {
     await withService(async (service, storage, provider) => {
@@ -1025,9 +972,11 @@ describe("BuildPipelineService", () => {
         releaseInitialLists = resolve;
       });
       let resolveCalls = 0;
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           initialListCalls += 1;
           if (initialListCalls <= 2) {
@@ -1069,11 +1018,9 @@ describe("BuildPipelineService", () => {
         const isPendingEnvelopeSave =
           candidate.pendingInteractionResolution?.interactionId === request.id;
         const isOutcomeSave =
-          candidate.pendingInteractionResolution === undefined
-          && candidate.sessions.some((candidateSession) =>
-            candidateSession.interactionTranscript?.some((entry) =>
-              entry.id === request.id
-            )
+          candidate.pendingInteractionResolution === undefined &&
+          candidate.sessions.some((candidateSession) =>
+            candidateSession.interactionTranscript?.some((entry) => entry.id === request.id),
           );
         if (isPendingEnvelopeSave) {
           pendingSaveAttempts += 1;
@@ -1089,9 +1036,9 @@ describe("BuildPipelineService", () => {
           return saved;
         } catch (error) {
           if (
-            isPendingEnvelopeSave
-            && error instanceof Error
-            && error.message === "Build pipeline revision conflict"
+            isPendingEnvelopeSave &&
+            error instanceof Error &&
+            error.message === "Build pipeline revision conflict"
           ) {
             // Surface the losing CAS only after the winner has removed the
             // envelope and durably recorded the terminal interaction outcome.
@@ -1101,10 +1048,7 @@ describe("BuildPipelineService", () => {
         }
       };
       try {
-        await Promise.all([
-          service.advanceNow(started.id),
-          second.advanceNow(started.id),
-        ]);
+        await Promise.all([service.advanceNow(started.id), second.advanceNow(started.id)]);
 
         const resolved = await pipeline(storage, started.id);
         expect(pendingSaveAttempts).toBe(2);
@@ -1114,16 +1058,15 @@ describe("BuildPipelineService", () => {
         expect(resolved.error).toBeUndefined();
         expect(resolved.pendingInteractionResolution).toBeUndefined();
         expect(resolved.autoDeclineCount).toBe(1);
-        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
-          .toEqual([expect.objectContaining({ id: request.id })]);
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript).toEqual([
+          expect.objectContaining({ id: request.id }),
+        ]);
       } finally {
         storage.saveBuildPipeline = originalSave;
         await second.shutdown();
       }
     });
   });
-
-
 
   test("interaction outcome save merges a concurrent queued user message", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
@@ -1135,9 +1078,11 @@ describe("BuildPipelineService", () => {
       const request = pendingQuestion(session.sdkSessionId, "outcome-merge-question");
       let requests = [request];
       let resolveCalls = 0;
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           return {
             version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -1151,8 +1096,7 @@ describe("BuildPipelineService", () => {
           return { result: "applied", sessionId, interactionId, revision: 1 };
         },
       };
-      const originalUpdateJournal = storage
-        .updateAgentInteractionResolutionJournal.bind(storage);
+      const originalUpdateJournal = storage.updateAgentInteractionResolutionJournal.bind(storage);
       let releaseProviderResolved!: () => void;
       const providerResolved = new Promise<void>((resolve) => {
         releaseProviderResolved = resolve;
@@ -1167,9 +1111,9 @@ describe("BuildPipelineService", () => {
       storage.updateAgentInteractionResolutionJournal = async (...args) => {
         const journal = await originalUpdateJournal(...args);
         if (
-          !blockedProviderResolved
-          && journal.entries.some((entry) =>
-            entry.interactionId === request.id && entry.state === "provider-resolved"
+          !blockedProviderResolved &&
+          journal.entries.some(
+            (entry) => entry.interactionId === request.id && entry.state === "provider-resolved",
           )
         ) {
           blockedProviderResolved = true;
@@ -1215,16 +1159,15 @@ describe("BuildPipelineService", () => {
         expect(resolved.pendingInteractionResolution).toBeUndefined();
         expect(resolved.pendingUserMessages).toEqual([concurrentMessage]);
         expect(resolved.autoDeclineCount).toBe(1);
-        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
-          .toEqual([expect.objectContaining({ id: request.id })]);
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript).toEqual([
+          expect.objectContaining({ id: request.id }),
+        ]);
       } finally {
         allowOutcomeSave();
         storage.updateAgentInteractionResolutionJournal = originalUpdateJournal;
       }
     });
   });
-
-
 
   test("fails a live pending interaction whose journal claim cleanup reclaimed", async () => {
     await withService(async (service, storage, provider) => {
@@ -1261,32 +1204,38 @@ describe("BuildPipelineService", () => {
       );
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "reclaimed-live-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: running.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "reclaimed-live-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: running.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
           },
-        }],
+        ],
       }));
       const reclaimed = await storage.getAgentInteractionResolutionJournal();
-      expect(reclaimed.entries).toContainEqual(expect.objectContaining({
-        id: "reclaimed-live-journal",
-        state: "workflow-recorded",
-        outcome: "stale",
-      }));
+      expect(reclaimed.entries).toContainEqual(
+        expect.objectContaining({
+          id: "reclaimed-live-journal",
+          state: "workflow-recorded",
+          outcome: "stale",
+        }),
+      );
       let resolveCalls = 0;
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           return {
             version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -1316,8 +1265,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("leases a durable interaction response to only one backend process", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start(startInput());
@@ -1345,21 +1292,23 @@ describe("BuildPipelineService", () => {
       };
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "contended-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: running.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "contended-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: running.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
           },
-        }],
+        ],
       }));
       await storage.saveBuildPipeline(
         running.id,
@@ -1372,9 +1321,11 @@ describe("BuildPipelineService", () => {
 
       let requests = [request];
       let resolveCalls = 0;
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           return {
             version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -1397,23 +1348,19 @@ describe("BuildPipelineService", () => {
         { autoAdvance: false, provider: async () => provider },
       );
       try {
-        await Promise.all([
-          service.advanceNow(started.id),
-          second.advanceNow(started.id),
-        ]);
+        await Promise.all([service.advanceNow(started.id), second.advanceNow(started.id)]);
         const resolved = await pipeline(storage, started.id);
         expect(resolveCalls).toBe(1);
         expect(resolved.phase).toBe("building");
         expect(resolved.autoDeclineCount).toBe(1);
-        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
-          .toHaveLength(1);
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript).toHaveLength(
+          1,
+        );
       } finally {
         await second.shutdown();
       }
     });
   });
-
-
 
   test("recovers each interaction journal crash boundary without a duplicate provider response", async () => {
     await withService(async (service, storage, provider) => {
@@ -1423,26 +1370,30 @@ describe("BuildPipelineService", () => {
       const running = await pipeline(storage, started.id);
       const session = running.sessions[running.currentSessionIndex]!;
       const claimedAt = Date.now();
-      let requests: AgentInteractionRequest[] = [{
-        version: AGENT_INTERACTION_CONTRACT_VERSION,
-        id: "claimed-question",
-        provider: "claude",
-        kind: "question",
-        origin: "build-pipeline",
-        sessionId: session.sdkSessionId,
-        state: "pending",
-        revision: 1,
-        presentation: {
-          title: "Question found after restart",
-          questions: [],
+      let requests: AgentInteractionRequest[] = [
+        {
+          version: AGENT_INTERACTION_CONTRACT_VERSION,
+          id: "claimed-question",
+          provider: "claude",
+          kind: "question",
+          origin: "build-pipeline",
+          sessionId: session.sdkSessionId,
+          state: "pending",
+          revision: 1,
+          presentation: {
+            title: "Question found after restart",
+            questions: [],
+          },
+          createdAt: claimedAt,
+          updatedAt: claimedAt,
         },
-        createdAt: claimedAt,
-        updatedAt: claimedAt,
-      }];
+      ];
       const responses: string[] = [];
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           return {
             version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -1459,21 +1410,23 @@ describe("BuildPipelineService", () => {
 
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "journal-claimed",
-          interactionId: "claimed-question",
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "journal-claimed",
+            interactionId: "claimed-question",
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
           },
-        }],
+        ],
       }));
       await service.advanceNow(started.id);
       expect(responses).toEqual(["claimed-question"]);
@@ -1487,23 +1440,26 @@ describe("BuildPipelineService", () => {
       const inputResolvedAt = Date.now();
       await storage.updateAgentInteractionResolutionJournal((journal) => ({
         ...journal,
-        entries: [...journal.entries, {
-          id: "journal-provider-resolved-input",
-          interactionId: "resolved-question",
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "provider-resolved",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt: inputResolvedAt - 1,
+        entries: [
+          ...journal.entries,
+          {
+            id: "journal-provider-resolved-input",
+            interactionId: "resolved-question",
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "provider-resolved",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt: inputResolvedAt - 1,
+            },
+            outcome: "auto-declined",
+            providerResolvedAt: inputResolvedAt,
           },
-          outcome: "auto-declined",
-          providerResolvedAt: inputResolvedAt,
-        }],
+        ],
       }));
       await service.advanceNow(started.id);
       expect(responses).toEqual(["claimed-question"]);
@@ -1517,23 +1473,26 @@ describe("BuildPipelineService", () => {
       const authorizationResolvedAt = Date.now();
       await storage.updateAgentInteractionResolutionJournal((journal) => ({
         ...journal,
-        entries: [...journal.entries, {
-          id: "journal-provider-resolved-auth",
-          interactionId: "resolved-permission",
-          provider: "claude",
-          kind: "permission",
-          sessionId: session.sdkSessionId,
-          state: "provider-resolved",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt: authorizationResolvedAt - 1,
+        entries: [
+          ...journal.entries,
+          {
+            id: "journal-provider-resolved-auth",
+            interactionId: "resolved-permission",
+            provider: "claude",
+            kind: "permission",
+            sessionId: session.sdkSessionId,
+            state: "provider-resolved",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt: authorizationResolvedAt - 1,
+            },
+            outcome: "denied",
+            providerResolvedAt: authorizationResolvedAt,
           },
-          outcome: "denied",
-          providerResolvedAt: authorizationResolvedAt,
-        }],
+        ],
       }));
       await service.advanceNow(started.id);
       expect(responses).toEqual(["claimed-question"]);
@@ -1557,7 +1516,8 @@ describe("BuildPipelineService", () => {
                 state: "provider-resolved" as const,
                 workflowRecordedAt: undefined,
               }
-            : entry),
+            : entry,
+        ),
       }));
       const restored = new BuildPipelineService(
         storage,
@@ -1569,9 +1529,9 @@ describe("BuildPipelineService", () => {
       try {
         await restored.init();
         const journal = await storage.getAgentInteractionResolutionJournal();
-        expect(journal.entries.find((entry) =>
-          entry.id === "journal-provider-resolved-auth"
-        )).toMatchObject({
+        expect(
+          journal.entries.find((entry) => entry.id === "journal-provider-resolved-auth"),
+        ).toMatchObject({
           state: "workflow-recorded",
           outcome: "denied",
         });
@@ -1581,8 +1541,6 @@ describe("BuildPipelineService", () => {
       }
     });
   });
-
-
 
   test("registers restored interaction metadata on a production bridge provider", async () => {
     await withService(async (service, storage) => {
@@ -1601,34 +1559,35 @@ describe("BuildPipelineService", () => {
         { autoAdvance: false },
       );
       try {
-        const provider = await (production as unknown as {
-          provider: (
-            pipeline: BuildPipeline,
-            agent: "claude",
-          ) => Promise<BuildPipelineProvider>;
-        }).provider(restored, "claude");
-        const registration = (provider as unknown as {
-          interactionAdapter: {
-            interactionTracker: {
-              registration: (sessionId: string) => ProviderSessionRegistration;
+        const provider = await (
+          production as unknown as {
+            provider: (pipeline: BuildPipeline, agent: "claude") => Promise<BuildPipelineProvider>;
+          }
+        ).provider(restored, "claude");
+        const registration = (
+          provider as unknown as {
+            interactionAdapter: {
+              interactionTracker: {
+                registration: (sessionId: string) => ProviderSessionRegistration;
+              };
             };
-          };
-        }).interactionAdapter.interactionTracker.registration("build-1");
-        expect(registration).toEqual(expect.objectContaining({
-          origin: "build-pipeline",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: "build",
-          workflowId: started.id,
-          provider: "claude",
-          fence: expect.any(String),
-        }));
+          }
+        ).interactionAdapter.interactionTracker.registration("build-1");
+        expect(registration).toEqual(
+          expect.objectContaining({
+            origin: "build-pipeline",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            phase: "build",
+            workflowId: started.id,
+            provider: "claude",
+            fence: expect.any(String),
+          }),
+        );
       } finally {
         await production.shutdown();
       }
     });
   });
-
-
 
   test("parks behind a live processing lease and takes over once it expires", async () => {
     await withService(async (service, storage, provider) => {
@@ -1646,27 +1605,29 @@ describe("BuildPipelineService", () => {
       const seedForeignLease = async (expiresAt: number): Promise<void> => {
         await storage.updateAgentInteractionResolutionJournal(() => ({
           version: AGENT_INTERACTION_JOURNAL_VERSION,
-          entries: [{
-            id: "leased-journal",
-            interactionId: request.id,
-            provider: "claude",
-            kind: "question",
-            sessionId: session.sdkSessionId,
-            state: "claimed",
-            claim: {
-              workflowType: "build-pipeline",
-              workflowId: started.id,
-              phase: "building",
-              fence: session.sessionKey,
-              claimedAt,
+          entries: [
+            {
+              id: "leased-journal",
+              interactionId: request.id,
+              provider: "claude",
+              kind: "question",
+              sessionId: session.sdkSessionId,
+              state: "claimed",
+              claim: {
+                workflowType: "build-pipeline",
+                workflowId: started.id,
+                phase: "building",
+                fence: session.sessionKey,
+                claimedAt,
+              },
+              processing: {
+                ownerId: "another-backend-process",
+                token: "another-backend-token",
+                acquiredAt: claimedAt,
+                expiresAt,
+              },
             },
-            processing: {
-              ownerId: "another-backend-process",
-              token: "another-backend-token",
-              acquiredAt: claimedAt,
-              expiresAt,
-            },
-          }],
+          ],
         }));
       };
       let resolveCalls = 0;
@@ -1702,16 +1663,15 @@ describe("BuildPipelineService", () => {
       const resolved = await pipeline(storage, started.id);
       expect(resolved).toMatchObject({ phase: "building", autoDeclineCount: 1 });
       expect(resolved.pendingInteractionResolution).toBeUndefined();
-      expect((await storage.getAgentInteractionResolutionJournal()).entries)
-        .toContainEqual(expect.objectContaining({
+      expect((await storage.getAgentInteractionResolutionJournal()).entries).toContainEqual(
+        expect.objectContaining({
           id: "leased-journal",
           state: "workflow-recorded",
           outcome: "auto-declined",
-        }));
+        }),
+      );
     });
   });
-
-
 
   test("reuses its own unexpired processing lease across a retried response", async () => {
     await withService(async (service, storage, provider) => {
@@ -1720,21 +1680,23 @@ describe("BuildPipelineService", () => {
       const claimedAt = Date.now();
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "retried-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "retried-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
           },
-        }],
+        ],
       }));
       await mutateStored(storage, started.id, (snapshot) => {
         snapshot.pendingInteractionResolution = pendingEnvelope(
@@ -1762,8 +1724,9 @@ describe("BuildPipelineService", () => {
         },
       });
       const lease = async (): Promise<unknown> =>
-        (await storage.getAgentInteractionResolutionJournal())
-          .entries.find((entry) => entry.id === "retried-journal")?.processing;
+        (await storage.getAgentInteractionResolutionJournal()).entries.find(
+          (entry) => entry.id === "retried-journal",
+        )?.processing;
 
       await service.advanceNow(started.id);
       const first = await lease();
@@ -1786,8 +1749,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("refuses to record an interaction outcome through a stolen fence", async () => {
     await withService(async (service, storage, provider) => {
       const { started, session } = await startBuilding(service, storage);
@@ -1795,21 +1756,23 @@ describe("BuildPipelineService", () => {
       const claimedAt = Date.now();
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "stolen-fence-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "stolen-fence-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
           },
-        }],
+        ],
       }));
       await mutateStored(storage, started.id, (snapshot) => {
         snapshot.pendingInteractionResolution = pendingEnvelope(
@@ -1845,7 +1808,8 @@ describe("BuildPipelineService", () => {
                       expiresAt: claimedAt + 120_000,
                     },
                   }
-                : entry),
+                : entry,
+            ),
           }));
           return { result: "applied", sessionId, interactionId, revision: 2 };
         },
@@ -1857,19 +1821,16 @@ describe("BuildPipelineService", () => {
       const parked = await pipeline(storage, started.id);
       expect(parked.phase).toBe("building");
       expect(parked.autoDeclineCount).toBeUndefined();
-      expect(parked.pendingInteractionResolution?.journalId)
-        .toBe("stolen-fence-journal");
-      expect(parked.sessions[parked.currentSessionIndex]?.interactionTranscript)
-        .toBeUndefined();
-      expect((await storage.getAgentInteractionResolutionJournal()).entries)
-        .toContainEqual(expect.objectContaining({
+      expect(parked.pendingInteractionResolution?.journalId).toBe("stolen-fence-journal");
+      expect(parked.sessions[parked.currentSessionIndex]?.interactionTranscript).toBeUndefined();
+      expect((await storage.getAgentInteractionResolutionJournal()).entries).toContainEqual(
+        expect.objectContaining({
           id: "stolen-fence-journal",
           state: "claimed",
-        }));
+        }),
+      );
     });
   });
-
-
 
   test("anchors a processing lease to a claim stamped by a clock running ahead", async () => {
     await withService(async (service, storage, provider) => {
@@ -1878,21 +1839,23 @@ describe("BuildPipelineService", () => {
       const claimedAt = Date.now() + 5 * 60_000;
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "future-claim-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "future-claim-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
           },
-        }],
+        ],
       }));
       await mutateStored(storage, started.id, (snapshot) => {
         snapshot.pendingInteractionResolution = pendingEnvelope(
@@ -1918,8 +1881,9 @@ describe("BuildPipelineService", () => {
 
       await service.advanceNow(started.id);
 
-      const entry = (await storage.getAgentInteractionResolutionJournal())
-        .entries.find((candidate) => candidate.id === "future-claim-journal");
+      const entry = (await storage.getAgentInteractionResolutionJournal()).entries.find(
+        (candidate) => candidate.id === "future-claim-journal",
+      );
       // The lease validator requires `acquiredAt >= claimedAt`; rejecting the
       // whole journal update instead would strand the claim permanently.
       expect(entry?.processing?.acquiredAt).toBe(claimedAt);
@@ -1930,8 +1894,6 @@ describe("BuildPipelineService", () => {
       });
     });
   });
-
-
 
   test("gives up after eight conflicting attempts to persist an outcome", async () => {
     await withService(async (service, storage, provider) => {
@@ -1955,9 +1917,11 @@ describe("BuildPipelineService", () => {
       let outcomeSaveAttempts = 0;
       storage.saveBuildPipeline = async (...args) => {
         const candidate = args[4] as BuildPipeline;
-        const isOutcomeSave = candidate.pendingInteractionResolution === undefined
-          && candidate.sessions.some((entry) =>
-            entry.interactionTranscript?.some((item) => item.id === request.id));
+        const isOutcomeSave =
+          candidate.pendingInteractionResolution === undefined &&
+          candidate.sessions.some((entry) =>
+            entry.interactionTranscript?.some((item) => item.id === request.id),
+          );
         if (isOutcomeSave) {
           // Every merge attempt loses to a concurrent writer. The retry budget
           // is what stops this from spinning for the life of the process.
@@ -1972,16 +1936,13 @@ describe("BuildPipelineService", () => {
         expect(outcomeSaveAttempts).toBe(8);
         const parked = await pipeline(storage, started.id);
         expect(parked.phase).toBe("building");
-        expect(parked.error)
-          .toContain("could not be persisted after concurrent updates");
+        expect(parked.error).toContain("could not be persisted after concurrent updates");
         expect(parked.pendingInteractionResolution?.interactionId).toBe(request.id);
       } finally {
         storage.saveBuildPipeline = originalSave;
       }
     });
   });
-
-
 
   test("refuses to merge an interaction outcome into a newer generation", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
@@ -2007,9 +1968,11 @@ describe("BuildPipelineService", () => {
       let diverted = false;
       storage.saveBuildPipeline = async (...args) => {
         const candidate = args[4] as BuildPipeline;
-        const isOutcomeSave = candidate.pendingInteractionResolution === undefined
-          && candidate.sessions.some((entry) =>
-            entry.interactionTranscript?.some((item) => item.id === request.id));
+        const isOutcomeSave =
+          candidate.pendingInteractionResolution === undefined &&
+          candidate.sessions.some((entry) =>
+            entry.interactionTranscript?.some((item) => item.id === request.id),
+          );
         if (isOutcomeSave && !diverted) {
           diverted = true;
           // Another backend has already claimed a different interaction into
@@ -2028,17 +1991,13 @@ describe("BuildPipelineService", () => {
 
         const parked = await pipeline(storage, started.id);
         expect(parked.phase).toBe("building");
-        expect(parked.error)
-          .toContain("could not be merged into the current pipeline generation");
-        expect(parked.pendingInteractionResolution?.journalId)
-          .toBe("a-newer-journal-claim");
+        expect(parked.error).toContain("could not be merged into the current pipeline generation");
+        expect(parked.pendingInteractionResolution?.journalId).toBe("a-newer-journal-claim");
       } finally {
         storage.saveBuildPipeline = originalSave;
       }
     });
   });
-
-
 
   test("rethrows a pending-envelope conflict no other writer explains", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
@@ -2064,19 +2023,18 @@ describe("BuildPipelineService", () => {
       let diverted = false;
       storage.saveBuildPipeline = async (...args) => {
         const candidate = args[4] as BuildPipeline;
-        if (
-          !diverted
-          && candidate.pendingInteractionResolution?.interactionId === request.id
-        ) {
+        if (!diverted && candidate.pendingInteractionResolution?.interactionId === request.id) {
           diverted = true;
           // An unrelated concurrent write: the envelope is neither on disk nor
           // durably resolved, so the loss is real and must surface.
           await mutateStored(concurrentStorage, started.id, (snapshot) => {
-            snapshot.pendingUserMessages = [{
-              id: "concurrent-message",
-              text: "An unrelated concurrent write",
-              createdAt: new Date().toISOString(),
-            }];
+            snapshot.pendingUserMessages = [
+              {
+                id: "concurrent-message",
+                text: "An unrelated concurrent write",
+                createdAt: new Date().toISOString(),
+              },
+            ];
           });
         }
         return originalSave(...args);
@@ -2089,18 +2047,17 @@ describe("BuildPipelineService", () => {
           phase: "failed",
           error: "Build pipeline revision conflict",
         });
-        expect((await storage.getAgentInteractionResolutionJournal()).entries)
-          .toContainEqual(expect.objectContaining({
+        expect((await storage.getAgentInteractionResolutionJournal()).entries).toContainEqual(
+          expect.objectContaining({
             interactionId: request.id,
             state: "claimed",
-          }));
+          }),
+        );
       } finally {
         storage.saveBuildPipeline = originalSave;
       }
     });
   });
-
-
 
   test("reconnects rather than answering an interaction from an inactive generation", async () => {
     await withService(async (service, storage, provider) => {
@@ -2132,13 +2089,10 @@ describe("BuildPipelineService", () => {
       expect(resolveCalls).toBe(0);
       const parked = await pipeline(storage, started.id);
       expect(parked.phase).toBe("building");
-      expect(parked.error)
-        .toContain("belongs to an inactive pipeline generation");
+      expect(parked.error).toContain("belongs to an inactive pipeline generation");
       expect(parked.reconnectAttempt).toBeDefined();
     });
   });
-
-
 
   test("reconnects when an existing claim names a different workflow generation", async () => {
     await withService(async (service, storage, provider) => {
@@ -2160,22 +2114,24 @@ describe("BuildPipelineService", () => {
       });
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "foreign-fence-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            // A stage that has since been restarted owns this claim.
-            fence: "a-superseded-session-key",
-            claimedAt: Date.now(),
+        entries: [
+          {
+            id: "foreign-fence-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              // A stage that has since been restarted owns this claim.
+              fence: "a-superseded-session-key",
+              claimedAt: Date.now(),
+            },
           },
-        }],
+        ],
       }));
 
       await service.advanceNow(started.id);
@@ -2187,8 +2143,6 @@ describe("BuildPipelineService", () => {
       });
     });
   });
-
-
 
   test("reconnects when a terminal interaction reappears at the provider", async () => {
     await withService(async (service, storage, provider) => {
@@ -2211,24 +2165,26 @@ describe("BuildPipelineService", () => {
       });
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "terminal-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "workflow-recorded",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "terminal-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "workflow-recorded",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
+            outcome: "auto-declined",
+            providerResolvedAt: claimedAt,
+            workflowRecordedAt: claimedAt,
           },
-          outcome: "auto-declined",
-          providerResolvedAt: claimedAt,
-          workflowRecordedAt: claimedAt,
-        }],
+        ],
       }));
 
       await service.advanceNow(started.id);
@@ -2242,8 +2198,6 @@ describe("BuildPipelineService", () => {
       });
     });
   });
-
-
 
   test("fails a build whose interaction claim was lost without a durable outcome", async () => {
     await withService(async (service, storage, provider) => {
@@ -2293,8 +2247,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("clears a lost-claim envelope whose outcome is already durable", async () => {
     await withService(async (service, storage, provider) => {
       const { started, session } = await startBuilding(service, storage);
@@ -2316,17 +2268,19 @@ describe("BuildPipelineService", () => {
       const resolvedAt = Date.now();
       await mutateStored(storage, started.id, (snapshot) => {
         const current = snapshot.sessions[snapshot.currentSessionIndex]!;
-        current.interactionTranscript = [{
-          id: request.id,
-          provider: "claude",
-          kind: "question",
-          phase: "build",
-          requestedAt: request.createdAt,
-          resolvedAt,
-          outcome: "auto-declined-headless",
-          title: request.presentation.title,
-          questions: [],
-        }];
+        current.interactionTranscript = [
+          {
+            id: request.id,
+            provider: "claude",
+            kind: "question",
+            phase: "build",
+            requestedAt: request.createdAt,
+            resolvedAt,
+            outcome: "auto-declined-headless",
+            title: request.presentation.title,
+            questions: [],
+          },
+        ];
         current.autoDeclineCount = 1;
         snapshot.autoDeclineCount = 1;
         snapshot.pendingInteractionResolution = pendingEnvelope(
@@ -2343,12 +2297,11 @@ describe("BuildPipelineService", () => {
       const cleared = await pipeline(storage, started.id);
       expect(cleared).toMatchObject({ phase: "building", autoDeclineCount: 1 });
       expect(cleared.pendingInteractionResolution).toBeUndefined();
-      expect(cleared.sessions[cleared.currentSessionIndex]?.interactionTranscript)
-        .toEqual([expect.objectContaining({ id: request.id })]);
+      expect(cleared.sessions[cleared.currentSessionIndex]?.interactionTranscript).toEqual([
+        expect.objectContaining({ id: request.id }),
+      ]);
     });
   });
-
-
 
   test("reconnects when a merged outcome no longer has its pipeline session", async () => {
     await withService(async (service, storage, provider, _invocations, controls) => {
@@ -2374,9 +2327,11 @@ describe("BuildPipelineService", () => {
       let diverted = false;
       storage.saveBuildPipeline = async (...args) => {
         const candidate = args[4] as BuildPipeline;
-        const isOutcomeSave = candidate.pendingInteractionResolution === undefined
-          && candidate.sessions.some((entry) =>
-            entry.interactionTranscript?.some((item) => item.id === request.id));
+        const isOutcomeSave =
+          candidate.pendingInteractionResolution === undefined &&
+          candidate.sessions.some((entry) =>
+            entry.interactionTranscript?.some((item) => item.id === request.id),
+          );
         if (isOutcomeSave && !diverted) {
           diverted = true;
           // The stage was restarted elsewhere, so the generation this outcome
@@ -2403,8 +2358,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("infers a terminal outcome when the request disappears before the lease", async () => {
     await withService(async (service, storage, provider) => {
       const { started, session } = await startBuilding(service, storage);
@@ -2412,21 +2365,23 @@ describe("BuildPipelineService", () => {
       const claimedAt = Date.now();
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "vanishing-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "vanishing-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
           },
-        }],
+        ],
       }));
       let listCalls = 0;
       let resolveCalls = 0;
@@ -2453,12 +2408,11 @@ describe("BuildPipelineService", () => {
       expect(resolveCalls).toBe(0);
       const resolved = await pipeline(storage, started.id);
       expect(resolved).toMatchObject({ phase: "building", autoDeclineCount: 1 });
-      expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
-        .toEqual([expect.objectContaining({ id: request.id })]);
+      expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript).toEqual([
+        expect.objectContaining({ id: request.id }),
+      ]);
     });
   });
-
-
 
   test("clears the pending envelope when the journal already holds the outcome", async () => {
     await withService(async (service, storage, provider) => {
@@ -2481,38 +2435,42 @@ describe("BuildPipelineService", () => {
       const resolvedAt = Date.now();
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "already-recorded-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "workflow-recorded",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt: resolvedAt,
+        entries: [
+          {
+            id: "already-recorded-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "workflow-recorded",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt: resolvedAt,
+            },
+            outcome: "auto-declined",
+            providerResolvedAt: resolvedAt,
+            workflowRecordedAt: resolvedAt,
           },
-          outcome: "auto-declined",
-          providerResolvedAt: resolvedAt,
-          workflowRecordedAt: resolvedAt,
-        }],
+        ],
       }));
       await mutateStored(storage, started.id, (snapshot) => {
         const current = snapshot.sessions[snapshot.currentSessionIndex]!;
-        current.interactionTranscript = [{
-          id: request.id,
-          provider: "claude",
-          kind: "question",
-          phase: "build",
-          requestedAt: request.createdAt,
-          resolvedAt,
-          outcome: "auto-declined-headless",
-          title: request.presentation.title,
-          questions: [],
-        }];
+        current.interactionTranscript = [
+          {
+            id: request.id,
+            provider: "claude",
+            kind: "question",
+            phase: "build",
+            requestedAt: request.createdAt,
+            resolvedAt,
+            outcome: "auto-declined-headless",
+            title: request.presentation.title,
+            questions: [],
+          },
+        ];
         current.autoDeclineCount = 1;
         snapshot.autoDeclineCount = 1;
         snapshot.pendingInteractionResolution = pendingEnvelope(
@@ -2530,12 +2488,9 @@ describe("BuildPipelineService", () => {
       expect(cleared).toMatchObject({ phase: "building", autoDeclineCount: 1 });
       expect(cleared.pendingInteractionResolution).toBeUndefined();
       expect(cleared.error).toBeUndefined();
-      expect(cleared.sessions[cleared.currentSessionIndex]?.interactionTranscript)
-        .toHaveLength(1);
+      expect(cleared.sessions[cleared.currentSessionIndex]?.interactionTranscript).toHaveLength(1);
     });
   });
-
-
 
   test("finishes only durably recorded build-pipeline journal entries on start", async () => {
     await withService(async (service, storage, provider) => {
@@ -2571,7 +2526,8 @@ describe("BuildPipelineService", () => {
                   state: "provider-resolved" as const,
                   workflowRecordedAt: undefined,
                 }
-              : entry),
+              : entry,
+          ),
           {
             id: "orphan-journal",
             interactionId: "orphan-question",
@@ -2620,19 +2576,21 @@ describe("BuildPipelineService", () => {
         await restored.init();
 
         const { entries } = await storage.getAgentInteractionResolutionJournal();
-        expect(entries.find((entry) => entry.interactionId === request.id))
-          .toMatchObject({ state: "workflow-recorded", outcome: "auto-declined" });
-        expect(entries.find((entry) => entry.id === "orphan-journal"))
-          .toMatchObject({ state: "provider-resolved" });
-        expect(entries.find((entry) => entry.id === "looped-review-journal"))
-          .toMatchObject({ state: "provider-resolved" });
+        expect(entries.find((entry) => entry.interactionId === request.id)).toMatchObject({
+          state: "workflow-recorded",
+          outcome: "auto-declined",
+        });
+        expect(entries.find((entry) => entry.id === "orphan-journal")).toMatchObject({
+          state: "provider-resolved",
+        });
+        expect(entries.find((entry) => entry.id === "looped-review-journal")).toMatchObject({
+          state: "provider-resolved",
+        });
       } finally {
         await restored.shutdown();
       }
     });
   });
-
-
 
   test("recovers a permission claim the provider no longer exposes and fails closed", async () => {
     await withService(async (service, storage, provider) => {
@@ -2640,21 +2598,23 @@ describe("BuildPipelineService", () => {
       const claimedAt = Date.now();
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "recovered-permission-journal",
-          interactionId: "recovered-permission",
-          provider: "claude",
-          kind: "permission",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: started.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt,
+        entries: [
+          {
+            id: "recovered-permission-journal",
+            interactionId: "recovered-permission",
+            provider: "claude",
+            kind: "permission",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: started.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt,
+            },
           },
-        }],
+        ],
       }));
       let resolveCalls = 0;
       installInteractions(provider, {
@@ -2683,12 +2643,14 @@ describe("BuildPipelineService", () => {
         await service.advanceNow(started.id);
 
         expect(resolveCalls).toBe(0);
-        expect(envelopes).toEqual([expect.objectContaining({
-          journalId: "recovered-permission-journal",
-          interactionId: "recovered-permission",
-          action: "deny-and-fail",
-          title: "Provider interaction recovered after restart",
-        })]);
+        expect(envelopes).toEqual([
+          expect.objectContaining({
+            journalId: "recovered-permission-journal",
+            interactionId: "recovered-permission",
+            action: "deny-and-fail",
+            title: "Provider interaction recovered after restart",
+          }),
+        ]);
         expect(await pipeline(storage, started.id)).toMatchObject({
           phase: "failed",
           error: expect.stringContaining("requested unexpected authorization"),
@@ -2702,8 +2664,6 @@ describe("BuildPipelineService", () => {
       }
     });
   });
-
-
 
   test("keeps a resolved interaction when the journal bookkeeping write fails", async () => {
     await withService(async (service, storage, provider) => {
@@ -2723,18 +2683,17 @@ describe("BuildPipelineService", () => {
           return { result: "applied", sessionId, interactionId, revision: 2 };
         },
       });
-      const originalUpdate = storage
-        .updateAgentInteractionResolutionJournal.bind(storage);
-      const originalGet = storage
-        .getAgentInteractionResolutionJournal.bind(storage);
+      const originalUpdate = storage.updateAgentInteractionResolutionJournal.bind(storage);
+      const originalGet = storage.getAgentInteractionResolutionJournal.bind(storage);
       storage.updateAgentInteractionResolutionJournal = async (update) => {
         // Fail only the final bookkeeping transition; the provider boundary is
         // already durable by then and start-up recovery repairs the journal.
         const projected = update(structuredClone(await originalGet()));
-        if (projected.entries.some((entry) =>
-          entry.interactionId === request.id
-          && entry.state === "workflow-recorded"
-        )) {
+        if (
+          projected.entries.some(
+            (entry) => entry.interactionId === request.id && entry.state === "workflow-recorded",
+          )
+        ) {
           throw new Error("The interaction journal is unavailable");
         }
         return originalUpdate(update);
@@ -2746,20 +2705,20 @@ describe("BuildPipelineService", () => {
         expect(resolved).toMatchObject({ phase: "building", autoDeclineCount: 1 });
         expect(resolved.error).toBeUndefined();
         expect(resolved.pendingInteractionResolution).toBeUndefined();
-        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript)
-          .toEqual([expect.objectContaining({ id: request.id })]);
-        expect((await storage.getAgentInteractionResolutionJournal()).entries)
-          .toContainEqual(expect.objectContaining({
+        expect(resolved.sessions[resolved.currentSessionIndex]?.interactionTranscript).toEqual([
+          expect.objectContaining({ id: request.id }),
+        ]);
+        expect((await storage.getAgentInteractionResolutionJournal()).entries).toContainEqual(
+          expect.objectContaining({
             interactionId: request.id,
             state: "provider-resolved",
-          }));
+          }),
+        );
       } finally {
         storage.updateAgentInteractionResolutionJournal = originalUpdate;
       }
     });
   });
-
-
 
   test("merges repeated interactions of one kind into a single summary entry", async () => {
     await withService(async (service, storage, provider) => {
@@ -2770,10 +2729,7 @@ describe("BuildPipelineService", () => {
         createdAt: firstCreatedAt,
         updatedAt: firstCreatedAt,
       };
-      let requests = [
-        first,
-        pendingQuestion(session.sdkSessionId, "summary-question-2"),
-      ];
+      let requests = [first, pendingQuestion(session.sdkSessionId, "summary-question-2")];
       installInteractions(provider, {
         async listPendingInteractions() {
           return {
@@ -2808,12 +2764,11 @@ describe("BuildPipelineService", () => {
       // lastResolvedAt, so one entry still bounds the whole run.
       expect(merged?.entries[0]?.count).toBe(2);
       expect(merged?.entries[0]?.firstSeenAt).toBe(firstCreatedAt);
-      expect(merged?.entries[0]?.lastResolvedAt)
-        .toBeGreaterThanOrEqual(afterFirst!.entries[0]!.lastResolvedAt!);
+      expect(merged?.entries[0]?.lastResolvedAt).toBeGreaterThanOrEqual(
+        afterFirst!.entries[0]!.lastResolvedAt!,
+      );
     });
   });
-
-
 
   test("folds a new interaction into a matching outcome at summary capacity", async () => {
     await withService(async (service, storage, provider) => {
@@ -2834,9 +2789,7 @@ describe("BuildPipelineService", () => {
               firstSeenAt: seededAt,
               lastResolvedAt: seededAt,
               // Exactly one seeded entry can absorb the new auto-decline.
-              outcome: index === 7
-                ? "auto-declined" as const
-                : "denied" as const,
+              outcome: index === 7 ? ("auto-declined" as const) : ("denied" as const),
               count: 1,
             }),
           ),
@@ -2861,24 +2814,22 @@ describe("BuildPipelineService", () => {
 
       const resolved = await pipeline(storage, started.id);
       const current = resolved.sessions[resolved.currentSessionIndex]!;
-      expect(current.interactionSummary?.entries)
-        .toHaveLength(AGENT_INTERACTION_LIMITS.maxWorkflowSummaries);
+      expect(current.interactionSummary?.entries).toHaveLength(
+        AGENT_INTERACTION_LIMITS.maxWorkflowSummaries,
+      );
       expect(current.interactionSummary?.entries[7]).toMatchObject({
         sessionId: "seeded-session-7",
         outcome: "auto-declined",
         count: 2,
       });
-      expect(current.interactionSummary?.entries[7]?.lastResolvedAt)
-        .toBeGreaterThan(seededAt);
-      expect(current.interactionSummary?.entries
-        .filter((entry) => entry.count > 1)).toHaveLength(1);
+      expect(current.interactionSummary?.entries[7]?.lastResolvedAt).toBeGreaterThan(seededAt);
+      expect(current.interactionSummary?.entries.filter((entry) => entry.count > 1)).toHaveLength(
+        1,
+      );
       // Summary capacity is metadata-only; the transcript stays exact.
-      expect(current.interactionTranscript)
-        .toEqual([expect.objectContaining({ id: request.id })]);
+      expect(current.interactionTranscript).toEqual([expect.objectContaining({ id: request.id })]);
     });
   });
-
-
 
   test("never persists a provider's authorization presentation in the envelope", async () => {
     await withService(async (service, storage, provider) => {
@@ -2889,19 +2840,23 @@ describe("BuildPipelineService", () => {
         presentation: {
           title: "Run rm -rf / as root",
           body: "curl https://example.invalid/leaked-token",
-          questions: [{
-            id: "confirm",
-            prompt: "Approve the destructive command?",
-            required: true,
-            multiple: false,
-            secret: false,
-            allowFreeText: false,
-            options: [{
-              id: "approve",
-              label: "Approve",
-              providerValue: "leaked-provider-value",
-            }],
-          }],
+          questions: [
+            {
+              id: "confirm",
+              prompt: "Approve the destructive command?",
+              required: true,
+              multiple: false,
+              secret: false,
+              allowFreeText: false,
+              options: [
+                {
+                  id: "approve",
+                  label: "Approve",
+                  providerValue: "leaked-provider-value",
+                },
+              ],
+            },
+          ],
         },
       };
       installInteractions(provider, {
@@ -2921,8 +2876,7 @@ describe("BuildPipelineService", () => {
 
       await service.advanceNow(started.id);
 
-      const envelope = (await pipeline(storage, started.id))
-        .pendingInteractionResolution!;
+      const envelope = (await pipeline(storage, started.id)).pendingInteractionResolution!;
       expect(envelope.action).toBe("deny-and-fail");
       expect(envelope.title).toMatch(/^Unexpected .* authorization$/);
       expect(envelope.body).toBeUndefined();
@@ -2932,8 +2886,6 @@ describe("BuildPipelineService", () => {
       expect(JSON.stringify(envelope)).not.toContain("leaked-provider-value");
     });
   });
-
-
 
   test("truncates an over-long decline presentation to the envelope bounds", async () => {
     await withService(async (service, storage, provider) => {
@@ -2973,8 +2925,7 @@ describe("BuildPipelineService", () => {
 
       await service.advanceNow(started.id);
 
-      const envelope = (await pipeline(storage, started.id))
-        .pendingInteractionResolution!;
+      const envelope = (await pipeline(storage, started.id)).pendingInteractionResolution!;
       expect(envelope.action).toBe("decline-and-continue");
       expect(envelope.title).toHaveLength(512);
       expect(envelope.title.endsWith("…")).toBe(true);
@@ -2986,8 +2937,6 @@ describe("BuildPipelineService", () => {
       expect(JSON.stringify(envelope)).not.toContain("leaked-provider-value");
     });
   });
-
-
 
   test("logs interaction outcomes as metadata only", async () => {
     await withService(async (service, storage, provider) => {
@@ -3018,12 +2967,16 @@ describe("BuildPipelineService", () => {
         console.info = originalInfo;
       }
 
-      const entry = logged.find((args) =>
-        args[0] === "[build-pipeline] interaction resolved");
+      const entry = logged.find((args) => args[0] === "[build-pipeline] interaction resolved");
       expect(entry).toBeDefined();
       const payload = entry![1] as Record<string, unknown>;
       expect(Object.keys(payload).sort()).toEqual([
-        "count", "kind", "latencyMs", "outcome", "phase", "provider",
+        "count",
+        "kind",
+        "latencyMs",
+        "outcome",
+        "phase",
+        "provider",
       ]);
       expect(payload).toMatchObject({
         provider: "claude",
@@ -3039,8 +2992,6 @@ describe("BuildPipelineService", () => {
       expect(serialized).not.toContain(started.id);
     });
   });
-
-
 
   test("rejects an interaction retry for a build with no interactive failure", async () => {
     await withService(async (service, storage) => {
@@ -3062,14 +3013,12 @@ describe("BuildPipelineService", () => {
       await expect(service.retryInteractionFailure(started.id)).rejects.toThrow(
         "This build has no interactive request failure to retry",
       );
-      expect((await pipeline(storage, started.id))).toMatchObject({
+      expect(await pipeline(storage, started.id)).toMatchObject({
         phase: "failed",
         failureContext: { kind: "stage-transition" },
       });
     });
   });
-
-
 
   test("rejects an interaction retry for a phase that owns no stage session", async () => {
     await withService(async (service, storage) => {
@@ -3101,8 +3050,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("fails an addressing interaction retry that has no structured review", async () => {
     await withService(async (service, storage) => {
       const { started } = await startBuilding(service, storage);
@@ -3125,8 +3072,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("appends the unattended policy to the stage and resume prompts", async () => {
     await withService(async (service, storage, provider) => {
       const { started } = await startBuilding(service, storage);
@@ -3144,14 +3089,11 @@ describe("BuildPipelineService", () => {
 
       const resumed = provider.sent.at(-1)!;
       expect(provider.sent).toHaveLength(2);
-      expect(resumed.prompt).toContain(
-        "Resume the build pipeline from where you left off.",
-      );
+      expect(resumed.prompt).toContain("Resume the build pipeline from where you left off.");
       expect(resumed.prompt).toContain(
         "This is a non-interactive build session: no user can answer a provider input request.",
       );
       expect((await pipeline(storage, started.id)).phase).toBe("building");
     });
   });
-
 });

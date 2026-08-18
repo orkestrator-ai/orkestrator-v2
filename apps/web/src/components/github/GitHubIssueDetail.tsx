@@ -42,18 +42,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
-import {
-  openInBrowser,
-  retryBuildPipelineCompletionComment,
-} from "@/lib/backend";
-import {
-  githubIssueDetailKey,
-  useGitHubIssuesStore,
-} from "@/stores/githubIssuesStore";
-import {
-  useBuildPipelineStore,
-  type BuildPipeline,
-} from "@/stores/buildPipelineStore";
+import { openInBrowser, retryBuildPipelineCompletionComment } from "@/lib/backend";
+import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
+import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import type { EnvironmentType } from "@/types";
 import type {
   GitHubIssue,
@@ -61,10 +52,7 @@ import type {
   GitHubIssueStatus,
   GitHubRepository,
 } from "@/types/github";
-import {
-  GITHUB_WORKFLOW_STAGES,
-  getGitHubStageLabel,
-} from "./GitHubIssueCard";
+import { GITHUB_WORKFLOW_STAGES, getGitHubStageLabel } from "./GitHubIssueCard";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 
@@ -158,9 +146,7 @@ function GitHubComment({
   return (
     <article className="rounded-lg border border-border/60 bg-card/40">
       <div className="flex items-center gap-2 border-b border-border/50 px-3 py-2 text-xs">
-        <span className="font-medium text-foreground">
-          {comment.author?.login ?? "Ghost"}
-        </span>
+        <span className="font-medium text-foreground">{comment.author?.login ?? "Ghost"}</span>
         <span className="text-muted-foreground">{formatGitHubDate(comment.createdAt)}</span>
         {comment.isEdited && <span className="text-muted-foreground">(edited)</span>}
         {comment.canEdit && !editing && (
@@ -282,9 +268,7 @@ export function GitHubIssueDetailContent({
   const mutationErrors = useGitHubIssuesStore((state) => state.mutationErrors);
 
   const pipelines = useBuildPipelineStore((state) => state.pipelines);
-  const replacePipeline = useBuildPipelineStore(
-    (state) => state.replacePipeline,
-  );
+  const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromGitHubIssue, navigateToPipeline } = buildPipeline;
 
   const [editing, setEditing] = useState(false);
@@ -324,9 +308,7 @@ export function GitHubIssueDetailContent({
   const [closeError, setCloseError] = useState<string | null>(null);
   const [startingType, setStartingType] = useState<EnvironmentType | null>(null);
   const [buildError, setBuildError] = useState<string | null>(null);
-  const [retryingCompletionIds, setRetryingCompletionIds] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [retryingCompletionIds, setRetryingCompletionIds] = useState<Set<string>>(() => new Set());
 
   const displayedIssue = detail ?? summary;
   const editKey = `edit:${projectId}:${issueNumber}`;
@@ -347,9 +329,7 @@ export function GitHubIssueDetailContent({
     (pipeline) => pipeline.completionCommentStatus === "failed",
   );
   const activePipeline =
-    selectedPipeline &&
-    selectedPipeline.phase !== "complete" &&
-    selectedPipeline.phase !== "failed"
+    selectedPipeline && selectedPipeline.phase !== "complete" && selectedPipeline.phase !== "failed"
       ? selectedPipeline
       : undefined;
 
@@ -454,7 +434,9 @@ export function GitHubIssueDetailContent({
         environmentType,
       );
       if (!pipelineId) {
-        setBuildError("The build pipeline could not be started. Review the error details and try again.");
+        setBuildError(
+          "The build pipeline could not be started. Review the error details and try again.",
+        );
       }
     } catch (error) {
       setBuildError(errorMessage(error, "Could not start the build."));
@@ -542,9 +524,7 @@ export function GitHubIssueDetailContent({
                 <div className="flex flex-wrap items-center gap-2 border-b border-border/60 px-4 py-3">
                   <Select
                     value={detail.status}
-                    onValueChange={(value) =>
-                      void handleStatusChange(value as GitHubIssueStatus)
-                    }
+                    onValueChange={(value) => void handleStatusChange(value as GitHubIssueStatus)}
                     disabled={changingStatus}
                   >
                     <SelectTrigger
@@ -589,8 +569,9 @@ export function GitHubIssueDetailContent({
                         size="sm"
                         disabled={saving}
                         onClick={() => {
-                          void Promise.all([clearTitleDraft(), clearBodyDraft()])
-                            .catch(() => undefined);
+                          void Promise.all([clearTitleDraft(), clearBodyDraft()]).catch(
+                            () => undefined,
+                          );
                           setEditError(null);
                           setEditing(false);
                         }}
@@ -702,9 +683,7 @@ export function GitHubIssueDetailContent({
                 <div className="flex items-center gap-2">
                   <MessageSquare className="h-4 w-4 text-muted-foreground" />
                   <h3 className="text-sm font-semibold">Discussion</h3>
-                  <span className="text-xs text-muted-foreground">
-                    {detail.comments.length}
-                  </span>
+                  <span className="text-xs text-muted-foreground">{detail.comments.length}</span>
                 </div>
                 {detail.comments.length ? (
                   detail.comments.map((comment) => (
@@ -835,8 +814,7 @@ export function GitHubIssueDetailContent({
                   >
                     <span className="min-w-0 flex-1 text-xs text-destructive">
                       GitHub completion comment failed for build{" "}
-                      {formatGitHubDate(pipeline.createdAt)}:{" "}
-                      {pipeline.completionCommentError}
+                      {formatGitHubDate(pipeline.createdAt)}: {pipeline.completionCommentError}
                     </span>
                     <Button
                       type="button"
@@ -846,12 +824,9 @@ export function GitHubIssueDetailContent({
                       disabled={retryingCompletionIds.has(pipeline.id)}
                       onClick={async () => {
                         if (retryingCompletionIds.has(pipeline.id)) return;
-                        setRetryingCompletionIds((current) =>
-                          new Set(current).add(pipeline.id));
+                        setRetryingCompletionIds((current) => new Set(current).add(pipeline.id));
                         try {
-                          replacePipeline(
-                            await retryBuildPipelineCompletionComment(pipeline.id),
-                          );
+                          replacePipeline(await retryBuildPipelineCompletionComment(pipeline.id));
                         } catch (error) {
                           toast.error("Failed to retry GitHub completion comment", {
                             description: errorMessage(
@@ -873,9 +848,7 @@ export function GitHubIssueDetailContent({
                       ) : (
                         <RefreshCw className="h-3.5 w-3.5" />
                       )}
-                      {retryingCompletionIds.has(pipeline.id)
-                        ? "Retrying…"
-                        : "Retry comment"}
+                      {retryingCompletionIds.has(pipeline.id) ? "Retrying…" : "Retry comment"}
                     </Button>
                   </div>
                 ))}
@@ -930,8 +903,8 @@ export function GitHubIssueDetailContent({
           <AlertDialogHeader>
             <AlertDialogTitle>Close issue #{issueNumber}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This closes the issue on GitHub and removes it from the open-issue
-              board. It does not change or stop any builds.
+              This closes the issue on GitHub and removes it from the open-issue board. It does not
+              change or stop any builds.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {closeError && (

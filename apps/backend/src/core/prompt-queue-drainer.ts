@@ -33,8 +33,10 @@ function nonBlank(value: unknown): value is string {
  * finished. Mirrors the guard `NativeAgentService` applies to its own queues.
  */
 function isEnvironmentReadyForAgents(environment: Environment): boolean {
-  return environment.status === "running"
-    && (environment.setupPhase === "ready" || environment.setupScriptsComplete === true);
+  return (
+    environment.status === "running" &&
+    (environment.setupPhase === "ready" || environment.setupScriptsComplete === true)
+  );
 }
 
 /**
@@ -44,8 +46,9 @@ function isEnvironmentReadyForAgents(environment: Environment): boolean {
  * condition "no first prompt has driven a rename yet".
  */
 function isGeneratedEnvironmentName(name: string): boolean {
-  return LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name)
-    || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name);
+  return (
+    LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name) || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name)
+  );
 }
 
 export interface PromptQueueDrainerOptions {
@@ -89,10 +92,7 @@ export class PromptQueueDrainer {
 
   async shutdown(): Promise<void> {
     this.stopped = true;
-    await Promise.allSettled([
-      ...(this.sweep ? [this.sweep] : []),
-      ...this.queueTasks.values(),
-    ]);
+    await Promise.allSettled([...(this.sweep ? [this.sweep] : []), ...this.queueTasks.values()]);
     this.queueTasks.clear();
     this.queueAttempts.clear();
     this.queueRetryAt.clear();
@@ -126,11 +126,11 @@ export class PromptQueueDrainer {
           const separator = queue.queueKey.indexOf("\0");
           if (queue.queueKey.slice(0, separator) !== TMUX_AGENT) return false;
           return (
-            (queue.messages.length > 0 || queue.inFlight !== undefined)
+            (queue.messages.length > 0 || queue.inFlight !== undefined) &&
             // A latched dispatch error is the user's to clear; retrying it here
             // would spin on the same prompt and hide the error they must see.
-            && queue.dispatchError === undefined
-            && (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
+            queue.dispatchError === undefined &&
+            (this.queueRetryAt.get(queue.queueKey) ?? 0) <= now
           );
         })
         .map((queue) => this.drainQueue(queue.queueKey)),
@@ -157,10 +157,9 @@ export class PromptQueueDrainer {
       // bypasses every inner handler and the sweep's `allSettled` swallows it,
       // so without this the queue would be retried every two seconds with no
       // attempt counter, no latch and no log.
-      await this.defer(
-        queueKey,
-        error instanceof Error ? error.name : "unknown drain error",
-      ).catch(() => undefined);
+      await this.defer(queueKey, error instanceof Error ? error.name : "unknown drain error").catch(
+        () => undefined,
+      );
     }
   }
 
@@ -182,10 +181,7 @@ export class PromptQueueDrainer {
       return;
     }
     if (queue.inFlight?.submittedAt) {
-      await this.storage.acknowledgePromptQueueDispatch(
-        queueKey,
-        queue.inFlight.requestId,
-      );
+      await this.storage.acknowledgePromptQueueDispatch(queueKey, queue.inFlight.requestId);
       this.confirmedSubmissions.delete(queueKey);
       this.clearBackoff(queueKey);
       return;
@@ -197,16 +193,13 @@ export class PromptQueueDrainer {
           queue.inFlight.requestId,
         );
         if (
-          submitted?.inFlight?.requestId !== queue.inFlight.requestId
-          || !submitted.inFlight.submittedAt
+          submitted?.inFlight?.requestId !== queue.inFlight.requestId ||
+          !submitted.inFlight.submittedAt
         ) {
           this.confirmedSubmissions.delete(queueKey);
           return;
         }
-        await this.storage.acknowledgePromptQueueDispatch(
-          queueKey,
-          queue.inFlight.requestId,
-        );
+        await this.storage.acknowledgePromptQueueDispatch(queueKey, queue.inFlight.requestId);
         this.confirmedSubmissions.delete(queueKey);
         this.clearBackoff(queueKey);
         return;
@@ -230,8 +223,7 @@ export class PromptQueueDrainer {
 
     // The composer owns the pane while the user is mid-draft. Draining under it
     // would type the queued prompt into whatever they are still writing.
-    const draftKey =
-      `${TMUX_AGENT}:${queue.environmentId}:${encodeURIComponent(stateKey)}`;
+    const draftKey = `${TMUX_AGENT}:${queue.environmentId}:${encodeURIComponent(stateKey)}`;
     const draft = await this.storage.getComposeDraft(draftKey);
     if (this.composeDraftHoldsQueue(draft?.value)) return;
 
@@ -277,8 +269,8 @@ export class PromptQueueDrainer {
           reservation.requestId,
         );
         if (
-          submitted?.inFlight?.requestId !== reservation.requestId
-          || !submitted.inFlight.submittedAt
+          submitted?.inFlight?.requestId !== reservation.requestId ||
+          !submitted.inFlight.submittedAt
         ) {
           this.confirmedSubmissions.delete(queueKey);
           return;
@@ -306,11 +298,11 @@ export class PromptQueueDrainer {
       this.storage.getComposeDraft(draftKey),
     ]);
     if (
-      !latestEnvironment
-      || latestEnvironment.deletionRequestedAt
-      || !isEnvironmentReadyForAgents(latestEnvironment)
-      || latestQueue?.environmentId !== target.environmentId
-      || latestQueue.inFlight?.requestId !== reservation.requestId
+      !latestEnvironment ||
+      latestEnvironment.deletionRequestedAt ||
+      !isEnvironmentReadyForAgents(latestEnvironment) ||
+      latestQueue?.environmentId !== target.environmentId ||
+      latestQueue.inFlight?.requestId !== reservation.requestId
     ) {
       await this.storage.failPromptQueueDispatch(
         queueKey,
@@ -344,9 +336,10 @@ export class PromptQueueDrainer {
       reservation.requestId,
     );
     if (
-      submitting?.inFlight?.requestId !== reservation.requestId
-      || !submitting.inFlight.submittingAt
-    ) return;
+      submitting?.inFlight?.requestId !== reservation.requestId ||
+      !submitting.inFlight.submittingAt
+    )
+      return;
     try {
       await this.invoke("claude_tmux_submit_queued", {
         environmentId: target.environmentId,
@@ -371,8 +364,8 @@ export class PromptQueueDrainer {
       reservation.requestId,
     );
     if (
-      submitted?.inFlight?.requestId !== reservation.requestId
-      || !submitted.inFlight.submittedAt
+      submitted?.inFlight?.requestId !== reservation.requestId ||
+      !submitted.inFlight.submittedAt
     ) {
       this.confirmedSubmissions.delete(queueKey);
       return;
@@ -387,17 +380,12 @@ export class PromptQueueDrainer {
    * Once a reservation exists, failures are handled at their call sites and
    * parked with a durable error carrying that request identity.
    */
-  private async defer(
-    queueKey: string,
-    reason: string,
-  ): Promise<void> {
+  private async defer(queueKey: string, reason: string): Promise<void> {
     const attempts = (this.queueAttempts.get(queueKey) ?? 0) + 1;
     this.queueAttempts.set(queueKey, attempts);
     if (attempts >= (this.options.maxDispatchAttempts ?? MAX_QUEUE_DISPATCH_ATTEMPTS)) {
       // The key and the reason are safe to log; the prompt itself never is.
-      console.warn(
-        `[prompt-queue] tmux queue ${queueKey} has failed ${attempts} times: ${reason}`,
-      );
+      console.warn(`[prompt-queue] tmux queue ${queueKey} has failed ${attempts} times: ${reason}`);
     }
     const backoff = Math.min(
       this.options.retryCeilingMs ?? QUEUE_RETRY_CEILING_MS,
@@ -423,9 +411,9 @@ export class PromptQueueDrainer {
     const draft = value as Record<string, unknown>;
     if (typeof draft.text !== "string") return true;
     if (!Array.isArray(draft.mentions) || !Array.isArray(draft.attachments)) return true;
-    return draft.text.trim().length > 0
-      || draft.mentions.length > 0
-      || draft.attachments.length > 0;
+    return (
+      draft.text.trim().length > 0 || draft.mentions.length > 0 || draft.attachments.length > 0
+    );
   }
 
   private async renameEnvironmentFromFirstPrompt(

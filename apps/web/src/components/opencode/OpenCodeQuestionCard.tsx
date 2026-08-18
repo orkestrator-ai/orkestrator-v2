@@ -3,23 +3,15 @@ import type { OpencodeClient, QuestionRequest } from "@/lib/opencode-client";
 import { replyToQuestion, rejectQuestion } from "@/lib/opencode-client";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { openCodeQuestionDraftKey } from "@/stores/promptDraftStore";
-import {
-  QuestionCard,
-  type QuestionCardQuestion,
-} from "@/components/chat/QuestionCard";
+import { QuestionCard, type QuestionCardQuestion } from "@/components/chat/QuestionCard";
 
 interface OpenCodeQuestionCardProps {
   question: QuestionRequest;
   client: OpencodeClient;
 }
 
-export function OpenCodeQuestionCard({
-  question,
-  client,
-}: OpenCodeQuestionCardProps) {
-  const removePendingQuestion = useOpenCodeStore(
-    (state) => state.removePendingQuestion,
-  );
+export function OpenCodeQuestionCard({ question, client }: OpenCodeQuestionCardProps) {
+  const removePendingQuestion = useOpenCodeStore((state) => state.removePendingQuestion);
 
   const questions = useMemo<QuestionCardQuestion[]>(
     () =>
@@ -49,7 +41,8 @@ export function OpenCodeQuestionCard({
         return {
           applied: false,
           retryable: false,
-          message: "The response outcome is unknown. Reconnect or refresh OpenCode before trying again.",
+          message:
+            "The response outcome is unknown. Reconnect or refresh OpenCode before trying again.",
         };
       }
       return false;
@@ -68,7 +61,8 @@ export function OpenCodeQuestionCard({
       return {
         applied: false,
         retryable: false,
-        message: "The dismissal outcome is unknown. Reconnect or refresh OpenCode before trying again.",
+        message:
+          "The dismissal outcome is unknown. Reconnect or refresh OpenCode before trying again.",
       };
     }
     return false;

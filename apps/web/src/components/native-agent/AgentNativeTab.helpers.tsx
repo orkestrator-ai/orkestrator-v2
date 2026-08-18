@@ -1,10 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, History } from "lucide-react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -63,10 +57,7 @@ import {
 } from "@/stores/nativeComposeStore";
 import type { FileCandidate, FileMention } from "@/types";
 import { toast } from "sonner";
-import {
-  findNativeAgentAdapter,
-  nativeAgentAdapters,
-} from "./adapter";
+import { findNativeAgentAdapter, nativeAgentAdapters } from "./adapter";
 
 /**
  * Execution profiles offered before a tab is locked to a provider, and the
@@ -124,8 +115,7 @@ function activeAgentSummary(snapshots: NativeAgentActivitySnapshot[]): string {
 
   for (const status of ["pending", "running", "paused"] as const) {
     const tasks = snapshots.filter(
-      (snapshot) => snapshot.kind === "background-task"
-        && snapshot.backgroundTaskStatus === status,
+      (snapshot) => snapshot.kind === "background-task" && snapshot.backgroundTaskStatus === status,
     );
     if (tasks.length === 0) continue;
     const noun = tasks.length === 1 ? "background task" : "background tasks";
@@ -142,13 +132,20 @@ function backgroundTaskAnnouncementStatus(
   status: NativeAgentActivitySnapshot["backgroundTaskStatus"],
 ): string | undefined {
   switch (status) {
-    case "pending": return "starting";
-    case "running": return "running";
-    case "paused": return "paused";
-    case "completed": return "completed";
-    case "failed": return "failed";
-    case "killed": return "stopped";
-    default: return undefined;
+    case "pending":
+      return "starting";
+    case "running":
+      return "running";
+    case "paused":
+      return "paused";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "killed":
+      return "stopped";
+    default:
+      return undefined;
   }
 }
 
@@ -173,9 +170,10 @@ export function useNativeAgentActivityAnnouncement(
     scope: string;
     snapshots: Map<string, NativeAgentActivitySnapshot>;
   } | null>(null);
-  const [announcement, setAnnouncement] = useState<NativeAgentActivityAnnouncement>(
-    { text: "", seq: 0 },
-  );
+  const [announcement, setAnnouncement] = useState<NativeAgentActivityAnnouncement>({
+    text: "",
+    seq: 0,
+  });
   const announce = useCallback((text: string) => {
     setAnnouncement((previous) => ({ text, seq: previous.seq + 1 }));
   }, []);
@@ -194,9 +192,9 @@ export function useNativeAgentActivityAnnouncement(
     for (const [id, previous] of previousState.snapshots) {
       const next = current.get(id);
       if (
-        previous.kind === "background-task"
-        && next?.kind === "background-task"
-        && previous.backgroundTaskStatus !== next.backgroundTaskStatus
+        previous.kind === "background-task" &&
+        next?.kind === "background-task" &&
+        previous.backgroundTaskStatus !== next.backgroundTaskStatus
       ) {
         const status = backgroundTaskAnnouncementStatus(next.backgroundTaskStatus);
         if (status) lifecycleUpdates.push(`${next.label} ${status}.`);
@@ -228,11 +226,13 @@ export function extractNativePlanContent(messages: readonly NativeMessage[]): st
   const looksLikePlan = (path: string) => {
     const normalized = path.toLowerCase();
     const filename = normalized.split("/").at(-1) ?? "";
-    return /(^|[-_])plan\.md$/.test(filename)
-      || /plan[-_].*\.md$/.test(filename)
-      || [".claude/", "docs/plans/", "plans/"].some(
+    return (
+      /(^|[-_])plan\.md$/.test(filename) ||
+      /plan[-_].*\.md$/.test(filename) ||
+      [".claude/", "docs/plans/", "plans/"].some(
         (directory) => normalized.includes(directory) && normalized.endsWith(".md"),
-      );
+      )
+    );
   };
   for (const message of [...messages].reverse()) {
     if (message.role !== "assistant") continue;
@@ -290,7 +290,9 @@ export function NativeAgentResumePlatformDialog({
                 <span className="min-w-0">
                   <span className="block text-sm font-medium text-foreground">{adapter.label}</span>
                   <span className="block text-xs text-muted-foreground">
-                    {canResume ? "Choose a previous session" : "Session resume is not available yet"}
+                    {canResume
+                      ? "Choose a previous session"
+                      : "Session resume is not available yet"}
                   </span>
                 </span>
               </button>
@@ -335,37 +337,38 @@ export function UnassignedNativeAgentComposer({
   const updateStoreDraft = useNativeComposeStore((state) => state.updateDraft);
   const defaultPlatform = useConfigStore((state) => state.config.global.defaultAgent ?? "claude");
   const globalConfig = useConfigStore((state) => state.config.global);
-  const environment = useEnvironmentStore(
-    (state) => state.getEnvironmentById(environmentId),
-  );
+  const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const worktreePath = environment?.worktreePath;
-  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
+    useAgentModelFavorites();
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
   const platform = draft.platform ?? defaultPlatform;
   const selectedAdapter = findNativeAgentAdapter(platform);
-  const platformFastModeDefault = platform === "claude"
-    ? globalConfig.claudeNativeFastModeDefault ?? false
-    : platform === "codex"
-      ? globalConfig.codexNativeFastModeDefault ?? false
-      : false;
-  const effectiveFastMode = hasDraft ? draft.fastMode : platformFastModeDefault;
-  const updateDraft = useCallback((
-    key: string,
-    update: Partial<typeof draft>,
-  ) => {
-    const current = useNativeComposeStore.getState().drafts.get(key);
-    const nextPlatform = update.platform ?? current?.platform ?? platform;
-    const defaultFastMode = nextPlatform === "claude"
-      ? useConfigStore.getState().config.global.claudeNativeFastModeDefault ?? false
-      : nextPlatform === "codex"
-        ? useConfigStore.getState().config.global.codexNativeFastModeDefault ?? false
+  const platformFastModeDefault =
+    platform === "claude"
+      ? (globalConfig.claudeNativeFastModeDefault ?? false)
+      : platform === "codex"
+        ? (globalConfig.codexNativeFastModeDefault ?? false)
         : false;
-    updateStoreDraft(key, {
-      ...(current ? {} : { fastMode: defaultFastMode }),
-      ...update,
-    });
-  }, [platform, updateStoreDraft]);
+  const effectiveFastMode = hasDraft ? draft.fastMode : platformFastModeDefault;
+  const updateDraft = useCallback(
+    (key: string, update: Partial<typeof draft>) => {
+      const current = useNativeComposeStore.getState().drafts.get(key);
+      const nextPlatform = update.platform ?? current?.platform ?? platform;
+      const defaultFastMode =
+        nextPlatform === "claude"
+          ? (useConfigStore.getState().config.global.claudeNativeFastModeDefault ?? false)
+          : nextPlatform === "codex"
+            ? (useConfigStore.getState().config.global.codexNativeFastModeDefault ?? false)
+            : false;
+      updateStoreDraft(key, {
+        ...(current ? {} : { fastMode: defaultFastMode }),
+        ...update,
+      });
+    },
+    [platform, updateStoreDraft],
+  );
   useNativeComposeDraftPersistence(
     "agent-native",
     environmentId,
@@ -391,7 +394,9 @@ export function UnassignedNativeAgentComposer({
       .catch((error) => {
         console.warn("[AgentNativeTab] Failed to load native model catalogue:", error);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [environmentId]);
   const fileSearch = useFileSearch(containerId, worktreePath);
   const {
@@ -405,90 +410,99 @@ export function UnassignedNativeAgentComposer({
     createMention,
   } = useFileMentions({ searchFiles: fileSearch.searchFiles });
   const platformModels = models.filter((model) => model.platform === platform);
-  const selectedModel = models.find((model) => model.id === draft.modelId && model.platform === platform)
-    ?? platformModels[0];
+  const selectedModel =
+    models.find((model) => model.id === draft.modelId && model.platform === platform) ??
+    platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
   // Capability, not platform: a tab that has no conversation mode but does have
   // execution profiles needs *some* way to pick one, because the opening prompt
   // is dispatched before the user can reach the locked composer.
-  const canConfigureExecutionProfile = !canConfigureMode
-    && selectedAdapter?.capabilities.composer.executionProfile === true;
+  const canConfigureExecutionProfile =
+    !canConfigureMode && selectedAdapter?.capabilities.composer.executionProfile === true;
   // A draft restored from a platform whose profiles differ, or persisted before
   // this list changed, can name a profile the launcher cannot show. Fall back to
   // the default rather than rendering a radio group with nothing selected.
-  const selectedLaunchExecutionProfile = LAUNCH_EXECUTION_PROFILES.find(
-    (profile) => profile.id === draft.executionProfileId,
-  ) ?? LAUNCH_EXECUTION_PROFILES[0];
+  const selectedLaunchExecutionProfile =
+    LAUNCH_EXECUTION_PROFILES.find((profile) => profile.id === draft.executionProfileId) ??
+    LAUNCH_EXECUTION_PROFILES[0];
   // The catalogue's `supportsSpeed` describes the model; the table describes the
   // platform. Both have to allow it, so a catalogue entry cannot reintroduce a
   // toggle the platform has no way to apply.
-  const canConfigureSpeed = selectedAdapter?.capabilities.composer.speed === true
-    && selectedModel?.supportsSpeed === true;
-  const selectedReasoningId = resolveReasoningId(
-    selectedModel?.reasoning ?? [],
-    draft.reasoningId,
-    selectedModel?.defaultReasoningId,
-  ) ?? selectedModel?.defaultReasoningId;
-  const selectedReasoningLabel = selectedModel?.reasoning?.find(
-    (option) => option.id === selectedReasoningId,
-  )?.label ?? "Default";
+  const canConfigureSpeed =
+    selectedAdapter?.capabilities.composer.speed === true && selectedModel?.supportsSpeed === true;
+  const selectedReasoningId =
+    resolveReasoningId(
+      selectedModel?.reasoning ?? [],
+      draft.reasoningId,
+      selectedModel?.defaultReasoningId,
+    ) ?? selectedModel?.defaultReasoningId;
+  const selectedReasoningLabel =
+    selectedModel?.reasoning?.find((option) => option.id === selectedReasoningId)?.label ??
+    "Default";
   const handleTextAndMentionsChange = useCallback(
     (text: string, mentions: FileMention[]) => updateDraft(sessionKey, { text, mentions }),
     [sessionKey, updateDraft],
   );
-  const handleFileMentionSelect = useCallback((file: FileCandidate) => {
-    const mention = createMention(file);
-    closeFileMentionMenu({ suppressReopenFor: file.filename });
-    inputRef.current?.insertMention(mention);
-  }, [closeFileMentionMenu, createMention]);
-  const handleWorkspaceFileMention = useCallback((file: FileCandidate) => {
-    const mention = createMention(file);
-    closeFileMentionMenu({ suppressReopenFor: file.filename });
-    inputRef.current?.insertMentionAtCursor(mention);
-  }, [closeFileMentionMenu, createMention]);
-  const handlePastedImage = useCallback((attachment: {
-    id: string;
-    type: "image";
-    path: string;
-    previewUrl: string;
-    name: string;
-  }) => {
-    const current = useNativeComposeStore.getState().drafts.get(sessionKey);
-    updateDraft(sessionKey, {
-      attachments: [...(current?.attachments ?? []), attachment],
-    });
-  }, [sessionKey, updateDraft]);
-  const handleWorkspaceFileAttach = useCallback((file: FileCandidate) => {
-    const current = useNativeComposeStore.getState().drafts.get(sessionKey);
-    const resolved = resolveWorkspaceAttachment(file, {
+  const handleFileMentionSelect = useCallback(
+    (file: FileCandidate) => {
+      const mention = createMention(file);
+      closeFileMentionMenu({ suppressReopenFor: file.filename });
+      inputRef.current?.insertMention(mention);
+    },
+    [closeFileMentionMenu, createMention],
+  );
+  const handleWorkspaceFileMention = useCallback(
+    (file: FileCandidate) => {
+      const mention = createMention(file);
+      closeFileMentionMenu({ suppressReopenFor: file.filename });
+      inputRef.current?.insertMentionAtCursor(mention);
+    },
+    [closeFileMentionMenu, createMention],
+  );
+  const handlePastedImage = useCallback(
+    (attachment: { id: string; type: "image"; path: string; previewUrl: string; name: string }) => {
+      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      updateDraft(sessionKey, {
+        attachments: [...(current?.attachments ?? []), attachment],
+      });
+    },
+    [sessionKey, updateDraft],
+  );
+  const handleWorkspaceFileAttach = useCallback(
+    (file: FileCandidate) => {
+      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      const resolved = resolveWorkspaceAttachment(file, {
+        containerId,
+        worktreePath,
+        allowFiles: selectedAdapter?.capabilities.attachments.files === true,
+        allowImages: selectedAdapter?.capabilities.attachments.images === true,
+        modelSupportsImages: selectedModel?.supportsImageInput,
+        modelLabel: selectedModel?.label,
+        attachedCount: current?.attachments.length ?? 0,
+      });
+      if ("error" in resolved) {
+        toast.error(resolved.error, { description: resolved.description });
+        return;
+      }
+      updateDraft(sessionKey, {
+        attachments: [...(current?.attachments ?? []), resolved.attachment],
+      });
+    },
+    [
       containerId,
+      selectedAdapter,
+      selectedModel?.label,
+      selectedModel?.supportsImageInput,
+      sessionKey,
+      updateDraft,
       worktreePath,
-      allowFiles: selectedAdapter?.capabilities.attachments.files === true,
-      allowImages: selectedAdapter?.capabilities.attachments.images === true,
-      modelSupportsImages: selectedModel?.supportsImageInput,
-      modelLabel: selectedModel?.label,
-      attachedCount: current?.attachments.length ?? 0,
-    });
-    if ("error" in resolved) {
-      toast.error(resolved.error, { description: resolved.description });
-      return;
-    }
-    updateDraft(sessionKey, {
-      attachments: [...(current?.attachments ?? []), resolved.attachment],
-    });
-  }, [
-    containerId,
-    selectedAdapter,
-    selectedModel?.label,
-    selectedModel?.supportsImageInput,
-    sessionKey,
-    updateDraft,
-    worktreePath,
-  ]);
+    ],
+  );
   const canAttachImage = useCallback(
-    () => selectedAdapter?.capabilities.attachments.images === true
-      && selectedModel?.supportsImageInput !== false,
+    () =>
+      selectedAdapter?.capabilities.attachments.images === true &&
+      selectedModel?.supportsImageInput !== false,
     [selectedAdapter, selectedModel?.supportsImageInput],
   );
   /*
@@ -502,10 +516,7 @@ export function UnassignedNativeAgentComposer({
   useEffect(() => {
     const current = useNativeComposeStore.getState().drafts.get(sessionKey);
     if (!current || current.attachments.length === 0) return;
-    const supported = retainSupportedAttachments(
-      current.attachments,
-      attachmentCapabilities,
-    );
+    const supported = retainSupportedAttachments(current.attachments, attachmentCapabilities);
     if (supported.length === current.attachments.length) return;
     updateDraft(sessionKey, { attachments: supported });
   }, [attachmentCapabilities, sessionKey, updateDraft]);
@@ -546,9 +557,11 @@ export function UnassignedNativeAgentComposer({
       // Read from the resolved selection, not the raw draft: the trigger renders
       // the same value, and dispatching an id the launcher never displayed is
       // exactly the display/dispatch split this control exists to close.
-      ...(canConfigureExecutionProfile ? {
-        executionProfileId: selectedLaunchExecutionProfile.id,
-      } : {}),
+      ...(canConfigureExecutionProfile
+        ? {
+            executionProfileId: selectedLaunchExecutionProfile.id,
+          }
+        : {}),
     });
   };
 
@@ -556,7 +569,7 @@ export function UnassignedNativeAgentComposer({
     <div className="@container relative flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <NativeComposeDock
         centered
-        actions={(
+        actions={
           <Button
             variant="ghost"
             size="sm"
@@ -567,15 +580,17 @@ export function UnassignedNativeAgentComposer({
             <History className="mr-2 h-4 w-4" />
             Resume Session
           </Button>
-        )}
+        }
       >
         <NativeComposeBar
           testId="unassigned-native-compose-bar"
           layout="centered"
           attachments={draft.attachments}
-          onRemoveAttachment={(attachmentId) => updateDraft(sessionKey, {
-            attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
-          })}
+          onRemoveAttachment={(attachmentId) =>
+            updateDraft(sessionKey, {
+              attachments: draft.attachments.filter((candidate) => candidate.id !== attachmentId),
+            })
+          }
           inputRef={inputRef}
           inputContainerRef={inputContainerRef}
           text={draft.text}
@@ -596,9 +611,8 @@ export function UnassignedNativeAgentComposer({
               const index = LAUNCH_EXECUTION_PROFILES.findIndex(
                 (profile) => profile.id === selectedLaunchExecutionProfile.id,
               );
-              const next = LAUNCH_EXECUTION_PROFILES[
-                (index + 1) % LAUNCH_EXECUTION_PROFILES.length
-              ];
+              const next =
+                LAUNCH_EXECUTION_PROFILES[(index + 1) % LAUNCH_EXECUTION_PROFILES.length];
               if (next) updateDraft(sessionKey, { executionProfileId: next.id });
               return;
             }
@@ -608,18 +622,20 @@ export function UnassignedNativeAgentComposer({
           }}
           placeholder="Ask an agent anything…"
           disabled={disabled}
-          menus={fileMentionMenuOpen ? (
+          menus={
+            fileMentionMenuOpen ? (
               <FileMentionMenu
                 files={filteredFiles}
                 selectedIndex={fileMentionSelectedIndex}
                 onSelect={handleFileMentionSelect}
                 onClose={closeFileMentionMenu}
               />
-            ) : null}
-          primaryControls={(
+            ) : null
+          }
+          primaryControls={
             <>
-              {selectedAdapter?.capabilities.attachments.files
-                || selectedAdapter?.capabilities.attachments.images ? (
+              {selectedAdapter?.capabilities.attachments.files ||
+              selectedAdapter?.capabilities.attachments.images ? (
                 <NativeAttachmentMenu
                   disabled={disabled}
                   fileSearch={fileSearch}
@@ -647,11 +663,12 @@ export function UnassignedNativeAgentComposer({
                     modelId: undefined,
                     reasoningId: undefined,
                     executionProfileId: undefined,
-                    fastMode: next === "claude"
-                      ? globalConfig.claudeNativeFastModeDefault ?? false
-                      : next === "codex"
-                        ? globalConfig.codexNativeFastModeDefault ?? false
-                        : false,
+                    fastMode:
+                      next === "claude"
+                        ? (globalConfig.claudeNativeFastModeDefault ?? false)
+                        : next === "codex"
+                          ? (globalConfig.codexNativeFastModeDefault ?? false)
+                          : false,
                     // Per type, not all-or-nothing: Codex takes images and
                     // refuses files, and its bridge rejects the entire prompt
                     // rather than dropping the entry it cannot use.
@@ -675,23 +692,29 @@ export function UnassignedNativeAgentComposer({
                   // value, which would otherwise be carried across the switch.
                   const currentDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
                   const selectedPlatform = currentDraft?.platform ?? platform;
-                  const model = models.find((candidate) =>
-                    candidate.platform === selectedPlatform && candidate.id === modelId,
+                  const model = models.find(
+                    (candidate) =>
+                      candidate.platform === selectedPlatform && candidate.id === modelId,
                   );
                   updateDraft(sessionKey, {
                     modelId,
                     platform: selectedPlatform,
-                    reasoningId: resolveReasoningId(
-                      model?.reasoning ?? [],
-                      currentDraft?.reasoningId,
-                      model?.defaultReasoningId,
-                    ) ?? model?.defaultReasoningId,
+                    reasoningId:
+                      resolveReasoningId(
+                        model?.reasoning ?? [],
+                        currentDraft?.reasoningId,
+                        model?.defaultReasoningId,
+                      ) ?? model?.defaultReasoningId,
                   });
                 }}
                 reasoningOptions={selectedModel?.reasoning ?? []}
                 selectedReasoningId={selectedReasoningId}
                 selectedReasoningLabel={selectedReasoningLabel}
-                onReasoningChange={canConfigureReasoning ? (reasoningId) => updateDraft(sessionKey, { reasoningId }) : undefined}
+                onReasoningChange={
+                  canConfigureReasoning
+                    ? (reasoningId) => updateDraft(sessionKey, { reasoningId })
+                    : undefined
+                }
                 fastModeEnabled={effectiveFastMode}
                 fastModeAvailable={canConfigureSpeed}
                 speedCapable={selectedAdapter?.capabilities.composer.speed === true}
@@ -716,7 +739,9 @@ export function UnassignedNativeAgentComposer({
                   <DropdownMenuContent align="start">
                     <DropdownMenuRadioGroup
                       value={draft.mode}
-                      onValueChange={(mode) => updateDraft(sessionKey, { mode: mode as "build" | "plan" })}
+                      onValueChange={(mode) =>
+                        updateDraft(sessionKey, { mode: mode as "build" | "plan" })
+                      }
                     >
                       <DropdownMenuRadioItem value="build">Build</DropdownMenuRadioItem>
                       <DropdownMenuRadioItem value="plan">Plan</DropdownMenuRadioItem>
@@ -741,9 +766,11 @@ export function UnassignedNativeAgentComposer({
                   <DropdownMenuContent align="start">
                     <DropdownMenuRadioGroup
                       value={selectedLaunchExecutionProfile.id}
-                      onValueChange={(executionProfileId) => updateDraft(sessionKey, {
-                        executionProfileId,
-                      })}
+                      onValueChange={(executionProfileId) =>
+                        updateDraft(sessionKey, {
+                          executionProfileId,
+                        })
+                      }
                     >
                       {LAUNCH_EXECUTION_PROFILES.map((profile) => (
                         <DropdownMenuRadioItem key={profile.id} value={profile.id}>
@@ -755,7 +782,7 @@ export function UnassignedNativeAgentComposer({
                 </DropdownMenu>
               ) : null}
             </>
-          )}
+          }
           sendDisabled={disabled || (!draft.text.trim() && draft.attachments.length === 0)}
           sendTitle="Start agent"
           onSend={send}

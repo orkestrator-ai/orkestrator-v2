@@ -143,13 +143,9 @@ export function NativeResumeSessionDialog({
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : error ? (
-            <div className="py-8 text-center text-sm text-destructive">
-              {error}
-            </div>
+            <div className="py-8 text-center text-sm text-destructive">{error}</div>
           ) : sessions.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              {emptyMessage}
-            </div>
+            <div className="py-8 text-center text-sm text-muted-foreground">{emptyMessage}</div>
           ) : (
             <ScrollArea className="h-[300px] overflow-hidden">
               <div className="space-y-1 pr-4">
@@ -179,14 +175,10 @@ export function NativeResumeSessionDialog({
                             </>
                           )}
                           {session.status === "running" && (
-                            <span className="ml-2 text-yellow-500">
-                              • Running
-                            </span>
+                            <span className="ml-2 text-yellow-500">• Running</span>
                           )}
                           {session.status === "error" && (
-                            <span className="ml-2 text-destructive">
-                              • Error
-                            </span>
+                            <span className="ml-2 text-destructive">• Error</span>
                           )}
                         </div>
                       </div>

@@ -15,11 +15,16 @@ export function fileMentionsEqual(
   right: readonly FileMention[],
 ): boolean {
   if (left === right) return true;
-  return left.length === right.length && left.every((mention, index) => {
-    const other = right[index];
-    return other !== undefined
-      && mention.id === other.id
-      && mention.filename === other.filename
-      && mention.relativePath === other.relativePath;
-  });
+  return (
+    left.length === right.length &&
+    left.every((mention, index) => {
+      const other = right[index];
+      return (
+        other !== undefined &&
+        mention.id === other.id &&
+        mention.filename === other.filename &&
+        mention.relativePath === other.relativePath
+      );
+    })
+  );
 }

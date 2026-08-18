@@ -12,10 +12,7 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 120_000,
-  reporter: [
-    ["line"],
-    ["json", { outputFile: path.join(outputRoot, "results.json") }],
-  ],
+  reporter: [["line"], ["json", { outputFile: path.join(outputRoot, "results.json") }]],
   outputDir: path.join(outputRoot, "artifacts"),
   globalTeardown: path.join(import.meta.dirname, "global-teardown.ts"),
   use: {

@@ -7,9 +7,7 @@ import {
 } from "./agent-slash-commands.js";
 import type { NativeAgentCapabilities } from "./native-agent.js";
 
-function capabilities(
-  actions: NativeAgentCapabilities["actions"],
-): NativeAgentCapabilities {
+function capabilities(actions: NativeAgentCapabilities["actions"]): NativeAgentCapabilities {
   return {
     attachments: { files: true, images: true },
     queue: true,
@@ -45,8 +43,10 @@ describe("resolveSessionActionCommand", () => {
   const steerCapable = capabilities({ steer: true });
 
   test("routes /steer to the steer action while a turn is running", () => {
-    expect(resolveSessionActionCommand("/steer use the cache", steerCapable, true))
-      .toEqual({ kind: "steer", text: "use the cache" });
+    expect(resolveSessionActionCommand("/steer use the cache", steerCapable, true)).toEqual({
+      kind: "steer",
+      text: "use the cache",
+    });
   });
 
   test("is an ordinary prompt when no turn is running", () => {
@@ -54,11 +54,9 @@ describe("resolveSessionActionCommand", () => {
   });
 
   test("is an ordinary prompt for a provider that cannot steer", () => {
-    expect(resolveSessionActionCommand(
-      "/steer use the cache",
-      capabilities({ compact: true }),
-      true,
-    )).toBeNull();
+    expect(
+      resolveSessionActionCommand("/steer use the cache", capabilities({ compact: true }), true),
+    ).toBeNull();
   });
 
   test("refuses a bare /steer with an explanation rather than steering nothing", () => {
@@ -78,11 +76,13 @@ describe("isProviderSlashCommand", () => {
   });
 
   test("excludes runtime session actions from handoff-consuming commands", () => {
-    expect(isProviderSlashCommand(
-      "/steer keep going",
-      [{ name: "/steer", description: "runtime action" }],
-      capabilities({ steer: true }),
-    )).toBe(false);
+    expect(
+      isProviderSlashCommand(
+        "/steer keep going",
+        [{ name: "/steer", description: "runtime action" }],
+        capabilities({ steer: true }),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -104,7 +104,8 @@ describe("withSessionActionSlashCommands", () => {
   });
 
   test("adds the action even when the provider discovered nothing", () => {
-    expect(withSessionActionSlashCommands([], capabilities({ steer: true })))
-      .toEqual([expect.objectContaining({ name: "/steer" })]);
+    expect(withSessionActionSlashCommands([], capabilities({ steer: true }))).toEqual([
+      expect.objectContaining({ name: "/steer" }),
+    ]);
   });
 });

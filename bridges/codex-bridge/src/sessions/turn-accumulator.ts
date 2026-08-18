@@ -136,13 +136,14 @@ export class TurnAccumulator {
     this.engineGeneration = options.engineGeneration;
     this.assistantMessageId = options.assistantMessageId;
     this.startedAt = options.startedAt ?? new Date().toISOString();
-    this.assistantSegments = [{
-      assistantMessageId: options.assistantMessageId,
-      startIndex: 0,
-      startedAt: this.startedAt,
-    }];
-    this.maxCommandOutputChars =
-      options.maxCommandOutputChars ?? DEFAULT_MAX_COMMAND_OUTPUT_CHARS;
+    this.assistantSegments = [
+      {
+        assistantMessageId: options.assistantMessageId,
+        startIndex: 0,
+        startedAt: this.startedAt,
+      },
+    ];
+    this.maxCommandOutputChars = options.maxCommandOutputChars ?? DEFAULT_MAX_COMMAND_OUTPUT_CHARS;
   }
 
   isTerminal(): boolean {
@@ -212,8 +213,7 @@ export class TurnAccumulator {
     const accumulator = this.ensureItem(item.id);
     // A repeated `item/started` must not reset text already streamed, and must
     // not clobber a final item that somehow arrived first.
-    const replacesRawFallback =
-      accumulator.rawFallback && item.type === "file_change";
+    const replacesRawFallback = accumulator.rawFallback && item.type === "file_change";
     if (!accumulator.completed || replacesRawFallback) accumulator.item = item;
     if (replacesRawFallback) accumulator.completed = false;
     if (item.type === "file_change") accumulator.rawFallback = false;
@@ -222,8 +222,7 @@ export class TurnAccumulator {
 
   onItemUpdated(item: EngineItem): void {
     const accumulator = this.ensureItem(item.id);
-    const replacesRawFallback =
-      accumulator.rawFallback && item.type === "file_change";
+    const replacesRawFallback = accumulator.rawFallback && item.type === "file_change";
     if (!accumulator.completed || replacesRawFallback) accumulator.item = item;
     if (replacesRawFallback) accumulator.completed = false;
     if (item.type === "file_change") accumulator.rawFallback = false;
@@ -322,16 +321,10 @@ export class TurnAccumulator {
     }
 
     const serialized = stringifyTranscriptToolOutput(output);
-    const state = resolveTranscriptToolOutputState(
-      item.tool,
-      output,
-      "success",
-    );
+    const state = resolveTranscriptToolOutputState(item.tool, output, "success");
     accumulator.item = {
       ...item,
-      content_items: serialized
-        ? [{ type: "inputText", text: serialized }]
-        : [],
+      content_items: serialized ? [{ type: "inputText", text: serialized }] : [],
       status: state === "failure" ? "failed" : "completed",
     };
     accumulator.completed = true;
@@ -367,9 +360,10 @@ export class TurnAccumulator {
   }
 
   assistantSegment(assistantMessageId: string = this.assistantMessageId): AssistantSegment {
-    return this.assistantSegments.find(
-      (segment) => segment.assistantMessageId === assistantMessageId,
-    ) ?? this.assistantSegments[this.assistantSegments.length - 1]!;
+    return (
+      this.assistantSegments.find((segment) => segment.assistantMessageId === assistantMessageId) ??
+      this.assistantSegments[this.assistantSegments.length - 1]!
+    );
   }
 
   /**
@@ -380,9 +374,7 @@ export class TurnAccumulator {
    * sampled, which is what lets a frozen row skip a re-render it cannot change
    * the result of.
    */
-  assistantSegmentVersion(
-    assistantMessageId: string = this.assistantMessageId,
-  ): number {
+  assistantSegmentVersion(assistantMessageId: string = this.assistantMessageId): number {
     const segment = this.assistantSegment(assistantMessageId);
     const end = segment.endIndex ?? this.itemOrder.length;
     let version = 0;
@@ -420,10 +412,12 @@ export class TurnAccumulator {
    * the projection does not mention keeps the position it already has.
    */
   boundaryAfterItems(
-    ordering: {
-      precedingItemIds?: readonly string[];
-      followingItemIds?: readonly string[];
-    } | undefined,
+    ordering:
+      | {
+          precedingItemIds?: readonly string[];
+          followingItemIds?: readonly string[];
+        }
+      | undefined,
   ): number {
     const liveBoundary = this.itemOrder.length;
     if (!ordering?.followingItemIds?.length) return liveBoundary;
@@ -439,10 +433,7 @@ export class TurnAccumulator {
    * Events may continue arriving while that row is rendered, so the boundary
    * must be captured before awaiting any rendering work.
    */
-  freezeAssistantSegment(
-    boundary: number = this.itemOrder.length,
-    endedAt?: string,
-  ): number {
+  freezeAssistantSegment(boundary: number = this.itemOrder.length, endedAt?: string): number {
     const segment = this.assistantSegment();
     segment.endIndex = boundary;
     if (endedAt) segment.endedAt = endedAt;
@@ -480,9 +471,11 @@ export class TurnAccumulator {
 
   /** Reasoning summary/content assembled from deltas in index order. */
   effectiveReasoning(accumulator: ItemAccumulator): { summary: string[]; content: string[] } {
-    const item = accumulator.item as
-      | { type?: string; summary?: string[]; content?: string[] }
-      | null;
+    const item = accumulator.item as {
+      type?: string;
+      summary?: string[];
+      content?: string[];
+    } | null;
     if (item?.type === "reasoning" && (item.summary?.length || item.content?.length)) {
       return { summary: item.summary ?? [], content: item.content ?? [] };
     }

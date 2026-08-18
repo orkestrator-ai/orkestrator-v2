@@ -137,31 +137,33 @@ function isPrStateOrNull(value: unknown): value is PrState | null {
   return value === null || (typeof value === "string" && PR_STATES.has(value));
 }
 
-export function isPrMonitorEnvironmentState(
-  value: unknown,
-): value is PrMonitorEnvironmentState {
+export function isPrMonitorEnvironmentState(value: unknown): value is PrMonitorEnvironmentState {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.environmentId === "string"
-    && candidate.environmentId.length > 0
-    && isPrMonitorMode(candidate.mode)
-    && typeof candidate.checkInProgress === "boolean"
-    && Number.isSafeInteger(candidate.consecutiveErrors)
-    && (candidate.consecutiveErrors as number) >= 0
-    && (candidate.lastCheckAt === null || typeof candidate.lastCheckAt === "string")
-    && (candidate.prUrl === null || typeof candidate.prUrl === "string")
-    && isPrStateOrNull(candidate.prState)
-    && (candidate.hasMergeConflicts === null || typeof candidate.hasMergeConflicts === "boolean");
+  return (
+    typeof candidate.environmentId === "string" &&
+    candidate.environmentId.length > 0 &&
+    isPrMonitorMode(candidate.mode) &&
+    typeof candidate.checkInProgress === "boolean" &&
+    Number.isSafeInteger(candidate.consecutiveErrors) &&
+    (candidate.consecutiveErrors as number) >= 0 &&
+    (candidate.lastCheckAt === null || typeof candidate.lastCheckAt === "string") &&
+    (candidate.prUrl === null || typeof candidate.prUrl === "string") &&
+    isPrStateOrNull(candidate.prState) &&
+    (candidate.hasMergeConflicts === null || typeof candidate.hasMergeConflicts === "boolean")
+  );
 }
 
 export function isPrMonitorTransition(value: unknown): value is PrMonitorTransition {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.url === "string"
-    && candidate.url.length > 0
-    && typeof candidate.state === "string"
-    && PR_STATES.has(candidate.state)
-    && isPrStateOrNull(candidate.previousState);
+  return (
+    typeof candidate.url === "string" &&
+    candidate.url.length > 0 &&
+    typeof candidate.state === "string" &&
+    PR_STATES.has(candidate.state) &&
+    isPrStateOrNull(candidate.previousState)
+  );
 }
 
 export function isPrMonitorEvent(value: unknown): value is PrMonitorEvent {

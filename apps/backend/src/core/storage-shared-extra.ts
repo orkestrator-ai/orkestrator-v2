@@ -1,8 +1,5 @@
 import * as shared from "./storage-shared-core.js";
-import {
-  createHash,
-  isRecord,
-} from "./storage-shared-core.js";
+import { createHash, isRecord } from "./storage-shared-core.js";
 type OpenCodeModelCatalogEntry = shared.OpenCodeModelCatalogEntry;
 type OpenCodeModelCatalogSnapshot = shared.OpenCodeModelCatalogSnapshot;
 type ResourceChange = shared.ResourceChange;
@@ -16,22 +13,23 @@ export function normalizeOpenCodeModelCatalogEntries(
     if (!candidate || typeof candidate !== "object") continue;
     const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
     const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
-    const provider =
-      typeof candidate.provider === "string" ? candidate.provider.trim() : "";
+    const provider = typeof candidate.provider === "string" ? candidate.provider.trim() : "";
     if (!id || !name || !provider) continue;
 
     const variants = Array.isArray(candidate.variants)
-      ? Array.from(new Set(candidate.variants.filter(
-          (variant): variant is string =>
-            typeof variant === "string" && variant.trim().length > 0,
-        ).map((variant) => variant.trim()))).sort((left, right) =>
-          left.localeCompare(right)
-        )
+      ? Array.from(
+          new Set(
+            candidate.variants
+              .filter(
+                (variant): variant is string =>
+                  typeof variant === "string" && variant.trim().length > 0,
+              )
+              .map((variant) => variant.trim()),
+          ),
+        ).sort((left, right) => left.localeCompare(right))
       : undefined;
     const nonNegativeNumber = (value: unknown): number | undefined =>
-      typeof value === "number" && Number.isFinite(value) && value >= 0
-        ? value
-        : undefined;
+      typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
     const contextWindow =
       typeof candidate.contextWindow === "number" &&
       Number.isSafeInteger(candidate.contextWindow) &&
@@ -65,8 +63,8 @@ export function normalizeOpenCodeModelCatalogEntries(
       duplicates.reduce((selected, candidate) =>
         JSON.stringify(candidate).localeCompare(JSON.stringify(selected)) < 0
           ? candidate
-          : selected
-      )
+          : selected,
+      ),
     )
     .sort((left, right) => left.id.localeCompare(right.id));
 }
@@ -93,18 +91,14 @@ export function parseOpenCodeModelCatalogSnapshot(
   const record = value as Record<string, unknown>;
   if (!Array.isArray(record.models)) return null;
 
-  const models = normalizeOpenCodeModelCatalogEntries(
-    record.models as OpenCodeModelCatalogEntry[],
-  );
+  const models = normalizeOpenCodeModelCatalogEntries(record.models as OpenCodeModelCatalogEntry[]);
   if (models.length === 0) return null;
 
   const updatedAt =
     typeof record.updatedAt === "string" && !Number.isNaN(Date.parse(record.updatedAt))
       ? record.updatedAt
       : new Date(0).toISOString();
-  const catalogVersion = createHash("sha256")
-    .update(JSON.stringify(models))
-    .digest("hex");
+  const catalogVersion = createHash("sha256").update(JSON.stringify(models)).digest("hex");
 
   return {
     schemaVersion: 2,
@@ -123,15 +117,16 @@ export function parseOpenCodeModelCatalogStore(
   // Schema 1 was one host-global catalogue. It is deliberately left
   // unassigned: attaching it to whichever project reads first would leak a
   // project-specific opencode.json catalogue into another project.
-  if (record.schemaVersion !== 2 || !record.catalogs ||
-      typeof record.catalogs !== "object" || Array.isArray(record.catalogs)) {
+  if (
+    record.schemaVersion !== 2 ||
+    !record.catalogs ||
+    typeof record.catalogs !== "object" ||
+    Array.isArray(record.catalogs)
+  ) {
     return {};
   }
 
-  const catalogs = Object.create(null) as Record<
-    string,
-    OpenCodeModelCatalogSnapshot
-  >;
+  const catalogs = Object.create(null) as Record<string, OpenCodeModelCatalogSnapshot>;
   for (const [rawProjectId, candidate] of Object.entries(
     record.catalogs as Record<string, unknown>,
   )) {
@@ -163,7 +158,10 @@ export type ResourceChangeListener = (change: ResourceChange) => void;
  * record is now the authority.
  */
 export class FeaturePlanningFenceError extends Error {
-  constructor(readonly featureId: string, readonly operationId: string) {
+  constructor(
+    readonly featureId: string,
+    readonly operationId: string,
+  ) {
     super(`Feature planning exchange ${operationId} is no longer attached`);
     this.name = "FeaturePlanningFenceError";
   }
@@ -180,9 +178,7 @@ export class FeaturePlanningFenceError extends Error {
  */
 export class PendingNativeAgentDispatchError extends Error {
   constructor(readonly pendingRequestId: string) {
-    super(
-      `Native agent dispatch ${pendingRequestId} is still awaiting recovery`,
-    );
+    super(`Native agent dispatch ${pendingRequestId} is still awaiting recovery`);
     this.name = "PendingNativeAgentDispatchError";
   }
 }

@@ -84,19 +84,17 @@ export function isJsonSchema(value: unknown): value is JsonSchema {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function isStructuredOutputResult(
-  value: unknown,
-): value is StructuredOutputResult {
+export function isStructuredOutputResult(value: unknown): value is StructuredOutputResult {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   const result = value as Record<string, unknown>;
   if (
-    result.provider !== "claude"
-    && result.provider !== "codex"
-    && result.provider !== "opencode"
-    && result.provider !== "cursor"
-    && result.provider !== "grok"
+    result.provider !== "claude" &&
+    result.provider !== "codex" &&
+    result.provider !== "opencode" &&
+    result.provider !== "cursor" &&
+    result.provider !== "grok"
   ) {
     return false;
   }
@@ -111,19 +109,15 @@ export function isStructuredOutputResult(
   }
   const error = result.error as Record<string, unknown>;
   return (
-    typeof error.code === "string"
-    && STRUCTURED_OUTPUT_FAILURE_CODES.has(error.code)
-    && typeof error.message === "string"
-    && error.provider === result.provider
-    && typeof error.retryable === "boolean"
-    && (
-      error.details === undefined
-      || (
-        error.details !== null
-        && typeof error.details === "object"
-        && !Array.isArray(error.details)
-      )
-    )
+    typeof error.code === "string" &&
+    STRUCTURED_OUTPUT_FAILURE_CODES.has(error.code) &&
+    typeof error.message === "string" &&
+    error.provider === result.provider &&
+    typeof error.retryable === "boolean" &&
+    (error.details === undefined ||
+      (error.details !== null &&
+        typeof error.details === "object" &&
+        !Array.isArray(error.details)))
   );
 }
 

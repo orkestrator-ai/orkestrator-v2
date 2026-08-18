@@ -30,9 +30,9 @@ async function createStorage(): Promise<StorageService> {
 }
 
 afterEach(async () => {
-  await Promise.all(dataDirs.splice(0).map((dataDir) =>
-    fs.rm(dataDir, { recursive: true, force: true })
-  ));
+  await Promise.all(
+    dataDirs.splice(0).map((dataDir) => fs.rm(dataDir, { recursive: true, force: true })),
+  );
 });
 
 describe("prompt queue dispatch boundary", () => {
@@ -76,10 +76,9 @@ describe("prompt queue dispatch boundary", () => {
     await storage.savePromptQueue("queue-1", "environment-1", [{ id: "message-1" }]);
     const reservation = await storage.reservePromptQueueHeadForDispatch("queue-1");
 
-    await expect(storage.markPromptQueueDispatchSubmitted(
-      "queue-1",
-      reservation!.requestId,
-    )).rejects.toThrow("not fenced");
+    await expect(
+      storage.markPromptQueueDispatchSubmitted("queue-1", reservation!.requestId),
+    ).rejects.toThrow("not fenced");
     const before = await storage.getPromptQueue("queue-1");
     const stale = await storage.markPromptQueueDispatchSubmitting("queue-1", "stale-id");
     expect(stale).toEqual(before);
@@ -93,27 +92,33 @@ describe("prompt queue dispatch boundary", () => {
     const queue = await storage.getPromptQueue("queue-1");
     const file = path.join(storage.getDataDir(), "prompt-queues.json");
 
-    await fs.writeFile(file, JSON.stringify({
-      "queue-1": {
-        ...queue,
-        inFlight: {
-          ...queue!.inFlight,
-          submittedAt: "2026-01-01T00:00:00.000Z",
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        "queue-1": {
+          ...queue,
+          inFlight: {
+            ...queue!.inFlight,
+            submittedAt: "2026-01-01T00:00:00.000Z",
+          },
         },
-      },
-    }));
+      }),
+    );
     await expect(storage.getPromptQueue("queue-1")).resolves.toBeNull();
 
-    await fs.writeFile(file, JSON.stringify({
-      "queue-1": {
-        ...queue,
-        inFlight: {
-          ...queue!.inFlight,
-          submittingAt: "2026-01-02T00:00:00.000Z",
-          submittedAt: "2026-01-01T00:00:00.000Z",
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        "queue-1": {
+          ...queue,
+          inFlight: {
+            ...queue!.inFlight,
+            submittingAt: "2026-01-02T00:00:00.000Z",
+            submittedAt: "2026-01-01T00:00:00.000Z",
+          },
         },
-      },
-    }));
+      }),
+    );
     await expect(storage.getPromptQueue("queue-1")).resolves.toBeNull();
   });
 
@@ -121,25 +126,17 @@ describe("prompt queue dispatch boundary", () => {
     const storage = await createStorage();
     const queueKey = "claude-tmux\0env:environment-1:tab:tab-1";
 
-    await expect(storage.savePromptQueue(
-      queueKey,
-      "environment-2",
-      [{ id: "message-1" }],
-    )).rejects.toThrow("does not match its environment owner");
-    await expect(storage.enqueuePromptQueueMessage(
-      queueKey,
-      "environment-2",
-      { id: "message-1" },
-    )).rejects.toThrow("does not match its environment owner");
-    await expect(storage.requeuePromptQueueMessage(
-      queueKey,
-      "environment-2",
-      { id: "message-1" },
-    )).rejects.toThrow("does not match its environment owner");
-    await expect(storage.claimPromptQueueHead(
-      queueKey,
-      "environment-2",
-      "message-1",
-    )).rejects.toThrow("does not match its environment owner");
+    await expect(
+      storage.savePromptQueue(queueKey, "environment-2", [{ id: "message-1" }]),
+    ).rejects.toThrow("does not match its environment owner");
+    await expect(
+      storage.enqueuePromptQueueMessage(queueKey, "environment-2", { id: "message-1" }),
+    ).rejects.toThrow("does not match its environment owner");
+    await expect(
+      storage.requeuePromptQueueMessage(queueKey, "environment-2", { id: "message-1" }),
+    ).rejects.toThrow("does not match its environment owner");
+    await expect(
+      storage.claimPromptQueueHead(queueKey, "environment-2", "message-1"),
+    ).rejects.toThrow("does not match its environment owner");
   });
 });

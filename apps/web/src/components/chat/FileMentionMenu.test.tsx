@@ -25,7 +25,9 @@ describe("FileMentionMenu", () => {
   test("selects a file on left mouse down without waiting for blur-prone click", () => {
     const onSelect = mock(() => {});
 
-    render(<FileMentionMenu files={files} selectedIndex={0} onSelect={onSelect} onClose={() => {}} />);
+    render(
+      <FileMentionMenu files={files} selectedIndex={0} onSelect={onSelect} onClose={() => {}} />,
+    );
 
     fireEvent.mouseDown(screen.getByRole("option", { name: /Button.tsx/ }), { button: 0 });
 
@@ -35,7 +37,9 @@ describe("FileMentionMenu", () => {
   test("ignores non-left mouse down (e.g. right click)", () => {
     const onSelect = mock(() => {});
 
-    render(<FileMentionMenu files={files} selectedIndex={0} onSelect={onSelect} onClose={() => {}} />);
+    render(
+      <FileMentionMenu files={files} selectedIndex={0} onSelect={onSelect} onClose={() => {}} />,
+    );
 
     fireEvent.mouseDown(screen.getByRole("option", { name: /Button.tsx/ }), { button: 2 });
 
@@ -45,7 +49,9 @@ describe("FileMentionMenu", () => {
   test("supports keyboard-originated button activation", () => {
     const onSelect = mock(() => {});
 
-    render(<FileMentionMenu files={files} selectedIndex={1} onSelect={onSelect} onClose={() => {}} />);
+    render(
+      <FileMentionMenu files={files} selectedIndex={1} onSelect={onSelect} onClose={() => {}} />,
+    );
 
     fireEvent.click(screen.getByRole("option", { name: /hooks/ }), { detail: 0 });
 
@@ -53,7 +59,9 @@ describe("FileMentionMenu", () => {
   });
 
   test("highlights the selected option with the input-bar popup treatment", () => {
-    render(<FileMentionMenu files={files} selectedIndex={0} onSelect={() => {}} onClose={() => {}} />);
+    render(
+      <FileMentionMenu files={files} selectedIndex={0} onSelect={() => {}} onClose={() => {}} />,
+    );
 
     const selectedOption = screen.getByRole("option", { name: /Button.tsx/ });
     const unselectedOption = screen.getByRole("option", { name: /hooks/ });
@@ -66,7 +74,9 @@ describe("FileMentionMenu", () => {
   test("closes when clicking outside the menu", () => {
     const onClose = mock(() => {});
 
-    render(<FileMentionMenu files={files} selectedIndex={0} onSelect={() => {}} onClose={onClose} />);
+    render(
+      <FileMentionMenu files={files} selectedIndex={0} onSelect={() => {}} onClose={onClose} />,
+    );
 
     fireEvent.mouseDown(document.body);
 

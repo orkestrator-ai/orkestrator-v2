@@ -10,12 +10,14 @@ const realUseProjectsSnapshot = { ...realUseProjects };
 const realCreateEnvironmentFlowSnapshot = { ...realCreateEnvironmentFlow };
 let projectsValue: Project[] = [];
 let isLoadingValue = false;
-let flowProps: (CreateEnvironmentFlowOperations & {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  projectId: string | null;
-  projectName?: string;
-}) | null = null;
+let flowProps:
+  | (CreateEnvironmentFlowOperations & {
+      open: boolean;
+      onOpenChange: (open: boolean) => void;
+      projectId: string | null;
+      projectName?: string;
+    })
+  | null = null;
 
 mock.module("@/hooks/useProjects", () => ({
   useProjects: () => ({ projects: projectsValue, isLoading: isLoadingValue }),
@@ -45,7 +47,10 @@ import {
   resolveRecentProjects,
 } from "@/components/projects/ProjectLauncher";
 
-function makeProject(index: number, addedAt = `2026-07-${String(index).padStart(2, "0")}T00:00:00.000Z`): Project {
+function makeProject(
+  index: number,
+  addedAt = `2026-07-${String(index).padStart(2, "0")}T00:00:00.000Z`,
+): Project {
   return {
     id: `project-${index}`,
     name: `Project ${index}`,
@@ -82,8 +87,12 @@ describe("ProjectLauncher", () => {
     const projects = Array.from({ length: 7 }, (_, index) => makeProject(index + 1));
 
     expect(
-      resolveRecentProjects(projects, ["deleted-project", "project-2", "project-5", "project-2"])
-        .map((project) => project.id),
+      resolveRecentProjects(projects, [
+        "deleted-project",
+        "project-2",
+        "project-5",
+        "project-2",
+      ]).map((project) => project.id),
     ).toEqual(["project-2", "project-5", "project-7", "project-6", "project-4"]);
   });
 
@@ -94,13 +103,17 @@ describe("ProjectLauncher", () => {
       makeProject(index + 1, index < 2 ? "invalid" : "2026-01-01T00:00:00.000Z"),
     );
     expect(
-      resolveRecentProjects(projects, projects.map((project) => project.id)).map(
-        (project) => project.id,
-      ),
+      resolveRecentProjects(
+        projects,
+        projects.map((project) => project.id),
+      ).map((project) => project.id),
     ).toEqual(["project-1", "project-2", "project-3", "project-4", "project-5"]);
 
-    expect(resolveRecentProjects(projects.slice(0, 3), []).map((project) => project.id))
-      .toEqual(["project-1", "project-2", "project-3"]);
+    expect(resolveRecentProjects(projects.slice(0, 3), []).map((project) => project.id)).toEqual([
+      "project-1",
+      "project-2",
+      "project-3",
+    ]);
   });
 
   test("opens the project row and keeps its environment action separate", () => {
@@ -125,9 +138,7 @@ describe("ProjectLauncher", () => {
     expect(onCreateEnvironment).not.toHaveBeenCalled();
 
     onOpenProject.mockClear();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Create environment for Project 1" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Create environment for Project 1" }));
     expect(onCreateEnvironment).toHaveBeenCalledWith("project-1");
     expect(onOpenProject).not.toHaveBeenCalled();
   });
@@ -163,7 +174,9 @@ describe("ProjectLauncher", () => {
 
   test("integrates recent project selection and opens and closes the shared create flow", () => {
     const operations = {
-      createEnvironment: mock(async () => { throw new Error("not called"); }),
+      createEnvironment: mock(async () => {
+        throw new Error("not called");
+      }),
       updateEnvironment: mock(() => {}),
       startEnvironment: mock(async () => {}),
     } satisfies CreateEnvironmentFlowOperations;
@@ -182,9 +195,7 @@ describe("ProjectLauncher", () => {
     expect(useUIStore.getState().selectedProjectId).toBe("project-2");
     expect(useUIStore.getState().recentProjectIds[0]).toBe("project-2");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Create environment for Project 1" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Create environment for Project 1" }));
     expect(screen.getByRole("button", { name: "Close create flow" })).toBeTruthy();
     expect(flowProps).toMatchObject({
       open: true,

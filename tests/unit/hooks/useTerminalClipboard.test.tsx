@@ -25,18 +25,24 @@ function createTerminal() {
       keyHandler = callback;
     }),
   };
-  return { terminal, selection: () => selectionCallback(), key: (event: KeyboardEvent) => keyHandler?.(event) };
+  return {
+    terminal,
+    selection: () => selectionCallback(),
+    key: (event: KeyboardEvent) => keyHandler?.(event),
+  };
 }
 
 describe("useTerminalClipboard", () => {
   test("tracks selection, copies, and selects all", async () => {
     const fake = createTerminal();
     const writeRef = { current: mock(async () => undefined) };
-    const { result, unmount } = renderHook(() => useTerminalClipboard({
-      terminal: fake.terminal as never,
-      containerId: "container-1",
-      writeRef,
-    }));
+    const { result, unmount } = renderHook(() =>
+      useTerminalClipboard({
+        terminal: fake.terminal as never,
+        containerId: "container-1",
+        writeRef,
+      }),
+    );
 
     expect(result.current.hasSelection).toBe(true);
     await act(async () => result.current.handleCopySelection());
@@ -51,11 +57,13 @@ describe("useTerminalClipboard", () => {
   test("handles terminal clipboard shortcuts without overriding shell Ctrl+C", async () => {
     const fake = createTerminal();
     const writeRef = { current: mock(async () => undefined) };
-    const { result } = renderHook(() => useTerminalClipboard({
-      terminal: fake.terminal as never,
-      containerId: "",
-      writeRef,
-    }));
+    const { result } = renderHook(() =>
+      useTerminalClipboard({
+        terminal: fake.terminal as never,
+        containerId: "",
+        writeRef,
+      }),
+    );
     act(() => result.current.attachClipboardKeyHandler());
 
     expect(fake.key(new KeyboardEvent("keydown", { key: "c", ctrlKey: true }))).toBe(true);
@@ -70,7 +78,9 @@ describe("useTerminalClipboard", () => {
 
   test("is inert without a terminal", async () => {
     const writeRef = { current: mock(async () => undefined) };
-    const { result } = renderHook(() => useTerminalClipboard({ terminal: null, containerId: "container", writeRef }));
+    const { result } = renderHook(() =>
+      useTerminalClipboard({ terminal: null, containerId: "container", writeRef }),
+    );
     await result.current.handleCopySelection();
     result.current.handleSelectAll();
     result.current.handlePaste();

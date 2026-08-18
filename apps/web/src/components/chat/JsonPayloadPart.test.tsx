@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
-import {
-  jsonPayloadSearchText,
-  parseJsonPayload,
-} from "@/lib/chat/json-payload";
+import { jsonPayloadSearchText, parseJsonPayload } from "@/lib/chat/json-payload";
 import type { JsonPayload } from "@/lib/chat/json-payload";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { NativeMessage } from "./NativeMessage";
@@ -25,10 +22,7 @@ function payloadOf(content: string): JsonPayload {
   return payload;
 }
 
-function makeMessage(
-  content: string,
-  role: "user" | "assistant" = "assistant",
-) {
+function makeMessage(content: string, role: "user" | "assistant" = "assistant") {
   return {
     id: `${role}-1`,
     role,
@@ -40,9 +34,7 @@ function makeMessage(
 
 /** Everything find would walk for this message, in DOM order. */
 function renderedSearchText(container: HTMLElement): string {
-  return Array.from(
-    container.querySelectorAll("[data-agent-chat-search-content]"),
-  )
+  return Array.from(container.querySelectorAll("[data-agent-chat-search-content]"))
     .map((root) => root.textContent ?? "")
     .join("\n\n");
 }
@@ -90,8 +82,7 @@ describe("JsonPayloadPart", () => {
 
     expect(screen.getByText("Verification passed")).toBeTruthy();
     // The rationale is flattened onto the collapsed row and shown in full below.
-    expect(screen.getByText("Working tree is clean. The UI suite passed."))
-      .toBeTruthy();
+    expect(screen.getByText("Working tree is clean. The UI suite passed.")).toBeTruthy();
 
     fireEvent.click(screen.getByText("Verification passed"));
 
@@ -105,9 +96,7 @@ describe("JsonPayloadPart", () => {
   test("names a failed verification as failed", () => {
     render(
       <JsonPayloadPart
-        payload={payloadOf(
-          '{"complete":false,"rationale":"A criterion is unmet."}',
-        )}
+        payload={payloadOf('{"complete":false,"rationale":"A criterion is unmet."}')}
         expansionKey="verdict"
       />,
     );
@@ -159,9 +148,7 @@ describe("JsonPayloadPart", () => {
   test("names each record in a list of records", () => {
     render(
       <JsonPayloadPart
-        payload={payloadOf(
-          '{"commandsRun":[{"command":"bun test","result":"passed"}]}',
-        )}
+        payload={payloadOf('{"commandsRun":[{"command":"bun test","result":"passed"}]}')}
         expansionKey="payload"
       />,
     );
@@ -176,22 +163,16 @@ describe("JsonPayloadPart", () => {
   test("keeps the exact document reachable behind a raw disclosure", () => {
     // The tree humanizes keys, so it cannot show what the agent actually
     // wrote. Nothing may be unreachable without leaving the transcript.
-    const source =
-      '{"stageName":"verify","duplicate":1,"duplicate":2,"exponent":1e3}';
-    render(
-      <JsonPayloadPart
-        payload={payloadOf(source)}
-        expansionKey="payload"
-      />,
-    );
+    const source = '{"stageName":"verify","duplicate":1,"duplicate":2,"exponent":1e3}';
+    render(<JsonPayloadPart payload={payloadOf(source)} expansionKey="payload" />);
 
     fireEvent.click(screen.getByText("JSON payload"));
     expect(document.body.textContent).not.toContain('"stageName"');
 
     fireEvent.click(screen.getByText("Raw JSON"));
     expect(
-      screen.getByText((_, element) =>
-        element?.tagName === "PRE" && element.textContent === source
+      screen.getByText(
+        (_, element) => element?.tagName === "PRE" && element.textContent === source,
       ),
     ).toBeTruthy();
   });
@@ -199,9 +180,7 @@ describe("JsonPayloadPart", () => {
   test("opens a deeply nested bounded payload without pretty-print amplification", () => {
     const source = `${"[".repeat(5_000)}0${"]".repeat(5_000)}`;
     const payload = payloadOf(source);
-    const view = render(
-      <JsonPayloadPart payload={payload} expansionKey="deep-payload" />,
-    );
+    const view = render(<JsonPayloadPart payload={payload} expansionKey="deep-payload" />);
 
     fireEvent.click(screen.getByText("JSON list"));
     expect(screen.getByText("Raw JSON")).toBeTruthy();
@@ -215,38 +194,28 @@ describe("JsonPayloadPart", () => {
 describe("JsonPayloadPart expansion persistence", () => {
   test("an opened payload survives the list unmounting its row", () => {
     const payload = payloadOf('{"stageName":"verify"}');
-    const view = render(
-      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
-    );
+    const view = render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
 
     fireEvent.click(screen.getByText("JSON payload"));
     expect(screen.getByText("Stage name")).toBeTruthy();
 
     // Virtuoso unmounts a row as soon as it leaves the viewport window.
     view.unmount();
-    render(
-      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
-    );
+    render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
 
     expect(screen.getByText("Stage name")).toBeTruthy();
   });
 
   test("an opened nested branch survives the same unmount", () => {
-    const payload = payloadOf(
-      '{"verdict":{"ready":"no","reasoning":"Pending."}}',
-    );
-    const view = render(
-      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
-    );
+    const payload = payloadOf('{"verdict":{"ready":"no","reasoning":"Pending."}}');
+    const view = render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
 
     fireEvent.click(screen.getByText("JSON payload"));
     fireEvent.click(screen.getByText("Verdict"));
     expect(screen.getByText("Pending.")).toBeTruthy();
 
     view.unmount();
-    render(
-      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
-    );
+    render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
 
     expect(screen.getByText("Pending.")).toBeTruthy();
   });
@@ -254,9 +223,7 @@ describe("JsonPayloadPart expansion persistence", () => {
   test("an opened raw disclosure survives the same unmount", () => {
     const source = '{"stageName":"verify"}';
     const payload = payloadOf(source);
-    const view = render(
-      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
-    );
+    const view = render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
 
     fireEvent.click(screen.getByText("JSON payload"));
     fireEvent.click(screen.getByText("Raw JSON"));
@@ -271,21 +238,15 @@ describe("JsonPayloadPart expansion persistence", () => {
 
   test("an opened structured-review section survives the same unmount", () => {
     const payload = payloadOf(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
-    const view = render(
-      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
-    );
+    const view = render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
 
     fireEvent.click(screen.getByText("Structured review report"));
     fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
-    expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview))
-      .toBeTruthy();
+    expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview)).toBeTruthy();
 
     view.unmount();
-    render(
-      <JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />,
-    );
-    expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview))
-      .toBeTruthy();
+    render(<JsonPayloadPart payload={payload} expansionKey="msg-1/part-0/json" />);
+    expect(screen.getByText(TEST_STRUCTURED_REVIEW_REPORT.whatChanged.overview)).toBeTruthy();
   });
 
   test("two payloads with different keys expand independently", () => {
@@ -305,11 +266,7 @@ describe("JsonPayloadPart expansion persistence", () => {
 
 describe("NativeMessage JSON payload handling", () => {
   test("folds an assistant message that is nothing but a report", () => {
-    render(
-      <NativeMessage
-        message={makeMessage(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT))}
-      />,
-    );
+    render(<NativeMessage message={makeMessage(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT))} />);
 
     expect(screen.getByText("Structured review report")).toBeTruthy();
     expect(document.body.textContent).not.toContain('"reviewScope"');
@@ -335,9 +292,7 @@ describe("NativeMessage JSON payload handling", () => {
 
   test("leaves prose around a JSON snippet to the markdown renderer", () => {
     render(
-      <NativeMessage
-        message={makeMessage('Here is the payload:\n\n```json\n{"a":1}\n```')}
-      />,
+      <NativeMessage message={makeMessage('Here is the payload:\n\n```json\n{"a":1}\n```')} />,
     );
 
     expect(screen.queryByText("JSON payload") === null).toBe(true);
@@ -346,9 +301,7 @@ describe("NativeMessage JSON payload handling", () => {
 
   test("leaves a fenced block of unrecognized JSON as readable source", () => {
     render(
-      <NativeMessage
-        message={makeMessage('```json\n{"compilerOptions":{"strict":true}}\n```')}
-      />,
+      <NativeMessage message={makeMessage('```json\n{"compilerOptions":{"strict":true}}\n```')} />,
     );
 
     expect(screen.queryByText("JSON payload") === null).toBe(true);
@@ -358,9 +311,7 @@ describe("NativeMessage JSON payload handling", () => {
   test("still folds a fenced verification verdict", () => {
     render(
       <NativeMessage
-        message={makeMessage(
-          '```json\n{"complete":false,"rationale":"Unmet."}\n```',
-        )}
+        message={makeMessage('```json\n{"complete":false,"rationale":"Unmet."}\n```')}
       />,
     );
 
@@ -368,9 +319,7 @@ describe("NativeMessage JSON payload handling", () => {
   });
 
   test("shows the user their own message as written", () => {
-    render(
-      <NativeMessage message={makeMessage('{"a":1}', "user")} />,
-    );
+    render(<NativeMessage message={makeMessage('{"a":1}', "user")} />);
 
     expect(screen.queryByText("JSON payload") === null).toBe(true);
     expect(document.body.textContent).toContain('{"a":1}');
@@ -400,19 +349,14 @@ describe("NativeMessage find-index alignment", () => {
   // row. If the two disagree, a match is either unhighlightable or lands on
   // the wrong text. These assert they agree exactly.
   test("a folded report indexes exactly what the collapsed row renders", () => {
-    const message = makeMessage(
-      JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT),
-    );
+    const message = makeMessage(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
     const view = render(<NativeMessage message={message} />);
 
-    expect(getNativeMessageSearchText(message))
-      .toBe(renderedSearchText(view.container));
+    expect(getNativeMessageSearchText(message)).toBe(renderedSearchText(view.container));
   });
 
   test("a folded verdict indexes exactly what the collapsed row renders", () => {
-    const message = makeMessage(
-      '{"complete":true,"rationale":"Tree clean.\\nSuite passed."}',
-    );
+    const message = makeMessage('{"complete":true,"rationale":"Tree clean.\\nSuite passed."}');
     const view = render(<NativeMessage message={message} />);
 
     const searchText = getNativeMessageSearchText(message);
@@ -427,8 +371,7 @@ describe("NativeMessage find-index alignment", () => {
     const message = makeMessage('{"stageName":"verify","attempts":2}');
     const view = render(<NativeMessage message={message} />);
 
-    expect(getNativeMessageSearchText(message))
-      .toBe(renderedSearchText(view.container));
+    expect(getNativeMessageSearchText(message)).toBe(renderedSearchText(view.container));
     expect(getNativeMessageSearchText(message)).not.toContain("stageName");
   });
 
@@ -485,9 +428,7 @@ describe("NativeMessage find-index alignment", () => {
 
   test("the payload search text is the trigger's own text", () => {
     const payload = payloadOf('{"stageName":"verify","attempts":2}');
-    const view = render(
-      <JsonPayloadPart payload={payload} expansionKey="payload" />,
-    );
+    const view = render(<JsonPayloadPart payload={payload} expansionKey="payload" />);
 
     // Locks the concatenation in `jsonPayloadSearchText` to the JSX above it:
     // adding whitespace between the title and summary spans breaks this.

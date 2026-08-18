@@ -26,7 +26,6 @@ import {
   waitFor,
 } from "./session-manager-test-harness.js";
 
-
 // ---------------------------------------------------------------------------
 // getAvailableModels
 // ---------------------------------------------------------------------------
@@ -101,13 +100,7 @@ describe("getAvailableModels", () => {
     for (const id of ["default", "opus[1m]", "claude-fable-5[1m]", "sonnet"]) {
       const model = byId.get(id);
       expect(model?.supportsEffort).toBe(true);
-      expect(model?.supportedEffortLevels).toEqual([
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max",
-      ]);
+      expect(model?.supportedEffortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
     }
 
     // Haiku is the fast, non-reasoning tier.
@@ -116,46 +109,35 @@ describe("getAvailableModels", () => {
 
   test("cleans up the SDK query after success, failure, and cleanup errors", async () => {
     const successReturn = mock(async () => ({ done: true, value: undefined }));
-    const successfulQuery = Object.assign(
-      (async function* () {})(),
-      {
-        supportedModels: async () => [],
-        return: successReturn,
-      },
-    );
+    const successfulQuery = Object.assign((async function* () {})(), {
+      supportedModels: async () => [],
+      return: successReturn,
+    });
     mockQuery.mockImplementationOnce(() => successfulQuery as never);
     expect(await getAvailableModels()).toEqual([]);
     expect(successReturn).toHaveBeenCalledTimes(1);
 
     const failedReturn = mock(async () => ({ done: true, value: undefined }));
-    const failingQuery = Object.assign(
-      (async function* () {})(),
-      {
-        supportedModels: async () => {
-          throw new Error("model lookup failed");
-        },
-        return: failedReturn,
+    const failingQuery = Object.assign((async function* () {})(), {
+      supportedModels: async () => {
+        throw new Error("model lookup failed");
       },
-    );
+      return: failedReturn,
+    });
     mockQuery.mockImplementationOnce(() => failingQuery as never);
     expect((await getAvailableModels()).length).toBeGreaterThan(0);
     expect(failedReturn).toHaveBeenCalledTimes(1);
 
-    const cleanupFailure = Object.assign(
-      (async function* () {})(),
-      {
-        supportedModels: async () => [],
-        return: async () => {
-          throw new Error("cleanup failed");
-        },
+    const cleanupFailure = Object.assign((async function* () {})(), {
+      supportedModels: async () => [],
+      return: async () => {
+        throw new Error("cleanup failed");
       },
-    );
+    });
     mockQuery.mockImplementationOnce(() => cleanupFailure as never);
     expect(await getAvailableModels()).toEqual([]);
   });
 });
-
-
 
 describe("getClaudeRuntimeVersions", () => {
   async function readBundledManifest(): Promise<{
@@ -164,17 +146,11 @@ describe("getClaudeRuntimeVersions", () => {
   }> {
     const sdkEntryUrl = import.meta.resolve("@anthropic-ai/claude-agent-sdk");
     return JSON.parse(
-      await realFs.promises.readFile(
-        new URL("./package.json", sdkEntryUrl),
-        "utf8",
-      ),
+      await realFs.promises.readFile(new URL("./package.json", sdkEntryUrl), "utf8"),
     );
   }
 
-  async function withClaudeCliPath<T>(
-    value: string | undefined,
-    fn: () => Promise<T>,
-  ): Promise<T> {
+  async function withClaudeCliPath<T>(value: string | undefined, fn: () => Promise<T>): Promise<T> {
     const previous = process.env.CLAUDE_CLI_PATH;
     if (value === undefined) delete process.env.CLAUDE_CLI_PATH;
     else process.env.CLAUDE_CLI_PATH = value;
@@ -186,10 +162,7 @@ describe("getClaudeRuntimeVersions", () => {
     }
   }
 
-  function stubClaudeVersionOutput(
-    executable: string,
-    output: string | (() => never),
-  ): void {
+  function stubClaudeVersionOutput(executable: string, output: string | (() => never)): void {
     mockExecFile.mockImplementation(((
       file: string,
       args: string[] | undefined,
@@ -256,18 +229,13 @@ describe("getClaudeRuntimeVersions", () => {
 
   test("parses the managed CLI --version output when configured", async () => {
     await withClaudeCliPath("/managed/toolchain/claude", async () => {
-      stubClaudeVersionOutput(
-        "/managed/toolchain/claude",
-        "5.4.2 (Claude Code)\n",
-      );
+      stubClaudeVersionOutput("/managed/toolchain/claude", "5.4.2 (Claude Code)\n");
 
       const versions = await getClaudeRuntimeVersions();
 
       expect(versions.cliVersion).toBe("5.4.2");
       expect(versions.sdkVersion).toBe((await readBundledManifest()).version);
-      const call = mockExecFile.mock.calls.find(
-        (c) => c[0] === "/managed/toolchain/claude",
-      );
+      const call = mockExecFile.mock.calls.find((c) => c[0] === "/managed/toolchain/claude");
       expect(call?.[1]).toEqual(["--version"]);
     });
   });
@@ -328,8 +296,6 @@ describe("getClaudeRuntimeVersions", () => {
     }
   }, 12_000);
 });
-
-
 
 // ---------------------------------------------------------------------------
 // Rate limits and usage
@@ -536,11 +502,11 @@ describe("rate_limit_event", () => {
     let pushedRefreshSignal = false;
     const stop = eventEmitter.subscribe((event) => {
       if (
-        !pushedRefreshSignal
-        && event.type === "session.updated"
-        && event.sessionId === created.id
-        && (event.data as { rateLimits?: Array<{ usedPercent?: number }> })
-          .rateLimits?.[0]?.usedPercent === 5
+        !pushedRefreshSignal &&
+        event.type === "session.updated" &&
+        event.sessionId === created.id &&
+        (event.data as { rateLimits?: Array<{ usedPercent?: number }> }).rateLimits?.[0]
+          ?.usedPercent === 5
       ) {
         pushedRefreshSignal = true;
         call.push(sparseFiveHourEvent);
@@ -608,17 +574,19 @@ describe("rate_limit_event", () => {
           resetsAt: "2026-07-28T22:30:00.000Z",
         },
       ]);
-      expect(getSession(created.id)?.usage?.rateLimits)
-        .toEqual(getSession(created.id)?.rateLimits);
+      expect(getSession(created.id)?.usage?.rateLimits).toEqual(getSession(created.id)?.rateLimits);
     });
   }
 
   test("ignores a structured response after its session is removed", async () => {
     let resolveUsage: ((value: unknown) => void) | undefined;
     let parsed = false;
-    const getStructuredUsage = mock(() => new Promise<unknown>((resolve) => {
-      resolveUsage = resolve;
-    }));
+    const getStructuredUsage = mock(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveUsage = resolve;
+        }),
+    );
     queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
       getStructuredUsage;
 
@@ -646,11 +614,14 @@ describe("rate_limit_event", () => {
       await promptPromise;
 
       expect(created.rateLimits).toBeUndefined();
-      expect(events.some((event) =>
-        event.type === "session.updated"
-        && event.sessionId === created.id
-        && "rateLimits" in event.data
-      )).toBe(false);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.updated" &&
+            event.sessionId === created.id &&
+            "rateLimits" in event.data,
+        ),
+      ).toBe(false);
     } finally {
       stop();
       call.finish();
@@ -660,9 +631,12 @@ describe("rate_limit_event", () => {
   test("ignores a structured response while its session is being deleted", async () => {
     let resolveUsage: ((value: unknown) => void) | undefined;
     let parsed = false;
-    const getStructuredUsage = mock(() => new Promise<unknown>((resolve) => {
-      resolveUsage = resolve;
-    }));
+    const getStructuredUsage = mock(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveUsage = resolve;
+        }),
+    );
     queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
       getStructuredUsage;
 
@@ -685,11 +659,14 @@ describe("rate_limit_event", () => {
       await waitFor(() => parsed);
 
       expect(created.rateLimits).toBeUndefined();
-      expect(events.some((event) =>
-        event.type === "session.updated"
-        && event.sessionId === created.id
-        && "rateLimits" in event.data
-      )).toBe(false);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.updated" &&
+            event.sessionId === created.id &&
+            "rateLimits" in event.data,
+        ),
+      ).toBe(false);
     } finally {
       created.deleting = false;
       stop();
@@ -701,9 +678,12 @@ describe("rate_limit_event", () => {
   test("ignores a structured response from a superseded query control", async () => {
     let resolveUsage: ((value: unknown) => void) | undefined;
     let parsed = false;
-    const getStructuredUsage = mock(() => new Promise<unknown>((resolve) => {
-      resolveUsage = resolve;
-    }));
+    const getStructuredUsage = mock(
+      () =>
+        new Promise<unknown>((resolve) => {
+          resolveUsage = resolve;
+        }),
+    );
     queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
       getStructuredUsage;
 
@@ -727,11 +707,14 @@ describe("rate_limit_event", () => {
       await waitFor(() => parsed);
 
       expect(created.rateLimits).toBeUndefined();
-      expect(events.some((event) =>
-        event.type === "session.updated"
-        && event.sessionId === created.id
-        && "rateLimits" in event.data
-      )).toBe(false);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.updated" &&
+            event.sessionId === created.id &&
+            "rateLimits" in event.data,
+        ),
+      ).toBe(false);
     } finally {
       created.queryControl = originalControl;
       stop();
@@ -741,8 +724,8 @@ describe("rate_limit_event", () => {
   });
 
   test("replaces sparse threshold data with all structured /usage windows", async () => {
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      mock(async () => ({
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+      async () => ({
         rate_limits_available: true,
         rate_limits: {
           five_hour: {
@@ -762,7 +745,8 @@ describe("rate_limit_event", () => {
             },
           ],
         },
-      }));
+      }),
+    );
 
     const { session } = await runPromptWithMessages([
       {
@@ -802,19 +786,17 @@ describe("rate_limit_event", () => {
   });
 
   test("clears retained windows when structured usage says limits are unavailable", async () => {
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      mock(async () => ({
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+      async () => ({
         rate_limits_available: false,
         rate_limits: null,
-      }));
+      }),
+    );
 
     const { events, stop } = captureEvents();
     let session;
     try {
-      ({ session } = await runPromptWithMessages([
-        sparseFiveHourEvent,
-        successfulUsageResult,
-      ]));
+      ({ session } = await runPromptWithMessages([sparseFiveHourEvent, successfulUsageResult]));
     } finally {
       stop();
     }
@@ -832,31 +814,27 @@ describe("rate_limit_event", () => {
   });
 
   test("treats an empty structured limits object as an authoritative empty snapshot", async () => {
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      mock(async () => ({
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+      async () => ({
         rate_limits_available: true,
         rate_limits: {},
-      }));
+      }),
+    );
 
-    const { session } = await runPromptWithMessages([
-      sparseFiveHourEvent,
-      successfulUsageResult,
-    ]);
+    const { session } = await runPromptWithMessages([sparseFiveHourEvent, successfulUsageResult]);
 
     expect(session.rateLimits).toEqual([]);
     expect(session.usage?.rateLimits).toEqual([]);
   });
 
   test("preserves sparse windows when the structured request rejects", async () => {
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      mock(async () => {
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+      async () => {
         throw new Error("experimental request failed");
-      });
+      },
+    );
 
-    const { session } = await runPromptWithMessages([
-      sparseFiveHourEvent,
-      successfulUsageResult,
-    ]);
+    const { session } = await runPromptWithMessages([sparseFiveHourEvent, successfulUsageResult]);
 
     expect(session.status).toBe("idle");
     expect(session.rateLimits).toEqual([
@@ -875,17 +853,12 @@ describe("rate_limit_event", () => {
       getStructuredUsage;
 
     const startedAt = performance.now();
-    const { session } = await runPromptWithMessages([
-      sparseFiveHourEvent,
-      successfulUsageResult,
-    ]);
+    const { session } = await runPromptWithMessages([sparseFiveHourEvent, successfulUsageResult]);
 
     expect(performance.now() - startedAt).toBeGreaterThanOrEqual(
       STRUCTURED_USAGE_REQUEST_TIMEOUT_MS - 50,
     );
-    expect(performance.now() - startedAt).toBeLessThan(
-      STRUCTURED_USAGE_REQUEST_TIMEOUT_MS + 1_000,
-    );
+    expect(performance.now() - startedAt).toBeLessThan(STRUCTURED_USAGE_REQUEST_TIMEOUT_MS + 1_000);
     expect(session.status).toBe("idle");
     expect(session.rateLimits?.[0]).toMatchObject({
       label: "Five Hour",
@@ -919,12 +892,10 @@ describe("rate_limit_event", () => {
       },
     ];
     for (const response of malformedResponses) {
-      queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-        mock(async () => response);
-      const { session } = await runPromptWithMessages([
-        sparseFiveHourEvent,
-        successfulUsageResult,
-      ]);
+      queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+        async () => response,
+      );
+      const { session } = await runPromptWithMessages([sparseFiveHourEvent, successfulUsageResult]);
       expect(session.rateLimits).toEqual([
         {
           label: "Five Hour",
@@ -936,8 +907,8 @@ describe("rate_limit_event", () => {
   });
 
   test("validates utilization and reset fields independently", async () => {
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      mock(async () => ({
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+      async () => ({
         rate_limits_available: true,
         rate_limits: {
           five_hour: {
@@ -959,7 +930,8 @@ describe("rate_limit_event", () => {
             utilization: Number.POSITIVE_INFINITY,
           },
         },
-      }));
+      }),
+    );
 
     const { session } = await runPromptWithMessages([successfulUsageResult]);
 
@@ -976,8 +948,8 @@ describe("rate_limit_event", () => {
   });
 
   test("parses every fixed key and removes fixed/model-scoped label collisions", async () => {
-    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET =
-      mock(async () => ({
+    queryControlOverrides.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET = mock(
+      async () => ({
         rate_limits_available: true,
         rate_limits: {
           five_hour: { utilization: 1 },
@@ -992,7 +964,8 @@ describe("rate_limit_event", () => {
             { display_name: "Fable", utilization: 7 },
           ],
         },
-      }));
+      }),
+    );
 
     const { session } = await runPromptWithMessages([successfulUsageResult]);
 
@@ -1037,9 +1010,7 @@ describe("rate_limit_event", () => {
     ]);
     // Reading seconds as milliseconds put every window in 1970, which the UI
     // renders as a limit that reset decades ago.
-    expect(
-      new Date(session.rateLimits![0]!.resetsAt!).getUTCFullYear(),
-    ).toBeGreaterThan(2020);
+    expect(new Date(session.rateLimits![0]!.resetsAt!).getUTCFullYear()).toBeGreaterThan(2020);
     expect(events).toContainEqual({
       type: "session.updated",
       sessionId: session.id,
@@ -1104,9 +1075,7 @@ describe("rate_limit_event", () => {
     const { session } = await runPromptWithMessages([
       { type: "rate_limit_event", rate_limit_info: { utilization: 5 } },
     ]);
-    expect(session.rateLimits).toEqual([
-      { label: "Usage", usedPercent: 5, resetsAt: undefined },
-    ]);
+    expect(session.rateLimits).toEqual([{ label: "Usage", usedPercent: 5, resetsAt: undefined }]);
   });
 
   test("ignores an event with no rate limit payload", async () => {
@@ -1161,8 +1130,6 @@ describe("rate_limit_event", () => {
     await second;
   });
 });
-
-
 
 describe("claude usage snapshot", () => {
   test("counts cache reads on a resumed turn", async () => {
@@ -1267,9 +1234,7 @@ describe("claude usage snapshot", () => {
   });
 
   test("publishes nothing when a turn reports no tokens", async () => {
-    const { session } = await runPromptWithMessages([
-      { type: "result", subtype: "success" },
-    ]);
+    const { session } = await runPromptWithMessages([{ type: "result", subtype: "success" }]);
     expect(session.usage).toBeUndefined();
   });
 
@@ -1290,10 +1255,7 @@ describe("claude usage snapshot", () => {
       maxTokens: 200_000,
       percentage: 25.6,
       model: "claude-opus-5",
-      categories: [
-        { name: "System prompt", tokens: 1200, color: "#fff" },
-        { name: "bad entry" },
-      ],
+      categories: [{ name: "System prompt", tokens: 1200, color: "#fff" }, { name: "bad entry" }],
     }));
 
     const { session } = await runPromptWithMessages([

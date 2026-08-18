@@ -1,4 +1,8 @@
-import { DEFAULT_CODEX_MODEL, type CodexModel, type CodexReasoningEffort } from "@/lib/codex-client";
+import {
+  DEFAULT_CODEX_MODEL,
+  type CodexModel,
+  type CodexReasoningEffort,
+} from "@/lib/codex-client";
 import type { AppConfig, GlobalConfig } from "@/types";
 import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
 
@@ -12,8 +16,9 @@ export interface CodexPreferenceSelection {
 export function getPersistedCodexPreferences(config: AppConfig): CodexPreferenceSelection {
   return {
     model: config.global.codexModel || DEFAULT_CODEX_MODEL,
-    reasoningEffort: (config.global.codexReasoningEffort as CodexReasoningEffort | undefined)
-      || DEFAULT_REASONING_EFFORT,
+    reasoningEffort:
+      (config.global.codexReasoningEffort as CodexReasoningEffort | undefined) ||
+      DEFAULT_REASONING_EFFORT,
   };
 }
 
@@ -33,11 +38,11 @@ export function resolveReasoningEffort(
   // wins, otherwise "high" when offered, otherwise the model's advertised
   // default, otherwise the first supported effort. It only returns undefined for
   // an empty catalog, which `supportedEfforts` can never be.
-  return (resolveReasoningId(
-    supportedEfforts,
-    storedEffort,
-    model?.defaultReasoningEffort,
-  ) as CodexReasoningEffort | undefined) ?? DEFAULT_REASONING_EFFORT;
+  return (
+    (resolveReasoningId(supportedEfforts, storedEffort, model?.defaultReasoningEffort) as
+      | CodexReasoningEffort
+      | undefined) ?? DEFAULT_REASONING_EFFORT
+  );
 }
 
 export function resolveCodexPreferenceSelection(options: {
@@ -47,19 +52,15 @@ export function resolveCodexPreferenceSelection(options: {
   persistedModel?: string;
   persistedReasoningEffort?: CodexReasoningEffort;
 }): CodexPreferenceSelection {
-  const {
-    models,
-    storedModel,
-    storedReasoningEffort,
-    persistedModel,
-    persistedReasoningEffort,
-  } = options;
+  const { models, storedModel, storedReasoningEffort, persistedModel, persistedReasoningEffort } =
+    options;
   const availableModelIds = new Set(models.map((model) => model.id));
-  const model = storedModel && availableModelIds.has(storedModel)
-    ? storedModel
-    : persistedModel && availableModelIds.has(persistedModel)
-      ? persistedModel
-      : models[0]?.id ?? DEFAULT_CODEX_MODEL;
+  const model =
+    storedModel && availableModelIds.has(storedModel)
+      ? storedModel
+      : persistedModel && availableModelIds.has(persistedModel)
+        ? persistedModel
+        : (models[0]?.id ?? DEFAULT_CODEX_MODEL);
 
   return {
     model,
@@ -80,10 +81,7 @@ export async function persistCodexGlobalPreferences(options: {
 }): Promise<boolean> {
   const { config, setConfig, persistGlobalConfig, model, effort } = options;
   const currentPreferences = getPersistedCodexPreferences(config);
-  if (
-    currentPreferences.model === model
-    && currentPreferences.reasoningEffort === effort
-  ) {
+  if (currentPreferences.model === model && currentPreferences.reasoningEffort === effort) {
     return true;
   }
 

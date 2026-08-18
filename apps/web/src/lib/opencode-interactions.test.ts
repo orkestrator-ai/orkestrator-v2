@@ -1,31 +1,20 @@
-import { afterEach,describe,expect,mock,test } from "bun:test";
-
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
 import {
-getPendingPermissions,
-getPendingQuestions,
-rejectQuestion,
-replyToPermission,
-replyToQuestion,
-subscribeToEvents,
-type OpencodeClient
+  getPendingPermissions,
+  getPendingQuestions,
+  rejectQuestion,
+  replyToPermission,
+  replyToQuestion,
+  subscribeToEvents,
+  type OpencodeClient,
 } from "./opencode-client";
 
-
-
-
-
-
-
 const originalFetch = globalThis.fetch;
-
-
 
 function setTestUrl(url: string): void {
   (window as unknown as Window & { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(url);
 }
-
-
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -34,22 +23,30 @@ afterEach(() => {
   mock.restore();
 });
 
-
-
 describe("opencode-client events and pending requests", () => {
   test("subscribes through stream and directly iterable response shapes", async () => {
-    const stream = (async function* () { yield { type: "session.updated" }; })();
+    const stream = (async function* () {
+      yield { type: "session.updated" };
+    })();
     const wrapped = { event: { subscribe: async () => ({ stream }) } } as unknown as OpencodeClient;
     expect(await subscribeToEvents(wrapped)).toBe(stream);
 
-    const direct = (async function* () { yield { type: "session.updated" }; })();
+    const direct = (async function* () {
+      yield { type: "session.updated" };
+    })();
     const directClient = { event: { subscribe: async () => direct } } as unknown as OpencodeClient;
     expect(await subscribeToEvents(directClient)).toBe(direct);
   });
 
   test("returns null for invalid or failed event subscriptions", async () => {
     const invalid = { event: { subscribe: async () => ({}) } } as unknown as OpencodeClient;
-    const failed = { event: { subscribe: async () => { throw new Error("stream failed"); } } } as unknown as OpencodeClient;
+    const failed = {
+      event: {
+        subscribe: async () => {
+          throw new Error("stream failed");
+        },
+      },
+    } as unknown as OpencodeClient;
     expect(await subscribeToEvents(invalid)).toBeNull();
     expect(await subscribeToEvents(failed)).toBeNull();
   });
@@ -70,17 +67,25 @@ describe("opencode-client events and pending requests", () => {
     expect(await getPendingPermissions(empty)).toEqual([]);
 
     const failed = {
-      question: { list: async () => { throw new Error("question failed"); } },
-      permission: { list: async () => { throw new Error("permission failed"); } },
+      question: {
+        list: async () => {
+          throw new Error("question failed");
+        },
+      },
+      permission: {
+        list: async () => {
+          throw new Error("permission failed");
+        },
+      },
     } as unknown as OpencodeClient;
     expect(await getPendingQuestions(failed)).toEqual([]);
     expect(await getPendingPermissions(failed)).toEqual([]);
-    await expect(
-      getPendingQuestions(failed, { throwOnError: true }),
-    ).rejects.toThrow("question failed");
-    await expect(
-      getPendingPermissions(failed, { throwOnError: true }),
-    ).rejects.toThrow("permission failed");
+    await expect(getPendingQuestions(failed, { throwOnError: true })).rejects.toThrow(
+      "question failed",
+    );
+    await expect(getPendingPermissions(failed, { throwOnError: true })).rejects.toThrow(
+      "permission failed",
+    );
 
     const resolvedFailure = {
       question: {
@@ -98,23 +103,31 @@ describe("opencode-client events and pending requests", () => {
     } as unknown as OpencodeClient;
     expect(await getPendingQuestions(resolvedFailure)).toEqual([]);
     expect(await getPendingPermissions(resolvedFailure)).toEqual([]);
-    await expect(
-      getPendingQuestions(resolvedFailure, { throwOnError: true }),
-    ).rejects.toThrow("question endpoint unavailable");
-    await expect(
-      getPendingPermissions(resolvedFailure, { throwOnError: true }),
-    ).rejects.toThrow("permission endpoint unavailable");
+    await expect(getPendingQuestions(resolvedFailure, { throwOnError: true })).rejects.toThrow(
+      "question endpoint unavailable",
+    );
+    await expect(getPendingPermissions(resolvedFailure, { throwOnError: true })).rejects.toThrow(
+      "permission endpoint unavailable",
+    );
 
     const primitiveFailure = {
-      question: { list: async () => { throw "question offline"; } },
-      permission: { list: async () => { throw 503; } },
+      question: {
+        list: async () => {
+          throw "question offline";
+        },
+      },
+      permission: {
+        list: async () => {
+          throw 503;
+        },
+      },
     } as unknown as OpencodeClient;
-    await expect(
-      getPendingQuestions(primitiveFailure, { throwOnError: true }),
-    ).rejects.toThrow("Failed to get pending OpenCode questions");
-    await expect(
-      getPendingPermissions(primitiveFailure, { throwOnError: true }),
-    ).rejects.toThrow("Failed to get pending OpenCode permissions");
+    await expect(getPendingQuestions(primitiveFailure, { throwOnError: true })).rejects.toThrow(
+      "Failed to get pending OpenCode questions",
+    );
+    await expect(getPendingPermissions(primitiveFailure, { throwOnError: true })).rejects.toThrow(
+      "Failed to get pending OpenCode permissions",
+    );
   });
 
   test("normalizes both session-id spellings and rejects malformed or missing ids", async () => {
@@ -228,23 +241,31 @@ describe("opencode-client events and pending requests", () => {
   test("reports pending when a failed response remains authoritatively pending", async () => {
     const failed = {
       question: {
-        reply: async () => { throw new Error("reply failed"); },
-        reject: async () => { throw new Error("reject failed"); },
+        reply: async () => {
+          throw new Error("reply failed");
+        },
+        reject: async () => {
+          throw new Error("reject failed");
+        },
         list: async () => ({
           data: [{ id: "question-1", sessionID: "session-1", questions: [] }],
         }),
       },
       permission: {
-        reply: async () => { throw new Error("permission failed"); },
+        reply: async () => {
+          throw new Error("permission failed");
+        },
         list: async () => ({
-          data: [{
-            id: "permission-1",
-            sessionID: "session-1",
-            permission: "read",
-            patterns: [],
-            metadata: {},
-            always: [],
-          }],
+          data: [
+            {
+              id: "permission-1",
+              sessionID: "session-1",
+              permission: "read",
+              patterns: [],
+              metadata: {},
+              always: [],
+            },
+          ],
         }),
       },
     } as unknown as OpencodeClient;
@@ -256,12 +277,18 @@ describe("opencode-client events and pending requests", () => {
   test("reports gone without claiming application when reconciliation finds no request", async () => {
     const reconciled = {
       question: {
-        reply: async () => { throw new Error("reply outcome unknown"); },
-        reject: async () => { throw new Error("reject outcome unknown"); },
+        reply: async () => {
+          throw new Error("reply outcome unknown");
+        },
+        reject: async () => {
+          throw new Error("reject outcome unknown");
+        },
         list: async () => ({ data: [] }),
       },
       permission: {
-        reply: async () => { throw new Error("permission outcome unknown"); },
+        reply: async () => {
+          throw new Error("permission outcome unknown");
+        },
         list: async () => ({ data: [] }),
       },
     } as unknown as OpencodeClient;
@@ -274,13 +301,23 @@ describe("opencode-client events and pending requests", () => {
   test("reports unknown instead of throwing when reconciliation is unavailable", async () => {
     const unavailable = {
       question: {
-        reply: async () => { throw new Error("reply outcome unknown"); },
-        reject: async () => { throw new Error("reject outcome unknown"); },
-        list: async () => { throw new Error("question reconciliation unavailable"); },
+        reply: async () => {
+          throw new Error("reply outcome unknown");
+        },
+        reject: async () => {
+          throw new Error("reject outcome unknown");
+        },
+        list: async () => {
+          throw new Error("question reconciliation unavailable");
+        },
       },
       permission: {
-        reply: async () => { throw new Error("permission outcome unknown"); },
-        list: async () => { throw new Error("permission reconciliation unavailable"); },
+        reply: async () => {
+          throw new Error("permission outcome unknown");
+        },
+        list: async () => {
+          throw new Error("permission reconciliation unavailable");
+        },
       },
     } as unknown as OpencodeClient;
 
@@ -296,7 +333,9 @@ describe("opencode-client events and pending requests", () => {
     try {
       const unavailable = {
         question: {
-          reply: async () => { throw new Error("reply outcome unknown"); },
+          reply: async () => {
+            throw new Error("reply outcome unknown");
+          },
           list: async () => new Promise(() => {}),
         },
       } as unknown as OpencodeClient;

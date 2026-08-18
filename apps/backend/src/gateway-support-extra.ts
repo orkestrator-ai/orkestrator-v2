@@ -91,7 +91,7 @@ export type GatewaySupportLayerTypes = [
   ResponseCompressionContext,
   PreparedBody,
   DynamicBodyCompressor,
-  GatewayReconcileReason
+  GatewayReconcileReason,
 ];
 export function getCookie(headers: IncomingHttpHeaders, name: string): string | null {
   const cookieHeader = headers.cookie;
@@ -116,7 +116,9 @@ export function tokenMatches(actual: string, candidate: string | null): boolean 
   if (!candidate) return false;
   const actualBytes = Buffer.from(actual);
   const candidateBytes = Buffer.from(candidate);
-  return actualBytes.length === candidateBytes.length && timingSafeEqual(actualBytes, candidateBytes);
+  return (
+    actualBytes.length === candidateBytes.length && timingSafeEqual(actualBytes, candidateBytes)
+  );
 }
 
 export function authFilePath(dataDir: string): string {
@@ -148,8 +150,16 @@ export async function loadOrCreateGatewayToken(
   const existing = await readFile(authFile, "utf8")
     .then((contents) => JSON.parse(contents) as { token?: unknown })
     .catch(() => null);
-  if (typeof existing?.token === "string" && getGatewayTokenValidationError(existing.token) === null) {
-    return { token: normalizeGatewayToken(existing.token), authFile, editable: true, source: "file" };
+  if (
+    typeof existing?.token === "string" &&
+    getGatewayTokenValidationError(existing.token) === null
+  ) {
+    return {
+      token: normalizeGatewayToken(existing.token),
+      authFile,
+      editable: true,
+      source: "file",
+    };
   }
 
   const token = randomBytes(32).toString("base64url");
@@ -225,10 +235,7 @@ export async function readLoginToken(request: IncomingMessage): Promise<string> 
 }
 
 function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 /**
@@ -278,7 +285,9 @@ export function wantsHtml(request: IncomingMessage): boolean {
   return request.headers.accept?.includes("text/html") ?? false;
 }
 
-export function filterGatewayCookie(cookieHeader: string | string[] | undefined): string | undefined {
+export function filterGatewayCookie(
+  cookieHeader: string | string[] | undefined,
+): string | undefined {
   const rawCookie = Array.isArray(cookieHeader) ? cookieHeader.join("; ") : cookieHeader;
   if (!rawCookie) return undefined;
 
@@ -320,8 +329,7 @@ export function sanitizeTargetRequestHeaders(
     // The public gateway consumes its own Bearer Authorization header. Carry
     // OpenCode's per-process credential in a dedicated header across that hop,
     // then translate it into the Basic scheme the upstream server supports.
-    sanitized.authorization =
-      `Basic ${Buffer.from(`opencode:${openCodePassword}`).toString("base64")}`;
+    sanitized.authorization = `Basic ${Buffer.from(`opencode:${openCodePassword}`).toString("base64")}`;
   }
   if (stripOrigin) {
     // This endpoint is an authenticated server-side hop to a loopback API.
@@ -333,7 +341,12 @@ export function sanitizeTargetRequestHeaders(
 }
 
 export function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]";
+  return (
+    hostname === "127.0.0.1" ||
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
 }
 
 export function proxyPath(proxyPrefix: string, targetPath: string): string {
@@ -383,14 +396,15 @@ export function rewriteSetCookieHeader(header: string, proxyPrefix?: string): st
     rewrittenAttributes.push(attribute);
   }
 
-  return [
-    nameValue,
-    `Path=${rewriteCookiePath(proxyPrefix, path)}`,
-    ...rewrittenAttributes,
-  ].join("; ");
+  return [nameValue, `Path=${rewriteCookiePath(proxyPrefix, path)}`, ...rewrittenAttributes].join(
+    "; ",
+  );
 }
 
-export function rewriteSetCookieHeaders(headers: string | string[], proxyPrefix?: string): string | string[] | undefined {
+export function rewriteSetCookieHeaders(
+  headers: string | string[],
+  proxyPrefix?: string,
+): string | string[] | undefined {
   const values = Array.isArray(headers) ? headers : [headers];
   const rewritten = values
     .map((header) => rewriteSetCookieHeader(header, proxyPrefix))
@@ -400,7 +414,11 @@ export function rewriteSetCookieHeaders(headers: string | string[], proxyPrefix?
   return Array.isArray(headers) ? rewritten : rewritten[0];
 }
 
-export function sanitizeProxyResponseHeaders(headers: IncomingHttpHeaders, target: URL, proxyPrefix?: string): OutgoingHttpHeaders {
+export function sanitizeProxyResponseHeaders(
+  headers: IncomingHttpHeaders,
+  target: URL,
+  proxyPrefix?: string,
+): OutgoingHttpHeaders {
   const sanitized: OutgoingHttpHeaders = { ...headers };
   const rewrittenSetCookie = headers["set-cookie"]
     ? rewriteSetCookieHeaders(headers["set-cookie"], proxyPrefix)
@@ -426,11 +444,13 @@ export function sanitizeProxyResponseHeaders(headers: IncomingHttpHeaders, targe
 }
 
 export function responseStatusCanHaveBody(method: string | undefined, statusCode: number): boolean {
-  return method !== "HEAD"
-    && statusCode >= 200
-    && statusCode !== 204
-    && statusCode !== 205
-    && statusCode !== 304;
+  return (
+    method !== "HEAD" &&
+    statusCode >= 200 &&
+    statusCode !== 204 &&
+    statusCode !== 205 &&
+    statusCode !== 304
+  );
 }
 
 export function canTransformProxyRepresentation(
@@ -438,9 +458,9 @@ export function canTransformProxyRepresentation(
   statusCode: number,
   contentRange: string | null,
 ): boolean {
-  return responseStatusCanHaveBody(method, statusCode)
-    && statusCode !== 206
-    && contentRange === null;
+  return (
+    responseStatusCanHaveBody(method, statusCode) && statusCode !== 206 && contentRange === null
+  );
 }
 
 export function parseStrictContentLengthHeader(value: string | null): number | null {
@@ -477,8 +497,10 @@ export function stripTransformedRepresentationHeaders(headers: OutgoingHttpHeade
 
 export type BrowserPreviewContentKind = "html" | "css" | "js";
 
-export function browserPreviewContentKind(contentType: string | string[] | undefined): BrowserPreviewContentKind | null {
-  const value = Array.isArray(contentType) ? contentType.join(";") : contentType ?? "";
+export function browserPreviewContentKind(
+  contentType: string | string[] | undefined,
+): BrowserPreviewContentKind | null {
+  const value = Array.isArray(contentType) ? contentType.join(";") : (contentType ?? "");
   // The rewriter decodes and re-encodes as UTF-8; pass other charsets through
   // untouched and let the Referer-based redirect recover their asset requests.
   const charset = /charset\s*=\s*"?([\w-]+)/i.exec(value)?.[1]?.toLowerCase();
@@ -489,8 +511,12 @@ export function browserPreviewContentKind(contentType: string | string[] | undef
   return null;
 }
 
-export function browserPreviewContentDecoder(contentEncoding: string | string[] | undefined): Transform | null | undefined {
-  const rawValue = (Array.isArray(contentEncoding) ? contentEncoding.join(",") : contentEncoding)?.trim().toLowerCase();
+export function browserPreviewContentDecoder(
+  contentEncoding: string | string[] | undefined,
+): Transform | null | undefined {
+  const rawValue = (Array.isArray(contentEncoding) ? contentEncoding.join(",") : contentEncoding)
+    ?.trim()
+    .toLowerCase();
   if (rawValue?.includes(",")) return undefined;
   const value = rawValue;
   if (!value || value === "identity") return null;
@@ -516,15 +542,17 @@ export function rewriteBrowserPreviewBody(
 ): string {
   const escapedPrefix = proxyPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const alreadyProxied = new RegExp(`^(?:${escapedPrefix}(?:/|$)|//)`);
-  const rewritePath = (value: string) => alreadyProxied.test(value)
-    ? value
-    : `${proxyPrefix}${value.startsWith("/") ? value : `/${value}`}`;
+  const rewritePath = (value: string) =>
+    alreadyProxied.test(value)
+      ? value
+      : `${proxyPrefix}${value.startsWith("/") ? value : `/${value}`}`;
 
   let rewritten = body;
   const rewriteQuotedAfter = (pattern: RegExp) => {
     rewritten = rewritten.replace(
       pattern,
-      (_match, before: string, quote: string, value: string) => `${before}${quote}${rewritePath(value)}${quote}`,
+      (_match, before: string, quote: string, value: string) =>
+        `${before}${quote}${rewritePath(value)}${quote}`,
     );
   };
 
@@ -738,7 +766,10 @@ export type GatewayReplayHandshake = {
 /** Parses the opt-in `?events=` subscription filter. Empty/absent means all. */
 export function parseEventSubscriptionFilter(value: string | null): string[] | null {
   if (value === null) return null;
-  const prefixes = value.split(",").map((prefix) => prefix.trim()).filter(Boolean);
+  const prefixes = value
+    .split(",")
+    .map((prefix) => prefix.trim())
+    .filter(Boolean);
   return prefixes.length > 0 ? prefixes : null;
 }
 
@@ -758,5 +789,3 @@ export function eventMatchesSubscription(
   if (prefixes === null) return true;
   return prefixes.some((prefix) => event.startsWith(prefix));
 }
-
-

@@ -1,21 +1,5 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realMonacoFileEditor from "@/components/terminal/MonacoFileEditor";
 import { MarkdownManager } from "@tiptap/markdown";
@@ -68,10 +52,7 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  mock.module(
-    "@/components/terminal/MonacoFileEditor",
-    () => realMonacoFileEditorSnapshot,
-  );
+  mock.module("@/components/terminal/MonacoFileEditor", () => realMonacoFileEditorSnapshot);
 });
 
 describe("MarkdownEditorTab", () => {
@@ -96,9 +77,11 @@ describe("MarkdownEditorTab", () => {
     expect(useFileDirtyStore.getState().isDirty(TAB_ID)).toBe(false);
     expect(rawTab.getAttribute("data-state")).toBe("active");
     expect(
-      (await screen.findByRole("textbox", {
-        name: "Raw Markdown source",
-      }) as HTMLTextAreaElement).value,
+      (
+        (await screen.findByRole("textbox", {
+          name: "Raw Markdown source",
+        })) as HTMLTextAreaElement
+      ).value,
     ).toBe(ORIGINAL_MARKDOWN);
   });
 
@@ -168,18 +151,18 @@ describe("MarkdownEditorTab", () => {
       />,
     );
 
-    const editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>Changed while rendered</p>");
     });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
 
     expect(
-      (await screen.findByRole("textbox", {
-        name: "Raw Markdown source",
-      }) as HTMLTextAreaElement).value,
+      (
+        (await screen.findByRole("textbox", {
+          name: "Raw Markdown source",
+        })) as HTMLTextAreaElement
+      ).value,
     ).toBe("Changed while rendered");
     expect(useFileDirtyStore.getState().isDirty(TAB_ID)).toBe(true);
   });
@@ -202,8 +185,7 @@ describe("MarkdownEditorTab", () => {
 
     expect(await screen.findByRole("table")).toBeTruthy();
     expect(screen.getByRole("cell", { name: "two" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state"))
-      .toBe("active");
+    expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state")).toBe("active");
   });
 
   test("starts frontmatter documents in Rendered mode", async () => {
@@ -229,11 +211,8 @@ describe("MarkdownEditorTab", () => {
       />,
     );
 
-    expect(
-      await screen.findByRole("heading", { name: "Angela Search & Scrape" }),
-    ).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state"))
-      .toBe("active");
+    expect(await screen.findByRole("heading", { name: "Angela Search & Scrape" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Rendered" }).getAttribute("data-state")).toBe("active");
     expect(screen.queryByText(/cannot preserve/i) === null).toBe(true);
   });
 
@@ -252,18 +231,18 @@ describe("MarkdownEditorTab", () => {
       />,
     );
 
-    const editor = await screen.findByTestId(
-      "tiptap-markdown-editor",
-    ) as TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
       editor.editor.commands.setContent("<p>Updated body</p>");
     });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
 
     expect(
-      (await screen.findByRole("textbox", {
-        name: "Raw Markdown source",
-      }) as HTMLTextAreaElement).value,
+      (
+        (await screen.findByRole("textbox", {
+          name: "Raw Markdown source",
+        })) as HTMLTextAreaElement
+      ).value,
     ).toBe("---\ntitle: Example\n---\n\nUpdated body");
   });
 
@@ -285,17 +264,19 @@ describe("MarkdownEditorTab", () => {
 
     await screen.findByText("Original body");
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
-    fireEvent.change(await screen.findByRole("textbox", {
-      name: "Raw Markdown source",
-    }), {
-      target: { value: "---\ntitle: Example\n---\n\nRaw body" },
-    });
+    fireEvent.change(
+      await screen.findByRole("textbox", {
+        name: "Raw Markdown source",
+      }),
+      {
+        target: { value: "---\ntitle: Example\n---\n\nRaw body" },
+      },
+    );
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Rendered" }), {
       button: 0,
     });
 
-    const editor = await screen.findByTestId("tiptap-markdown-editor") as
-      TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     expect(await screen.findByText("Raw body")).toBeTruthy();
     expect(editor.textContent).not.toContain("title: Example");
     act(() => {
@@ -303,9 +284,7 @@ describe("MarkdownEditorTab", () => {
     });
     fireEvent.keyDown(editor, { key: "s", ctrlKey: true });
 
-    expect(onSave).toHaveBeenCalledWith(
-      "---\ntitle: Example\n---\n\nSaved body",
-    );
+    expect(onSave).toHaveBeenCalledWith("---\ntitle: Example\n---\n\nSaved body");
   });
 
   test("renders and preserves delimiter blocks that are not frontmatter", async () => {
@@ -326,18 +305,17 @@ describe("MarkdownEditorTab", () => {
     expect(await screen.findByText("Intro")).toBeTruthy();
     expect(screen.getByText("title: x")).toBeTruthy();
     expect(screen.getByText("Body")).toBeTruthy();
-    const editor = await screen.findByTestId("tiptap-markdown-editor") as
-      TiptapEditorElement;
+    const editor = (await screen.findByTestId("tiptap-markdown-editor")) as TiptapEditorElement;
     act(() => {
-      editor.editor.commands.setContent(
-        "<p>Updated intro</p><hr><p>title: x</p><hr><p>Body</p>",
-      );
+      editor.editor.commands.setContent("<p>Updated intro</p><hr><p>title: x</p><hr><p>Body</p>");
     });
     fireEvent.mouseDown(screen.getByRole("tab", { name: "Raw" }), { button: 0 });
 
-    const raw = (await screen.findByRole("textbox", {
-      name: "Raw Markdown source",
-    }) as HTMLTextAreaElement).value;
+    const raw = (
+      (await screen.findByRole("textbox", {
+        name: "Raw Markdown source",
+      })) as HTMLTextAreaElement
+    ).value;
     expect(raw).toContain("Updated intro");
     expect(raw).toContain("title: x");
     expect(raw).toContain("Body");
@@ -361,8 +339,7 @@ describe("MarkdownEditorTab", () => {
     );
 
     const renderedTab = screen.getByRole("tab", { name: "Rendered" });
-    expect(screen.getByRole("tab", { name: "Raw" }).getAttribute("data-state"))
-      .toBe("active");
+    expect(screen.getByRole("tab", { name: "Raw" }).getAttribute("data-state")).toBe("active");
     expect(screen.getByText(/cannot preserve/i)).toBeTruthy();
     fireEvent.mouseDown(renderedTab, { button: 0 });
     expect(renderedTab.getAttribute("data-state")).toBe("inactive");
@@ -398,10 +375,7 @@ describe("MarkdownEditorTab", () => {
     const originalParse = MarkdownManager.prototype.parse;
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     let parseCalls = 0;
-    MarkdownManager.prototype.parse = function (
-      this: MarkdownManager,
-      ...args
-    ) {
+    MarkdownManager.prototype.parse = function (this: MarkdownManager, ...args) {
       parseCalls += 1;
       if (parseCalls === 1) {
         return originalParse.apply(this, args);
@@ -425,15 +399,14 @@ describe("MarkdownEditorTab", () => {
         />,
       );
 
+      expect(await screen.findByText(/Invalid JSON content/i)).toBeTruthy();
+      expect(screen.getByRole("tab", { name: "Raw" }).getAttribute("data-state")).toBe("active");
       expect(
-        await screen.findByText(/Invalid JSON content/i),
-      ).toBeTruthy();
-      expect(screen.getByRole("tab", { name: "Raw" }).getAttribute("data-state"))
-        .toBe("active");
-      expect(
-        (await screen.findByRole("textbox", {
-          name: "Raw Markdown source",
-        }) as HTMLTextAreaElement).value,
+        (
+          (await screen.findByRole("textbox", {
+            name: "Raw Markdown source",
+          })) as HTMLTextAreaElement
+        ).value,
       ).toBe(ORIGINAL_MARKDOWN);
     } finally {
       MarkdownManager.prototype.parse = originalParse;

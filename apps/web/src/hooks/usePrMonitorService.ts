@@ -25,11 +25,7 @@ import {
 import { usePrMonitorStore } from "@/stores/prMonitorStore";
 import { useEnvironmentStore } from "@/stores";
 import * as backend from "@/lib/backend";
-import {
-  listen,
-  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-  type UnlistenFn,
-} from "@/lib/native/events";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 
 export function usePrMonitorService(): void {
   const applySnapshot = usePrMonitorStore((s) => s.applySnapshot);
@@ -57,9 +53,7 @@ export function usePrMonitorService(): void {
       const key = [event.environmentId, transition.url, transition.state].join("\0");
       if (notifiedTransitions.has(key)) return;
       notifiedTransitions.add(key);
-      const environment = useEnvironmentStore
-        .getState()
-        .getEnvironmentById(event.environmentId);
+      const environment = useEnvironmentStore.getState().getEnvironmentById(event.environmentId);
       toast.success("Branch merged", {
         description: environment?.branch,
         id: `branch-merged-${event.environmentId}`,
@@ -107,18 +101,15 @@ export function usePrMonitorService(): void {
       if (disposed || stopChanges || changeSubscriptionPending) return;
       changeSubscriptionPending = true;
       try {
-        const stop = await listen<unknown>(
-          PR_MONITOR_CHANGED_EVENT,
-          (event) => {
-            // The payload crosses a process boundary; validate rather than trust.
-            if (!isPrMonitorEvent(event.payload)) return;
-            if (rehydrating) {
-              bufferedEvents.push(event.payload);
-            } else {
-              handleEvent(event.payload);
-            }
-          },
-        );
+        const stop = await listen<unknown>(PR_MONITOR_CHANGED_EVENT, (event) => {
+          // The payload crosses a process boundary; validate rather than trust.
+          if (!isPrMonitorEvent(event.payload)) return;
+          if (rehydrating) {
+            bufferedEvents.push(event.payload);
+          } else {
+            handleEvent(event.payload);
+          }
+        });
         if (disposed) stop();
         else stopChanges = stop;
       } catch {
@@ -135,13 +126,10 @@ export function usePrMonitorService(): void {
       if (disposed) return;
 
       try {
-        const stopReconnects = await listen(
-          NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-          () => {
-            void ensureChangeSubscription();
-            requestRehydrate();
-          },
-        );
+        const stopReconnects = await listen(NATIVE_EVENT_STREAM_CONNECTED_EVENT, () => {
+          void ensureChangeSubscription();
+          requestRehydrate();
+        });
         if (disposed) stopReconnects();
         else unlisteners.push(stopReconnects);
       } catch {

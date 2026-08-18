@@ -46,14 +46,14 @@ export function FileActionDialog({
             {isRevert ? (
               <>
                 Restore <strong className="break-all text-foreground">{action?.path}</strong> to its
-                state in <strong className="break-all text-foreground">{targetRef}</strong>. Any changes
-                to this file will be discarded.
+                state in <strong className="break-all text-foreground">{targetRef}</strong>. Any
+                changes to this file will be discarded.
               </>
             ) : (
               <>
-                Delete <strong className="break-all text-foreground">{action?.path}</strong> from this
-                workspace. Git will stage the deletion when the file is tracked. Untracked files cannot
-                be recovered from Git.
+                Delete <strong className="break-all text-foreground">{action?.path}</strong> from
+                this workspace. Git will stage the deletion when the file is tracked. Untracked
+                files cannot be recovered from Git.
               </>
             )}
           </AlertDialogDescription>
@@ -66,7 +66,11 @@ export function FileActionDialog({
               event.preventDefault();
               void onConfirm();
             }}
-            className={isRevert ? undefined : "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
+            className={
+              isRevert
+                ? undefined
+                : "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            }
           >
             {isPending ? "Working..." : isRevert ? "Revert" : "Delete file"}
           </AlertDialogAction>

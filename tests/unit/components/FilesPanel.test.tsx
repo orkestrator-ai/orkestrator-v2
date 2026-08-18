@@ -12,7 +12,13 @@ import { mockToastError } from "../../mocks/sonner";
 import * as realHooks from "@/hooks";
 import * as realContextMenu from "@/components/ui/context-menu";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
-import { createContext, useContext, useEffect, type ButtonHTMLAttributes, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  type ButtonHTMLAttributes,
+  type ReactNode,
+} from "react";
 
 const realHooksSnapshot = { ...realHooks };
 const realContextMenuSnapshot = { ...realContextMenu };
@@ -49,13 +55,9 @@ mock.module("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
   ContextMenuTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   ContextMenuContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-  ContextMenuItem: ({
-    children,
-    onSelect,
-  }: {
-    children: ReactNode;
-    onSelect?: () => void;
-  }) => <button onClick={onSelect}>{children}</button>,
+  ContextMenuItem: ({ children, onSelect }: { children: ReactNode; onSelect?: () => void }) => (
+    <button onClick={onSelect}>{children}</button>
+  ),
 }));
 
 const AlertDialogOpenChangeContext = createContext<((open: boolean) => void) | null>(null);
@@ -68,11 +70,16 @@ mock.module("@/components/ui/alert-dialog", () => ({
     children: ReactNode;
     open?: boolean;
     onOpenChange?: (open: boolean) => void;
-  }) => open
-    ? <AlertDialogOpenChangeContext.Provider value={onOpenChange ?? null}>{children}</AlertDialogOpenChangeContext.Provider>
-    : null,
+  }) =>
+    open ? (
+      <AlertDialogOpenChangeContext.Provider value={onOpenChange ?? null}>
+        {children}
+      </AlertDialogOpenChangeContext.Provider>
+    ) : null,
   AlertDialogAction: ({ children, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button type="button" {...props}>{children}</button>
+    <button type="button" {...props}>
+      {children}
+    </button>
   ),
   AlertDialogCancel: ({ children, onClick, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) => {
     const onOpenChange = useContext(AlertDialogOpenChangeContext);
@@ -96,13 +103,16 @@ mock.module("@/components/ui/alert-dialog", () => ({
   AlertDialogTitle: ({ children }: { children: ReactNode }) => <h2>{children}</h2>,
 }));
 
-const { ChangedFileItem } = await import("../../../apps/web/src/components/files-panel/ChangedFileItem");
+const { ChangedFileItem } =
+  await import("../../../apps/web/src/components/files-panel/ChangedFileItem");
 const { FileTreeNode } = await import("../../../apps/web/src/components/files-panel/FileTreeNode");
-const { FilesPanelHeader } = await import("../../../apps/web/src/components/files-panel/FilesPanelHeader");
+const { FilesPanelHeader } =
+  await import("../../../apps/web/src/components/files-panel/FilesPanelHeader");
 const { FilesPanel } = await import("../../../apps/web/src/components/files-panel/FilesPanel");
 const { AllFilesView } = await import("../../../apps/web/src/components/files-panel/AllFilesView");
 const { ChangesView } = await import("../../../apps/web/src/components/files-panel/ChangesView");
-const { FileActionDialog } = await import("../../../apps/web/src/components/files-panel/FileActionDialog");
+const { FileActionDialog } =
+  await import("../../../apps/web/src/components/files-panel/FileActionDialog");
 const filesPanelExports = await import("../../../apps/web/src/components/files-panel");
 
 const change: GitFileChange = {
@@ -133,9 +143,7 @@ const nestedFileTree: FileNode[] = [
         name: "components",
         path: "src/components",
         isDirectory: true,
-        children: [
-          { name: "Button.tsx", path: "src/components/Button.tsx", isDirectory: false },
-        ],
+        children: [{ name: "Button.tsx", path: "src/components/Button.tsx", isDirectory: false }],
       },
     ],
   },
@@ -233,12 +241,7 @@ describe("Files panel components", () => {
   });
 
   test("ChangedFileItem hides reveal for deleted files", () => {
-    render(
-      <ChangedFileItem
-        change={{ ...change, status: "D" }}
-        onReveal={mock(() => {})}
-      />,
-    );
+    render(<ChangedFileItem change={{ ...change, status: "D" }} onReveal={mock(() => {})} />);
 
     expect(screen.queryByRole("button", { name: "Reveal in file manager" }) === null).toBe(true);
   });
@@ -357,9 +360,9 @@ describe("Files panel components", () => {
     render(<FilesPanelHeader onRefresh={refreshMock} />);
 
     expect(screen.getByText("1")).toBeTruthy();
-    const refreshButton = screen.getAllByRole("button").find((button) =>
-      button.querySelector(".animate-spin"),
-    ) as HTMLButtonElement;
+    const refreshButton = screen
+      .getAllByRole("button")
+      .find((button) => button.querySelector(".animate-spin")) as HTMLButtonElement;
     expect(refreshButton.disabled).toBe(true);
   });
 
@@ -372,10 +375,15 @@ describe("Files panel components", () => {
     });
     render(<FilesPanelHeader onRefresh={refreshMock} />);
 
-    fireEvent.mouseDown(screen.getByRole("tab", { name: "All files" }), { button: 0, ctrlKey: false });
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "All files" }), {
+      button: 0,
+      ctrlKey: false,
+    });
     expect(useFilesPanelStore.getState().activeTab).toBe("all-files");
 
-    const actionButtons = screen.getAllByRole("button").filter((button) => button.getAttribute("role") !== "tab");
+    const actionButtons = screen
+      .getAllByRole("button")
+      .filter((button) => button.getAttribute("role") !== "tab");
     fireEvent.click(actionButtons[0]!);
     fireEvent.click(actionButtons[1]!);
     expect(refreshMock).toHaveBeenCalledTimes(1);
@@ -392,15 +400,27 @@ describe("Files panel components", () => {
     expect(screen.getByText("Loading files...")).toBeTruthy();
 
     act(() => useFilesPanelStore.setState({ isLoadingTree: false, fileTree: [] }));
-    rerender(<TerminalProvider><AllFilesView /></TerminalProvider>);
+    rerender(
+      <TerminalProvider>
+        <AllFilesView />
+      </TerminalProvider>,
+    );
     expect(screen.getByText("No files found")).toBeTruthy();
 
     act(() => useFilesPanelStore.setState({ isLoadingChanges: true, changes: [] }));
-    rerender(<TerminalProvider><ChangesView /></TerminalProvider>);
+    rerender(
+      <TerminalProvider>
+        <ChangesView />
+      </TerminalProvider>,
+    );
     expect(screen.getByText("Loading changes...")).toBeTruthy();
 
     act(() => useFilesPanelStore.setState({ isLoadingChanges: false, changes: [] }));
-    rerender(<TerminalProvider><ChangesView /></TerminalProvider>);
+    rerender(
+      <TerminalProvider>
+        <ChangesView />
+      </TerminalProvider>,
+    );
     expect(screen.getByText("No changes")).toBeTruthy();
   });
 
@@ -489,8 +509,12 @@ describe("Files panel components", () => {
       />,
     );
     expect(screen.getByRole("heading", { name: "Delete file?" })).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Working..." }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Working..." }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   test("FilesPanel renders the panel surface and switches between tab views", () => {
@@ -586,10 +610,7 @@ describe("Files panel components", () => {
     fireEvent.click(screen.getByRole("button", { name: /components/i }));
 
     expect(screen.getByText("Button.tsx")).toBeTruthy();
-    expect(useFilesPanelStore.getState().expandedFolders).toEqual([
-      "src",
-      "src/components",
-    ]);
+    expect(useFilesPanelStore.getState().expandedFolders).toEqual(["src", "src/components"]);
   });
 
   test("FilesPanel confirms actions and keeps failed actions open for retry", async () => {
@@ -617,14 +638,24 @@ describe("Files panel components", () => {
     expect(screen.getByRole("heading", { name: "Delete file?" })).toBeTruthy();
 
     mockEnvironmentId = "env-other";
-    rerender(<TerminalProvider><FilesPanel /></TerminalProvider>);
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Delete file?" }) === null).toBe(true));
+    rerender(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Delete file?" }) === null).toBe(true),
+    );
   }, 20_000);
 
   test("FilesPanel does not queue destructive actions without an environment", () => {
     mockEnvironmentId = null;
     useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
-    render(<TerminalProvider><FilesPanel /></TerminalProvider>);
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Delete file" }));
     expect(screen.queryByRole("heading", { name: "Delete file?" }) === null).toBe(true);
@@ -636,16 +667,26 @@ describe("Files panel components", () => {
     mockIsLocalEnvironment = true;
     mockWorktreePath = "/worktrees/feature/";
     useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
-    const { rerender } = render(<TerminalProvider><FilesPanel /></TerminalProvider>);
+    const { rerender } = render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Reveal in file manager" }));
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", {
-      path: "/worktrees/feature/src/components/Button.tsx",
-    }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", {
+        path: "/worktrees/feature/src/components/Button.tsx",
+      }),
+    );
 
     mockIsLocalEnvironment = false;
     mockWorktreePath = null;
-    rerender(<TerminalProvider><FilesPanel /></TerminalProvider>);
+    rerender(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
     expect(screen.queryByRole("button", { name: "Reveal in file manager" }) === null).toBe(true);
   });
 
@@ -655,14 +696,19 @@ describe("Files panel components", () => {
     mockWorktreePath = "/worktrees/feature";
     invokeMock.mockRejectedValueOnce(new Error("file manager unavailable"));
     useFilesPanelStore.setState({ activeTab: "changes", changes: [change] });
-    render(<TerminalProvider><FilesPanel /></TerminalProvider>);
+    render(
+      <TerminalProvider>
+        <FilesPanel />
+      </TerminalProvider>,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Reveal in file manager" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to reveal file",
-      { description: "file manager unavailable" },
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Failed to reveal file", {
+        description: "file manager unavailable",
+      }),
+    );
   });
 
   test("the files-panel barrel exports every public component", () => {

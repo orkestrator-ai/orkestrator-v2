@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -147,33 +142,36 @@ exit 1
     return created;
   }
 
-
-
   test("detects local PRs by listing all PRs for the environment branch", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-worktree-");
     const environment = createEnvironment({ worktreePath, branch: "feature/pr" });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","mergeable":"MERGEABLE","updatedAt":"2026-01-01T00:00:00Z"},{"url":"https://github.com/acme/repo/pull/2","state":"OPEN","mergeable":"CONFLICTING","updatedAt":"2026-01-02T00:00:00Z"}]'
-`, async (logPath) => {
-      await expect(commands.get("detect_pr_local")?.(
-        { environmentId: environment.id, branch: environment.branch },
-        context,
-      )).resolves.toEqual({
-        url: "https://github.com/acme/repo/pull/2",
-        state: "open",
-        hasMergeConflicts: true,
-      });
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("detect_pr_local")?.(
+            { environmentId: environment.id, branch: environment.branch },
+            context,
+          ),
+        ).resolves.toEqual({
+          url: "https://github.com/acme/repo/pull/2",
+          state: "open",
+          hasMergeConflicts: true,
+        });
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,updatedAt");
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain(
+          "pr list --head feature/pr --state all --limit 30 --json url,state,mergeable,updatedAt",
+        );
+      },
+    );
   });
-
-
 
   test("returns null when local PR listing reports no PRs", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-empty-");
@@ -181,46 +179,55 @@ printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/1","state":"CLOSED","
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf '[]\\n'
-`, async () => {
-      await expect(commands.get("detect_pr_local")?.(
-        { environmentId: environment.id, branch: environment.branch },
-        context,
-      )).resolves.toBeNull();
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("detect_pr_local")?.(
+            { environmentId: environment.id, branch: environment.branch },
+            context,
+          ),
+        ).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test.each([
     ["UNKNOWN mergeability", '"mergeable":"UNKNOWN"', null],
     ["missing mergeability", "", null],
     ["non-string mergeability", '"mergeable":42', null],
     ["lowercase mergeability", '"mergeable":"conflicting"', true],
-  ] as const)("preserves %s from local PR list detection", async (_label, mergeableField, expected) => {
-    const worktreePath = await createTempDir("ork-electron-pr-mergeability-");
-    const environment = createEnvironment({ worktreePath, branch: "feature/mergeability" });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const comma = mergeableField ? `,${mergeableField}` : "";
+  ] as const)(
+    "preserves %s from local PR list detection",
+    async (_label, mergeableField, expected) => {
+      const worktreePath = await createTempDir("ork-electron-pr-mergeability-");
+      const environment = createEnvironment({ worktreePath, branch: "feature/mergeability" });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const comma = mergeableField ? `,${mergeableField}` : "";
 
-    await withFakeGh(`#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\n' '[{"url":"https://github.com/acme/repo/pull/3","state":"OPEN"${comma},"updatedAt":"2026-01-03T00:00:00Z"}]'
-`, async () => {
-      await expect(commands.get("detect_pr_local")?.(
-        { environmentId: environment.id, branch: environment.branch },
-        context,
-      )).resolves.toEqual({
-        url: "https://github.com/acme/repo/pull/3",
-        state: "open",
-        hasMergeConflicts: expected,
-      });
-    });
-  });
-
-
+`,
+        async () => {
+          await expect(
+            commands.get("detect_pr_local")?.(
+              { environmentId: environment.id, branch: environment.branch },
+              context,
+            ),
+          ).resolves.toEqual({
+            url: "https://github.com/acme/repo/pull/3",
+            state: "open",
+            hasMergeConflicts: expected,
+          });
+        },
+      );
+    },
+  );
 
   test("surfaces gh failures during local PR detection", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-fail-");
@@ -228,18 +235,21 @@ printf '%s\n' '[{"url":"https://github.com/acme/repo/pull/3","state":"OPEN"${com
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf 'auth required\\n' >&2
 exit 1
-`, async () => {
-      await expect(commands.get("detect_pr_local")?.(
-        { environmentId: environment.id, branch: environment.branch },
-        context,
-      )).rejects.toThrow("auth required");
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("detect_pr_local")?.(
+            { environmentId: environment.id, branch: environment.branch },
+            context,
+          ),
+        ).rejects.toThrow("auth required");
+      },
+    );
   });
-
-
 
   test("throws when local PR detection output is not valid JSON", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-badjson-");
@@ -247,17 +257,20 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf 'not-json{\\n'
-`, async () => {
-      await expect(commands.get("detect_pr_local")?.(
-        { environmentId: environment.id, branch: environment.branch },
-        context,
-      )).rejects.toThrow("Failed to parse gh pr list output");
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("detect_pr_local")?.(
+            { environmentId: environment.id, branch: environment.branch },
+            context,
+          ),
+        ).rejects.toThrow("Failed to parse gh pr list output");
+      },
+    );
   });
-
-
 
   test("throws when local PR detection output is not a JSON array", async () => {
     const worktreePath = await createTempDir("ork-electron-pr-object-");
@@ -265,29 +278,35 @@ printf 'not-json{\\n'
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/1"}'
-`, async () => {
-      await expect(commands.get("detect_pr_local")?.(
-        { environmentId: environment.id, branch: environment.branch },
-        context,
-      )).rejects.toThrow("Failed to parse gh pr list output");
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("detect_pr_local")?.(
+            { environmentId: environment.id, branch: environment.branch },
+            context,
+          ),
+        ).rejects.toThrow("Failed to parse gh pr list output");
+      },
+    );
   });
 
-
-
   test("detects container PRs with gh pr list instead of gh pr view", async () => {
-    const { context } = createContext(createEnvironment({
-      id: "env-container",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "running",
-      branch: "feature/container-pr",
-    }));
+    const { context } = createContext(
+      createEnvironment({
+        id: "env-container",
+        environmentType: "containerized",
+        containerId: "container-1",
+        status: "running",
+        branch: "feature/container-pr",
+      }),
+    );
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -295,31 +314,36 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      await expect(commands.get("detect_pr")?.(
-        { containerId: "container-1", branch: "feature/container-pr" },
-        context,
-      )).resolves.toEqual({
-        url: "https://github.com/acme/repo/pull/9",
-        state: "merged",
-        hasMergeConflicts: false,
-      });
+`,
+      async (logs) => {
+        await expect(
+          commands.get("detect_pr")?.(
+            { containerId: "container-1", branch: "feature/container-pr" },
+            context,
+          ),
+        ).resolves.toEqual({
+          url: "https://github.com/acme/repo/pull/9",
+          state: "merged",
+          hasMergeConflicts: false,
+        });
 
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,updatedAt");
-      expect(execLog).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
-      expect(execLog).toContain("orkestrator_source_runtime_env");
-      expect(execLog).not.toContain("gh pr view");
-    });
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain(
+          "gh pr list --head 'feature/container-pr' --state all --limit 30 --json url,state,mergeable,updatedAt",
+        );
+        expect(execLog).toContain("source /usr/local/bin/orkestrator-runtime-env.sh");
+        expect(execLog).toContain("orkestrator_source_runtime_env");
+        expect(execLog).not.toContain("gh pr view");
+      },
+    );
   });
-
-
 
   test("reports a container PR as merged only after verifying the captured PR URL", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -341,25 +365,32 @@ if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--js
 fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
-`, async (logs) => {
-      await expect(commands.get("merge_pr")?.(
-        { containerId: "container-1", method: "squash", deleteBranch: false },
-        context,
-      )).resolves.toEqual({ outcome: "merged" });
+`,
+      async (logs) => {
+        await expect(
+          commands.get("merge_pr")?.(
+            { containerId: "container-1", method: "squash", deleteBranch: false },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "merged" });
 
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'");
-      expect(execLog).toContain("'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state'");
-    });
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain(
+          "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'",
+        );
+        expect(execLog).toContain(
+          "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--json' 'state'",
+        );
+      },
+    );
   });
-
-
 
   test("marks a draft container PR ready before merging it", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -384,28 +415,31 @@ if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--js
 fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
-`, async (logs) => {
-      await expect(commands.get("merge_pr")?.(
-        { containerId: "container-1", method: "squash", deleteBranch: false },
-        context,
-      )).resolves.toEqual({ outcome: "merged" });
+`,
+      async (logs) => {
+        await expect(
+          commands.get("merge_pr")?.(
+            { containerId: "container-1", method: "squash", deleteBranch: false },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "merged" });
 
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      const readyCommand = "'gh' 'pr' 'ready' 'https://github.com/acme/repo/pull/42'";
-      const mergeCommand = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'";
-      expect(execLog).toContain(readyCommand);
-      expect(execLog.indexOf(readyCommand)).toBeLessThan(execLog.indexOf(mergeCommand));
-    });
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        const readyCommand = "'gh' 'pr' 'ready' 'https://github.com/acme/repo/pull/42'";
+        const mergeCommand = "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--squash'";
+        expect(execLog).toContain(readyCommand);
+        expect(execLog.indexOf(readyCommand)).toBeLessThan(execLog.indexOf(mergeCommand));
+      },
+    );
   });
-
-
 
   test("stops container merges when draft inspection or readiness fails", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
 
     for (const failure of ["draft-status", "ready"] as const) {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -423,25 +457,28 @@ if [ "$command" = "'gh' 'pr' 'ready' 'https://github.com/acme/repo/pull/42'" ]; 
 fi
 printf 'merge must not be submitted: %s\\n' "$command" >&2
 exit 43
-`, async (logs) => {
-        await expect(commands.get("merge_pr")?.(
-          { containerId: "container-1", method: "squash", deleteBranch: false },
-          context,
-        )).rejects.toThrow(failure === "draft-status" ? "draft lookup failed" : "ready failed");
+`,
+        async (logs) => {
+          await expect(
+            commands.get("merge_pr")?.(
+              { containerId: "container-1", method: "squash", deleteBranch: false },
+              context,
+            ),
+          ).rejects.toThrow(failure === "draft-status" ? "draft lookup failed" : "ready failed");
 
-        const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog).not.toContain("'gh' 'pr' 'merge'");
-      });
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog).not.toContain("'gh' 'pr' 'merge'");
+        },
+      );
     }
   });
-
-
 
   test("reports a queued container PR as pending when the captured PR remains open", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 command=""
 for arg in "$@"; do command="$arg"; done
 command="$(printf '%s\\n' "$command" | tail -n 1)"
@@ -462,21 +499,24 @@ if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--js
 fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
-`, async () => {
-      await expect(commands.get("merge_pr")?.(
-        { containerId: "container-1", method: "rebase", deleteBranch: true },
-        context,
-      )).resolves.toEqual({ outcome: "pending" });
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("merge_pr")?.(
+            { containerId: "container-1", method: "rebase", deleteBranch: true },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "pending" });
+      },
+    );
   });
-
-
 
   test("reports an unknown container merge outcome when post-submit verification fails", async () => {
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 command=""
 for arg in "$@"; do command="$arg"; done
 command="$(printf '%s\\n' "$command" | tail -n 1)"
@@ -497,15 +537,17 @@ if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--js
 fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
-`, async () => {
-      await expect(commands.get("merge_pr")?.(
-        { containerId: "container-1", method: "merge", deleteBranch: false },
-        context,
-      )).resolves.toEqual({ outcome: "unknown" });
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("merge_pr")?.(
+            { containerId: "container-1", method: "merge", deleteBranch: false },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "unknown" });
+      },
+    );
   });
-
-
 
   test("merges local PRs through the GitHub API without updating worktree branches", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-worktree-");
@@ -516,7 +558,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -528,20 +571,24 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "squash", deleteBranch: false },
-        context,
-      )).resolves.toEqual({ outcome: "merged" });
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "squash", deleteBranch: false },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "merged" });
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash");
-      expect(ghLog).not.toContain("pr merge");
-      expect(ghLog).not.toContain("--delete-branch");
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain(
+          "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",
+        );
+        expect(ghLog).not.toContain("pr merge");
+        expect(ghLog).not.toContain("--delete-branch");
+      },
+    );
   });
-
-
 
   test("marks a draft local PR ready before merging it through the GitHub API", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-draft-worktree-");
@@ -552,7 +599,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'true'
@@ -567,21 +615,23 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "squash", deleteBranch: false },
-        context,
-      )).resolves.toEqual({ outcome: "merged" });
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "squash", deleteBranch: false },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "merged" });
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      const readyCommand = "pr ready https://github.com/acme/repo/pull/42";
-      const mergeCommand = "api repos/acme/repo/pulls/42/merge";
-      expect(ghLog).toContain(readyCommand);
-      expect(ghLog.indexOf(readyCommand)).toBeLessThan(ghLog.indexOf(mergeCommand));
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        const readyCommand = "pr ready https://github.com/acme/repo/pull/42";
+        const mergeCommand = "api repos/acme/repo/pulls/42/merge";
+        expect(ghLog).toContain(readyCommand);
+        expect(ghLog.indexOf(readyCommand)).toBeLessThan(ghLog.indexOf(mergeCommand));
+      },
+    );
   });
-
-
 
   test("stops local merges when draft inspection or readiness fails", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-failure-worktree-");
@@ -593,7 +643,8 @@ exit 1
     const commands = createCommandRegistry();
 
     for (const failure of ["draft-status", "ready"] as const) {
-      await withFakeGh(`#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   ${failure === "draft-status" ? "printf 'draft lookup failed\\n' >&2; exit 41" : "printf 'true\\n'; exit 0"}
@@ -604,19 +655,21 @@ if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then
 fi
 printf 'merge must not be submitted: %s\\n' "$*" >&2
 exit 43
-`, async (logPath) => {
-        await expect(commands.get("merge_pr_local")?.(
-          { environmentId: environment.id, method: "squash", deleteBranch: false },
-          context,
-        )).rejects.toThrow(failure === "draft-status" ? "draft lookup failed" : "ready failed");
+`,
+        async (logPath) => {
+          await expect(
+            commands.get("merge_pr_local")?.(
+              { environmentId: environment.id, method: "squash", deleteBranch: false },
+              context,
+            ),
+          ).rejects.toThrow(failure === "draft-status" ? "draft lookup failed" : "ready failed");
 
-        const ghLog = await fs.readFile(logPath, "utf8");
-        expect(ghLog).not.toContain("api repos/acme/repo/pulls/42/merge");
-      });
+          const ghLog = await fs.readFile(logPath, "utf8");
+          expect(ghLog).not.toContain("api repos/acme/repo/pulls/42/merge");
+        },
+      );
     }
   });
-
-
 
   test("treats empty, null, and non-boolean draft output as non-draft", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-malformed-draft-worktree-");
@@ -631,7 +684,8 @@ exit 43
     try {
       for (const status of ["", "null", "unexpected"]) {
         process.env.FAKE_DRAFT_STATUS = status;
-        await withFakeGh(`#!/bin/sh
+        await withFakeGh(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '%s\\n' "$FAKE_DRAFT_STATUS"
@@ -643,24 +697,26 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-          await expect(commands.get("merge_pr_local")?.(
-            { environmentId: environment.id, method: "squash", deleteBranch: false },
-            context,
-          )).resolves.toEqual({ outcome: "merged" });
+`,
+          async (logPath) => {
+            await expect(
+              commands.get("merge_pr_local")?.(
+                { environmentId: environment.id, method: "squash", deleteBranch: false },
+                context,
+              ),
+            ).resolves.toEqual({ outcome: "merged" });
 
-          const ghLog = await fs.readFile(logPath, "utf8");
-          expect(ghLog).not.toContain("pr ready");
-          expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge");
-        });
+            const ghLog = await fs.readFile(logPath, "utf8");
+            expect(ghLog).not.toContain("pr ready");
+            expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge");
+          },
+        );
       }
     } finally {
       if (previousStatus === undefined) delete process.env.FAKE_DRAFT_STATUS;
       else process.env.FAKE_DRAFT_STATUS = previousStatus;
     }
   });
-
-
 
   test("deletes the remote head branch after local API merge when requested", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-worktree-");
@@ -671,7 +727,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -690,21 +747,27 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/local-wo
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "rebase", deleteBranch: true },
-        context,
-      )).resolves.toEqual({ outcome: "merged" });
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "rebase", deleteBranch: true },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "merged" });
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("api repos/acme/repo/pulls/42");
-      expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=rebase");
-      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/local-work --method DELETE");
-      expect(ghLog).not.toContain("pr merge");
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain("api repos/acme/repo/pulls/42");
+        expect(ghLog).toContain(
+          "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=rebase",
+        );
+        expect(ghLog).toContain(
+          "api repos/acme/repo/git/refs/heads/feature/local-work --method DELETE",
+        );
+        expect(ghLog).not.toContain("pr merge");
+      },
+    );
   });
-
-
 
   test("defaults local API merge method to squash", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-default-worktree-");
@@ -715,7 +778,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -727,18 +791,22 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ] && [ "$3" = "
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, deleteBranch: false },
-        context,
-      )).resolves.toEqual({ outcome: "merged" });
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, deleteBranch: false },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "merged" });
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash");
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain(
+          "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",
+        );
+      },
+    );
   });
-
-
 
   test("does not report a local API merge as successful without an explicit merged response", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-unconfirmed-worktree-");
@@ -749,7 +817,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -761,15 +830,17 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async () => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "squash", deleteBranch: false },
-        context,
-      )).resolves.toEqual({ outcome: "unknown" });
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "squash", deleteBranch: false },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "unknown" });
+      },
+    );
   });
-
-
 
   test("reports an unknown local API merge outcome when the response cannot be parsed", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-malformed-worktree-");
@@ -780,7 +851,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
   exit 0
@@ -790,15 +862,17 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42/merge" ]; then
   exit 0
 fi
 exit 1
-`, async () => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "squash", deleteBranch: false },
-        context,
-      )).resolves.toEqual({ outcome: "unknown" });
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "squash", deleteBranch: false },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "unknown" });
+      },
+    );
   });
-
-
 
   test("rejects local API merge when the environment has no PR URL", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-no-pr-worktree-");
@@ -806,13 +880,13 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("merge_pr_local")?.(
-      { environmentId: environment.id, method: "squash", deleteBranch: false },
-      context,
-    )).rejects.toThrow("Local environment PR URL is not available");
+    await expect(
+      commands.get("merge_pr_local")?.(
+        { environmentId: environment.id, method: "squash", deleteBranch: false },
+        context,
+      ),
+    ).rejects.toThrow("Local environment PR URL is not available");
   });
-
-
 
   test("rejects invalid local API merge inputs before invoking gh", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-invalid-worktree-");
@@ -823,27 +897,32 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf 'gh should not be called\\n' >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "fast-forward", deleteBranch: false },
-        context,
-      )).rejects.toThrow("Invalid merge method: fast-forward");
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "fast-forward", deleteBranch: false },
+            context,
+          ),
+        ).rejects.toThrow("Invalid merge method: fast-forward");
 
-      environment.prUrl = "https://example.com/acme/repo/pull/42";
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "squash", deleteBranch: false },
-        context,
-      )).rejects.toThrow("Invalid PR URL: https://example.com/acme/repo/pull/42");
+        environment.prUrl = "https://example.com/acme/repo/pull/42";
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "squash", deleteBranch: false },
+            context,
+          ),
+        ).rejects.toThrow("Invalid PR URL: https://example.com/acme/repo/pull/42");
 
-      expect(existsSync(logPath)).toBe(false);
-    });
+        expect(existsSync(logPath)).toBe(false);
+      },
+    );
   });
-
-
 
   test("ignores a 404 while deleting the remote head branch after local API merge", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-404-worktree-");
@@ -854,7 +933,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -874,18 +954,22 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/already-
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "merge", deleteBranch: true },
-        context,
-      )).resolves.toEqual({ outcome: "merged" });
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "merge", deleteBranch: true },
+            context,
+          ),
+        ).resolves.toEqual({ outcome: "merged" });
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/already-deleted --method DELETE");
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain(
+          "api repos/acme/repo/git/refs/heads/feature/already-deleted --method DELETE",
+        );
+      },
+    );
   });
-
-
 
   test("propagates non-404 remote branch delete failures after local API merge", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-fail-worktree-");
@@ -896,7 +980,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ] && [ "$5" = "isDraft" ]; then
   printf '%s\\n' 'false'
@@ -916,15 +1001,17 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/protecte
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async () => {
-      await expect(commands.get("merge_pr_local")?.(
-        { environmentId: environment.id, method: "merge", deleteBranch: true },
-        context,
-      )).rejects.toThrow("HTTP 403: Resource protected");
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("merge_pr_local")?.(
+            { environmentId: environment.id, method: "merge", deleteBranch: true },
+            context,
+          ),
+        ).rejects.toThrow("HTTP 403: Resource protected");
+      },
+    );
   });
-
-
 
   test("persists merge cleanup intent before dispatch and completes local cleanup in the backend", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-cleanup-local-");
@@ -945,17 +1032,22 @@ exit 1
       prMergeCommented: false,
       comments: [] as Array<{ text: string }>,
     };
-    context.storage.getKanbanTasks = mock(async () => [task]) as typeof context.storage.getKanbanTasks;
-    context.storage.updateKanbanTask = mock(async (
-      _taskId: string,
-      taskUpdates: Record<string, unknown>,
-    ) => ({ ...task, ...taskUpdates })) as typeof context.storage.updateKanbanTask;
-    context.storage.addKanbanComment = mock(async (
-      _taskId: string,
-      text: string,
-    ) => ({ ...task, comments: [{ text }] })) as typeof context.storage.addKanbanComment;
+    context.storage.getKanbanTasks = mock(async () => [
+      task,
+    ]) as typeof context.storage.getKanbanTasks;
+    context.storage.updateKanbanTask = mock(
+      async (_taskId: string, taskUpdates: Record<string, unknown>) => ({
+        ...task,
+        ...taskUpdates,
+      }),
+    ) as typeof context.storage.updateKanbanTask;
+    context.storage.addKanbanComment = mock(async (_taskId: string, text: string) => ({
+      ...task,
+      comments: [{ text }],
+    })) as typeof context.storage.addKanbanComment;
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '%s\\n' 'false'
@@ -974,54 +1066,59 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/backend-
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("merge_environment_pr")?.({
-        environmentId: environment.id,
-        method: "squash",
-        deleteBranch: true,
-        cleanupAfterMerge: true,
-      }, context)).resolves.toEqual({
-        outcome: "merged",
-        cleanupOutcome: "completed",
-      });
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("merge_environment_pr")?.(
+            {
+              environmentId: environment.id,
+              method: "squash",
+              deleteBranch: true,
+              cleanupAfterMerge: true,
+            },
+            context,
+          ),
+        ).resolves.toEqual({
+          outcome: "merged",
+          cleanupOutcome: "completed",
+        });
 
-      const intentIndex = updates.findIndex((update) =>
-        typeof update.cleanupAfterMergeRequestedAt === "string"
-      );
-      const mergingIndex = updates.findIndex((update) =>
-        update.lifecycleOperation === "merging"
-      );
-      expect(intentIndex).toBeGreaterThanOrEqual(0);
-      expect(mergingIndex).toBeGreaterThan(intentIndex);
-      expect(updates).toContainEqual(expect.objectContaining({
-        prState: "merged",
-        hasMergeConflicts: false,
-      }));
-      expect(context.storage.updateKanbanTask).toHaveBeenCalledWith(
-        task.id,
-        { status: "review" },
-      );
-      expect(context.storage.addKanbanComment).toHaveBeenCalledWith(
-        task.id,
-        `🎉 PR merged: ${environment.prUrl}`,
-      );
-      expect(context.storage.updateKanbanTask).toHaveBeenLastCalledWith(
-        task.id,
-        {
+        const intentIndex = updates.findIndex(
+          (update) => typeof update.cleanupAfterMergeRequestedAt === "string",
+        );
+        const mergingIndex = updates.findIndex((update) => update.lifecycleOperation === "merging");
+        expect(intentIndex).toBeGreaterThanOrEqual(0);
+        expect(mergingIndex).toBeGreaterThan(intentIndex);
+        expect(updates).toContainEqual(
+          expect.objectContaining({
+            prState: "merged",
+            hasMergeConflicts: false,
+          }),
+        );
+        expect(context.storage.updateKanbanTask).toHaveBeenCalledWith(task.id, {
+          status: "review",
+        });
+        expect(context.storage.addKanbanComment).toHaveBeenCalledWith(
+          task.id,
+          `🎉 PR merged: ${environment.prUrl}`,
+        );
+        expect(context.storage.updateKanbanTask).toHaveBeenLastCalledWith(task.id, {
           prUrl: environment.prUrl,
           prState: "merged",
           prMergeCommented: true,
-        },
-      );
-      await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
+        });
+        await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash");
-      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/backend-cleanup --method DELETE");
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain(
+          "api repos/acme/repo/pulls/42/merge --method PUT -f merge_method=squash",
+        );
+        expect(ghLog).toContain(
+          "api repos/acme/repo/git/refs/heads/feature/backend-cleanup --method DELETE",
+        );
+      },
+    );
   });
-
-
 
   test("keeps an unconfirmed container merge cleanup pending without deleting the environment", async () => {
     const environment = createEnvironment({
@@ -1036,7 +1133,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 command=""
 for arg in "$@"; do command="$arg"; done
@@ -1058,31 +1156,36 @@ if [ "$command" = "'gh' 'pr' 'view' 'https://github.com/acme/repo/pull/42' '--js
 fi
 printf 'unexpected docker command: %s\\n' "$command" >&2
 exit 1
-`, async (logs) => {
-      const result = await commands.get("merge_environment_pr")?.({
-        environmentId: environment.id,
-        method: "rebase",
-        deleteBranch: true,
-        cleanupAfterMerge: true,
-      }, context);
-      expect(result).toEqual({
-        outcome: "pending",
-        cleanupOutcome: "pending",
-      });
+`,
+      async (logs) => {
+        const result = await commands.get("merge_environment_pr")?.(
+          {
+            environmentId: environment.id,
+            method: "rebase",
+            deleteBranch: true,
+            cleanupAfterMerge: true,
+          },
+          context,
+        );
+        expect(result).toEqual({
+          outcome: "pending",
+          cleanupOutcome: "pending",
+        });
 
-      await expect(context.storage.getEnvironment(environment.id)).resolves.toMatchObject({
-        cleanupAfterMergeRequestedAt: expect.any(String),
-        cleanupAfterMergeError: null,
-        prState: "open",
-      });
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase'");
-      expect(execLog).not.toContain("--delete-branch");
-      expect(existsSync(logs.rm)).toBe(false);
-    });
+        await expect(context.storage.getEnvironment(environment.id)).resolves.toMatchObject({
+          cleanupAfterMergeRequestedAt: expect.any(String),
+          cleanupAfterMergeError: null,
+          prState: "open",
+        });
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain(
+          "'gh' 'pr' 'merge' 'https://github.com/acme/repo/pull/42' '--rebase'",
+        );
+        expect(execLog).not.toContain("--delete-branch");
+        expect(existsSync(logs.rm)).toBe(false);
+      },
+    );
   });
-
-
 
   test("continues confirmed cleanup when persisting merged PR state fails once", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-cleanup-persist-fail-");
@@ -1096,18 +1199,18 @@ exit 1
     const commands = createCommandRegistry();
     const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
     let rejectedMergedState = false;
-    context.storage.updateEnvironment = mock(async (
-      environmentId: string,
-      updates: Partial<Environment>,
-    ) => {
-      if (updates.prState === "merged" && !rejectedMergedState) {
-        rejectedMergedState = true;
-        throw new Error("storage temporarily unavailable");
-      }
-      return updateEnvironment(environmentId, updates);
-    });
+    context.storage.updateEnvironment = mock(
+      async (environmentId: string, updates: Partial<Environment>) => {
+        if (updates.prState === "merged" && !rejectedMergedState) {
+          rejectedMergedState = true;
+          throw new Error("storage temporarily unavailable");
+        }
+        return updateEnvironment(environmentId, updates);
+      },
+    );
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '%s\\n' 'false'
   exit 0
@@ -1124,22 +1227,27 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/persist-
   exit 0
 fi
 exit 1
-`, async () => {
-      await expect(commands.get("merge_environment_pr")?.({
-        environmentId: environment.id,
-        method: "merge",
-        deleteBranch: true,
-        cleanupAfterMerge: true,
-      }, context)).resolves.toEqual({
-        outcome: "merged",
-        cleanupOutcome: "completed",
-      });
-      expect(rejectedMergedState).toBe(true);
-      await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("merge_environment_pr")?.(
+            {
+              environmentId: environment.id,
+              method: "merge",
+              deleteBranch: true,
+              cleanupAfterMerge: true,
+            },
+            context,
+          ),
+        ).resolves.toEqual({
+          outcome: "merged",
+          cleanupOutcome: "completed",
+        });
+        expect(rejectedMergedState).toBe(true);
+        await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test("verifies a PR against the trusted project and environment branches", async () => {
     const worktreePath = await createTempDir("ork-electron-verify-pr-");
@@ -1159,90 +1267,175 @@ exit 1
     });
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"feature/local","baseRefName":"main","state":"OPEN"}'
-`, async (logPath) => {
-      const verified = await commands.get("verify_environment_pr")?.({
-        environmentId: environment.id,
-        prUrl: "https://github.com/acme/repo/pull/42",
-        targetBranch: "main",
-      }, context);
-      expect(verified).toEqual({
-        url: "https://github.com/acme/repo/pull/42",
-        headRefName: "feature/local",
-        baseRefName: "main",
-        state: "OPEN",
-      });
-      expect(await fs.readFile(logPath, "utf8")).toContain(
-        "pr view https://github.com/acme/repo/pull/42 --json url,headRefName,baseRefName,state",
-      );
-    });
+`,
+      async (logPath) => {
+        const verified = await commands.get("verify_environment_pr")?.(
+          {
+            environmentId: environment.id,
+            prUrl: "https://github.com/acme/repo/pull/42",
+            targetBranch: "main",
+          },
+          context,
+        );
+        expect(verified).toEqual({
+          url: "https://github.com/acme/repo/pull/42",
+          headRefName: "feature/local",
+          baseRefName: "main",
+          state: "OPEN",
+        });
+        expect(await fs.readFile(logPath, "utf8")).toContain(
+          "pr view https://github.com/acme/repo/pull/42 --json url,headRefName,baseRefName,state",
+        );
+      },
+    );
 
-    await expect(commands.get("verify_environment_pr")?.({
-      environmentId: environment.id,
-      prUrl: "https://github.com/other/repo/pull/42",
-      targetBranch: "main",
-    }, context)).rejects.toThrow("different repository");
-    await expect(commands.get("verify_environment_pr")?.({
-      environmentId: environment.id,
-      prUrl: "https://github.com/acme/repo/pull/42/",
-      targetBranch: "main",
-    }, context)).rejects.toThrow("canonical github.com URL");
+    await expect(
+      commands.get("verify_environment_pr")?.(
+        {
+          environmentId: environment.id,
+          prUrl: "https://github.com/other/repo/pull/42",
+          targetBranch: "main",
+        },
+        context,
+      ),
+    ).rejects.toThrow("different repository");
+    await expect(
+      commands.get("verify_environment_pr")?.(
+        {
+          environmentId: environment.id,
+          prUrl: "https://github.com/acme/repo/pull/42/",
+          targetBranch: "main",
+        },
+        context,
+      ),
+    ).rejects.toThrow("canonical github.com URL");
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"other-branch","baseRefName":"main","state":"OPEN"}'
-`, async () => {
-      await expect(commands.get("verify_environment_pr")?.({
-        environmentId: environment.id,
-        prUrl: "https://github.com/acme/repo/pull/42",
-        targetBranch: "main",
-      }, context)).rejects.toThrow("head branch does not match");
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("verify_environment_pr")?.(
+            {
+              environmentId: environment.id,
+              prUrl: "https://github.com/acme/repo/pull/42",
+              targetBranch: "main",
+            },
+            context,
+          ),
+        ).rejects.toThrow("head branch does not match");
+      },
+    );
   });
 
-
-
-  test("deterministically generates refs, diff, Git-object contents, hashes, and validation evidence", async () => {
-    const packageId = "package-1";
-    const { worktreePath, artifactDirectory, baseRef, headRef, content } =
-      await createReviewPackageWorktree({
-        packageId,
-        extraCommittedFiles: { "binary.dat": Buffer.from([0, 1, 2, 255]) },
+  test(
+    "deterministically generates refs, diff, Git-object contents, hashes, and validation evidence",
+    async () => {
+      const packageId = "package-1";
+      const { worktreePath, artifactDirectory, baseRef, headRef, content } =
+        await createReviewPackageWorktree({
+          packageId,
+          extraCommittedFiles: { "binary.dat": Buffer.from([0, 1, 2, 255]) },
+        });
+      await fs.writeFile(
+        path.join(artifactDirectory, "validation-01.stdout.txt"),
+        "TOKEN=visible-for-review\nall tests passed\n",
+      );
+      await fs.writeFile(
+        path.join(artifactDirectory, "validation-01.stderr.txt"),
+        "exact warning output\n",
+      );
+      await fs.writeFile(path.join(worktreePath, "review.txt"), "later worktree edit\n");
+      await fs.writeFile(path.join(worktreePath, "unrelated.txt"), "leave me alone\n");
+      const environment = createEnvironment({
+        worktreePath,
+        branch: "feature/local",
       });
-    await fs.writeFile(
-      path.join(artifactDirectory, "validation-01.stdout.txt"),
-      "TOKEN=visible-for-review\nall tests passed\n",
-    );
-    await fs.writeFile(
-      path.join(artifactDirectory, "validation-01.stderr.txt"),
-      "exact warning output\n",
-    );
-    await fs.writeFile(path.join(worktreePath, "review.txt"), "later worktree edit\n");
-    await fs.writeFile(path.join(worktreePath, "unrelated.txt"), "leave me alone\n");
-    const environment = createEnvironment({
-      worktreePath,
-      branch: "feature/local",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const args = {
-      environmentId: environment.id,
-      packageId,
-      round: 2,
-      targetBranch: "main",
-      preparation: {
-        validation: [{
-          command: "bun test tests --parallel",
-          status: "passed",
-          exitCode: 0,
-          stdoutPath:
-            `.orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
-          stderrPath:
-            `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
-          durationMs: 123,
-          limitation: null,
-        }],
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const args = {
+        environmentId: environment.id,
+        packageId,
+        round: 2,
+        targetBranch: "main",
+        preparation: {
+          validation: [
+            {
+              command: "bun test tests --parallel",
+              status: "passed",
+              exitCode: 0,
+              stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+              stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+              durationMs: 123,
+              limitation: null,
+            },
+          ],
+          uncommittedFiles: [
+            {
+              path: "review.txt",
+              reason: "Later user edit after the prepared commit.",
+            },
+            {
+              path: "unrelated.txt",
+              reason: "Unrelated user file.",
+            },
+          ],
+          limitations: [],
+        },
+      };
+
+      const command = commands.get("generate_looped_review_package")!;
+      const first = (await command(args, context)) as Record<string, unknown>;
+      const second = (await command(args, context)) as Record<string, unknown>;
+      expect(second).toEqual(first);
+      expect(first).toMatchObject({
+        id: packageId,
+        round: 2,
+        targetBranch: "main",
+        baseRef,
+        headRef,
+        commit: {
+          sha: headRef,
+          subject: "change",
+          committedFiles: ["binary.dat", "review.txt"],
+        },
+        changedFiles: [
+          {
+            path: "binary.dat",
+            status: "A",
+            content: null,
+            contentSha256: null,
+            omittedReason: "Binary content is represented by the complete binary Git diff.",
+          },
+          {
+            path: "review.txt",
+            status: "M",
+            content,
+            contentSha256: createHash("sha256").update(content).digest("hex"),
+            omittedReason: null,
+          },
+        ],
+        validation: [
+          {
+            command: "bun test tests --parallel",
+            status: "passed",
+            exitCode: 0,
+            stdout: "TOKEN=visible-for-review\nall tests passed\n",
+            stderr: "exact warning output\n",
+            durationMs: 123,
+          },
+        ],
+        skippedFiles: [
+          {
+            path: "binary.dat",
+            reason: "Binary content is represented by the complete binary Git diff.",
+          },
+        ],
         uncommittedFiles: [
           {
             path: "review.txt",
@@ -1254,185 +1447,162 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
           },
         ],
         limitations: [],
-      },
-    };
+      });
+      // The context key is deliberately absent rather than null. The workflow
+      // supplies it, and a null is not a valid ReviewPackageContext — persisting
+      // one made the snapshot fail validation on its very next read.
+      expect(first).not.toHaveProperty("context");
+      // Same reason, for the same reason it is easy to miss: the preparation
+      // agent reports `limitation: null` for a command that ran without one, but
+      // the persisted contract is `limitation?: string`. Carrying that null
+      // through made every package with an executed validation command
+      // unpersistable, failing the round at `package` on a loop no retry escaped.
+      expect((first.validation as Array<Record<string, unknown>>)[0]).not.toHaveProperty(
+        "limitation",
+      );
+      // The whole point of the shape assertions above: a generated package has to
+      // survive the guard the backend runs before it saves the snapshot.
+      expect(
+        isLoopedReviewWorkflow(
+          loopedReviewWorkflowAround(first, { round: 2, targetBranch: "main" }),
+        ),
+      ).toBe(true);
+      expect(first.completeDiff).toContain("diff --git a/review.txt b/review.txt");
+      expect(first.completeDiff).toContain("GIT binary patch");
+      expect(first.completeDiff).toMatch(/index [a-f0-9]{40}\.\.[a-f0-9]{40}/);
 
-    const command = commands.get("generate_looped_review_package")!;
-    const first = await command(args, context) as Record<string, unknown>;
-    const second = await command(args, context) as Record<string, unknown>;
-    expect(second).toEqual(first);
-    expect(first).toMatchObject({
-      id: packageId,
-      round: 2,
-      targetBranch: "main",
-      baseRef,
-      headRef,
-      commit: {
-        sha: headRef,
-        subject: "change",
-        committedFiles: ["binary.dat", "review.txt"],
-      },
-      changedFiles: [
-        {
-          path: "binary.dat",
-          status: "A",
-          content: null,
-          contentSha256: null,
-          omittedReason:
-            "Binary content is represented by the complete binary Git diff.",
-        },
-        {
-          path: "review.txt",
-          status: "M",
-          content,
-          contentSha256: createHash("sha256").update(content).digest("hex"),
-          omittedReason: null,
-        },
-      ],
-      validation: [{
-        command: "bun test tests --parallel",
-        status: "passed",
-        exitCode: 0,
-        stdout: "TOKEN=visible-for-review\nall tests passed\n",
-        stderr: "exact warning output\n",
-        durationMs: 123,
-      }],
-      skippedFiles: [{
-        path: "binary.dat",
-        reason: "Binary content is represented by the complete binary Git diff.",
-      }],
-      uncommittedFiles: [
-        {
-          path: "review.txt",
-          reason: "Later user edit after the prepared commit.",
-        },
-        {
-          path: "unrelated.txt",
-          reason: "Unrelated user file.",
-        },
-      ],
-      limitations: [],
-    });
-    // The context key is deliberately absent rather than null. The workflow
-    // supplies it, and a null is not a valid ReviewPackageContext — persisting
-    // one made the snapshot fail validation on its very next read.
-    expect(first).not.toHaveProperty("context");
-    // Same reason, for the same reason it is easy to miss: the preparation
-    // agent reports `limitation: null` for a command that ran without one, but
-    // the persisted contract is `limitation?: string`. Carrying that null
-    // through made every package with an executed validation command
-    // unpersistable, failing the round at `package` on a loop no retry escaped.
-    expect((first.validation as Array<Record<string, unknown>>)[0])
-      .not.toHaveProperty("limitation");
-    // The whole point of the shape assertions above: a generated package has to
-    // survive the guard the backend runs before it saves the snapshot.
-    expect(isLoopedReviewWorkflow(
-      loopedReviewWorkflowAround(first, { round: 2, targetBranch: "main" }),
-    )).toBe(true);
-    expect(first.completeDiff).toContain("diff --git a/review.txt b/review.txt");
-    expect(first.completeDiff).toContain("GIT binary patch");
-    expect(first.completeDiff).toMatch(/index [a-f0-9]{40}\.\.[a-f0-9]{40}/);
+      await expect(
+        command(
+          {
+            ...args,
+            preparation: {
+              ...args.preparation,
+              uncommittedFiles: [],
+            },
+          },
+          context,
+        ),
+      ).rejects.toThrow("account for every uncommitted file");
+      await expect(
+        command(
+          {
+            ...args,
+            preparation: {
+              ...args.preparation,
+              validation: [
+                {
+                  ...args.preparation.validation[0],
+                  stdoutPath: "../validation.stdout.txt",
+                },
+              ],
+            },
+          },
+          context,
+        ),
+      ).rejects.toThrow("parent directory traversal");
 
-    await expect(command({
-      ...args,
-      preparation: {
-        ...args.preparation,
-        uncommittedFiles: [],
-      },
-    }, context)).rejects.toThrow("account for every uncommitted file");
-    await expect(command({
-      ...args,
-      preparation: {
-        ...args.preparation,
-        validation: [{
-          ...args.preparation.validation[0],
-          stdoutPath: "../validation.stdout.txt",
-        }],
-      },
-    }, context)).rejects.toThrow("parent directory traversal");
+      // Agents commonly return the filename relative to the artifact directory
+      // they were told to write into. Every spelling below names the same evidence
+      // file, so all of them must produce the identical package.
+      for (const [stdoutPath, stderrPath] of [
+        ["validation-01.stdout.txt", "validation-01.stderr.txt"],
+        ["./validation-01.stdout.txt", "./validation-01.stderr.txt"],
+        [
+          `.orkestrator\\review-artifacts\\${packageId}\\validation-01.stdout.txt`,
+          `.orkestrator\\review-artifacts\\${packageId}\\validation-01.stderr.txt`,
+        ],
+        [
+          `.orkestrator/review-artifacts/${packageId}/./validation-01.stdout.txt`,
+          `.orkestrator/review-artifacts/${packageId}/./validation-01.stderr.txt`,
+        ],
+        // Only one of the pair needs rewriting for the package to stay identical.
+        [
+          "validation-01.stdout.txt",
+          `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+        ],
+      ]) {
+        expect(
+          await command(
+            {
+              ...args,
+              preparation: {
+                ...args.preparation,
+                validation: [
+                  {
+                    ...args.preparation.validation[0],
+                    stdoutPath,
+                    stderrPath,
+                  },
+                ],
+              },
+            },
+            context,
+          ),
+        ).toEqual(first);
+      }
 
-    // Agents commonly return the filename relative to the artifact directory
-    // they were told to write into. Every spelling below names the same evidence
-    // file, so all of them must produce the identical package.
-    for (const [stdoutPath, stderrPath] of [
-      ["validation-01.stdout.txt", "validation-01.stderr.txt"],
-      ["./validation-01.stdout.txt", "./validation-01.stderr.txt"],
-      [
-        `.orkestrator\\review-artifacts\\${packageId}\\validation-01.stdout.txt`,
-        `.orkestrator\\review-artifacts\\${packageId}\\validation-01.stderr.txt`,
-      ],
-      [
-        `.orkestrator/review-artifacts/${packageId}/./validation-01.stdout.txt`,
-        `.orkestrator/review-artifacts/${packageId}/./validation-01.stderr.txt`,
-      ],
-      // Only one of the pair needs rewriting for the package to stay identical.
-      [
-        "validation-01.stdout.txt",
-        `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
-      ],
-    ]) {
-      expect(await command({
-        ...args,
-        preparation: {
-          ...args.preparation,
-          validation: [{
-            ...args.preparation.validation[0],
-            stdoutPath,
-            stderrPath,
-          }],
-        },
-      }, context)).toEqual(first);
-    }
+      // Anchoring a bare filename must not widen which file the backend reads: the
+      // resolved path is still compared against the one the backend computed.
+      for (const stdoutPath of [
+        "validation-02.stdout.txt",
+        "validation-1.stdout.txt",
+        "validation-01.stdout.text",
+        ".orkestrator/review-artifacts/other-package/validation-01.stdout.txt",
+        `.orkestrator/review-artifacts/${packageId}/nested/validation-01.stdout.txt`,
+      ]) {
+        await expect(
+          command(
+            {
+              ...args,
+              preparation: {
+                ...args.preparation,
+                validation: [{ ...args.preparation.validation[0], stdoutPath }],
+              },
+            },
+            context,
+          ),
+        ).rejects.toThrow("artifact paths are not deterministic");
+      }
 
-    // Anchoring a bare filename must not widen which file the backend reads: the
-    // resolved path is still compared against the one the backend computed.
-    for (const stdoutPath of [
-      "validation-02.stdout.txt",
-      "validation-1.stdout.txt",
-      "validation-01.stdout.text",
-      ".orkestrator/review-artifacts/other-package/validation-01.stdout.txt",
-      `.orkestrator/review-artifacts/${packageId}/nested/validation-01.stdout.txt`,
-    ]) {
-      await expect(command({
-        ...args,
-        preparation: {
-          ...args.preparation,
-          validation: [{ ...args.preparation.validation[0], stdoutPath }],
-        },
-      }, context)).rejects.toThrow("artifact paths are not deterministic");
-    }
+      // The rejection has to say what was expected, or a retrying agent has no way
+      // to correct the path it sent.
+      await expect(
+        command(
+          {
+            ...args,
+            preparation: {
+              ...args.preparation,
+              validation: [
+                {
+                  ...args.preparation.validation[0],
+                  stdoutPath: "validation-02.stdout.txt",
+                },
+              ],
+            },
+          },
+          context,
+        ),
+      ).rejects.toThrow(
+        `expected .orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+      );
 
-    // The rejection has to say what was expected, or a retrying agent has no way
-    // to correct the path it sent.
-    await expect(command({
-      ...args,
-      preparation: {
-        ...args.preparation,
-        validation: [{
-          ...args.preparation.validation[0],
-          stdoutPath: "validation-02.stdout.txt",
-        }],
-      },
-    }, context)).rejects.toThrow(
-      `expected .orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
-    );
-
-    for (const stdoutPath of [
-      "/etc/passwd",
-      ".git/config",
-      "",
-    ]) {
-      await expect(command({
-        ...args,
-        preparation: {
-          ...args.preparation,
-          validation: [{ ...args.preparation.validation[0], stdoutPath }],
-        },
-      }, context)).rejects.toThrow(/Invalid validation\[0\]\.stdoutPath/);
-    }
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+      for (const stdoutPath of ["/etc/passwd", ".git/config", ""]) {
+        await expect(
+          command(
+            {
+              ...args,
+              preparation: {
+                ...args.preparation,
+                validation: [{ ...args.preparation.validation[0], stdoutPath }],
+              },
+            },
+            context,
+          ),
+        ).rejects.toThrow(/Invalid validation\[0\]\.stdoutPath/);
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("hydrates validation evidence by array position, counting skipped commands", async () => {
     const packageId = "package-ordinals";
@@ -1445,14 +1615,8 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       path.join(artifactDirectory, "validation-02.stdout.txt"),
       "all tests passed\n",
     );
-    await fs.writeFile(
-      path.join(artifactDirectory, "validation-02.stderr.txt"),
-      "",
-    );
-    await fs.writeFile(
-      path.join(artifactDirectory, "validation-03.stdout.txt"),
-      "build output\n",
-    );
+    await fs.writeFile(path.join(artifactDirectory, "validation-02.stderr.txt"), "");
+    await fs.writeFile(path.join(artifactDirectory, "validation-03.stdout.txt"), "build output\n");
     await fs.writeFile(
       path.join(artifactDirectory, "validation-03.stderr.txt"),
       "error TS2345: build failed\n",
@@ -1505,7 +1669,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       },
     };
 
-    const generated = await command(args, context) as Record<string, unknown>;
+    const generated = (await command(args, context)) as Record<string, unknown>;
     expect(generated.validation).toEqual([
       {
         command: "bun run --cwd apps/ios typecheck",
@@ -1537,21 +1701,26 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         limitation: "Build ran against a stale cache.",
       },
     ]);
-    expect(isLoopedReviewWorkflow(
-      loopedReviewWorkflowAround(generated, { round: 1, targetBranch: "main" }),
-    )).toBe(true);
+    expect(
+      isLoopedReviewWorkflow(
+        loopedReviewWorkflowAround(generated, { round: 1, targetBranch: "main" }),
+      ),
+    ).toBe(true);
 
     // Dropping the skipped entry shifts every later entry's ordinal. Numbering
     // by execution order instead of array position would accept this.
-    await expect(command({
-      ...args,
-      preparation: { ...args.preparation, validation: [passed, failed] },
-    }, context)).rejects.toThrow(
+    await expect(
+      command(
+        {
+          ...args,
+          preparation: { ...args.preparation, validation: [passed, failed] },
+        },
+        context,
+      ),
+    ).rejects.toThrow(
       `expected .orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
     );
   });
-
-
 
   test("reports a validation artifact the preparation agent never wrote", async () => {
     const packageId = "package-missing";
@@ -1575,15 +1744,17 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       round: 1,
       targetBranch: "main",
       preparation: {
-        validation: [{
-          command: "bun test tests --parallel",
-          status: "passed",
-          exitCode: 0,
-          stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
-          stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
-          durationMs: 123,
-          limitation: null,
-        }],
+        validation: [
+          {
+            command: "bun test tests --parallel",
+            status: "passed",
+            exitCode: 0,
+            stdoutPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stdout.txt`,
+            stderrPath: `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+            durationMs: 123,
+            limitation: null,
+          },
+        ],
         uncommittedFiles: [],
         limitations: [],
       },
@@ -1593,15 +1764,13 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     // now pass validation and still not exist, so the read has to say so in
     // review terms rather than surfacing a bare ENOENT.
     await expect(command(args, context)).rejects.toThrow(
-      `Review artifact was not written by preparation: `
-      + `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
+      `Review artifact was not written by preparation: ` +
+        `.orkestrator/review-artifacts/${packageId}/validation-01.stderr.txt`,
     );
 
     const stderrArtifact = path.join(artifactDirectory, "validation-01.stderr.txt");
     await fs.mkdir(stderrArtifact);
-    await expect(command(args, context)).rejects.toThrow(
-      "Review artifact is not a regular file",
-    );
+    await expect(command(args, context)).rejects.toThrow("Review artifact is not a regular file");
     await fs.rmdir(stderrArtifact);
 
     const outsideDirectory = await createTempDir("ork-electron-outside-artifact-");
@@ -1622,8 +1791,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       "Review artifact must not traverse symbolic links",
     );
   });
-
-
 
   test("rejects preparation validation metadata that breaks the evidence contract", async () => {
     const environment = createEnvironment({
@@ -1654,13 +1821,17 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     };
     // Every case below is rejected while parsing the arguments, before any Git
     // command runs, so the worktree above is never touched.
-    const call = (validation: unknown) => command({
-      environmentId: environment.id,
-      packageId,
-      round: 1,
-      targetBranch: "main",
-      preparation: { validation, uncommittedFiles: [], limitations: [] },
-    }, context);
+    const call = (validation: unknown) =>
+      command(
+        {
+          environmentId: environment.id,
+          packageId,
+          round: 1,
+          targetBranch: "main",
+          preparation: { validation, uncommittedFiles: [], limitations: [] },
+        },
+        context,
+      );
 
     await expect(call({})).rejects.toThrow("Expected validation to be an array");
     await expect(call([null])).rejects.toThrow("Expected validation[0] to be an object");
@@ -1713,8 +1884,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     );
   });
 
-
-
   test("waits for a local bridge server to pass health before persisting pid and port", async () => {
     const appRoot = await createTempDir("ork-electron-app-");
     const toolchainBinDir = await createTempDir("ork-electron-toolchain-");
@@ -1742,7 +1911,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.toolchainBinDir = toolchainBinDir;
 
     const commands = createCommandRegistry();
-    const result = await commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context) as {
+    const result = (await commands.get("start_local_codex_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    )) as {
       port: number;
       pid: number;
       wasRunning: boolean;
@@ -1755,10 +1927,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     expect(result.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(updates).toContainEqual({ localCodexPort: result.port, codexBridgePid: result.pid });
     await expect(
-      commands.get("get_local_codex_server_status")?.(
-        { environmentId: environment.id },
-        context,
-      ),
+      commands.get("get_local_codex_server_status")?.({ environmentId: environment.id }, context),
     ).resolves.toMatchObject({
       running: true,
       port: result.port,
@@ -1772,10 +1941,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
 
     await commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context);
     await expect(
-      commands.get("get_local_codex_server_status")?.(
-        { environmentId: environment.id },
-        context,
-      ),
+      commands.get("get_local_codex_server_status")?.({ environmentId: environment.id }, context),
     ).resolves.toEqual({
       running: false,
       port: null,
@@ -1792,10 +1958,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     fallbackContext.appRoot = appRoot;
     fallbackContext.resourceRoot = appRoot;
     fallbackContext.toolchainBinDir = toolchainBinDir;
-    const fallbackResult = await commands.get("start_local_codex_server_cmd")?.(
+    const fallbackResult = (await commands.get("start_local_codex_server_cmd")?.(
       { environmentId: fallbackEnvironment.id },
       fallbackContext,
-    ) as { port: number; pid: number; wasRunning: boolean };
+    )) as { port: number; pid: number; wasRunning: boolean };
     try {
       expect(fallbackResult.wasRunning).toBe(false);
       expect(await fs.readFile(maxConcurrentThreadsMarkerPath, "utf8")).toBe("5");
@@ -1807,55 +1973,55 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     }
   });
 
+  test(
+    "does not report a child that exits while local status awaits storage as running",
+    async () => {
+      const appRoot = await createTempDir("ork-electron-app-status-exit-race-");
+      const worktreePath = await createTempDir("ork-electron-worktree-status-exit-race-");
+      await writeBridgeServer(appRoot, "codex-bridge");
+      const environment = createEnvironment({ worktreePath });
+      const { context } = createContext(environment);
+      context.appRoot = appRoot;
+      context.resourceRoot = appRoot;
+      const commands = createCommandRegistry();
 
+      const started = (await commands.get("start_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      )) as { port: number; pid: number };
+      const lookupStarted = createDeferred();
+      const releaseLookup = createDeferred();
+      const getEnvironment = context.storage.getEnvironment.bind(context.storage);
+      context.storage.getEnvironment = mock(async (environmentId: string) => {
+        lookupStarted.resolve(undefined);
+        await releaseLookup.promise;
+        return getEnvironment(environmentId);
+      });
 
-  test("does not report a child that exits while local status awaits storage as running", async () => {
-    const appRoot = await createTempDir("ork-electron-app-status-exit-race-");
-    const worktreePath = await createTempDir("ork-electron-worktree-status-exit-race-");
-    await writeBridgeServer(appRoot, "codex-bridge");
-    const environment = createEnvironment({ worktreePath });
-    const { context } = createContext(environment);
-    context.appRoot = appRoot;
-    context.resourceRoot = appRoot;
-    const commands = createCommandRegistry();
+      const statusPromise = commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<unknown>;
+      await lookupStarted.promise;
+      try {
+        process.kill(started.pid, "SIGTERM");
+        await waitForCondition(
+          () => commandTesting.getLocalServerProcess(`codex:${environment.id}`) === undefined,
+          "exited Codex bridge ownership release",
+        );
+      } finally {
+        releaseLookup.resolve(undefined);
+      }
 
-    const started = await commands.get("start_local_codex_server_cmd")?.(
-      { environmentId: environment.id },
-      context,
-    ) as { port: number; pid: number };
-    const lookupStarted = createDeferred();
-    const releaseLookup = createDeferred();
-    const getEnvironment = context.storage.getEnvironment.bind(context.storage);
-    context.storage.getEnvironment = mock(async (environmentId: string) => {
-      lookupStarted.resolve(undefined);
-      await releaseLookup.promise;
-      return getEnvironment(environmentId);
-    });
-
-    const statusPromise = commands.get("get_local_codex_server_status")?.(
-      { environmentId: environment.id },
-      context,
-    ) as Promise<unknown>;
-    await lookupStarted.promise;
-    try {
-      process.kill(started.pid, "SIGTERM");
-      await waitForCondition(
-        () => commandTesting.getLocalServerProcess(`codex:${environment.id}`) === undefined,
-        "exited Codex bridge ownership release",
-      );
-    } finally {
-      releaseLookup.resolve(undefined);
-    }
-
-    await expect(statusPromise).resolves.toEqual({
-      running: false,
-      port: started.port,
-      pid: started.pid,
-    });
-    expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+      await expect(statusPromise).resolves.toEqual({
+        running: false,
+        port: started.port,
+        pid: started.pid,
+      });
+      expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("serializes simultaneous starts so one local server owns the key", async () => {
     const appRoot = await createTempDir("ork-electron-app-concurrent-start-");
@@ -1891,127 +2057,121 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     }
   });
 
+  test(
+    "holds local server status behind an in-flight startup until its ready port is committed",
+    async () => {
+      const appRoot = await createTempDir("ork-electron-app-start-status-");
+      const worktreePath = await createTempDir("ork-electron-worktree-start-status-");
+      await writeBridgeServer(appRoot, "codex-bridge");
+      const environment = createEnvironment({ worktreePath });
+      const { context } = createContext(environment);
+      context.appRoot = appRoot;
+      context.resourceRoot = appRoot;
+      const commitStarted = createDeferred();
+      const releaseCommit = createDeferred();
+      const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+      context.storage.updateEnvironment = mock(
+        async (environmentId: string, update: Record<string, unknown>) => {
+          if (typeof update.localCodexPort === "number") {
+            commitStarted.resolve(undefined);
+            await releaseCommit.promise;
+          }
+          return updateEnvironment(environmentId, update);
+        },
+      );
+      const commands = createCommandRegistry();
 
-
-  test("holds local server status behind an in-flight startup until its ready port is committed", async () => {
-    const appRoot = await createTempDir("ork-electron-app-start-status-");
-    const worktreePath = await createTempDir("ork-electron-worktree-start-status-");
-    await writeBridgeServer(appRoot, "codex-bridge");
-    const environment = createEnvironment({ worktreePath });
-    const { context } = createContext(environment);
-    context.appRoot = appRoot;
-    context.resourceRoot = appRoot;
-    const commitStarted = createDeferred();
-    const releaseCommit = createDeferred();
-    const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
-    context.storage.updateEnvironment = mock(async (
-      environmentId: string,
-      update: Record<string, unknown>,
-    ) => {
-      if (typeof update.localCodexPort === "number") {
-        commitStarted.resolve(undefined);
-        await releaseCommit.promise;
-      }
-      return updateEnvironment(environmentId, update);
-    });
-    const commands = createCommandRegistry();
-
-    const startPromise = commands.get("start_local_codex_server_cmd")?.(
-      { environmentId: environment.id },
-      context,
-    ) as Promise<{ port: number; pid: number; authToken: string }>;
-    await commitStarted.promise;
-
-    let statusReadStarted = false;
-    const getEnvironment = context.storage.getEnvironment.bind(context.storage);
-    context.storage.getEnvironment = mock(async (environmentId: string) => {
-      statusReadStarted = true;
-      return getEnvironment(environmentId);
-    });
-
-    const statusPromise = commands.get("get_local_codex_server_status")?.(
-      { environmentId: environment.id },
-      context,
-    ) as Promise<{
-      running: boolean;
-      port: number | null;
-      pid: number | null;
-      authToken?: string;
-    }>;
-    try {
-      expect(statusReadStarted).toBe(false);
-    } finally {
-      releaseCommit.resolve(undefined);
-    }
-    const [started, status] = await Promise.all([startPromise, statusPromise]);
-    try {
-      expect(status).toEqual({
-        running: true,
-        port: started.port,
-        pid: started.pid,
-        authToken: started.authToken,
-      });
-    } finally {
-      await commands.get("stop_local_codex_server_cmd")?.(
+      const startPromise = commands.get("start_local_codex_server_cmd")?.(
         { environmentId: environment.id },
         context,
-      );
-    }
-  }, ASYNC_TEST_BUDGET_MS);
+      ) as Promise<{ port: number; pid: number; authToken: string }>;
+      await commitStarted.promise;
 
+      let statusReadStarted = false;
+      const getEnvironment = context.storage.getEnvironment.bind(context.storage);
+      context.storage.getEnvironment = mock(async (environmentId: string) => {
+        statusReadStarted = true;
+        return getEnvironment(environmentId);
+      });
 
+      const statusPromise = commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<{
+        running: boolean;
+        port: number | null;
+        pid: number | null;
+        authToken?: string;
+      }>;
+      try {
+        expect(statusReadStarted).toBe(false);
+      } finally {
+        releaseCommit.resolve(undefined);
+      }
+      const [started, status] = await Promise.all([startPromise, statusPromise]);
+      try {
+        expect(status).toEqual({
+          running: true,
+          port: started.port,
+          pid: started.pid,
+          authToken: started.authToken,
+        });
+      } finally {
+        await commands.get("stop_local_codex_server_cmd")?.(
+          { environmentId: environment.id },
+          context,
+        );
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-  test("runs queued status after a rejected startup and reports the cleaned stopped state", async () => {
-    const appRoot = await createTempDir("ork-electron-app-rejected-start-status-");
-    const worktreePath = await createTempDir("ork-electron-worktree-rejected-start-status-");
-    await writeBridgeEntrypoint(
-      appRoot,
-      "codex-bridge",
-      "process.exitCode = 23;",
-    );
-    const environment = createEnvironment({
-      worktreePath,
-      localCodexPort: 40123,
-      codexBridgePid: 50123,
-    });
-    const { context } = createContext(environment);
-    context.appRoot = appRoot;
-    context.resourceRoot = appRoot;
-    const commands = createCommandRegistry();
+  test(
+    "runs queued status after a rejected startup and reports the cleaned stopped state",
+    async () => {
+      const appRoot = await createTempDir("ork-electron-app-rejected-start-status-");
+      const worktreePath = await createTempDir("ork-electron-worktree-rejected-start-status-");
+      await writeBridgeEntrypoint(appRoot, "codex-bridge", "process.exitCode = 23;");
+      const environment = createEnvironment({
+        worktreePath,
+        localCodexPort: 40123,
+        codexBridgePid: 50123,
+      });
+      const { context } = createContext(environment);
+      context.appRoot = appRoot;
+      context.resourceRoot = appRoot;
+      const commands = createCommandRegistry();
 
-    const startPromise = commands.get("start_local_codex_server_cmd")?.(
-      { environmentId: environment.id },
-      context,
-    ) as Promise<unknown>;
-    const statusPromise = commands.get("get_local_codex_server_status")?.(
-      { environmentId: environment.id },
-      context,
-    ) as Promise<unknown>;
+      const startPromise = commands.get("start_local_codex_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<unknown>;
+      const statusPromise = commands.get("get_local_codex_server_status")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<unknown>;
 
-    const [startResult, statusResult] = await Promise.allSettled([
-      startPromise,
-      statusPromise,
-    ]);
-    expect(startResult.status).toBe("rejected");
-    if (startResult.status === "rejected") {
-      expect(startResult.reason).toBeInstanceOf(Error);
-      expect((startResult.reason as Error).message).toContain(
-        "codex server exited before becoming healthy",
-      );
-    }
-    expect(statusResult).toEqual({
-      status: "fulfilled",
-      value: {
-        running: false,
-        port: null,
-        pid: null,
-      },
-    });
-    expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBeUndefined();
-    expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+      const [startResult, statusResult] = await Promise.allSettled([startPromise, statusPromise]);
+      expect(startResult.status).toBe("rejected");
+      if (startResult.status === "rejected") {
+        expect(startResult.reason).toBeInstanceOf(Error);
+        expect((startResult.reason as Error).message).toContain(
+          "codex server exited before becoming healthy",
+        );
+      }
+      expect(statusResult).toEqual({
+        status: "fulfilled",
+        value: {
+          running: false,
+          port: null,
+          pid: null,
+        },
+      });
+      expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBeUndefined();
+      expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("holds status behind an in-flight stop until process ownership and metadata are cleared", async () => {
     const environment = createEnvironment({
@@ -2057,8 +2217,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       { running: false, port: null, pid: null },
     ]);
   });
-
-
 
   test("serializes status across local server kinds for the same environment", async () => {
     const environment = createEnvironment({
@@ -2107,8 +2265,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     ]);
   });
 
-
-
   test("serializes a stop queued behind startup and leaves metadata cleared", async () => {
     const appRoot = await createTempDir("ork-electron-app-start-stop-");
     const worktreePath = await createTempDir("ork-electron-worktree-start-stop-");
@@ -2136,17 +2292,12 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     expect(environment.codexBridgePid).toBeNull();
   });
 
-
-
   test("does not spawn an in-flight local server after the bounded shutdown drain expires", async () => {
-    const worktreePath = await createTempDir(
-      "ork-electron-local-start-shutdown-deadline-",
-    );
+    const worktreePath = await createTempDir("ork-electron-local-start-shutdown-deadline-");
     const environment = createEnvironment({ worktreePath });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
-    const originalGetEnvironment =
-      context.storage.getEnvironment.bind(context.storage);
+    const originalGetEnvironment = context.storage.getEnvironment.bind(context.storage);
     let releaseLookup!: () => void;
     let markLookupStarted!: () => void;
     const lookupGate = new Promise<void>((resolve) => {
@@ -2167,9 +2318,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const spawnAttempt = mock(() => {
       throw new Error("local server spawned after shutdown");
     });
-    commandTesting.setSpawnLocalServerCommand(
-      spawnAttempt as unknown as typeof spawnCommand,
-    );
+    commandTesting.setSpawnLocalServerCommand(spawnAttempt as unknown as typeof spawnCommand);
 
     const start = commands.get("start_local_opencode_server_cmd")?.(
       { environmentId: environment.id },
@@ -2177,9 +2326,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     ) as Promise<unknown>;
     await lookupStarted;
 
-    await expect(
-      shutdownLocalServers({ operationDrainTimeoutMs: 10 }),
-    ).resolves.toBeUndefined();
+    await expect(shutdownLocalServers({ operationDrainTimeoutMs: 10 })).resolves.toBeUndefined();
     releaseLookup();
 
     await expect(start).rejects.toThrow(
@@ -2187,8 +2334,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     );
     expect(spawnAttempt).not.toHaveBeenCalled();
   });
-
-
 
   test("reports and stops every local server kind through its public handlers", async () => {
     const environment = createEnvironment({
@@ -2212,39 +2357,34 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     }
     commandTesting.setTerminateProcessTree(async () => true);
 
-    await expect(Promise.all([
-      commands.get("get_local_opencode_server_status")?.(
-        { environmentId: environment.id },
-        context,
-      ),
-      commands.get("get_local_claude_server_status")?.(
-        { environmentId: environment.id },
-        context,
-      ),
-      commands.get("get_local_codex_server_status")?.(
-        { environmentId: environment.id },
-        context,
-      ),
-    ])).resolves.toEqual([
+    await expect(
+      Promise.all([
+        commands.get("get_local_opencode_server_status")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+        commands.get("get_local_claude_server_status")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+        commands.get("get_local_codex_server_status")?.({ environmentId: environment.id }, context),
+      ]),
+    ).resolves.toEqual([
       { running: true, port: 40101, pid: 94001 },
       { running: true, port: 40102, pid: 94002 },
       { running: true, port: 40103, pid: 94003 },
     ]);
 
-    await expect(Promise.all([
-      commands.get("stop_local_opencode_server_cmd")?.(
-        { environmentId: environment.id },
-        context,
-      ),
-      commands.get("stop_local_claude_server_cmd")?.(
-        { environmentId: environment.id },
-        context,
-      ),
-      commands.get("stop_local_codex_server_cmd")?.(
-        { environmentId: environment.id },
-        context,
-      ),
-    ])).resolves.toEqual([undefined, undefined, undefined]);
+    await expect(
+      Promise.all([
+        commands.get("stop_local_opencode_server_cmd")?.(
+          { environmentId: environment.id },
+          context,
+        ),
+        commands.get("stop_local_claude_server_cmd")?.({ environmentId: environment.id }, context),
+        commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
+      ]),
+    ).resolves.toEqual([undefined, undefined, undefined]);
 
     expect(environment).toMatchObject({
       localOpencodePort: null,
@@ -2258,8 +2398,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       expect(commandTesting.getLocalServerProcess(`${kind}:${environment.id}`)).toBeUndefined();
     }
   });
-
-
 
   test("launches the local claude bridge through the bundled bun binary in resources", async () => {
     // The bridges run on bun, not node. resolveBunBinary prefers the bun shipped
@@ -2287,7 +2425,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.resourceRoot = resourceRoot;
 
     const commands = createCommandRegistry();
-    const result = await commands.get("start_local_claude_server_cmd")?.({ environmentId: environment.id }, context) as {
+    const result = (await commands.get("start_local_claude_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    )) as {
       port: number;
       pid: number;
       wasRunning: boolean;
@@ -2313,11 +2454,12 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         authToken: result.authToken,
       });
     } finally {
-      await commands.get("stop_local_claude_server_cmd")?.({ environmentId: environment.id }, context);
+      await commands.get("stop_local_claude_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
     }
   });
-
-
 
   test("peeks a local bridge without ever starting one", async () => {
     // The activity sweep polls every environment every two seconds. Resolving
@@ -2339,34 +2481,38 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const spawnAttempt = mock(() => {
       throw new Error("peek must not spawn a bridge");
     });
-    commandTesting.setSpawnLocalServerCommand(
-      spawnAttempt as unknown as typeof spawnCommand,
-    );
-    await expect(commands.get("peek_local_agent_bridge")?.(
-      { environmentId: environment.id, agent: "claude" },
-      context,
-    )).resolves.toBeNull();
+    commandTesting.setSpawnLocalServerCommand(spawnAttempt as unknown as typeof spawnCommand);
+    await expect(
+      commands.get("peek_local_agent_bridge")?.(
+        { environmentId: environment.id, agent: "claude" },
+        context,
+      ),
+    ).resolves.toBeNull();
     expect(spawnAttempt).not.toHaveBeenCalled();
     commandTesting.setSpawnLocalServerCommand(spawnCommand);
 
-    const started = await commands.get("start_local_claude_server_cmd")?.(
+    const started = (await commands.get("start_local_claude_server_cmd")?.(
       { environmentId: environment.id },
       context,
-    ) as { port: number; authToken: string };
+    )) as { port: number; authToken: string };
     try {
-      await expect(commands.get("peek_local_agent_bridge")?.(
-        { environmentId: environment.id, agent: "claude" },
-        context,
-      )).resolves.toEqual({
+      await expect(
+        commands.get("peek_local_agent_bridge")?.(
+          { environmentId: environment.id, agent: "claude" },
+          context,
+        ),
+      ).resolves.toEqual({
         port: started.port,
         authToken: started.authToken,
       });
 
       // A different agent shares the environment but has no bridge of its own.
-      await expect(commands.get("peek_local_agent_bridge")?.(
-        { environmentId: environment.id, agent: "codex" },
-        context,
-      )).resolves.toBeNull();
+      await expect(
+        commands.get("peek_local_agent_bridge")?.(
+          { environmentId: environment.id, agent: "codex" },
+          context,
+        ),
+      ).resolves.toBeNull();
     } finally {
       await commands.get("stop_local_claude_server_cmd")?.(
         { environmentId: environment.id },
@@ -2375,13 +2521,13 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     }
 
     // Once stopped it reports null again rather than resurrecting the bridge.
-    await expect(commands.get("peek_local_agent_bridge")?.(
-      { environmentId: environment.id, agent: "claude" },
-      context,
-    )).resolves.toBeNull();
+    await expect(
+      commands.get("peek_local_agent_bridge")?.(
+        { environmentId: environment.id, agent: "claude" },
+        context,
+      ),
+    ).resolves.toBeNull();
   });
-
-
 
   test("rejects an unknown agent on either peek surface", async () => {
     const environment = createEnvironment({ id: "env-peek-validation" });
@@ -2390,25 +2536,28 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
 
     // Validation runs before the handler returns a promise, so these throw
     // synchronously; `invoke` awaits the handler and surfaces them either way.
-    expect(() => commands.get("peek_local_agent_bridge")?.(
-      { environmentId: environment.id, agent: "gemini" },
-      context,
-    )).toThrow("agent must be one of: opencode, claude, codex");
-    expect(() => commands.get("peek_container_agent_bridge")?.(
-      { containerId: "container-1", agent: "gemini" },
-      context,
-    )).toThrow("agent must be one of: opencode, claude, codex");
-    expect(() => commands.get("peek_local_agent_bridge")?.(
-      { environmentId: "  ", agent: "claude" },
-      context,
-    )).toThrow();
-    expect(() => commands.get("peek_container_agent_bridge")?.(
-      { containerId: "container-1", agent: "claude", extra: 1 },
-      context,
-    )).toThrow();
+    expect(() =>
+      commands.get("peek_local_agent_bridge")?.(
+        { environmentId: environment.id, agent: "gemini" },
+        context,
+      ),
+    ).toThrow("agent must be one of: opencode, claude, codex");
+    expect(() =>
+      commands.get("peek_container_agent_bridge")?.(
+        { containerId: "container-1", agent: "gemini" },
+        context,
+      ),
+    ).toThrow("agent must be one of: opencode, claude, codex");
+    expect(() =>
+      commands.get("peek_local_agent_bridge")?.({ environmentId: "  ", agent: "claude" }, context),
+    ).toThrow();
+    expect(() =>
+      commands.get("peek_container_agent_bridge")?.(
+        { containerId: "container-1", agent: "claude", extra: 1 },
+        context,
+      ),
+    ).toThrow();
   });
-
-
 
   test("restarts a healthy local Claude bridge whose auth token this process no longer holds", async () => {
     const appRoot = await createTempDir("ork-electron-app-tokenless-claude-");
@@ -2421,20 +2570,20 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.resourceRoot = appRoot;
     const commands = createCommandRegistry();
 
-    const first = await commands.get("start_local_claude_server_cmd")?.(
+    const first = (await commands.get("start_local_claude_server_cmd")?.(
       { environmentId: environment.id },
       context,
-    ) as { port: number; pid: number; authToken: string };
+    )) as { port: number; pid: number; authToken: string };
     expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
     // A bridge inherited from a previous backend process: still healthy, but its
     // token was never handed to us, so the renderer could not authenticate.
     commandTesting.deleteLocalClaudeBridgeToken(environment.id);
 
-    const second = await commands.get("start_local_claude_server_cmd")?.(
+    const second = (await commands.get("start_local_claude_server_cmd")?.(
       { environmentId: environment.id },
       context,
-    ) as { port: number; pid: number; wasRunning: boolean; authToken: string };
+    )) as { port: number; pid: number; wasRunning: boolean; authToken: string };
     try {
       expect(second.wasRunning).toBe(false);
       expect(second.pid).not.toBe(first.pid);
@@ -2450,8 +2599,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     }
   });
 
-
-
   test("does not persist local bridge process state when the bridge entrypoint is missing", async () => {
     const appRoot = await createTempDir("ork-electron-app-missing-");
     const worktreePath = await createTempDir("ork-electron-worktree-missing-");
@@ -2463,13 +2610,11 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.resourceRoot = appRoot;
 
     const commands = createCommandRegistry();
-    await expect(commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context)).rejects.toThrow(
-      "codex bridge entrypoint not found",
-    );
+    await expect(
+      commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow("codex bridge entrypoint not found");
     expect(updates).toHaveLength(0);
   });
-
-
 
   test("replaces an unhealthy local bridge process before restarting it", async () => {
     const appRoot = await createTempDir("ork-electron-app-stale-bridge-");
@@ -2500,10 +2645,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.resourceRoot = appRoot;
     const commands = createCommandRegistry();
 
-    const first = await commands.get("start_local_codex_server_cmd")?.(
+    const first = (await commands.get("start_local_codex_server_cmd")?.(
       { environmentId: environment.id },
       context,
-    ) as { port: number; pid: number; wasRunning: boolean };
+    )) as { port: number; pid: number; wasRunning: boolean };
     expect(first.wasRunning).toBe(false);
     await expect(requestOk(first.port, "/disable")).resolves.toBe(true);
     await commandTesting.waitForUnhealthy(first.port);
@@ -2511,16 +2656,15 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const replacementCommitStarted = createDeferred();
     const releaseReplacementCommit = createDeferred();
     const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
-    context.storage.updateEnvironment = mock(async (
-      environmentId: string,
-      update: Record<string, unknown>,
-    ) => {
-      if (typeof update.localCodexPort === "number") {
-        replacementCommitStarted.resolve(undefined);
-        await releaseReplacementCommit.promise;
-      }
-      return updateEnvironment(environmentId, update);
-    });
+    context.storage.updateEnvironment = mock(
+      async (environmentId: string, update: Record<string, unknown>) => {
+        if (typeof update.localCodexPort === "number") {
+          replacementCommitStarted.resolve(undefined);
+          await releaseReplacementCommit.promise;
+        }
+        return updateEnvironment(environmentId, update);
+      },
+    );
 
     const replacementPromise = commands.get("start_local_codex_server_cmd")?.(
       { environmentId: environment.id },
@@ -2553,10 +2697,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     } finally {
       releaseReplacementCommit.resolve(undefined);
     }
-    const [second, status] = await Promise.all([
-      replacementPromise,
-      statusPromise,
-    ]);
+    const [second, status] = await Promise.all([replacementPromise, statusPromise]);
     try {
       expect(second.wasRunning).toBe(false);
       expect(second.pid).not.toBe(first.pid);
@@ -2580,8 +2721,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     }
   });
 
-
-
   test("restarts a healthy local Codex bridge whose auth token this process no longer holds", async () => {
     const appRoot = await createTempDir("ork-electron-app-tokenless-bridge-");
     const worktreePath = await createTempDir("ork-electron-worktree-tokenless-bridge-");
@@ -2593,20 +2732,20 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     context.resourceRoot = appRoot;
     const commands = createCommandRegistry();
 
-    const first = await commands.get("start_local_codex_server_cmd")?.(
+    const first = (await commands.get("start_local_codex_server_cmd")?.(
       { environmentId: environment.id },
       context,
-    ) as { port: number; pid: number; authToken: string };
+    )) as { port: number; pid: number; authToken: string };
     expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 
     // A bridge inherited from a previous backend process: still healthy, but its
     // token was never handed to us, so the renderer could not authenticate.
     commandTesting.deleteLocalCodexBridgeToken(environment.id);
 
-    const second = await commands.get("start_local_codex_server_cmd")?.(
+    const second = (await commands.get("start_local_codex_server_cmd")?.(
       { environmentId: environment.id },
       context,
-    ) as { port: number; pid: number; wasRunning: boolean; authToken: string };
+    )) as { port: number; pid: number; wasRunning: boolean; authToken: string };
     try {
       expect(second.wasRunning).toBe(false);
       expect(second.pid).not.toBe(first.pid);
@@ -2621,8 +2760,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       );
     }
   });
-
-
 
   test("forgets the local Codex bridge token when the process cannot be spawned", async () => {
     const appRoot = await createTempDir("ork-electron-app-spawn-failure-");
@@ -2640,10 +2777,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
 
     try {
       await expect(
-        commands.get("start_local_codex_server_cmd")?.(
-          { environmentId: environment.id },
-          context,
-        ),
+        commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
       ).rejects.toThrow("spawn refused");
       expect(commandTesting.getLocalCodexBridgeToken(environment.id)).toBeUndefined();
       expect(updates).toHaveLength(0);
@@ -2652,16 +2786,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     }
   });
 
-
-
   test("clears persisted local bridge state when startup exits before health", async () => {
     const appRoot = await createTempDir("ork-electron-app-failed-bridge-");
     const worktreePath = await createTempDir("ork-electron-worktree-failed-bridge-");
-    await writeBridgeEntrypoint(
-      appRoot,
-      "codex-bridge",
-      `process.exitCode = 23;`,
-    );
+    await writeBridgeEntrypoint(appRoot, "codex-bridge", `process.exitCode = 23;`);
 
     const environment = createEnvironment({ worktreePath });
     const { context, updates } = createContext(environment);
@@ -2670,10 +2798,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     const commands = createCommandRegistry();
 
     await expect(
-      commands.get("start_local_codex_server_cmd")?.(
-        { environmentId: environment.id },
-        context,
-      ),
+      commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
     ).rejects.toThrow("codex server exited before becoming healthy");
     expect(updates).toContainEqual({
       localCodexPort: null,
@@ -2683,16 +2808,10 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     expect(environment.codexBridgePid).toBeNull();
   });
 
-
-
   test("reports both startup and cleanup failures while clearing persisted state", async () => {
     const appRoot = await createTempDir("ork-electron-app-failed-bridge-cleanup-");
     const worktreePath = await createTempDir("ork-electron-worktree-failed-bridge-cleanup-");
-    await writeBridgeEntrypoint(
-      appRoot,
-      "codex-bridge",
-      `process.exitCode = 23;`,
-    );
+    await writeBridgeEntrypoint(appRoot, "codex-bridge", `process.exitCode = 23;`);
 
     const environment = createEnvironment({ worktreePath });
     const { context, updates } = createContext(environment);
@@ -2702,10 +2821,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     commandTesting.setTerminateProcessTree(async () => false);
 
     await expect(
-      commands.get("start_local_codex_server_cmd")?.(
-        { environmentId: environment.id },
-        context,
-      ),
+      commands.get("start_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
     ).rejects.toThrow("Failed to start and clean up local server");
     expect(updates).toContainEqual({
       localCodexPort: null,
@@ -2715,5 +2831,4 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
     expect(environment.codexBridgePid).toBeNull();
     commandTesting.setTerminateProcessTree(async () => true);
   });
-
 });

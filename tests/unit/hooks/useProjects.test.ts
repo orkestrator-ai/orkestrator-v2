@@ -1,8 +1,6 @@
 import { afterAll, describe, test, expect, beforeEach, mock } from "bun:test";
 import { renderHook, act, waitFor } from "@testing-library/react";
-import {
-  useProjectStore,
-} from "../../../apps/web/src/stores/projectStore";
+import { useProjectStore } from "../../../apps/web/src/stores/projectStore";
 import type { Project } from "../../../apps/web/src/types";
 import { createMockProject } from "../utils/testFactories";
 import { mockToastError, mockToastSuccess } from "../../mocks/sonner";
@@ -15,26 +13,26 @@ const capturedResyncHandlers = new Set<ResourceResyncHandler>();
 // Mock backend module BEFORE importing the hook
 const mockGetProjects = mock<() => Promise<Project[]>>(() => Promise.resolve([]));
 const mockAddProject = mock<(gitUrl: string, localPath?: string) => Promise<Project>>((gitUrl) =>
-  Promise.resolve(createMockProject({ id: "new-project-id", name: "test-repo", gitUrl }))
+  Promise.resolve(createMockProject({ id: "new-project-id", name: "test-repo", gitUrl })),
 );
 const mockCreateProjectFromScratch = mock<(localPath: string) => Promise<Project>>((localPath) =>
-  Promise.resolve(createMockProject({
-    id: "scratch-project-id",
-    name: "scratch-repo",
-    gitUrl: "git@github.com:test/scratch-repo.git",
-    localPath,
-  }))
+  Promise.resolve(
+    createMockProject({
+      id: "scratch-project-id",
+      name: "scratch-repo",
+      gitUrl: "git@github.com:test/scratch-repo.git",
+      localPath,
+    }),
+  ),
 );
 const mockRemoveProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
 const mockValidateGitUrl = mock<(url: string) => Promise<boolean>>(() => Promise.resolve(true));
 const mockReorderProjects = mock<(projectIds: string[]) => Promise<Project[]>>(() =>
-  Promise.resolve([])
+  Promise.resolve([]),
 );
 const mockUpdateProject = mock<
   (projectId: string, updates: Partial<Pick<Project, "name" | "localPath">>) => Promise<Project>
->((projectId, updates) =>
-  Promise.resolve(createMockProject({ id: projectId, ...updates }))
-);
+>((projectId, updates) => Promise.resolve(createMockProject({ id: projectId, ...updates })));
 
 mock.module("@/lib/backend", () => ({
   getProjects: mockGetProjects,
@@ -61,19 +59,12 @@ mock.module("@/lib/resource-sync", () => ({
 // Import hook AFTER mocking
 import { useProjects } from "../../../apps/web/src/hooks/useProjects";
 
-const {
-  dispatchResourceChange,
-  requestResourceResync,
-  resetResourceSync,
-} = realResourceSyncSnapshot;
+const { dispatchResourceChange, requestResourceResync, resetResourceSync } =
+  realResourceSyncSnapshot;
 
-async function deliverResync(
-  request: realResourceSync.ResourceResyncRequest,
-): Promise<void> {
+async function deliverResync(request: realResourceSync.ResourceResyncRequest): Promise<void> {
   await act(async () => {
-    await Promise.all(
-      [...capturedResyncHandlers].map((handler) => handler(request)),
-    );
+    await Promise.all([...capturedResyncHandlers].map((handler) => handler(request)));
   });
 }
 
@@ -100,21 +91,23 @@ describe("useProjects", () => {
     // Reset to default implementations
     mockGetProjects.mockImplementation(() => Promise.resolve([]));
     mockAddProject.mockImplementation((gitUrl: string) =>
-      Promise.resolve(createMockProject({ id: "new-project-id", name: "test-repo", gitUrl }))
+      Promise.resolve(createMockProject({ id: "new-project-id", name: "test-repo", gitUrl })),
     );
     mockCreateProjectFromScratch.mockImplementation((localPath: string) =>
-      Promise.resolve(createMockProject({
-        id: "scratch-project-id",
-        name: "scratch-repo",
-        gitUrl: "git@github.com:test/scratch-repo.git",
-        localPath,
-      }))
+      Promise.resolve(
+        createMockProject({
+          id: "scratch-project-id",
+          name: "scratch-repo",
+          gitUrl: "git@github.com:test/scratch-repo.git",
+          localPath,
+        }),
+      ),
     );
     mockRemoveProject.mockImplementation(() => Promise.resolve());
     mockValidateGitUrl.mockImplementation(() => Promise.resolve(true));
     mockReorderProjects.mockImplementation(() => Promise.resolve([]));
     mockUpdateProject.mockImplementation((projectId, updates) =>
-      Promise.resolve(createMockProject({ id: projectId, ...updates }))
+      Promise.resolve(createMockProject({ id: projectId, ...updates })),
     );
   });
 
@@ -136,7 +129,11 @@ describe("useProjects", () => {
 
   test("loads projects on mount", async () => {
     const mockProjects: Project[] = [
-      createMockProject({ id: "project-1", name: "repo-1", gitUrl: "git@github.com:test/repo1.git" }),
+      createMockProject({
+        id: "project-1",
+        name: "repo-1",
+        gitUrl: "git@github.com:test/repo1.git",
+      }),
     ];
     mockGetProjects.mockImplementation(() => Promise.resolve(mockProjects));
 
@@ -199,9 +196,10 @@ describe("useProjects", () => {
   test("createProjectFromScratch exposes loading, stores the project, and reports success", async () => {
     let resolveCreation!: (project: Project) => void;
     mockCreateProjectFromScratch.mockImplementation(
-      () => new Promise<Project>((resolve) => {
-        resolveCreation = resolve;
-      }),
+      () =>
+        new Promise<Project>((resolve) => {
+          resolveCreation = resolve;
+        }),
     );
 
     const { result } = renderHook(() => useProjects());
@@ -417,7 +415,10 @@ describe("useProjects", () => {
   test("reorderProjects applies the backend-confirmed order", async () => {
     const first = createMockProject({ id: "first", name: "first", order: 0 });
     const second = createMockProject({ id: "second", name: "second", order: 1 });
-    const confirmed = [{ ...second, order: 0 }, { ...first, order: 1 }];
+    const confirmed = [
+      { ...second, order: 0 },
+      { ...first, order: 1 },
+    ];
     useProjectStore.setState({ projects: [first, second] });
     mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
     mockReorderProjects.mockImplementation(() => Promise.resolve(confirmed));
@@ -547,7 +548,11 @@ describe("useProjects", () => {
 
   test("loadProjects can be called manually", async () => {
     const mockProjects: Project[] = [
-      createMockProject({ id: "project-1", name: "repo-1", gitUrl: "git@github.com:test/repo1.git" }),
+      createMockProject({
+        id: "project-1",
+        name: "repo-1",
+        gitUrl: "git@github.com:test/repo1.git",
+      }),
     ];
 
     // Start with no projects
@@ -589,9 +594,10 @@ describe("useProjects", () => {
   test("deduplicates concurrent mount loads and shares loading state", async () => {
     let resolveProjects!: (projects: Project[]) => void;
     mockGetProjects.mockImplementation(
-      () => new Promise<Project[]>((resolve) => {
-        resolveProjects = resolve;
-      })
+      () =>
+        new Promise<Project[]>((resolve) => {
+          resolveProjects = resolve;
+        }),
     );
 
     const first = renderHook(() => useProjects());
@@ -602,24 +608,21 @@ describe("useProjects", () => {
     expect(second.result.current.isLoading).toBe(true);
 
     await act(async () => {
-      resolveProjects([
-        createMockProject({ id: "shared-project", name: "shared", order: 0 }),
-      ]);
+      resolveProjects([createMockProject({ id: "shared-project", name: "shared", order: 0 })]);
     });
 
     expect(first.result.current.isLoading).toBe(false);
     expect(second.result.current.isLoading).toBe(false);
-    expect(first.result.current.projects.map((project) => project.id)).toEqual([
-      "shared-project",
-    ]);
+    expect(first.result.current.projects.map((project) => project.id)).toEqual(["shared-project"]);
   });
 
   test("shares load errors across concurrent hook instances", async () => {
     let rejectProjects!: (error: Error) => void;
     mockGetProjects.mockImplementation(
-      () => new Promise<Project[]>((_, reject) => {
-        rejectProjects = reject;
-      })
+      () =>
+        new Promise<Project[]>((_, reject) => {
+          rejectProjects = reject;
+        }),
     );
 
     const first = renderHook(() => useProjects());
@@ -640,9 +643,10 @@ describe("useProjects", () => {
   test("does not let a mount snapshot overwrite a completed add", async () => {
     let resolveSnapshot!: (projects: Project[]) => void;
     mockGetProjects.mockImplementation(
-      () => new Promise<Project[]>((resolve) => {
-        resolveSnapshot = resolve;
-      })
+      () =>
+        new Promise<Project[]>((resolve) => {
+          resolveSnapshot = resolve;
+        }),
     );
 
     const { result } = renderHook(() => useProjects());
@@ -662,9 +666,10 @@ describe("useProjects", () => {
   test("does not let a mount snapshot overwrite a completed scratch creation", async () => {
     let resolveSnapshot!: (projects: Project[]) => void;
     mockGetProjects.mockImplementation(
-      () => new Promise<Project[]>((resolve) => {
-        resolveSnapshot = resolve;
-      }),
+      () =>
+        new Promise<Project[]>((resolve) => {
+          resolveSnapshot = resolve;
+        }),
     );
 
     const { result } = renderHook(() => useProjects());
@@ -684,9 +689,10 @@ describe("useProjects", () => {
   test("ignores a failed load that became obsolete after scratch creation", async () => {
     let rejectSnapshot!: (error: Error) => void;
     mockGetProjects.mockImplementation(
-      () => new Promise<Project[]>((_, reject) => {
-        rejectSnapshot = reject;
-      }),
+      () =>
+        new Promise<Project[]>((_, reject) => {
+          rejectSnapshot = reject;
+        }),
     );
 
     const { result } = renderHook(() => useProjects());
@@ -707,16 +713,16 @@ describe("useProjects", () => {
   test("a post-mutation load supersedes an older in-flight snapshot", async () => {
     const resolvers: Array<(projects: Project[]) => void> = [];
     mockGetProjects.mockImplementation(
-      () => new Promise<Project[]>((resolve) => resolvers.push(resolve))
+      () => new Promise<Project[]>((resolve) => resolvers.push(resolve)),
     );
 
     const { result } = renderHook(() => useProjects());
     expect(mockGetProjects).toHaveBeenCalledTimes(1);
 
     act(() => {
-      useProjectStore.getState().addProject(
-        createMockProject({ id: "locally-added", name: "local", order: 0 })
-      );
+      useProjectStore
+        .getState()
+        .addProject(createMockProject({ id: "locally-added", name: "local", order: 0 }));
     });
 
     let replacementLoad!: Promise<void>;
@@ -733,9 +739,7 @@ describe("useProjects", () => {
     expect(result.current.projects.map((project) => project.id)).toEqual(["locally-added"]);
 
     await act(async () => {
-      resolvers[1]?.([
-        createMockProject({ id: "authoritative", name: "backend", order: 0 }),
-      ]);
+      resolvers[1]?.([createMockProject({ id: "authoritative", name: "backend", order: 0 })]);
       await replacementLoad;
     });
 
@@ -747,9 +751,9 @@ describe("useProjects", () => {
     const { result } = renderHook(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
-    mockGetProjects.mockImplementation(() => Promise.resolve([
-      createMockProject({ id: "remote-project", name: "remote", order: 0 }),
-    ]));
+    mockGetProjects.mockImplementation(() =>
+      Promise.resolve([createMockProject({ id: "remote-project", name: "remote", order: 0 })]),
+    );
 
     await act(async () => {
       dispatchResourceChange({
@@ -768,9 +772,11 @@ describe("useProjects", () => {
     const { result } = renderHook(() => useProjects());
     await waitFor(() => expect(result.current.isLoading).toBe(false));
     mockGetProjects.mockClear();
-    mockGetProjects.mockImplementation(() => Promise.resolve([
-      createMockProject({ id: "recovered-project", name: "recovered", order: 0 }),
-    ]));
+    mockGetProjects.mockImplementation(() =>
+      Promise.resolve([
+        createMockProject({ id: "recovered-project", name: "recovered", order: 0 }),
+      ]),
+    );
 
     await act(async () => {
       requestResourceResync();

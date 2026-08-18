@@ -73,7 +73,7 @@ describe("terminal-utils", () => {
       failed: false,
     });
     expect(
-      detectContainerSetupReadiness("=== Workspace Setup Failed ===\n=== Workspace Ready ===")
+      detectContainerSetupReadiness("=== Workspace Setup Failed ===\n=== Workspace Ready ==="),
     ).toEqual({
       ready: true,
       failed: true,

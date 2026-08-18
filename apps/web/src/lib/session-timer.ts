@@ -15,9 +15,7 @@ export function parseBackendTurnStartedAt(value: unknown): number | undefined {
  * Providers that expose a transcript but no turn clock can use the latest
  * backend-created user message as the authoritative beginning of a busy turn.
  */
-export function findLatestBackendUserTurnStartedAt<
-  T extends { role: string; createdAt?: string },
->(
+export function findLatestBackendUserTurnStartedAt<T extends { role: string; createdAt?: string }>(
   messages: readonly T[],
   isBackendMessage: (message: T) => boolean = () => true,
 ): number | undefined {
@@ -44,9 +42,7 @@ export function findLatestBackendUserTurnStartedAt<
  * or a reload — a renderer that never watched the turn end still reports it.
  * Returns `undefined` rather than a guess whenever either end is missing.
  */
-export function findLatestBackendTurnElapsedSeconds<
-  T extends { role: string; createdAt?: string },
->(
+export function findLatestBackendTurnElapsedSeconds<T extends { role: string; createdAt?: string }>(
   messages: readonly T[],
   isBackendMessage: (message: T) => boolean = () => true,
 ): number | undefined {
@@ -97,15 +93,15 @@ export function reconcileTimedSession<T extends TimedSessionState>(
       ...session,
       loadingStartedAt: undefined,
       lastCompletedElapsedSeconds:
-        session.lastCompletedElapsedSeconds
-        ?? Math.floor((now - previous.loadingStartedAt) / 1000),
+        session.lastCompletedElapsedSeconds ?? Math.floor((now - previous.loadingStartedAt) / 1000),
     };
   }
 
   return {
     ...session,
     loadingStartedAt: undefined,
-    lastCompletedElapsedSeconds: session.lastCompletedElapsedSeconds ?? previous?.lastCompletedElapsedSeconds ?? null,
+    lastCompletedElapsedSeconds:
+      session.lastCompletedElapsedSeconds ?? previous?.lastCompletedElapsedSeconds ?? null,
   };
 }
 
@@ -116,12 +112,11 @@ export function updateTimedSessionLoading<T extends TimedSessionState>(
   authoritativeStartedAt?: number,
 ): T {
   if (isLoading) {
-    const loadingStartedAt =
-      authoritativeStartedAt ?? session.loadingStartedAt;
+    const loadingStartedAt = authoritativeStartedAt ?? session.loadingStartedAt;
     if (
-      session.isLoading
-      && session.loadingStartedAt === loadingStartedAt
-      && session.lastCompletedElapsedSeconds === null
+      session.isLoading &&
+      session.loadingStartedAt === loadingStartedAt &&
+      session.lastCompletedElapsedSeconds === null
     ) {
       return session;
     }
@@ -134,9 +129,10 @@ export function updateTimedSessionLoading<T extends TimedSessionState>(
     };
   }
 
-  const lastCompletedElapsedSeconds = session.loadingStartedAt !== undefined
-    ? Math.floor((now - session.loadingStartedAt) / 1000)
-    : (session.lastCompletedElapsedSeconds ?? null);
+  const lastCompletedElapsedSeconds =
+    session.loadingStartedAt !== undefined
+      ? Math.floor((now - session.loadingStartedAt) / 1000)
+      : (session.lastCompletedElapsedSeconds ?? null);
 
   return {
     ...session,

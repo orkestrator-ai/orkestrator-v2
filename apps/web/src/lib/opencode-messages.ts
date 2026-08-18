@@ -67,10 +67,7 @@ function isOpenCodeTaskTool(toolName: string): boolean {
   return normalized === "task" || normalized === "agent";
 }
 
-function stringRecordValue(
-  value: unknown,
-  ...keys: string[]
-): string | undefined {
+function stringRecordValue(value: unknown, ...keys: string[]): string | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
   for (const key of keys) {
@@ -109,9 +106,7 @@ function countOpenCodeToolActions(parts: OpenCodeMessagePart[]): number {
 }
 
 function flattenOpenCodeSubagentActions(messages: OpenCodeMessage[]): OpenCodeMessagePart[] {
-  return messages.flatMap((message) =>
-    message.role === "assistant" ? message.parts : [],
-  );
+  return messages.flatMap((message) => (message.role === "assistant" ? message.parts : []));
 }
 
 export function mapOpenCodeParts(
@@ -176,7 +171,7 @@ export function mergeOpenCodeSubagentTranscript(
           ? "failure"
           : part.toolState === "success"
             ? "success"
-            : state ?? part.toolState;
+            : (state ?? part.toolState);
       return {
         ...part,
         toolState: nextState,
@@ -201,10 +196,7 @@ export function mergeOpenCodeSubagentTranscript(
  * lookup re-scans only the message that actually changed instead of deep
  * traversing every part of every message of every session per SSE frame.
  */
-const transcriptSubagentIdsCache = new WeakMap<
-  readonly OpenCodeMessage[],
-  ReadonlySet<string>
->();
+const transcriptSubagentIdsCache = new WeakMap<readonly OpenCodeMessage[], ReadonlySet<string>>();
 const messageSubagentIdsCache = new WeakMap<OpenCodeMessage, readonly string[]>();
 
 /**
@@ -214,9 +206,7 @@ const messageSubagentIdsCache = new WeakMap<OpenCodeMessage, readonly string[]>(
  * comment above. Use this instead of {@link hasOpenCodeSubagentSession} on hot
  * paths such as per-event routing.
  */
-export function collectOpenCodeSubagentIds(
-  messages: OpenCodeMessage[],
-): ReadonlySet<string> {
+export function collectOpenCodeSubagentIds(messages: OpenCodeMessage[]): ReadonlySet<string> {
   const cached = transcriptSubagentIdsCache.get(messages);
   if (cached) return cached;
 
@@ -273,9 +263,7 @@ export function mergeOpenCodeMessageInfo(
     // "not known yet" rather than "cleared" — blanking would drop the
     // backend-confirmed model badge for the whole streaming turn.
     ...(normalized.modelId ? { modelId: normalized.modelId } : {}),
-    ...(normalized.providerUsage
-      ? { providerUsage: normalized.providerUsage }
-      : {}),
+    ...(normalized.providerUsage ? { providerUsage: normalized.providerUsage } : {}),
   };
   if (!normalized.hasError) delete merged.hasError;
   if (!normalized.errorName) delete merged.errorName;
@@ -297,11 +285,7 @@ export function carryOverOpenCodeSubagentHydration(
   const hydratedBySubagentId = new Map<string, OpenCodeMessagePart>();
   for (const message of previous) {
     mapOpenCodeParts(message.parts, (part) => {
-      if (
-        part.type === "subagent" &&
-        part.subagentId &&
-        part.subagentActions?.length
-      ) {
+      if (part.type === "subagent" && part.subagentId && part.subagentActions?.length) {
         hydratedBySubagentId.set(part.subagentId, part);
       }
       return part;
@@ -327,7 +311,7 @@ export function carryOverOpenCodeSubagentHydration(
         toolState:
           hydrated.toolState === "success" || hydrated.toolState === "failure"
             ? hydrated.toolState
-            : part.toolState ?? hydrated.toolState,
+            : (part.toolState ?? hydrated.toolState),
       };
     });
     if (!mapped.changed) return message;
@@ -427,10 +411,8 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
       const metadata = p.state?.metadata ?? p.metadata;
       const taskEnvelope = parseTaskEnvelope(toolOutput);
       const subagentId =
-        stringRecordValue(metadata, "sessionId", "sessionID", "jobId") ??
-        taskEnvelope.sessionId;
-      const description =
-        stringRecordValue(input, "description") ?? toolTitle ?? toolName;
+        stringRecordValue(metadata, "sessionId", "sessionID", "jobId") ?? taskEnvelope.sessionId;
+      const description = stringRecordValue(input, "description") ?? toolTitle ?? toolName;
       const role = stringRecordValue(input, "subagent_type", "agent");
       const prompt = stringRecordValue(input, "prompt");
 
@@ -465,22 +447,51 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
       const meta = p.state?.metadata || {};
       const filediff = meta.filediff as FileDiffMetadata | undefined;
 
-      const filePath = (input.filePath || input.file_path || input.path || input.file ||
-        meta.file || meta.filePath || meta.path || filediff?.file || mappedSides?.filePath) as string | undefined;
+      const filePath = (input.filePath ||
+        input.file_path ||
+        input.path ||
+        input.file ||
+        meta.file ||
+        meta.filePath ||
+        meta.path ||
+        filediff?.file ||
+        mappedSides?.filePath) as string | undefined;
 
-      const oldString = typeof input.oldString === "string" ? input.oldString :
-        typeof input.old_string === "string" ? input.old_string : undefined;
-      const newString = typeof input.newString === "string" ? input.newString :
-        typeof input.new_string === "string" ? input.new_string :
-        typeof input.content === "string" ? input.content : undefined;
-      const metaBefore = typeof filediff?.before === "string" ? filediff.before :
-        typeof meta.before === "string" ? meta.before : undefined;
-      const metaAfter = typeof filediff?.after === "string" ? filediff.after :
-        typeof meta.after === "string" ? meta.after : undefined;
+      const oldString =
+        typeof input.oldString === "string"
+          ? input.oldString
+          : typeof input.old_string === "string"
+            ? input.old_string
+            : undefined;
+      const newString =
+        typeof input.newString === "string"
+          ? input.newString
+          : typeof input.new_string === "string"
+            ? input.new_string
+            : typeof input.content === "string"
+              ? input.content
+              : undefined;
+      const metaBefore =
+        typeof filediff?.before === "string"
+          ? filediff.before
+          : typeof meta.before === "string"
+            ? meta.before
+            : undefined;
+      const metaAfter =
+        typeof filediff?.after === "string"
+          ? filediff.after
+          : typeof meta.after === "string"
+            ? meta.after
+            : undefined;
 
-      const unifiedDiff = typeof meta.diff === "string" ? meta.diff :
-        typeof input.patch === "string" ? input.patch :
-        typeof input.diff === "string" ? input.diff : undefined;
+      const unifiedDiff =
+        typeof meta.diff === "string"
+          ? meta.diff
+          : typeof input.patch === "string"
+            ? input.patch
+            : typeof input.diff === "string"
+              ? input.diff
+              : undefined;
 
       // OpenCode-native sides win when present. Mapped Claude-shaped input
       // (MultiEdit `edits[]`, Write `content`) fills the gap so those tools
@@ -507,7 +518,11 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
         }
         additions = addCount;
         deletions = delCount;
-      } else if (toolOutput && toolOutput.includes("@@") && (toolOutput.includes("\n+") || toolOutput.includes("\n-"))) {
+      } else if (
+        toolOutput &&
+        toolOutput.includes("@@") &&
+        (toolOutput.includes("\n+") || toolOutput.includes("\n-"))
+      ) {
         let addCount = 0;
         let delCount = 0;
         const lines = toolOutput.split("\n");
@@ -520,8 +535,8 @@ export function normalizeOpenCodePart(part: unknown): OpenCodeMessagePart | null
           deletions = delCount;
         }
       } else if (
-        usingMappedSides
-        && (mappedSides?.additions !== undefined || mappedSides?.deletions !== undefined)
+        usingMappedSides &&
+        (mappedSides?.additions !== undefined || mappedSides?.deletions !== undefined)
       ) {
         // Per-chunk MultiEdit counts must win over recounting the joined
         // string, which would charge separators the mapping already avoided.
@@ -596,16 +611,16 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
       ? typeof info?.providerID === "string" && info.providerID.trim().length > 0
         ? `${info.providerID.trim()}/${info.modelID.trim()}`
         : info.modelID.trim()
-        : undefined;
+      : undefined;
 
   if (Array.isArray(msg.parts)) {
     for (const part of msg.parts) {
       if (
-        part
-        && typeof part === "object"
-        && part.type === "step-finish"
-        && typeof part.reason === "string"
-        && part.reason.trim().length > 0
+        part &&
+        typeof part === "object" &&
+        part.type === "step-finish" &&
+        typeof part.reason === "string" &&
+        part.reason.trim().length > 0
       ) {
         // A message can contain more than one step marker in malformed or
         // replayed data. The final marker is the terminal reason that matters.
@@ -647,10 +662,7 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
             reasoningTokens: Number(info.tokens.reasoning) || 0,
             cacheReadTokens: Number(info.tokens.cache?.read) || 0,
             cacheWriteTokens: Number(info.tokens.cache?.write) || 0,
-            totalTokens:
-              typeof info.tokens.total === "number"
-                ? info.tokens.total
-                : undefined,
+            totalTokens: typeof info.tokens.total === "number" ? info.tokens.total : undefined,
             // Keep usage parsing tolerant of older OpenCode payloads whose
             // model id was not typed as a string. The top-level `modelId`
             // displayed in the footer remains strict and backend-confirmed.
@@ -660,8 +672,7 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
                 : String(info.modelID ?? ""),
             agent: typeof info.agent === "string" ? info.agent : undefined,
             durationMs:
-              typeof info.time?.completed === "number"
-              && typeof info.time?.created === "number"
+              typeof info.time?.completed === "number" && typeof info.time?.created === "number"
                 ? Math.max(0, info.time.completed - info.time.created)
                 : undefined,
           },
@@ -681,13 +692,9 @@ export function normalizeOpenCodeMessage(rawMessage: unknown): OpenCodeMessage |
 export function getOpenCodePartKey(part: OpenCodeMessagePart): string | null {
   if (part.sourcePartId) return part.sourcePartId;
   if (part.sourceMessageId) {
-    return [
-      part.sourceMessageId,
-      part.type,
-      part.toolName,
-      part.fileUrl,
-      part.content,
-    ].filter(Boolean).join(":");
+    return [part.sourceMessageId, part.type, part.toolName, part.fileUrl, part.content]
+      .filter(Boolean)
+      .join(":");
   }
   return null;
 }

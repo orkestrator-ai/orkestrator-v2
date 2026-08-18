@@ -74,12 +74,8 @@ function isEngineTurnConfig(value: unknown): value is EngineTurnConfig {
   if (!value || typeof value !== "object") return false;
   const config = value as Record<string, unknown>;
   if (config.mode !== "build" && config.mode !== "plan") return false;
-  if (config.model !== undefined && typeof config.model !== "string")
-    return false;
-  if (
-    config.reasoningEffort !== undefined &&
-    typeof config.reasoningEffort !== "string"
-  ) {
+  if (config.model !== undefined && typeof config.model !== "string") return false;
+  if (config.reasoningEffort !== undefined && typeof config.reasoningEffort !== "string") {
     return false;
   }
   if (
@@ -107,8 +103,7 @@ function isEngineTurnConfig(value: unknown): value is EngineTurnConfig {
     return false;
   }
   return (
-    config.networkAccessEnabled === undefined ||
-    typeof config.networkAccessEnabled === "boolean"
+    config.networkAccessEnabled === undefined || typeof config.networkAccessEnabled === "boolean"
   );
 }
 
@@ -129,8 +124,7 @@ function isPersistedBridgeSession(
   ) {
     return false;
   }
-  if (session.title !== undefined && typeof session.title !== "string")
-    return false;
+  if (session.title !== undefined && typeof session.title !== "string") return false;
   if (
     session.titleSource !== undefined &&
     (typeof session.titleSource !== "string" ||
@@ -145,43 +139,35 @@ function isPersistedBridgeSession(
     return false;
   }
   if (
-    session.structuredOutputRequestId !== undefined
-    && typeof session.structuredOutputRequestId !== "string"
+    session.structuredOutputRequestId !== undefined &&
+    typeof session.structuredOutputRequestId !== "string"
   ) {
     return false;
   }
   if (
-    session.structuredOutput !== undefined
-    && !isStructuredOutputResult(session.structuredOutput)
+    session.structuredOutput !== undefined &&
+    !isStructuredOutputResult(session.structuredOutput)
   ) {
     return false;
   }
   if (
-    session.confirmedModelsByTurn !== undefined
-    && (
-      !session.confirmedModelsByTurn
-      || typeof session.confirmedModelsByTurn !== "object"
-      || Array.isArray(session.confirmedModelsByTurn)
-      || Object.entries(session.confirmedModelsByTurn).some(
+    session.confirmedModelsByTurn !== undefined &&
+    (!session.confirmedModelsByTurn ||
+      typeof session.confirmedModelsByTurn !== "object" ||
+      Array.isArray(session.confirmedModelsByTurn) ||
+      Object.entries(session.confirmedModelsByTurn).some(
         ([turnId, modelId]) =>
-          turnId.trim().length === 0
-          || typeof modelId !== "string"
-          || modelId.trim().length === 0,
-      )
-    )
+          turnId.trim().length === 0 || typeof modelId !== "string" || modelId.trim().length === 0,
+      ))
   ) {
     return false;
   }
   const lastAccessed =
-    typeof session.lastAccessed === "string"
-      ? Date.parse(session.lastAccessed)
-      : Number.NaN;
+    typeof session.lastAccessed === "string" ? Date.parse(session.lastAccessed) : Number.NaN;
   return Number.isFinite(lastAccessed) && lastAccessed >= cutoff;
 }
 
-function isPersistedSessionTombstone(
-  value: unknown,
-): value is PersistedSessionTombstone {
+function isPersistedSessionTombstone(value: unknown): value is PersistedSessionTombstone {
   if (!value || typeof value !== "object") return false;
   const tombstone = value as Record<string, unknown>;
   return (
@@ -311,17 +297,13 @@ export class BridgeSessionStore {
             }
             return null;
           }
-          return isPersistedBridgeSession(value, this.cwdHash, cutoff)
-            ? value
-            : null;
+          return isPersistedBridgeSession(value, this.cwdHash, cutoff) ? value : null;
         } catch {
           return null;
         }
       }),
     );
-    const loaded = records.filter(
-      (record): record is PersistedBridgeSession => record !== null,
-    );
+    const loaded = records.filter((record): record is PersistedBridgeSession => record !== null);
     return migrationFailed && loaded.length === 0 ? legacy : loaded;
   }
 
@@ -371,9 +353,7 @@ export class BridgeSessionStore {
     try {
       await chmod(this.dir(), PRIVATE_DIRECTORY_MODE);
       await chmod(this.path(), PRIVATE_FILE_MODE);
-      const parsed = JSON.parse(
-        await readFile(this.path(), "utf8"),
-      ) as RegistryFile;
+      const parsed = JSON.parse(await readFile(this.path(), "utf8")) as RegistryFile;
       if (parsed.version !== BRIDGE_SESSION_REGISTRY_VERSION) return [];
       if (!Array.isArray(parsed.sessions)) return [];
       return parsed.sessions.filter((session) =>
@@ -389,20 +369,17 @@ export class BridgeSessionStore {
    * each migrated temp file only when that record does not already exist, so a
    * concurrent newer per-session write always wins.
    */
-  private async migrateLegacy(
-    sessions: PersistedBridgeSession[],
-  ): Promise<void> {
+  private async migrateLegacy(sessions: PersistedBridgeSession[]): Promise<void> {
     if (sessions.length === 0) return;
     await this.ensurePrivateStorage();
     await Promise.all(
       sessions.map(async (session) => {
         const target = this.recordPath(session.bridgeSessionId);
         const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-        await writeFile(
-          temporary,
-          `${JSON.stringify(session, null, 2)}\n`,
-          { encoding: "utf8", mode: PRIVATE_FILE_MODE },
-        );
+        await writeFile(temporary, `${JSON.stringify(session, null, 2)}\n`, {
+          encoding: "utf8",
+          mode: PRIVATE_FILE_MODE,
+        });
         await chmod(temporary, PRIVATE_FILE_MODE);
         await link(temporary, target).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "EEXIST") throw error;
@@ -414,9 +391,7 @@ export class BridgeSessionStore {
     await rm(this.path(), { force: true }).catch(() => undefined);
   }
 
-  private async writeRecordAtomic(
-    session: PersistedBridgeSession,
-  ): Promise<void> {
+  private async writeRecordAtomic(session: PersistedBridgeSession): Promise<void> {
     await this.ensurePrivateStorage();
     await this.writeAtomicPath(
       this.recordPath(session.bridgeSessionId),

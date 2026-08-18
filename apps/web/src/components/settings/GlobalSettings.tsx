@@ -5,13 +5,9 @@ import { Check, Loader2 } from "lucide-react";
 import { useConfigStore } from "@/stores";
 import * as backend from "@/lib/backend";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
-import {
-  getReviewInstructionValidationError,
-} from "@orkestrator/protocol/review-instruction";
+import { getReviewInstructionValidationError } from "@orkestrator/protocol/review-instruction";
 import { useTimedCopyFeedback } from "@/hooks";
-import {
-  DEFAULT_REVIEW_INSTRUCTION,
-} from "@/prompts";
+import { DEFAULT_REVIEW_INSTRUCTION } from "@/prompts";
 import type {
   ClaudeMode,
   ClaudeNativeBackend,
@@ -30,16 +26,12 @@ import {
   DEFAULT_TERMINAL_SCROLLBACK,
   isValidHexColor,
 } from "@/constants/terminal";
-import {
-  type AgentPlatform,
-} from "@orkestrator/protocol/agent-platforms";
+import { type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   normalizeActionDefaults,
   type ActionDefaults,
 } from "@orkestrator/protocol/action-defaults";
-import {
-  normalizeOpenCodeModelProviders,
-} from "@orkestrator/protocol/native-agent";
+import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 
@@ -115,81 +107,75 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [cursorApiKey, setCursorApiKey] = useState("");
   const [clearCursorApiKey, setClearCursorApiKey] = useState(false);
   const [useHostGitHubCredentials, setUseHostGitHubCredentials] = useState(
-    global.useHostGitHubCredentials ?? true
+    global.useHostGitHubCredentials ?? true,
   );
   const [useHostClaudeCredentials, setUseHostClaudeCredentials] = useState(
-    global.useHostClaudeCredentials ?? true
+    global.useHostClaudeCredentials ?? true,
   );
   const [githubToken, setGithubToken] = useState("");
   const [clearGithubToken, setClearGithubToken] = useState(false);
-  const [allowedDomains, setAllowedDomains] = useState(
-    (global.allowedDomains || []).join("\n")
-  );
+  const [allowedDomains, setAllowedDomains] = useState((global.allowedDomains || []).join("\n"));
   const [preferredEditor, setPreferredEditor] = useState<PreferredEditor>(
-    global.preferredEditor || "vscode"
+    global.preferredEditor || "vscode",
   );
-  const [defaultAgent, setDefaultAgent] = useState<DefaultAgent>(
-    global.defaultAgent || "claude"
-  );
+  const [defaultAgent, setDefaultAgent] = useState<DefaultAgent>(global.defaultAgent || "claude");
   const [enabledAgentPlatforms, setEnabledAgentPlatforms] = useState<AgentPlatform[]>(
-    global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
+    global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
   );
   const [opencodeModel, setOpencodeModel] = useState(
-    global.opencodeModel || "opencode/claude-sonnet-5"
+    global.opencodeModel || "opencode/claude-sonnet-5",
   );
-  const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(
-    global.opencodeMode || "terminal"
-  );
-  const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(
-    () => normalizeOpenCodeModelProviders(global.openCodeModelProviders)
+  const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(global.opencodeMode || "terminal");
+  const [openCodeModelProviders, setOpenCodeModelProviders] = useState<string[]>(() =>
+    normalizeOpenCodeModelProviders(global.openCodeModelProviders),
   );
   const [openCodeProviderDraft, setOpenCodeProviderDraft] = useState("");
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(
-    global.claudeMode || DEFAULT_CLAUDE_MODE
+    global.claudeMode || DEFAULT_CLAUDE_MODE,
   );
   const [claudeNativeBackend, setClaudeNativeBackend] = useState<ClaudeNativeBackend>(
-    global.claudeNativeBackend || "sdk"
+    global.claudeNativeBackend || "sdk",
   );
   const [claudeNativeFastModeDefault, setClaudeNativeFastModeDefault] = useState(
-    global.claudeNativeFastModeDefault ?? false
+    global.claudeNativeFastModeDefault ?? false,
   );
-  const [codexMode, setCodexMode] = useState<CodexMode>(
-    global.codexMode || "native"
-  );
+  const [codexMode, setCodexMode] = useState<CodexMode>(global.codexMode || "native");
   const [codexNativeFastModeDefault, setCodexNativeFastModeDefault] = useState(
-    global.codexNativeFastModeDefault ?? false
+    global.codexNativeFastModeDefault ?? false,
   );
   const [codexMaxConcurrentThreads, setCodexMaxConcurrentThreads] = useState(
-    global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS
+    global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
   );
   const [terminalFontFamily, setTerminalFontFamily] = useState(
-    global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily
+    global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily,
   );
   const [terminalFontSize, setTerminalFontSize] = useState(
-    global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize
+    global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize,
   );
   const [terminalBackgroundColor, setTerminalBackgroundColor] = useState(
-    global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor
+    global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
   );
   const [terminalScrollback, setTerminalScrollback] = useState(
     typeof global.terminalScrollback === "number"
       ? global.terminalScrollback
-      : DEFAULT_TERMINAL_SCROLLBACK
+      : DEFAULT_TERMINAL_SCROLLBACK,
   );
   const [experimentalCodexRawEventLogging, setExperimentalCodexRawEventLogging] = useState(
-    global.experimentalCodexRawEventLogging ?? true
+    global.experimentalCodexRawEventLogging ?? true,
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [reviewInstruction, setReviewInstruction] = useState(
-    getSavedReviewInstruction(global.reviewInstruction)
+    getSavedReviewInstruction(global.reviewInstruction),
   );
-  const [actionDefaults, setActionDefaults] = useState<ActionDefaults>(
-    () => normalizeActionDefaults(global.actionDefaults)
+  const [actionDefaults, setActionDefaults] = useState<ActionDefaults>(() =>
+    normalizeActionDefaults(global.actionDefaults),
   );
   const [webClientStatus, setWebClientStatus] = useState<WebClientStatus | null>(null);
   const [webClientApplyError, setWebClientApplyError] = useState<string | null>(null);
-  const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(null);
+  const [gatewayTokenSettings, setGatewayTokenSettings] = useState<GatewayTokenSettings | null>(
+    null,
+  );
   const [gatewayToken, setGatewayToken] = useState("");
   const [savedGatewayToken, setSavedGatewayToken] = useState("");
   const [gatewayTokenLoadError, setGatewayTokenLoadError] = useState<string | null>(null);
@@ -255,9 +241,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setEnabledAgentPlatforms(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]);
     setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
     setOpencodeMode(global.opencodeMode || "terminal");
-    setOpenCodeModelProviders(
-      normalizeOpenCodeModelProviders(global.openCodeModelProviders),
-    );
+    setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
     setOpenCodeProviderDraft("");
     setClaudeMode(global.claudeMode || DEFAULT_CLAUDE_MODE);
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
@@ -265,15 +249,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setCodexMode(global.codexMode || "native");
     setCodexNativeFastModeDefault(global.codexNativeFastModeDefault ?? false);
     setCodexMaxConcurrentThreads(
-      global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS
+      global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     );
-    setTerminalFontFamily(global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily);
-    setTerminalFontSize(global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize);
-    setTerminalBackgroundColor(global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor);
+    setTerminalFontFamily(
+      global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily,
+    );
+    setTerminalFontSize(
+      global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize,
+    );
+    setTerminalBackgroundColor(
+      global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
+    );
     setTerminalScrollback(
       typeof global.terminalScrollback === "number"
         ? global.terminalScrollback
-        : DEFAULT_TERMINAL_SCROLLBACK
+        : DEFAULT_TERMINAL_SCROLLBACK,
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
@@ -288,7 +278,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setIsLoadingGatewayToken(true);
     setGatewayTokenLoadError(null);
 
-    const statusRequest = backend.getWebClientStatus()
+    const statusRequest = backend
+      .getWebClientStatus()
       .then((status) => {
         if (requestId === webClientStatusRequestRef.current) {
           setWebClientStatus(status);
@@ -310,7 +301,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         if (requestId === webClientStatusRequestRef.current) setIsLoadingWebClientStatus(false);
       });
 
-    const tokenRequest = backend.getGatewayTokenSettings()
+    const tokenRequest = backend
+      .getGatewayTokenSettings()
       .then((settings) => {
         if (requestId !== webClientStatusRequestRef.current) return;
         setGatewayTokenSettings(settings);
@@ -338,7 +330,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
   // Fetch log directory path once on mount
   useEffect(() => {
-    backend.getLogDirectory().then(setLogDirectory).catch(() => {});
+    backend
+      .getLogDirectory()
+      .then(setLogDirectory)
+      .catch(() => {});
   }, []);
 
   // Check for changes
@@ -359,12 +354,13 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       githubCredentialPropagationPending ||
       allowedDomains !== (global.allowedDomains || []).join("\n") ||
       preferredEditor !== (global.preferredEditor || "vscode") ||
-      JSON.stringify(enabledAgentPlatforms) !== JSON.stringify(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]) ||
+      JSON.stringify(enabledAgentPlatforms) !==
+        JSON.stringify(global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]) ||
       defaultAgent !== (global.defaultAgent || "claude") ||
       opencodeModel !== (global.opencodeModel || "opencode/claude-sonnet-5") ||
       opencodeMode !== (global.opencodeMode || "terminal") ||
-      JSON.stringify(openCodeModelProviders)
-        !== JSON.stringify(normalizeOpenCodeModelProviders(global.openCodeModelProviders)) ||
+      JSON.stringify(openCodeModelProviders) !==
+        JSON.stringify(normalizeOpenCodeModelProviders(global.openCodeModelProviders)) ||
       claudeMode !== (global.claudeMode || DEFAULT_CLAUDE_MODE) ||
       claudeNativeBackend !== (global.claudeNativeBackend || "sdk") ||
       claudeNativeFastModeDefault !== (global.claudeNativeFastModeDefault ?? false) ||
@@ -382,15 +378,54 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction) ||
       // Both sides go through the normalizer so key order, which the editing
       // path can change without changing the value, cannot report a change.
-      JSON.stringify(normalizeActionDefaults(actionDefaults))
-        !== JSON.stringify(normalizeActionDefaults(global.actionDefaults)) ||
+      JSON.stringify(normalizeActionDefaults(actionDefaults)) !==
+        JSON.stringify(normalizeActionDefaults(global.actionDefaults)) ||
       webClientApplyError !== null ||
       gatewayToken !== savedGatewayToken;
     setHasChanges(changed);
     if (changed) {
       setSaveSuccess(false);
     }
-  }, [cpuCores, memoryGb, envPatterns, anthropicApiKey, clearAnthropicApiKey, cursorApiKey, clearCursorApiKey, useHostGitHubCredentials, useHostClaudeCredentials, githubToken, clearGithubToken, githubCredentialPropagationPending, allowedDomains, preferredEditor, enabledAgentPlatforms, defaultAgent, opencodeModel, opencodeMode, openCodeModelProviders, claudeMode, claudeNativeBackend, claudeNativeFastModeDefault, codexMode, codexNativeFastModeDefault, codexMaxConcurrentThreads, terminalFontFamily, terminalFontSize, terminalBackgroundColor, terminalScrollback, experimentalCodexRawEventLogging, debugLogging, webClientEnabled, reviewInstruction, actionDefaults, webClientApplyError, gatewayToken, savedGatewayToken, global]);
+  }, [
+    cpuCores,
+    memoryGb,
+    envPatterns,
+    anthropicApiKey,
+    clearAnthropicApiKey,
+    cursorApiKey,
+    clearCursorApiKey,
+    useHostGitHubCredentials,
+    useHostClaudeCredentials,
+    githubToken,
+    clearGithubToken,
+    githubCredentialPropagationPending,
+    allowedDomains,
+    preferredEditor,
+    enabledAgentPlatforms,
+    defaultAgent,
+    opencodeModel,
+    opencodeMode,
+    openCodeModelProviders,
+    claudeMode,
+    claudeNativeBackend,
+    claudeNativeFastModeDefault,
+    codexMode,
+    codexNativeFastModeDefault,
+    codexMaxConcurrentThreads,
+    terminalFontFamily,
+    terminalFontSize,
+    terminalBackgroundColor,
+    terminalScrollback,
+    experimentalCodexRawEventLogging,
+    debugLogging,
+    webClientEnabled,
+    reviewInstruction,
+    actionDefaults,
+    webClientApplyError,
+    gatewayToken,
+    savedGatewayToken,
+    global,
+  ]);
 
   // Validate domains on change
   const validateDomainsLocally = useCallback((domainsText: string) => {
@@ -449,10 +484,14 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setIsSaving(true);
     try {
       // Filenames are case-sensitive, so these dedupe exactly.
-      const patterns = [...new Set(envPatterns
-        .split(",")
-        .map((p) => p.trim())
-        .filter((p) => p.length > 0))];
+      const patterns = [
+        ...new Set(
+          envPatterns
+            .split(",")
+            .map((p) => p.trim())
+            .filter((p) => p.length > 0),
+        ),
+      ];
 
       // DNS is not case-sensitive, so `example.com` and `Example.com` are one
       // allowed domain. The first spelling the user typed is the one kept.
@@ -477,14 +516,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         opencodeModel: string;
         claudeModel: string;
         codexModel: string;
-        codexReasoningEffort:
-          | "minimal"
-          | "low"
-          | "medium"
-          | "high"
-          | "xhigh"
-          | "max"
-          | "ultra";
+        codexReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
         opencodeMode: OpenCodeMode;
         openCodeModelProviders: string[];
         claudeMode: ClaudeMode;
@@ -580,16 +612,12 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         setConfig(newConfig);
       }
       if (cursorApiKeyChanged) {
-        newConfig = await backend.setCursorApiKey(
-          clearCursorApiKey ? null : nextCursorApiKey,
-        );
+        newConfig = await backend.setCursorApiKey(clearCursorApiKey ? null : nextCursorApiKey);
         pendingCursorCredentialEditRef.current = null;
         setConfig(newConfig);
       }
       if (githubTokenChanged) {
-        newConfig = await backend.setGitHubToken(
-          clearGithubToken ? null : nextGitHubToken,
-        );
+        newConfig = await backend.setGitHubToken(clearGithubToken ? null : nextGitHubToken);
         pendingGitHubCredentialEditRef.current = null;
         setConfig(newConfig);
       }
@@ -641,13 +669,17 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
                   : null,
                 `Failed: ${failureDetails}${remainingFailureCount > 0 ? `; and ${remainingFailureCount} more` : ""}.`,
                 "Save Changes to retry.",
-              ].filter(Boolean).join(" "),
+              ]
+                .filter(Boolean)
+                .join(" "),
             });
           } else {
             setGithubCredentialPropagationPending(false);
           }
           if (propagateResult.updated.length > 0 && propagateResult.failed.length === 0) {
-            toast.success(`Updated GitHub credentials in ${propagateResult.updated.length} container(s)`);
+            toast.success(
+              `Updated GitHub credentials in ${propagateResult.updated.length} container(s)`,
+            );
           }
         } catch (err) {
           console.error("[settings] Failed to propagate GitHub credentials:", err);
@@ -673,7 +705,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       setSaveSuccess(!githubCredentialPropagationFailed);
       if (!githubCredentialPropagationFailed) {
         toast.success("Settings saved");
-        setTimeout(() => { onSaveSuccess?.(); }, 500);
+        setTimeout(() => {
+          onSaveSuccess?.();
+        }, 500);
       }
     } catch (err) {
       console.error("[settings] Failed to save config:", err);
@@ -708,9 +742,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setDefaultAgent(global.defaultAgent || "claude");
     setOpencodeModel(global.opencodeModel || "opencode/claude-sonnet-5");
     setOpencodeMode(global.opencodeMode || "terminal");
-    setOpenCodeModelProviders(
-      normalizeOpenCodeModelProviders(global.openCodeModelProviders),
-    );
+    setOpenCodeModelProviders(normalizeOpenCodeModelProviders(global.openCodeModelProviders));
     setOpenCodeProviderDraft("");
     setClaudeMode(global.claudeMode || DEFAULT_CLAUDE_MODE);
     setClaudeNativeBackend(global.claudeNativeBackend || "sdk");
@@ -718,15 +750,21 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setCodexMode(global.codexMode || "native");
     setCodexNativeFastModeDefault(global.codexNativeFastModeDefault ?? false);
     setCodexMaxConcurrentThreads(
-      global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS
+      global.codexMaxConcurrentThreads ?? DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
     );
-    setTerminalFontFamily(global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily);
-    setTerminalFontSize(global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize);
-    setTerminalBackgroundColor(global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor);
+    setTerminalFontFamily(
+      global.terminalAppearance?.fontFamily || DEFAULT_TERMINAL_APPEARANCE.fontFamily,
+    );
+    setTerminalFontSize(
+      global.terminalAppearance?.fontSize || DEFAULT_TERMINAL_APPEARANCE.fontSize,
+    );
+    setTerminalBackgroundColor(
+      global.terminalAppearance?.backgroundColor || DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
+    );
     setTerminalScrollback(
       typeof global.terminalScrollback === "number"
         ? global.terminalScrollback
-        : DEFAULT_TERMINAL_SCROLLBACK
+        : DEFAULT_TERMINAL_SCROLLBACK,
     );
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setDebugLogging(global.debugLogging ?? false);
@@ -740,12 +778,10 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTestResults(null);
   };
 
-
   const gatewayTokenValidationError = gatewayTokenSettings?.editable
     ? getGatewayTokenValidationError(gatewayToken)
     : null;
-  const reviewInstructionValidationError =
-    getReviewInstructionValidationError(reviewInstruction);
+  const reviewInstructionValidationError = getReviewInstructionValidationError(reviewInstruction);
 
   const sectionSettings = {
     global,
@@ -875,7 +911,18 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         <Button variant="outline" onClick={handleReset} disabled={!hasChanges}>
           Reset
         </Button>
-        <Button onClick={handleSave} disabled={!hasChanges || isSaving || saveSuccess || domainErrors.length > 0 || !!colorError || !!gatewayTokenValidationError || !!reviewInstructionValidationError}>
+        <Button
+          onClick={handleSave}
+          disabled={
+            !hasChanges ||
+            isSaving ||
+            saveSuccess ||
+            domainErrors.length > 0 ||
+            !!colorError ||
+            !!gatewayTokenValidationError ||
+            !!reviewInstructionValidationError
+          }
+        >
           {saveSuccess ? (
             <>
               <Check className="mr-2 h-4 w-4" />

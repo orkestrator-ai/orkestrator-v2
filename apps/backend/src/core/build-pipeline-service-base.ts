@@ -1,11 +1,43 @@
 import { randomUUID } from "node:crypto";
-import type { BuildPipeline, BuildPipelineAgent, PipelineSession, PipelineSessionPhase, StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
-import { isBuildPipeline, isActiveBuildPhase, isStartBuildPipelineInput, MAX_PIPELINE_USER_MESSAGES, MAX_PIPELINE_USER_MESSAGE_LENGTH } from "@orkestrator/protocol/build-pipeline";
+import type {
+  BuildPipeline,
+  BuildPipelineAgent,
+  PipelineSession,
+  PipelineSessionPhase,
+  StartBuildPipelineInput,
+} from "@orkestrator/protocol/build-pipeline";
+import {
+  isBuildPipeline,
+  isActiveBuildPhase,
+  isStartBuildPipelineInput,
+  MAX_PIPELINE_USER_MESSAGES,
+  MAX_PIPELINE_USER_MESSAGE_LENGTH,
+} from "@orkestrator/protocol/build-pipeline";
 import type { ReviewContractValidationError } from "@orkestrator/protocol/structured-review";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
 import type { StorageService } from "./storage.js";
-import { type BridgeConnection, type BuildPipelineProvider, type ProviderDependencies, type ProviderInteractionObservationEvent, ProviderUnavailableError } from "./build-pipeline-provider.js";
-import { errorMessage, buildAdmissionKey, sessionForCurrentPhase, resumablePhase, sessionAgent, pipelineAgents, normalizeSteps, sessionPhaseFor, resumePromptFor, DEFAULT_RECONNECT_DEADLINE_MS, DEFAULT_STRUCTURED_RESULT_DEADLINE_MS, DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS, withUnattendedPolicy } from "./build-pipeline-service-helpers.js";
+import {
+  type BridgeConnection,
+  type BuildPipelineProvider,
+  type ProviderDependencies,
+  type ProviderInteractionObservationEvent,
+  ProviderUnavailableError,
+} from "./build-pipeline-provider.js";
+import {
+  errorMessage,
+  buildAdmissionKey,
+  sessionForCurrentPhase,
+  resumablePhase,
+  sessionAgent,
+  pipelineAgents,
+  normalizeSteps,
+  sessionPhaseFor,
+  resumePromptFor,
+  DEFAULT_RECONNECT_DEADLINE_MS,
+  DEFAULT_STRUCTURED_RESULT_DEADLINE_MS,
+  DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS,
+  withUnattendedPolicy,
+} from "./build-pipeline-service-helpers.js";
 import type { CommandInvoker } from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceBase {
@@ -54,9 +86,7 @@ export abstract class BuildPipelineServiceBase {
     session: PipelineSession,
   ): Promise<void>;
   protected abstract finishPullRequest(pipeline: BuildPipeline): Promise<void>;
-  protected abstract finishConflictResolution(
-    pipeline: BuildPipeline,
-  ): Promise<void>;
+  protected abstract finishConflictResolution(pipeline: BuildPipeline): Promise<void>;
   protected abstract updateKanbanLifecycle(
     pipeline: BuildPipeline,
     updates: {
@@ -101,10 +131,7 @@ export abstract class BuildPipelineServiceBase {
         },
       ) => void | Promise<void>;
       /** Narrow production-provider seam used by deterministic backend tests. */
-      providerDependencies?: Pick<
-        ProviderDependencies,
-        "openCodeClient" | "monitorRetryMs"
-      >;
+      providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
     } = {},
   ) {}
 
@@ -113,13 +140,11 @@ export abstract class BuildPipelineServiceBase {
   }
 
   protected get structuredResultDeadlineMs(): number {
-    return this.options.structuredResultDeadlineMs
-      ?? DEFAULT_STRUCTURED_RESULT_DEADLINE_MS;
+    return this.options.structuredResultDeadlineMs ?? DEFAULT_STRUCTURED_RESULT_DEADLINE_MS;
   }
 
   protected get transcriptPersistIntervalMs(): number {
-    return this.options.transcriptPersistIntervalMs
-      ?? DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS;
+    return this.options.transcriptPersistIntervalMs ?? DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS;
   }
 
   async init(): Promise<void> {
@@ -135,9 +160,8 @@ export abstract class BuildPipelineServiceBase {
       if (!isBuildPipeline(normalized)) continue;
       const pipeline = normalized;
       if (
-        (record.snapshot as { controller?: unknown }).controller !== "backend"
-        || (record.snapshot as { backendRevision?: unknown }).backendRevision
-          !== record.revision
+        (record.snapshot as { controller?: unknown }).controller !== "backend" ||
+        (record.snapshot as { backendRevision?: unknown }).backendRevision !== record.revision
       ) {
         // One unsaveable record must not take the whole backend down with it.
         // The realistic case is a pipeline whose environment carries a deletion
@@ -184,20 +208,20 @@ export abstract class BuildPipelineServiceBase {
       ...journal,
       entries: journal.entries.map((entry) => {
         if (
-          entry.state !== "provider-resolved"
-          || entry.claim.workflowType !== "build-pipeline"
-          || entry.providerResolvedAt === undefined
-        ) return entry;
+          entry.state !== "provider-resolved" ||
+          entry.claim.workflowType !== "build-pipeline" ||
+          entry.providerResolvedAt === undefined
+        )
+          return entry;
         const pipeline = pipelines.get(entry.claim.workflowId);
         if (!pipeline) return entry;
         const transcriptRecorded = pipeline.sessions.some((session) =>
-          session.interactionTranscript?.some((item) =>
-            item.id === entry.interactionId
-          )
+          session.interactionTranscript?.some((item) => item.id === entry.interactionId),
         );
-        const failureRecorded = pipeline.phase === "failed"
-          && pipeline.failureContext?.kind === "interactive-request"
-          && pipeline.failureContext.requestId === entry.interactionId;
+        const failureRecorded =
+          pipeline.phase === "failed" &&
+          pipeline.failureContext?.kind === "interactive-request" &&
+          pipeline.failureContext.requestId === entry.interactionId;
         if (!transcriptRecorded && !failureRecorded) return entry;
         return {
           ...entry,
@@ -219,12 +243,14 @@ export abstract class BuildPipelineServiceBase {
     while (this.locks.size > 0) {
       await Promise.allSettled([...this.locks.values()]);
     }
-    await Promise.allSettled([...this.providers.values()].map(async (provider) => {
-      const disposable = provider as BuildPipelineProvider & {
-        dispose?: () => void | Promise<void>;
-      };
-      await disposable.dispose?.();
-    }));
+    await Promise.allSettled(
+      [...this.providers.values()].map(async (provider) => {
+        const disposable = provider as BuildPipelineProvider & {
+          dispose?: () => void | Promise<void>;
+        };
+        await disposable.dispose?.();
+      }),
+    );
     this.providers.clear();
     this.provisioningPrompts.clear();
     this.lastProviderAgent.clear();
@@ -239,9 +265,9 @@ export abstract class BuildPipelineServiceBase {
     if (existingEnvironmentId) {
       existingEnvironment = await this.storage.getEnvironment(existingEnvironmentId);
       if (
-        !existingEnvironment
-        || existingEnvironment.projectId !== input.projectId
-        || existingEnvironment.deletionRequestedAt
+        !existingEnvironment ||
+        existingEnvironment.projectId !== input.projectId ||
+        existingEnvironment.deletionRequestedAt
       ) {
         throw new Error("The selected build environment does not belong to this project");
       }
@@ -258,9 +284,7 @@ export abstract class BuildPipelineServiceBase {
       // own configuration falls back to.
       agentType: steps?.build?.agent ?? input.agentType,
       ...(steps ? { steps } : {}),
-      phase: existingEnvironment
-        ? "starting-environment"
-        : "creating-environment",
+      phase: existingEnvironment ? "starting-environment" : "creating-environment",
       sessions: [],
       currentSessionIndex: -1,
       iteration: 0,
@@ -371,13 +395,11 @@ export abstract class BuildPipelineServiceBase {
       if (normalized.environmentId) {
         const environment = await this.storage.getEnvironment(normalized.environmentId);
         if (
-          !environment
-          || environment.projectId !== projectId
-          || environment.deletionRequestedAt
-          || (
-            environment.buildPipelineId !== undefined
-            && environment.buildPipelineId !== normalized.id
-          )
+          !environment ||
+          environment.projectId !== projectId ||
+          environment.deletionRequestedAt ||
+          (environment.buildPipelineId !== undefined &&
+            environment.buildPipelineId !== normalized.id)
         ) {
           skipped += 1;
           continue;
@@ -419,10 +441,7 @@ export abstract class BuildPipelineServiceBase {
       const session = sessionForCurrentPhase(pipeline);
       if (session?.status === "running") {
         try {
-          const provider = await this.provider(
-            pipeline,
-            sessionAgent(pipeline, session),
-          );
+          const provider = await this.provider(pipeline, sessionAgent(pipeline, session));
           await provider.abort(session.sdkSessionId);
           session.status = "idle";
         } catch (error) {
@@ -445,11 +464,7 @@ export abstract class BuildPipelineServiceBase {
       const session = sessionForCurrentPhase(candidate);
       const resumePrompt = resumePromptFor(phase);
       const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;
-      if (
-        prompt
-        && session?.status === "idle"
-        && session.phase === sessionPhaseFor(phase)
-      ) {
+      if (prompt && session?.status === "idle" && session.phase === sessionPhaseFor(phase)) {
         const requestId = randomUUID();
         const startedAt = new Date().toISOString();
         const structuredReview = phase === "reviewing" || phase === "verifying";
@@ -499,9 +514,7 @@ export abstract class BuildPipelineServiceBase {
     const trimmed = text.trim();
     if (!trimmed) throw new Error("Message must not be blank");
     if (trimmed.length > MAX_PIPELINE_USER_MESSAGE_LENGTH) {
-      throw new Error(
-        `Message exceeds the ${MAX_PIPELINE_USER_MESSAGE_LENGTH} character limit`,
-      );
+      throw new Error(`Message exceeds the ${MAX_PIPELINE_USER_MESSAGE_LENGTH} character limit`);
     }
     let rejection: Error | undefined;
     const pipeline = await this.mutate(pipelineId, (candidate) => {
@@ -511,16 +524,17 @@ export abstract class BuildPipelineServiceBase {
       }
       const queue = candidate.pendingUserMessages ?? [];
       if (queue.length >= MAX_PIPELINE_USER_MESSAGES) {
-        rejection = new Error(
-          `Only ${MAX_PIPELINE_USER_MESSAGES} queued messages are allowed`,
-        );
+        rejection = new Error(`Only ${MAX_PIPELINE_USER_MESSAGES} queued messages are allowed`);
         return;
       }
-      candidate.pendingUserMessages = [...queue, {
-        id: randomUUID(),
-        text: trimmed,
-        createdAt: new Date().toISOString(),
-      }];
+      candidate.pendingUserMessages = [
+        ...queue,
+        {
+          id: randomUUID(),
+          text: trimmed,
+          createdAt: new Date().toISOString(),
+        },
+      ];
     });
     if (rejection) throw rejection;
     void this.runLocked(pipelineId);
@@ -571,9 +585,9 @@ export abstract class BuildPipelineServiceBase {
     let rejection: Error | undefined;
     await this.mutate(pipelineId, (candidate) => {
       if (
-        candidate.phase !== "failed"
-        || !candidate.failureContext
-        || candidate.failureContext.kind === "interactive-request"
+        candidate.phase !== "failed" ||
+        !candidate.failureContext ||
+        candidate.failureContext.kind === "interactive-request"
       ) {
         rejection = new Error("This build has no failed stage to retry");
         return;
@@ -586,10 +600,7 @@ export abstract class BuildPipelineServiceBase {
         delete candidate.stageRetryRequested;
       }
       const failedSession = sessionForCurrentPhase(candidate);
-      if (
-        failedSession
-        && failedSession.sdkSessionId === candidate.failureContext.sessionId
-      ) {
+      if (failedSession && failedSession.sdkSessionId === candidate.failureContext.sessionId) {
         failedSession.status = "error";
       }
       delete candidate.error;
@@ -612,8 +623,8 @@ export abstract class BuildPipelineServiceBase {
     let rejection: Error | undefined;
     await this.mutate(pipelineId, (candidate) => {
       if (
-        candidate.phase !== "failed"
-        || candidate.failureContext?.kind !== "interactive-request"
+        candidate.phase !== "failed" ||
+        candidate.failureContext?.kind !== "interactive-request"
       ) {
         rejection = new Error("This build has no interactive request failure to retry");
         return;
@@ -623,9 +634,7 @@ export abstract class BuildPipelineServiceBase {
       // flag set and start the stage twice. Reject it here instead, where the
       // pipeline is still untouched.
       if (!sessionPhaseFor(candidate.failureContext.phase)) {
-        rejection = new Error(
-          `Cannot retry pipeline phase ${candidate.failureContext.phase}`,
-        );
+        rejection = new Error(`Cannot retry pipeline phase ${candidate.failureContext.phase}`);
         return;
       }
       candidate.phase = candidate.failureContext.phase;
@@ -647,8 +656,9 @@ export abstract class BuildPipelineServiceBase {
       const session = sessionForCurrentPhase(pipeline);
       if (session?.status === "running" && pipeline.environmentId) {
         try {
-          await (await this.provider(pipeline, sessionAgent(pipeline, session)))
-            .abort(session.sdkSessionId);
+          await (
+            await this.provider(pipeline, sessionAgent(pipeline, session))
+          ).abort(session.sdkSessionId);
           session.status = "idle";
         } catch (error) {
           abortError = error;
@@ -677,11 +687,7 @@ export abstract class BuildPipelineServiceBase {
 
   async remove(pipelineId: string): Promise<void> {
     const record = await this.storage.getBuildPipeline(pipelineId);
-    if (
-      record
-      && isBuildPipeline(record.snapshot)
-      && isActiveBuildPhase(record.snapshot.phase)
-    ) {
+    if (record && isBuildPipeline(record.snapshot) && isActiveBuildPhase(record.snapshot.phase)) {
       await this.cancel(pipelineId);
     }
     await this.storage.deleteBuildPipeline(pipelineId);
@@ -694,9 +700,7 @@ export abstract class BuildPipelineServiceBase {
     // A pipeline whose steps chose different harnesses holds one provider per
     // harness, so every one of them has to be checked, not just its build agent.
     const providerKeys = new Set(
-      [...pipelineAgents(removed)].map(
-        (agent) => `${removed.environmentId}:${agent}`,
-      ),
+      [...pipelineAgents(removed)].map((agent) => `${removed.environmentId}:${agent}`),
     );
     for (const candidate of await this.storage.listAllBuildPipelines()) {
       if (candidate.id === pipelineId || !isBuildPipeline(candidate.snapshot)) {
@@ -734,7 +738,10 @@ export abstract class BuildPipelineServiceBase {
     mutation: (pipeline: BuildPipeline) => void | Promise<void>,
   ): Promise<BuildPipeline>;
   protected abstract requireRecord(pipelineId: string): Promise<PersistedBuildPipeline>;
-  protected abstract provider(pipeline: BuildPipeline, agent: BuildPipelineAgent): Promise<BuildPipelineProvider>;
+  protected abstract provider(
+    pipeline: BuildPipeline,
+    agent: BuildPipelineAgent,
+  ): Promise<BuildPipelineProvider>;
   protected abstract needsTerminalReconciliation(pipeline: BuildPipeline): boolean;
   protected abstract reconcileTerminalState(pipeline: BuildPipeline): Promise<void>;
 }

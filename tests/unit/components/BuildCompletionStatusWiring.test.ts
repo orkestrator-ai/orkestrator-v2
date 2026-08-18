@@ -11,14 +11,10 @@ const repoRoot = path.resolve(import.meta.dir, "../../..");
  * completely invisible, which no rendering test would notice.
  */
 describe("build completion status wiring", () => {
-  for (const relativePath of [
-    "apps/web/src/components/build-pipeline/BuildChatTab.tsx",
-  ]) {
+  for (const relativePath of ["apps/web/src/components/build-pipeline/BuildChatTab.tsx"]) {
     test(`${relativePath} renders the persisted failure and retry status`, () => {
       const source = fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
-      expect(source).toContain(
-        'import { BuildCompletionStatus } from "./BuildCompletionStatus";',
-      );
+      expect(source).toContain('import { BuildCompletionStatus } from "./BuildCompletionStatus";');
       expect(source).toContain("<BuildCompletionStatus pipeline={pipeline} />");
     });
   }

@@ -98,19 +98,25 @@ async function startPackagedBackend(
 ): Promise<{ child: Bun.Subprocess; dataDir: string; ready: ReadyMessage }> {
   const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-cli-test-"));
   temporaryDirectories.push(dataDir);
-  const child = Bun.spawn([
-    process.execPath,
-    path.join(packageRoot, "bin/orkestrator.js"),
-    "--host", "127.0.0.1",
-    "--port", "0",
-    "--allow-non-tailscale-bind",
-    "--data-dir", dataDir,
-  ], {
-    cwd: dataDir,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, ...environmentOverrides },
-  });
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      path.join(packageRoot, "bin/orkestrator.js"),
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+      "--allow-non-tailscale-bind",
+      "--data-dir",
+      dataDir,
+    ],
+    {
+      cwd: dataDir,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, ...environmentOverrides },
+    },
+  );
   processes.push(child);
 
   // Killing the child is what unblocks the loop. A backend that starts and then
@@ -144,7 +150,9 @@ async function startPackagedBackend(
 
   if (!ready) {
     await stopPackagedBackend(child);
-    throw new Error(`Packaged backend did not become ready: ${await new Response(child.stderr).text()}`);
+    throw new Error(
+      `Packaged backend did not become ready: ${await new Response(child.stderr).text()}`,
+    );
   }
   return { child, dataDir, ready };
 }
@@ -240,10 +248,11 @@ describe("orkestrator CLI package", () => {
   test("packs the runtime payload and nothing else", async () => {
     // --ignore-scripts skips the prepack rebuild; the build task this suite
     // depends on has already produced the artifacts.
-    const packed = Bun.spawn(
-      [process.execPath, "pm", "pack", "--dry-run", "--ignore-scripts"],
-      { cwd: packageRoot, stdout: "pipe", stderr: "pipe" },
-    );
+    const packed = Bun.spawn([process.execPath, "pm", "pack", "--dry-run", "--ignore-scripts"], {
+      cwd: packageRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     const [stdout, exitCode] = await Promise.all([
       new Response(packed.stdout).text(),
       packed.exited,

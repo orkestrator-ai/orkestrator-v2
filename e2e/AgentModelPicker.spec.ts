@@ -1,8 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("short mobile viewports keep every picker view reachable", async ({
-  page,
-}, testInfo) => {
+test("short mobile viewports keep every picker view reachable", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
   await page.setViewportSize({ width: 390, height: 360 });
   await page.goto("/agent-model-picker");
@@ -38,8 +36,9 @@ test("short mobile viewports keep every picker view reachable", async ({
   await lastReasoning.scrollIntoViewIfNeeded();
   await expect(lastReasoning).toBeInViewport();
   await lastReasoning.click();
-  await expect(page.getByTitle("Choose model, reasoning, and speed"))
-    .toHaveAccessibleName(/Fixture effort 12/);
+  await expect(page.getByTitle("Choose model, reasoning, and speed")).toHaveAccessibleName(
+    /Fixture effort 12/,
+  );
 });
 
 test("desktop picker scrolls model and reasoning columns independently", async ({
@@ -71,12 +70,15 @@ test("desktop picker scrolls model and reasoning columns independently", async (
   expect(layout.top).toBeGreaterThanOrEqual(0);
   expect(layout.bottom).toBeLessThanOrEqual(480);
 
-  expect(await modelList.evaluate((element) => element.scrollHeight))
-    .toBeGreaterThan(await modelList.evaluate((element) => element.clientHeight));
-  expect(await reasoningList.evaluate((element) => element.scrollHeight))
-    .toBeGreaterThan(await reasoningList.evaluate((element) => element.clientHeight));
-  expect(await speedList.evaluate((element) => element.scrollHeight))
-    .toBeLessThanOrEqual(await speedList.evaluate((element) => element.clientHeight));
+  expect(await modelList.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
+    await modelList.evaluate((element) => element.clientHeight),
+  );
+  expect(await reasoningList.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
+    await reasoningList.evaluate((element) => element.clientHeight),
+  );
+  expect(await speedList.evaluate((element) => element.scrollHeight)).toBeLessThanOrEqual(
+    await speedList.evaluate((element) => element.clientHeight),
+  );
 
   const lastReasoning = page.getByRole("menuitemradio", { name: /Fixture effort 12/ });
   await reasoningList.evaluate((element) => {
@@ -95,6 +97,7 @@ test("desktop picker scrolls model and reasoning columns independently", async (
   expect(lastItemLayout.itemTop).toBeGreaterThanOrEqual(lastItemLayout.listTop);
   expect(lastItemLayout.itemBottom).toBeLessThanOrEqual(lastItemLayout.listBottom);
   await lastReasoning.click();
-  await expect(page.getByTitle("Choose model, reasoning, and speed"))
-    .toHaveAccessibleName(/Fixture effort 12/);
+  await expect(page.getByTitle("Choose model, reasoning, and speed")).toHaveAccessibleName(
+    /Fixture effort 12/,
+  );
 });

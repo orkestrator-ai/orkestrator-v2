@@ -1,11 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realTmuxClient from "@/lib/claude-tmux-client";
 import type { PreviousSession } from "@/lib/claude-tmux-client";
 
@@ -13,30 +7,24 @@ import type { PreviousSession } from "@/lib/claude-tmux-client";
 // see the original behavior (see CLAUDE.md "Bun mock.module() rules").
 const realTmuxClientSnapshot = { ...realTmuxClient };
 
-const listPreviousSessionsMock = mock(
-  async (_envId: string): Promise<PreviousSession[]> => [],
-);
+const listPreviousSessionsMock = mock(async (_envId: string): Promise<PreviousSession[]> => []);
 
 mock.module("@/lib/claude-tmux-client", () => ({
   ...realTmuxClientSnapshot,
   listPreviousSessions: listPreviousSessionsMock,
 }));
 
-const { ResumeTmuxSessionDialog } = await import(
-  "@/components/claude/ResumeTmuxSessionDialog"
-);
+const { ResumeTmuxSessionDialog } = await import("@/components/claude/ResumeTmuxSessionDialog");
 
 function makeSession(overrides: Partial<PreviousSession>): PreviousSession {
   return {
     session_id: overrides.session_id ?? "sess-1",
     // Use `in` so a deliberate `title: null` is preserved instead of
     // collapsing to the default via `??`.
-    title: "title" in overrides ? overrides.title ?? null : "Hello world",
-    last_activity_unix:
-      overrides.last_activity_unix ?? Math.floor(Date.now() / 1000) - 60,
+    title: "title" in overrides ? (overrides.title ?? null) : "Hello world",
+    last_activity_unix: overrides.last_activity_unix ?? Math.floor(Date.now() / 1000) - 60,
     message_count: overrides.message_count ?? 3,
-    transcript_path:
-      overrides.transcript_path ?? "/tmp/sessions/sess-1.jsonl",
+    transcript_path: overrides.transcript_path ?? "/tmp/sessions/sess-1.jsonl",
   };
 }
 
@@ -74,9 +62,7 @@ describe("ResumeTmuxSessionDialog", () => {
         onResume={() => {}}
       />,
     );
-    expect(
-      await screen.findByText(/No previous sessions recorded/i),
-    ).toBeTruthy();
+    expect(await screen.findByText(/No previous sessions recorded/i)).toBeTruthy();
     expect(listPreviousSessionsMock).toHaveBeenCalledTimes(1);
     expect(listPreviousSessionsMock.mock.calls[0]).toEqual(["env-1"]);
   });
@@ -84,9 +70,10 @@ describe("ResumeTmuxSessionDialog", () => {
   test("shows a loading indicator until the session request settles", async () => {
     let resolveSessions!: (sessions: PreviousSession[]) => void;
     listPreviousSessionsMock.mockImplementation(
-      () => new Promise<PreviousSession[]>((resolve) => {
-        resolveSessions = resolve;
-      }),
+      () =>
+        new Promise<PreviousSession[]>((resolve) => {
+          resolveSessions = resolve;
+        }),
     );
 
     render(
@@ -98,15 +85,11 @@ describe("ResumeTmuxSessionDialog", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(document.querySelector(".animate-spin")).toBeTruthy(),
-    );
+    await waitFor(() => expect(document.querySelector(".animate-spin")).toBeTruthy());
     expect(screen.queryByText(/No previous sessions recorded/i) === null).toBe(true);
 
     resolveSessions([]);
-    expect(
-      await screen.findByText(/No previous sessions recorded/i),
-    ).toBeTruthy();
+    expect(await screen.findByText(/No previous sessions recorded/i)).toBeTruthy();
     expect(document.querySelector(".animate-spin") === null).toBe(true);
   });
 

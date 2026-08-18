@@ -1,8 +1,44 @@
 import { GatewayEvents } from "./gateway-events.js";
 import { randomBytes } from "node:crypto";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
-import { GatewayTokenValidationError, gatewayTokenCookieHeader } from "@orkestrator/protocol/gateway-token";
-import { AUTH_COOKIE, API_PREFIX, AGENT_TEST_BOOTSTRAP_TTL_MS, AGENT_TEST_SESSION_IDLE_TTL_MS, AGENT_TEST_SESSION_MAX_LIFETIME_MS, MAX_AGENT_TEST_BOOTSTRAPS, MAX_AGENT_TEST_SESSIONS, CORS_ALLOWED_METHODS, CORS_ALLOWED_HEADERS, InvalidRequestBodyError, RequestBodyTooLargeError, compressionModeForListener, headerValueToString, parseContentLengthHeader, classifyGatewayRoute, instrumentGatewayResponse, isLoopbackAddress, originMatchesRule, appendVary, appendResponseVary, appendHeadersVary, responseCompressionContexts, jsonResponse, textResponse, getCookie, getBearerToken, tokenMatches, readJsonBody, readLoginToken, loginPage, wantsHtml, browserPreviewRefererPrefix } from "./gateway-internals.js";
+import {
+  GatewayTokenValidationError,
+  gatewayTokenCookieHeader,
+} from "@orkestrator/protocol/gateway-token";
+import {
+  AUTH_COOKIE,
+  API_PREFIX,
+  AGENT_TEST_BOOTSTRAP_TTL_MS,
+  AGENT_TEST_SESSION_IDLE_TTL_MS,
+  AGENT_TEST_SESSION_MAX_LIFETIME_MS,
+  MAX_AGENT_TEST_BOOTSTRAPS,
+  MAX_AGENT_TEST_SESSIONS,
+  CORS_ALLOWED_METHODS,
+  CORS_ALLOWED_HEADERS,
+  InvalidRequestBodyError,
+  RequestBodyTooLargeError,
+  compressionModeForListener,
+  headerValueToString,
+  parseContentLengthHeader,
+  classifyGatewayRoute,
+  instrumentGatewayResponse,
+  isLoopbackAddress,
+  originMatchesRule,
+  appendVary,
+  appendResponseVary,
+  appendHeadersVary,
+  responseCompressionContexts,
+  jsonResponse,
+  textResponse,
+  getCookie,
+  getBearerToken,
+  tokenMatches,
+  readJsonBody,
+  readLoginToken,
+  loginPage,
+  wantsHtml,
+  browserPreviewRefererPrefix,
+} from "./gateway-internals.js";
 import type { ListenerKind, GatewayRequestMetrics } from "./gateway-internals.js";
 
 export abstract class GatewayAuth extends GatewayEvents {
@@ -146,15 +182,15 @@ export abstract class GatewayAuth extends GatewayEvents {
       ...(request.headers["access-control-request-private-network"] === "true"
         ? { "access-control-allow-private-network": "true" }
         : {}),
-      vary: appendVary(
-        null,
-        "Origin, Access-Control-Request-Private-Network",
-      ),
+      vary: appendVary(null, "Origin, Access-Control-Request-Private-Network"),
     });
     response.end();
   }
 
-  protected handleBrowserPreviewCorsPreflight(request: IncomingMessage, response: ServerResponse): void {
+  protected handleBrowserPreviewCorsPreflight(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): void {
     const requestedHeaders = request.headers["access-control-request-headers"];
     const allowedHeaders = Array.isArray(requestedHeaders)
       ? requestedHeaders.join(", ")
@@ -214,7 +250,10 @@ export abstract class GatewayAuth extends GatewayEvents {
       response.setHeader("access-control-allow-origin", "null");
       response.setHeader("access-control-allow-credentials", "true");
       response.setHeader("vary", "Origin");
-    } else if (url.pathname.startsWith(`${API_PREFIX}/`) && !this.applyCorsHeaders(request, response)) {
+    } else if (
+      url.pathname.startsWith(`${API_PREFIX}/`) &&
+      !this.applyCorsHeaders(request, response)
+    ) {
       jsonResponse(response, 403, { error: "Origin not allowed" });
       return;
     }
@@ -274,7 +313,12 @@ export abstract class GatewayAuth extends GatewayEvents {
 
     if (!this.authenticated(request)) {
       if (wantsHtml(request) && request.method === "GET") {
-        textResponse(response, 401, loginPage("", this.agentTestLoginHint()), "text/html; charset=utf-8");
+        textResponse(
+          response,
+          401,
+          loginPage("", this.agentTestLoginHint()),
+          "text/html; charset=utf-8",
+        );
       } else {
         jsonResponse(response, 401, { error: "Authentication required" });
       }
@@ -391,7 +435,9 @@ export abstract class GatewayAuth extends GatewayEvents {
 
     try {
       const settings = await this.setToken(body.token);
-      jsonResponse(response, 200, settings, { "set-cookie": gatewayTokenCookieHeader(settings.token) });
+      jsonResponse(response, 200, settings, {
+        "set-cookie": gatewayTokenCookieHeader(settings.token),
+      });
     } catch (error) {
       if (error instanceof GatewayTokenValidationError) {
         jsonResponse(response, 400, { error: error.message });
@@ -450,7 +496,12 @@ export abstract class GatewayAuth extends GatewayEvents {
 
   protected async handleLogin(request: IncomingMessage, response: ServerResponse): Promise<void> {
     if (request.method === "GET") {
-      textResponse(response, 200, loginPage("", this.agentTestLoginHint()), "text/html; charset=utf-8");
+      textResponse(
+        response,
+        200,
+        loginPage("", this.agentTestLoginHint()),
+        "text/html; charset=utf-8",
+      );
       return;
     }
     if (request.method !== "POST") {
@@ -481,10 +532,15 @@ export abstract class GatewayAuth extends GatewayEvents {
     response.end();
   }
 
-  protected agentTestBootstrapAllowed(request: IncomingMessage, listenerKind: ListenerKind): boolean {
-    return this.agentTestMode
-      && listenerKind === "browser"
-      && Boolean(request.socket.remoteAddress && isLoopbackAddress(request.socket.remoteAddress));
+  protected agentTestBootstrapAllowed(
+    request: IncomingMessage,
+    listenerKind: ListenerKind,
+  ): boolean {
+    return (
+      this.agentTestMode &&
+      listenerKind === "browser" &&
+      Boolean(request.socket.remoteAddress && isLoopbackAddress(request.socket.remoteAddress))
+    );
   }
 
   protected async handleAgentTestBootstrapMint(
@@ -583,10 +639,15 @@ export abstract class GatewayAuth extends GatewayEvents {
       return;
     }
     const session = this.issueAgentTestSession();
-    jsonResponse(response, 200, { ok: true }, {
-      "cache-control": "no-store",
-      "set-cookie": this.agentTestSessionCookie(session),
-    });
+    jsonResponse(
+      response,
+      200,
+      { ok: true },
+      {
+        "cache-control": "no-store",
+        "set-cookie": this.agentTestSessionCookie(session),
+      },
+    );
   }
 
   /** Redeems a bootstrap code exactly once, whichever route presented it. */

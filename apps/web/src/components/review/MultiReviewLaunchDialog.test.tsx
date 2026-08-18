@@ -3,7 +3,10 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
-import { MultiReviewLaunchDialog, type MultiReviewLaunchSelection } from "./MultiReviewLaunchDialog";
+import {
+  MultiReviewLaunchDialog,
+  type MultiReviewLaunchSelection,
+} from "./MultiReviewLaunchDialog";
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high"] }],
@@ -34,13 +37,15 @@ function chooseFavorite(row: string, name: RegExp) {
 describe("MultiReviewLaunchDialog", () => {
   test("adds and removes reviewer model rows while retaining at least one", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(<MultiReviewLaunchDialog
-      open
-      onOpenChange={() => undefined}
-      defaultAgent="claude"
-      catalog={catalog}
-      onConfirm={onConfirm}
-    />);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={onConfirm}
+      />,
+    );
 
     expect(screen.getByLabelText("Reviewer 1 model")).toBeTruthy();
     expect(screen.getByLabelText("Reviewer 2 model")).toBeTruthy();
@@ -72,14 +77,16 @@ describe("MultiReviewLaunchDialog", () => {
       { platform: "cursor", modelId: "grok-4.6" },
     ]);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(<MultiReviewLaunchDialog
-      open
-      onOpenChange={() => undefined}
-      defaultAgent="claude"
-      catalog={catalog}
-      preferredReasoningEfforts={{ codex: "high", cursor: "high" }}
-      onConfirm={onConfirm}
-    />);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        preferredReasoningEfforts={{ codex: "high", cursor: "high" }}
+        onConfirm={onConfirm}
+      />,
+    );
 
     chooseFavorite("Reviewer 1", /GPT-5\.6/);
     chooseFavorite("Reviewer 2", /Grok 4\.6/);
@@ -103,14 +110,16 @@ describe("MultiReviewLaunchDialog", () => {
   test("adopts the platform of a favourite chosen for the consolidation row", () => {
     setFavorites([{ platform: "codex", modelId: "gpt-5.6" }]);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(<MultiReviewLaunchDialog
-      open
-      onOpenChange={() => undefined}
-      defaultAgent="claude"
-      catalog={catalog}
-      preferredReasoningEfforts={{ codex: "medium" }}
-      onConfirm={onConfirm}
-    />);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        preferredReasoningEfforts={{ codex: "medium" }}
+        onConfirm={onConfirm}
+      />,
+    );
 
     chooseFavorite("Consolidation & fix model", /GPT-5\.6/);
 
@@ -131,14 +140,16 @@ describe("MultiReviewLaunchDialog", () => {
    */
   test("applies the configured effort when the provider rail switches platform", () => {
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
-    render(<MultiReviewLaunchDialog
-      open
-      onOpenChange={() => undefined}
-      defaultAgent="claude"
-      catalog={catalog}
-      preferredReasoningEfforts={{ codex: "high" }}
-      onConfirm={onConfirm}
-    />);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        preferredReasoningEfforts={{ codex: "high" }}
+        onConfirm={onConfirm}
+      />,
+    );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Reviewer 1 model" }));
     fireEvent.click(screen.getByRole("button", { name: "codex models" }));

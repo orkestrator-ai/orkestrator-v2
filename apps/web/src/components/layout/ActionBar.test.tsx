@@ -1,5 +1,13 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, createEvent, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { createContext, useContext, useState } from "react";
 import * as realAlertDialog from "@/components/ui/alert-dialog";
 import * as realContextMenu from "@/components/ui/context-menu";
@@ -45,67 +53,75 @@ type MergeOutcome = {
 };
 
 const deleteEnvironmentMock = mock(async (_environmentId: string) => {});
-const mergeEnvironmentPrMock = mock(async (
-  _environmentId: string,
-  _method: string,
-  _deleteBranch: boolean,
-  _cleanupAfterMerge: boolean,
-): Promise<MergeOutcome> => ({
-  outcome: "merged",
-  cleanupOutcome: "not-requested",
-}));
-const mergePrMock = mock(async (
-  _containerId: string,
-  _method: string,
-  _deleteBranch: boolean,
-): Promise<{ outcome: "merged" | "pending" | "unknown" }> => ({ outcome: "merged" }));
-const mergePrLocalMock = mock(async (
-  _environmentId: string,
-  _method: string,
-  _deleteBranch: boolean,
-): Promise<{ outcome: "merged" | "pending" | "unknown" }> => ({ outcome: "merged" }));
+const mergeEnvironmentPrMock = mock(
+  async (
+    _environmentId: string,
+    _method: string,
+    _deleteBranch: boolean,
+    _cleanupAfterMerge: boolean,
+  ): Promise<MergeOutcome> => ({
+    outcome: "merged",
+    cleanupOutcome: "not-requested",
+  }),
+);
+const mergePrMock = mock(
+  async (
+    _containerId: string,
+    _method: string,
+    _deleteBranch: boolean,
+  ): Promise<{ outcome: "merged" | "pending" | "unknown" }> => ({ outcome: "merged" }),
+);
+const mergePrLocalMock = mock(
+  async (
+    _environmentId: string,
+    _method: string,
+    _deleteBranch: boolean,
+  ): Promise<{ outcome: "merged" | "pending" | "unknown" }> => ({ outcome: "merged" }),
+);
 const openInEditorMock = mock(async (_containerId: string, _editor: string) => {});
 const openLocalInEditorMock = mock(async (_worktreePath: string, _editor: string) => {});
-const readContainerFileMock = mock(async (_containerId: string, _path: string) => ({ content: "{}" }));
+const readContainerFileMock = mock(async (_containerId: string, _path: string) => ({
+  content: "{}",
+}));
 const readLocalFileMock = mock(async (_worktreePath: string, _path: string) => ({ content: "{}" }));
 // Mirrors `backend.setEnvironmentPr`; keep the parameters in step with it so
 // argument assertions here cannot be written against a signature that does not
 // exist.
-const setEnvironmentPrBackendMock = mock(async (
-  _environmentId: string,
-  _prUrl: string,
-  _prState: PrState,
-  _hasMergeConflicts: boolean | null,
-) => {});
+const setEnvironmentPrBackendMock = mock(
+  async (
+    _environmentId: string,
+    _prUrl: string,
+    _prState: PrState,
+    _hasMergeConflicts: boolean | null,
+  ) => {},
+);
 const setEnvironmentPRStoreMock = mock(() => {});
 const createTabMock = mock((_agent: string, _options?: unknown) => true);
 // The controller reaches the pane layout store imperatively, so the real store
 // action is swapped rather than the module mocked: `@/stores/paneLayoutStore`
 // stays real for every other suite.
 const clearTabInitialPromptMock = mock((_tabId: string, _environmentId?: string) => {});
-const realClearTabInitialPrompt =
-  usePaneLayoutStore.getState().clearTabInitialPrompt;
-const enqueuePromptQueueMessageMock = mock(async (
-  _queueKey: string,
-  _environmentId: string,
-  _message: unknown,
-) => ({}));
+const realClearTabInitialPrompt = usePaneLayoutStore.getState().clearTabInitialPrompt;
+const enqueuePromptQueueMessageMock = mock(
+  async (_queueKey: string, _environmentId: string, _message: unknown) => ({}),
+);
 const startedLoopedWorkflow = { id: "looped-workflow-1", phase: "preparing" as const };
 const cancelledLoopedWorkflow = { id: "looped-workflow-1", phase: "cancelled" as const };
 const startLoopedReviewMock = mock(async (_options: unknown) => startedLoopedWorkflow);
 const installLoopedWorkflowMock = mock((_workflow: unknown) => {});
 const removeLoopedWorkflowMock = mock((_workflowId: string) => {});
 const deleteLoopedReviewMock = mock(async (_workflowId: string) => {});
-const cancelLoopedReviewMock = mock(async (
-  _workflowId: string,
-): Promise<{ id: string; phase: string }> => cancelledLoopedWorkflow);
+const cancelLoopedReviewMock = mock(
+  async (_workflowId: string): Promise<{ id: string; phase: string }> => cancelledLoopedWorkflow,
+);
 const startedMultiReview = { id: "multi-workflow-1", phase: "reviewing" as const };
 const startMultiReviewMock = mock(async (_options: unknown) => startedMultiReview);
-const cancelMultiReviewMock = mock(async (
-  _workflowId: string,
-): Promise<{ id: string; phase: "cancelled" | "cancelling" }> => ({
-  id: "multi-workflow-1", phase: "cancelled",
-}));
+const cancelMultiReviewMock = mock(
+  async (_workflowId: string): Promise<{ id: string; phase: "cancelled" | "cancelling" }> => ({
+    id: "multi-workflow-1",
+    phase: "cancelled",
+  }),
+);
 const deleteMultiReviewWorkflowMock = mock(async (_workflowId: string) => {});
 const findActiveMultiReviewWorkflowMock = mock(
   async (_environmentId: string): Promise<{ id: string; phase: string } | null> => null,
@@ -180,7 +196,9 @@ let currentChanges: unknown[] = [];
 let currentFilesPanelOpen = false;
 let currentReviewPrompt: string | undefined;
 let currentDefaultAgent: "claude" | "opencode" | "codex" | undefined = "codex";
-let currentEnabledAgentPlatforms: Array<"claude" | "codex" | "cursor" | "grok" | "opencode"> | undefined;
+let currentEnabledAgentPlatforms:
+  | Array<"claude" | "codex" | "cursor" | "grok" | "opencode">
+  | undefined;
 let currentActionDefaults: ActionDefaults | undefined;
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
 let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
@@ -223,11 +241,7 @@ function expectProviderMenuOrder(action: string) {
       .getAllByRole("button")
       .map((button) => button.textContent?.trim())
       .filter((label) => label?.startsWith(`${action} `)),
-  ).toEqual([
-    `${action} Claude`,
-    `${action} Codex`,
-    `${action} OpenCode`,
-  ]);
+  ).toEqual([`${action} Claude`, `${action} Codex`, `${action} OpenCode`]);
 }
 
 /**
@@ -410,22 +424,22 @@ mock.module("@/components/settings", () => ({
     onUpdateProject: (project: Project) => Promise<void>;
     open: boolean;
     project: Project;
-  }) => open ? (
-    <div>
-      <span>Repository settings for {project.name}</span>
-      <button
-        onClick={() => void onUpdateProject({ ...project, name: "updated-repo" })}
-        type="button"
-      >
-        Update mock repository
-      </button>
-      <button onClick={() => onOpenChange(false)} type="button">
-        Close mock repository settings
-      </button>
-    </div>
-  ) : null,
-  SettingsPage: ({ open }: { open: boolean }) =>
-    open ? <div>Global settings dialog</div> : null,
+  }) =>
+    open ? (
+      <div>
+        <span>Repository settings for {project.name}</span>
+        <button
+          onClick={() => void onUpdateProject({ ...project, name: "updated-repo" })}
+          type="button"
+        >
+          Update mock repository
+        </button>
+        <button onClick={() => onOpenChange(false)} type="button">
+          Close mock repository settings
+        </button>
+      </div>
+    ) : null,
+  SettingsPage: ({ open }: { open: boolean }) => (open ? <div>Global settings dialog</div> : null),
 }));
 
 mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
@@ -441,20 +455,21 @@ mock.module("@/components/environments/EnvironmentSettingsDialog", () => ({
     onRestart: (environmentId: string) => Promise<void>;
     onUpdate: (environment: Environment) => void;
     open: boolean;
-  }) => open ? (
-    <div>
-      <span>Environment settings for {environment.name}</span>
-      <button onClick={() => onUpdate({ ...environment, name: "updated-env" })} type="button">
-        Update mock environment
-      </button>
-      <button onClick={() => void onRestart(environment.id)} type="button">
-        Restart mock environment
-      </button>
-      <button onClick={() => onOpenChange(false)} type="button">
-        Close mock environment settings
-      </button>
-    </div>
-  ) : null,
+  }) =>
+    open ? (
+      <div>
+        <span>Environment settings for {environment.name}</span>
+        <button onClick={() => onUpdate({ ...environment, name: "updated-env" })} type="button">
+          Update mock environment
+        </button>
+        <button onClick={() => void onRestart(environment.id)} type="button">
+          Restart mock environment
+        </button>
+        <button onClick={() => onOpenChange(false)} type="button">
+          Close mock environment settings
+        </button>
+      </div>
+    ) : null,
 }));
 
 mock.module("@/components/docker", () => ({
@@ -463,24 +478,26 @@ mock.module("@/components/docker", () => ({
 }));
 
 mock.module("@/stores", () => ({
-  useConfigStore: <T,>(selector?: (state: {
-    config: {
-      global: {
-        defaultAgent?: "claude" | "opencode" | "codex";
-        preferredEditor?: "vscode" | "cursor";
-        reviewInstruction?: string;
-        claudeModel?: string;
-        claudeNativeFastModeDefault?: boolean;
-        codexModel: string;
-        codexReasoningEffort: string;
-        codexNativeFastModeDefault?: boolean;
-        opencodeModel: string;
-        enabledAgentPlatforms?: Array<"claude" | "codex" | "cursor" | "grok" | "opencode">;
-        actionDefaults?: ActionDefaults;
+  useConfigStore: <T,>(
+    selector?: (state: {
+      config: {
+        global: {
+          defaultAgent?: "claude" | "opencode" | "codex";
+          preferredEditor?: "vscode" | "cursor";
+          reviewInstruction?: string;
+          claudeModel?: string;
+          claudeNativeFastModeDefault?: boolean;
+          codexModel: string;
+          codexReasoningEffort: string;
+          codexNativeFastModeDefault?: boolean;
+          opencodeModel: string;
+          enabledAgentPlatforms?: Array<"claude" | "codex" | "cursor" | "grok" | "opencode">;
+          actionDefaults?: ActionDefaults;
+        };
+        repositories: Record<string, { prBaseBranch?: string }>;
       };
-      repositories: Record<string, { prBaseBranch?: string }>;
-    };
-  }) => T) =>
+    }) => T,
+  ) =>
     selectState(
       {
         config: {
@@ -502,27 +519,31 @@ mock.module("@/stores", () => ({
       },
       selector,
     ),
-  useEnvironmentStore: <T,>(selector?: (state: {
-    environments: Environment[];
-    getEnvironmentById: (environmentId: string) => Environment | undefined;
-    updateEnvironment: (environmentId: string, environment: Environment) => void;
-    setEnvironmentPR: () => void;
-  }) => T) =>
+  useEnvironmentStore: <T,>(
+    selector?: (state: {
+      environments: Environment[];
+      getEnvironmentById: (environmentId: string) => Environment | undefined;
+      updateEnvironment: (environmentId: string, environment: Environment) => void;
+      setEnvironmentPR: () => void;
+    }) => T,
+  ) =>
     selectState(
       {
         environments: [
           ...(currentSelectedEnvironmentId ? [currentEnvironment] : []),
           ...currentOtherEnvironments,
-        ].map((environment) => environment.id === currentEnvironment.id
-          ? {
-              ...environment,
-              setupPhase: (currentSetupScriptsRunning
-                ? "running"
-                : currentWorkspaceReady
-                  ? "ready"
-                  : "pending") as Environment["setupPhase"],
-            }
-          : environment),
+        ].map((environment) =>
+          environment.id === currentEnvironment.id
+            ? {
+                ...environment,
+                setupPhase: (currentSetupScriptsRunning
+                  ? "running"
+                  : currentWorkspaceReady
+                    ? "ready"
+                    : "pending") as Environment["setupPhase"],
+              }
+            : environment,
+        ),
         getEnvironmentById: (environmentId: string) =>
           environmentId === currentEnvironment.id
             ? {
@@ -539,11 +560,9 @@ mock.module("@/stores", () => ({
       },
       selector,
     ),
-  useFilesPanelStore: <T,>(selector?: (state: {
-    isOpen: boolean;
-    togglePanel: () => void;
-    changes: unknown[];
-  }) => T) =>
+  useFilesPanelStore: <T,>(
+    selector?: (state: { isOpen: boolean; togglePanel: () => void; changes: unknown[] }) => T,
+  ) =>
     selectState(
       {
         isOpen: currentFilesPanelOpen,
@@ -552,30 +571,33 @@ mock.module("@/stores", () => ({
       },
       selector,
     ),
-  useProjectStore: <T,>(selector?: (state: {
-    projects: Project[];
-    getProjectById: (projectId: string) => Project | undefined;
-  }) => T) =>
+  useProjectStore: <T,>(
+    selector?: (state: {
+      projects: Project[];
+      getProjectById: (projectId: string) => Project | undefined;
+    }) => T,
+  ) =>
     selectState(
       {
         projects: [...currentOtherProjects, selectedProject].filter(
           (project) => !currentDeletedProjectIds.has(project.id),
         ),
         getProjectById: (projectId: string) =>
-          projectId === selectedProject.id
-            && !currentDeletedProjectIds.has(projectId)
+          projectId === selectedProject.id && !currentDeletedProjectIds.has(projectId)
             ? selectedProject
             : currentOtherProjects.find((project) => project.id === projectId),
       },
       selector,
     ),
-  useUIStore: <T,>(selector?: (state: {
-    selectedEnvironmentId: string | null;
-    selectedProjectId: string | null;
-    projectBoardTab: "kanban" | "linear" | "github" | "features";
-    setProjectBoardTab: (tab: "kanban" | "linear" | "github" | "features") => void;
-    setProjectBoardNotesOpen: (open: boolean) => void;
-  }) => T) =>
+  useUIStore: <T,>(
+    selector?: (state: {
+      selectedEnvironmentId: string | null;
+      selectedProjectId: string | null;
+      projectBoardTab: "kanban" | "linear" | "github" | "features";
+      setProjectBoardTab: (tab: "kanban" | "linear" | "github" | "features") => void;
+      setProjectBoardNotesOpen: (open: boolean) => void;
+    }) => T,
+  ) =>
     selectState(
       {
         selectedEnvironmentId: currentSelectedEnvironmentId,
@@ -586,13 +608,16 @@ mock.module("@/stores", () => ({
       },
       selector,
     ),
-  useLoopedReviewStore: <T,>(selector: (state: {
-    replaceWorkflow: typeof installLoopedWorkflowMock;
-    removeWorkflow: typeof removeLoopedWorkflowMock;
-  }) => T) => selector({
-    replaceWorkflow: installLoopedWorkflowMock,
-    removeWorkflow: removeLoopedWorkflowMock,
-  }),
+  useLoopedReviewStore: <T,>(
+    selector: (state: {
+      replaceWorkflow: typeof installLoopedWorkflowMock;
+      removeWorkflow: typeof removeLoopedWorkflowMock;
+    }) => T,
+  ) =>
+    selector({
+      replaceWorkflow: installLoopedWorkflowMock,
+      removeWorkflow: removeLoopedWorkflowMock,
+    }),
   useMultiReviewStore: {
     getState: () => ({
       replaceWorkflow: installMultiReviewWorkflowMock,
@@ -675,7 +700,10 @@ afterAll(() => {
   mock.module("@/components/ui/context-menu", () => realContextMenuSnapshot);
   mock.module("@/components/ui/tooltip", () => realTooltipSnapshot);
   mock.module("@/components/settings", () => realSettingsSnapshot);
-  mock.module("@/components/environments/EnvironmentSettingsDialog", () => realEnvironmentSettingsDialogSnapshot);
+  mock.module(
+    "@/components/environments/EnvironmentSettingsDialog",
+    () => realEnvironmentSettingsDialogSnapshot,
+  );
   mock.module("@/components/docker", () => realDockerComponentsSnapshot);
   mock.module("@/stores", () => realStoresSnapshot);
   mock.module("@/hooks", () => realHooksSnapshot);
@@ -723,7 +751,8 @@ beforeEach(() => {
   startMultiReviewMock.mockImplementation(async () => startedMultiReview);
   cancelMultiReviewMock.mockReset();
   cancelMultiReviewMock.mockImplementation(async () => ({
-    id: "multi-workflow-1", phase: "cancelled" as const,
+    id: "multi-workflow-1",
+    phase: "cancelled" as const,
   }));
   deleteMultiReviewWorkflowMock.mockReset();
   deleteMultiReviewWorkflowMock.mockImplementation(async () => {});
@@ -751,15 +780,12 @@ beforeEach(() => {
   updateProjectMock.mockReset();
   updateEnvironmentMock.mockReset();
   recreateEnvironmentMock.mockReset();
-  mergeEnvironmentPrMock.mockImplementation(async (
-    _environmentId,
-    _method,
-    _deleteBranch,
-    cleanupAfterMerge,
-  ) => ({
-    outcome: "merged",
-    cleanupOutcome: cleanupAfterMerge ? "completed" : "not-requested",
-  }));
+  mergeEnvironmentPrMock.mockImplementation(
+    async (_environmentId, _method, _deleteBranch, cleanupAfterMerge) => ({
+      outcome: "merged",
+      cleanupOutcome: cleanupAfterMerge ? "completed" : "not-requested",
+    }),
+  );
   mergePrMock.mockImplementation(async () => ({ outcome: "merged" }));
   mergePrLocalMock.mockImplementation(async () => ({ outcome: "merged" }));
   openInEditorMock.mockImplementation(async () => {});
@@ -840,15 +866,16 @@ describe("ActionBar grid presentation", () => {
     const nativeButton = screen.getByRole("button", { name: "New native agent tab" });
     fireEvent.mouseEnter(nativeButton);
 
-    const tooltipTitle = await waitFor(() =>
-      screen.getByText("New Native Agent Tab"),
-    );
+    const tooltipTitle = await waitFor(() => screen.getByText("New Native Agent Tab"));
 
     fireEvent.mouseLeave(nativeButton);
     fireEvent.mouseLeave(tooltipTitle.parentElement!);
-    await waitFor(() => {
-      expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
-    }, { timeout: 10_000 });
+    await waitFor(
+      () => {
+        expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
   }, 20_000);
 
   test("keeps context-menu tooltips enabled on desktop keyboard focus", async () => {
@@ -859,13 +886,16 @@ describe("ActionBar grid presentation", () => {
     expect(screen.getByText("New Native Agent Tab")).toBeTruthy();
 
     fireEvent.blur(nativeButton);
-    await waitFor(() => {
-      expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
-    }, { timeout: 10_000 });
-  // Radix closes the portalled tooltip on a timer. Under the repository's
-  // concurrent workspace run this file shares a saturated runner with the web
-  // build and can exceed Bun's default 10s test ceiling despite passing in
-  // about a second alone.
+    await waitFor(
+      () => {
+        expect(screen.queryByText("New Native Agent Tab") === null).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
+    // Radix closes the portalled tooltip on a timer. Under the repository's
+    // concurrent workspace run this file shares a saturated runner with the web
+    // build and can exceed Bun's default 10s test ceiling despite passing in
+    // about a second alone.
   }, 20_000);
 
   test("renders mobile tools as two columns with labels after their icons", () => {
@@ -879,8 +909,9 @@ describe("ActionBar grid presentation", () => {
     const native = screen.getByRole("button", { name: "New native agent tab" });
     expect(globalSettings.lastElementChild?.textContent).toBe("Global settings");
     expect(native.lastElementChild?.textContent).toBe("New agent");
-    expect(screen.getByRole("button", { name: "New terminal tab" }).lastElementChild?.textContent)
-      .toBe("New terminal");
+    expect(
+      screen.getByRole("button", { name: "New terminal tab" }).lastElementChild?.textContent,
+    ).toBe("New terminal");
     expect(
       screen
         .getAllByRole("button")
@@ -894,12 +925,24 @@ describe("ActionBar grid presentation", () => {
     currentSelectedEnvironmentId = null;
     render(<ActionBar presentation="grid" />);
 
-    expect(screen.getByRole("button", { name: "Global settings" }).hasAttribute("disabled")).toBe(false);
-    expect(screen.getByRole("button", { name: "Repository settings" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "New native agent tab" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "New terminal tab" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "Kanban board" }).hasAttribute("disabled")).toBe(true);
-    expect(screen.getByRole("button", { name: "Show file panel" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("button", { name: "Global settings" }).hasAttribute("disabled")).toBe(
+      false,
+    );
+    expect(
+      screen.getByRole("button", { name: "Repository settings" }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "New native agent tab" }).hasAttribute("disabled"),
+    ).toBe(true);
+    expect(screen.getByRole("button", { name: "New terminal tab" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(screen.getByRole("button", { name: "Kanban board" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(screen.getByRole("button", { name: "Show file panel" }).hasAttribute("disabled")).toBe(
+      true,
+    );
   });
 
   test("uses one visual variant for every mobile tool and shortens environment settings", () => {
@@ -1088,9 +1131,13 @@ describe("ActionBar copy URL", () => {
       <>
         <input aria-label="Message" />
         <textarea aria-label="Description" />
-        <select aria-label="Agent"><option>Claude</option></select>
+        <select aria-label="Agent">
+          <option>Claude</option>
+        </select>
         <div aria-label="Editable content" contentEditable />
-        <div contentEditable><span aria-label="Nested editable content">Nested</span></div>
+        <div contentEditable>
+          <span aria-label="Nested editable content">Nested</span>
+        </div>
         <div className="xterm" tabIndex={0} />
         <ActionBar />
       </>,
@@ -1315,7 +1362,9 @@ describe("ActionBar editor and run commands", () => {
 
     await waitFor(() => {
       expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "orkestrator-ai.json");
-      expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("false");
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false");
     });
     fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
 
@@ -1339,7 +1388,9 @@ describe("ActionBar editor and run commands", () => {
 
     await waitFor(() => {
       expect(readLocalFileMock).toHaveBeenCalledWith("/tmp/feature-env", "orkestrator-ai.json");
-      expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("false");
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false");
     });
   });
 
@@ -1410,9 +1461,7 @@ describe("ActionBar toolbar interactions", () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Global settings" }));
-    expect(
-      screen.getByRole("status", { name: "Loading global settings…" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Loading global settings…" })).toBeTruthy();
     expect(
       await screen.findByText("Global settings dialog", undefined, asyncDialogOptions),
     ).toBeTruthy();
@@ -1427,10 +1476,14 @@ describe("ActionBar toolbar interactions", () => {
       await screen.findByText("Repository settings for repo", undefined, asyncDialogOptions),
     ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Update mock repository" }));
-    await waitFor(() => expect(updateProjectMock).toHaveBeenCalledWith({
-      ...selectedProject,
-      name: "updated-repo",
-    }), asyncDialogOptions);
+    await waitFor(
+      () =>
+        expect(updateProjectMock).toHaveBeenCalledWith({
+          ...selectedProject,
+          name: "updated-repo",
+        }),
+      asyncDialogOptions,
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
     expect(
@@ -1463,20 +1516,17 @@ describe("ActionBar toolbar interactions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Docker configuration" }));
     expect(await screen.findByText("Docker configuration dialog")).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement).disabled,
     ).toBe(false);
 
     view.rerender(renderActionBar(false));
 
     expect(screen.queryByText("Docker configuration dialog") === null).toBe(true);
     expect(
-      (screen.getByRole("button", { name: "Docker configuration" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Docker configuration" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Open in VS Code" }) as HTMLButtonElement).disabled,
     ).toBe(true);
 
     currentEnvironment = {
@@ -1490,8 +1540,7 @@ describe("ActionBar toolbar interactions", () => {
     const localEditorButton = screen.getByRole("button", { name: "Open in VS Code" });
     expect((localEditorButton as HTMLButtonElement).disabled).toBe(false);
     expect(
-      (screen.getByRole("button", { name: "Environment settings" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Environment settings" }) as HTMLButtonElement).disabled,
     ).toBe(false);
     fireEvent.click(localEditorButton);
     await waitFor(() => {
@@ -1518,9 +1567,7 @@ describe("ActionBar toolbar interactions", () => {
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(
-      await screen.findByText("Environment settings for feature-env"),
-    ).toBeTruthy();
+    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
 
     // The pinned environment still exists; only the selection moved on.
     currentOtherEnvironments = [{ ...selectedEnvironment }];
@@ -1540,9 +1587,7 @@ describe("ActionBar toolbar interactions", () => {
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(
-      await screen.findByText("Environment settings for feature-env"),
-    ).toBeTruthy();
+    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
 
     currentOtherEnvironments = [{ ...selectedEnvironment }];
     currentEnvironment = { ...selectedEnvironment, id: "env-2", name: "second-env" };
@@ -1562,9 +1607,7 @@ describe("ActionBar toolbar interactions", () => {
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Environment settings" }));
-    expect(
-      await screen.findByText("Environment settings for feature-env"),
-    ).toBeTruthy();
+    expect(await screen.findByText("Environment settings for feature-env")).toBeTruthy();
 
     // Deleted from the store. Keeping a stale snapshot open would let the user
     // edit an environment that no longer exists, and updateEnvironment would
@@ -1595,9 +1638,7 @@ describe("ActionBar toolbar interactions", () => {
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
-    expect(
-      await screen.findByText("Repository settings for repo"),
-    ).toBeTruthy();
+    expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
 
     currentSelectedProjectId = "project-2";
     view.rerender(<ActionBar />);
@@ -1609,9 +1650,7 @@ describe("ActionBar toolbar interactions", () => {
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Repository settings" }));
-    expect(
-      await screen.findByText("Repository settings for repo"),
-    ).toBeTruthy();
+    expect(await screen.findByText("Repository settings for repo")).toBeTruthy();
 
     currentDeletedProjectIds = new Set([selectedProject.id]);
     currentSelectedProjectId = null;
@@ -1717,7 +1756,9 @@ describe("ActionBar toolbar interactions", () => {
     }));
     render(<ActionBar />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("false");
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false");
     });
 
     fireEvent.keyDown(window, { key: "p", code: "KeyP", metaKey: true });
@@ -1759,7 +1800,9 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.getByRole("tab", { name: "GitHub" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Linear" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Features" })).toBeTruthy();
-    expect(notesButton.compareDocumentPosition(kanbanTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      notesButton.compareDocumentPosition(kanbanTab) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     fireEvent.click(notesButton);
     expect(setProjectBoardNotesOpenMock).toHaveBeenCalledWith(true);
@@ -1812,7 +1855,9 @@ describe("ActionBar workflow tabs", () => {
     expect(linearTab.getAttribute("aria-selected")).toBe("true");
     expect(linearTab.className).toContain("data-[state=active]:!bg-primary/15");
     expect(screen.getByRole("tab", { name: "Kanban" }).getAttribute("aria-selected")).toBe("false");
-    expect(screen.getByRole("tab", { name: "Features" }).getAttribute("aria-selected")).toBe("false");
+    expect(screen.getByRole("tab", { name: "Features" }).getAttribute("aria-selected")).toBe(
+      "false",
+    );
   });
 
   test("hides the Project Notes button when the active board tab is not kanban", () => {
@@ -1940,20 +1985,22 @@ describe("ActionBar workflow tabs", () => {
       ),
       isReviewTab: true,
     });
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      `codex\u0000env-env-1:${tabOptions.tabId}`,
-      "env-1",
-      expect.objectContaining({
-        id: `initial-prompt:env-1:${tabOptions.tabId}`,
-        text: expect.stringContaining(
-          'User review instruction (JSON string): "Inspect origin/main...HEAD for release blockers."',
-        ),
-        model: "gpt-review-default",
-        reasoningEffort: "xhigh",
-        mode: "build",
-        fastMode: true,
-      }),
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        `codex\u0000env-env-1:${tabOptions.tabId}`,
+        "env-1",
+        expect.objectContaining({
+          id: `initial-prompt:env-1:${tabOptions.tabId}`,
+          text: expect.stringContaining(
+            'User review instruction (JSON string): "Inspect origin/main...HEAD for release blockers."',
+          ),
+          model: "gpt-review-default",
+          reasoningEffort: "xhigh",
+          mode: "build",
+          fastMode: true,
+        }),
+      ),
+    );
   });
 
   test("preserves Claude model and fast-mode defaults in a one-click review", async () => {
@@ -1970,16 +2017,18 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
 
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^claude\u0000env-env-1:tab-/),
-      "env-1",
-      expect.objectContaining({
-        model: "claude-review-default",
-        effort: "high",
-        planModeEnabled: false,
-        fastModeEnabled: true,
-      }),
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^claude\u0000env-env-1:tab-/),
+        "env-1",
+        expect.objectContaining({
+          model: "claude-review-default",
+          effort: "high",
+          planModeEnabled: false,
+          fastModeEnabled: true,
+        }),
+      ),
+    );
   });
 
   test("hands an OpenCode review to the backend before an environment switch", async () => {
@@ -1997,23 +2046,27 @@ describe("ActionBar workflow tabs", () => {
     const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
 
     currentSelectedEnvironmentId = "env-2";
-    currentOtherEnvironments = [{
-      ...selectedEnvironment,
-      id: "env-2",
-      name: "other-environment",
-    }];
+    currentOtherEnvironments = [
+      {
+        ...selectedEnvironment,
+        id: "env-2",
+        name: "other-environment",
+      },
+    ];
     view.rerender(<ActionBar />);
 
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      `opencode\u0000env-env-1:${tabOptions.tabId}`,
-      "env-1",
-      expect.objectContaining({
-        id: `initial-prompt:env-1:${tabOptions.tabId}`,
-        model: "openai/review-default",
-        mode: "build",
-        text: expect.stringContaining("Security and instruction hierarchy"),
-      }),
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        `opencode\u0000env-env-1:${tabOptions.tabId}`,
+        "env-1",
+        expect.objectContaining({
+          id: `initial-prompt:env-1:${tabOptions.tabId}`,
+          model: "openai/review-default",
+          mode: "build",
+          text: expect.stringContaining("Security and instruction hierarchy"),
+        }),
+      ),
+    );
   });
 
   test("hands a Cursor PR to the backend before an environment switch", async () => {
@@ -2030,9 +2083,10 @@ describe("ActionBar workflow tabs", () => {
     // exists to pin.
     let settleEnqueue: (() => void) | undefined;
     enqueuePromptQueueMessageMock.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        settleEnqueue = () => resolve({});
-      }),
+      () =>
+        new Promise((resolve) => {
+          settleEnqueue = () => resolve({});
+        }),
     );
     const view = render(<ActionBar />);
 
@@ -2051,11 +2105,13 @@ describe("ActionBar workflow tabs", () => {
     expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
 
     currentSelectedEnvironmentId = "env-2";
-    currentOtherEnvironments = [{
-      ...selectedEnvironment,
-      id: "env-2",
-      name: "other-environment",
-    }];
+    currentOtherEnvironments = [
+      {
+        ...selectedEnvironment,
+        id: "env-2",
+        name: "other-environment",
+      },
+    ];
     view.rerender(<ActionBar />);
     // Only now, with env-1 deselected and its ActionBar re-rendered against
     // another environment, does the durable hand-off acknowledge.
@@ -2064,22 +2120,21 @@ describe("ActionBar workflow tabs", () => {
       await Promise.resolve();
     });
 
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      `cursor\u0000env-env-1:${tabId}`,
-      "env-1",
-      expect.objectContaining({
-        id: `initial-prompt:env-1:${tabId}`,
-        requestId: `initial-prompt:env-1:${tabId}`,
-        text: expect.stringContaining("gh pr create --base main --fill"),
-        mode: "build",
-      }),
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        `cursor\u0000env-env-1:${tabId}`,
+        "env-1",
+        expect.objectContaining({
+          id: `initial-prompt:env-1:${tabId}`,
+          requestId: `initial-prompt:env-1:${tabId}`,
+          text: expect.stringContaining("gh pr create --base main --fill"),
+          mode: "build",
+        }),
+      ),
+    );
     // The renderer fallback is dropped against the originating environment, not
     // whichever one happens to be selected when persistence acknowledges.
-    await waitFor(() => expect(clearTabInitialPromptMock).toHaveBeenCalledWith(
-      tabId,
-      "env-1",
-    ));
+    await waitFor(() => expect(clearTabInitialPromptMock).toHaveBeenCalledWith(tabId, "env-1"));
     expect(setModeCreatePendingMock).toHaveBeenCalledTimes(1);
   });
 
@@ -2130,23 +2185,24 @@ describe("ActionBar workflow tabs", () => {
       displayTitle: "PR",
     });
     expect(tabOptions.tabId).toMatch(/^tab-/);
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      promptQueueKey("claude", `env-env-1:${tabOptions.tabId}`),
-      "env-1",
-      expect.objectContaining({
-        id: `initial-prompt:env-1:${tabOptions.tabId}`,
-        requestId: `initial-prompt:env-1:${tabOptions.tabId}`,
-        text: expect.stringContaining("gh pr create --base main --fill"),
-        // Claude reads `planModeEnabled` for its execution mode and treats an
-        // absent field as build, so a PR launch must never arrive in plan mode.
-        mode: "build",
-        fastMode: true,
-      }),
-    ));
-    await waitFor(() => expect(clearTabInitialPromptMock).toHaveBeenCalledWith(
-      tabOptions.tabId,
-      "env-1",
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        promptQueueKey("claude", `env-env-1:${tabOptions.tabId}`),
+        "env-1",
+        expect.objectContaining({
+          id: `initial-prompt:env-1:${tabOptions.tabId}`,
+          requestId: `initial-prompt:env-1:${tabOptions.tabId}`,
+          text: expect.stringContaining("gh pr create --base main --fill"),
+          // Claude reads `planModeEnabled` for its execution mode and treats an
+          // absent field as build, so a PR launch must never arrive in plan mode.
+          mode: "build",
+          fastMode: true,
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(clearTabInitialPromptMock).toHaveBeenCalledWith(tabOptions.tabId, "env-1"),
+    );
   });
 
   test("durably queues a configured Codex PR with its fast-mode default", async () => {
@@ -2166,15 +2222,17 @@ describe("ActionBar workflow tabs", () => {
 
     const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
     expect(tabOptions.tabId).toMatch(/^tab-/);
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      promptQueueKey("codex", `env-env-1:${tabOptions.tabId}`),
-      "env-1",
-      expect.objectContaining({
-        id: `initial-prompt:env-1:${tabOptions.tabId}`,
-        mode: "build",
-        fastMode: true,
-      }),
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        promptQueueKey("codex", `env-env-1:${tabOptions.tabId}`),
+        "env-1",
+        expect.objectContaining({
+          id: `initial-prompt:env-1:${tabOptions.tabId}`,
+          mode: "build",
+          fastMode: true,
+        }),
+      ),
+    );
   });
 
   test("retains the launch prompt when durable PR enqueue fails", async () => {
@@ -2186,17 +2244,17 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    enqueuePromptQueueMessageMock.mockRejectedValueOnce(
-      new Error("backend unavailable"),
-    );
+    enqueuePromptQueueMessageMock.mockRejectedValueOnce(new Error("backend unavailable"));
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Create PR" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not start pull request creation",
-      expect.objectContaining({ description: "backend unavailable" }),
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not start pull request creation",
+        expect.objectContaining({ description: "backend unavailable" }),
+      ),
+    );
     // Persistence never became authoritative, so the tab keeps the prompt it was
     // created with and can still launch the PR itself.
     expect(createTabMock).toHaveBeenLastCalledWith(
@@ -2215,9 +2273,7 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    enqueuePromptQueueMessageMock.mockRejectedValueOnce(
-      new Error("backend unavailable"),
-    );
+    enqueuePromptQueueMessageMock.mockRejectedValueOnce(new Error("backend unavailable"));
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
@@ -2229,10 +2285,12 @@ describe("ActionBar workflow tabs", () => {
         isReviewTab: true,
       }),
     );
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not start review",
-      expect.objectContaining({ description: "backend unavailable" }),
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not start review",
+        expect.objectContaining({ description: "backend unavailable" }),
+      ),
+    );
   });
 
   test("names PR, resolve, and push workflow tabs", async () => {
@@ -2326,9 +2384,12 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: true,
     };
     let resolveArm!: (armedAt: string | null) => void;
-    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveArm = resolve;
-    }));
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveArm = resolve;
+        }),
+    );
     render(<ActionBar />);
 
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
@@ -2349,8 +2410,10 @@ describe("ActionBar workflow tabs", () => {
     resolveArm("armed-after-menu-check");
     await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null)
-        .toBe(true));
+      expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null).toBe(
+        true,
+      ),
+    );
   });
 
   test("keeps the Resolve dialog open through dismissals while the launch is arming", async () => {
@@ -2360,9 +2423,12 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: true,
     };
     let resolveArm!: (armedAt: string | null) => void;
-    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveArm = resolve;
-    }));
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveArm = resolve;
+        }),
+    );
     createTabMock.mockReturnValueOnce(false);
     render(<ActionBar />);
 
@@ -2383,10 +2449,13 @@ describe("ActionBar workflow tabs", () => {
 
     resolveArm("armed-during-dismiss-attempt");
     await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain("maximum tab count"));
+      expect(screen.getByRole("alert").textContent).toContain("maximum tab count"),
+    );
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
     expect(toastErrorMock).not.toHaveBeenCalled();
-    expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-during-dismiss-attempt");
+    expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith(
+      "armed-during-dismiss-attempt",
+    );
   });
 
   test("reports a refused Resolve tab in the dialog without a duplicate toast", async () => {
@@ -2403,7 +2472,8 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("alert").textContent).toContain("maximum tab count"));
+      expect(screen.getByRole("alert").textContent).toContain("maximum tab count"),
+    );
     expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
     // The dialog is the reporting surface here; a toast would repeat the same
     // failure in different words behind a modal the user is already reading.
@@ -2413,8 +2483,10 @@ describe("ActionBar workflow tabs", () => {
     // The dialog stays usable: a retry that succeeds clears it.
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null)
-        .toBe(true));
+      expect(screen.queryByRole("dialog", { name: "Configure conflict resolution" }) === null).toBe(
+        true,
+      ),
+    );
     expect(createTabMock).toHaveBeenCalledTimes(2);
   });
 
@@ -2470,10 +2542,12 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open conflict resolution",
-      expect.any(Object),
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not open conflict resolution",
+        expect.any(Object),
+      ),
+    );
     expect(disarmRefreshAfterAgentCompletionMock).not.toHaveBeenCalled();
   });
 
@@ -2494,10 +2568,9 @@ describe("ActionBar workflow tabs", () => {
     await waitFor(() => {
       expect(disarmRefreshAfterAgentCompletionMock).toHaveBeenCalledWith("armed-at-thrown");
     });
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open conflict resolution",
-      { description: "pane rejected the tab" },
-    );
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not open conflict resolution", {
+      description: "pane rejected the tab",
+    });
   });
 
   test("reports tab refusal and unlocks Resolve when arm rollback rejects", async () => {
@@ -2514,10 +2587,12 @@ describe("ActionBar workflow tabs", () => {
     const resolveButton = screen.getByRole("button", { name: "Resolve" });
     fireEvent.click(resolveButton);
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open conflict resolution",
-      expect.any(Object),
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not open conflict resolution",
+        expect.any(Object),
+      ),
+    );
     expect(console.warn).toHaveBeenCalledWith(
       "[ActionBar] Failed to roll back the PR refresh arm:",
       expect.any(Error),
@@ -2532,20 +2607,25 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: true,
     };
     let resolveArm!: (armedAt: string | null) => void;
-    armRefreshAfterAgentCompletionMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveArm = resolve;
-    }));
+    armRefreshAfterAgentCompletionMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveArm = resolve;
+        }),
+    );
     const view = render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
     currentSelectedEnvironmentId = "env-2";
-    currentOtherEnvironments = [{
-      ...selectedEnvironment,
-      id: "env-2",
-      name: "other-environment",
-      prState: "open",
-      hasMergeConflicts: true,
-    }];
+    currentOtherEnvironments = [
+      {
+        ...selectedEnvironment,
+        id: "env-2",
+        name: "other-environment",
+        prState: "open",
+        hasMergeConflicts: true,
+      },
+    ];
     view.rerender(<ActionBar />);
     resolveArm("armed-before-selection-change");
 
@@ -2557,7 +2637,9 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
     expect(toastErrorMock).toHaveBeenCalledWith(
       "Could not open conflict resolution",
-      expect.objectContaining({ description: expect.stringContaining("selected environment changed") }),
+      expect.objectContaining({
+        description: expect.stringContaining("selected environment changed"),
+      }),
     );
   });
 
@@ -2687,8 +2769,9 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
 
     expect(screen.getByRole("alert").textContent).toContain("selected environment changed");
-    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(screen.getByText(/into main/)).toBeTruthy();
     expect(createTabMock).not.toHaveBeenCalled();
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
@@ -2712,8 +2795,9 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
 
     expect(screen.getByRole("alert").textContent).toContain("now exists");
-    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
   });
@@ -2819,8 +2903,9 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
 
     expect(screen.getByRole("alert").textContent).toContain("no longer running");
-    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
     expect(setModeCreatePendingMock).not.toHaveBeenCalled();
   });
@@ -2839,8 +2924,9 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
 
     expect(screen.getByRole("alert").textContent).toContain("maximum number of tabs");
-    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -2862,8 +2948,9 @@ describe("ActionBar workflow tabs", () => {
     const alert = screen.getByRole("alert").textContent ?? "";
     expect(alert).toContain("not ready to open a new tab");
     expect(alert).not.toContain("maximum number of tabs");
-    expect((screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Create pull request" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -2894,9 +2981,12 @@ describe("ActionBar workflow tabs", () => {
     // The 550 ms production timer is raced against this test's fixed 575 ms
     // sleep, so under aggregate scheduling the dialog can mount just after an
     // immediate query. Same fix as the code-review twin below.
-    await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
-    }, { timeout: 10_000 });
+    await waitFor(
+      () => {
+        expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy();
+      },
+      { timeout: 10_000 },
+    );
 
     // The click mobile browsers synthesize after the gesture must be consumed.
     fireEvent.click(createPrButton);
@@ -2960,13 +3050,15 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve conflicts" }));
-    await waitFor(() => expect(createTabMock).toHaveBeenCalledWith(
-      "codex",
-      expect.objectContaining({
-        agentLaunchMode: "native",
-        displayTitle: "Resolve",
-      }),
-    ));
+    await waitFor(() =>
+      expect(createTabMock).toHaveBeenCalledWith(
+        "codex",
+        expect.objectContaining({
+          agentLaunchMode: "native",
+          displayTitle: "Resolve",
+        }),
+      ),
+    );
   }, 20_000);
 
   test("resolves against the base branch pinned when the modal opened", async () => {
@@ -3009,8 +3101,9 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
 
     expect(screen.getByRole("alert").textContent).toContain("no longer has merge conflicts");
-    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3027,8 +3120,9 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
 
     expect(screen.getByRole("alert").textContent).toContain("no longer running");
-    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3045,8 +3139,9 @@ describe("ActionBar workflow tabs", () => {
     view.rerender(<ActionBar />);
 
     expect(screen.getByRole("alert").textContent).toContain("maximum number of tabs");
-    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3067,8 +3162,9 @@ describe("ActionBar workflow tabs", () => {
     const alert = screen.getByRole("alert").textContent ?? "";
     expect(alert).toContain("not ready to open a new tab");
     expect(alert).not.toContain("maximum number of tabs");
-    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3082,18 +3178,21 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
     currentSelectedEnvironmentId = "env-2";
-    currentOtherEnvironments = [{
-      ...selectedEnvironment,
-      id: "env-2",
-      name: "other-environment",
-      prState: "open",
-      hasMergeConflicts: true,
-    }];
+    currentOtherEnvironments = [
+      {
+        ...selectedEnvironment,
+        id: "env-2",
+        name: "other-environment",
+        prState: "open",
+        hasMergeConflicts: true,
+      },
+    ];
     view.rerender(<ActionBar />);
 
     expect(screen.getByRole("alert").textContent).toContain("selected environment changed");
-    expect((screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Resolve conflicts" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -3146,9 +3245,12 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
 
-    await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-    }, { timeout: 10_000 });
+    await waitFor(
+      () => {
+        expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+      },
+      { timeout: 10_000 },
+    );
     expect(createTabMock).not.toHaveBeenCalled();
 
     // Mobile browsers synthesize a click after the completed pointer gesture.
@@ -3184,9 +3286,12 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
     await new Promise((resolve) => setTimeout(resolve, 575));
-    await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-    }, { timeout: 10_000 });
+    await waitFor(
+      () => {
+        expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+      },
+      { timeout: 10_000 },
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 1_025));
     fireEvent.click(reviewButton);
@@ -3215,9 +3320,12 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
     await new Promise((resolve) => setTimeout(resolve, 575));
-    await waitFor(() => {
-      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
-    }, { timeout: 10_000 });
+    await waitFor(
+      () => {
+        expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy();
+      },
+      { timeout: 10_000 },
+    );
 
     view.unmount();
 
@@ -3277,11 +3385,7 @@ describe("ActionBar workflow tabs", () => {
     expect(screen.queryByRole("dialog", { name: "Configure code review" }) === null).toBe(true);
     expect(createTabMock).not.toHaveBeenCalled();
 
-    const cases = [
-      { agent: "claude" },
-      { agent: "codex" },
-      { agent: "opencode" },
-    ] as const;
+    const cases = [{ agent: "claude" }, { agent: "codex" }, { agent: "opencode" }] as const;
 
     for (const reviewCase of cases) {
       fireEvent.contextMenu(reviewButton);
@@ -3310,20 +3414,25 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     const toolbarButtons = screen.getAllByRole("button");
-    expect(toolbarButtons.indexOf(screen.getByRole("button", { name: "Multi Review" })))
-      .toBe(toolbarButtons.indexOf(screen.getByRole("button", { name: "Code review" })) + 1);
+    expect(toolbarButtons.indexOf(screen.getByRole("button", { name: "Multi Review" }))).toBe(
+      toolbarButtons.indexOf(screen.getByRole("button", { name: "Code review" })) + 1,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
-    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledWith(expect.objectContaining({
-      environmentId: "env-1",
-      projectId: "project-1",
-      targetBranch: "main",
-      reviewers: expect.arrayContaining([
-        expect.objectContaining({ agent: "codex", model: expect.any(String) }),
-      ]),
-      fixModel: expect.objectContaining({ agent: "codex", model: expect.any(String) }),
-    })));
+    await waitFor(() =>
+      expect(startMultiReviewMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          projectId: "project-1",
+          targetBranch: "main",
+          reviewers: expect.arrayContaining([
+            expect.objectContaining({ agent: "codex", model: expect.any(String) }),
+          ]),
+          fixModel: expect.objectContaining({ agent: "codex", model: expect.any(String) }),
+        }),
+      ),
+    );
     expect(createTabMock).toHaveBeenCalledWith("multi-review", {
       multiReviewId: "multi-workflow-1",
       displayTitle: "Multi Review",
@@ -3341,7 +3450,8 @@ describe("ActionBar workflow tabs", () => {
     // `ready` is not a terminal phase, so it blocks a new launch while still
     // offering Abandon once the tab is back on screen.
     findActiveMultiReviewWorkflowMock.mockImplementation(async () => ({
-      id: "multi-workflow-open", phase: "ready",
+      id: "multi-workflow-open",
+      phase: "ready",
     }));
     currentEnvironment = {
       ...selectedEnvironment,
@@ -3355,10 +3465,12 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
-    await waitFor(() => expect(createTabMock).toHaveBeenCalledWith("multi-review", {
-      multiReviewId: "multi-workflow-open",
-      displayTitle: "Multi Review",
-    }));
+    await waitFor(() =>
+      expect(createTabMock).toHaveBeenCalledWith("multi-review", {
+        multiReviewId: "multi-workflow-open",
+        displayTitle: "Multi Review",
+      }),
+    );
     // Reattaching must not start, cancel, or delete anything: the running
     // review keeps its reviewers and its report.
     expect(startMultiReviewMock).not.toHaveBeenCalled();
@@ -3372,7 +3484,8 @@ describe("ActionBar workflow tabs", () => {
 
   test("keeps an active Multi Review intact when its tab cannot be reopened", async () => {
     findActiveMultiReviewWorkflowMock.mockImplementation(async () => ({
-      id: "multi-workflow-open", phase: "failed",
+      id: "multi-workflow-open",
+      phase: "failed",
     }));
     createTabMock.mockImplementation((type: string) => type !== "multi-review");
     currentEnvironment = {
@@ -3387,10 +3500,11 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open Multi Review",
-      { description: expect.stringContaining("Close a tab and try again") },
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
+        description: expect.stringContaining("Close a tab and try again"),
+      }),
+    );
     expect(startMultiReviewMock).not.toHaveBeenCalled();
     expect(cancelMultiReviewMock).not.toHaveBeenCalled();
     expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
@@ -3421,10 +3535,11 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open Multi Review",
-      { description: "backend unavailable" },
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
+        description: "backend unavailable",
+      }),
+    );
     expect(startMultiReviewMock).not.toHaveBeenCalled();
     expect(createTabMock).not.toHaveBeenCalledWith("multi-review", expect.anything());
     expect(cancelMultiReviewMock).not.toHaveBeenCalled();
@@ -3438,7 +3553,8 @@ describe("ActionBar workflow tabs", () => {
     // `cancelled`. Deleting there is rejected, which would replace the real
     // launch error with a storage error and strand the record.
     cancelMultiReviewMock.mockImplementation(async () => ({
-      id: "multi-workflow-1", phase: "cancelling" as const,
+      id: "multi-workflow-1",
+      phase: "cancelling" as const,
     }));
     createTabMock.mockImplementation((type: string) => type !== "multi-review");
     currentEnvironment = {
@@ -3457,7 +3573,8 @@ describe("ActionBar workflow tabs", () => {
     expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
     expect(removeMultiReviewWorkflowMock).not.toHaveBeenCalled();
     expect(installMultiReviewWorkflowMock).toHaveBeenLastCalledWith({
-      id: "multi-workflow-1", phase: "cancelling",
+      id: "multi-workflow-1",
+      phase: "cancelling",
     });
     expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
       description: expect.stringContaining("maximum tab count was reached"),
@@ -3484,7 +3601,8 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() =>
-      expect(deleteMultiReviewWorkflowMock).toHaveBeenCalledWith("multi-workflow-1"));
+      expect(deleteMultiReviewWorkflowMock).toHaveBeenCalledWith("multi-workflow-1"),
+    );
     expect(removeMultiReviewWorkflowMock).toHaveBeenCalledWith("multi-workflow-1");
     expect(toastErrorMock).toHaveBeenCalledWith("Could not open Multi Review", {
       description: "The environment is not ready or the maximum tab count was reached.",
@@ -3503,18 +3621,20 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
-    expect(
-      screen.getByRole("dialog", { name: "Configure looped code review" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Configure looped code review" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
-      environmentId: "env-1",
-      projectId: "project-1",
-      agent: "codex",
-      targetBranch: "main",
-      allowance: 6,
-    })));
+    await waitFor(() =>
+      expect(startLoopedReviewMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "codex",
+          targetBranch: "main",
+          allowance: 6,
+        }),
+      ),
+    );
     expect(createTabMock).toHaveBeenCalledWith("looped-review", {
       loopedReviewId: "looped-workflow-1",
       displayTitle: "Looped Review",
@@ -3526,9 +3646,12 @@ describe("ActionBar workflow tabs", () => {
   test("blocks duplicate submissions and exposes a busy launch state", async () => {
     currentWorkspaceReady = true;
     let resolveStart!: (workflow: typeof startedLoopedWorkflow) => void;
-    startLoopedReviewMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveStart = resolve;
-    }));
+    startLoopedReviewMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
@@ -3537,21 +3660,28 @@ describe("ActionBar workflow tabs", () => {
 
     const busyButton = await screen.findByRole("button", { name: "Starting looped review…" });
     expect((busyButton as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     fireEvent.submit(busyButton.closest("form")!);
     expect(startLoopedReviewMock).toHaveBeenCalledTimes(1);
 
     resolveStart(startedLoopedWorkflow);
     await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
-    expect(screen.queryByRole("dialog", { name: "Configure looped code review" }) === null).toBe(true);
+    expect(screen.queryByRole("dialog", { name: "Configure looped code review" }) === null).toBe(
+      true,
+    );
   });
 
   test("disables the toolbar entry point while a launch is in flight", async () => {
     currentWorkspaceReady = true;
     let resolveStart!: (workflow: typeof startedLoopedWorkflow) => void;
-    startLoopedReviewMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveStart = resolve;
-    }));
+    startLoopedReviewMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
     render(<ActionBar />);
 
     const toolbarButton = screen.getByRole("button", { name: "Looped code review" });
@@ -3562,9 +3692,8 @@ describe("ActionBar workflow tabs", () => {
     // Otherwise a second review could be launched for the same environment
     // from the toolbar while the first is still being created. The open dialog
     // marks the toolbar aria-hidden, so it is queried explicitly.
-    const toolbarEntry = () => screen.getByRole(
-      "button", { name: "Looped code review", hidden: true },
-    ) as HTMLButtonElement;
+    const toolbarEntry = () =>
+      screen.getByRole("button", { name: "Looped code review", hidden: true }) as HTMLButtonElement;
     await waitFor(() => {
       expect(toolbarEntry().disabled).toBe(true);
     });
@@ -3602,15 +3731,17 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open looped review",
-      { description: "backend unavailable" },
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Could not open looped review", {
+        description: "backend unavailable",
+      }),
+    );
     expect(cancelLoopedReviewMock).not.toHaveBeenCalled();
     expect(deleteLoopedReviewMock).not.toHaveBeenCalled();
     expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
-    expect((screen.getByRole("button", { name: "Start looped review" }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Start looped review" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("passes linked ticket details and current project notes into looped review", async () => {
@@ -3629,9 +3760,7 @@ describe("ActionBar workflow tabs", () => {
         comments: [
           { id: "comment-1", text: "Preserve the original file.", createdAt: "2026-07-20" },
         ],
-        images: [
-          { id: "image-1", filename: "failed-upload.png", createdAt: "2026-07-20" },
-        ],
+        images: [{ id: "image-1", filename: "failed-upload.png", createdAt: "2026-07-20" }],
         createdAt: "2026-07-20",
         order: 0,
         environmentId: "env-1",
@@ -3642,16 +3771,20 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
-      context: {
-        ticketTitle: "Retry failed uploads",
-        ticketDescription: "Keep failed uploads available for retry.",
-        acceptanceCriteria: "Retry without selecting the file again.",
-        comments: ["Preserve the original file."],
-        imageNames: ["failed-upload.png"],
-        projectNotes: "Prefer small, independently deployable changes.",
-      },
-    })));
+    await waitFor(() =>
+      expect(startLoopedReviewMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context: {
+            ticketTitle: "Retry failed uploads",
+            ticketDescription: "Keep failed uploads available for retry.",
+            acceptanceCriteria: "Retry without selecting the file again.",
+            comments: ["Preserve the original file."],
+            imageNames: ["failed-upload.png"],
+            projectNotes: "Prefer small, independently deployable changes.",
+          },
+        }),
+      ),
+    );
   });
 
   test("passes current project notes without requiring a linked ticket", async () => {
@@ -3663,16 +3796,20 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
-      context: {
-        ticketTitle: undefined,
-        ticketDescription: undefined,
-        acceptanceCriteria: undefined,
-        comments: undefined,
-        imageNames: undefined,
-        projectNotes: "Review database migrations carefully.",
-      },
-    })));
+    await waitFor(() =>
+      expect(startLoopedReviewMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context: {
+            ticketTitle: undefined,
+            ticketDescription: undefined,
+            acceptanceCriteria: undefined,
+            comments: undefined,
+            imageNames: undefined,
+            projectNotes: "Review database migrations carefully.",
+          },
+        }),
+      ),
+    );
   });
 
   test("excludes notes loaded for another project from looped review", async () => {
@@ -3684,9 +3821,13 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(startLoopedReviewMock).toHaveBeenCalledWith(expect.objectContaining({
-      context: undefined,
-    })));
+    await waitFor(() =>
+      expect(startLoopedReviewMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          context: undefined,
+        }),
+      ),
+    );
   });
 
   test("requires a running, workspace-ready environment with setup complete", () => {
@@ -3694,7 +3835,9 @@ describe("ActionBar workflow tabs", () => {
       const button = screen.getByRole("button", { name: "Looped code review" });
       expect((button as HTMLButtonElement).disabled).toBe(true);
       fireEvent.click(button);
-      expect(screen.queryByRole("dialog", { name: "Configure looped code review" }) === null).toBe(true);
+      expect(screen.queryByRole("dialog", { name: "Configure looped code review" }) === null).toBe(
+        true,
+      );
       expect(startLoopedReviewMock).not.toHaveBeenCalled();
     };
 
@@ -3747,9 +3890,7 @@ describe("ActionBar workflow tabs", () => {
       "Could not open looped review",
       expect.objectContaining({ description: expect.stringContaining("maximum tab count") }),
     );
-    expect(
-      screen.getByRole("dialog", { name: "Configure looped code review" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Configure looped code review" })).toBeTruthy();
   });
 
   test("rolls back the workflow when tab creation throws", async () => {
@@ -3765,10 +3906,9 @@ describe("ActionBar workflow tabs", () => {
     await waitFor(() => expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1"));
     expect(cancelLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
     expect(deleteLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open looped review",
-      { description: "pane rejected the tab" },
-    );
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not open looped review", {
+      description: "pane rejected the tab",
+    });
   });
 
   test("reports non-Error looped-review tab creation failures", async () => {
@@ -3783,10 +3923,9 @@ describe("ActionBar workflow tabs", () => {
 
     await waitFor(() => expect(removeLoopedWorkflowMock).toHaveBeenCalledWith("looped-workflow-1"));
     expect(deleteLoopedReviewMock).toHaveBeenCalledWith("looped-workflow-1");
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open looped review",
-      { description: "pane rejected the tab" },
-    );
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not open looped review", {
+      description: "pane rejected the tab",
+    });
   });
 
   test("preserves the workflow projection when cancellation fails", async () => {
@@ -3800,12 +3939,14 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open looped review",
-      expect.objectContaining({
-        description: expect.stringContaining("saved workflow remains available for recovery"),
-      }),
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not open looped review",
+        expect.objectContaining({
+          description: expect.stringContaining("saved workflow remains available for recovery"),
+        }),
+      ),
+    );
     expect(installLoopedWorkflowMock).toHaveBeenCalledWith(startedLoopedWorkflow);
     expect(deleteLoopedReviewMock).not.toHaveBeenCalled();
     expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
@@ -3833,12 +3974,14 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open looped review",
-      expect.objectContaining({
-        description: expect.stringContaining("saved workflow remains available for recovery"),
-      }),
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not open looped review",
+        expect.objectContaining({
+          description: expect.stringContaining("saved workflow remains available for recovery"),
+        }),
+      ),
+    );
 
     const recoveryToast = toastErrorMock.mock.calls.at(-1)?.[1] as {
       action?: { label: string; onClick: () => void };
@@ -3868,12 +4011,14 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open looped review",
-      expect.objectContaining({
-        description: expect.stringContaining("saved workflow remains available for recovery"),
-      }),
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not open looped review",
+        expect.objectContaining({
+          description: expect.stringContaining("saved workflow remains available for recovery"),
+        }),
+      ),
+    );
 
     const recoveryToast = toastErrorMock.mock.calls.at(-1)?.[1] as {
       action?: { label: string; onClick: () => void };
@@ -3902,12 +4047,14 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledWith(
-      "Could not open looped review",
-      expect.objectContaining({
-        description: expect.stringContaining("saved workflow remains available for recovery"),
-      }),
-    ));
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith(
+        "Could not open looped review",
+        expect.objectContaining({
+          description: expect.stringContaining("saved workflow remains available for recovery"),
+        }),
+      ),
+    );
     expect(installLoopedWorkflowMock).toHaveBeenLastCalledWith(cancelledLoopedWorkflow);
     expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog", { name: "Configure looped code review" })).toBeTruthy();
@@ -3923,14 +4070,16 @@ describe("ActionBar workflow tabs", () => {
     fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
 
-    await waitFor(() => expect(installLoopedWorkflowMock).toHaveBeenLastCalledWith(
-      cancellingWorkflow,
-    ));
+    await waitFor(() =>
+      expect(installLoopedWorkflowMock).toHaveBeenLastCalledWith(cancellingWorkflow),
+    );
     expect(deleteLoopedReviewMock).not.toHaveBeenCalled();
     expect(removeLoopedWorkflowMock).not.toHaveBeenCalled();
     expect(toastErrorMock).toHaveBeenCalledWith(
       "Could not open looped review",
-      expect.objectContaining({ description: expect.stringContaining("Cancellation is still in progress") }),
+      expect.objectContaining({
+        description: expect.stringContaining("Cancellation is still in progress"),
+      }),
     );
   });
 
@@ -3981,11 +4130,13 @@ describe("ActionBar configured action defaults", () => {
         initialReasoningEffort: "max",
       }),
     );
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^claude\u0000env-env-1:tab-/),
-      "env-1",
-      expect.objectContaining({ model: "opus[1m]", effort: "max" }),
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^claude\u0000env-env-1:tab-/),
+        "env-1",
+        expect.objectContaining({ model: "opus[1m]", effort: "max" }),
+      ),
+    );
   });
 
   test("keeps the environment's own agent ahead of an application-level default", async () => {
@@ -4061,14 +4212,16 @@ describe("ActionBar configured action defaults", () => {
     );
     // Claude's model must not be carried onto Codex; the configured Codex
     // defaults are what the launch falls back to.
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^codex\u0000env-env-1:tab-/),
-      "env-1",
-      expect.objectContaining({
-        model: "codex-default-model",
-        reasoningEffort: "medium",
-      }),
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^codex\u0000env-env-1:tab-/),
+        "env-1",
+        expect.objectContaining({
+          model: "codex-default-model",
+          reasoningEffort: "medium",
+        }),
+      ),
+    );
   });
 
   test("applies the configured PR default to a plain Create PR click", () => {
@@ -4109,13 +4262,15 @@ describe("ActionBar configured action defaults", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Resolve" }));
 
-    await waitFor(() => expect(createTabMock).toHaveBeenLastCalledWith(
-      "claude",
-      expect.objectContaining({
-        displayTitle: "Resolve",
-        initialAgentModel: "sonnet",
-      }),
-    ));
+    await waitFor(() =>
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        "claude",
+        expect.objectContaining({
+          displayTitle: "Resolve",
+          initialAgentModel: "sonnet",
+        }),
+      ),
+    );
 
     currentEnvironment = {
       ...selectedEnvironment,
@@ -4177,7 +4332,8 @@ describe("ActionBar configured action defaults", () => {
     // Right-clicking must propose what the plain click would have done, or the
     // two adjacent affordances disagree about the same button.
     await waitFor(() =>
-      expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy());
+      expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy(),
+    );
     expect(
       screen.getByRole("combobox", { name: "Agent, model and reasoning" }).textContent,
     ).toContain("Haiku");
@@ -4242,7 +4398,9 @@ describe("ActionBar pull request actions", () => {
     };
     render(<ActionBar />);
 
-    const checking = screen.getByRole("button", { name: "Checking mergeability…" }) as HTMLButtonElement;
+    const checking = screen.getByRole("button", {
+      name: "Checking mergeability…",
+    }) as HTMLButtonElement;
     expect(checking.disabled).toBe(true);
     expect(screen.queryByRole("button", { name: "Merge PR" }) === null).toBe(true);
     expect(screen.queryByRole("button", { name: "Resolve" }) === null).toBe(true);
@@ -4271,10 +4429,9 @@ describe("ActionBar run commands", () => {
 
     render(<ActionBar />);
 
-    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledWith(
-      "container-1",
-      "orkestrator-ai.json",
-    ));
+    await waitFor(() =>
+      expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "orkestrator-ai.json"),
+    );
     const runButton = screen.getByRole("button", { name: "Run commands" });
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
     fireEvent.click(runButton);
@@ -4296,10 +4453,9 @@ describe("ActionBar run commands", () => {
     readLocalFileMock.mockResolvedValueOnce({ content: '{"run":["bun run dev"]}' });
 
     render(<ActionBar />);
-    await waitFor(() => expect(readLocalFileMock).toHaveBeenCalledWith(
-      "/tmp/repo-worktree",
-      "orkestrator-ai.json",
-    ));
+    await waitFor(() =>
+      expect(readLocalFileMock).toHaveBeenCalledWith("/tmp/repo-worktree", "orkestrator-ai.json"),
+    );
     const runButton = screen.getByRole("button", { name: "Run commands" });
     await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
     fireEvent.click(runButton);
@@ -4315,14 +4471,18 @@ describe("ActionBar run commands", () => {
     const { rerender } = render(<ActionBar />);
 
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
 
     currentEnvironment = { ...selectedEnvironment, containerId: "container-2" };
     currentSelectedEnvironmentId = currentEnvironment.id;
     readContainerFileMock.mockRejectedValueOnce(new Error("file unavailable"));
     rerender(<ActionBar />);
     await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledTimes(2));
-    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
 
     currentEnvironment = { ...selectedEnvironment, containerId: "container-3" };
     currentSetupScriptsRunning = true;
@@ -4332,7 +4492,9 @@ describe("ActionBar run commands", () => {
       await Promise.resolve();
     });
     expect(readContainerFileMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Run commands" }));
     expect(createTabMock).not.toHaveBeenCalled();
   });
@@ -4342,12 +4504,12 @@ describe("ActionBar run commands", () => {
     readContainerFileMock.mockImplementationOnce(() => null as never);
     render(<ActionBar />);
 
-    await waitFor(() => expect(readContainerFileMock).toHaveBeenCalledWith(
-      "container-1",
-      "orkestrator-ai.json",
-    ));
-    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"))
-      .toBe("true");
+    await waitFor(() =>
+      expect(readContainerFileMock).toHaveBeenCalledWith("container-1", "orkestrator-ai.json"),
+    );
+    expect(screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled")).toBe(
+      "true",
+    );
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
@@ -4355,9 +4517,12 @@ describe("ActionBar run commands", () => {
     currentWorkspaceReady = true;
     let resolveOld!: (value: { content: string }) => void;
     readContainerFileMock
-      .mockImplementationOnce(() => new Promise((resolve) => {
-        resolveOld = resolve;
-      }))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve;
+          }),
+      )
       .mockResolvedValueOnce({ content: '{"run":[]}' });
 
     const { rerender } = render(<ActionBar />);
@@ -4398,10 +4563,9 @@ describe("ActionBar editor actions", () => {
     };
     rerender(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Open in VS Code" }));
-    await waitFor(() => expect(openLocalInEditorMock).toHaveBeenCalledWith(
-      "/tmp/repo-worktree",
-      "vscode",
-    ));
+    await waitFor(() =>
+      expect(openLocalInEditorMock).toHaveBeenCalledWith("/tmp/repo-worktree", "vscode"),
+    );
   });
 
   test("shows and dismisses editor launch failures", async () => {
@@ -4465,29 +4629,31 @@ describe("ActionBar successful cleanup and merge actions", () => {
   test("submits merge and cleanup as one backend-owned workflow", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     let resolveMerge!: (outcome: MergeOutcome) => void;
-    mergeEnvironmentPrMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveMerge = resolve;
-    }));
+    mergeEnvironmentPrMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMerge = resolve;
+        }),
+    );
     render(<ActionBar />);
 
     confirmMergeAndCleanup();
 
-    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-      "env-1",
-      "squash",
-      true,
-      true,
-    ));
+    await waitFor(() =>
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+    );
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(mergePrLocalMock).not.toHaveBeenCalled();
 
     resolveMerge({ outcome: "merged", cleanupOutcome: "completed" });
 
-    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith(
-      "Branch merged",
-      expect.objectContaining({ id: "branch-merged-env-1" }),
-    ));
+    await waitFor(() =>
+      expect(toastSuccessMock).toHaveBeenCalledWith(
+        "Branch merged",
+        expect.objectContaining({ id: "branch-merged-env-1" }),
+      ),
+    );
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
   });
 
@@ -4501,12 +4667,9 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     confirmMergeAndCleanup();
 
-    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-      "env-1",
-      "squash",
-      true,
-      true,
-    ));
+    await waitFor(() =>
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+    );
     expect(deleteEnvironmentMock).not.toHaveBeenCalled();
   });
 
@@ -4557,9 +4720,12 @@ describe("ActionBar successful cleanup and merge actions", () => {
   test("keeps a cleanup retry tied to the environment that initiated the merge", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     let resolveMerge!: (outcome: MergeOutcome) => void;
-    mergeEnvironmentPrMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveMerge = resolve;
-    }));
+    mergeEnvironmentPrMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMerge = resolve;
+        }),
+    );
     const { rerender } = render(<ActionBar />);
     confirmMergeAndCleanup();
     await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledTimes(1));
@@ -4599,12 +4765,9 @@ describe("ActionBar successful cleanup and merge actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
-    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-      "env-1",
-      "squash",
-      true,
-      false,
-    ));
+    await waitFor(() =>
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+    );
 
     mergeEnvironmentPrMock.mockClear();
     currentEnvironment = {
@@ -4620,12 +4783,9 @@ describe("ActionBar successful cleanup and merge actions", () => {
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
-    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-      "env-1",
-      "squash",
-      true,
-      false,
-    ));
+    await waitFor(() =>
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false),
+    );
     expect(mergePrLocalMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
   });
@@ -4659,21 +4819,30 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
-    await waitFor(() => expect(findErrorAlert("Failed to delete environment:").textContent)
-      .toContain("first failure"));
+    await waitFor(() =>
+      expect(findErrorAlert("Failed to delete environment:").textContent).toContain(
+        "first failure",
+      ),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: "Delete Environment" }));
-    await waitFor(() => expect(findErrorAlert("Failed to delete environment:").textContent)
-      .toContain("second failure"));
+    await waitFor(() =>
+      expect(findErrorAlert("Failed to delete environment:").textContent).toContain(
+        "second failure",
+      ),
+    );
     expect(screen.getByRole("button", { name: "Delete Environment" })).toBeTruthy();
     expect(deleteEnvironmentMock).toHaveBeenCalledTimes(2);
   });
 
   test("disables cleanup controls and suppresses duplicates while deletion is pending", async () => {
     let resolveDelete!: () => void;
-    deleteEnvironmentMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveDelete = resolve;
-    }));
+    deleteEnvironmentMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve;
+        }),
+    );
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
@@ -4681,12 +4850,16 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     const deletingButton = await screen.findByRole("button", { name: "Deleting..." });
     expect((deletingButton as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     fireEvent.click(deletingButton);
     expect(deleteEnvironmentMock).toHaveBeenCalledTimes(1);
 
     resolveDelete();
-    await waitFor(() => expect(screen.queryByRole("button", { name: "Deleting..." }) === null).toBe(true));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Deleting..." }) === null).toBe(true),
+    );
   });
 
   test("rehydrates a persisted backend cleanup failure", async () => {
@@ -4701,8 +4874,9 @@ describe("ActionBar successful cleanup and merge actions", () => {
 
     const errorAlert = await waitFor(() => findErrorAlert("Failed to delete environment:"));
     expect(errorAlert.textContent).toContain("persisted cleanup failure");
-    expect((screen.getByRole("button", { name: "Delete Environment" }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Delete Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 });
 
@@ -4712,9 +4886,11 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     currentTabCount = 1;
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
     render(<ActionBar />);
-    await waitFor(() => expect(
-      screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
-    ).toBe("false"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false"),
+    );
 
     fireEvent.keyDown(window, { key: "3", code: "Digit3", ctrlKey: true });
     fireEvent.keyDown(window, { key: "t", code: "KeyT", metaKey: true });
@@ -4745,15 +4921,19 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
     currentWorkspaceReady = true;
     readContainerFileMock.mockResolvedValueOnce({ content: '{"run":["bun test"]}' });
     const { rerender } = render(<ActionBar />);
-    await waitFor(() => expect(
-      screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
-    ).toBe("false"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("false"),
+    );
 
     currentTabCount = 10;
     rerender(<ActionBar />);
-    await waitFor(() => expect(
-      screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
-    ).toBe("true"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Run commands" }).getAttribute("aria-disabled"),
+      ).toBe("true"),
+    );
 
     for (const key of ["t", "n", "r", "p"]) {
       toastErrorMock.mockClear();
@@ -4774,9 +4954,15 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
     expect(createTabMock).not.toHaveBeenCalled();
     expect(startLoopedReviewMock).not.toHaveBeenCalled();
-    expect((screen.getByRole("button", { name: "Code review" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Looped code review" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Code review" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Looped code review" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "New terminal tab" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 
   test("falls back to the built-in review prompt for malformed config state", async () => {
@@ -4785,13 +4971,15 @@ describe("ActionBar keyboard shortcuts and tab guards", () => {
 
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
 
-    await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-      expect.stringMatching(/^codex\u0000env-env-1:tab-/),
-      "env-1",
-      expect.objectContaining({
-        text: expect.stringContaining("Security and instruction hierarchy"),
-      }),
-    ));
+    await waitFor(() =>
+      expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+        expect.stringMatching(/^codex\u0000env-env-1:tab-/),
+        "env-1",
+        expect.objectContaining({
+          text: expect.stringContaining("Security and instruction hierarchy"),
+        }),
+      ),
+    );
   });
 });
 
@@ -4811,12 +4999,7 @@ describe("ActionBar merge completion", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Merge PR" }).at(-1)!);
 
     await waitFor(() => {
-      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-        "env-1",
-        "squash",
-        true,
-        false,
-      );
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false);
       expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
         description: "feature/very-long-error",
         id: "branch-merged-env-1",
@@ -4842,10 +5025,12 @@ describe("ActionBar merge completion", () => {
 
     confirmMerge();
 
-    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith("Merge pending", {
-      description: "feature/very-long-error",
-      id: "branch-merge-submitted-env-1",
-    }));
+    await waitFor(() =>
+      expect(toastSuccessMock).toHaveBeenCalledWith("Merge pending", {
+        description: "feature/very-long-error",
+        id: "branch-merge-submitted-env-1",
+      }),
+    );
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
     expect(setEnvironmentPRStoreMock).not.toHaveBeenCalled();
     expect(addCommentMock).not.toHaveBeenCalled();
@@ -4866,10 +5051,12 @@ describe("ActionBar merge completion", () => {
 
     confirmMerge();
 
-    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith("Merge submitted", {
-      description: "feature/very-long-error",
-      id: "branch-merge-submitted-env-1",
-    }));
+    await waitFor(() =>
+      expect(toastSuccessMock).toHaveBeenCalledWith("Merge submitted", {
+        description: "feature/very-long-error",
+        id: "branch-merge-submitted-env-1",
+      }),
+    );
     expect(setEnvironmentPrBackendMock).not.toHaveBeenCalled();
     expect(setEnvironmentPRStoreMock).not.toHaveBeenCalled();
     expect(addCommentMock).not.toHaveBeenCalled();
@@ -4879,9 +5066,12 @@ describe("ActionBar merge completion", () => {
   test("keeps completion presentation tied to the initiating environment after selection changes", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     let resolveMerge!: (outcome: MergeOutcome) => void;
-    mergeEnvironmentPrMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveMerge = resolve;
-    }));
+    mergeEnvironmentPrMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMerge = resolve;
+        }),
+    );
     const { rerender } = render(<ActionBar />);
     confirmMerge();
     await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledTimes(1));
@@ -4898,26 +5088,28 @@ describe("ActionBar merge completion", () => {
     rerender(<ActionBar />);
     resolveMerge({ outcome: "merged", cleanupOutcome: "not-requested" });
 
-    await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
-      description: "feature/very-long-error",
-      id: "branch-merged-env-1",
-    }));
+    await waitFor(() =>
+      expect(toastSuccessMock).toHaveBeenCalledWith("Branch merged", {
+        description: "feature/very-long-error",
+        id: "branch-merged-env-1",
+      }),
+    );
   });
 
   test("dispatches durable cleanup intent before the initiating action bar unmounts", async () => {
     currentEnvironment = { ...selectedEnvironment, prState: "open" };
     let resolveMerge!: (outcome: MergeOutcome) => void;
-    mergeEnvironmentPrMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveMerge = resolve;
-    }));
+    mergeEnvironmentPrMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveMerge = resolve;
+        }),
+    );
     const { unmount } = render(<ActionBar />);
     confirmMergeAndCleanup();
-    await waitFor(() => expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-      "env-1",
-      "squash",
-      true,
-      true,
-    ));
+    await waitFor(() =>
+      expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, true),
+    );
 
     unmount();
     resolveMerge({ outcome: "merged", cleanupOutcome: "completed" });
@@ -4964,10 +5156,12 @@ describe("ActionBar error dialogs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Clean Up" }));
-    expect(screen.queryByText(
-      (_content, element) =>
-        element?.textContent?.startsWith("Failed to delete environment:") ?? false,
-    ) === null).toBe(true);
+    expect(
+      screen.queryByText(
+        (_content, element) =>
+          element?.textContent?.startsWith("Failed to delete environment:") ?? false,
+      ) === null,
+    ).toBe(true);
   });
 
   test("uses generic cleanup guidance for non-Error rejections", async () => {
@@ -4998,12 +5192,7 @@ describe("ActionBar error dialogs", () => {
     const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
     const dialogContent = screen.getByTestId("alert-dialog-content");
 
-    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-      "env-1",
-      "squash",
-      true,
-      false,
-    );
+    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false);
     expect(toastSuccessMock).not.toHaveBeenCalled();
     expect(dialogContent.className).toContain("max-h-[calc(100vh-2rem)]");
     expect(dialogContent.className).toContain("overflow-hidden");
@@ -5016,10 +5205,11 @@ describe("ActionBar error dialogs", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Merge PR" }));
-    expect(screen.queryByText(
-      (_content, element) =>
-        element?.textContent?.startsWith("Failed to merge PR:") ?? false,
-    ) === null).toBe(true);
+    expect(
+      screen.queryByText(
+        (_content, element) => element?.textContent?.startsWith("Failed to merge PR:") ?? false,
+      ) === null,
+    ).toBe(true);
   });
 
   test("reports a local merge failure without a success toast", async () => {
@@ -5037,12 +5227,7 @@ describe("ActionBar error dialogs", () => {
 
     const errorAlert = await waitFor(() => findErrorAlert("Failed to merge PR:"));
     expect(errorAlert.textContent).toContain("local merge failed");
-    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith(
-      "env-1",
-      "squash",
-      true,
-      false,
-    );
+    expect(mergeEnvironmentPrMock).toHaveBeenCalledWith("env-1", "squash", true, false);
     expect(mergePrLocalMock).not.toHaveBeenCalled();
     expect(mergePrMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).not.toHaveBeenCalled();

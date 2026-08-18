@@ -23,13 +23,15 @@ export const AGENT_TEST_LOGIN_MINT_TIMEOUT_MS = 10_000;
 export function isLoopbackBrowserGatewayUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return (url.protocol === "http:" || url.protocol === "https:")
-      && url.username === ""
-      && url.password === ""
-      && (url.hostname === "127.0.0.1"
-        || url.hostname === "localhost"
-        || url.hostname === "::1"
-        || url.hostname === "[::1]");
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.username === "" &&
+      url.password === "" &&
+      (url.hostname === "127.0.0.1" ||
+        url.hostname === "localhost" ||
+        url.hostname === "::1" ||
+        url.hostname === "[::1]")
+    );
   } catch {
     return false;
   }
@@ -52,14 +54,20 @@ export async function mintAgentTestLoginUrl(options: {
 }): Promise<AgentTestLogin> {
   const { status } = options;
   if (status.flavor !== "agent-test") {
-    throw new Error(`Profile ${status.profile} is not an agent-test profile; refusing to mint a login link`);
+    throw new Error(
+      `Profile ${status.profile} is not an agent-test profile; refusing to mint a login link`,
+    );
   }
   if (status.status !== "ready") {
-    throw new Error(`Profile ${status.profile} is ${status.status}; start it with bun run dev:test first`);
+    throw new Error(
+      `Profile ${status.profile} is ${status.status}; start it with bun run dev:test first`,
+    );
   }
   if (!status.browserUrl) throw new Error(`Profile ${status.profile} has no browser gateway URL`);
   if (!isLoopbackBrowserGatewayUrl(status.browserUrl)) {
-    throw new Error(`Profile ${status.profile} browser gateway URL is not loopback; refusing to mint a login link`);
+    throw new Error(
+      `Profile ${status.profile} browser gateway URL is not loopback; refusing to mint a login link`,
+    );
   }
   if (!status.authFile) throw new Error(`Profile ${status.profile} has no gateway auth file`);
 
@@ -115,10 +123,10 @@ export async function mintAgentTestLoginUrl(options: {
     if (timeout) clearTimeout(timeout);
   }
   if (
-    typeof minted.code !== "string"
-    || minted.code.length === 0
-    || typeof minted.expiresAt !== "number"
-    || !Number.isFinite(minted.expiresAt)
+    typeof minted.code !== "string" ||
+    minted.code.length === 0 ||
+    typeof minted.expiresAt !== "number" ||
+    !Number.isFinite(minted.expiresAt)
   ) {
     throw new Error("Gateway returned an unexpected bootstrap response");
   }

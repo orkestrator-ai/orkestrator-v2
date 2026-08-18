@@ -5,15 +5,9 @@ interface AgentThinkingIndicatorProps {
   className?: string;
 }
 
-export function AgentThinkingIndicator({
-  agentName,
-  className,
-}: AgentThinkingIndicatorProps) {
+export function AgentThinkingIndicator({ agentName, className }: AgentThinkingIndicatorProps) {
   return (
-    <span
-      role="status"
-      className={cn("agent-thinking-shimmer text-xs", className)}
-    >
+    <span role="status" className={cn("agent-thinking-shimmer text-xs", className)}>
       {agentName} is thinking...
     </span>
   );

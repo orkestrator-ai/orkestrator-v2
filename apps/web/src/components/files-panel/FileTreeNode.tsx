@@ -3,11 +3,7 @@ import { ChevronRight, Folder, FolderOpen, RotateCcw, Trash2 } from "lucide-reac
 import { cn } from "@/lib/utils";
 import { FileIcon } from "./FileIcon";
 import { useFilesPanelStore } from "@/stores";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { FileNode } from "@/lib/backend";
 import {
   ContextMenu,
@@ -46,21 +42,18 @@ export const FileTreeNode = memo(function FileTreeNode({
 
   if (isFolder) {
     return (
-      <Collapsible
-        open={isExpanded}
-        onOpenChange={(open) => setFolderExpanded(item.path, open)}
-      >
+      <Collapsible open={isExpanded} onOpenChange={(open) => setFolderExpanded(item.path, open)}>
         <CollapsibleTrigger asChild>
           <button
             className={cn(
-              "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50"
+              "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
             )}
             style={{ paddingLeft }}
           >
             <ChevronRight
               className={cn(
                 "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200",
-                isExpanded && "rotate-90"
+                isExpanded && "rotate-90",
               )}
             />
             {isExpanded ? (
@@ -94,7 +87,7 @@ export const FileTreeNode = memo(function FileTreeNode({
     <button
       onClick={() => onFileClick?.(item.path)}
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50"
+        "flex w-full items-center gap-1.5 rounded-sm py-1 text-sm text-foreground transition-colors hover:bg-accent/50",
       )}
       style={{ paddingLeft: paddingLeft + 14 }} // Extra indent for files (no chevron)
     >

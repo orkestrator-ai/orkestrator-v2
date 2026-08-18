@@ -74,10 +74,7 @@ export function applyRuntimeEnvironmentOutput(output: string): string[] {
 
     const value = line.slice(separatorIndex + 1);
     if (value.length === 0) {
-      if (
-        RUNTIME_ENV_CREDENTIAL_VARIABLES.has(name)
-        && process.env[name] !== undefined
-      ) {
+      if (RUNTIME_ENV_CREDENTIAL_VARIABLES.has(name) && process.env[name] !== undefined) {
         delete process.env[name];
         updated.push(name);
       }
@@ -101,9 +98,7 @@ export function applyRuntimeEnvironmentOutput(output: string): string[] {
   return updated;
 }
 
-export async function refreshRuntimeEnvironment(
-  run: typeof execFile = execFile,
-): Promise<void> {
+export async function refreshRuntimeEnvironment(run: typeof execFile = execFile): Promise<void> {
   try {
     const runtimeEnvScript = getRuntimeEnvironmentScriptPath();
     const { stdout } = await run(
@@ -138,9 +133,7 @@ export async function refreshRuntimeEnvironment(
  * the child is serving stale tools or credentials. Only the digest is ever
  * logged or exposed through health — never the underlying values.
  */
-export function fingerprintRuntimeEnvironment(
-  env: NodeJS.ProcessEnv = process.env,
-): string {
+export function fingerprintRuntimeEnvironment(env: NodeJS.ProcessEnv = process.env): string {
   const hash = createHash("sha256");
   for (const name of [...RUNTIME_ENV_VARIABLES].sort()) {
     hash.update(name);

@@ -1,7 +1,18 @@
 import { describe, expect, mock, test } from "bun:test";
 import { OPEN_CODE_MESSAGE_HISTORY_LIMIT } from "@orkestrator/protocol/opencode-message-id";
-import { createNativeAgentProvider, PromptRejectedError, ProviderUnavailableError } from "./native-agent-provider.js";
-import { waitUntil, deferred, expectedOpenCodeMessageId, openCodeFake, openCodeProvider, openCodeActivityProvider } from "./agent-provider-test-support.js";
+import {
+  createNativeAgentProvider,
+  PromptRejectedError,
+  ProviderUnavailableError,
+} from "./native-agent-provider.js";
+import {
+  waitUntil,
+  deferred,
+  expectedOpenCodeMessageId,
+  openCodeFake,
+  openCodeProvider,
+  openCodeActivityProvider,
+} from "./agent-provider-test-support.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
 
 describe("OpenCode provider runtime", () => {
@@ -23,10 +34,10 @@ describe("OpenCode provider runtime", () => {
           fake.setQuestionRejectResponse({ error: { message: "failed" } });
         }
         fake.subscriptions[0]!.push(event);
-        await waitUntil(() =>
-          (requestType === "permission"
-            ? fake.permissionReplies
-            : fake.questionRejections).length === 1
+        await waitUntil(
+          () =>
+            (requestType === "permission" ? fake.permissionReplies : fake.questionRejections)
+              .length === 1,
         );
 
         if (requestType === "permission") {
@@ -36,10 +47,10 @@ describe("OpenCode provider runtime", () => {
         }
         await waitUntil(() => fake.subscriptions.length >= 2);
         fake.subscriptions[1]!.push(event);
-        await waitUntil(() =>
-          (requestType === "permission"
-            ? fake.permissionReplies
-            : fake.questionRejections).length === 2
+        await waitUntil(
+          () =>
+            (requestType === "permission" ? fake.permissionReplies : fake.questionRejections)
+              .length === 2,
         );
       } finally {
         await provider.dispose?.();
@@ -49,10 +60,13 @@ describe("OpenCode provider runtime", () => {
 
   test("serializes reconciliation when sessions register concurrently", async () => {
     const fake = openCodeFake();
-    fake.setPending([
-      { id: "permission-a", sessionID: "restored-a" },
-      { id: "permission-b", sessionID: "restored-b" },
-    ], []);
+    fake.setPending(
+      [
+        { id: "permission-a", sessionID: "restored-a" },
+        { id: "permission-b", sessionID: "restored-b" },
+      ],
+      [],
+    );
     const gate = deferred();
     const provider = openCodeProvider(fake);
     try {
@@ -65,8 +79,10 @@ describe("OpenCode provider runtime", () => {
 
       await waitUntil(() => fake.permissionListCallCount === 2);
       expect(fake.questionListCallCount).toBe(2);
-      expect(fake.permissionReplies.map(({ requestID }) => requestID).sort())
-        .toEqual(["permission-a", "permission-b"]);
+      expect(fake.permissionReplies.map(({ requestID }) => requestID).sort()).toEqual([
+        "permission-a",
+        "permission-b",
+      ]);
     } finally {
       await provider.dispose?.();
     }
@@ -158,14 +174,17 @@ describe("OpenCode provider runtime", () => {
     const provider = openCodeProvider(fake);
     try {
       fake.setMessagesResponse({ error: { message: "failed" } });
-      await expect(provider.messages("owned-session"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
-      await expect(provider.structured("owned-session", "request"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.messages("owned-session")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
+      await expect(provider.structured("owned-session", "request")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
 
       fake.setAbortResponse({ error: { message: "failed" } });
-      await expect(provider.abort("owned-session"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.abort("owned-session")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
     } finally {
       await provider.dispose?.();
     }
@@ -197,33 +216,43 @@ describe("OpenCode provider runtime", () => {
     const fake = openCodeFake();
     fake.setMessagesHandler(async (parameters) => {
       if (parameters?.sessionID === "child-session") {
-        return { data: [{
-          info: {
-            id: "child-message",
-            role: "assistant",
-            time: { created: 2 },
-          },
-          parts: [{ id: "child-text", type: "text", text: "Child finished" }],
-        }] };
+        return {
+          data: [
+            {
+              info: {
+                id: "child-message",
+                role: "assistant",
+                time: { created: 2 },
+              },
+              parts: [{ id: "child-text", type: "text", text: "Child finished" }],
+            },
+          ],
+        };
       }
-      return { data: [{
-        info: {
-          id: "root-message",
-          role: "assistant",
-          time: { created: 1 },
-        },
-        parts: [{
-          id: "task-part",
-          type: "tool",
-          tool: "task",
-          state: {
-            status: "completed",
-            title: "Inspect files",
-            input: { description: "Inspect files", agent: "explore" },
-            metadata: { sessionId: "child-session" },
+      return {
+        data: [
+          {
+            info: {
+              id: "root-message",
+              role: "assistant",
+              time: { created: 1 },
+            },
+            parts: [
+              {
+                id: "task-part",
+                type: "tool",
+                tool: "task",
+                state: {
+                  status: "completed",
+                  title: "Inspect files",
+                  input: { description: "Inspect files", agent: "explore" },
+                  metadata: { sessionId: "child-session" },
+                },
+              },
+            ],
           },
-        }],
-      }] };
+        ],
+      };
     });
     const provider = openCodeActivityProvider(fake);
     try {
@@ -232,20 +261,26 @@ describe("OpenCode provider runtime", () => {
         { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
         { sessionID: "child-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
       ]);
-      expect(snapshot?.messages).toEqual([expect.objectContaining({
-        id: "root-message",
-        parts: [expect.objectContaining({
-          type: "subagent",
-          subagentId: "child-session",
-          subagentName: "Inspect files",
-          subagentRole: "explore",
-          subagentActions: [expect.objectContaining({
-            type: "text",
-            content: "Child finished",
-          })],
-          subagentActionCount: 0,
-        })],
-      })]);
+      expect(snapshot?.messages).toEqual([
+        expect.objectContaining({
+          id: "root-message",
+          parts: [
+            expect.objectContaining({
+              type: "subagent",
+              subagentId: "child-session",
+              subagentName: "Inspect files",
+              subagentRole: "explore",
+              subagentActions: [
+                expect.objectContaining({
+                  type: "text",
+                  content: "Child finished",
+                }),
+              ],
+              subagentActionCount: 0,
+            }),
+          ],
+        }),
+      ]);
     } finally {
       await provider.dispose?.();
     }
@@ -268,20 +303,23 @@ describe("OpenCode provider runtime", () => {
   ] as const)("normalizes OpenCode terminal message state", async (error, expected) => {
     const fake = openCodeFake();
     fake.setMessagesResponse({
-      data: [{
-        info: {
-          id: "assistant-terminal",
-          role: "assistant",
-          error,
-          time: { created: 1, completed: 2 },
+      data: [
+        {
+          info: {
+            id: "assistant-terminal",
+            role: "assistant",
+            error,
+            time: { created: 1, completed: 2 },
+          },
+          parts: [],
         },
-        parts: [],
-      }],
+      ],
     });
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.interactiveSnapshot?.("owned-session"))
-        .resolves.toMatchObject(expected);
+      await expect(provider.interactiveSnapshot?.("owned-session")).resolves.toMatchObject(
+        expected,
+      );
     } finally {
       await provider.dispose?.();
     }
@@ -291,21 +329,23 @@ describe("OpenCode provider runtime", () => {
     const fake = openCodeFake();
     const providerList = mock(async () => ({
       data: {
-        providers: [{
-          id: "opencode",
-          name: "OpenCode",
-          models: {
-            "claude-sonnet": {
-              name: "Claude Sonnet",
-              variants: {
-                high: {},
-                disabled: { disabled: true },
+        providers: [
+          {
+            id: "opencode",
+            name: "OpenCode",
+            models: {
+              "claude-sonnet": {
+                name: "Claude Sonnet",
+                variants: {
+                  high: {},
+                  disabled: { disabled: true },
+                },
+                limit: { context: 200_000 },
+                capabilities: { input: { image: true } },
               },
-              limit: { context: 200_000 },
-              capabilities: { input: { image: true } },
             },
           },
-        }],
+        ],
         default: {
           providerID: "opencode",
           modelID: "claude-sonnet",
@@ -324,22 +364,24 @@ describe("OpenCode provider runtime", () => {
     });
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.modelCatalog?.()).resolves.toEqual([{
-        platform: "opencode",
-        id: "opencode/claude-sonnet",
-        label: "Claude Sonnet",
-        providerLabel: "opencode",
-        reasoning: [
-          { id: "default", label: "Default" },
-          { id: "high", label: "High" },
-        ],
-        defaultReasoningId: "default",
-        supportsSpeed: false,
-        // OpenCode has primary agents, not a Build/Plan permission mode.
-        supportsMode: false,
-        contextWindow: 200_000,
-        supportsImageInput: true,
-      }]);
+      await expect(provider.modelCatalog?.()).resolves.toEqual([
+        {
+          platform: "opencode",
+          id: "opencode/claude-sonnet",
+          label: "Claude Sonnet",
+          providerLabel: "opencode",
+          reasoning: [
+            { id: "default", label: "Default" },
+            { id: "high", label: "High" },
+          ],
+          defaultReasoningId: "default",
+          supportsSpeed: false,
+          // OpenCode has primary agents, not a Build/Plan permission mode.
+          supportsMode: false,
+          contextWindow: 200_000,
+          supportsImageInput: true,
+        },
+      ]);
       const snapshot = await provider.interactiveSnapshot?.("owned-session");
       expect(snapshot).toMatchObject({
         title: "Shared investigation",
@@ -347,11 +389,13 @@ describe("OpenCode provider runtime", () => {
         composer: {
           selectedModelId: "opencode/claude-sonnet",
           selectedReasoningId: "high",
-          models: [{
-            id: "opencode/claude-sonnet",
-            contextWindow: 200_000,
-            supportsImageInput: true,
-          }],
+          models: [
+            {
+              id: "opencode/claude-sonnet",
+              contextWindow: 200_000,
+              supportsImageInput: true,
+            },
+          ],
         },
       });
       await provider.modelCatalog?.();
@@ -546,10 +590,12 @@ describe("OpenCode provider runtime", () => {
       provider: {
         list: mock(async () => ({
           data: {
-            all: [{
-              id: "opencode",
-              models: { "kimi-k2.7": { name: "Kimi K2.7" } },
-            }],
+            all: [
+              {
+                id: "opencode",
+                models: { "kimi-k2.7": { name: "Kimi K2.7" } },
+              },
+            ],
             connected: [],
           },
         })),
@@ -557,10 +603,12 @@ describe("OpenCode provider runtime", () => {
       config: {
         providers: mock(async () => ({
           data: {
-            providers: [{
-              id: "opencode",
-              models: { "kimi-k2.7": { name: "Kimi K2.7" } },
-            }],
+            providers: [
+              {
+                id: "opencode",
+                models: { "kimi-k2.7": { name: "Kimi K2.7" } },
+              },
+            ],
           },
         })),
       },
@@ -708,10 +756,12 @@ describe("OpenCode provider runtime", () => {
     try {
       const snapshot = await provider.interactiveSnapshot?.("owned-session");
       expect(snapshot?.composer?.models).toHaveLength(512);
-      expect(snapshot?.composer?.models.some((model) => model.id.startsWith("opencode-go/")))
-        .toBe(true);
-      expect(snapshot?.composer?.models.some((model) => model.id === "opencode/model-500"))
-        .toBe(true);
+      expect(snapshot?.composer?.models.some((model) => model.id.startsWith("opencode-go/"))).toBe(
+        true,
+      );
+      expect(snapshot?.composer?.models.some((model) => model.id === "opencode/model-500")).toBe(
+        true,
+      );
       expect(snapshot?.composer?.selectedModelId).toBe("opencode/model-500");
     } finally {
       await provider.dispose?.();
@@ -751,16 +801,21 @@ describe("OpenCode provider runtime", () => {
   // advertise more than 512 models on its own, and the advertised default must
   // not be lost merely because of where the provider listed it.
   test("reserves a default listed past the per-provider model cap", () => {
-    const catalog = normalizeOpenCodeComposerCatalog({
-      providers: [{
-        id: "openrouter",
-        models: Array.from({ length: 700 }, (_unused, index) => ({
-          id: `model-${index}`,
-          name: `Model ${index}`,
-        })),
-      }],
-      default: { providerID: "openrouter", modelID: "model-690" },
-    }, []);
+    const catalog = normalizeOpenCodeComposerCatalog(
+      {
+        providers: [
+          {
+            id: "openrouter",
+            models: Array.from({ length: 700 }, (_unused, index) => ({
+              id: `model-${index}`,
+              name: `Model ${index}`,
+            })),
+          },
+        ],
+        default: { providerID: "openrouter", modelID: "model-690" },
+      },
+      [],
+    );
 
     expect(catalog.models).toHaveLength(512);
     expect(catalog.models.some((model) => model.id === "openrouter/model-690")).toBe(true);
@@ -797,10 +852,8 @@ describe("OpenCode provider runtime", () => {
 
     expect(catalog.models).toHaveLength(512);
     expect(catalog.selectedModelId).toBe("openrouter/other-3");
-    expect(catalog.models.filter((model) => model.id.startsWith("openrouter/")))
-      .toHaveLength(1);
-    expect(catalog.models.filter((model) => model.id.startsWith("opencode/")))
-      .toHaveLength(511);
+    expect(catalog.models.filter((model) => model.id.startsWith("openrouter/"))).toHaveLength(1);
+    expect(catalog.models.filter((model) => model.id.startsWith("opencode/"))).toHaveLength(511);
   });
 
   test("drops an OpenCode default that names an excluded provider", async () => {
@@ -918,13 +971,11 @@ describe("OpenCode provider runtime", () => {
       resolveOpenCodeModelProviders: () => allowed,
     });
     try {
-      await expect((await provider.rawModelCatalog?.())?.[0]?.id)
-        .toBe("opencode/claude-sonnet-5");
+      await expect((await provider.rawModelCatalog?.())?.[0]?.id).toBe("opencode/claude-sonnet-5");
       // The priority list decides which providers survive the caps, so the
       // pre-edit entry cannot answer a read that passed a different one.
       allowed = ["openrouter"];
-      await expect((await provider.rawModelCatalog?.())?.[0]?.id)
-        .toBe("openrouter/kimi-k2.5");
+      await expect((await provider.rawModelCatalog?.())?.[0]?.id).toBe("openrouter/kimi-k2.5");
     } finally {
       await provider.dispose?.();
     }
@@ -1023,11 +1074,13 @@ describe("OpenCode provider runtime", () => {
       resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
     });
     try {
-      await expect(provider.send("owned-session", "prompt", {
-        requestId: "request-1",
-        // The provider is connected; this model is simply not one of its.
-        model: "hpc-ai/retired-v3",
-      })).rejects.toBeInstanceOf(PromptRejectedError);
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+          // The provider is connected; this model is simply not one of its.
+          model: "hpc-ai/retired-v3",
+        }),
+      ).rejects.toBeInstanceOf(PromptRejectedError);
       expect(fake.promptCalls).toHaveLength(0);
     } finally {
       await provider.dispose?.();
@@ -1087,10 +1140,12 @@ describe("OpenCode provider runtime", () => {
       resolveOpenCodeModelProviders: () => ["hpc-ai", "opencode"],
     });
     try {
-      await expect(provider.send("owned-session", "prompt", {
-        requestId: "request-1",
-        model: "hpc-ai/deepseek/deepseek-v4-flash",
-      })).rejects.toBeInstanceOf(PromptRejectedError);
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+          model: "hpc-ai/deepseek/deepseek-v4-flash",
+        }),
+      ).rejects.toBeInstanceOf(PromptRejectedError);
       expect(fake.promptCalls).toHaveLength(0);
     } finally {
       await provider.dispose?.();
@@ -1149,16 +1204,14 @@ describe("OpenCode provider runtime", () => {
     });
     try {
       const before = await provider.interactiveSnapshot?.("owned-session");
-      expect(before?.composer?.models?.map((model) => model.id))
-        .toEqual(["openrouter/kimi-k2.5"]);
+      expect(before?.composer?.models?.map((model) => model.id)).toEqual(["openrouter/kimi-k2.5"]);
 
       // The composer reads through a second, session-scoped cache. A settings
       // edit has to invalidate that one too, or the picker keeps the pre-edit
       // catalogue for a whole TTL without ever consulting the filter.
       allowed = ["opencode-go"];
       const after = await provider.interactiveSnapshot?.("owned-session");
-      expect(after?.composer?.models?.map((model) => model.id))
-        .toEqual(["opencode-go/grok-code"]);
+      expect(after?.composer?.models?.map((model) => model.id)).toEqual(["opencode-go/grok-code"]);
     } finally {
       await provider.dispose?.();
     }
@@ -1191,9 +1244,7 @@ describe("OpenCode provider runtime", () => {
     const provider = openCodeActivityProvider(fake);
     try {
       const models = await provider.modelCatalog?.();
-      expect(models?.map((model) => model.id)).toEqual([
-        "opencode/claude-sonnet-5",
-      ]);
+      expect(models?.map((model) => model.id)).toEqual(["opencode/claude-sonnet-5"]);
     } finally {
       await provider.dispose?.();
     }
@@ -1256,33 +1307,35 @@ describe("OpenCode provider runtime", () => {
       expect(fake.sessionGetCallCount).toBe(1);
 
       fake.setPromptResponse({ error: { message: "rejected" } });
-      await expect(provider.send("owned-session", "prompt", {
-        requestId: "request-1",
-      })).rejects.toBeInstanceOf(PromptRejectedError);
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+        }),
+      ).rejects.toBeInstanceOf(PromptRejectedError);
 
       fake.setPromptResponse({
         error: { message: "session restarting" },
         response: new Response(null, { status: 404 }),
       });
-      await expect(provider.send("owned-session", "prompt", {
-        requestId: "request-2",
-      })).rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-2",
+        }),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
     } finally {
       await provider.dispose?.();
     }
   });
 
   test("wraps malformed and failed OpenCode status reads as unavailable", async () => {
-    for (const response of [
-      { data: undefined },
-      { error: { message: "failed" } },
-    ]) {
+    for (const response of [{ data: undefined }, { error: { message: "failed" } }]) {
       const fake = openCodeFake();
       fake.setStatusResponse(response);
       const provider = openCodeProvider(fake);
       try {
-        await expect(provider.status("owned-session"))
-          .rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(provider.status("owned-session")).rejects.toBeInstanceOf(
+          ProviderUnavailableError,
+        );
       } finally {
         await provider.dispose?.();
       }
@@ -1294,8 +1347,9 @@ describe("OpenCode provider runtime", () => {
     fake.setStatusError(new Error("status failed"));
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.activity?.("owned-session"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.activity?.("owned-session")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
       expect(fake.statusCalls).toEqual([{ directory: "/workspace" }]);
     } finally {
       await provider.dispose?.();
@@ -1307,63 +1361,69 @@ describe("OpenCode provider runtime", () => {
     const provider = openCodeProvider(fake);
     try {
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID: expectedOpenCodeMessageId("request-1"),
-            structured: { complete: true },
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: expectedOpenCodeMessageId("request-1"),
+              structured: { complete: true },
+              time: { completed: 1 },
+            },
           },
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
 
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID: expectedOpenCodeMessageId("request-1"),
-            structured: { complete: true },
-            time: {},
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: expectedOpenCodeMessageId("request-1"),
+              structured: { complete: true },
+              time: {},
+            },
           },
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toBeNull();
+      await expect(provider.structured("owned-session", "request-1")).resolves.toBeNull();
 
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID: expectedOpenCodeMessageId("request-1"),
-            error: { message: "failed" },
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: expectedOpenCodeMessageId("request-1"),
+              error: { message: "failed" },
+              time: { completed: 1 },
+            },
           },
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({
-          ok: false,
-          error: { code: "provider_error", retryable: true },
-        });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: false,
+        error: { code: "provider_error", retryable: true },
+      });
 
       fake.setMessagesResponse({ data: "invalid" });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toBeNull();
+      await expect(provider.structured("owned-session", "request-1")).resolves.toBeNull();
 
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID: "other-request",
-            structured: { complete: true },
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: "other-request",
+              structured: { complete: true },
+              time: { completed: 1 },
+            },
           },
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toBeNull();
+      await expect(provider.structured("owned-session", "request-1")).resolves.toBeNull();
     } finally {
       await provider.dispose?.();
     }
@@ -1393,36 +1453,43 @@ describe("OpenCode provider runtime", () => {
           },
         ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { version: "new" } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { version: "new" },
+      });
 
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID: expectedOpenCodeMessageId("request-1"),
-            structured: null,
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: expectedOpenCodeMessageId("request-1"),
+              structured: null,
+              time: { completed: 1 },
+            },
           },
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: null });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: null,
+      });
 
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID: expectedOpenCodeMessageId("request-1"),
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID: expectedOpenCodeMessageId("request-1"),
+              time: { completed: 1 },
+            },
           },
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({
-          ok: false,
-          error: { code: "malformed_output", retryable: true },
-        });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: false,
+        error: { code: "malformed_output", retryable: true },
+      });
     } finally {
       await provider.dispose?.();
     }
@@ -1434,43 +1501,55 @@ describe("OpenCode provider runtime", () => {
     try {
       const parentID = expectedOpenCodeMessageId("request-1");
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID,
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID,
+              time: { completed: 1 },
+            },
+            parts: [{ type: "text", text: '{"complete":true}' }],
           },
-          parts: [{ type: "text", text: '{"complete":true}' }],
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
 
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID,
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID,
+              time: { completed: 1 },
+            },
+            parts: [{ type: "text", text: '```json\n{"complete":false}\n```' }],
           },
-          parts: [{ type: "text", text: '```json\n{"complete":false}\n```' }],
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: false } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: false },
+      });
 
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID,
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID,
+              time: { completed: 1 },
+            },
+            parts: [{ type: "text", text: 'Here is the result: {"complete":true}' }],
           },
-          parts: [{ type: "text", text: "Here is the result: {\"complete\":true}" }],
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
     } finally {
       await provider.dispose?.();
     }
@@ -1482,121 +1561,145 @@ describe("OpenCode provider runtime", () => {
     try {
       const parentID = expectedOpenCodeMessageId("request-1");
       const reply = (text: string) => ({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID,
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID,
+              time: { completed: 1 },
+            },
+            parts: [{ type: "text", text }],
           },
-          parts: [{ type: "text", text }],
-        }],
+        ],
       });
 
       // A trailing summary after the required JSON value is the common recovery case.
       fake.setMessagesResponse(reply('{"complete":true}\n\nAll checks passed.'));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
 
       // A lead-in sentence before the JSON value.
       fake.setMessagesResponse(reply('The result is {"complete":false}'));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: false } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: false },
+      });
 
       // The last well-formed document wins when prose contains several.
       fake.setMessagesResponse(reply('Example {"nope":1}. Answer {"complete":true}.'));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
 
       // Nested values belong to the outer schema result and must not replace it
       // merely because their opening delimiter occurs later in the response.
-      fake.setMessagesResponse(reply(
-        'Result: {"complete":true,"commandsRun":[{"command":"bun test","result":"passed"}]} Done.',
-      ));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({
-          ok: true,
-          value: {
-            complete: true,
-            commandsRun: [{ command: "bun test", result: "passed" }],
-          },
-        });
+      fake.setMessagesResponse(
+        reply(
+          'Result: {"complete":true,"commandsRun":[{"command":"bun test","result":"passed"}]} Done.',
+        ),
+      );
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: {
+          complete: true,
+          commandsRun: [{ command: "bun test", result: "passed" }],
+        },
+      });
 
-      fake.setMessagesResponse(reply(
-        'Candidates: [{"id":1,"metadata":{"selected":false}},{"id":2}] Done.',
-      ));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({
-          ok: true,
-          value: [
-            { id: 1, metadata: { selected: false } },
-            { id: 2 },
-          ],
-        });
+      fake.setMessagesResponse(
+        reply('Candidates: [{"id":1,"metadata":{"selected":false}},{"id":2}] Done.'),
+      );
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: [{ id: 1, metadata: { selected: false } }, { id: 2 }],
+      });
 
       // A multiline document inside a fence, and a fence without the trailing
       // newline before the closing backticks, are still recovered.
       fake.setMessagesResponse(reply('```json\n{\n  "complete": false\n}\n```'));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: false } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: false },
+      });
 
       fake.setMessagesResponse(reply('```json\n{"complete":true}```'));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
 
       // Streaming can split a message across several text parts; joining them
       // must still recover the document.
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            role: "assistant",
-            parentID,
-            time: { completed: 1 },
+        data: [
+          {
+            info: {
+              role: "assistant",
+              parentID,
+              time: { completed: 1 },
+            },
+            parts: [
+              { type: "text", text: 'Here is the result: {"compl' },
+              { type: "reasoning", text: "ignored" },
+              { type: "text", text: 'ete":true}' },
+            ],
           },
-          parts: [
-            { type: "text", text: 'Here is the result: {"compl' },
-            { type: "reasoning", text: "ignored" },
-            { type: "text", text: 'ete":true}' },
-          ],
-        }],
+        ],
       });
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
 
       // Bare JSON primitives pass through for the workflow layer to validate.
       fake.setMessagesResponse(reply("true"));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: true });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: true,
+      });
 
       fake.setMessagesResponse(reply("42"));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: 42 });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: 42,
+      });
 
       // Prose with no JSON document is still rejected rather than guessed.
       fake.setMessagesResponse(reply("I could not verify the build."));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({
-          ok: false,
-          error: { code: "malformed_output", retryable: true },
-        });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: false,
+        error: { code: "malformed_output", retryable: true },
+      });
 
-      fake.setMessagesResponse(reply(
-        "<thinking>{ incomplete schema sketch\n{\"fromThought\":true}</thinking>\n{\"complete\":true}",
-      ));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      fake.setMessagesResponse(
+        reply(
+          '<thinking>{ incomplete schema sketch\n{"fromThought":true}</thinking>\n{"complete":true}',
+        ),
+      );
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
 
-      fake.setMessagesResponse(reply(
-        "{\"complete\":true}\n<thinking>{\"fromThought\":true}</thinking>",
-      ));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      fake.setMessagesResponse(
+        reply('{"complete":true}\n<thinking>{"fromThought":true}</thinking>'),
+      );
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
 
       // An annotated opening tag still marks the trace.
-      fake.setMessagesResponse(reply(
-        "{\"complete\":true}\n<thinking type=\"reflection\">{\"fromThought\":true}</thinking>",
-      ));
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      fake.setMessagesResponse(
+        reply('{"complete":true}\n<thinking type="reflection">{"fromThought":true}</thinking>'),
+      );
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
     } finally {
       await provider.dispose?.();
     }
@@ -1632,8 +1735,10 @@ describe("OpenCode provider runtime", () => {
         ],
       });
 
-      await expect(provider.structured("owned-session", "request-1")).resolves
-        .toMatchObject({ ok: true, value: { complete: true } });
+      await expect(provider.structured("owned-session", "request-1")).resolves.toMatchObject({
+        ok: true,
+        value: { complete: true },
+      });
       expect(fake.messageCalls.at(-1)).toEqual({
         sessionID: "owned-session",
         limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
@@ -1675,10 +1780,14 @@ describe("OpenCode provider runtime", () => {
         ],
       });
 
-      await expect(provider.structured("owned-session", "foo")).resolves
-        .toMatchObject({ ok: true, value: { request: "foo" } });
-      await expect(provider.structured("owned-session", "msg_foo")).resolves
-        .toMatchObject({ ok: true, value: { request: "msg_foo" } });
+      await expect(provider.structured("owned-session", "foo")).resolves.toMatchObject({
+        ok: true,
+        value: { request: "foo" },
+      });
+      await expect(provider.structured("owned-session", "msg_foo")).resolves.toMatchObject({
+        ok: true,
+        value: { request: "msg_foo" },
+      });
     } finally {
       await provider.dispose?.();
     }

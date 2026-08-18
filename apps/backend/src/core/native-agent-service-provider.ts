@@ -137,10 +137,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       input.reasoningEffort,
     );
     const connectionIdentity = this.bridgeConnectionIdentity(connection);
-    if (
-      cached
-      && this.providerConnections.get(cacheKey) === connectionIdentity
-    ) return cached;
+    if (cached && this.providerConnections.get(cacheKey) === connectionIdentity) return cached;
     await this.assertEnvironmentLive(input.environmentId);
     this.assertAcceptingWork();
     const provider = createNativeAgentProvider(connection, {
@@ -148,8 +145,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       // questions. Answering them here would run a command the user never saw
       // and cancel the card that exists to answer it.
       autoAnswerRequests: false,
-      stageImages: (images) =>
-        this.stageImages(input.environmentId, images),
+      stageImages: (images) => this.stageImages(input.environmentId, images),
       // Read per call rather than per provider: providers are cached for the
       // life of a bridge connection, so a settings edit would otherwise not
       // reach the catalogue until the environment restarted.
@@ -221,29 +217,18 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       this.providerConnections.delete(cacheKey);
       return provider;
     }
-    const connection = await this.observeBridgeConnection(
-      input.agent,
-      environment,
-    );
+    const connection = await this.observeBridgeConnection(input.agent, environment);
     if (!connection) {
-      this.absentBridgeUntil.set(
-        cacheKey,
-        this.now() + ABSENT_BRIDGE_RECHECK_MS,
-      );
+      this.absentBridgeUntil.set(cacheKey, this.now() + ABSENT_BRIDGE_RECHECK_MS);
       return undefined;
     }
     await this.assertEnvironmentLive(input.environmentId);
     this.assertAcceptingWork();
     const provider = createNativeAgentProvider(connection, {
       autoAnswerRequests: false,
-      stageImages: (images) =>
-        this.stageImages(input.environmentId, images),
+      stageImages: (images) => this.stageImages(input.environmentId, images),
     });
-    this.cacheProvider(
-      cacheKey,
-      provider,
-      this.bridgeConnectionIdentity(connection),
-    );
+    this.cacheProvider(cacheKey, provider, this.bridgeConnectionIdentity(connection));
     return provider;
   }
 
@@ -286,12 +271,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     images: readonly TaskSnapshotImage[],
   ): Promise<PromptAttachment[]> {
     const environment = await this.assertEnvironmentLive(environmentId);
-    return stagePromptImages(
-      this.invoke,
-      environment,
-      images,
-      INITIAL_PROMPT_STAGING_DIRECTORY,
-    );
+    return stagePromptImages(this.invoke, environment, images, INITIAL_PROMPT_STAGING_DIRECTORY);
   }
 
   /**
@@ -304,10 +284,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     const stale: Array<[string, NativeAgentRuntimeProvider]> = [];
     for (const [cacheKey, provider] of this.providers) {
       const environmentId = cacheKey.slice(0, cacheKey.indexOf("\0"));
-      if (
-        !liveEnvironmentIds.has(environmentId)
-        && !this.providerDispatchCounts.has(provider)
-      ) {
+      if (!liveEnvironmentIds.has(environmentId) && !this.providerDispatchCounts.has(provider)) {
         stale.push([cacheKey, provider]);
       }
     }
@@ -347,15 +324,13 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     key: string,
   ): void {
     if (
-      session.key !== key
-      || session.environmentId !== input.environmentId
-      || session.agent !== input.agent
-      || session.logicalSessionKey !== input.logicalSessionKey
-      || (input.origin !== undefined && session.origin !== input.origin)
-      || (
-        input.interactionPolicy !== undefined
-        && session.interactionPolicy.mode !== input.interactionPolicy.mode
-      )
+      session.key !== key ||
+      session.environmentId !== input.environmentId ||
+      session.agent !== input.agent ||
+      session.logicalSessionKey !== input.logicalSessionKey ||
+      (input.origin !== undefined && session.origin !== input.origin) ||
+      (input.interactionPolicy !== undefined &&
+        session.interactionPolicy.mode !== input.interactionPolicy.mode)
     ) {
       throw new Error("Native agent session key collision");
     }
@@ -374,16 +349,16 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       fastMode: input.fastMode,
       interaction: {
         origin: input.origin ?? "interactive-native",
-        interactionPolicy: input.interactionPolicy
-          ?? ((input.origin === "build-pipeline" || input.origin === "looped-review")
+        interactionPolicy:
+          input.interactionPolicy ??
+          (input.origin === "build-pipeline" || input.origin === "looped-review"
             ? UNATTENDED_AGENT_INTERACTION_POLICY
             : INTERACTIVE_AGENT_INTERACTION_POLICY),
         phase: input.phase,
       },
     };
-    const maxAttempts = input.agent === "cursor" || input.agent === "grok"
-      ? ACP_SESSION_CREATE_ATTEMPTS
-      : 1;
+    const maxAttempts =
+      input.agent === "cursor" || input.agent === "grok" ? ACP_SESSION_CREATE_ATTEMPTS : 1;
     let providerSessionId: string | undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
@@ -422,9 +397,9 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     if (!Array.isArray(draft.mentions) || !Array.isArray(draft.attachments)) {
       return true;
     }
-    return draft.text.trim().length > 0
-      || draft.mentions.length > 0
-      || draft.attachments.length > 0;
+    return (
+      draft.text.trim().length > 0 || draft.mentions.length > 0 || draft.attachments.length > 0
+    );
   }
 
   protected queueBoolean(message: unknown, field: string): boolean | undefined {
@@ -444,15 +419,14 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
   }
 
   protected queueReasoningEffort(message: unknown): string | undefined {
-    return this.queueString(message, "reasoningEffort")
-      ?? this.queueString(message, "effort")
-      ?? this.queueString(message, "variant");
+    return (
+      this.queueString(message, "reasoningEffort") ??
+      this.queueString(message, "effort") ??
+      this.queueString(message, "variant")
+    );
   }
 
-  protected queueFastMode(
-    agent: BuildPipelineAgent,
-    message: unknown,
-  ): boolean | undefined {
+  protected queueFastMode(agent: BuildPipelineAgent, message: unknown): boolean | undefined {
     if (!message || typeof message !== "object" || Array.isArray(message)) {
       return undefined;
     }
@@ -465,19 +439,15 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     // coalesced first: `??` only falls through on null/undefined, so a garbage
     // legacy value would otherwise shadow a perfectly good shared field and
     // silently drop the user's speed selection.
-    const candidates = agent === "claude"
-      ? [record.fastModeEnabled, record.fastMode]
-      : [record.fastMode];
+    const candidates =
+      agent === "claude" ? [record.fastModeEnabled, record.fastMode] : [record.fastMode];
     for (const candidate of candidates) {
       if (typeof candidate === "boolean") return candidate;
     }
     return undefined;
   }
 
-  protected queueExecutionMode(
-    agent: BuildPipelineAgent,
-    message: unknown,
-  ): ProviderExecutionMode {
+  protected queueExecutionMode(agent: BuildPipelineAgent, message: unknown): ProviderExecutionMode {
     if (!message || typeof message !== "object" || Array.isArray(message)) {
       return "plan";
     }
@@ -550,9 +520,10 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     environment: Environment,
   ): Promise<BridgeConnection | undefined> {
     if (environment.environmentType === "local") {
-      const result = await this.invoke<
-        { port: number; authToken: string } | null
-      >("peek_local_agent_bridge", { environmentId: environment.id, agent });
+      const result = await this.invoke<{ port: number; authToken: string } | null>(
+        "peek_local_agent_bridge",
+        { environmentId: environment.id, agent },
+      );
       if (!result?.authToken) return undefined;
       return {
         agent,
@@ -563,12 +534,13 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     }
 
     if (!environment.containerId) return undefined;
-    const result = await this.invoke<
-      { hostPort: number; authToken: string } | null
-    >("peek_container_agent_bridge", {
-      containerId: environment.containerId,
-      agent,
-    });
+    const result = await this.invoke<{ hostPort: number; authToken: string } | null>(
+      "peek_container_agent_bridge",
+      {
+        containerId: environment.containerId,
+        agent,
+      },
+    );
     if (!result?.authToken) return undefined;
     return {
       agent,

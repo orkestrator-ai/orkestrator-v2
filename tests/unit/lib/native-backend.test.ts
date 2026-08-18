@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 
 async function loadNativeBackend() {
-  return import("../../../apps/web/src/lib/native/backend.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/backend")>;
+  return import("../../../apps/web/src/lib/native/backend.ts?real") as Promise<
+    typeof import("../../../apps/web/src/lib/native/backend")
+  >;
 }
 
 afterEach(() => {

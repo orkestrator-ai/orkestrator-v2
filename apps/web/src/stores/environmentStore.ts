@@ -43,11 +43,13 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
 
   mergeEnvironmentsForProject: (projectId, newEnvironments) =>
     set((state) => {
-      const current = state.environments.filter((environment) => environment.projectId === projectId);
+      const current = state.environments.filter(
+        (environment) => environment.projectId === projectId,
+      );
       const sorted = sortByOrder(newEnvironments);
       if (
-        current.length === sorted.length
-        && sorted.every((environment, index) => deepEqualJson(environment, current[index]))
+        current.length === sorted.length &&
+        sorted.every((environment, index) => deepEqualJson(environment, current[index]))
       ) {
         return state;
       }
@@ -81,7 +83,7 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
       );
       if (!changed) return state;
       const environments = state.environments.map((environment) =>
-        environment.id === environmentId ? { ...environment, ...updates } : environment
+        environment.id === environmentId ? { ...environment, ...updates } : environment,
       );
       return {
         environments:
@@ -94,7 +96,7 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
   updateEnvironmentStatus: (environmentId, status) =>
     set((state) => ({
       environments: state.environments.map((environment) =>
-        environment.id === environmentId ? { ...environment, status } : environment
+        environment.id === environmentId ? { ...environment, status } : environment,
       ),
     })),
 
@@ -103,7 +105,7 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
       environments: state.environments.map((environment) =>
         environment.id === environmentId
           ? { ...environment, prUrl, prState, hasMergeConflicts: hasMergeConflicts ?? null }
-          : environment
+          : environment,
       ),
     })),
 
@@ -136,9 +138,10 @@ export const useEnvironmentStore = create<EnvironmentState>()((set, get) => ({
   getEnvironmentsByProjectId: (projectId) =>
     sortByOrder(get().environments.filter((environment) => environment.projectId === projectId)),
   isDeleting: (environmentId) =>
-    get().deletingEnvironments.has(environmentId)
-    || get().environments.some(
-      (environment) => environment.id === environmentId
-        && (environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt)),
+    get().deletingEnvironments.has(environmentId) ||
+    get().environments.some(
+      (environment) =>
+        environment.id === environmentId &&
+        (environment.lifecycleOperation === "deleting" || Boolean(environment.deletionRequestedAt)),
     ),
 }));

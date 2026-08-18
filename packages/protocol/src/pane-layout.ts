@@ -20,16 +20,14 @@ export const LEGACY_PANE_LAYOUT_VERSION = 1;
 export const PROVIDER_NATIVE_PANE_LAYOUT_VERSION = 2;
 export const PANE_LAYOUT_VERSION = 3;
 
-export const PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER =
-  "Unsupported pane layout version:";
+export const PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER = "Unsupported pane layout version:";
 
 export function paneLayoutUnsupportedVersionMessage(version: number): string {
   return `${PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER} ${version}`;
 }
 
 export function isPaneLayoutUnsupportedVersion(error: unknown): boolean {
-  return error instanceof Error
-    && error.message.includes(PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER);
+  return error instanceof Error && error.message.includes(PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER);
 }
 
 export function paneLayoutRevisionConflictMessage(
@@ -47,6 +45,5 @@ export function paneLayoutRevisionConflictMessage(
  * numbers stay free to change.
  */
 export function isPaneLayoutRevisionConflict(error: unknown): boolean {
-  return error instanceof Error
-    && error.message.includes(PANE_LAYOUT_REVISION_CONFLICT_MARKER);
+  return error instanceof Error && error.message.includes(PANE_LAYOUT_REVISION_CONFLICT_MARKER);
 }

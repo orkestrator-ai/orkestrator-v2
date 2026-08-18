@@ -171,8 +171,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
   virtuosoRef,
 }: NativeChatShellProps<TMessage>) {
   const [showLog, setShowLog] = useState(false);
-  const [composeDockElement, setComposeDockElement] =
-    useState<HTMLDivElement | null>(null);
+  const [composeDockElement, setComposeDockElement] = useState<HTMLDivElement | null>(null);
   const [composeDockHeight, setComposeDockHeight] = useState<number | null>(null);
   const composeDockRef = useCallback((element: HTMLDivElement | null) => {
     setComposeDockElement(element);
@@ -212,10 +211,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         className="flex h-full flex-col items-center justify-center gap-4 p-4 text-muted-foreground"
       >
         <span aria-hidden="true">
-          <AgentPlatformIcon
-            platform={platform}
-            className="agent-connecting-logo h-16 w-16"
-          />
+          <AgentPlatformIcon platform={platform} className="agent-connecting-logo h-16 w-16" />
         </span>
         <p className="text-sm">Connecting to {agentLabel}...</p>
       </div>
@@ -238,11 +234,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
             Retry
           </Button>
           {serverLog && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setShowLog((value) => !value)}
-            >
+            <Button variant="ghost" size="sm" onClick={() => setShowLog((value) => !value)}>
               {showLog ? "Hide Log" : "Show Log"}
             </Button>
           )}
@@ -266,8 +258,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
    * wrapper and permanently switch the spacer to dock-height mode for a tab
    * that has no blocking prompt at all.
    */
-  const hasPinnedContent =
-    Children.count(blockingCards) > 0 || Children.count(pinnedAccessory) > 0;
+  const hasPinnedContent = Children.count(blockingCards) > 0 || Children.count(pinnedAccessory) > 0;
 
   /**
    * A measured height of 0 means the dock has not laid out yet (first paint, a
@@ -293,9 +284,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
         className="sr-only"
       >
         {agentActivityAnnouncement?.text ? (
-          <span key={agentActivityAnnouncement.seq}>
-            {agentActivityAnnouncement.text}
-          </span>
+          <span key={agentActivityAnnouncement.seq}>{agentActivityAnnouncement.text}</span>
         ) : null}
       </span>
       <div
@@ -327,8 +316,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
             !centerCompose ? (
               <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-3 text-muted-foreground">
                 <p className="text-sm">
-                  {emptyStateMessage
-                    ?? `No messages yet. Start a conversation with ${agentLabel}!`}
+                  {emptyStateMessage ?? `No messages yet. Start a conversation with ${agentLabel}!`}
                 </p>
                 {onResumeClick && (
                   <Button variant="outline" size="sm" onClick={onResumeClick}>
@@ -345,9 +333,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                 <div className="px-2 @sm:px-4">
                   <div className="chat-status-row mx-auto max-w-3xl min-w-0">
                     <div className="flex items-center gap-2 text-muted-foreground">
-                      {statusLabel ?? (
-                        <AgentThinkingIndicator agentName={agentLabel} />
-                      )}
+                      {statusLabel ?? <AgentThinkingIndicator agentName={agentLabel} />}
                       {elapsedSeconds !== null && elapsedSeconds > 0 && (
                         <span className="text-xs text-muted-foreground/50">
                           {formatElapsed(elapsedSeconds)}
@@ -382,11 +368,7 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
                       : bottomSpacerClassName
                     : undefined,
                 )}
-                style={
-                  measuredDockHeight !== null
-                    ? { height: measuredDockHeight }
-                    : undefined
-                }
+                style={measuredDockHeight !== null ? { height: measuredDockHeight } : undefined}
                 aria-hidden="true"
               />
             </>
@@ -421,7 +403,8 @@ export function NativeChatShell<TMessage extends NativeMessageType>({
           desynced ? (
             <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
               <AlertCircle className="h-4 w-4 shrink-0" />
-              Live updates disconnected. A full session refresh will run when the connection returns.
+              Live updates disconnected. A full session refresh will run when the connection
+              returns.
             </div>
           ) : null
         }

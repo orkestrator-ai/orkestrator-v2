@@ -102,12 +102,7 @@ function takeOpenCodeCatalogSources(
   for (const { group, start } of leftovers) {
     const room = budget - target.length;
     if (room <= 0) return;
-    appendOpenCodeCatalogSources(
-      target,
-      group,
-      start,
-      Math.min(group.models.length - start, room),
-    );
+    appendOpenCodeCatalogSources(target, group, start, Math.min(group.models.length - start, room));
   }
 }
 
@@ -121,7 +116,10 @@ function reserveOpenCodeDefaultSource(
   defaultModelId: string | undefined,
   budget: number,
 ): void {
-  if (!defaultModelId || selected.some((source) => openCodeCatalogSourceId(source) === defaultModelId)) {
+  if (
+    !defaultModelId ||
+    selected.some((source) => openCodeCatalogSourceId(source) === defaultModelId)
+  ) {
     return;
   }
   const owner = groups.find((group) => group.defaultModel !== undefined);
@@ -155,12 +153,14 @@ function openCodeCatalogDefault(value: unknown): {
   const defaults = asRecord(catalog?.default);
   if (!defaults) return {};
   const nested = asRecord(defaults.model);
-  const providerId = nonEmptyString(nested?.providerID)
-    ?? nonEmptyString(defaults.providerID)
-    ?? nonEmptyString(defaults.provider);
-  const modelId = nonEmptyString(nested?.modelID)
-    ?? nonEmptyString(defaults.modelID)
-    ?? (typeof defaults.model === "string" ? defaults.model : null);
+  const providerId =
+    nonEmptyString(nested?.providerID) ??
+    nonEmptyString(defaults.providerID) ??
+    nonEmptyString(defaults.provider);
+  const modelId =
+    nonEmptyString(nested?.modelID) ??
+    nonEmptyString(defaults.modelID) ??
+    (typeof defaults.model === "string" ? defaults.model : null);
   const qualified = modelId?.includes("/")
     ? modelId
     : providerId && modelId
@@ -168,11 +168,10 @@ function openCodeCatalogDefault(value: unknown): {
       : undefined;
   return {
     ...(qualified ? { modelId: qualified } : {}),
-    ...(nonEmptyString(nested?.variant) ?? nonEmptyString(defaults.variant)
+    ...((nonEmptyString(nested?.variant) ?? nonEmptyString(defaults.variant))
       ? {
-          reasoningId: nonEmptyString(nested?.variant)
-            ?? nonEmptyString(defaults.variant)
-            ?? undefined,
+          reasoningId:
+            nonEmptyString(nested?.variant) ?? nonEmptyString(defaults.variant) ?? undefined,
         }
       : {}),
   };
@@ -214,16 +213,18 @@ export function normalizeOpenCodeComposerCatalog(
 } {
   const connected = asRecord(value)?.connected;
   const connectedProviderIds = Array.isArray(connected)
-    ? connected.flatMap((candidate) => {
-        const providerId = typeof candidate === "string"
-          ? nonEmptyString(candidate)
-          : nonEmptyString(asRecord(candidate)?.id);
-        return providerId ? [providerId] : [];
-      }).slice(0, 512)
+    ? connected
+        .flatMap((candidate) => {
+          const providerId =
+            typeof candidate === "string"
+              ? nonEmptyString(candidate)
+              : nonEmptyString(asRecord(candidate)?.id);
+          return providerId ? [providerId] : [];
+        })
+        .slice(0, 512)
     : undefined;
-  const connectedProviders = options.requireConnected && connectedProviderIds
-    ? new Set(connectedProviderIds)
-    : null;
+  const connectedProviders =
+    options.requireConnected && connectedProviderIds ? new Set(connectedProviderIds) : null;
   const priorityProviders = new Set(
     (options.priorityProviders ?? []).map((providerId) => providerId.trim().toLowerCase()),
   );
@@ -231,26 +232,28 @@ export function normalizeOpenCodeComposerCatalog(
   // thousands of models across every provider it knows about, so an excluded
   // provider allowed to consume the 128-provider or 512-model budget pushes the
   // selectable catalogues out of the picker entirely.
-  const accepted = openCodeCatalogProviders(value)
-    .filter((provider) => {
-      const providerId = nonEmptyString(provider.id);
-      return providerId !== null
-        && (!connectedProviders || connectedProviders.has(providerId))
-        && isSelectableOpenCodeProvider(providerId, allowedProviders);
-    });
+  const accepted = openCodeCatalogProviders(value).filter((provider) => {
+    const providerId = nonEmptyString(provider.id);
+    return (
+      providerId !== null &&
+      (!connectedProviders || connectedProviders.has(providerId)) &&
+      isSelectableOpenCodeProvider(providerId, allowedProviders)
+    );
+  });
   // A stable partition, so a catalogue with no priority list — every
   // picker-facing read — keeps OpenCode's own provider order exactly.
   const isPriority = (provider: Record<string, unknown>): boolean =>
     priorityProviders.has((nonEmptyString(provider.id) ?? "").toLowerCase());
-  const selectableProviders = (priorityProviders.size === 0
-    ? accepted
-    : [...accepted.filter(isPriority), ...accepted.filter((provider) => !isPriority(provider))])
-    .slice(0, MAX_OPENCODE_CATALOG_PROVIDERS);
+  const selectableProviders = (
+    priorityProviders.size === 0
+      ? accepted
+      : [...accepted.filter(isPriority), ...accepted.filter((provider) => !isPriority(provider))]
+  ).slice(0, MAX_OPENCODE_CATALOG_PROVIDERS);
   const defaults = openCodeCatalogDefault(value);
-  const selectableDefaultModelId = defaults.modelId
-    && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
-    ? defaults.modelId
-    : undefined;
+  const selectableDefaultModelId =
+    defaults.modelId && isSelectableOpenCodeModelId(defaults.modelId, allowedProviders)
+      ? defaults.modelId
+      : undefined;
   const defaultProviderId = selectableDefaultModelId
     ? openCodeModelProviderId(selectableDefaultModelId)
     : "";
@@ -269,13 +272,15 @@ export function normalizeOpenCodeComposerCatalog(
     // truncating first would drop the advertised default merely for its listing
     // position. Only the one matching model is retained, so the cap still bounds
     // what this group holds.
-    const defaultModel = providerId === defaultProviderId
-      ? parsed.find((candidate) => {
-        const candidateId = nonEmptyString(candidate.id);
-        return candidateId !== null
-          && `${providerId}/${candidateId}` === selectableDefaultModelId;
-      })
-      : undefined;
+    const defaultModel =
+      providerId === defaultProviderId
+        ? parsed.find((candidate) => {
+            const candidateId = nonEmptyString(candidate.id);
+            return (
+              candidateId !== null && `${providerId}/${candidateId}` === selectableDefaultModelId
+            );
+          })
+        : undefined;
     return { providerId, models, ...(defaultModel ? { defaultModel } : {}) };
   };
   const priorityGroups: OpenCodeCatalogModelGroup[] = [];
@@ -288,25 +293,10 @@ export function normalizeOpenCodeComposerCatalog(
   }
   const selectedSources: OpenCodeCatalogModelSource[] = [];
   if (priorityGroups.length > 0) {
-    takeOpenCodeCatalogSources(
-      selectedSources,
-      priorityGroups,
-      MAX_OPENCODE_CATALOG_MODELS,
-      true,
-    );
-    takeOpenCodeCatalogSources(
-      selectedSources,
-      otherGroups,
-      MAX_OPENCODE_CATALOG_MODELS,
-      false,
-    );
+    takeOpenCodeCatalogSources(selectedSources, priorityGroups, MAX_OPENCODE_CATALOG_MODELS, true);
+    takeOpenCodeCatalogSources(selectedSources, otherGroups, MAX_OPENCODE_CATALOG_MODELS, false);
   } else {
-    takeOpenCodeCatalogSources(
-      selectedSources,
-      otherGroups,
-      MAX_OPENCODE_CATALOG_MODELS,
-      true,
-    );
+    takeOpenCodeCatalogSources(selectedSources, otherGroups, MAX_OPENCODE_CATALOG_MODELS, true);
   }
   reserveOpenCodeDefaultSource(
     selectedSources,
@@ -320,33 +310,36 @@ export function normalizeOpenCodeComposerCatalog(
     const localId = nonEmptyString(model.id)!;
     const variants = asRecord(model.variants);
     const reasoning = variants
-      ? Object.entries(variants).flatMap(([id, candidate]) => {
-          const variant = asRecord(candidate);
-          return variant?.disabled === true
-            ? []
-            : [{ id, label: id.replace(/[-_]+/g, " ").replace(/^\w/, (letter) => letter.toUpperCase()) }];
-        }).slice(0, 64)
+      ? Object.entries(variants)
+          .flatMap(([id, candidate]) => {
+            const variant = asRecord(candidate);
+            return variant?.disabled === true
+              ? []
+              : [
+                  {
+                    id,
+                    label: id
+                      .replace(/[-_]+/g, " ")
+                      .replace(/^\w/, (letter) => letter.toUpperCase()),
+                  },
+                ];
+          })
+          .slice(0, 64)
       : [];
     const limit = asRecord(model.limit);
     const capabilities = asRecord(model.capabilities);
     const input = asRecord(capabilities?.input);
-    const contextWindow = [
-      limit?.context,
-      model.contextWindow,
-      model.context_window,
-    ].find((candidate) => typeof candidate === "number"
-      && Number.isSafeInteger(candidate)
-      && candidate > 0) as number | undefined;
+    const contextWindow = [limit?.context, model.contextWindow, model.context_window].find(
+      (candidate) =>
+        typeof candidate === "number" && Number.isSafeInteger(candidate) && candidate > 0,
+    ) as number | undefined;
     const modelId = `${providerId}/${localId}`;
     return {
       platform: "opencode",
       id: modelId,
       label: openCodeModelDisplayLabel(modelId, nonEmptyString(model.name)),
       providerLabel: providerId,
-      reasoning: [
-        { id: "default", label: "Default" },
-        ...reasoning,
-      ],
+      reasoning: [{ id: "default", label: "Default" }, ...reasoning],
       defaultReasoningId: "default",
       supportsSpeed: false,
       // OpenCode has primary agents, not a Build/Plan permission mode.
@@ -362,10 +355,10 @@ export function normalizeOpenCodeComposerCatalog(
   // OpenCode's own default may name a provider the user excluded. Surfacing it
   // would pre-select a model the picker cannot show, so it is dropped with the
   // rest of that provider's catalogue.
-  const selectedModelId = selectableDefaultModelId
-    && models.some((model) => model.id === selectableDefaultModelId)
-    ? selectableDefaultModelId
-    : undefined;
+  const selectedModelId =
+    selectableDefaultModelId && models.some((model) => model.id === selectableDefaultModelId)
+      ? selectableDefaultModelId
+      : undefined;
   return {
     models,
     ...(connectedProviderIds ? { connectedProviderIds } : {}),
@@ -401,18 +394,20 @@ export function openCodeModelDispatchability(
   const providerId = openCodeModelProviderId(modelId);
   const localModelId = providerId ? modelId.slice(providerId.length + 1) : "";
   const providerConnected = connected.some((candidate) => {
-    const connectedProviderId = typeof candidate === "string"
-      ? nonEmptyString(candidate)
-      : nonEmptyString(asRecord(candidate)?.id);
+    const connectedProviderId =
+      typeof candidate === "string"
+        ? nonEmptyString(candidate)
+        : nonEmptyString(asRecord(candidate)?.id);
     return connectedProviderId === providerId;
   });
   if (!providerConnected || !providerId || !localModelId) return "unavailable";
 
-  return openCodeCatalogProviders(value).some((provider) =>
-    nonEmptyString(provider.id) === providerId
-    && openCodeProviderModels(provider.models).some((model) =>
-      nonEmptyString(model.id) === localModelId
-    )
+  return openCodeCatalogProviders(value).some(
+    (provider) =>
+      nonEmptyString(provider.id) === providerId &&
+      openCodeProviderModels(provider.models).some(
+        (model) => nonEmptyString(model.id) === localModelId,
+      ),
   )
     ? "available"
     : "unavailable";
@@ -433,9 +428,9 @@ export function openCodeCatalogCacheKey(
   requireConnected: boolean,
   priorityProviders: readonly string[] = [],
 ): string {
-  return `${requireConnected ? "connected" : "all"}:${
-    openCodeModelProvidersKey(allowedProviders)
-  }:${openCodeModelProvidersKey(priorityProviders)}`;
+  return `${requireConnected ? "connected" : "all"}:${openCodeModelProvidersKey(
+    allowedProviders,
+  )}:${openCodeModelProvidersKey(priorityProviders)}`;
 }
 
 /**

@@ -47,71 +47,74 @@ export function useFileSave({
     };
   }, []);
 
-  const saveFile = useCallback<SaveFile>(async (contentOverride) => {
-    if (savingRef.current) return false;
+  const saveFile = useCallback<SaveFile>(
+    async (contentOverride) => {
+      if (savingRef.current) return false;
 
-    if (isLocalEnvironment && !worktreePath) {
-      toast.error("Cannot save file", {
-        description: "No worktree path available",
-      });
-      return false;
-    }
-
-    if (!isLocalEnvironment && !containerId) {
-      toast.error("Cannot save file", {
-        description: "No container ID available",
-      });
-      return false;
-    }
-
-    const contentToSave = contentOverride ?? getContent(tabId);
-    if (contentToSave === null) return false;
-
-    // Keep the dirty store authoritative even if a caller flushes editor state
-    // immediately before a save that later fails.
-    if (contentOverride !== undefined) {
-      setContent(tabId, contentOverride);
-    }
-
-    savingRef.current = true;
-    if (mountedRef.current) setIsSaving(true);
-
-    try {
-      const base64Data = encodeUtf8AsBase64(contentToSave);
-
-      if (isLocalEnvironment && worktreePath) {
-        await backend.writeLocalFile(worktreePath, filePath, base64Data);
-      } else if (containerId) {
-        await backend.writeContainerFile(containerId, filePath, base64Data);
+      if (isLocalEnvironment && !worktreePath) {
+        toast.error("Cannot save file", {
+          description: "No worktree path available",
+        });
+        return false;
       }
 
-      // Advance the saved baseline without replacing edits made while the
-      // backend write was in flight. If the tab was closed, do not recreate
-      // its dirty-store entry after unmount cleanup removed it.
-      if (getContent(tabId) !== null) {
-        setOriginalContent(tabId, contentToSave);
+      if (!isLocalEnvironment && !containerId) {
+        toast.error("Cannot save file", {
+          description: "No container ID available",
+        });
+        return false;
       }
-      return true;
-    } catch (error) {
-      console.error("Failed to save file:", error);
-      toast.error("Failed to save file", {
-        description: error instanceof Error ? error.message : String(error),
-      });
-      return false;
-    } finally {
-      savingRef.current = false;
-      if (mountedRef.current) setIsSaving(false);
-    }
-  }, [
-    containerId,
-    filePath,
-    getContent,
-    isLocalEnvironment,
-    setContent,
-    setOriginalContent,
-    tabId,
-    worktreePath,
-  ]);
+
+      const contentToSave = contentOverride ?? getContent(tabId);
+      if (contentToSave === null) return false;
+
+      // Keep the dirty store authoritative even if a caller flushes editor state
+      // immediately before a save that later fails.
+      if (contentOverride !== undefined) {
+        setContent(tabId, contentOverride);
+      }
+
+      savingRef.current = true;
+      if (mountedRef.current) setIsSaving(true);
+
+      try {
+        const base64Data = encodeUtf8AsBase64(contentToSave);
+
+        if (isLocalEnvironment && worktreePath) {
+          await backend.writeLocalFile(worktreePath, filePath, base64Data);
+        } else if (containerId) {
+          await backend.writeContainerFile(containerId, filePath, base64Data);
+        }
+
+        // Advance the saved baseline without replacing edits made while the
+        // backend write was in flight. If the tab was closed, do not recreate
+        // its dirty-store entry after unmount cleanup removed it.
+        if (getContent(tabId) !== null) {
+          setOriginalContent(tabId, contentToSave);
+        }
+        return true;
+      } catch (error) {
+        console.error("Failed to save file:", error);
+        toast.error("Failed to save file", {
+          description: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      } finally {
+        savingRef.current = false;
+        if (mountedRef.current) setIsSaving(false);
+      }
+    },
+    [
+      containerId,
+      filePath,
+      getContent,
+      isLocalEnvironment,
+      setContent,
+      setOriginalContent,
+      tabId,
+      worktreePath,
+    ],
+  );
 
   return { saveFile, isSaving };
 }

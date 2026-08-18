@@ -1,17 +1,14 @@
 import { invoke } from "@/lib/native/backend";
 import type { TabTeardownInput } from "@orkestrator/protocol/tab-teardown";
 import type { EnvironmentSetupSession } from "@/types";
-import {
-  parseTerminalSessionCreateResult,
-  type TerminalSessionCreateResult,
-} from "./shared";
+import { parseTerminalSessionCreateResult, type TerminalSessionCreateResult } from "./shared";
 export type { TerminalSessionCreateResult } from "./shared";
 /** PR detection result containing URL, state, and merge conflict status */
 
 export async function attachTerminal(
   containerId: string,
   cols: number,
-  rows: number
+  rows: number,
 ): Promise<string> {
   return invoke<string>("attach_terminal", { containerId, cols, rows });
 }
@@ -63,9 +60,7 @@ export async function bootstrapTerminalSession(
   });
 }
 
-export async function getTerminalSession(
-  sessionId: string
-): Promise<TerminalSessionStatus> {
+export async function getTerminalSession(sessionId: string): Promise<TerminalSessionStatus> {
   return invoke<TerminalSessionStatus>("get_terminal_session", { sessionId });
 }
 
@@ -94,9 +89,7 @@ export async function getTerminalOutputSnapshot(
 ): Promise<TerminalOutputSnapshot> {
   const value = await invoke<unknown>("get_terminal_output_snapshot", {
     sessionId,
-    ...(cursor
-      ? { sinceRevision: cursor.revision, sinceGeneration: cursor.generation }
-      : {}),
+    ...(cursor ? { sinceRevision: cursor.revision, sinceGeneration: cursor.generation } : {}),
   });
   if (
     typeof value !== "object" ||
@@ -106,10 +99,8 @@ export async function getTerminalOutputSnapshot(
     (value as { revision: number }).revision < 0 ||
     !Number.isSafeInteger((value as { generation?: unknown }).generation) ||
     (value as { generation: number }).generation < 0 ||
-    (
-      (value as { truncated?: unknown }).truncated !== undefined &&
-      typeof (value as { truncated?: unknown }).truncated !== "boolean"
-    )
+    ((value as { truncated?: unknown }).truncated !== undefined &&
+      typeof (value as { truncated?: unknown }).truncated !== "boolean")
   ) {
     throw new Error("Backend returned an invalid terminal output snapshot");
   }
@@ -142,18 +133,11 @@ export async function teardownTab(input: TabTeardownInput): Promise<{ completed:
   return invoke("teardown_tab", { ...input });
 }
 
-export async function writeTerminal(
-  sessionId: string,
-  data: string
-): Promise<void> {
+export async function writeTerminal(sessionId: string, data: string): Promise<void> {
   return invoke("terminal_write", { sessionId, data });
 }
 
-export async function resizeTerminal(
-  sessionId: string,
-  cols: number,
-  rows: number
-): Promise<void> {
+export async function resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void> {
   return invoke("terminal_resize", { sessionId, cols, rows });
 }
 

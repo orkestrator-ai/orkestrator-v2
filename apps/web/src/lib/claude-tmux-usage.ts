@@ -49,9 +49,11 @@ function candidateMatches(candidate: string, summary: IndexedUsageSummary): bool
   const normalized = normalizeAgentName(candidate);
   if (!normalized || !summary.normalizedName) return false;
   if (["agent", "task", "subagent"].includes(normalized)) return false;
-  return normalized === summary.normalizedName
-    || normalized.includes(summary.normalizedName)
-    || summary.normalizedName.includes(normalized);
+  return (
+    normalized === summary.normalizedName ||
+    normalized.includes(summary.normalizedName) ||
+    summary.normalizedName.includes(normalized)
+  );
 }
 
 function indexedSummaries(summaries: TmuxAgentUsageSummary[]): IndexedUsageSummary[] {
@@ -71,8 +73,9 @@ function findMatchingSummary(
 ): IndexedUsageSummary | undefined {
   const candidates = agentNameCandidates(part);
   const exact = summaries.find(
-    (summary) => !used.has(summary.index)
-      && candidates.some((candidate) => candidateMatches(candidate, summary)),
+    (summary) =>
+      !used.has(summary.index) &&
+      candidates.some((candidate) => candidateMatches(candidate, summary)),
   );
   if (exact) return exact;
   if (!allowOrdinalFallback) return undefined;
@@ -96,23 +99,18 @@ export function applyTmuxAgentUsageSummaries(
     const parts = message.parts.map((part) => {
       if (part.type !== "tool-invocation" || !isAgentTool(part)) return part;
       const allowOrdinalFallback = !isTerminalToolState(part.toolState);
-      const summary = findMatchingSummary(
-        part,
-        indexed,
-        used,
-        agentIndex,
-        allowOrdinalFallback,
-      );
+      const summary = findMatchingSummary(part, indexed, used, agentIndex, allowOrdinalFallback);
       if (allowOrdinalFallback) agentIndex += 1;
       if (!summary) return part;
       used.add(summary.index);
       if (
-        (summary.toolUseCount === undefined || part.toolUseCount === summary.toolUseCount)
-        && part.tokenCount === summary.tokenCount
-        && part.tokenCountText === summary.tokenCountText
-        && part.agentUsageDisplay === "token-only"
-        && part.agentState === "active"
-      ) return part;
+        (summary.toolUseCount === undefined || part.toolUseCount === summary.toolUseCount) &&
+        part.tokenCount === summary.tokenCount &&
+        part.tokenCountText === summary.tokenCountText &&
+        part.agentUsageDisplay === "token-only" &&
+        part.agentState === "active"
+      )
+        return part;
 
       changed = true;
       partsChanged = true;

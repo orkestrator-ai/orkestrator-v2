@@ -5,10 +5,7 @@ import { SerializeAddon } from "@xterm/addon-serialize";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { openInBrowser } from "@/lib/backend";
 import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
-import {
-  getTerminalLinkTarget,
-  requestTerminalBrowserTab,
-} from "@/lib/terminal-links";
+import { getTerminalLinkTarget, requestTerminalBrowserTab } from "@/lib/terminal-links";
 
 /**
  * Data for a persistent terminal instance that survives tab moves.
@@ -131,7 +128,12 @@ function createXtermTerminal(
   },
   scrollback: number | undefined,
   linkSource: Pick<CreateTerminalOptions, "environmentId" | "tabId">,
-): { terminal: Terminal; fitAddon: FitAddon; serializeAddon: SerializeAddon; webLinksAddon: WebLinksAddon } {
+): {
+  terminal: Terminal;
+  fitAddon: FitAddon;
+  serializeAddon: SerializeAddon;
+  webLinksAddon: WebLinksAddon;
+} {
   const {
     fontFamily = DEFAULT_TERMINAL_APPEARANCE.fontFamily,
     fontSize = DEFAULT_TERMINAL_APPEARANCE.fontSize,
@@ -139,9 +141,7 @@ function createXtermTerminal(
   } = appearance;
 
   const scrollbackLines =
-    typeof scrollback === "number" && scrollback > 0
-      ? scrollback
-      : DEFAULT_TERMINAL_SCROLLBACK;
+    typeof scrollback === "number" && scrollback > 0 ? scrollback : DEFAULT_TERMINAL_SCROLLBACK;
 
   const terminal = new Terminal({
     cursorBlink: true,
@@ -237,11 +237,14 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
       return existing;
     }
 
-    const { terminal, fitAddon, serializeAddon, webLinksAddon } =
-      createXtermTerminal(appearance, options.scrollback, {
+    const { terminal, fitAddon, serializeAddon, webLinksAddon } = createXtermTerminal(
+      appearance,
+      options.scrollback,
+      {
         environmentId,
         tabId,
-      });
+      },
+    );
 
     const portalElement = document.createElement("div");
     portalElement.className = "absolute inset-0 pointer-events-auto";
@@ -393,7 +396,8 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
     // Extract primary font family (before fallbacks added by createXtermTerminal)
     const existingFontFamily = existing.terminal.options.fontFamily;
     const primaryFont = existingFontFamily
-      ? (existingFontFamily.split(",")[0]?.replace(/["']/g, "").trim() || DEFAULT_TERMINAL_APPEARANCE.fontFamily)
+      ? existingFontFamily.split(",")[0]?.replace(/["']/g, "").trim() ||
+        DEFAULT_TERMINAL_APPEARANCE.fontFamily
       : DEFAULT_TERMINAL_APPEARANCE.fontFamily;
 
     // Create new terminal preserving user's settings
@@ -401,7 +405,9 @@ export const useTerminalPortalStore = create<TerminalPortalState>((set, get) => 
       {
         fontFamily: primaryFont,
         fontSize: existing.terminal.options.fontSize ?? DEFAULT_TERMINAL_APPEARANCE.fontSize,
-        backgroundColor: existing.terminal.options.theme?.background ?? DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
+        backgroundColor:
+          existing.terminal.options.theme?.background ??
+          DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
       },
       existing.terminal.options.scrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
       { environmentId, tabId },

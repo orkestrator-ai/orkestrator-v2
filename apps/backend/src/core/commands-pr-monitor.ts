@@ -1,8 +1,18 @@
 import { PrMonitorService, runCommand } from "./commands-dependencies.js";
-import type { Environment, PrDetection, PrMonitorKanbanTask, PrMonitorTarget, StorageService } from "./commands-dependencies.js";
+import type {
+  Environment,
+  PrDetection,
+  PrMonitorKanbanTask,
+  PrMonitorTarget,
+  StorageService,
+} from "./commands-dependencies.js";
 import { withContainerRuntimeCredential } from "./commands-runtime-state.js";
 import { quoteShell } from "./commands-agent-support.js";
-import { parsePrDetectionOutput, parseKnownPrDetectionOutput, validatePrDetectionBranch } from "./commands-review.js";
+import {
+  parsePrDetectionOutput,
+  parseKnownPrDetectionOutput,
+  validatePrDetectionBranch,
+} from "./commands-review.js";
 import { dockerExec } from "./commands-container-exec.js";
 import type { PrDetectionResult } from "./commands-review.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
@@ -33,17 +43,14 @@ export function setMergeCleanupScheduler(scheduler: MergeCleanupScheduler): void
   for (const [environmentId, context] of deferred) scheduler(environmentId, context);
 }
 
-export function requestMergeCleanupRecovery(
-  environmentId: string,
-  context: CommandContext,
-): void {
+export function requestMergeCleanupRecovery(environmentId: string, context: CommandContext): void {
   if (mergeCleanupScheduler) {
     mergeCleanupScheduler(environmentId, context);
     return;
   }
   if (
-    deferredMergeCleanups.size >= MAX_DEFERRED_MERGE_CLEANUPS
-    && !deferredMergeCleanups.has(environmentId)
+    deferredMergeCleanups.size >= MAX_DEFERRED_MERGE_CLEANUPS &&
+    !deferredMergeCleanups.has(environmentId)
   ) {
     console.warn(
       "[pr-monitor] Dropping merge cleanup request: no scheduler registered and the deferred set is full",
@@ -146,18 +153,10 @@ export interface PrMonitorDetectionRequest {
  * terminal state the monitor still needs to observe. Once terminal, branch
  * discovery resumes so a replacement PR on the same branch can be found.
  */
-export function getPrMonitorDetectionRequest(
-  target: PrMonitorTarget,
-): PrMonitorDetectionRequest {
+export function getPrMonitorDetectionRequest(target: PrMonitorTarget): PrMonitorDetectionRequest {
   const headBranch = validatePrDetectionBranch(target.branch);
   if (target.prUrl && target.prState !== "merged" && target.prState !== "closed") {
-    const args = [
-      "pr",
-      "view",
-      target.prUrl,
-      "--json",
-      "url,state,mergeable",
-    ];
+    const args = ["pr", "view", target.prUrl, "--json", "url,state,mergeable"];
     return {
       args,
       shellCommand: `gh pr view ${quoteShell(target.prUrl)} --json url,state,mergeable`,
@@ -224,11 +223,9 @@ export const prMonitorService = new PrMonitorService({
         prUrl: detection.url,
         prState: detection.state,
         hasMergeConflicts: detection.hasMergeConflicts,
-        ...(
-          detection.state !== "open" || detection.hasMergeConflicts === false
-            ? { prRecheckAfterAgentCompletionArmedAt: undefined }
-            : {}
-        ),
+        ...(detection.state !== "open" || detection.hasMergeConflicts === false
+          ? { prRecheckAfterAgentCompletionArmedAt: undefined }
+          : {}),
       });
       if (detection.state === "merged" && prMonitorContext) {
         requestMergeCleanupRecovery(environmentId, prMonitorContext);
@@ -260,16 +257,18 @@ export const prMonitorService = new PrMonitorService({
 });
 
 export function environmentToPrMonitorTarget(environment: Environment): PrMonitorTarget {
-  const kind = environment.environmentType === "local" ? "local" as const : "container" as const;
+  const kind =
+    environment.environmentType === "local" ? ("local" as const) : ("container" as const);
   return {
     environmentId: environment.id,
     branch: environment.branch,
     kind,
     worktreePath: environment.worktreePath,
     containerId: environment.containerId ?? undefined,
-    ready: kind === "local"
-      ? !!environment.worktreePath
-      : environment.status === "running" && !!environment.containerId,
+    ready:
+      kind === "local"
+        ? !!environment.worktreePath
+        : environment.status === "running" && !!environment.containerId,
     prUrl: environment.prUrl ?? null,
     prState: environment.prState ?? null,
     hasMergeConflicts: environment.hasMergeConflicts ?? null,
@@ -312,14 +311,11 @@ export async function reconcileConfirmedMerge(
     prState: "merged",
     hasMergeConflicts: false,
   };
-  await prMonitorService.reconcileTerminal(
-    environmentToPrMonitorTarget(confirmedEnvironment),
-    {
-      url: environment.prUrl,
-      state: "merged",
-      hasMergeConflicts: false,
-    },
-  );
+  await prMonitorService.reconcileTerminal(environmentToPrMonitorTarget(confirmedEnvironment), {
+    url: environment.prUrl,
+    state: "merged",
+    hasMergeConflicts: false,
+  });
 }
 
 /** Releases every PR polling timer; called on backend shutdown. */

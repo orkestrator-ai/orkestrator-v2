@@ -7,23 +7,29 @@ import {
 
 describe("resolveStartupLaunch", () => {
   test("prefers the environment over the repository over the global tier", () => {
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: "codex", codexMode: "native" },
-      repository: { defaultAgent: "opencode" },
-      global: { defaultAgent: "claude", codexMode: "terminal" },
-    }).agent).toBe("codex");
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: "codex", codexMode: "native" },
+        repository: { defaultAgent: "opencode" },
+        global: { defaultAgent: "claude", codexMode: "terminal" },
+      }).agent,
+    ).toBe("codex");
 
-    expect(resolveStartupLaunch({
-      environment: {},
-      repository: { defaultAgent: "opencode" },
-      global: { defaultAgent: "claude" },
-    }).agent).toBe("opencode");
+    expect(
+      resolveStartupLaunch({
+        environment: {},
+        repository: { defaultAgent: "opencode" },
+        global: { defaultAgent: "claude" },
+      }).agent,
+    ).toBe("opencode");
 
-    expect(resolveStartupLaunch({
-      environment: {},
-      repository: {},
-      global: { defaultAgent: "codex" },
-    }).agent).toBe("codex");
+    expect(
+      resolveStartupLaunch({
+        environment: {},
+        repository: {},
+        global: { defaultAgent: "codex" },
+      }).agent,
+    ).toBe("codex");
   });
 
   test("falls back to the native Claude default when nothing is configured", () => {
@@ -36,27 +42,33 @@ describe("resolveStartupLaunch", () => {
   });
 
   test("reads the repository Claude style when the environment has none", () => {
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: "claude" },
-      repository: { agentStyle: "native" },
-      global: { claudeMode: "terminal" },
-    })).toMatchObject({ mode: "native", dispatchedByBackend: true });
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: "claude" },
+        repository: { agentStyle: "native" },
+        global: { claudeMode: "terminal" },
+      }),
+    ).toMatchObject({ mode: "native", dispatchedByBackend: true });
   });
 
   test("lets an environment Claude style override the repository", () => {
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: "claude", claudeMode: "terminal" },
-      repository: { agentStyle: "native" },
-      global: { claudeMode: "native" },
-    })).toMatchObject({ mode: "terminal", dispatchedByBackend: false });
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: "claude", claudeMode: "terminal" },
+        repository: { agentStyle: "native" },
+        global: { claudeMode: "native" },
+      }),
+    ).toMatchObject({ mode: "terminal", dispatchedByBackend: false });
   });
 
   test("leaves a tmux-backed Claude launch with the terminal coordinator", () => {
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: "claude", claudeMode: "native" },
-      repository: { claudeNativeBackend: "tmux" },
-      global: {},
-    })).toMatchObject({
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: "claude", claudeMode: "native" },
+        repository: { claudeNativeBackend: "tmux" },
+        global: {},
+      }),
+    ).toMatchObject({
       mode: "native",
       claudeNativeBackend: "tmux",
       dispatchedByBackend: false,
@@ -64,39 +76,49 @@ describe("resolveStartupLaunch", () => {
   });
 
   test("dispatches an sdk-backed native Claude launch from the backend", () => {
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: "claude", claudeMode: "native" },
-      global: { claudeNativeBackend: "sdk" },
-    }).dispatchedByBackend).toBe(true);
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: "claude", claudeMode: "native" },
+        global: { claudeNativeBackend: "sdk" },
+      }).dispatchedByBackend,
+    ).toBe(true);
   });
 
   test.each([
     ["codex", { codexMode: "native" as const }],
     ["opencode", { opencodeMode: "native" as const }],
   ])("dispatches a native %s launch from the backend", (agent, modes) => {
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: agent as "codex" | "opencode", ...modes },
-    }).dispatchedByBackend).toBe(true);
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: agent as "codex" | "opencode", ...modes },
+      }).dispatchedByBackend,
+    ).toBe(true);
   });
 
   test("routes platforms without their own mode through the OpenCode mode", () => {
     // Mirrors the backend's own resolution: cursor and grok have no dedicated
     // mode field, so they follow `opencodeMode`.
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: "grok" },
-      global: { opencodeMode: "native", codexMode: "terminal" },
-    })).toMatchObject({ mode: "native", dispatchedByBackend: true });
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: "grok" },
+        global: { opencodeMode: "native", codexMode: "terminal" },
+      }),
+    ).toMatchObject({ mode: "native", dispatchedByBackend: true });
 
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: "cursor" },
-      global: { opencodeMode: "terminal" },
-    }).dispatchedByBackend).toBe(false);
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: "cursor" },
+        global: { opencodeMode: "terminal" },
+      }).dispatchedByBackend,
+    ).toBe(false);
   });
 
   test("keeps the conservative terminal fallback for non-Claude agents", () => {
-    expect(resolveStartupLaunch({
-      environment: { defaultAgent: "codex" },
-      global: { defaultAgent: "codex" },
-    }).dispatchedByBackend).toBe(false);
+    expect(
+      resolveStartupLaunch({
+        environment: { defaultAgent: "codex" },
+        global: { defaultAgent: "codex" },
+      }).dispatchedByBackend,
+    ).toBe(false);
   });
 });

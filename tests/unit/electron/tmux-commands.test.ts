@@ -2,7 +2,11 @@ import { describe, expect, spyOn, test } from "bun:test";
 import path from "node:path";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
-import { cleanupEnvironmentTmux, RUNTIME_ROOT_PREFIX, tmuxSessionName } from "../../../apps/backend/src/core/tmux";
+import {
+  cleanupEnvironmentTmux,
+  RUNTIME_ROOT_PREFIX,
+  tmuxSessionName,
+} from "../../../apps/backend/src/core/tmux";
 import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
@@ -17,7 +21,6 @@ import {
   withFakeContainerTmuxRuntime,
   withFakeTmuxRuntime,
 } from "./tmux-test-harness.js";
-
 
 describe("Electron tmux backend command registration", () => {
   test("registers the tmux command surface", () => {
@@ -68,11 +71,7 @@ describe("Electron tmux backend command registration", () => {
         appRoot: "",
         resourceRoot: "",
         agentTools: {
-          connection: (
-            environmentId: string,
-            projectId: string,
-            target: "host" | "container",
-          ) => {
+          connection: (environmentId: string, projectId: string, target: "host" | "container") => {
             connectionCalls.push({ environmentId, projectId, target });
             return {
               url: "http://127.0.0.1:4567/mcp",
@@ -90,11 +89,13 @@ describe("Electron tmux backend command registration", () => {
         context,
       );
 
-      expect(connectionCalls).toEqual([{
-        environmentId: environment.id,
-        projectId: environment.projectId,
-        target: "host",
-      }]);
+      expect(connectionCalls).toEqual([
+        {
+          environmentId: environment.id,
+          projectId: environment.projectId,
+          target: "host",
+        },
+      ]);
       const configPath = path.join(runtimeRoot, "agent-mcp.json");
       expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
       expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
@@ -106,9 +107,7 @@ describe("Electron tmux backend command registration", () => {
           },
         },
       });
-      expect(await fs.readFile(log, "utf8")).toContain(
-        `--mcp-config '${configPath}'`,
-      );
+      expect(await fs.readFile(log, "utf8")).toContain(`--mcp-config '${configPath}'`);
 
       await invoke(
         handlers,
@@ -217,17 +216,19 @@ describe("Electron tmux backend command registration", () => {
         },
       };
 
-      await expect(invoke(
-        handlers,
-        "claude_tmux_start",
-        { tabId: "tab-agent-config-write-failure", environmentId: environment.id },
-        context,
-      )).rejects.toThrow();
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          { tabId: "tab-agent-config-write-failure", environmentId: environment.id },
+          context,
+        ),
+      ).rejects.toThrow();
 
       expect((await fs.stat(configPath)).isDirectory()).toBe(true);
       expect(
-        (await fs.readdir(runtimeRoot)).filter((name) =>
-          name.startsWith("agent-mcp.json.") && name.endsWith(".tmp")
+        (await fs.readdir(runtimeRoot)).filter(
+          (name) => name.startsWith("agent-mcp.json.") && name.endsWith(".tmp"),
         ),
       ).toEqual([]);
       expect(await fs.readFile(log, "utf8")).not.toContain("new-session ");
@@ -260,17 +261,19 @@ describe("Electron tmux backend command registration", () => {
         },
       };
 
-      await expect(invoke(
-        handlers,
-        "claude_tmux_start",
-        { tabId: "tab-agent-launch-failure", environmentId: environment.id },
-        context,
-      )).rejects.toThrow("tmux new-session failed");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          { tabId: "tab-agent-launch-failure", environmentId: environment.id },
+          context,
+        ),
+      ).rejects.toThrow("tmux new-session failed");
 
       await expect(fs.stat(configPath)).rejects.toThrow();
       expect(
-        (await fs.readdir(runtimeRoot)).filter((name) =>
-          name.startsWith("agent-mcp.json.") && name.endsWith(".tmp")
+        (await fs.readdir(runtimeRoot)).filter(
+          (name) => name.startsWith("agent-mcp.json.") && name.endsWith(".tmp"),
         ),
       ).toEqual([]);
       await invoke(
@@ -297,11 +300,7 @@ describe("Electron tmux backend command registration", () => {
         appRoot: "",
         resourceRoot: "",
         agentTools: {
-          connection: (
-            environmentId: string,
-            projectId: string,
-            target: "host" | "container",
-          ) => {
+          connection: (environmentId: string, projectId: string, target: "host" | "container") => {
             connectionCalls.push({ environmentId, projectId, target });
             return {
               url: "http://host.docker.internal:4567/mcp",
@@ -319,11 +318,13 @@ describe("Electron tmux backend command registration", () => {
         context,
       );
 
-      expect(connectionCalls).toEqual([{
-        environmentId: environment.id,
-        projectId: environment.projectId,
-        target: "container",
-      }]);
+      expect(connectionCalls).toEqual([
+        {
+          environmentId: environment.id,
+          projectId: environment.projectId,
+          target: "container",
+        },
+      ]);
       const configPath = path.join(runtimeRoot, "agent-mcp.json");
       expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
       expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual({
@@ -337,10 +338,7 @@ describe("Electron tmux backend command registration", () => {
       });
       expect(
         JSON.parse(
-          await fs.readFile(
-            path.join(worktree, ".claude", "settings.local.json"),
-            "utf8",
-          ),
+          await fs.readFile(path.join(worktree, ".claude", "settings.local.json"), "utf8"),
         ),
       ).toHaveProperty("hooks");
 
@@ -364,10 +362,18 @@ describe("Electron tmux backend command registration", () => {
 
     await expect(invoke(handlers, "claude_tmux_status", args)).resolves.toBeNull();
     await expect(invoke(handlers, "claude_tmux_stop", args)).resolves.toBeUndefined();
-    await expect(invoke(handlers, "claude_tmux_interrupt", args)).rejects.toThrow("tmux session not running");
-    await expect(invoke(handlers, "claude_tmux_pending_hooks", args)).rejects.toThrow("tmux session not running");
-    await expect(invoke(handlers, "claude_tmux_tasks", args)).rejects.toThrow("tmux session not running");
-    await expect(invoke(handlers, "claude_tmux_detach_interactive_terminal", { terminalSessionId: "missing" })).resolves.toBeUndefined();
+    await expect(invoke(handlers, "claude_tmux_interrupt", args)).rejects.toThrow(
+      "tmux session not running",
+    );
+    await expect(invoke(handlers, "claude_tmux_pending_hooks", args)).rejects.toThrow(
+      "tmux session not running",
+    );
+    await expect(invoke(handlers, "claude_tmux_tasks", args)).rejects.toThrow(
+      "tmux session not running",
+    );
+    await expect(
+      invoke(handlers, "claude_tmux_detach_interactive_terminal", { terminalSessionId: "missing" }),
+    ).resolves.toBeUndefined();
   });
 
   test("names generated tab ids without tmux session collisions", () => {
@@ -392,27 +398,25 @@ describe("Electron tmux backend command registration", () => {
         resourceRoot: "",
       };
 
-      const first = await invoke(
+      const first = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-1782973296000-1", environmentId: environment.id },
         context,
-      ) as { tmux_session: string; running: boolean };
-      const second = await invoke(
+      )) as { tmux_session: string; running: boolean };
+      const second = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-1782973296000-2", environmentId: environment.id },
         context,
-      ) as { tmux_session: string; running: boolean };
+      )) as { tmux_session: string; running: boolean };
 
       expect(first.running).toBe(true);
       expect(second.running).toBe(true);
       expect(first.tmux_session).not.toBe(second.tmux_session);
 
       const tmuxLog = await fs.readFile(log, "utf8");
-      const newSessionLines = tmuxLog
-        .split("\n")
-        .filter((line) => line.startsWith("new-session "));
+      const newSessionLines = tmuxLog.split("\n").filter((line) => line.startsWith("new-session "));
       expect(newSessionLines).toHaveLength(2);
       expect(newSessionLines[0]).toContain(first.tmux_session);
       expect(newSessionLines[1]).toContain(second.tmux_session);
@@ -453,46 +457,35 @@ describe("Electron tmux backend command registration", () => {
         initialPrompt: "Inspect the workspace",
       };
 
-      const first = await invoke(
-        handlers,
-        "claude_tmux_start",
-        args,
-        context,
-      ) as { session_id: string };
-      const attached = await invoke(
-        handlers,
-        "claude_tmux_start",
-        args,
-        context,
-      ) as { session_id: string };
+      const first = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+        session_id: string;
+      };
+      const attached = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+        session_id: string;
+      };
 
       expect(attached.session_id).toBe(first.session_id);
       await waitFor(() =>
-        events.some((event) =>
-          event.kind === "initial-prompt-sent"
-          && event.session_id === first.session_id
+        events.some(
+          (event) => event.kind === "initial-prompt-sent" && event.session_id === first.session_id,
         ),
       );
       let tmuxLog = await fs.readFile(log, "utf8");
-      expect(
-        tmuxLog.split("\n").filter((line) => line.startsWith("new-session ")),
-      ).toHaveLength(1);
-      expect(
-        tmuxLog.split("\n").filter((line) => line.startsWith("paste-buffer ")),
-      ).toHaveLength(1);
+      expect(tmuxLog.split("\n").filter((line) => line.startsWith("new-session "))).toHaveLength(1);
+      expect(tmuxLog.split("\n").filter((line) => line.startsWith("paste-buffer "))).toHaveLength(
+        1,
+      );
       expect(tmuxLog).not.toContain("kill-session");
 
-      const replaced = await invoke(
+      const replaced = (await invoke(
         handlers,
         "claude_tmux_start",
         { ...args, initialPrompt: undefined, replaceExisting: true },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
       expect(replaced.session_id).not.toBe(first.session_id);
       tmuxLog = await fs.readFile(log, "utf8");
-      expect(
-        tmuxLog.split("\n").filter((line) => line.startsWith("new-session ")),
-      ).toHaveLength(2);
+      expect(tmuxLog.split("\n").filter((line) => line.startsWith("new-session "))).toHaveLength(2);
       expect(tmuxLog).toContain("kill-session");
 
       await invoke(handlers, "claude_tmux_stop", args, context);
@@ -522,10 +515,9 @@ describe("Electron tmux backend command registration", () => {
       await waitFor(() => existsSync(`${barrier}.started`));
 
       let stopSettled = false;
-      const stop = invoke(handlers, "claude_tmux_stop", args, context)
-        .finally(() => {
-          stopSettled = true;
-        });
+      const stop = invoke(handlers, "claude_tmux_stop", args, context).finally(() => {
+        stopSettled = true;
+      });
       await delay(75);
       const settledBeforeStartReleased = stopSettled;
       await fs.writeFile(`${barrier}.release`, "");
@@ -535,9 +527,7 @@ describe("Electron tmux backend command registration", () => {
 
       expect(settledBeforeStartReleased).toBe(false);
       expect(existsSync(path.join(alive, started.tmux_session))).toBe(false);
-      await expect(
-        invoke(handlers, "claude_tmux_status", args, context),
-      ).resolves.toBeNull();
+      await expect(invoke(handlers, "claude_tmux_status", args, context)).resolves.toBeNull();
     });
   });
 
@@ -559,12 +549,12 @@ describe("Electron tmux backend command registration", () => {
       expect(runtimeRoot).toBe(path.join(RUNTIME_ROOT_PREFIX, environment.id));
       await expect(fs.stat(runtimeRoot)).rejects.toThrow();
 
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-runtime-root", environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
 
       expect((await fs.stat(runtimeRoot)).isDirectory()).toBe(true);
       expect(
@@ -603,12 +593,12 @@ describe("Electron tmux backend command registration", () => {
         resourceRoot: "",
       };
 
-      const started = await invoke(
+      const started = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-teardown", environmentId: environment.id },
         context,
-      ) as { tmux_session: string; running: boolean };
+      )) as { tmux_session: string; running: boolean };
 
       expect(started.running).toBe(true);
       // tmux mode has taken the settings file over by now.
@@ -621,16 +611,19 @@ describe("Electron tmux backend command registration", () => {
       await expect(fs.stat(runtimeRoot)).rejects.toThrow();
       // The fake tmux drops the alive marker on kill-session.
       expect(existsSync(path.join(alive, started.tmux_session))).toBe(false);
-      expect(await fs.readFile(log, "utf8")).toContain(
-        `kill-session -t ${started.tmux_session}`,
-      );
+      expect(await fs.readFile(log, "utf8")).toContain(`kill-session -t ${started.tmux_session}`);
 
       // The session is forgotten too, so a later command cannot drive a dead tab.
       await expect(
-        invoke(handlers, "claude_tmux_status", {
-          tabId: "tab-teardown",
-          environmentId: environment.id,
-        }, context),
+        invoke(
+          handlers,
+          "claude_tmux_status",
+          {
+            tabId: "tab-teardown",
+            environmentId: environment.id,
+          },
+          context,
+        ),
       ).resolves.toBeNull();
     });
   });
@@ -639,7 +632,11 @@ describe("Electron tmux backend command registration", () => {
     await withFakeTmuxRuntime(async ({ environment }) => {
       // A container environment whose container id is already gone: there is
       // nothing to exec into, and deletion must not be blocked by that.
-      const unreachable = { ...environment, environmentType: "container" as const, containerId: null };
+      const unreachable = {
+        ...environment,
+        environmentType: "container" as const,
+        containerId: null,
+      };
       const context = {
         storage: {
           getEnvironment: async () => unreachable,
@@ -675,15 +672,10 @@ describe("Electron tmux backend command registration", () => {
         resourceRoot: "",
       };
 
-      await cleanupEnvironmentTmux(
-        environment.id,
-        context as unknown as CommandContext,
-      );
+      await cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext);
 
       expect(existsSync(path.join(alive, orphanName))).toBe(true);
-      expect(await fs.readFile(log, "utf8")).not.toContain(
-        `kill-session -t ${orphanName}`,
-      );
+      expect(await fs.readFile(log, "utf8")).not.toContain(`kill-session -t ${orphanName}`);
       await fs.rm(path.join(alive, orphanName), { force: true });
     });
   });
@@ -705,10 +697,9 @@ describe("Electron tmux backend command registration", () => {
         resourceRoot: "",
       };
 
-      await expect(cleanupEnvironmentTmux(
-        environment.id,
-        context as unknown as CommandContext,
-      )).resolves.toBeUndefined();
+      await expect(
+        cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
+      ).resolves.toBeUndefined();
       expect(existsSync(path.join(alive, orphanName))).toBe(false);
       await expect(fs.stat(runtimeRoot)).rejects.toThrow();
     });
@@ -721,7 +712,11 @@ describe("Electron tmux backend command registration", () => {
       const settingsPath = path.join(worktree, ".claude", "settings.local.json");
       const backupPath = path.join(runtimeRoot, "settings.local.json.orkestrator-v2-backup");
       const hookPath = path.join(runtimeRoot, "hook.sh");
-      const originalSettings = JSON.stringify({ permissions: { allow: ["Bash(git status)"] } }, null, 2);
+      const originalSettings = JSON.stringify(
+        { permissions: { allow: ["Bash(git status)"] } },
+        null,
+        2,
+      );
       await fs.mkdir(path.dirname(settingsPath), { recursive: true });
       await fs.writeFile(settingsPath, originalSettings);
       const context = {
@@ -735,10 +730,15 @@ describe("Electron tmux backend command registration", () => {
         resourceRoot: "",
       };
       const tabId = "tab-orphan-stop-failure";
-      const status = await invoke(handlers, "claude_tmux_start", {
-        tabId,
-        environmentId: environment.id,
-      }, context) as { session_id: string };
+      const status = (await invoke(
+        handlers,
+        "claude_tmux_start",
+        {
+          tabId,
+          environmentId: environment.id,
+        },
+        context,
+      )) as { session_id: string };
       const installedSettings = await fs.readFile(settingsPath, "utf8");
       const installedHook = await fs.readFile(hookPath, "utf8");
       const installedBackup = await fs.readFile(backupPath, "utf8");
@@ -751,22 +751,38 @@ describe("Electron tmux backend command registration", () => {
         await invoke(handlers, "claude_tmux_reconcile_orphans", {}, context);
         process.env.FAKE_TMUX_FAIL_KILL = "1";
         now += 60 * 60 * 1_000 + 60_001;
-        await expect(invoke(handlers, "claude_tmux_reconcile_orphans", {}, context))
-          .resolves.toEqual({ reaped: 0, skipped: false });
-        await expect(invoke(handlers, "claude_tmux_status", {
-          tabId,
-          environmentId: environment.id,
-        }, context)).resolves.not.toBeNull();
+        await expect(
+          invoke(handlers, "claude_tmux_reconcile_orphans", {}, context),
+        ).resolves.toEqual({ reaped: 0, skipped: false });
+        await expect(
+          invoke(
+            handlers,
+            "claude_tmux_status",
+            {
+              tabId,
+              environmentId: environment.id,
+            },
+            context,
+          ),
+        ).resolves.not.toBeNull();
         expect(existsSync(sessionDir)).toBe(true);
 
         delete process.env.FAKE_TMUX_FAIL_KILL;
         now += 60_001;
-        await expect(invoke(handlers, "claude_tmux_reconcile_orphans", {}, context))
-          .resolves.toEqual({ reaped: 1, skipped: false });
-        await expect(invoke(handlers, "claude_tmux_status", {
-          tabId,
-          environmentId: environment.id,
-        }, context)).resolves.toBeNull();
+        await expect(
+          invoke(handlers, "claude_tmux_reconcile_orphans", {}, context),
+        ).resolves.toEqual({ reaped: 1, skipped: false });
+        await expect(
+          invoke(
+            handlers,
+            "claude_tmux_status",
+            {
+              tabId,
+              environmentId: environment.id,
+            },
+            context,
+          ),
+        ).resolves.toBeNull();
 
         // Recreate only the persisted managed hook state. With no tmux server
         // and no in-memory sessions, reconciliation must still restore it.
@@ -775,8 +791,9 @@ describe("Electron tmux backend command registration", () => {
         await fs.writeFile(backupPath, installedBackup);
         await fs.writeFile(settingsPath, installedSettings);
         now += 60_001;
-        await expect(invoke(handlers, "claude_tmux_reconcile_orphans", {}, context))
-          .resolves.toEqual({ reaped: 0, skipped: false });
+        await expect(
+          invoke(handlers, "claude_tmux_reconcile_orphans", {}, context),
+        ).resolves.toEqual({ reaped: 0, skipped: false });
         await expect(fs.readFile(settingsPath, "utf8")).resolves.toBe(originalSettings);
         await expect(fs.stat(runtimeRoot)).rejects.toThrow();
       } finally {
@@ -814,10 +831,7 @@ describe("Electron tmux backend command registration", () => {
         context,
       );
 
-      const cleanup = cleanupEnvironmentTmux(
-        environment.id,
-        context as unknown as CommandContext,
-      );
+      const cleanup = cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext);
       await waitFor(() => loadStarted);
 
       storedEnvironment = {
@@ -839,9 +853,7 @@ describe("Electron tmux backend command registration", () => {
       loadGate.resolve([storedEnvironment]);
 
       await expect(cleanup).resolves.toBeUndefined();
-      expect((await queuedStartOutcome).error?.message).toContain(
-        "is being deleted",
-      );
+      expect((await queuedStartOutcome).error?.message).toContain("is being deleted");
       expect(await fs.readFile(log, "utf8")).not.toContain(
         tmuxSessionName(environment.id, "tab-after-delete"),
       );
@@ -872,16 +884,18 @@ describe("Electron tmux backend command registration", () => {
         ...environment,
         deletionRequestedAt: new Date().toISOString(),
       };
-      await expect(invoke(
-        handlers,
-        "claude_tmux_submit_queued",
-        {
-          tabId: "tab-delete-submit",
-          environmentId: environment.id,
-          text: "must not be typed",
-        },
-        context,
-      )).rejects.toThrow("is being deleted");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_submit_queued",
+          {
+            tabId: "tab-delete-submit",
+            environmentId: environment.id,
+            text: "must not be typed",
+          },
+          context,
+        ),
+      ).rejects.toThrow("is being deleted");
       expect(await fs.readFile(log, "utf8")).not.toContain("must not be typed");
       await invoke(
         handlers,
@@ -911,7 +925,7 @@ describe("Electron tmux backend command registration", () => {
         { tabId: "tab-interactive-cleanup", environmentId: environment.id },
         context,
       );
-      const terminalSessionId = await invoke(
+      const terminalSessionId = (await invoke(
         handlers,
         "claude_tmux_create_interactive_terminal",
         {
@@ -921,7 +935,7 @@ describe("Electron tmux backend command registration", () => {
           rows: 40,
         },
         context,
-      ) as string;
+      )) as string;
       await invoke(
         handlers,
         "claude_tmux_start_interactive_terminal",
@@ -929,10 +943,7 @@ describe("Electron tmux backend command registration", () => {
         context,
       );
 
-      await cleanupEnvironmentTmux(
-        environment.id,
-        context as unknown as CommandContext,
-      );
+      await cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext);
 
       await expect(
         invoke(
@@ -969,10 +980,7 @@ describe("Electron tmux backend command registration", () => {
       process.env.FAKE_TMUX_FAIL_KILL = "1";
       try {
         await expect(
-          cleanupEnvironmentTmux(
-            environment.id,
-            context as unknown as CommandContext,
-          ),
+          cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
         ).rejects.toThrow("cleanup incomplete");
         expect((await fs.stat(runtimeRoot)).isDirectory()).toBe(true);
       } finally {
@@ -1005,10 +1013,7 @@ describe("Electron tmux backend command registration", () => {
       );
 
       await expect(
-        cleanupEnvironmentTmux(
-          environment.id,
-          context as unknown as CommandContext,
-        ),
+        cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
       ).rejects.toThrow("cleanup incomplete");
       expect((await fs.stat(runtimeRoot)).isDirectory()).toBe(true);
     });
@@ -1041,10 +1046,7 @@ describe("Electron tmux backend command registration", () => {
       await fs.mkdir(settingsPath);
 
       await expect(
-        cleanupEnvironmentTmux(
-          environment.id,
-          context as unknown as CommandContext,
-        ),
+        cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
       ).rejects.toThrow("cleanup incomplete");
       expect(
         await fs.readFile(
@@ -1061,13 +1063,16 @@ describe("Electron tmux backend command registration", () => {
     await withFakeTmuxRuntime(async ({ environment, log }) => {
       const toolchainBinDir = await createTempDir("ork-tmux-toolchain-");
       const managedClaude = path.join(toolchainBinDir, "claude");
-      await fs.writeFile(managedClaude, `#!/bin/sh
+      await fs.writeFile(
+        managedClaude,
+        `#!/bin/sh
 case "$1" in
   --version) printf '2.1.2\n' ;;
   --help) printf '%s\n' '--session-id <uuid>' ;;
 esac
 exit 0
-`);
+`,
+      );
       await fs.chmod(managedClaude, 0o500);
       const context = {
         storage: { getEnvironment: async () => environment },
@@ -1103,13 +1108,16 @@ exit 0
       // An older CLI ignores the unknown option on the `--version` path and
       // exits 0, which is exactly what the probe treats as "unsupported". Its
       // `--help` also omits `--effort`, so that flag must be dropped too.
-      await fs.writeFile(oldClaude, `#!/bin/sh
+      await fs.writeFile(
+        oldClaude,
+        `#!/bin/sh
 case "$1" in
   --help) printf '%s\\n' '--session-id <uuid>' ;;
   *) printf '2.1.2\\n' ;;
 esac
 exit 0
-`);
+`,
+      );
       await fs.chmod(oldClaude, 0o500);
       const context = {
         storage: { getEnvironment: async () => environment },
@@ -1119,7 +1127,7 @@ exit 0
         toolchainBinDir,
       };
 
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         {
@@ -1130,7 +1138,7 @@ exit 0
           fastMode: true,
         },
         context,
-      ) as { fast_mode: boolean };
+      )) as { fast_mode: boolean };
 
       const launchLog = await fs.readFile(log, "utf8");
       expect(launchLog).toContain(" --dangerously-skip-permissions");
@@ -1159,7 +1167,9 @@ exit 0
       // The flags must be probed as a pair. A CLI that accepts one and rejects
       // the other would otherwise be launched with an option it cannot parse,
       // and Claude would exit before the tmux session ever showed a prompt.
-      await fs.writeFile(splitClaude, `#!/bin/sh
+      await fs.writeFile(
+        splitClaude,
+        `#!/bin/sh
 case "$1" in
   --help) printf '%s\\n' '--session-id <uuid>' ;;
   --thinking)
@@ -1179,7 +1189,8 @@ case "$1" in
   *) printf '2.1.2\\n' ;;
 esac
 exit 0
-`);
+`,
+      );
       await fs.chmod(splitClaude, 0o500);
       const context = {
         storage: { getEnvironment: async () => environment },
@@ -1221,12 +1232,18 @@ exit 0
       };
       const resumeSessionId = "11111111-2222-3333-4444-555555555555";
 
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
-        { tabId: "tab-resume", environmentId: environment.id, model: "opus", effort: "medium", resumeSessionId },
+        {
+          tabId: "tab-resume",
+          environmentId: environment.id,
+          model: "opus",
+          effort: "medium",
+          resumeSessionId,
+        },
         context,
-      ) as { session_id: string; resumed: boolean };
+      )) as { session_id: string; resumed: boolean };
 
       expect(status.session_id).toBe(resumeSessionId);
       expect(status.resumed).toBe(true);
@@ -1264,18 +1281,16 @@ exit 0
         environmentId: environment.id,
         resumeSessionId: "11111111-2222-3333-4444-555555555555",
       };
-      const first = await invoke(
-        handlers,
-        "claude_tmux_start",
-        args,
-        context,
-      ) as { session_id: string; observation: { generation?: string; revision: number } };
-      const second = await invoke(
+      const first = (await invoke(handlers, "claude_tmux_start", args, context)) as {
+        session_id: string;
+        observation: { generation?: string; revision: number };
+      };
+      const second = (await invoke(
         handlers,
         "claude_tmux_start",
         { ...args, replaceExisting: true },
         context,
-      ) as { session_id: string; observation: { generation?: string; revision: number } };
+      )) as { session_id: string; observation: { generation?: string; revision: number } };
 
       expect(second.session_id).toBe(first.session_id);
       expect(first.observation.generation).toBeTruthy();
@@ -1303,44 +1318,66 @@ exit 0
         resourceRoot: "",
       };
       const tabId = "tab-commands";
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
       const session = tmuxSessionName(environment.id, tabId);
       const inputBuffer = path.join(alive, `buffer-claude-tmux-input-${session}`);
 
       // sendText pastes through a tmux buffer rather than send-keys, so the
       // pasted payload has to survive verbatim.
-      await invoke(handlers, "claude_tmux_send_text", { tabId, environmentId: environment.id, text: "hello 👋" });
+      await invoke(handlers, "claude_tmux_send_text", {
+        tabId,
+        environmentId: environment.id,
+        text: "hello 👋",
+      });
       await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("hello 👋");
-      await expect(fs.readFile(path.join(alive, `${session}.input`), "utf8")).resolves.toBe("hello 👋");
+      await expect(fs.readFile(path.join(alive, `${session}.input`), "utf8")).resolves.toBe(
+        "hello 👋",
+      );
 
-      await invoke(handlers, "claude_tmux_send_keys", { tabId, environmentId: environment.id, keys: ["Escape", "Enter"] });
+      await invoke(handlers, "claude_tmux_send_keys", {
+        tabId,
+        environmentId: environment.id,
+        keys: ["Escape", "Enter"],
+      });
       expect(await fs.readFile(log, "utf8")).toContain("-- Escape Enter");
 
-      await invoke(handlers, "claude_tmux_resize", { tabId, environmentId: environment.id, cols: 120, rows: 40 });
+      await invoke(handlers, "claude_tmux_resize", {
+        tabId,
+        environmentId: environment.id,
+        cols: 120,
+        rows: 40,
+      });
       expect(await fs.readFile(log, "utf8")).toContain(`resize-window -t ${session} -x 120 -y 40`);
-      await expect(invoke(
-        handlers,
-        "claude_tmux_resize",
-        { tabId, environmentId: environment.id, cols: 0, rows: 40 },
-      )).rejects.toThrow("cols");
+      await expect(
+        invoke(handlers, "claude_tmux_resize", {
+          tabId,
+          environmentId: environment.id,
+          cols: 0,
+          rows: 40,
+        }),
+      ).rejects.toThrow("cols");
 
       // A blank model or effort must be rejected before anything reaches tmux.
       const beforeRejected = await fs.readFile(log, "utf8");
-      await expect(invoke(
-        handlers,
-        "claude_tmux_switch_model",
-        { tabId, environmentId: environment.id, model: "   " },
-      )).rejects.toThrow("model id cannot be empty");
-      await expect(invoke(
-        handlers,
-        "claude_tmux_switch_effort",
-        { tabId, environmentId: environment.id, effort: "" },
-      )).rejects.toThrow("effort level cannot be empty");
+      await expect(
+        invoke(handlers, "claude_tmux_switch_model", {
+          tabId,
+          environmentId: environment.id,
+          model: "   ",
+        }),
+      ).rejects.toThrow("model id cannot be empty");
+      await expect(
+        invoke(handlers, "claude_tmux_switch_effort", {
+          tabId,
+          environmentId: environment.id,
+          effort: "",
+        }),
+      ).rejects.toThrow("effort level cannot be empty");
       expect(await fs.readFile(log, "utf8")).toBe(beforeRejected);
 
       const sessionRoot = path.join(runtimeRoot, "sessions", status.session_id);
@@ -1357,7 +1394,9 @@ exit 0
         reason: "not this time",
       });
       await expect(
-        fs.readFile(path.join(sessionRoot, "response", "PreToolUse-event-9.json"), "utf8").then(JSON.parse),
+        fs
+          .readFile(path.join(sessionRoot, "response", "PreToolUse-event-9.json"), "utf8")
+          .then(JSON.parse),
       ).resolves.toEqual({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -1365,7 +1404,9 @@ exit 0
           permissionDecisionReason: "not this time",
         },
       });
-      await expect(fs.stat(path.join(sessionRoot, "pending", "PreToolUse-event-9.json"))).rejects.toThrow();
+      await expect(
+        fs.stat(path.join(sessionRoot, "pending", "PreToolUse-event-9.json")),
+      ).rejects.toThrow();
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1386,46 +1427,79 @@ exit 0
         resourceRoot: "",
       };
       const tabId = "tab-switches";
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      );
       const session = tmuxSessionName(environment.id, tabId);
       const inputBuffer = path.join(alive, `buffer-claude-tmux-input-${session}`);
 
-      await invoke(handlers, "claude_tmux_switch_model", { tabId, environmentId: environment.id, model: "opus" });
+      await invoke(handlers, "claude_tmux_switch_model", {
+        tabId,
+        environmentId: environment.id,
+        model: "opus",
+      });
       await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("/model opus");
 
-      await invoke(handlers, "claude_tmux_switch_effort", { tabId, environmentId: environment.id, effort: "high" });
+      await invoke(handlers, "claude_tmux_switch_effort", {
+        tabId,
+        environmentId: environment.id,
+        effort: "high",
+      });
       await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("/effort high");
 
-      await invoke(handlers, "claude_tmux_switch_fast_mode", { tabId, environmentId: environment.id, fastMode: true }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_switch_fast_mode",
+        { tabId, environmentId: environment.id, fastMode: true },
+        context,
+      );
       await expect(fs.readFile(inputBuffer, "utf8")).resolves.toBe("/fast on");
       await expect(
         invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
       ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
-      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8"))
-        .resolves.toBe("1");
-      expect(emitted).toContainEqual(expect.objectContaining({
-        payload: expect.objectContaining({ kind: "fast-mode-changed", fast_mode: true }),
-      }));
+      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8")).resolves.toBe(
+        "1",
+      );
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          payload: expect.objectContaining({ kind: "fast-mode-changed", fast_mode: true }),
+        }),
+      );
 
-      await invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: false,
-      }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_switch_fast_mode",
+        {
+          tabId,
+          environmentId: environment.id,
+          fastMode: false,
+        },
+        context,
+      );
       await expect(
         invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
       ).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
-      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8"))
-        .resolves.toBe("0");
+      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8")).resolves.toBe(
+        "0",
+      );
       const beforeNoOp = await fs.readFile(path.join(alive, `${session}.fast-option`), "utf8");
       const eventCountBeforeNoOp = emitted.length;
-      await invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: false,
-      }, context);
-      expect(await fs.readFile(path.join(alive, `${session}.fast-option`), "utf8"))
-        .toBe(beforeNoOp);
+      await invoke(
+        handlers,
+        "claude_tmux_switch_fast_mode",
+        {
+          tabId,
+          environmentId: environment.id,
+          fastMode: false,
+        },
+        context,
+      );
+      expect(await fs.readFile(path.join(alive, `${session}.fast-option`), "utf8")).toBe(
+        beforeNoOp,
+      );
       expect(emitted).toHaveLength(eventCountBeforeNoOp);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
@@ -1449,11 +1523,18 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      await expect(invoke(handlers, "claude_tmux_start", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: false,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          {
+            tabId,
+            environmentId: environment.id,
+            fastMode: false,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1475,11 +1556,18 @@ exit 0
         resourceRoot: "",
       };
 
-      await expect(invoke(handlers, "claude_tmux_start", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: null }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          {
+            tabId,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: null }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1502,12 +1590,20 @@ exit 0
         resourceRoot: "",
       };
 
-      await expect(invoke(handlers, "claude_tmux_start", {
-        tabId,
-        environmentId: environment.id,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
-      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8"))
-        .resolves.toBe("1");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          {
+            tabId,
+            environmentId: environment.id,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8")).resolves.toBe(
+        "1",
+      );
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1529,23 +1625,47 @@ exit 0
       await fs.writeFile(path.join(alive, falseSession), "");
       await fs.writeFile(path.join(alive, `${falseSession}.mode`), "bypassPermissions");
       await fs.writeFile(path.join(alive, `${falseSession}.fast-option`), "0");
-      await expect(invoke(handlers, "claude_tmux_start", {
-        tabId: falseTabId,
-        environmentId: environment.id,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          {
+            tabId: falseTabId,
+            environmentId: environment.id,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
 
       const garbageTabId = "tab-fast-option-garbage";
       const garbageSession = tmuxSessionName(environment.id, garbageTabId);
       await fs.writeFile(path.join(alive, garbageSession), "");
       await fs.writeFile(path.join(alive, `${garbageSession}.mode`), "bypassPermissions");
       await fs.writeFile(path.join(alive, `${garbageSession}.fast-option`), "sometimes");
-      await expect(invoke(handlers, "claude_tmux_start", {
-        tabId: garbageTabId,
-        environmentId: environment.id,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: null }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          {
+            tabId: garbageTabId,
+            environmentId: environment.id,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: null }));
 
-      await invoke(handlers, "claude_tmux_stop", { tabId: falseTabId, environmentId: environment.id }, context);
-      await invoke(handlers, "claude_tmux_stop", { tabId: garbageTabId, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: falseTabId, environmentId: environment.id },
+        context,
+      );
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: garbageTabId, environmentId: environment.id },
+        context,
+      );
     });
   });
 
@@ -1564,17 +1684,28 @@ exit 0
       await fs.mkdir(alive, { recursive: true });
       await fs.writeFile(path.join(alive, session), "");
       await fs.writeFile(path.join(alive, `${session}.mode`), "bypassPermissions");
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      );
       await fs.writeFile(path.join(alive, `${session}.fast-pane`), "Fast mode ON");
 
-      await invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_switch_fast_mode",
+        {
+          tabId,
+          environmentId: environment.id,
+          fastMode: true,
+        },
+        context,
+      );
       expect(existsSync(path.join(alive, `${session}.input`))).toBe(false);
-      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8"))
-        .resolves.toBe("1");
+      await expect(fs.readFile(path.join(alive, `${session}.fast-option`), "utf8")).resolves.toBe(
+        "1",
+      );
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1592,21 +1723,40 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      );
       await fs.writeFile(
         path.join(alive, `${session}.fast-pane`),
         "Fast mode OFF\nFast mode requires an eligible plan",
       );
 
-      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).resolves.toBeUndefined();
-      await expect(invoke(handlers, "claude_tmux_status", {
-        tabId,
-        environmentId: environment.id,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          {
+            tabId,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).resolves.toBeUndefined();
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_status",
+          {
+            tabId,
+            environmentId: environment.id,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1624,24 +1774,42 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      await invoke(handlers, "claude_tmux_start", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        {
+          tabId,
+          environmentId: environment.id,
+          fastMode: true,
+        },
+        context,
+      );
       await fs.writeFile(path.join(alive, `${session}.fast-pane`), "Fast mode OFF");
 
-      await invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context);
-      await expect(fs.readFile(path.join(alive, `buffer-claude-tmux-input-${session}`), "utf8"))
-        .resolves.toBe("/fast on");
-      await expect(invoke(handlers, "claude_tmux_status", {
-        tabId,
-        environmentId: environment.id,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await invoke(
+        handlers,
+        "claude_tmux_switch_fast_mode",
+        {
+          tabId,
+          environmentId: environment.id,
+          fastMode: true,
+        },
+        context,
+      );
+      await expect(
+        fs.readFile(path.join(alive, `buffer-claude-tmux-input-${session}`), "utf8"),
+      ).resolves.toBe("/fast on");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_status",
+          {
+            tabId,
+            environmentId: environment.id,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1659,26 +1827,60 @@ exit 0
       };
       const beforeTab = "tab-fast-exited-before";
       const beforeSession = tmuxSessionName(environment.id, beforeTab);
-      await invoke(handlers, "claude_tmux_start", { tabId: beforeTab, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: beforeTab, environmentId: environment.id },
+        context,
+      );
       await fs.writeFile(path.join(alive, `${beforeSession}.mode`), "exited");
-      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId: beforeTab,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).rejects.toThrow("Claude exited before fast mode could be changed");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          {
+            tabId: beforeTab,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Claude exited before fast mode could be changed");
 
       const duringTab = "tab-fast-exited-during";
       const duringSession = tmuxSessionName(environment.id, duringTab);
-      await invoke(handlers, "claude_tmux_start", { tabId: duringTab, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId: duringTab, environmentId: environment.id },
+        context,
+      );
       await fs.writeFile(path.join(alive, `${duringSession}.exit-fast`), "");
-      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId: duringTab,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).rejects.toThrow("Claude exited before fast mode could be changed");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          {
+            tabId: duringTab,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Claude exited before fast mode could be changed");
 
-      await invoke(handlers, "claude_tmux_stop", { tabId: beforeTab, environmentId: environment.id }, context);
-      await invoke(handlers, "claude_tmux_stop", { tabId: duringTab, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: beforeTab, environmentId: environment.id },
+        context,
+      );
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: duringTab, environmentId: environment.id },
+        context,
+      );
     });
   });
 
@@ -1695,23 +1897,34 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
-      await fs.writeFile(path.join(alive, `${session}.reject-fast`), "");
-
-      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).rejects.toThrow("Fast mode is unavailable for this model");
-      await expect(invoke(
+      await invoke(
         handlers,
-        "claude_tmux_status",
+        "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      )).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
-      expect(emitted.filter(({ payload }) =>
-        (payload as { kind?: string }).kind === "fast-mode-changed"
-      )).toHaveLength(0);
+      );
+      await fs.writeFile(path.join(alive, `${session}.reject-fast`), "");
+
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          {
+            tabId,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Fast mode is unavailable for this model");
+      await expect(
+        invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
+      expect(
+        emitted.filter(
+          ({ payload }) => (payload as { kind?: string }).kind === "fast-mode-changed",
+        ),
+      ).toHaveLength(0);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1729,35 +1942,58 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      );
       const beforeMalformed = await fs.readFile(log, "utf8");
-      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: "yes",
-      }, context)).rejects.toThrow("Expected fastMode to be a boolean");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          {
+            tabId,
+            environmentId: environment.id,
+            fastMode: "yes",
+          },
+          context,
+        ),
+      ).rejects.toThrow("Expected fastMode to be a boolean");
       expect(await fs.readFile(log, "utf8")).toBe(beforeMalformed);
 
       await fs.writeFile(path.join(alive, `${session}.mode`), "selection");
-      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).rejects.toThrow("Finish the active Claude prompt");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          {
+            tabId,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Finish the active Claude prompt");
       await fs.writeFile(path.join(alive, `${session}.mode`), "bypassPermissions");
 
       await fs.writeFile(path.join(alive, `${session}.ignore-fast`), "");
-      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).rejects.toThrow("Claude did not confirm fast mode on");
-      await expect(invoke(
-        handlers,
-        "claude_tmux_status",
-        { tabId, environmentId: environment.id },
-        context,
-      )).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          {
+            tabId,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Claude did not confirm fast mode on");
+      await expect(
+        invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: false }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1776,23 +2012,34 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
-      await fs.writeFile(path.join(alive, `${session}.fail-fast-option`), "");
-
-      await expect(invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).rejects.toThrow("Fast mode changed but its restart metadata could not be saved");
-      await expect(invoke(
+      await invoke(
         handlers,
-        "claude_tmux_status",
+        "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      )).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
-      expect(emitted).toContainEqual(expect.objectContaining({
-        payload: expect.objectContaining({ kind: "fast-mode-changed", fast_mode: true }),
-      }));
+      );
+      await fs.writeFile(path.join(alive, `${session}.fail-fast-option`), "");
+
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_fast_mode",
+          {
+            tabId,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).rejects.toThrow("Fast mode changed but its restart metadata could not be saved");
+      await expect(
+        invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      expect(emitted).toContainEqual(
+        expect.objectContaining({
+          payload: expect.objectContaining({ kind: "fast-mode-changed", fast_mode: true }),
+        }),
+      );
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1812,33 +2059,66 @@ exit 0
       const retrySession = tmuxSessionName(environment.id, retryTab);
       await fs.mkdir(alive, { recursive: true });
       await fs.writeFile(path.join(alive, `${retrySession}.fail-fast-option-once`), "");
-      await expect(invoke(handlers, "claude_tmux_start", {
-        tabId: retryTab,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
-      await expect(fs.readFile(path.join(alive, `${retrySession}.fast-option`), "utf8"))
-        .resolves.toBe("1");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          {
+            tabId: retryTab,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await expect(
+        fs.readFile(path.join(alive, `${retrySession}.fast-option`), "utf8"),
+      ).resolves.toBe("1");
 
       const repairTab = "tab-fast-launch-repair";
       const repairSession = tmuxSessionName(environment.id, repairTab);
       await fs.writeFile(path.join(alive, `${repairSession}.fail-fast-option`), "");
-      await expect(invoke(handlers, "claude_tmux_start", {
-        tabId: repairTab,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          {
+            tabId: repairTab,
+            environmentId: environment.id,
+            fastMode: true,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
       await fs.rm(path.join(alive, `${repairSession}.fail-fast-option`));
-      await expect(invoke(handlers, "claude_tmux_start", {
-        tabId: repairTab,
-        environmentId: environment.id,
-        fastMode: false,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
-      await expect(fs.readFile(path.join(alive, `${repairSession}.fast-option`), "utf8"))
-        .resolves.toBe("1");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_start",
+          {
+            tabId: repairTab,
+            environmentId: environment.id,
+            fastMode: false,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await expect(
+        fs.readFile(path.join(alive, `${repairSession}.fast-option`), "utf8"),
+      ).resolves.toBe("1");
 
-      await invoke(handlers, "claude_tmux_stop", { tabId: retryTab, environmentId: environment.id }, context);
-      await invoke(handlers, "claude_tmux_stop", { tabId: repairTab, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: retryTab, environmentId: environment.id },
+        context,
+      );
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: repairTab, environmentId: environment.id },
+        context,
+      );
     });
   });
 
@@ -1854,27 +2134,49 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      );
       await fs.writeFile(path.join(alive, `${session}.delay-fast`), "");
 
-      const switching = invoke(handlers, "claude_tmux_switch_fast_mode", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: true,
-      }, context);
+      const switching = invoke(
+        handlers,
+        "claude_tmux_switch_fast_mode",
+        {
+          tabId,
+          environmentId: environment.id,
+          fastMode: true,
+        },
+        context,
+      );
       await waitFor(() => existsSync(path.join(alive, `${session}.input`)));
-      const reattaching = invoke(handlers, "claude_tmux_start", {
-        tabId,
-        environmentId: environment.id,
-        fastMode: false,
-      }, context);
+      const reattaching = invoke(
+        handlers,
+        "claude_tmux_start",
+        {
+          tabId,
+          environmentId: environment.id,
+          fastMode: false,
+        },
+        context,
+      );
 
       await expect(switching).resolves.toBeUndefined();
       await expect(reattaching).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
-      await expect(invoke(handlers, "claude_tmux_status", {
-        tabId,
-        environmentId: environment.id,
-      }, context)).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_status",
+          {
+            tabId,
+            environmentId: environment.id,
+          },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ fast_mode: true }));
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1894,7 +2196,7 @@ exit 0
         resourceRoot: "",
       };
 
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         {
@@ -1908,7 +2210,7 @@ exit 0
           planMode: true,
         },
         context,
-      ) as { session_id: string; running: boolean; fast_mode: boolean };
+      )) as { session_id: string; running: boolean; fast_mode: boolean };
       expect(status.running).toBe(true);
       expect(status.session_id).toBeTruthy();
       expect(status.fast_mode).toBe(true);
@@ -1921,30 +2223,38 @@ exit 0
       expect(launchLog).toContain(" --thinking adaptive --thinking-display summarized");
       expect(launchLog).toContain(" --settings '{\"fastMode\":true}'");
 
-      await expect(invoke(
-        handlers,
-        "claude_tmux_switch_plan_mode",
-        { tabId: "tab-1", environmentId: environment.id, planMode: true },
-        context,
-      )).resolves.toBe("plan");
-      await expect(invoke(
-        handlers,
-        "claude_tmux_status",
-        { tabId: "tab-1", environmentId: environment.id },
-        context,
-      )).resolves.toEqual(expect.objectContaining({ permission_mode: "plan" }));
-      await expect(invoke(
-        handlers,
-        "claude_tmux_switch_plan_mode",
-        { tabId: "tab-1", environmentId: environment.id, planMode: false },
-        context,
-      )).resolves.toBe("bypassPermissions");
-      await expect(invoke(
-        handlers,
-        "claude_tmux_status",
-        { tabId: "tab-1", environmentId: environment.id },
-        context,
-      )).resolves.toEqual(expect.objectContaining({ permission_mode: "bypassPermissions" }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_plan_mode",
+          { tabId: "tab-1", environmentId: environment.id, planMode: true },
+          context,
+        ),
+      ).resolves.toBe("plan");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_status",
+          { tabId: "tab-1", environmentId: environment.id },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ permission_mode: "plan" }));
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_plan_mode",
+          { tabId: "tab-1", environmentId: environment.id, planMode: false },
+          context,
+        ),
+      ).resolves.toBe("bypassPermissions");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_status",
+          { tabId: "tab-1", environmentId: environment.id },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ permission_mode: "bypassPermissions" }));
 
       const switchedLog = await fs.readFile(log, "utf8");
       expect(switchedLog).toContain("send-keys -t");
@@ -1956,7 +2266,10 @@ exit 0
       const timingDir = path.join(sessionRoot, "timing");
       await fs.mkdir(pendingDir, { recursive: true });
       const hookEventId = "1700000000-event-1";
-      await fs.writeFile(path.join(pendingDir, `PreToolUse-${hookEventId}.json`), JSON.stringify({ tool_name: "Edit" }));
+      await fs.writeFile(
+        path.join(pendingDir, `PreToolUse-${hookEventId}.json`),
+        JSON.stringify({ tool_name: "Edit" }),
+      );
       await fs.writeFile(
         path.join(timingDir, `PreToolUse-${hookEventId}.json`),
         JSON.stringify({ requestedAt: 1_700_000_000_123, expiresAt: 1_700_000_300_123 }),
@@ -1969,18 +2282,19 @@ exit 0
         "9007199254740992-unsafe-seconds",
         "9007199254740-unsafe-milliseconds",
       ];
-      await Promise.all(invalidTimingEventIds.map((eventId) =>
-        fs.writeFile(
-          path.join(pendingDir, `PermissionRequest-${eventId}.json`),
-          JSON.stringify({ tool_name: "Edit" }),
-        )
-      ));
+      await Promise.all(
+        invalidTimingEventIds.map((eventId) =>
+          fs.writeFile(
+            path.join(pendingDir, `PermissionRequest-${eventId}.json`),
+            JSON.stringify({ tool_name: "Edit" }),
+          ),
+        ),
+      );
 
-      const pendingHooks = await invoke(
-        handlers,
-        "claude_tmux_pending_hooks",
-        { tabId: "tab-1", environmentId: environment.id },
-      ) as Array<Record<string, unknown>>;
+      const pendingHooks = (await invoke(handlers, "claude_tmux_pending_hooks", {
+        tabId: "tab-1",
+        environmentId: environment.id,
+      })) as Array<Record<string, unknown>>;
       expect(pendingHooks).toContainEqual({
         id: hookEventId,
         kind: "PreToolUse",
@@ -1999,19 +2313,31 @@ exit 0
         expect(pending).not.toHaveProperty("expiresAt");
       }
 
-      await invoke(
-        handlers,
-        "claude_tmux_reply_hook",
-        { tabId: "tab-1", environmentId: environment.id, eventKind: "PreToolUse", eventId: hookEventId, response: { ok: true } },
-      );
-      await expect(fs.readFile(path.join(responseDir, `PreToolUse-${hookEventId}.json`), "utf8")).resolves.toBe(JSON.stringify({ ok: true }));
-      await expect(fs.stat(path.join(pendingDir, `PreToolUse-${hookEventId}.json`))).rejects.toThrow();
-      await expect(fs.stat(path.join(timingDir, `PreToolUse-${hookEventId}.json`))).rejects.toThrow();
-      await expect(invoke(
-        handlers,
-        "claude_tmux_reply_hook",
-        { tabId: "tab-1", environmentId: environment.id, eventKind: "PreToolUse", eventId: "../bad", response: {} },
-      )).rejects.toThrow("invalid hook event id");
+      await invoke(handlers, "claude_tmux_reply_hook", {
+        tabId: "tab-1",
+        environmentId: environment.id,
+        eventKind: "PreToolUse",
+        eventId: hookEventId,
+        response: { ok: true },
+      });
+      await expect(
+        fs.readFile(path.join(responseDir, `PreToolUse-${hookEventId}.json`), "utf8"),
+      ).resolves.toBe(JSON.stringify({ ok: true }));
+      await expect(
+        fs.stat(path.join(pendingDir, `PreToolUse-${hookEventId}.json`)),
+      ).rejects.toThrow();
+      await expect(
+        fs.stat(path.join(timingDir, `PreToolUse-${hookEventId}.json`)),
+      ).rejects.toThrow();
+      await expect(
+        invoke(handlers, "claude_tmux_reply_hook", {
+          tabId: "tab-1",
+          environmentId: environment.id,
+          eventKind: "PreToolUse",
+          eventId: "../bad",
+          response: {},
+        }),
+      ).rejects.toThrow("invalid hook event id");
 
       const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
       await fs.mkdir(transcriptDir, { recursive: true });
@@ -2019,11 +2345,23 @@ exit 0
         path.join(transcriptDir, `${status.session_id}.jsonl`),
         `${JSON.stringify({ type: "user", message: { role: "user", content: "Hello" } })}\nnot-json\n${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Hi" } })}\n`,
       );
-      await expect(invoke(handlers, "claude_tmux_transcript", { tabId: "tab-1", environmentId: environment.id })).resolves.toEqual([
+      await expect(
+        invoke(handlers, "claude_tmux_transcript", {
+          tabId: "tab-1",
+          environmentId: environment.id,
+        }),
+      ).resolves.toEqual([
         { type: "user", message: { role: "user", content: "Hello" } },
         { type: "assistant", message: { role: "assistant", content: "Hi" } },
       ]);
-      await expect(invoke(handlers, "claude_tmux_list_previous_sessions", { environmentId: environment.id }, context)).resolves.toEqual([
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_list_previous_sessions",
+          { environmentId: environment.id },
+          context,
+        ),
+      ).resolves.toEqual([
         expect.objectContaining({
           session_id: status.session_id,
           title: "Hello",
@@ -2031,17 +2369,34 @@ exit 0
         }),
       ]);
 
-      const terminalSessionId = await invoke(
+      const terminalSessionId = (await invoke(
         handlers,
         "claude_tmux_create_interactive_terminal",
         { tabId: "tab-1", environmentId: environment.id, cols: 120, rows: 40 },
         context,
-      ) as string;
-      await invoke(handlers, "claude_tmux_start_interactive_terminal", { terminalSessionId }, context);
-      await invoke(handlers, "claude_tmux_write_interactive_terminal", { terminalSessionId, data: "abc\r\n\u001b[A\u007f" });
-      await invoke(handlers, "claude_tmux_resize_interactive_terminal", { terminalSessionId, cols: 100, rows: 30 });
+      )) as string;
+      await invoke(
+        handlers,
+        "claude_tmux_start_interactive_terminal",
+        { terminalSessionId },
+        context,
+      );
+      await invoke(handlers, "claude_tmux_write_interactive_terminal", {
+        terminalSessionId,
+        data: "abc\r\n\u001b[A\u007f",
+      });
+      await invoke(handlers, "claude_tmux_resize_interactive_terminal", {
+        terminalSessionId,
+        cols: 100,
+        rows: 30,
+      });
       await invoke(handlers, "claude_tmux_detach_interactive_terminal", { terminalSessionId });
-      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-1", environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-1", environmentId: environment.id },
+        context,
+      );
 
       const tmuxLog = await fs.readFile(log, "utf8");
       expect(tmuxLog).toContain("resize-window");
@@ -2053,7 +2408,9 @@ exit 0
       expect(tmuxLog).toContain("-- Up");
       expect(tmuxLog).toContain("-- BSpace");
       expect(emitted.some((item) => item.event === "claude-tmux:event")).toBe(true);
-      const terminalOutput = emitted.find((item) => item.event === `terminal-output-${terminalSessionId}`);
+      const terminalOutput = emitted.find(
+        (item) => item.event === `terminal-output-${terminalSessionId}`,
+      );
       expect(terminalOutput).toBeDefined();
       // Pins the current plain UTF-8 shape and exact-repaint marker.
       const terminalPayload = terminalOutput!.payload as Record<string, unknown>;
@@ -2073,19 +2430,19 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-hook-timeout", environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
 
       const installedScript = await fs.readFile(path.join(runtimeRoot, "hook.sh"), "utf8");
       const timeout = installedScript.match(/^TIMEOUT_SECS=(\d+)$/m);
       expect(timeout?.[1]).toBe("300");
-      expect(installedScript).toContain("REQUESTED_AT_MS=\"$(epoch_millis)\"");
+      expect(installedScript).toContain('REQUESTED_AT_MS="$(epoch_millis)"');
       expect(installedScript).toContain("EXPIRES_AT_MS=$((REQUESTED_AT_MS + TIMEOUT_SECS * 1000))");
-      expect(installedScript).toContain("sleep \"$TIMEOUT_SECS\" &");
+      expect(installedScript).toContain('sleep "$TIMEOUT_SECS" &');
       expect(installedScript).not.toContain("TIMEOUT_SECS * 4");
 
       // Exercise the real generated shell branches without waiting five
@@ -2162,12 +2519,14 @@ exit 0
       const before = await fs.readFile(log, "utf8");
 
       for (const planMode of [undefined, null, "true", 0]) {
-        await expect(invoke(
-          handlers,
-          "claude_tmux_switch_plan_mode",
-          { tabId: "tab-plan-validation", environmentId: environment.id, planMode },
-          context,
-        )).rejects.toThrow("Expected planMode to be a boolean");
+        await expect(
+          invoke(
+            handlers,
+            "claude_tmux_switch_plan_mode",
+            { tabId: "tab-plan-validation", environmentId: environment.id, planMode },
+            context,
+          ),
+        ).rejects.toThrow("Expected planMode to be a boolean");
       }
 
       expect(await fs.readFile(log, "utf8")).toBe(before);
@@ -2192,35 +2551,39 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-plan-modes", environmentId: environment.id },
         context,
-      ) as { tmux_session: string };
+      )) as { tmux_session: string };
       const modePath = path.join(alive, `${status.tmux_session}.mode`);
       await fs.writeFile(path.join(alive, `${status.tmux_session}.auto-prompt-on-btab`), "");
 
       for (const sourceMode of ["bypassPermissions", "default", "acceptEdits", "auto", "dontAsk"]) {
         await fs.writeFile(modePath, sourceMode);
-        await expect(invoke(
-          handlers,
-          "claude_tmux_switch_plan_mode",
-          { tabId: "tab-plan-modes", environmentId: environment.id, planMode: true },
-          context,
-        )).resolves.toBe("plan");
+        await expect(
+          invoke(
+            handlers,
+            "claude_tmux_switch_plan_mode",
+            { tabId: "tab-plan-modes", environmentId: environment.id, planMode: true },
+            context,
+          ),
+        ).resolves.toBe("plan");
         await expect(fs.readFile(modePath, "utf8")).resolves.toBe("plan");
       }
 
       const beforeBuild = await fs.readFile(log, "utf8");
       expect(beforeBuild).not.toContain("-- BTab");
 
-      await expect(invoke(
-        handlers,
-        "claude_tmux_switch_plan_mode",
-        { tabId: "tab-plan-modes", environmentId: environment.id, planMode: false },
-        context,
-      )).resolves.toBe("bypassPermissions");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_switch_plan_mode",
+          { tabId: "tab-plan-modes", environmentId: environment.id, planMode: false },
+          context,
+        ),
+      ).resolves.toBe("bypassPermissions");
       await expect(fs.readFile(modePath, "utf8")).resolves.toBe("bypassPermissions");
       expect(await fs.readFile(log, "utf8")).toContain("-- BTab");
 
@@ -2245,26 +2608,29 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-plan-errors", environmentId: environment.id },
         context,
-      ) as { tmux_session: string };
+      )) as { tmux_session: string };
       const prefix = path.join(alive, status.tmux_session);
       const modePath = `${prefix}.mode`;
-      const switchToPlan = () => invoke(
-        handlers,
-        "claude_tmux_switch_plan_mode",
-        { tabId: "tab-plan-errors", environmentId: environment.id, planMode: true },
-        context,
-      );
+      const switchToPlan = () =>
+        invoke(
+          handlers,
+          "claude_tmux_switch_plan_mode",
+          { tabId: "tab-plan-errors", environmentId: environment.id, planMode: true },
+          context,
+        );
 
       await fs.writeFile(modePath, "selection");
       await expect(switchToPlan()).rejects.toThrow("Finish the active Claude prompt");
 
       await fs.writeFile(modePath, "exited");
-      await expect(switchToPlan()).rejects.toThrow("Claude exited before its mode could be changed");
+      await expect(switchToPlan()).rejects.toThrow(
+        "Claude exited before its mode could be changed",
+      );
 
       await fs.writeFile(modePath, "bypassPermissions");
       await fs.writeFile(`${prefix}.fail-capture`, "");
@@ -2277,7 +2643,9 @@ exit 0
       await fs.rm(`${prefix}.input`, { force: true });
 
       await fs.writeFile(`${prefix}.ignore-plan`, "");
-      await expect(switchToPlan()).rejects.toThrow("Claude did not enter plan; observed bypassPermissions");
+      await expect(switchToPlan()).rejects.toThrow(
+        "Claude did not enter plan; observed bypassPermissions",
+      );
       await fs.rm(`${prefix}.ignore-plan`);
 
       await invoke(
@@ -2301,19 +2669,19 @@ exit 0
         appRoot: "",
         resourceRoot: "",
       };
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-plan-lock", environmentId: environment.id },
         context,
-      ) as { tmux_session: string };
+      )) as { tmux_session: string };
       await fs.writeFile(path.join(alive, `${status.tmux_session}.delay-plan`), "");
-      const terminalSessionId = await invoke(
+      const terminalSessionId = (await invoke(
         handlers,
         "claude_tmux_create_interactive_terminal",
         { tabId: "tab-plan-lock", environmentId: environment.id, cols: 100, rows: 30 },
         context,
-      ) as string;
+      )) as string;
 
       const switching = invoke(
         handlers,
@@ -2412,31 +2780,35 @@ exit 0
       );
 
       await waitFor(async () => {
-        const status = await invoke(
+        const status = (await invoke(
           handlers,
           "claude_tmux_status",
           { tabId: "tab-initial", environmentId: environment.id },
           context,
-        ) as { busy: boolean } | null;
+        )) as { busy: boolean } | null;
         return status?.busy === true;
       }, 3_000);
 
       try {
         expect(await fs.readFile(log, "utf8")).not.toContain(" --settings ");
         const beforeSwitch = await fs.readFile(log, "utf8");
-        await expect(invoke(
-          handlers,
-          "claude_tmux_switch_plan_mode",
-          { tabId: "tab-initial", environmentId: environment.id, planMode: true },
-          context,
-        )).rejects.toThrow("Cannot switch Claude mode while a turn is running");
+        await expect(
+          invoke(
+            handlers,
+            "claude_tmux_switch_plan_mode",
+            { tabId: "tab-initial", environmentId: environment.id, planMode: true },
+            context,
+          ),
+        ).rejects.toThrow("Cannot switch Claude mode while a turn is running");
         expect(await fs.readFile(log, "utf8")).toBe(beforeSwitch);
-        await expect(invoke(
-          handlers,
-          "claude_tmux_switch_fast_mode",
-          { tabId: "tab-initial", environmentId: environment.id, fastMode: true },
-          context,
-        )).rejects.toThrow("Cannot switch Claude fast mode while a turn is running");
+        await expect(
+          invoke(
+            handlers,
+            "claude_tmux_switch_fast_mode",
+            { tabId: "tab-initial", environmentId: environment.id, fastMode: true },
+            context,
+          ),
+        ).rejects.toThrow("Cannot switch Claude fast mode while a turn is running");
         expect(await fs.readFile(log, "utf8")).toBe(beforeSwitch);
 
         await invoke(
@@ -2471,19 +2843,22 @@ exit 0
         resourceRoot: "",
       };
 
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-fallback", environmentId: environment.id },
         context,
-      ) as { session_id: string; running: boolean };
+      )) as { session_id: string; running: boolean };
       expect(status.running).toBe(true);
 
       const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
       await fs.mkdir(transcriptDir, { recursive: true });
 
       const oldPath = path.join(transcriptDir, "old-session.jsonl");
-      await fs.writeFile(oldPath, `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Old" } })}\n`);
+      await fs.writeFile(
+        oldPath,
+        `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Old" } })}\n`,
+      );
       await fs.utimes(oldPath, new Date(0), new Date(0));
 
       const fallbackPath = path.join(transcriptDir, "claude-owned-session.jsonl");
@@ -2492,15 +2867,25 @@ exit 0
         `${JSON.stringify({ sessionId: status.session_id, type: "assistant", message: { role: "assistant", content: "Visible" } })}\n`,
       );
 
-      await expect(invoke(
-        handlers,
-        "claude_tmux_transcript",
-        { tabId: "tab-fallback", environmentId: environment.id },
-      )).resolves.toEqual([
-        { sessionId: status.session_id, type: "assistant", message: { role: "assistant", content: "Visible" } },
+      await expect(
+        invoke(handlers, "claude_tmux_transcript", {
+          tabId: "tab-fallback",
+          environmentId: environment.id,
+        }),
+      ).resolves.toEqual([
+        {
+          sessionId: status.session_id,
+          type: "assistant",
+          message: { role: "assistant", content: "Visible" },
+        },
       ]);
 
-      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-fallback", environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-fallback", environmentId: environment.id },
+        context,
+      );
     });
   });
 
@@ -2517,12 +2902,12 @@ exit 0
         resourceRoot: "",
       };
 
-      const reviewStatus = await invoke(
+      const reviewStatus = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "review-tab", environmentId: environment.id, initialPrompt: "Review this" },
         context,
-      ) as { session_id: string; running: boolean };
+      )) as { session_id: string; running: boolean };
       expect(reviewStatus.running).toBe(true);
 
       const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
@@ -2532,36 +2917,52 @@ exit 0
         `${JSON.stringify({ sessionId: reviewStatus.session_id, type: "assistant", message: { role: "assistant", content: "Review transcript" } })}\n`,
       );
 
-      const freshStatus = await invoke(
+      const freshStatus = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "fresh-tab", environmentId: environment.id },
         context,
-      ) as { session_id: string; running: boolean };
+      )) as { session_id: string; running: boolean };
       expect(freshStatus.running).toBe(true);
       expect(freshStatus.session_id).not.toBe(reviewStatus.session_id);
 
-      await expect(invoke(
-        handlers,
-        "claude_tmux_transcript",
-        { tabId: "fresh-tab", environmentId: environment.id },
-      )).resolves.toEqual([]);
+      await expect(
+        invoke(handlers, "claude_tmux_transcript", {
+          tabId: "fresh-tab",
+          environmentId: environment.id,
+        }),
+      ).resolves.toEqual([]);
 
       await fs.writeFile(
         path.join(transcriptDir, "fresh-owned-session.jsonl"),
         `${JSON.stringify({ sessionId: freshStatus.session_id, type: "assistant", message: { role: "assistant", content: "Fresh transcript" } })}\n`,
       );
 
-      await expect(invoke(
-        handlers,
-        "claude_tmux_transcript",
-        { tabId: "fresh-tab", environmentId: environment.id },
-      )).resolves.toEqual([
-        { sessionId: freshStatus.session_id, type: "assistant", message: { role: "assistant", content: "Fresh transcript" } },
+      await expect(
+        invoke(handlers, "claude_tmux_transcript", {
+          tabId: "fresh-tab",
+          environmentId: environment.id,
+        }),
+      ).resolves.toEqual([
+        {
+          sessionId: freshStatus.session_id,
+          type: "assistant",
+          message: { role: "assistant", content: "Fresh transcript" },
+        },
       ]);
 
-      await invoke(handlers, "claude_tmux_stop", { tabId: "review-tab", environmentId: environment.id }, context);
-      await invoke(handlers, "claude_tmux_stop", { tabId: "fresh-tab", environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "review-tab", environmentId: environment.id },
+        context,
+      );
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "fresh-tab", environmentId: environment.id },
+        context,
+      );
     });
   });
 
@@ -2578,12 +2979,12 @@ exit 0
         resourceRoot: "",
       };
 
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-ambiguous", environmentId: environment.id },
         context,
-      ) as { running: boolean };
+      )) as { running: boolean };
       expect(status.running).toBe(true);
 
       const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
@@ -2597,13 +2998,19 @@ exit 0
         `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Second" } })}\n`,
       );
 
-      await expect(invoke(
-        handlers,
-        "claude_tmux_transcript",
-        { tabId: "tab-ambiguous", environmentId: environment.id },
-      )).resolves.toEqual([]);
+      await expect(
+        invoke(handlers, "claude_tmux_transcript", {
+          tabId: "tab-ambiguous",
+          environmentId: environment.id,
+        }),
+      ).resolves.toEqual([]);
 
-      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-ambiguous", environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-ambiguous", environmentId: environment.id },
+        context,
+      );
     });
   });
 
@@ -2621,12 +3028,12 @@ exit 0
         resourceRoot: "",
       };
 
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-tail", environmentId: environment.id },
         context,
-      ) as { session_id: string; running: boolean };
+      )) as { session_id: string; running: boolean };
       expect(status.running).toBe(true);
 
       const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
@@ -2637,40 +3044,61 @@ exit 0
         `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Hello £" } })}\n`,
       );
 
-      await waitFor(() => emitted.some((item) =>
-        item.event === "claude-tmux:event" &&
-        (item.payload as { kind?: string; line?: { message?: { content?: string } } }).kind === "transcript-line" &&
-        (item.payload as { line?: { message?: { content?: string } } }).line?.message?.content === "Hello £"
-      ));
+      await waitFor(() =>
+        emitted.some(
+          (item) =>
+            item.event === "claude-tmux:event" &&
+            (item.payload as { kind?: string; line?: { message?: { content?: string } } }).kind ===
+              "transcript-line" &&
+            (item.payload as { line?: { message?: { content?: string } } }).line?.message
+              ?.content === "Hello £",
+        ),
+      );
 
       await fs.appendFile(
         transcriptPath,
         `${JSON.stringify({ type: "assistant", message: { role: "assistant", content: "Second message" } })}\n`,
       );
 
-      await waitFor(() => emitted.some((item) =>
-        item.event === "claude-tmux:event" &&
-        (item.payload as { kind?: string; line?: { message?: { content?: string } } }).kind === "transcript-line" &&
-        (item.payload as { line?: { message?: { content?: string } } }).line?.message?.content === "Second message"
-      ));
+      await waitFor(() =>
+        emitted.some(
+          (item) =>
+            item.event === "claude-tmux:event" &&
+            (item.payload as { kind?: string; line?: { message?: { content?: string } } }).kind ===
+              "transcript-line" &&
+            (item.payload as { line?: { message?: { content?: string } } }).line?.message
+              ?.content === "Second message",
+        ),
+      );
 
       await fs.appendFile(
         transcriptPath,
         `${JSON.stringify({ type: "permission-mode", permissionMode: "plan" })}\n`,
       );
-      await waitFor(() => emitted.some((item) =>
-        item.event === "claude-tmux:event" &&
-        (item.payload as { kind?: string; permission_mode?: string }).kind === "permission-mode-changed" &&
-        (item.payload as { permission_mode?: string }).permission_mode === "plan"
-      ));
-      await expect(invoke(
+      await waitFor(() =>
+        emitted.some(
+          (item) =>
+            item.event === "claude-tmux:event" &&
+            (item.payload as { kind?: string; permission_mode?: string }).kind ===
+              "permission-mode-changed" &&
+            (item.payload as { permission_mode?: string }).permission_mode === "plan",
+        ),
+      );
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_status",
+          { tabId: "tab-tail", environmentId: environment.id },
+          context,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ permission_mode: "plan" }));
+
+      await invoke(
         handlers,
-        "claude_tmux_status",
+        "claude_tmux_stop",
         { tabId: "tab-tail", environmentId: environment.id },
         context,
-      )).resolves.toEqual(expect.objectContaining({ permission_mode: "plan" }));
-
-      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-tail", environmentId: environment.id }, context);
+      );
     });
   });
 
@@ -2688,12 +3116,12 @@ exit 0
         resourceRoot: "",
       };
 
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId: "tab-tasks", environmentId: environment.id },
         context,
-      ) as { session_id: string; running: boolean };
+      )) as { session_id: string; running: boolean };
       expect(status.running).toBe(true);
 
       const transcriptDir = path.join(home, ".claude", "projects", encodeCwd(worktree));
@@ -2735,11 +3163,10 @@ exit 0
       );
 
       // A full read stamps each line with the list as it stood at that line.
-      const lines = await invoke(
-        handlers,
-        "claude_tmux_transcript",
-        { tabId: "tab-tasks", environmentId: environment.id },
-      ) as Array<{ taskSnapshots?: Record<string, unknown> }>;
+      const lines = (await invoke(handlers, "claude_tmux_transcript", {
+        tabId: "tab-tasks",
+        environmentId: environment.id,
+      })) as Array<{ taskSnapshots?: Record<string, unknown> }>;
 
       expect(lines).toHaveLength(2);
       // The tool_use line changed nothing; the result line carries the list,
@@ -2755,11 +3182,12 @@ exit 0
 
       // ...and the same state is available without replaying the transcript,
       // which is how a tab that was unmounted catches up.
-      await expect(invoke(
-        handlers,
-        "claude_tmux_tasks",
-        { tabId: "tab-tasks", environmentId: environment.id },
-      )).resolves.toEqual({
+      await expect(
+        invoke(handlers, "claude_tmux_tasks", {
+          tabId: "tab-tasks",
+          environmentId: environment.id,
+        }),
+      ).resolves.toEqual({
         items: [{ id: "1", subject: "Derived in the backend", status: "pending" }],
         complete: true,
       });
@@ -2796,17 +3224,25 @@ exit 0
           }),
       );
 
-      await waitFor(() => emitted.some((item) =>
-        item.event === "claude-tmux:event" &&
-        (item.payload as { kind?: string }).kind === "transcript-line" &&
-        (item.payload as { line?: { taskSnapshots?: Record<string, unknown> } })
-          .line?.taskSnapshots?.["tu-task-2"] !== undefined
-      ));
+      await waitFor(() =>
+        emitted.some(
+          (item) =>
+            item.event === "claude-tmux:event" &&
+            (item.payload as { kind?: string }).kind === "transcript-line" &&
+            (item.payload as { line?: { taskSnapshots?: Record<string, unknown> } }).line
+              ?.taskSnapshots?.["tu-task-2"] !== undefined,
+        ),
+      );
 
       const tailed = emitted
-        .map((item) => item.payload as {
-          line?: { taskSnapshots?: Record<string, { items?: unknown; changedTaskId?: string }> };
-        })
+        .map(
+          (item) =>
+            item.payload as {
+              line?: {
+                taskSnapshots?: Record<string, { items?: unknown; changedTaskId?: string }>;
+              };
+            },
+        )
         .filter((payload) => payload.line?.taskSnapshots)
         .at(-1);
       expect(tailed?.line?.taskSnapshots?.["tu-task-2"]).toEqual({
@@ -2815,7 +3251,12 @@ exit 0
         changedTaskId: "1",
       });
 
-      await invoke(handlers, "claude_tmux_stop", { tabId: "tab-tasks", environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "tab-tasks", environmentId: environment.id },
+        context,
+      );
     });
   });
 });

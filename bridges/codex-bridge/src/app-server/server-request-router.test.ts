@@ -89,14 +89,16 @@ describe("exhaustiveness", () => {
     h.router.handle(request("future/request"), 7);
     await Bun.sleep(25);
 
-    expect(h.answers).toEqual([{
-      generation: 7,
-      id: "srv-1",
-      error: {
-        code: -32601,
-        message: "Orkestrator did not produce a response in time",
+    expect(h.answers).toEqual([
+      {
+        generation: 7,
+        id: "srv-1",
+        error: {
+          code: -32601,
+          message: "Orkestrator did not produce a response in time",
+        },
       },
-    }]);
+    ]);
     expect(h.router.getMetrics().timedOut).toBe(1);
     expect(h.router.getPending()).toHaveLength(0);
   });
@@ -590,31 +592,38 @@ describe("interactive questions and MCP elicitation", () => {
       },
       approvalTimeoutMs: 5_000,
     });
-    h.router.handle({
-      ...request("item/tool/requestUserInput"),
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "item-1",
-        questions: [{
-          id: "language",
-          header: "Language",
-          question: "Which language?",
-          isOther: true,
-          isSecret: false,
-          options: [{ label: "TypeScript", description: "Typed JavaScript" }],
-        }],
-        autoResolutionMs: 60_000,
+    h.router.handle(
+      {
+        ...request("item/tool/requestUserInput"),
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          questions: [
+            {
+              id: "language",
+              header: "Language",
+              question: "Which language?",
+              isOther: true,
+              isSecret: false,
+              options: [{ label: "TypeScript", description: "Typed JavaScript" }],
+            },
+          ],
+          autoResolutionMs: 60_000,
+        },
       },
-    }, 1);
+      1,
+    );
     await settle();
 
     expect(h.answers).toHaveLength(0);
     expect(presented[0]?.kind).toBe("question");
-    expect(h.router.resolveInteraction(presented[0]!.interactionId, {
-      action: "accept",
-      answers: { language: ["TypeScript"] },
-    })).toBe(true);
+    expect(
+      h.router.resolveInteraction(presented[0]!.interactionId, {
+        action: "accept",
+        answers: { language: ["TypeScript"] },
+      }),
+    ).toBe(true);
     await settle();
 
     expect(h.answers[0]?.result).toEqual({
@@ -633,21 +642,24 @@ describe("interactive questions and MCP elicitation", () => {
       },
       approvalTimeoutMs: 5_000,
     });
-    h.router.handle({
-      ...request("mcpServer/elicitation/request"),
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        serverName: "deploy",
-        mode: "form",
-        message: "Choose a region",
-        requestedSchema: {
-          type: "object",
-          properties: { region: { type: "string" } },
-          required: ["region"],
+    h.router.handle(
+      {
+        ...request("mcpServer/elicitation/request"),
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          serverName: "deploy",
+          mode: "form",
+          message: "Choose a region",
+          requestedSchema: {
+            type: "object",
+            properties: { region: { type: "string" } },
+            required: ["region"],
+          },
         },
       },
-    }, 2);
+      2,
+    );
     await settle();
 
     expect(presented[0]?.kind).toBe("mcp-form");
@@ -772,10 +784,13 @@ describe("interactive questions and MCP elicitation", () => {
 
   test("a shorter autoResolutionMs shortens the park, it does not extend it", async () => {
     const h = interactionHarness({ approvalTimeoutMs: 5_000 });
-    h.router.handle({
-      ...questionRequest(),
-      params: { ...questionRequest().params as object, autoResolutionMs: 30 },
-    }, 1);
+    h.router.handle(
+      {
+        ...questionRequest(),
+        params: { ...(questionRequest().params as object), autoResolutionMs: 30 },
+      },
+      1,
+    );
     await settle();
     await Bun.sleep(80);
 
@@ -803,8 +818,9 @@ describe("interactive questions and MCP elicitation", () => {
     await settle();
 
     const id = h.presented[0]!.interactionId;
-    expect(h.router.resolveInteraction(id, { action: "accept", answers: { q: ["Yes"] } }))
-      .toBe(true);
+    expect(h.router.resolveInteraction(id, { action: "accept", answers: { q: ["Yes"] } })).toBe(
+      true,
+    );
     // A double click, or a click racing the expiry timer.
     expect(h.router.resolveInteraction(id, { action: "cancel" })).toBe(false);
     await settle();
@@ -815,8 +831,7 @@ describe("interactive questions and MCP elicitation", () => {
 
   test("resolving an unknown interaction id reports false", () => {
     const h = interactionHarness();
-    expect(h.router.resolveInteraction("ask-does-not-exist", { action: "cancel" }))
-      .toBe(false);
+    expect(h.router.resolveInteraction("ask-does-not-exist", { action: "cancel" })).toBe(false);
   });
 
   test.each(["decline", "cancel"] as const)(
@@ -948,32 +963,39 @@ describe("interactive questions and MCP elicitation", () => {
       },
       approvalTimeoutMs: 5_000,
     });
-    h.router.handle({
-      ...request("item/tool/requestUserInput"),
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        itemId: "item-1",
-        questions: [{
-          id: "q",
-          header: "Question",
-          question: "Continue?",
-          isOther: false,
-          isSecret: false,
-          options: [{ label: "Yes", description: "" }],
-        }],
-        autoResolutionMs: null,
+    h.router.handle(
+      {
+        ...request("item/tool/requestUserInput"),
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          questions: [
+            {
+              id: "q",
+              header: "Question",
+              question: "Continue?",
+              isOther: false,
+              isSecret: false,
+              options: [{ label: "Yes", description: "" }],
+            },
+          ],
+          autoResolutionMs: null,
+        },
       },
-    }, 7);
+      7,
+    );
     await settle();
     h.router.abandonGeneration(7);
     await settle();
 
     expect(h.answers).toHaveLength(0);
     expect(h.router.getParkedInteractions()).toHaveLength(0);
-    expect(h.router.resolveInteraction(
-      presented[0]!.interactionId,
-      { action: "accept", answers: { q: ["Yes"] } },
-    )).toBe(false);
+    expect(
+      h.router.resolveInteraction(presented[0]!.interactionId, {
+        action: "accept",
+        answers: { q: ["Yes"] },
+      }),
+    ).toBe(false);
   });
 });

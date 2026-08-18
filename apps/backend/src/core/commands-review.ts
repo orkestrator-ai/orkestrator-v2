@@ -1,6 +1,20 @@
-import { fs, path, createHash, reviewArtifactDirectory, reviewValidationArtifactPaths, DOCKER_LABEL_OWNER, runCommand, workspaceFilePath, resolveGitHubRepository } from "./commands-dependencies.js";
+import {
+  fs,
+  path,
+  createHash,
+  reviewArtifactDirectory,
+  reviewValidationArtifactPaths,
+  DOCKER_LABEL_OWNER,
+  runCommand,
+  workspaceFilePath,
+  resolveGitHubRepository,
+} from "./commands-dependencies.js";
 import type { Environment, PrState, JsonRecord } from "./commands-dependencies.js";
-import { deletingLocalServerEnvironments, mergingEnvironments, withContainerRuntimeCredential } from "./commands-runtime-state.js";
+import {
+  deletingLocalServerEnvironments,
+  mergingEnvironments,
+  withContainerRuntimeCredential,
+} from "./commands-runtime-state.js";
 import { asString, asRecord, assertOnlyKeys } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
@@ -67,7 +81,14 @@ export function parseGitHubPullRequestUrl(url: string): GitHubPullRequestRef {
     .filter(Boolean)
     .map((segment) => decodeURIComponent(segment));
 
-  if (!owner || !repo || pullSegment !== "pull" || !number || rest.length > 0 || !/^\d+$/.test(number)) {
+  if (
+    !owner ||
+    !repo ||
+    pullSegment !== "pull" ||
+    !number ||
+    rest.length > 0 ||
+    !/^\d+$/.test(number)
+  ) {
     throw new Error(`Invalid PR URL: ${url}`);
   }
 
@@ -140,38 +161,38 @@ export type ReviewPreparationFileNote = {
   reason: string;
 };
 
-export function createEnvironmentCommandRunner(
-  environment: Environment,
-): EnvironmentCommandRunner {
+export function createEnvironmentCommandRunner(environment: Environment): EnvironmentCommandRunner {
   if (environment.environmentType === "local") {
     if (!environment.worktreePath) {
       throw new Error("Local environment worktree is not available");
     }
     return async (command, args, timeoutMs = 60_000, env) =>
-      (await runCommand(command, args, {
-        cwd: environment.worktreePath,
-        timeoutMs,
-        ...(env ? { env } : {}),
-      })).stdout;
+      (
+        await runCommand(command, args, {
+          cwd: environment.worktreePath,
+          timeoutMs,
+          ...(env ? { env } : {}),
+        })
+      ).stdout;
   }
   if (!environment.containerId) {
     throw new Error("Container environment is not available");
   }
   return async (command, args, timeoutMs = 60_000) =>
-    (await runCommand(
-      "docker",
-      ["exec", environment.containerId!, command, ...args],
-      { timeoutMs },
-    )).stdout;
+    (
+      await runCommand("docker", ["exec", environment.containerId!, command, ...args], {
+        timeoutMs,
+      })
+    ).stdout;
 }
 
 export function parseReviewPackageId(value: unknown): string {
   const packageId = asString(value, "packageId");
   if (
-    packageId.length === 0
-    || packageId.length > 200
-    || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(packageId)
-    || packageId.includes("..")
+    packageId.length === 0 ||
+    packageId.length > 200 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(packageId) ||
+    packageId.includes("..")
   ) {
     throw new Error("Invalid review package ID");
   }
@@ -198,9 +219,7 @@ export function resolveValidationArtifactPath(
   label: string,
 ): string {
   const relativePath = validateWorkspaceMutationPath(value, label);
-  return relativePath.includes("/")
-    ? relativePath
-    : `${artifactDirectory}/${relativePath}`;
+  return relativePath.includes("/") ? relativePath : `${artifactDirectory}/${relativePath}`;
 }
 
 export function parseReviewPreparationValidation(
@@ -214,55 +233,34 @@ export function parseReviewPreparationValidation(
     const entry = asRecord(candidate, `validation[${index}]`);
     assertOnlyKeys(
       entry,
-      [
-        "command",
-        "status",
-        "exitCode",
-        "stdoutPath",
-        "stderrPath",
-        "durationMs",
-        "limitation",
-      ],
+      ["command", "status", "exitCode", "stdoutPath", "stderrPath", "durationMs", "limitation"],
       `validation[${index}]`,
     );
     const command = asString(entry.command, `validation[${index}].command`);
     if (command.trim().length === 0) {
       throw new Error(`Expected validation[${index}].command to be non-empty`);
     }
-    if (
-      entry.status !== "passed"
-      && entry.status !== "failed"
-      && entry.status !== "skipped"
-    ) {
+    if (entry.status !== "passed" && entry.status !== "failed" && entry.status !== "skipped") {
       throw new Error(`Invalid validation[${index}].status`);
     }
     const status = entry.status;
     const durationMs = entry.durationMs;
     if (!Number.isInteger(durationMs) || (durationMs as number) < 0) {
-      throw new Error(
-        `Expected validation[${index}].durationMs to be a non-negative integer`,
-      );
+      throw new Error(`Expected validation[${index}].durationMs to be a non-negative integer`);
     }
     const limitation = entry.limitation;
-    if (
-      limitation !== null
-      && (typeof limitation !== "string" || limitation.trim().length === 0)
-    ) {
-      throw new Error(
-        `Expected validation[${index}].limitation to be a non-empty string or null`,
-      );
+    if (limitation !== null && (typeof limitation !== "string" || limitation.trim().length === 0)) {
+      throw new Error(`Expected validation[${index}].limitation to be a non-empty string or null`);
     }
 
     if (status === "skipped") {
       if (
-        entry.exitCode !== null
-        || entry.stdoutPath !== null
-        || entry.stderrPath !== null
-        || typeof limitation !== "string"
+        entry.exitCode !== null ||
+        entry.stdoutPath !== null ||
+        entry.stderrPath !== null ||
+        typeof limitation !== "string"
       ) {
-        throw new Error(
-          `Skipped validation[${index}] has incompatible evidence metadata`,
-        );
+        throw new Error(`Skipped validation[${index}] has incompatible evidence metadata`);
       }
       return {
         command,
@@ -279,17 +277,12 @@ export function parseReviewPreparationValidation(
       throw new Error(`Expected validation[${index}].exitCode to be an integer`);
     }
     const exitCode = entry.exitCode as number;
-    if (
-      (status === "passed" && exitCode !== 0)
-      || (status === "failed" && exitCode === 0)
-    ) {
+    if ((status === "passed" && exitCode !== 0) || (status === "failed" && exitCode === 0)) {
       throw new Error(`Validation[${index}] status does not match its exit code`);
     }
     const artifactDirectory = reviewArtifactDirectory(packageId);
-    const {
-      stdoutPath: expectedStdoutPath,
-      stderrPath: expectedStderrPath,
-    } = reviewValidationArtifactPaths(packageId, index);
+    const { stdoutPath: expectedStdoutPath, stderrPath: expectedStderrPath } =
+      reviewValidationArtifactPaths(packageId, index);
     const stdoutPath = resolveValidationArtifactPath(
       asString(entry.stdoutPath, `validation[${index}].stdoutPath`),
       artifactDirectory,
@@ -302,9 +295,9 @@ export function parseReviewPreparationValidation(
     );
     if (stdoutPath !== expectedStdoutPath || stderrPath !== expectedStderrPath) {
       throw new Error(
-        `Validation[${index}] artifact paths are not deterministic: expected `
-        + `${expectedStdoutPath} and ${expectedStderrPath}, received `
-        + `${stdoutPath} and ${stderrPath}`,
+        `Validation[${index}] artifact paths are not deterministic: expected ` +
+          `${expectedStdoutPath} and ${expectedStderrPath}, received ` +
+          `${stdoutPath} and ${stderrPath}`,
       );
     }
     return {
@@ -381,10 +374,7 @@ export function parseGitNameStatus(output: string): Array<{ path: string; status
  * every other guard below already reports itself in review terms.
  */
 export function reviewArtifactMissingError(relativePath: string, cause: unknown): Error {
-  return new Error(
-    `Review artifact was not written by preparation: ${relativePath}`,
-    { cause },
-  );
+  return new Error(`Review artifact was not written by preparation: ${relativePath}`, { cause });
 }
 
 export async function readEnvironmentWorkspaceFile(
@@ -404,11 +394,7 @@ export async function readEnvironmentWorkspaceFile(
       }),
     ]);
     const relative = path.relative(root, resolved);
-    if (
-      relative.startsWith("..")
-      || path.isAbsolute(relative)
-      || relative === ""
-    ) {
+    if (relative.startsWith("..") || path.isAbsolute(relative) || relative === "") {
       throw new Error(`Review artifact escapes the environment worktree: ${relativePath}`);
     }
     if (resolved !== path.resolve(root, relativePath)) {
@@ -425,13 +411,14 @@ export async function readEnvironmentWorkspaceFile(
   // realpath in the container fails the same way for a missing artifact and for
   // a broken runner, so this stays deliberately non-committal about which it
   // was; the original failure is kept as the cause either way.
-  const resolved = (await runner("realpath", ["--", workspacePath], 10_000)
-    .catch((error) => {
+  const resolved = (
+    await runner("realpath", ["--", workspacePath], 10_000).catch((error) => {
       throw new Error(
         `Review artifact could not be read from the environment workspace: ${relativePath}`,
         { cause: error },
       );
-    })).trim();
+    })
+  ).trim();
   if (resolved !== workspacePath) {
     throw new Error(`Review artifact must not traverse symbolic links: ${relativePath}`);
   }
@@ -493,8 +480,8 @@ export async function verifyEnvironmentPullRequest(
     throw new Error("Pull request URL must be a canonical github.com URL");
   }
   if (
-    submitted.owner.toLowerCase() !== repository.owner.toLowerCase()
-    || submitted.repo.toLowerCase() !== repository.name.toLowerCase()
+    submitted.owner.toLowerCase() !== repository.owner.toLowerCase() ||
+    submitted.repo.toLowerCase() !== repository.name.toLowerCase()
   ) {
     throw new Error("Pull request belongs to a different repository");
   }
@@ -540,9 +527,7 @@ export function parseGitPorcelainPaths(output: string): string[] {
       throw new Error("Git returned malformed worktree status");
     }
     const status = entry.slice(0, 2);
-    paths.push(
-      validateWorkspaceMutationPath(entry.slice(3), "uncommitted file path"),
-    );
+    paths.push(validateWorkspaceMutationPath(entry.slice(3), "uncommitted file path"));
     if (status.includes("R") || status.includes("C")) {
       if (!fields[index++]) {
         throw new Error("Git returned malformed renamed worktree status");
@@ -555,9 +540,7 @@ export function parseGitPorcelainPaths(output: string): string[] {
 export function parseNullDelimitedPaths(output: string, label: string): string[] {
   const fields = output.split("\0");
   if (fields.at(-1) === "") fields.pop();
-  return fields.map((filePath) =>
-    validateWorkspaceMutationPath(filePath, label)
-  );
+  return fields.map((filePath) => validateWorkspaceMutationPath(filePath, label));
 }
 
 export async function generateLoopedReviewPackage(
@@ -607,30 +590,13 @@ export async function generateLoopedReviewPackage(
     committedFileOutput,
   ] = await Promise.all([
     runner("git", diffArgs, 120_000),
-    runner(
-      "git",
-      ["diff", "--name-status", "-z", "--no-renames", range],
-      60_000,
-    ),
+    runner("git", ["diff", "--name-status", "-z", "--no-renames", range], 60_000),
     runner("git", ["show", "-s", "--format=%cI", headRef], 30_000),
-    runner(
-      "git",
-      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-      30_000,
-    ),
+    runner("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], 30_000),
     runner("git", ["show", "-s", "--format=%s", headRef], 30_000),
     runner(
       "git",
-      [
-        "diff-tree",
-        "--root",
-        "--no-commit-id",
-        "--name-only",
-        "-r",
-        "-z",
-        "--no-renames",
-        headRef,
-      ],
+      ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", "--no-renames", headRef],
       30_000,
     ),
   ]);
@@ -638,136 +604,120 @@ export async function generateLoopedReviewPackage(
   const changes = parseGitNameStatus(nameStatus);
   const changeKeys = changes.map((file) => `${file.status}\0${file.path}`);
   if (
-    new Set(changeKeys).size !== changes.length
-    || (changes.length > 0 && completeDiff.length === 0)
+    new Set(changeKeys).size !== changes.length ||
+    (changes.length > 0 && completeDiff.length === 0)
   ) {
     throw new Error("Git returned an incomplete or ambiguous review diff");
   }
 
   const artifactDirectory = reviewArtifactDirectory(packageId);
-  const actualUncommittedPaths = parseGitPorcelainPaths(worktreeStatus)
-    .filter((filePath) =>
-      filePath !== artifactDirectory
-      && !filePath.startsWith(`${artifactDirectory}/`)
-    );
+  const actualUncommittedPaths = parseGitPorcelainPaths(worktreeStatus).filter(
+    (filePath) => filePath !== artifactDirectory && !filePath.startsWith(`${artifactDirectory}/`),
+  );
   const submittedUncommittedPaths = uncommittedFiles.map((note) => note.path);
   const actualUncommittedSet = new Set(actualUncommittedPaths);
   const submittedUncommittedSet = new Set(submittedUncommittedPaths);
   if (
-    actualUncommittedSet.size !== actualUncommittedPaths.length
-    || submittedUncommittedSet.size !== submittedUncommittedPaths.length
-    || actualUncommittedSet.size !== submittedUncommittedSet.size
-    || [...actualUncommittedSet].some((filePath) =>
-      !submittedUncommittedSet.has(filePath)
-    )
+    actualUncommittedSet.size !== actualUncommittedPaths.length ||
+    submittedUncommittedSet.size !== submittedUncommittedPaths.length ||
+    actualUncommittedSet.size !== submittedUncommittedSet.size ||
+    [...actualUncommittedSet].some((filePath) => !submittedUncommittedSet.has(filePath))
   ) {
-    throw new Error(
-      "Preparation result does not account for every uncommitted file",
-    );
+    throw new Error("Preparation result does not account for every uncommitted file");
   }
 
-  const changedFiles = await Promise.all(changes.map(async (file) => {
-    if (file.status === "D") {
-      const omittedReason = "Deleted file has no content at the prepared HEAD.";
+  const changedFiles = await Promise.all(
+    changes.map(async (file) => {
+      if (file.status === "D") {
+        const omittedReason = "Deleted file has no content at the prepared HEAD.";
+        return {
+          ...file,
+          content: null,
+          contentSha256: null,
+          omittedReason,
+        };
+      }
+      const object = await readEnvironmentGitBlob(runner, headRef, file.path);
+      if (object.type !== "blob") {
+        const omittedReason = `Git object type ${object.type || "unknown"} has no text file content.`;
+        return {
+          ...file,
+          content: null,
+          contentSha256: null,
+          omittedReason,
+        };
+      }
+      const content = decodeReviewText(object.bytes);
+      if (content === null) {
+        const omittedReason = "Binary content is represented by the complete binary Git diff.";
+        return {
+          ...file,
+          content: null,
+          contentSha256: null,
+          omittedReason,
+        };
+      }
       return {
         ...file,
-        content: null,
-        contentSha256: null,
-        omittedReason,
+        content,
+        contentSha256: createHash("sha256").update(object.bytes).digest("hex"),
+        omittedReason: null,
       };
-    }
-    const object = await readEnvironmentGitBlob(runner, headRef, file.path);
-    if (object.type !== "blob") {
-      const omittedReason =
-        `Git object type ${object.type || "unknown"} has no text file content.`;
-      return {
-        ...file,
-        content: null,
-        contentSha256: null,
-        omittedReason,
-      };
-    }
-    const content = decodeReviewText(object.bytes);
-    if (content === null) {
-      const omittedReason =
-        "Binary content is represented by the complete binary Git diff.";
-      return {
-        ...file,
-        content: null,
-        contentSha256: null,
-        omittedReason,
-      };
-    }
-    return {
-      ...file,
-      content,
-      contentSha256: createHash("sha256").update(object.bytes).digest("hex"),
-      omittedReason: null,
-    };
-  }));
+    }),
+  );
   const skippedFiles = changedFiles.flatMap((file) =>
-    file.omittedReason === null
-      ? []
-      : [{ path: file.path, reason: file.omittedReason }]
+    file.omittedReason === null ? [] : [{ path: file.path, reason: file.omittedReason }],
   );
 
-  const hydratedValidation = await Promise.all(validation.map(async (entry) => {
-    // The preparation agent reports `limitation: null` for a command that ran
-    // without one, but the persisted contract is `limitation?: string` and its
-    // guard rejects null. Carrying the null through made the finished package
-    // unpersistable — the whole workflow snapshot failed validation on save and
-    // the round died with a `package` failure that a retry reproduced exactly.
-    const limitation = entry.limitation === null
-      ? {}
-      : { limitation: entry.limitation };
-    if (entry.status === "skipped") {
+  const hydratedValidation = await Promise.all(
+    validation.map(async (entry) => {
+      // The preparation agent reports `limitation: null` for a command that ran
+      // without one, but the persisted contract is `limitation?: string` and its
+      // guard rejects null. Carrying the null through made the finished package
+      // unpersistable — the whole workflow snapshot failed validation on save and
+      // the round died with a `package` failure that a retry reproduced exactly.
+      const limitation = entry.limitation === null ? {} : { limitation: entry.limitation };
+      if (entry.status === "skipped") {
+        return {
+          command: entry.command,
+          status: entry.status,
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+          durationMs: entry.durationMs,
+          ...limitation,
+        };
+      }
+      const [stdoutBytes, stderrBytes] = await Promise.all([
+        readEnvironmentWorkspaceFile(environment, runner, entry.stdoutPath!),
+        readEnvironmentWorkspaceFile(environment, runner, entry.stderrPath!),
+      ]);
       return {
         command: entry.command,
         status: entry.status,
-        exitCode: null,
-        stdout: "",
-        stderr: "",
+        exitCode: entry.exitCode,
+        stdout: decodeValidationOutput(stdoutBytes, entry.stdoutPath!),
+        stderr: decodeValidationOutput(stderrBytes, entry.stderrPath!),
         durationMs: entry.durationMs,
         ...limitation,
       };
-    }
-    const [stdoutBytes, stderrBytes] = await Promise.all([
-      readEnvironmentWorkspaceFile(environment, runner, entry.stdoutPath!),
-      readEnvironmentWorkspaceFile(environment, runner, entry.stderrPath!),
-    ]);
-    return {
-      command: entry.command,
-      status: entry.status,
-      exitCode: entry.exitCode,
-      stdout: decodeValidationOutput(stdoutBytes, entry.stdoutPath!),
-      stderr: decodeValidationOutput(stderrBytes, entry.stderrPath!),
-      durationMs: entry.durationMs,
-      ...limitation,
-    };
-  }));
+    }),
+  );
 
   const [finalHeadOutput, finalWorktreeStatus] = await Promise.all([
     runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], 30_000),
-    runner(
-      "git",
-      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-      30_000,
-    ),
+    runner("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], 30_000),
   ]);
   const finalHead = finalHeadOutput.trim();
   if (finalHead !== headRef) {
     throw new Error("Environment HEAD changed while generating the review package");
   }
-  const finalUncommittedPaths = parseGitPorcelainPaths(finalWorktreeStatus)
-    .filter((filePath) =>
-      filePath !== artifactDirectory
-      && !filePath.startsWith(`${artifactDirectory}/`)
-    );
+  const finalUncommittedPaths = parseGitPorcelainPaths(finalWorktreeStatus).filter(
+    (filePath) => filePath !== artifactDirectory && !filePath.startsWith(`${artifactDirectory}/`),
+  );
   if (
-    finalUncommittedPaths.length !== actualUncommittedPaths.length
-    || finalUncommittedPaths.some((filePath, index) =>
-      filePath !== actualUncommittedPaths[index]
-    )
+    finalUncommittedPaths.length !== actualUncommittedPaths.length ||
+    finalUncommittedPaths.some((filePath, index) => filePath !== actualUncommittedPaths[index])
   ) {
     throw new Error("Environment worktree changed while generating the review package");
   }
@@ -782,17 +732,14 @@ export async function generateLoopedReviewPackage(
     commit: {
       sha: headRef,
       subject: commitSubject.trimEnd(),
-      committedFiles: parseNullDelimitedPaths(
-        committedFileOutput,
-        "committed file path",
-      ),
+      committedFiles: parseNullDelimitedPaths(committedFileOutput, "committed file path"),
     },
     completeDiff,
     changedFiles,
     validation: hydratedValidation,
     skippedFiles,
     uncommittedFiles: [...uncommittedFiles].sort((left, right) =>
-      left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+      left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
     ),
     limitations,
     // Deliberately absent rather than `null`. The context is supplied by the
@@ -802,23 +749,25 @@ export async function generateLoopedReviewPackage(
   };
 }
 
-export async function markPullRequestReadyIfDraft(prUrl: string, runGh: GhCliRunner): Promise<void> {
-  const draftStatus = (await runGh([
-    "pr",
-    "view",
-    prUrl,
-    "--json",
-    "isDraft",
-    "--jq",
-    ".isDraft",
-  ], 30_000)).trim().toLowerCase();
+export async function markPullRequestReadyIfDraft(
+  prUrl: string,
+  runGh: GhCliRunner,
+): Promise<void> {
+  const draftStatus = (
+    await runGh(["pr", "view", prUrl, "--json", "isDraft", "--jq", ".isDraft"], 30_000)
+  )
+    .trim()
+    .toLowerCase();
 
   if (draftStatus === "true") {
     await runGh(["pr", "ready", prUrl], 30_000);
   }
 }
 
-export async function loadPullRequestHead(pullEndpoint: string, runGh: GhCliRunner): Promise<GitHubPullRequestHead> {
+export async function loadPullRequestHead(
+  pullEndpoint: string,
+  runGh: GhCliRunner,
+): Promise<GitHubPullRequestHead> {
   const stdout = await runGh(["api", pullEndpoint], 30_000);
   return JSON.parse(stdout) as GitHubPullRequestHead;
 }
@@ -828,17 +777,21 @@ export async function deleteRemoteBranchForPullRequestHead(
   runGh: GhCliRunner,
 ): Promise<void> {
   const headRefName = typeof head?.head?.ref === "string" ? head.head.ref : "";
-  const headRepositoryNameWithOwner = typeof head?.head?.repo?.full_name === "string" ? head.head.repo.full_name : "";
+  const headRepositoryNameWithOwner =
+    typeof head?.head?.repo?.full_name === "string" ? head.head.repo.full_name : "";
   const [headOwner, headRepo] = headRepositoryNameWithOwner.split("/");
   if (!headRefName || !headOwner || !headRepo) return;
 
   try {
-    await runGh([
-      "api",
-      `repos/${encodeGitHubPathSegment(headOwner)}/${encodeGitHubPathSegment(headRepo)}/git/refs/heads/${encodeGitRefPath(headRefName)}`,
-      "--method",
-      "DELETE",
-    ], 30_000);
+    await runGh(
+      [
+        "api",
+        `repos/${encodeGitHubPathSegment(headOwner)}/${encodeGitHubPathSegment(headRepo)}/git/refs/heads/${encodeGitRefPath(headRefName)}`,
+        "--method",
+        "DELETE",
+      ],
+      30_000,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!isRemoteBranchAlreadyDeletedError(message)) {
@@ -847,7 +800,10 @@ export async function deleteRemoteBranchForPullRequestHead(
   }
 }
 
-export async function deletePullRequestHeadBranchViaGitHubApi(prUrl: string, runGh: GhCliRunner): Promise<void> {
+export async function deletePullRequestHeadBranchViaGitHubApi(
+  prUrl: string,
+  runGh: GhCliRunner,
+): Promise<void> {
   const pr = parseGitHubPullRequestUrl(prUrl);
   const pullEndpoint = `repos/${encodeGitHubPathSegment(pr.owner)}/${encodeGitHubPathSegment(pr.repo)}/pulls/${pr.number}`;
   const head = await loadPullRequestHead(pullEndpoint, runGh);
@@ -872,14 +828,10 @@ export async function mergePullRequestViaGitHubApi(
     head = await loadPullRequestHead(pullEndpoint, runGh);
   }
 
-  const mergeOutput = await runGh([
-    "api",
-    mergeEndpoint,
-    "--method",
-    "PUT",
-    "-f",
-    `merge_method=${method}`,
-  ], 120_000);
+  const mergeOutput = await runGh(
+    ["api", mergeEndpoint, "--method", "PUT", "-f", `merge_method=${method}`],
+    120_000,
+  );
 
   let mergeResponse: GitHubPullRequestMergeResponse;
   try {
@@ -907,17 +859,16 @@ export async function mergePullRequestInContainer(
 
   await markPullRequestReadyIfDraft(prUrl, runGh);
 
-  await runGh([
-    "pr",
-    "merge",
-    prUrl,
-    `--${method}`,
-    ...(deleteBranch ? ["--delete-branch"] : []),
-  ], 120_000);
+  await runGh(
+    ["pr", "merge", prUrl, `--${method}`, ...(deleteBranch ? ["--delete-branch"] : [])],
+    120_000,
+  );
 
   let state: string;
   try {
-    state = (await runGh(["pr", "view", prUrl, "--json", "state", "--jq", ".state"], 30_000)).trim().toUpperCase();
+    state = (await runGh(["pr", "view", prUrl, "--json", "state", "--jq", ".state"], 30_000))
+      .trim()
+      .toUpperCase();
   } catch {
     return { outcome: "unknown" };
   }
@@ -957,28 +908,27 @@ export async function runStoredEnvironmentMerge<T>(
       lifecycleOperation: "merging",
       lifecycleOperationStartedAt: new Date().toISOString(),
     });
-    const result = environment.environmentType === "local"
-      ? await mergePullRequestViaGitHubApi(
-        environment.prUrl!,
-        method,
-        deleteBranch,
-        environment.worktreePath!,
-      )
-      : await mergePullRequestInContainer(
-        environment.containerId!,
-        method,
-        deleteBranch,
-      );
+    const result =
+      environment.environmentType === "local"
+        ? await mergePullRequestViaGitHubApi(
+            environment.prUrl!,
+            method,
+            deleteBranch,
+            environment.worktreePath!,
+          )
+        : await mergePullRequestInContainer(environment.containerId!, method, deleteBranch);
     // The callback runs before the merge guard is released. A confirmed
     // merge-and-cleanup can therefore transition directly into the deletion
     // tombstone without a user delete racing through the middle.
     return await onResult(result);
   } finally {
     mergingEnvironments.delete(environment.id);
-    await context.storage.updateEnvironment(environment.id, {
-      lifecycleOperation: null,
-      lifecycleOperationStartedAt: null,
-    }).catch(() => undefined);
+    await context.storage
+      .updateEnvironment(environment.id, {
+        lifecycleOperation: null,
+        lifecycleOperationStartedAt: null,
+      })
+      .catch(() => undefined);
   }
 }
 
@@ -1029,23 +979,20 @@ export function isValidPrUrl(value: unknown): value is string {
   );
 }
 
-export function buildPrDetectionCandidate(entry: GhPrListEntry): { rank: number; updatedAt: string; result: PrDetectionResult } | null {
+export function buildPrDetectionCandidate(
+  entry: GhPrListEntry,
+): { rank: number; updatedAt: string; result: PrDetectionResult } | null {
   const state = parsePrState(entry.state);
   if (!state || !isValidPrUrl(entry.url)) return null;
-  const mergeable = typeof entry.mergeable === "string"
-    ? entry.mergeable.toUpperCase()
-    : null;
+  const mergeable = typeof entry.mergeable === "string" ? entry.mergeable.toUpperCase() : null;
   return {
     rank: prStateRank(state),
     updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : "",
     result: {
       url: entry.url,
       state,
-      hasMergeConflicts: mergeable === "CONFLICTING"
-        ? true
-        : mergeable === "MERGEABLE"
-          ? false
-          : null,
+      hasMergeConflicts:
+        mergeable === "CONFLICTING" ? true : mergeable === "MERGEABLE" ? false : null,
     },
   };
 }
@@ -1077,7 +1024,10 @@ export function parsePrDetectionOutput(stdout: string, branch: string): PrDetect
 
   const result = candidates[0]?.result;
   if (!result) {
-    console.debug("[ElectronBackend] Unexpected output from gh pr list", { branch, output: trimmed });
+    console.debug("[ElectronBackend] Unexpected output from gh pr list", {
+      branch,
+      output: trimmed,
+    });
     throw new Error("Failed to parse gh pr list output");
   }
   return result;
@@ -1112,11 +1062,21 @@ export function validatePrDetectionBranch(branch: unknown): string {
 export function containerIdMatches(known: string, candidate: string): boolean {
   const left = known.trim();
   const right = candidate.trim();
-  return left.length > 0 && right.length > 0 && (left === right || left.startsWith(right) || right.startsWith(left));
+  return (
+    left.length > 0 &&
+    right.length > 0 &&
+    (left === right || left.startsWith(right) || right.startsWith(left))
+  );
 }
 
-export function findEnvironmentByContainerId(environments: Environment[], containerId: string): Environment | undefined {
-  return environments.find((environment) => environment.containerId && containerIdMatches(environment.containerId, containerId));
+export function findEnvironmentByContainerId(
+  environments: Environment[],
+  containerId: string,
+): Environment | undefined {
+  return environments.find(
+    (environment) =>
+      environment.containerId && containerIdMatches(environment.containerId, containerId),
+  );
 }
 
 /**
@@ -1145,7 +1105,11 @@ export function dockerLabelValue(labels: unknown, key: string): string | undefin
  * writer of that label, so adoption can never reach a container it did not
  * create.
  */
-export function dockerOwnerMatches(labels: unknown, owner: string, requireExactOwner = false): boolean {
+export function dockerOwnerMatches(
+  labels: unknown,
+  owner: string,
+  requireExactOwner = false,
+): boolean {
   const value = dockerLabelValue(labels, DOCKER_LABEL_OWNER);
   return value === owner || (!requireExactOwner && value === undefined);
 }
@@ -1175,9 +1139,6 @@ export function parseDockerByteSize(value: string): number {
   const prefix = unit.replace(/i?b$/, "");
   const power = ["", "k", "m", "g", "t", "p"].indexOf(prefix);
   const base = unit.includes("i") ? 1024 : 1000;
-  return Number.isFinite(amount) && power >= 0
-    ? Math.round(amount * base ** power)
-    : 0;
+  return Number.isFinite(amount) && power >= 0 ? Math.round(amount * base ** power) : 0;
 }
 /** Explicit list projection: renderer hydration never receives backend internals. */
-

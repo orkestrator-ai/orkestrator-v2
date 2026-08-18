@@ -66,18 +66,19 @@ export const TiptapMarkdownEditor = forwardRef<
       return null;
     }
 
-    const currentMarkdown = restoreMarkdownFrontmatter(
-      frontmatter,
-      currentEditor.getMarkdown(),
-    );
+    const currentMarkdown = restoreMarkdownFrontmatter(frontmatter, currentEditor.getMarkdown());
     hasPendingChangesRef.current = false;
     onChangeRef.current(currentMarkdown);
     return currentMarkdown;
   }, [frontmatter]);
 
-  useImperativeHandle(ref, () => ({
-    flushPendingChanges: syncEditorToStore,
-  }), [syncEditorToStore]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      flushPendingChanges: syncEditorToStore,
+    }),
+    [syncEditorToStore],
+  );
 
   const editor = useEditor({
     extensions: createMarkdownExtensions(),
@@ -137,9 +138,7 @@ export const TiptapMarkdownEditor = forwardRef<
           syncTimerRef.current = null;
         }
         hasPendingChangesRef.current = false;
-        onChangeRef.current(
-          restoreMarkdownFrontmatter(frontmatter, destroyedEditor.getMarkdown()),
-        );
+        onChangeRef.current(restoreMarkdownFrontmatter(frontmatter, destroyedEditor.getMarkdown()));
       }
       editorRef.current = null;
     },
@@ -161,13 +160,15 @@ export const TiptapMarkdownEditor = forwardRef<
     <EditorContent
       editor={editor}
       className="min-h-full"
-      style={{
-        fontSize: `${fontSize}px`,
-        fontFamily: `-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`,
-        // Expose the configured monospace face to descendants without making
-        // the entire rendered document use the terminal font.
-        "--markdown-mono-font": `"${fontFamily}", "Fira Code", monospace`,
-      } as CSSProperties}
+      style={
+        {
+          fontSize: `${fontSize}px`,
+          fontFamily: `-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`,
+          // Expose the configured monospace face to descendants without making
+          // the entire rendered document use the terminal font.
+          "--markdown-mono-font": `"${fontFamily}", "Fira Code", monospace`,
+        } as CSSProperties
+      }
     />
   );
 });

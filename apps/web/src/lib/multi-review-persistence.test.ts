@@ -8,9 +8,7 @@ import * as realBackend from "@/lib/backend";
 
 const realBackendSnapshot = { ...realBackend };
 
-const listMultiReviewWorkflowsMock = mock(
-  async (_environmentId: string): Promise<unknown[]> => [],
-);
+const listMultiReviewWorkflowsMock = mock(async (_environmentId: string): Promise<unknown[]> => []);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -29,23 +27,40 @@ const TIMESTAMP = "2026-01-01T00:00:00.000Z";
 
 const report: StructuredReviewReport = {
   reviewScope: {
-    targetBranch: "main", baseRef: "origin/main...HEAD", commit: null,
-    filesReviewed: [], filesSkipped: [], filesLeftUncommitted: [], commandsRun: [],
-    commandsNotRun: [], limitations: [],
+    targetBranch: "main",
+    baseRef: "origin/main...HEAD",
+    commit: null,
+    filesReviewed: [],
+    filesSkipped: [],
+    filesLeftUncommitted: [],
+    commandsRun: [],
+    commandsNotRun: [],
+    limitations: [],
   },
   whatChanged: {
-    overview: "Change", before: "Before", after: "After", keyCodeChanges: [], userImpact: "None",
+    overview: "Change",
+    before: "Before",
+    after: "After",
+    keyCodeChanges: [],
+    userImpact: "None",
   },
   riskProfile: { changeTypes: [], riskAreas: [], overallRisk: "low", reasoning: "Low" },
   testResults: { total: 0, passed: 0, failed: 0, notRun: 0, failures: [] },
-  strengths: [], issues: [], testCoverageGaps: [],
+  strengths: [],
+  issues: [],
+  testCoverageGaps: [],
   verdict: { ready: "yes", reasoning: "Ready" },
-  summaryOfChange: "Change", reviewSummary: "Clean",
+  summaryOfChange: "Change",
+  reviewSummary: "Clean",
 };
 
 const FIX_SESSION = {
-  agent: "claude", model: "opus", sessionKey: "fix-session",
-  providerSessionId: "provider-fix", requestIds: ["request-1"], status: "idle",
+  agent: "claude",
+  model: "opus",
+  sessionKey: "fix-session",
+  providerSessionId: "provider-fix",
+  requestIds: ["request-1"],
+  status: "idle",
   startedAt: TIMESTAMP,
 };
 
@@ -64,7 +79,10 @@ function phaseFields(phase: MultiReviewPhase): Record<string, unknown> {
     ...(phase === "fixing"
       ? {
           activeRequest: {
-            kind: "fix", requestId: "request-fix", state: "sent", createdAt: TIMESTAMP,
+            kind: "fix",
+            requestId: "request-fix",
+            state: "sent",
+            createdAt: TIMESTAMP,
           },
         }
       : {}),
@@ -114,19 +132,25 @@ describe("findActiveMultiReviewWorkflow", () => {
    * particular are *not* terminal even though nothing is executing.
    */
   test.each<MultiReviewPhase>([
-    "reviewing", "consolidating", "ready", "fixing", "cancelling", "failed",
+    "reviewing",
+    "consolidating",
+    "ready",
+    "fixing",
+    "cancelling",
+    "failed",
   ])("treats %s as the active workflow", async (phase) => {
     listMultiReviewWorkflowsMock.mockImplementation(async () => [entry("wf-active", phase)]);
     const active = await findActiveMultiReviewWorkflow(ENVIRONMENT_ID);
     expect(active).toMatchObject({ id: "wf-active", phase });
   });
 
-  test.each<MultiReviewPhase>([
-    "interactive", "completed", "cancelled",
-  ])("leaves a %s workflow free for a new launch", async (phase) => {
-    listMultiReviewWorkflowsMock.mockImplementation(async () => [entry("wf-done", phase)]);
-    expect(await findActiveMultiReviewWorkflow(ENVIRONMENT_ID)).toBeNull();
-  });
+  test.each<MultiReviewPhase>(["interactive", "completed", "cancelled"])(
+    "leaves a %s workflow free for a new launch",
+    async (phase) => {
+      listMultiReviewWorkflowsMock.mockImplementation(async () => [entry("wf-done", phase)]);
+      expect(await findActiveMultiReviewWorkflow(ENVIRONMENT_ID)).toBeNull();
+    },
+  );
 
   test("skips terminal history to find the one active workflow", async () => {
     listMultiReviewWorkflowsMock.mockImplementation(async () => [
@@ -161,8 +185,9 @@ describe("findActiveMultiReviewWorkflow", () => {
     listMultiReviewWorkflowsMock.mockImplementation(async () => {
       throw new Error("backend unavailable");
     });
-    await expect(findActiveMultiReviewWorkflow(ENVIRONMENT_ID))
-      .rejects.toThrow("backend unavailable");
+    await expect(findActiveMultiReviewWorkflow(ENVIRONMENT_ID)).rejects.toThrow(
+      "backend unavailable",
+    );
   });
 
   /**
@@ -177,7 +202,9 @@ describe("findActiveMultiReviewWorkflow", () => {
     });
     await findActiveMultiReviewWorkflow(ENVIRONMENT_ID).catch(() => undefined);
     expect(useMultiReviewStore.getState().workflows.get("wf-live")).toMatchObject({
-      id: "wf-live", phase: "reviewing", backendRevision: 3,
+      id: "wf-live",
+      phase: "reviewing",
+      backendRevision: 3,
     });
   });
 
@@ -187,7 +214,9 @@ describe("findActiveMultiReviewWorkflow", () => {
     ]);
     await findActiveMultiReviewWorkflow(ENVIRONMENT_ID);
     expect(useMultiReviewStore.getState().workflows.get("wf-live")).toMatchObject({
-      id: "wf-live", phase: "reviewing", backendRevision: 12,
+      id: "wf-live",
+      phase: "reviewing",
+      backendRevision: 12,
     });
   });
 });

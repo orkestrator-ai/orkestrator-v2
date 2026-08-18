@@ -1,31 +1,58 @@
 import { describe, expect, test } from "bun:test";
-import { AGENT_INTERACTION_CONTRACT_VERSION, AGENT_INTERACTION_LIMITS, INTERACTIVE_AGENT_INTERACTION_POLICY, UNATTENDED_AGENT_INTERACTION_POLICY, type AgentInteractionRequest, type AgentInteractionResolution } from "@orkestrator/protocol/agent-interactions";
-import { createNativeAgentProvider, ProviderUnavailableError, type ProviderSessionRegistration } from "./native-agent-provider.js";
-import { codexConnection, httpProvider, waitUntil, deferred, declineResolution, answerResolution, freeTextResolution, openCodeFake, openCodeActivityProvider } from "./agent-provider-test-support.js";
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  AGENT_INTERACTION_LIMITS,
+  INTERACTIVE_AGENT_INTERACTION_POLICY,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  type AgentInteractionRequest,
+  type AgentInteractionResolution,
+} from "@orkestrator/protocol/agent-interactions";
+import {
+  createNativeAgentProvider,
+  ProviderUnavailableError,
+  type ProviderSessionRegistration,
+} from "./native-agent-provider.js";
+import {
+  codexConnection,
+  httpProvider,
+  waitUntil,
+  deferred,
+  declineResolution,
+  answerResolution,
+  freeTextResolution,
+  openCodeFake,
+  openCodeActivityProvider,
+} from "./agent-provider-test-support.js";
 
 describe("provider-neutral interaction adapters", () => {
   test("Claude snapshots and exact response mapping satisfy the shared contract", async () => {
     const expiresAt = Date.now() + 60_000;
-    let questions: Array<Record<string, unknown>> = [{
-      id: "question-1",
-      sessionId: "session-1",
-      expiresAt,
-      questions: [{
-        question: "Choose",
-        header: "Choice",
-        options: [
-          { label: "same", value: "exact-provider-value", description: "first" },
-          { label: "same", description: "second" },
-          { label: "comma,value" },
+    let questions: Array<Record<string, unknown>> = [
+      {
+        id: "question-1",
+        sessionId: "session-1",
+        expiresAt,
+        questions: [
+          {
+            question: "Choose",
+            header: "Choice",
+            options: [
+              { label: "same", value: "exact-provider-value", description: "first" },
+              { label: "same", description: "second" },
+              { label: "comma,value" },
+            ],
+            multiSelect: true,
+          },
         ],
-        multiSelect: true,
-      }],
-    }];
-    let approvals: Array<Record<string, unknown>> = [{
-      id: "approval-1",
-      sessionId: "session-1",
-      expiresAt,
-    }];
+      },
+    ];
+    let approvals: Array<Record<string, unknown>> = [
+      {
+        id: "approval-1",
+        sessionId: "session-1",
+        expiresAt,
+      },
+    ];
     const upstream: Array<{ url: string; body: unknown }> = [];
     const { provider } = httpProvider(async (url, init) => {
       if (url.endsWith("/questions")) return Response.json({ questions });
@@ -48,13 +75,11 @@ describe("provider-neutral interaction adapters", () => {
       phase: "build",
     });
     const first = await provider.interactions!.listPendingInteractions("session-1");
-    expect(first.requests.map((request) => request.kind)).toEqual([
-      "question",
-      "plan-approval",
-    ]);
+    expect(first.requests.map((request) => request.kind)).toEqual(["question", "plan-approval"]);
     expect(first.requests[0]!.origin).toBe("build-pipeline");
-    expect(first.requests[0]!.presentation.questions[0]!.options.map((option) => option.id))
-      .toEqual(["q0:o0", "q0:o1", "q0:o2"]);
+    expect(
+      first.requests[0]!.presentation.questions[0]!.options.map((option) => option.id),
+    ).toEqual(["q0:o0", "q0:o1", "q0:o2"]);
 
     // A cached/adopted provider may be registered again, but a live request
     // keeps the policy it was presented under instead of switching owners.
@@ -63,53 +88,65 @@ describe("provider-neutral interaction adapters", () => {
       interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
       phase: "chat",
     });
-    expect((await provider.interactions!.listPendingInteractions("session-1"))
-      .requests[0]!.origin).toBe("build-pipeline");
+    expect(
+      (await provider.interactions!.listPendingInteractions("session-1")).requests[0]!.origin,
+    ).toBe("build-pipeline");
 
     const question = first.requests[0]!;
-    await expect(provider.interactions!.resolveInteraction(
-      "other-session",
-      question.id,
-      answerResolution(question),
-    )).resolves.toMatchObject({ result: "rejected" });
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      question.id,
-      answerResolution(question),
-    )).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "other-session",
+        question.id,
+        answerResolution(question),
+      ),
+    ).resolves.toMatchObject({ result: "rejected" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        question.id,
+        answerResolution(question),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
     expect(upstream[0]!.body).toEqual({ answers: [["exact-provider-value"]] });
 
     const approval = (await provider.interactions!.listPendingInteractions("session-1"))
       .requests[0]!;
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      approval.id,
-      { ...declineResolution(approval), feedback: "Add rollback steps" },
-    )).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", approval.id, {
+        ...declineResolution(approval),
+        feedback: "Add rollback steps",
+      }),
+    ).resolves.toMatchObject({ result: "applied" });
     expect(upstream[1]!.body).toEqual({
       approved: false,
       feedback: "Add rollback steps",
     });
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      approval.id,
-      declineResolution(approval),
-    )).resolves.toMatchObject({ result: "stale" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        approval.id,
+        declineResolution(approval),
+      ),
+    ).resolves.toMatchObject({ result: "stale" });
   });
 
   test("lets the first real registration replace an implicit placeholder", async () => {
     const expiresAt = Date.now() + 60_000;
-    const { provider } = httpProvider((url) => Response.json(
-      url.endsWith("/questions")
-        ? {
-            questions: [{
-              id: "question-1",
-              expiresAt,
-              questions: [{ question: "Choose", options: [] }],
-            }],
-          }
-        : { approvals: [] },
-    ));
+    const { provider } = httpProvider((url) =>
+      Response.json(
+        url.endsWith("/questions")
+          ? {
+              questions: [
+                {
+                  id: "question-1",
+                  expiresAt,
+                  questions: [{ question: "Choose", options: [] }],
+                },
+              ],
+            }
+          : { approvals: [] },
+      ),
+    );
 
     // Reading a snapshot for an unknown session registers it implicitly with
     // DEFAULT_SESSION_REGISTRATION. That placeholder is not a decision, so it
@@ -129,8 +166,7 @@ describe("provider-neutral interaction adapters", () => {
       fence: "pipeline:build:1",
     });
 
-    const afterRegistration = await provider.interactions!
-      .listPendingInteractions("session-1");
+    const afterRegistration = await provider.interactions!.listPendingInteractions("session-1");
     expect(afterRegistration.requests[0]!.origin).toBe("build-pipeline");
     const internal = provider as unknown as {
       interactionAdapter: {
@@ -153,18 +189,19 @@ describe("provider-neutral interaction adapters", () => {
       origin: "interactive-native",
       interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
     });
-    expect(internal.interactionAdapter.interactionTracker.registration("session-1"))
-      .toMatchObject({
+    expect(internal.interactionAdapter.interactionTracker.registration("session-1")).toMatchObject({
       origin: "build-pipeline",
       interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
     });
   });
 
   test("fills in registration metadata a first caller did not know", async () => {
-    const { provider } = httpProvider(() => Response.json({
-      questions: [],
-      approvals: [],
-    }));
+    const { provider } = httpProvider(() =>
+      Response.json({
+        questions: [],
+        approvals: [],
+      }),
+    );
     const internal = provider as unknown as {
       interactionAdapter: {
         interactionTracker: {
@@ -206,8 +243,7 @@ describe("provider-neutral interaction adapters", () => {
       workflowId: "workflow-2",
       fence: "pipeline:build:2",
     });
-    expect(internal.interactionAdapter.interactionTracker.registration("session-1"))
-      .toMatchObject({
+    expect(internal.interactionAdapter.interactionTracker.registration("session-1")).toMatchObject({
       workflowId: "workflow-1",
       fence: "pipeline:build:1",
     });
@@ -216,28 +252,34 @@ describe("provider-neutral interaction adapters", () => {
   test("Codex recovers from snapshots, rejects stale generations, and resolves once", async () => {
     const requestedAt = Date.now();
     const expiresAt = requestedAt + 60_000;
-    let approvals: Array<Record<string, unknown>> = [{
-      approvalId: "approval-1",
-      kind: "command",
-      requestedAt,
-      expiresAt,
-      command: "safe-command",
-    }];
-    let interactions: Array<Record<string, unknown>> = [{
-      interactionId: "question-1",
-      kind: "question",
-      requestedAt,
-      expiresAt,
-      generation: 1,
-      questions: [{
-        id: "language",
-        header: "Language",
-        question: "Choose",
-        isOther: true,
-        isSecret: false,
-        options: [{ label: "TypeScript" }],
-      }],
-    }];
+    let approvals: Array<Record<string, unknown>> = [
+      {
+        approvalId: "approval-1",
+        kind: "command",
+        requestedAt,
+        expiresAt,
+        command: "safe-command",
+      },
+    ];
+    let interactions: Array<Record<string, unknown>> = [
+      {
+        interactionId: "question-1",
+        kind: "question",
+        requestedAt,
+        expiresAt,
+        generation: 1,
+        questions: [
+          {
+            id: "language",
+            header: "Language",
+            question: "Choose",
+            isOther: true,
+            isSecret: false,
+            options: [{ label: "TypeScript" }],
+          },
+        ],
+      },
+    ];
     const gate = deferred();
     let approvalResponses = 0;
     const { provider } = httpProvider(async (url, init) => {
@@ -247,7 +289,10 @@ describe("provider-neutral interaction adapters", () => {
         approvalResponses += 1;
         await gate.promise;
         approvals = [];
-        return Response.json({ status: "applied", decision: JSON.parse(String(init.body)).decision });
+        return Response.json({
+          status: "applied",
+          decision: JSON.parse(String(init.body)).decision,
+        });
       }
       if (url.includes("/interactions/question-1")) {
         interactions = [];
@@ -272,11 +317,13 @@ describe("provider-neutral interaction adapters", () => {
       declineResolution(approval),
     );
     await waitUntil(() => approvalResponses === 1);
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      approval.id,
-      declineResolution(approval),
-    )).resolves.toMatchObject({ result: "already-resolved" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        approval.id,
+        declineResolution(approval),
+      ),
+    ).resolves.toMatchObject({ result: "already-resolved" });
     gate.resolve();
     await expect(firstResolution).resolves.toMatchObject({ result: "applied" });
     expect(approvalResponses).toBe(1);
@@ -285,11 +332,13 @@ describe("provider-neutral interaction adapters", () => {
       .requests[0]!;
     expect(question.presentation.questions[0]?.multiple).toBe(false);
     interactions = [];
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      question.id,
-      answerResolution(question),
-    )).resolves.toMatchObject({ result: "stale" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        question.id,
+        answerResolution(question),
+      ),
+    ).resolves.toMatchObject({ result: "stale" });
   });
 
   test("Codex presents actionable approval scope and round-trips every MCP variant", async () => {
@@ -360,7 +409,8 @@ describe("provider-neutral interaction adapters", () => {
         return Response.json({ status: "applied" });
       }
       const interactionId = interactions.find(({ interactionId }) =>
-        url.endsWith(`/${interactionId}`))?.interactionId as string | undefined;
+        url.endsWith(`/${interactionId}`),
+      )?.interactionId as string | undefined;
       if (interactionId) {
         responses.push({ id: interactionId, body: JSON.parse(String(init.body)) });
         interactions = interactions.filter((entry) => entry.interactionId !== interactionId);
@@ -380,46 +430,50 @@ describe("provider-neutral interaction adapters", () => {
     expect(first.requests[0]!.presentation.body).toContain("Reason: Needs package metadata");
     expect(first.requests[0]!.presentation.body).toContain("Command: bun install");
     expect(first.requests[0]!.presentation.body).toContain("Network host: registry.npmjs.org");
-    expect(first.requests[0]!.presentation.approveForSessionLabel)
-      .toBe("Approve for session");
+    expect(first.requests[0]!.presentation.approveForSessionLabel).toBe("Approve for session");
     expect(first.requests[1]!.presentation.body).toContain("Change: update: /workspace/a.ts");
     expect(first.requests[2]!.presentation.body).toContain("Permissions: network");
     expect(first.requests[3]!.presentation.questions).toHaveLength(1);
-    expect(first.requests[3]!.presentation.questions[0]!.description)
-      .toContain('"region"');
+    expect(first.requests[3]!.presentation.questions[0]!.description).toContain('"region"');
 
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      first.requests[0]!.id,
-      {
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", first.requests[0]!.id, {
         version: AGENT_INTERACTION_CONTRACT_VERSION,
         interactionId: first.requests[0]!.id,
         sessionId: first.requests[0]!.sessionId,
         action: "approve-for-session",
         resolvedAt: Math.max(Date.now(), first.requests[0]!.createdAt),
-      },
-    )).resolves.toMatchObject({ result: "applied" });
+      }),
+    ).resolves.toMatchObject({ result: "applied" });
     for (const approval of first.requests.slice(1, 3)) {
-      await expect(provider.interactions!.resolveInteraction(
-        "session-1",
-        approval!.id,
-        answerResolution(approval!),
-      )).resolves.toMatchObject({ result: "applied" });
+      await expect(
+        provider.interactions!.resolveInteraction(
+          "session-1",
+          approval!.id,
+          answerResolution(approval!),
+        ),
+      ).resolves.toMatchObject({ result: "applied" });
     }
-    const form = (await provider.interactions!.listPendingInteractions("session-1"))
-      .requests.find(({ kind }) => kind === "mcp-form")!;
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      form.id,
-      freeTextResolution(form, JSON.stringify({ region: "eu-west-1" })),
-    )).resolves.toMatchObject({ result: "applied" });
-    const urlRequest = (await provider.interactions!.listPendingInteractions("session-1"))
-      .requests.find(({ kind }) => kind === "mcp-url")!;
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      urlRequest.id,
-      answerResolution(urlRequest),
-    )).resolves.toMatchObject({ result: "applied" });
+    const form = (await provider.interactions!.listPendingInteractions("session-1")).requests.find(
+      ({ kind }) => kind === "mcp-form",
+    )!;
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        form.id,
+        freeTextResolution(form, JSON.stringify({ region: "eu-west-1" })),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
+    const urlRequest = (
+      await provider.interactions!.listPendingInteractions("session-1")
+    ).requests.find(({ kind }) => kind === "mcp-url")!;
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        urlRequest.id,
+        answerResolution(urlRequest),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
 
     expect(responses).toEqual([
       { id: "command-1", body: { decision: "approve-for-session" } },
@@ -459,11 +513,13 @@ describe("provider-neutral interaction adapters", () => {
         kind: "question",
         requestedAt,
         expiresAt,
-        questions: [{
-          id: "language",
-          question: "Choose",
-          options: [{ label: "TypeScript" }],
-        }],
+        questions: [
+          {
+            id: "language",
+            question: "Choose",
+            options: [{ label: "TypeScript" }],
+          },
+        ],
       },
     ];
     let answerBody: unknown;
@@ -490,11 +546,13 @@ describe("provider-neutral interaction adapters", () => {
     expect(file.presentation.body).toContain("… and 16 more files");
     expect(form.presentation.body?.length).toBe(AGENT_INTERACTION_LIMITS.maxTextLength);
     expect(form.presentation.questions[0]!.description).toBe("{}");
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      question.id,
-      answerResolution(question),
-    )).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        question.id,
+        answerResolution(question),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
     expect(answerBody).toEqual({
       action: "accept",
       answers: { language: ["TypeScript"] },
@@ -509,26 +567,31 @@ describe("provider-neutral interaction adapters", () => {
       fetch: (async (input, init = {}) => {
         const url = String(input);
         if (init.method && init.method !== "GET") writes += 1;
-        return Response.json(url.endsWith("/approvals")
-          ? { approvals: [] }
-          : {
-              interactions: [{
-                interactionId: "question",
-                kind: "question",
-                requestedAt,
-                expiresAt: requestedAt + 60_000,
-                questions: [{ id: "q1", question: "Continue?", options: [] }],
-              }],
-            });
+        return Response.json(
+          url.endsWith("/approvals")
+            ? { approvals: [] }
+            : {
+                interactions: [
+                  {
+                    interactionId: "question",
+                    kind: "question",
+                    requestedAt,
+                    expiresAt: requestedAt + 60_000,
+                    questions: [{ id: "q1", question: "Continue?", options: [] }],
+                  },
+                ],
+              },
+        );
       }) as typeof fetch,
       onInteractionObservation: () => {
         observations += 1;
       },
     });
-    await expect(provider.interactions!.listPendingInteractions("session-1"))
-      .resolves.toMatchObject({
-        requests: [expect.objectContaining({ kind: "question" })],
-      });
+    await expect(
+      provider.interactions!.listPendingInteractions("session-1"),
+    ).resolves.toMatchObject({
+      requests: [expect.objectContaining({ kind: "question" })],
+    });
     expect(observations).toBe(0);
     expect(writes).toBe(0);
   });
@@ -536,21 +599,25 @@ describe("provider-neutral interaction adapters", () => {
   test("Codex refuses positive approval and malformed MCP form content without actionable detail", async () => {
     const requestedAt = Date.now();
     const expiresAt = requestedAt + 60_000;
-    const approvals = [{
-      approvalId: "missing-detail",
-      kind: "file-change",
-      requestedAt,
-      expiresAt,
-      reason: "Change requested",
-      actionable: true,
-    }];
-    const interactions = [{
-      interactionId: "form-1",
-      kind: "mcp-form",
-      requestedAt,
-      expiresAt,
-      schema: { type: "object", properties: {} },
-    }];
+    const approvals = [
+      {
+        approvalId: "missing-detail",
+        kind: "file-change",
+        requestedAt,
+        expiresAt,
+        reason: "Change requested",
+        actionable: true,
+      },
+    ];
+    const interactions = [
+      {
+        interactionId: "form-1",
+        kind: "mcp-form",
+        requestedAt,
+        expiresAt,
+        schema: { type: "object", properties: {} },
+      },
+    ];
     let writes = 0;
     const { provider } = httpProvider((url) => {
       if (url.endsWith("/approvals")) return Response.json({ approvals });
@@ -560,65 +627,83 @@ describe("provider-neutral interaction adapters", () => {
     }, codexConnection);
     const snapshot = await provider.interactions!.listPendingInteractions("session-1");
     const approval = snapshot.requests.find(({ kind }) => kind === "file-approval")!;
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      approval.id,
-      answerResolution(approval),
-    )).resolves.toMatchObject({ result: "rejected" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        approval.id,
+        answerResolution(approval),
+      ),
+    ).resolves.toMatchObject({ result: "rejected" });
     const form = snapshot.requests.find(({ kind }) => kind === "mcp-form")!;
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      form.id,
-      freeTextResolution(form, "not json"),
-    )).resolves.toMatchObject({ result: "rejected" });
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      form.id,
-      freeTextResolution(form, JSON.stringify(["not", "an", "object"])),
-    )).resolves.toMatchObject({ result: "rejected" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        form.id,
+        freeTextResolution(form, "not json"),
+      ),
+    ).resolves.toMatchObject({ result: "rejected" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        form.id,
+        freeTextResolution(form, JSON.stringify(["not", "an", "object"])),
+      ),
+    ).resolves.toMatchObject({ result: "rejected" });
     expect(writes).toBe(0);
 
-    const malformedFileChange = httpProvider((url) => Response.json(
-      url.endsWith("/approvals")
-        ? {
-            approvals: [{
-              approvalId: "malformed-file",
-              kind: "file-change",
-              requestedAt,
-              expiresAt,
-              changes: [{}],
-              actionable: true,
-            }],
-          }
-        : { interactions: [] },
-    ), codexConnection);
-    await expect(malformedFileChange.provider.interactions!
-      .listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    const malformedFileChange = httpProvider(
+      (url) =>
+        Response.json(
+          url.endsWith("/approvals")
+            ? {
+                approvals: [
+                  {
+                    approvalId: "malformed-file",
+                    kind: "file-change",
+                    requestedAt,
+                    expiresAt,
+                    changes: [{}],
+                    actionable: true,
+                  },
+                ],
+              }
+            : { interactions: [] },
+        ),
+      codexConnection,
+    );
+    await expect(
+      malformedFileChange.provider.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
   });
 
   test("OpenCode lists input and authorization without auto-answering and preserves values", async () => {
     const fake = openCodeFake();
     fake.setPending(
-      [{
-        id: "permission-1",
-        sessionID: "owned-session",
-        permission: "edit",
-        patterns: [],
-        metadata: {},
-        always: [],
-      }],
-      [{
-        id: "question-1",
-        sessionID: "owned-session",
-        questions: [{
-          question: "Choose",
-          header: "Choice",
-          options: [{ label: "comma,value", description: "kept intact" }],
-          multiple: false,
-          custom: true,
-        }],
-      }],
+      [
+        {
+          id: "permission-1",
+          sessionID: "owned-session",
+          permission: "edit",
+          patterns: [],
+          metadata: {},
+          always: [],
+        },
+      ],
+      [
+        {
+          id: "question-1",
+          sessionID: "owned-session",
+          questions: [
+            {
+              question: "Choose",
+              header: "Choice",
+              options: [{ label: "comma,value", description: "kept intact" }],
+              multiple: false,
+              custom: true,
+            },
+          ],
+        },
+      ],
     );
     const provider = openCodeActivityProvider(fake);
     provider.registerSession?.("owned-session", {
@@ -627,30 +712,31 @@ describe("provider-neutral interaction adapters", () => {
       phase: "review",
     });
     const snapshot = await provider.interactions!.listPendingInteractions("owned-session");
-    expect(snapshot.requests.map((request) => request.kind)).toEqual([
-      "question",
-      "permission",
-    ]);
+    expect(snapshot.requests.map((request) => request.kind)).toEqual(["question", "permission"]);
     expect(fake.permissionReplies).toEqual([]);
     expect(fake.questionRejections).toEqual([]);
 
     const question = snapshot.requests[0]!;
-    await expect(provider.interactions!.resolveInteraction(
-      "owned-session",
-      question.id,
-      answerResolution(question),
-    )).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "owned-session",
+        question.id,
+        answerResolution(question),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
     expect(fake.questionReplies[0]).toMatchObject({
       requestID: "question-1",
       answers: [["comma,value"]],
     });
     const permission = (await provider.interactions!.listPendingInteractions("owned-session"))
       .requests[0]!;
-    await expect(provider.interactions!.resolveInteraction(
-      "owned-session",
-      permission.id,
-      declineResolution(permission),
-    )).resolves.toMatchObject({ result: "applied" });
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "owned-session",
+        permission.id,
+        declineResolution(permission),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
     expect(fake.permissionReplies[0]).toMatchObject({
       requestID: "permission-1",
       reply: "reject",
@@ -661,25 +747,31 @@ describe("provider-neutral interaction adapters", () => {
   test("OpenCode preserves multi-select and free text, presents permission scope, and resolves once", async () => {
     const fake = openCodeFake();
     fake.setPending(
-      [{
-        id: "permission-1",
-        sessionID: "owned-session",
-        permission: "edit",
-        patterns: ["src/**", "package.json"],
-        metadata: {},
-        always: ["src/**"],
-      }],
-      [{
-        id: "question-1",
-        sessionID: "owned-session",
-        questions: [{
-          question: "Choose targets",
-          header: "Targets",
-          options: [{ label: "one" }, { label: "two" }],
-          multiple: true,
-          custom: true,
-        }],
-      }],
+      [
+        {
+          id: "permission-1",
+          sessionID: "owned-session",
+          permission: "edit",
+          patterns: ["src/**", "package.json"],
+          metadata: {},
+          always: ["src/**"],
+        },
+      ],
+      [
+        {
+          id: "question-1",
+          sessionID: "owned-session",
+          questions: [
+            {
+              question: "Choose targets",
+              header: "Targets",
+              options: [{ label: "one" }, { label: "two" }],
+              multiple: true,
+              custom: true,
+            },
+          ],
+        },
+      ],
     );
     const provider = openCodeActivityProvider(fake);
     try {
@@ -696,46 +788,42 @@ describe("provider-neutral interaction adapters", () => {
           version: AGENT_INTERACTION_CONTRACT_VERSION,
           interactionId: question.id,
           sessionId: question.sessionId,
-          answers: [{
-            questionId: q.id,
-            optionIds: q.options.map(({ id }) => id),
-            freeText: "custom, value",
-          }],
+          answers: [
+            {
+              questionId: q.id,
+              optionIds: q.options.map(({ id }) => id),
+              freeText: "custom, value",
+            },
+          ],
         },
       };
-      await expect(provider.interactions!.resolveInteraction(
-        "owned-session",
-        question.id,
-        answer,
-      )).resolves.toMatchObject({ result: "applied" });
-      await expect(provider.interactions!.resolveInteraction(
-        "owned-session",
-        question.id,
-        answer,
-      )).resolves.toMatchObject({ result: "stale" });
+      await expect(
+        provider.interactions!.resolveInteraction("owned-session", question.id, answer),
+      ).resolves.toMatchObject({ result: "applied" });
+      await expect(
+        provider.interactions!.resolveInteraction("owned-session", question.id, answer),
+      ).resolves.toMatchObject({ result: "stale" });
       expect(fake.questionReplies).toHaveLength(1);
       expect(fake.questionReplies[0]).toMatchObject({
         requestID: "question-1",
         answers: [["one", "two", "custom, value"]],
       });
 
-      const permission = (await provider.interactions!
-        .listPendingInteractions("owned-session")).requests[0]!;
+      const permission = (await provider.interactions!.listPendingInteractions("owned-session"))
+        .requests[0]!;
       expect(permission.presentation.body).toContain("Permission: edit");
       expect(permission.presentation.body).toContain("Resource: src/**");
       expect(permission.presentation.body).toContain("Resource: package.json");
       expect(permission.presentation.approveForSessionLabel).toBe("Always allow");
-      await expect(provider.interactions!.resolveInteraction(
-        "owned-session",
-        permission.id,
-        {
+      await expect(
+        provider.interactions!.resolveInteraction("owned-session", permission.id, {
           version: AGENT_INTERACTION_CONTRACT_VERSION,
           interactionId: permission.id,
           sessionId: permission.sessionId,
           action: "approve-for-session",
           resolvedAt: Math.max(Date.now(), permission.createdAt),
-        },
-      )).resolves.toMatchObject({ result: "applied" });
+        }),
+      ).resolves.toMatchObject({ result: "applied" });
       expect(fake.permissionReplies[0]).toMatchObject({
         requestID: "permission-1",
         reply: "always",
@@ -747,28 +835,35 @@ describe("provider-neutral interaction adapters", () => {
 
   test("OpenCode serializes concurrent resolution of the same interaction", async () => {
     const fake = openCodeFake();
-    fake.setPending([], [{
-      id: "question-1",
-      sessionID: "owned-session",
-      questions: [{ question: "Choose", options: [] }],
-    }]);
+    fake.setPending(
+      [],
+      [
+        {
+          id: "question-1",
+          sessionID: "owned-session",
+          questions: [{ question: "Choose", options: [] }],
+        },
+      ],
+    );
     const provider = openCodeActivityProvider(fake);
     const gate = deferred();
     fake.setQuestionReplyGate(gate.promise);
     try {
-      const request = (await provider.interactions!
-        .listPendingInteractions("owned-session")).requests[0]!;
+      const request = (await provider.interactions!.listPendingInteractions("owned-session"))
+        .requests[0]!;
       const first = provider.interactions!.resolveInteraction(
         "owned-session",
         request.id,
         answerResolution(request),
       );
       await waitUntil(() => fake.questionReplies.length === 1);
-      await expect(provider.interactions!.resolveInteraction(
-        "owned-session",
-        request.id,
-        answerResolution(request),
-      )).resolves.toMatchObject({ result: "already-resolved" });
+      await expect(
+        provider.interactions!.resolveInteraction(
+          "owned-session",
+          request.id,
+          answerResolution(request),
+        ),
+      ).resolves.toMatchObject({ result: "already-resolved" });
       gate.resolve();
       await expect(first).resolves.toMatchObject({ result: "applied" });
       expect(fake.questionReplies).toHaveLength(1);
@@ -784,21 +879,28 @@ describe("provider-neutral interaction adapters", () => {
       [false, "provider-unavailable"],
     ] as const) {
       const fake = openCodeFake();
-      fake.setPending([], [{
-        id: "question-1",
-        sessionID: "owned-session",
-        questions: [{ question: "Choose", options: [] }],
-      }]);
+      fake.setPending(
+        [],
+        [
+          {
+            id: "question-1",
+            sessionID: "owned-session",
+            questions: [{ question: "Choose", options: [] }],
+          },
+        ],
+      );
       const provider = openCodeActivityProvider(fake);
       try {
-        const request = (await provider.interactions!
-          .listPendingInteractions("owned-session")).requests[0]!;
+        const request = (await provider.interactions!.listPendingInteractions("owned-session"))
+          .requests[0]!;
         fake.setQuestionReplyFailure(new TypeError("connection reset"), applied);
-        await expect(provider.interactions!.resolveInteraction(
-          "owned-session",
-          request.id,
-          answerResolution(request),
-        )).resolves.toMatchObject({ result: expected });
+        await expect(
+          provider.interactions!.resolveInteraction(
+            "owned-session",
+            request.id,
+            answerResolution(request),
+          ),
+        ).resolves.toMatchObject({ result: expected });
         expect(fake.questionReplies).toHaveLength(1);
       } finally {
         await provider.dispose?.();
@@ -809,40 +911,44 @@ describe("provider-neutral interaction adapters", () => {
   test("OpenCode rejects unscoped positive permissions and maps question cancel to reject", async () => {
     const fake = openCodeFake();
     fake.setPending(
-      [{
-        id: "permission-1",
-        sessionID: "owned-session",
-        permission: "edit",
-        patterns: [],
-        metadata: {},
-        always: [],
-      }],
-      [{
-        id: "question-1",
-        sessionID: "owned-session",
-        questions: [{ question: "Continue?", options: [], custom: true }],
-      }],
+      [
+        {
+          id: "permission-1",
+          sessionID: "owned-session",
+          permission: "edit",
+          patterns: [],
+          metadata: {},
+          always: [],
+        },
+      ],
+      [
+        {
+          id: "question-1",
+          sessionID: "owned-session",
+          questions: [{ question: "Continue?", options: [], custom: true }],
+        },
+      ],
     );
     const provider = openCodeActivityProvider(fake);
     try {
       const snapshot = await provider.interactions!.listPendingInteractions("owned-session");
       const permission = snapshot.requests.find(({ kind }) => kind === "permission")!;
-      await expect(provider.interactions!.resolveInteraction(
-        "owned-session",
-        permission.id,
-        answerResolution(permission),
-      )).resolves.toMatchObject({ result: "rejected" });
+      await expect(
+        provider.interactions!.resolveInteraction(
+          "owned-session",
+          permission.id,
+          answerResolution(permission),
+        ),
+      ).resolves.toMatchObject({ result: "rejected" });
       expect(fake.permissionReplies).toHaveLength(0);
 
       const question = snapshot.requests.find(({ kind }) => kind === "question")!;
-      await expect(provider.interactions!.resolveInteraction(
-        "owned-session",
-        question.id,
-        {
+      await expect(
+        provider.interactions!.resolveInteraction("owned-session", question.id, {
           ...declineResolution(question),
           action: "cancel",
-        },
-      )).resolves.toMatchObject({ result: "applied" });
+        }),
+      ).resolves.toMatchObject({ result: "applied" });
       expect(fake.questionRejections).toHaveLength(1);
     } finally {
       await provider.dispose?.();
@@ -852,35 +958,57 @@ describe("provider-neutral interaction adapters", () => {
   test("OpenCode fails closed on malformed, globally oversized, and overlong-id list payloads", async () => {
     const cases: Array<[Record<string, unknown>, Record<string, unknown>]> = [
       [{ data: {} }, { data: [] }],
-      [{ data: [{
-        id: "permission-1",
-        sessionID: "owned-session",
-        permission: "edit",
-        patterns: [123],
-        metadata: {},
-        always: [],
-      }] }, { data: [] }],
-      [{ data: [{
-        id: "permission-1",
-        sessionID: "owned-session",
-        permission: "edit",
-        patterns: ["x".repeat(300_000)],
-        metadata: {},
-        always: [],
-      }] }, { data: [] }],
-      [{ data: [] }, { data: [{
-        id: "x".repeat(513),
-        sessionID: "owned-session",
-        questions: [{ question: "Choose", options: [] }],
-      }] }],
+      [
+        {
+          data: [
+            {
+              id: "permission-1",
+              sessionID: "owned-session",
+              permission: "edit",
+              patterns: [123],
+              metadata: {},
+              always: [],
+            },
+          ],
+        },
+        { data: [] },
+      ],
+      [
+        {
+          data: [
+            {
+              id: "permission-1",
+              sessionID: "owned-session",
+              permission: "edit",
+              patterns: ["x".repeat(300_000)],
+              metadata: {},
+              always: [],
+            },
+          ],
+        },
+        { data: [] },
+      ],
+      [
+        { data: [] },
+        {
+          data: [
+            {
+              id: "x".repeat(513),
+              sessionID: "owned-session",
+              questions: [{ question: "Choose", options: [] }],
+            },
+          ],
+        },
+      ],
     ];
     for (const [permissions, questions] of cases) {
       const fake = openCodeFake();
       fake.setPendingReadResponses(permissions, questions);
       const provider = openCodeActivityProvider(fake);
       try {
-        await expect(provider.interactions!.listPendingInteractions("owned-session"))
-          .rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(
+          provider.interactions!.listPendingInteractions("owned-session"),
+        ).rejects.toBeInstanceOf(ProviderUnavailableError);
       } finally {
         await provider.dispose?.();
       }
@@ -889,16 +1017,24 @@ describe("provider-neutral interaction adapters", () => {
 
   test("OpenCode ignores malformed foreign entries and tolerates an absent list payload", async () => {
     const fake = openCodeFake();
-    fake.setPendingReadResponses({ data: [{
-      id: "permission-foreign",
-      sessionID: "x".repeat(513),
-      permission: "edit",
-      patterns: ["x".repeat(300_000)],
-    }] }, { data: null });
+    fake.setPendingReadResponses(
+      {
+        data: [
+          {
+            id: "permission-foreign",
+            sessionID: "x".repeat(513),
+            permission: "edit",
+            patterns: ["x".repeat(300_000)],
+          },
+        ],
+      },
+      { data: null },
+    );
     const provider = openCodeActivityProvider(fake);
     try {
-      await expect(provider.interactions!.listPendingInteractions("owned-session"))
-        .resolves.toMatchObject({ requests: [] });
+      await expect(
+        provider.interactions!.listPendingInteractions("owned-session"),
+      ).resolves.toMatchObject({ requests: [] });
       fake.setStatusResponse({ data: { "owned-session": { type: "busy" } } });
       await expect(provider.activity?.("owned-session")).resolves.toBe("working");
     } finally {
@@ -909,84 +1045,107 @@ describe("provider-neutral interaction adapters", () => {
   test("all adapters fail closed on malformed or oversized authoritative snapshots", async () => {
     const oversized = "x".repeat(300_000);
     const claude = httpProvider(() => new Response(oversized));
-    await expect(claude.provider.interactions!.listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    await expect(
+      claude.provider.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
-    const codex = httpProvider((url) => url.endsWith("/approvals")
-      ? Response.json({ approvals: [{ approvalId: "bad", kind: "future" }] })
-      : Response.json({ interactions: [] }), codexConnection);
-    await expect(codex.provider.interactions!.listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    const codex = httpProvider(
+      (url) =>
+        url.endsWith("/approvals")
+          ? Response.json({ approvals: [{ approvalId: "bad", kind: "future" }] })
+          : Response.json({ interactions: [] }),
+      codexConnection,
+    );
+    await expect(
+      codex.provider.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
     const fake = openCodeFake();
     fake.setPending([], [{ id: "bad", sessionID: "session-1", questions: [] }]);
     const opencode = openCodeActivityProvider(fake);
-    await expect(opencode.interactions!.listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    await expect(
+      opencode.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
     await opencode.dispose?.();
 
-    const malformedClaudeQuestion = httpProvider((url) => Response.json(
-      url.endsWith("/questions")
-        ? {
-            questions: [{
-              id: "bad-question",
-              questions: [{ question: "Choose", options: [{}] }],
-            }],
-          }
-        : { approvals: [] },
-    ));
-    await expect(malformedClaudeQuestion.provider.interactions!
-      .listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    const malformedClaudeQuestion = httpProvider((url) =>
+      Response.json(
+        url.endsWith("/questions")
+          ? {
+              questions: [
+                {
+                  id: "bad-question",
+                  questions: [{ question: "Choose", options: [{}] }],
+                },
+              ],
+            }
+          : { approvals: [] },
+      ),
+    );
+    await expect(
+      malformedClaudeQuestion.provider.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
     const now = Date.now();
-    const malformedCodexQuestion = httpProvider((url) => Response.json(
-      url.endsWith("/approvals")
-        ? { approvals: [] }
-        : {
-            interactions: [{
-              interactionId: "bad-question",
-              kind: "question",
-              requestedAt: now,
-              expiresAt: now + 60_000,
-              questions: [{ id: "q1", options: [] }],
-            }],
-          }
-    ), codexConnection);
-    await expect(malformedCodexQuestion.provider.interactions!
-      .listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    const malformedCodexQuestion = httpProvider(
+      (url) =>
+        Response.json(
+          url.endsWith("/approvals")
+            ? { approvals: [] }
+            : {
+                interactions: [
+                  {
+                    interactionId: "bad-question",
+                    kind: "question",
+                    requestedAt: now,
+                    expiresAt: now + 60_000,
+                    questions: [{ id: "q1", options: [] }],
+                  },
+                ],
+              },
+        ),
+      codexConnection,
+    );
+    await expect(
+      malformedCodexQuestion.provider.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
     const malformedOpenCodeQuestion = openCodeFake();
-    malformedOpenCodeQuestion.setPending([], [{
-      id: "bad-option",
-      sessionID: "session-1",
-      questions: [{ question: "Choose", options: [{}] }],
-    }]);
-    const malformedOpenCodeProvider = openCodeActivityProvider(
-      malformedOpenCodeQuestion,
+    malformedOpenCodeQuestion.setPending(
+      [],
+      [
+        {
+          id: "bad-option",
+          sessionID: "session-1",
+          questions: [{ question: "Choose", options: [{}] }],
+        },
+      ],
     );
-    await expect(malformedOpenCodeProvider.interactions!
-      .listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    const malformedOpenCodeProvider = openCodeActivityProvider(malformedOpenCodeQuestion);
+    await expect(
+      malformedOpenCodeProvider.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
     await malformedOpenCodeProvider.dispose?.();
 
     for (const body of ["{", null] as const) {
       const malformed = httpProvider(() => new Response(body, { status: 200 }));
-      await expect(malformed.provider.interactions!
-        .listPendingInteractions("session-1"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(
+        malformed.provider.interactions!.listPendingInteractions("session-1"),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
     }
   });
 
   test("HTTP adapters bound the combined snapshot and scope opaque IDs to a session", async () => {
-    const combinedOversized = httpProvider((url) => Response.json(
-      url.endsWith("/questions")
-        ? { questions: [], padding: "x".repeat(140_000) }
-        : { approvals: [], padding: "x".repeat(140_000) },
-    ));
-    await expect(combinedOversized.provider.interactions!.listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    const combinedOversized = httpProvider((url) =>
+      Response.json(
+        url.endsWith("/questions")
+          ? { questions: [], padding: "x".repeat(140_000) }
+          : { approvals: [], padding: "x".repeat(140_000) },
+      ),
+    );
+    await expect(
+      combinedOversized.provider.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
     const expiresAt = Date.now() + 60_000;
     const responses: string[] = [];
@@ -994,45 +1153,51 @@ describe("provider-neutral interaction adapters", () => {
       const sessionId = url.includes("session-a") ? "session-a" : "session-b";
       if (url.endsWith("/questions")) {
         return Response.json({
-          questions: [{
-            id: "same-provider-id",
-            expiresAt,
-            questions: [{ question: sessionId, options: [] }],
-          }],
+          questions: [
+            {
+              id: "same-provider-id",
+              expiresAt,
+              questions: [{ question: sessionId, options: [] }],
+            },
+          ],
         });
       }
       if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
       responses.push(url);
       return Response.json({ status: "answered" });
     });
-    const requestA = (await scoped.provider.interactions!
-      .listPendingInteractions("session-a")).requests[0]!;
-    const requestB = (await scoped.provider.interactions!
-      .listPendingInteractions("session-b")).requests[0]!;
+    const requestA = (await scoped.provider.interactions!.listPendingInteractions("session-a"))
+      .requests[0]!;
+    const requestB = (await scoped.provider.interactions!.listPendingInteractions("session-b"))
+      .requests[0]!;
     expect(requestA.id).not.toBe(requestB.id);
-    await expect(scoped.provider.interactions!.resolveInteraction(
-      "session-a",
-      requestB.id,
-      answerResolution(requestB),
-    )).resolves.toMatchObject({ result: "rejected" });
+    await expect(
+      scoped.provider.interactions!.resolveInteraction(
+        "session-a",
+        requestB.id,
+        answerResolution(requestB),
+      ),
+    ).resolves.toMatchObject({ result: "rejected" });
     expect(responses).toEqual([]);
   });
 
   test("HTTP interaction snapshots keep stable revisions and advance on every authoritative reset", async () => {
     const expiresAt = Date.now() + 60_000;
     let questions: Array<Record<string, unknown>> = [];
-    const { provider } = httpProvider((url) => Response.json(
-      url.endsWith("/questions") ? { questions } : { approvals: [] },
-    ));
+    const { provider } = httpProvider((url) =>
+      Response.json(url.endsWith("/questions") ? { questions } : { approvals: [] }),
+    );
     const empty = await provider.interactions!.listPendingInteractions("session-1");
     const sameEmpty = await provider.interactions!.listPendingInteractions("session-1");
     expect(sameEmpty.revision).toBe(empty.revision);
 
-    questions = [{
-      id: "question-1",
-      expiresAt,
-      questions: [{ question: "Choose", options: [] }],
-    }];
+    questions = [
+      {
+        id: "question-1",
+        expiresAt,
+        questions: [{ question: "Choose", options: [] }],
+      },
+    ];
     const pending = await provider.interactions!.listPendingInteractions("session-1");
     const samePending = await provider.interactions!.listPendingInteractions("session-1");
     expect(pending.revision).toBe(empty.revision + 1);
@@ -1057,10 +1222,7 @@ describe("provider-neutral interaction adapters", () => {
           registration(sessionId: string): ProviderSessionRegistration;
           firstSeen(interactionId: string, fallback?: number): number;
           sessionFor(interactionId: string): string | undefined;
-          snapshot(
-            sessionId: string,
-            requests: AgentInteractionRequest[],
-          ): unknown;
+          snapshot(sessionId: string, requests: AgentInteractionRequest[]): unknown;
         };
         providerInteractionIds: Map<string, unknown>;
         mapClaudeQuestion(sessionId: string, raw: unknown): AgentInteractionRequest;
@@ -1075,32 +1237,27 @@ describe("provider-neutral interaction adapters", () => {
       });
     }
     expect(adapter.interactionTracker.registrations.size).toBe(1_024);
-    expect(adapter.interactionTracker.registration("session-0").origin)
-      .toBe("interactive-native");
-    expect(adapter.interactionTracker.registration("session-1024").phase)
-      .toBe("phase-1024");
+    expect(adapter.interactionTracker.registration("session-0").origin).toBe("interactive-native");
+    expect(adapter.interactionTracker.registration("session-1024").phase).toBe("phase-1024");
 
     let oldestInteractionId = "";
     let newestInteractionId = "";
     let newestSessionId = "";
     for (let offset = 0; offset < 4_097; offset += 64) {
       const trackerSessionId = `tracker-session-${Math.floor(offset / 64)}`;
-      const batch = Array.from(
-        { length: Math.min(64, 4_097 - offset) },
-        (_, batchIndex) => {
-          const index = offset + batchIndex;
-          const mapped = adapter.mapClaudeQuestion(trackerSessionId, {
-            id: `question-${index}`,
-            expiresAt,
-            questions: [{ question: `Question ${index}`, options: [] }],
-          });
-          adapter.interactionTracker.firstSeen(mapped.id, index);
-          oldestInteractionId ||= mapped.id;
-          newestInteractionId = mapped.id;
-          newestSessionId = trackerSessionId;
-          return mapped;
-        },
-      );
+      const batch = Array.from({ length: Math.min(64, 4_097 - offset) }, (_, batchIndex) => {
+        const index = offset + batchIndex;
+        const mapped = adapter.mapClaudeQuestion(trackerSessionId, {
+          id: `question-${index}`,
+          expiresAt,
+          questions: [{ question: `Question ${index}`, options: [] }],
+        });
+        adapter.interactionTracker.firstSeen(mapped.id, index);
+        oldestInteractionId ||= mapped.id;
+        newestInteractionId = mapped.id;
+        newestSessionId = trackerSessionId;
+        return mapped;
+      });
       adapter.interactionTracker.snapshot(trackerSessionId, batch);
     }
     expect(adapter.providerInteractionIds.size).toBe(4_096);
@@ -1113,20 +1270,22 @@ describe("provider-neutral interaction adapters", () => {
     expect(adapter.interactionTracker.firstSeenAt.has(newestInteractionId)).toBe(true);
     expect(adapter.interactionTracker.sessionFor(newestInteractionId)).toBe(newestSessionId);
 
-    const tooMany = httpProvider((url) => Response.json(
-      url.endsWith("/questions")
-        ? {
-            questions: Array.from({ length: 65 }, (_, index) => ({
-              id: `question-${index}`,
-              expiresAt,
-              questions: [{ question: `Question ${index}`, options: [] }],
-            })),
-          }
-        : { approvals: [] },
-    ));
-    await expect(tooMany.provider.interactions!
-      .listPendingInteractions("session-1"))
-      .resolves.toMatchObject({ requests: expect.any(Array) });
+    const tooMany = httpProvider((url) =>
+      Response.json(
+        url.endsWith("/questions")
+          ? {
+              questions: Array.from({ length: 65 }, (_, index) => ({
+                id: `question-${index}`,
+                expiresAt,
+                questions: [{ question: `Question ${index}`, options: [] }],
+              })),
+            }
+          : { approvals: [] },
+      ),
+    );
+    await expect(
+      tooMany.provider.interactions!.listPendingInteractions("session-1"),
+    ).resolves.toMatchObject({ requests: expect.any(Array) });
   });
 
   test("accepts a new policy only after a tracked session is evicted", async () => {
@@ -1180,16 +1339,20 @@ describe("provider-neutral interaction adapters", () => {
 
   test("rejects oversized HTTP identities before retaining tracker state", async () => {
     const oversizedId = "x".repeat(AGENT_INTERACTION_LIMITS.maxIdLength + 1);
-    const { provider } = httpProvider((url) => Response.json(
-      url.endsWith("/questions")
-        ? {
-            questions: [{
-              id: oversizedId,
-              questions: [{ question: "Choose", options: [] }],
-            }],
-          }
-        : { approvals: [] },
-    ));
+    const { provider } = httpProvider((url) =>
+      Response.json(
+        url.endsWith("/questions")
+          ? {
+              questions: [
+                {
+                  id: oversizedId,
+                  questions: [{ question: "Choose", options: [] }],
+                },
+              ],
+            }
+          : { approvals: [] },
+      ),
+    );
     const internal = provider as unknown as {
       interactionAdapter: {
         providerInteractionIds: Map<string, unknown>;
@@ -1202,8 +1365,9 @@ describe("provider-neutral interaction adapters", () => {
     };
     const adapter = internal.interactionAdapter;
 
-    await expect(provider.interactions!.listPendingInteractions("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    await expect(
+      provider.interactions!.listPendingInteractions("session-1"),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
     expect(adapter.providerInteractionIds.size).toBe(0);
     expect(adapter.interactionTracker.fingerprints.size).toBe(0);
     expect(adapter.interactionTracker.revisions.size).toBe(0);
@@ -1216,40 +1380,46 @@ describe("provider-neutral interaction adapters", () => {
     [503, "provider-unavailable"],
     [400, "rejected"],
     [204, "provider-unavailable"],
-  ] as const)("classifies an HTTP %s interaction response as %s", async (
-    responseStatus,
-    expected,
-  ) => {
-    const expiresAt = Date.now() + 60_000;
-    const questions = [{
-      id: "question-1",
-      expiresAt,
-      questions: [{ question: "Choose", options: [] }],
-    }];
-    let writes = 0;
-    const { provider } = httpProvider((url) => {
-      if (url.endsWith("/questions")) return Response.json({ questions });
-      if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
-      writes += 1;
-      return new Response(null, { status: responseStatus });
-    });
-    const request = (await provider.interactions!
-      .listPendingInteractions("session-1")).requests[0]!;
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      request.id,
-      answerResolution(request),
-    )).resolves.toMatchObject({ result: expected });
-    expect(writes).toBe(1);
-  });
+  ] as const)(
+    "classifies an HTTP %s interaction response as %s",
+    async (responseStatus, expected) => {
+      const expiresAt = Date.now() + 60_000;
+      const questions = [
+        {
+          id: "question-1",
+          expiresAt,
+          questions: [{ question: "Choose", options: [] }],
+        },
+      ];
+      let writes = 0;
+      const { provider } = httpProvider((url) => {
+        if (url.endsWith("/questions")) return Response.json({ questions });
+        if (url.endsWith("/plan-approvals")) return Response.json({ approvals: [] });
+        writes += 1;
+        return new Response(null, { status: responseStatus });
+      });
+      const request = (await provider.interactions!.listPendingInteractions("session-1"))
+        .requests[0]!;
+      await expect(
+        provider.interactions!.resolveInteraction(
+          "session-1",
+          request.id,
+          answerResolution(request),
+        ),
+      ).resolves.toMatchObject({ result: expected });
+      expect(writes).toBe(1);
+    },
+  );
 
   test("reconciles ambiguous HTTP interaction writes and rejects expired resolutions", async () => {
     const createdAt = Date.now() - 120_000;
-    let questions: Array<Record<string, unknown>> = [{
-      id: "question-1",
-      expiresAt: Date.now() + 60_000,
-      questions: [{ question: "Choose", options: [] }],
-    }];
+    let questions: Array<Record<string, unknown>> = [
+      {
+        id: "question-1",
+        expiresAt: Date.now() + 60_000,
+        questions: [{ question: "Choose", options: [] }],
+      },
+    ];
     let writes = 0;
     const { provider } = httpProvider((url) => {
       if (url.endsWith("/questions")) return Response.json({ questions });
@@ -1258,32 +1428,34 @@ describe("provider-neutral interaction adapters", () => {
       questions = [];
       throw new TypeError("connection reset");
     });
-    const request = (await provider.interactions!
-      .listPendingInteractions("session-1")).requests[0]!;
-    await expect(provider.interactions!.resolveInteraction(
-      "session-1",
-      request.id,
-      answerResolution(request),
-    )).resolves.toMatchObject({ result: "applied" });
+    const request = (await provider.interactions!.listPendingInteractions("session-1"))
+      .requests[0]!;
+    await expect(
+      provider.interactions!.resolveInteraction("session-1", request.id, answerResolution(request)),
+    ).resolves.toMatchObject({ result: "applied" });
     expect(writes).toBe(1);
 
-    const expiredQuestions = [{
-      id: "expired",
-      expiresAt: createdAt + 1,
-      questions: [{ question: "Too late", options: [] }],
-    }];
-    const expiredProvider = httpProvider((url) => Response.json(
-      url.endsWith("/questions")
-        ? { questions: expiredQuestions }
-        : { approvals: [] },
-    )).provider;
-    const expired = (await expiredProvider.interactions!
-      .listPendingInteractions("session-1")).requests[0]!;
-    await expect(expiredProvider.interactions!.resolveInteraction(
-      "session-1",
-      expired.id,
-      answerResolution(expired),
-    )).resolves.toMatchObject({ result: "stale" });
+    const expiredQuestions = [
+      {
+        id: "expired",
+        expiresAt: createdAt + 1,
+        questions: [{ question: "Too late", options: [] }],
+      },
+    ];
+    const expiredProvider = httpProvider((url) =>
+      Response.json(
+        url.endsWith("/questions") ? { questions: expiredQuestions } : { approvals: [] },
+      ),
+    ).provider;
+    const expired = (await expiredProvider.interactions!.listPendingInteractions("session-1"))
+      .requests[0]!;
+    await expect(
+      expiredProvider.interactions!.resolveInteraction(
+        "session-1",
+        expired.id,
+        answerResolution(expired),
+      ),
+    ).resolves.toMatchObject({ result: "stale" });
   });
 
   test("fails closed when HTTP interaction write reconciliation cannot prove application", async () => {
@@ -1308,13 +1480,15 @@ describe("provider-neutral interaction adapters", () => {
         if (!successfulWrite) throw new TypeError("connection reset");
         return Response.json({ status: "answered" });
       });
-      const request = (await provider.interactions!
-        .listPendingInteractions("session-1")).requests[0]!;
-      await expect(provider.interactions!.resolveInteraction(
-        "session-1",
-        request.id,
-        answerResolution(request),
-      )).resolves.toMatchObject({ result: "provider-unavailable" });
+      const request = (await provider.interactions!.listPendingInteractions("session-1"))
+        .requests[0]!;
+      await expect(
+        provider.interactions!.resolveInteraction(
+          "session-1",
+          request.id,
+          answerResolution(request),
+        ),
+      ).resolves.toMatchObject({ result: "provider-unavailable" });
     }
   });
 });

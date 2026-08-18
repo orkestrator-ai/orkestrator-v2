@@ -34,11 +34,15 @@ function loginShellPath(): string | null {
   const shell = process.env.SHELL;
   if (!shell) return null;
   try {
-    const output = execFileSync(shell, ["-ilc", "command -v node >/dev/null 2>&1; printf %s \"$PATH\""], {
-      encoding: "utf8",
-      timeout: 5_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    const output = execFileSync(
+      shell,
+      ["-ilc", 'command -v node >/dev/null 2>&1; printf %s "$PATH"'],
+      {
+        encoding: "utf8",
+        timeout: 5_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
     const value = output.trim();
     return value.length > 0 ? value : null;
   } catch {

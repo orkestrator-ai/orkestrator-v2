@@ -149,8 +149,7 @@ export async function reconcileInterruptedEnvironmentLifecycleTasks(
         // Repair older or partially written records while keeping the value
         // stable across later restarts.
         await storage.updateEnvironment(environment.id, {
-          deletionRequestedAt:
-            environment.lifecycleOperationStartedAt ?? new Date().toISOString(),
+          deletionRequestedAt: environment.lifecycleOperationStartedAt ?? new Date().toISOString(),
         });
       }
       deletionRecoveryEnvironmentIds.push(environment.id);

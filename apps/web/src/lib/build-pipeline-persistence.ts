@@ -10,9 +10,7 @@ import { parseStructuredReviewReport } from "@orkestrator/protocol/structured-re
 
 export { isBuildPipeline } from "@/stores/buildPipelineStore";
 
-type PipelineLoader = (
-  pipelineId: string,
-) => Promise<PersistedBuildPipeline<BuildPipeline> | null>;
+type PipelineLoader = (pipelineId: string) => Promise<PersistedBuildPipeline<BuildPipeline> | null>;
 type PipelineListLoader = (
   projectId: string,
 ) => Promise<Array<PersistedBuildPipeline<BuildPipeline>>>;
@@ -55,30 +53,27 @@ function normalizeStructuredReview(value: unknown): unknown {
   try {
     return {
       ...pipeline,
-      structuredReview: parseStructuredReviewReport(
-        pipeline.structuredReview,
-        { allowLegacyTestResults: true },
-      ),
+      structuredReview: parseStructuredReviewReport(pipeline.structuredReview, {
+        allowLegacyTestResults: true,
+      }),
     };
   } catch {
     return value;
   }
 }
 
-function toSnapshot(
-  persisted: PersistedBuildPipeline<BuildPipeline>,
-): BuildPipeline | null {
+function toSnapshot(persisted: PersistedBuildPipeline<BuildPipeline>): BuildPipeline | null {
   const snapshot = normalizeStructuredReview(persisted.snapshot);
   if (
-    persisted.version !== BUILD_PIPELINE_VERSION
-    || !Number.isSafeInteger(persisted.revision)
-    || persisted.revision < 1
-    || typeof persisted.updatedAt !== "string"
-    || !Number.isFinite(Date.parse(persisted.updatedAt))
-    || !isBuildPipeline(snapshot)
-    || snapshot.id !== persisted.id
-    || snapshot.projectId !== persisted.projectId
-    || snapshot.environmentId !== persisted.environmentId
+    persisted.version !== BUILD_PIPELINE_VERSION ||
+    !Number.isSafeInteger(persisted.revision) ||
+    persisted.revision < 1 ||
+    typeof persisted.updatedAt !== "string" ||
+    !Number.isFinite(Date.parse(persisted.updatedAt)) ||
+    !isBuildPipeline(snapshot) ||
+    snapshot.id !== persisted.id ||
+    snapshot.projectId !== persisted.projectId ||
+    snapshot.environmentId !== persisted.environmentId
   ) {
     return null;
   }
@@ -108,43 +103,37 @@ export async function hydrateBuildPipeline(
         pipelineId,
         localBefore?.backendRevision,
         localBefore
-          ? Object.fromEntries(localBefore.sessions.map((session) => [
-              session.sessionKey,
-              {
-                revision: session.messageRevision ?? 0,
-                count: session.messages?.length ?? 0,
-              },
-            ]))
+          ? Object.fromEntries(
+              localBefore.sessions.map((session) => [
+                session.sessionKey,
+                {
+                  revision: session.messageRevision ?? 0,
+                  count: session.messages?.length ?? 0,
+                },
+              ]),
+            )
           : undefined,
       );
-  if (
-    loaded
-    && "unchanged" in loaded
-    && loaded.unchanged
-  ) {
+  if (loaded && "unchanged" in loaded && loaded.unchanged) {
     return useBuildPipelineStore.getState().pipelines.get(pipelineId) ?? null;
   }
   let persisted: PersistedBuildPipeline<BuildPipeline> | null;
-  if (
-    loaded
-    && "unchanged" in loaded
-    && loaded.unchanged === false
-  ) {
+  if (loaded && "unchanged" in loaded && loaded.unchanged === false) {
     const snapshot = loaded.record.snapshot;
     const localSessions = new Map(
       localBefore?.sessions.map((session) => [session.sessionKey, session]) ?? [],
     );
-    const patches = new Map(
-      loaded.messagePatches.map((patch) => [patch.sessionKey, patch]),
-    );
+    const patches = new Map(loaded.messagePatches.map((patch) => [patch.sessionKey, patch]));
     const invalidPatch = loaded.messagePatches.some((patch) => {
       if (patch.startIndex === 0) return false;
       const local = localSessions.get(patch.sessionKey);
-      return !local
-        || patch.baseRevision !== (local.messageRevision ?? 0)
-        || patch.baseCount !== (local.messages?.length ?? 0)
-        || patch.startIndex < 0
-        || patch.startIndex > (local.messages?.length ?? 0);
+      return (
+        !local ||
+        patch.baseRevision !== (local.messageRevision ?? 0) ||
+        patch.baseCount !== (local.messages?.length ?? 0) ||
+        patch.startIndex < 0 ||
+        patch.startIndex > (local.messages?.length ?? 0)
+      );
     });
     if (invalidPatch) {
       persisted = await backend.getBuildPipeline<BuildPipeline>(pipelineId);
@@ -157,16 +146,14 @@ export async function hydrateBuildPipeline(
             const patch = patches.get(session.sessionKey);
             const local = localSessions.get(session.sessionKey);
             if (!patch) return { ...session, messages: local?.messages };
-            const canApply = local
-              && patch.baseRevision === (local.messageRevision ?? 0)
-              && patch.baseCount === (local.messages?.length ?? 0)
-              && patch.startIndex >= 0
-              && patch.startIndex <= (local.messages?.length ?? 0);
+            const canApply =
+              local &&
+              patch.baseRevision === (local.messageRevision ?? 0) &&
+              patch.baseCount === (local.messages?.length ?? 0) &&
+              patch.startIndex >= 0 &&
+              patch.startIndex <= (local.messages?.length ?? 0);
             const messages = canApply
-              ? [
-                  ...(local.messages ?? []).slice(0, patch.startIndex),
-                  ...patch.messages,
-                ]
+              ? [...(local.messages ?? []).slice(0, patch.startIndex), ...patch.messages]
               : patch.startIndex === 0
                 ? patch.messages
                 : undefined;
@@ -218,23 +205,20 @@ export async function hydrateBuildPipelinesForProject(
     generation,
     MAX_PROJECT_HYDRATION_MARKERS,
   );
-  const localBefore = Array.from(useBuildPipelineStore.getState().pipelines.values())
-    .filter((pipeline) => pipeline.projectId === projectId);
+  const localBefore = Array.from(useBuildPipelineStore.getState().pipelines.values()).filter(
+    (pipeline) => pipeline.projectId === projectId,
+  );
   const conditional = list
     ? null
     : await backend.listBuildPipelinesConditional<BuildPipeline>(
         projectId,
-        Object.fromEntries(localBefore.map((pipeline) => [
-          pipeline.id,
-          pipeline.backendRevision,
-        ])),
+        Object.fromEntries(localBefore.map((pipeline) => [pipeline.id, pipeline.backendRevision])),
       );
-  const persisted = list
-    ? await list(projectId)
-    : conditional!.records;
+  const persisted = list ? await list(projectId) : conditional!.records;
   if (projectHydrationGenerations.get(projectId) !== generation) {
-    return Array.from(useBuildPipelineStore.getState().pipelines.values())
-      .filter((pipeline) => pipeline.projectId === projectId);
+    return Array.from(useBuildPipelineStore.getState().pipelines.values()).filter(
+      (pipeline) => pipeline.projectId === projectId,
+    );
   }
   if (!Array.isArray(persisted)) return [];
   const restored: BuildPipeline[] = [];
@@ -286,8 +270,9 @@ export interface LegacyBuildPipelineMigrationResult {
  * transient backend failure is safely retried on the next launch.
  */
 export async function migrateLegacyBuildPipelines(
-  storage: Pick<Storage, "getItem" | "removeItem"> | undefined =
-    typeof localStorage === "undefined" ? undefined : localStorage,
+  storage: Pick<Storage, "getItem" | "removeItem"> | undefined = typeof localStorage === "undefined"
+    ? undefined
+    : localStorage,
   importLegacy: LegacyPipelineImporter = backend.importLegacyBuildPipelines,
   load: PipelineLoader = backend.getBuildPipeline,
 ): Promise<LegacyBuildPipelineMigrationResult> {
@@ -323,19 +308,15 @@ export async function migrateLegacyBuildPipelines(
 
   const legacyVersion = (parsed as { version?: unknown }).version;
   if (
-    legacyVersion !== undefined
-    && (
-      !Number.isSafeInteger(legacyVersion)
-      || (legacyVersion as number) < 0
-      || (legacyVersion as number) > LEGACY_BUILD_PIPELINE_MAX_VERSION
-    )
+    legacyVersion !== undefined &&
+    (!Number.isSafeInteger(legacyVersion) ||
+      (legacyVersion as number) < 0 ||
+      (legacyVersion as number) > LEGACY_BUILD_PIPELINE_MAX_VERSION)
   ) {
     return {
       ...empty,
       skipped: 1,
-      ...(typeof legacyVersion === "number"
-        ? { unsupportedVersion: legacyVersion }
-        : {}),
+      ...(typeof legacyVersion === "number" ? { unsupportedVersion: legacyVersion } : {}),
     };
   }
 
@@ -351,14 +332,14 @@ export async function migrateLegacyBuildPipelines(
     }
     const [id, value] = entry;
     if (
-      typeof id !== "string"
-      || id.length === 0
-      || !value
-      || typeof value !== "object"
-      || Array.isArray(value)
-      || (value as { id?: unknown }).id !== id
-      || typeof (value as { projectId?: unknown }).projectId !== "string"
-      || (value as { projectId: string }).projectId.length === 0
+      typeof id !== "string" ||
+      id.length === 0 ||
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value) ||
+      (value as { id?: unknown }).id !== id ||
+      typeof (value as { projectId?: unknown }).projectId !== "string" ||
+      (value as { projectId: string }).projectId.length === 0
     ) {
       skipped += 1;
       continue;

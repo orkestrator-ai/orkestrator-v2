@@ -20,20 +20,14 @@ mock.module("@/lib/resource-sync", () => ({
 
 import { useEnvironmentListSync } from "../../../apps/web/src/hooks/useEnvironmentListSync";
 
-const {
-  dispatchResourceChange,
-  requestResourceResync,
-  resetResourceSync,
-} = realResourceSyncSnapshot;
+const { dispatchResourceChange, requestResourceResync, resetResourceSync } =
+  realResourceSyncSnapshot;
 
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
 
 /** Drives one `environment` announcement past the dispatcher's coalescing window. */
-async function announceEnvironmentChange(
-  revision = 1,
-  projectId?: string,
-): Promise<void> {
+async function announceEnvironmentChange(revision = 1, projectId?: string): Promise<void> {
   await act(async () => {
     dispatchResourceChange({
       resource: "environment",
@@ -45,13 +39,9 @@ async function announceEnvironmentChange(
   });
 }
 
-async function deliverResync(
-  request: realResourceSync.ResourceResyncRequest,
-): Promise<void> {
+async function deliverResync(request: realResourceSync.ResourceResyncRequest): Promise<void> {
   await act(async () => {
-    await Promise.all(
-      [...capturedResyncHandlers].map((handler) => handler(request)),
-    );
+    await Promise.all([...capturedResyncHandlers].map((handler) => handler(request)));
   });
 }
 
@@ -70,7 +60,7 @@ describe("useEnvironmentListSync", () => {
   test("does not register its own interval (resource-sync owns the periodic resync)", () => {
     // The hook used to run a second 60s interval on top of resource-sync's own
     // resync timer, refreshing every project twice per tick.
-    const setIntervalMock = mock(((() => 1) as unknown) as typeof setInterval);
+    const setIntervalMock = mock((() => 1) as unknown as typeof setInterval);
     globalThis.setInterval = setIntervalMock as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
@@ -107,7 +97,8 @@ describe("useEnvironmentListSync", () => {
     });
     expect(firstRefreshProject).toHaveBeenCalledTimes(1);
     expect(nextRefreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
-      "project-1", "project-2",
+      "project-1",
+      "project-2",
     ]);
 
     unmount();
@@ -120,7 +111,7 @@ describe("useEnvironmentListSync", () => {
 
   test("refreshes when the backend announces an environment change", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
@@ -128,35 +119,27 @@ describe("useEnvironmentListSync", () => {
     await announceEnvironmentChange();
 
     expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
-      "project-1", "project-2",
-    ]);
-  });
-
-  test("refreshes only the announced project and ignores unloaded projects", async () => {
-    const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => Promise.resolve(),
-    );
-    renderHook(() =>
-      useEnvironmentListSync(["project-1", "project-2"], refreshProject)
-    );
-
-    await announceEnvironmentChange(1, "project-2");
-    await announceEnvironmentChange(2, "project-not-loaded");
-
-    expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
+      "project-1",
       "project-2",
     ]);
   });
 
+  test("refreshes only the announced project and ignores unloaded projects", async () => {
+    const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
+    renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
+
+    await announceEnvironmentChange(1, "project-2");
+    await announceEnvironmentChange(2, "project-not-loaded");
+
+    expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual(["project-2"]);
+  });
+
   test("refreshes every current project after reconnect or revision-gap recovery", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    renderHook(() => useEnvironmentListSync(
-      ["project-1", "project-2"],
-      refreshProject,
-    ));
+    renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
 
     await act(async () => {
       requestResourceResync();
@@ -170,9 +153,7 @@ describe("useEnvironmentListSync", () => {
   });
 
   test("ignores manifest and irrelevant selective resync requests", async () => {
-    const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => Promise.resolve(),
-    );
+    const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
     renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
 
     await deliverResync({
@@ -188,13 +169,8 @@ describe("useEnvironmentListSync", () => {
   });
 
   test("handles a relevant selective explicit resync request", async () => {
-    const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => Promise.resolve(),
-    );
-    renderHook(() => useEnvironmentListSync(
-      ["project-1", "project-2"],
-      refreshProject,
-    ));
+    const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
+    renderHook(() => useEnvironmentListSync(["project-1", "project-2"], refreshProject));
 
     await deliverResync({
       resources: new Set(["environment"]),
@@ -209,7 +185,7 @@ describe("useEnvironmentListSync", () => {
 
   test("coalesces an announcement burst into a single refresh per project", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
@@ -227,7 +203,7 @@ describe("useEnvironmentListSync", () => {
 
   test("stops refreshing after unmount", async () => {
     const refreshProject = mock<(projectId: string) => Promise<void>>(() => Promise.resolve());
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     const { unmount } = renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
@@ -241,14 +217,15 @@ describe("useEnvironmentListSync", () => {
   test("does not run a queued follow-up after unmounting during an in-flight refresh", async () => {
     let finishRefresh: (() => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
     );
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
-    const { unmount } = renderHook(() =>
-      useEnvironmentListSync(["project-1"], refreshProject)
-    );
+    const { unmount } = renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
     await announceEnvironmentChange(1);
     await announceEnvironmentChange(2);
     expect(refreshProject).toHaveBeenCalledTimes(1);
@@ -265,9 +242,12 @@ describe("useEnvironmentListSync", () => {
   test("does not re-run a removed project after its in-flight refresh settles", async () => {
     let finishRefresh: (() => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
     );
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     const hook = renderHook(
@@ -301,11 +281,11 @@ describe("useEnvironmentListSync", () => {
 
   test("isolates in-flight work per project so one stalled refresh does not block others", async () => {
     let finishRefresh: (() => void) | undefined;
-    const refreshProject = mock<(projectId: string) => Promise<void>>(
-      (projectId) => projectId === "project-1"
+    const refreshProject = mock<(projectId: string) => Promise<void>>((projectId) =>
+      projectId === "project-1"
         ? new Promise<void>((resolve) => {
-          finishRefresh = resolve;
-        })
+            finishRefresh = resolve;
+          })
         : Promise.resolve(),
     );
 
@@ -321,7 +301,9 @@ describe("useEnvironmentListSync", () => {
       requestResourceResync();
     });
     expect(refreshProject.mock.calls.map(([projectId]) => projectId)).toEqual([
-      "project-1", "project-2", "project-2",
+      "project-1",
+      "project-2",
+      "project-2",
     ]);
 
     await act(async () => {
@@ -332,7 +314,9 @@ describe("useEnvironmentListSync", () => {
       requestResourceResync();
       await Promise.resolve();
     });
-    expect(refreshProject.mock.calls.filter(([projectId]) => projectId === "project-1")).toHaveLength(2);
+    expect(
+      refreshProject.mock.calls.filter(([projectId]) => projectId === "project-1"),
+    ).toHaveLength(2);
   });
 
   test("re-runs a project whose refresh was requested while one was in flight", async () => {
@@ -341,9 +325,12 @@ describe("useEnvironmentListSync", () => {
     // list stale until the next slow manifest resync.
     let finishRefresh: (() => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
     );
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
@@ -366,9 +353,12 @@ describe("useEnvironmentListSync", () => {
   test("collapses many requests arriving during one read into a single follow-up", async () => {
     let finishRefresh: (() => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
     );
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
@@ -392,9 +382,12 @@ describe("useEnvironmentListSync", () => {
   test("does not re-run when nothing was requested during the read", async () => {
     let finishRefresh: (() => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => new Promise<void>((resolve) => { finishRefresh = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
     );
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));
@@ -411,9 +404,12 @@ describe("useEnvironmentListSync", () => {
   test("still re-runs when the in-flight refresh rejects", async () => {
     let failRefresh: ((error: Error) => void) | undefined;
     const refreshProject = mock<(projectId: string) => Promise<void>>(
-      () => new Promise<void>((_resolve, reject) => { failRefresh = reject; }),
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failRefresh = reject;
+        }),
     );
-    globalThis.setInterval = ((() => 1) as unknown) as typeof setInterval;
+    globalThis.setInterval = (() => 1) as unknown as typeof setInterval;
     globalThis.clearInterval = mock(() => {}) as typeof clearInterval;
 
     renderHook(() => useEnvironmentListSync(["project-1"], refreshProject));

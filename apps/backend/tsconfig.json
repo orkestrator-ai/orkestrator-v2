@@ -16,11 +16,6 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": [
-    "src/**/*.ts",
-    "src/core/**/*.ts",
-    "src/gateway.ts",
-    "scripts/**/*.ts"
-  ],
+  "include": ["src/**/*.ts", "src/core/**/*.ts", "src/gateway.ts", "scripts/**/*.ts"],
   "exclude": []
 }

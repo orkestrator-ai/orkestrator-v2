@@ -1,17 +1,6 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { invoke } from "@/lib/native/backend";
-import {
-  DEFAULT_TERMINAL_APPEARANCE,
-  DEFAULT_TERMINAL_SCROLLBACK,
-} from "@/constants/terminal";
+import { DEFAULT_TERMINAL_APPEARANCE, DEFAULT_TERMINAL_SCROLLBACK } from "@/constants/terminal";
 import {
   TERMINAL_BROWSER_TAB_REQUEST_EVENT,
   type TerminalBrowserTabRequest,
@@ -53,8 +42,7 @@ function createTerminal(
   return useTerminalPortalStore.getState().createTerminal({
     tabId,
     environmentId,
-    containerId:
-      options.containerId === undefined ? "container-1" : options.containerId,
+    containerId: options.containerId === undefined ? "container-1" : options.containerId,
     appearance: options.appearance,
     scrollback: options.scrollback,
   });
@@ -86,31 +74,17 @@ describe("terminal creation and lookup", () => {
     const otherEnvironment = document.createElement("div");
 
     useTerminalPortalStore.getState().registerPaneHost("env-a", "pane-1", first);
-    useTerminalPortalStore.getState().registerPaneHost(
-      "env-b",
-      "pane-1",
-      otherEnvironment,
-    );
-    useTerminalPortalStore.getState().registerPaneHost(
-      "env-a",
-      "pane-1",
-      replacement,
-    );
+    useTerminalPortalStore.getState().registerPaneHost("env-b", "pane-1", otherEnvironment);
+    useTerminalPortalStore.getState().registerPaneHost("env-a", "pane-1", replacement);
 
-    expect(useTerminalPortalStore.getState().getPaneHost("env-a", "pane-1")).toBe(
-      replacement,
-    );
-    expect(useTerminalPortalStore.getState().getPaneHost("env-b", "pane-1")).toBe(
-      otherEnvironment,
-    );
+    expect(useTerminalPortalStore.getState().getPaneHost("env-a", "pane-1")).toBe(replacement);
+    expect(useTerminalPortalStore.getState().getPaneHost("env-b", "pane-1")).toBe(otherEnvironment);
     expect(useTerminalPortalStore.getState().getPaneHost("env-a", "missing")).toBeUndefined();
 
     useTerminalPortalStore.getState().unregisterPaneHost("env-a", "missing");
     useTerminalPortalStore.getState().unregisterPaneHost("env-a", "pane-1");
     expect(useTerminalPortalStore.getState().getPaneHost("env-a", "pane-1")).toBeUndefined();
-    expect(useTerminalPortalStore.getState().getPaneHost("env-b", "pane-1")).toBe(
-      otherEnvironment,
-    );
+    expect(useTerminalPortalStore.getState().getPaneHost("env-b", "pane-1")).toBe(otherEnvironment);
   });
 
   test("creates a terminal with default settings and all addons", () => {
@@ -135,9 +109,7 @@ describe("terminal creation and lookup", () => {
     expect(data.fitAddon).toBeDefined();
     expect(data.serializeAddon).toBeDefined();
     expect(data.webLinksAddon).toBeDefined();
-    expect(data.portalElement.className).toBe(
-      "absolute inset-0 pointer-events-auto",
-    );
+    expect(data.portalElement.className).toBe("absolute inset-0 pointer-events-auto");
   });
 
   test("preserves custom settings, falls back for invalid scrollback, and deduplicates keys", () => {
@@ -164,9 +136,7 @@ describe("terminal creation and lookup", () => {
     expect(custom.terminal.options.theme?.background).toBe("#123456");
     expect(custom.terminal.options.scrollback).toBe(4321);
     expect(custom.containerId).toBeNull();
-    expect(invalidScrollback.terminal.options.scrollback).toBe(
-      DEFAULT_TERMINAL_SCROLLBACK,
-    );
+    expect(invalidScrollback.terminal.options.scrollback).toBe(DEFAULT_TERMINAL_SCROLLBACK);
     expect(duplicate).toBe(custom);
     expect(useTerminalPortalStore.getState().terminals.size).toBe(2);
   });
@@ -200,11 +170,13 @@ describe("terminal web link routing", () => {
       window.removeEventListener(TERMINAL_BROWSER_TAB_REQUEST_EVENT, listener);
     }
 
-    expect(requests).toEqual([{
-      environmentId: "source-env",
-      sourceTabId: "source-tab",
-      url: "https://example.com/internal?q=1",
-    }]);
+    expect(requests).toEqual([
+      {
+        environmentId: "source-env",
+        sourceTabId: "source-tab",
+        url: "https://example.com/internal?q=1",
+      },
+    ]);
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
@@ -248,15 +220,9 @@ describe("terminal web link routing", () => {
     invokeMock.mockRejectedValueOnce(error);
 
     try {
-      webLinkHandler(createTerminal())(
-        linkEvent({ ctrlKey: true }),
-        "https://example.com/failure",
-      );
+      webLinkHandler(createTerminal())(linkEvent({ ctrlKey: true }), "https://example.com/failure");
       await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(consoleError).toHaveBeenCalledWith(
-        "[terminalPortalStore] Failed to open URL:",
-        error,
-      );
+      expect(consoleError).toHaveBeenCalledWith("[terminalPortalStore] Failed to open URL:", error);
     } finally {
       consoleError.mockRestore();
     }
@@ -352,9 +318,7 @@ describe("terminal lifecycle mutations", () => {
 
 describe("terminal recreation", () => {
   test("returns null when the terminal does not exist", () => {
-    expect(
-      useTerminalPortalStore.getState().recreateTerminal("missing", "missing"),
-    ).toBeNull();
+    expect(useTerminalPortalStore.getState().recreateTerminal("missing", "missing")).toBeNull();
   });
 
   test("disposes the old terminal, removes its portal, and preserves settings and identity", () => {
@@ -367,26 +331,19 @@ describe("terminal recreation", () => {
       },
       scrollback: 9876,
     });
-    useTerminalPortalStore.getState().setTerminalPane(
-      "env-custom",
-      "tab-custom",
-      "pane-custom",
-    );
+    useTerminalPortalStore.getState().setTerminalPane("env-custom", "tab-custom", "pane-custom");
     useTerminalPortalStore.getState().markTerminalOpened("env-custom", "tab-custom");
-    useTerminalPortalStore.getState().setTerminalContainer(
-      "env-custom",
-      "tab-custom",
-      document.createElement("div"),
-    );
+    useTerminalPortalStore
+      .getState()
+      .setTerminalContainer("env-custom", "tab-custom", document.createElement("div"));
     const oldDispose = mock(() => undefined);
     old.terminal.dispose = oldDispose;
     const parent = document.createElement("div");
     parent.appendChild(old.portalElement);
 
-    const recreated = useTerminalPortalStore.getState().recreateTerminal(
-      "env-custom",
-      "tab-custom",
-    );
+    const recreated = useTerminalPortalStore
+      .getState()
+      .recreateTerminal("env-custom", "tab-custom");
 
     expect(recreated).not.toBeNull();
     if (!recreated) {
@@ -408,12 +365,10 @@ describe("terminal recreation", () => {
     expect(recreated.terminal.options.fontSize).toBe(19);
     expect(recreated.terminal.options.theme?.background).toBe("#102030");
     expect(recreated.terminal.options.scrollback).toBe(9876);
-    expect(recreated.portalElement.className).toBe(
-      "absolute inset-0 pointer-events-auto",
+    expect(recreated.portalElement.className).toBe("absolute inset-0 pointer-events-auto");
+    expect(useTerminalPortalStore.getState().getTerminal("env-custom", "tab-custom")).toBe(
+      recreated,
     );
-    expect(
-      useTerminalPortalStore.getState().getTerminal("env-custom", "tab-custom"),
-    ).toBe(recreated);
   });
 
   test("continues recreation when disposal throws and restores default settings for missing options", () => {
@@ -428,24 +383,17 @@ describe("terminal recreation", () => {
     old.terminal.options.theme = undefined;
     old.terminal.options.scrollback = undefined;
 
-    const recreated = useTerminalPortalStore.getState().recreateTerminal(
-      "env-error",
-      "tab-error",
-    );
+    const recreated = useTerminalPortalStore.getState().recreateTerminal("env-error", "tab-error");
 
     expect(recreated).not.toBeNull();
     expect(recreated?.containerId).toBeNull();
     expect(recreated?.terminal.options.fontFamily).toStartWith(
       `"${DEFAULT_TERMINAL_APPEARANCE.fontFamily}"`,
     );
-    expect(recreated?.terminal.options.fontSize).toBe(
-      DEFAULT_TERMINAL_APPEARANCE.fontSize,
-    );
+    expect(recreated?.terminal.options.fontSize).toBe(DEFAULT_TERMINAL_APPEARANCE.fontSize);
     expect(recreated?.terminal.options.theme?.background).toBe(
       DEFAULT_TERMINAL_APPEARANCE.backgroundColor,
     );
-    expect(recreated?.terminal.options.scrollback).toBe(
-      DEFAULT_TERMINAL_SCROLLBACK,
-    );
+    expect(recreated?.terminal.options.scrollback).toBe(DEFAULT_TERMINAL_SCROLLBACK);
   });
 });

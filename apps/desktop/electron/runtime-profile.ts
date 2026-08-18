@@ -67,9 +67,23 @@ export type RuntimeStatusManifest = {
 };
 
 const RUNTIME_STATUS_KEYS = new Set([
-  "version", "status", "profile", "flavor", "dataDir", "testProject", "electronTitle",
-  "rendererUrl", "browserUrl", "authFile", "logDir", "statusPath", "startedAt",
-  "updatedAt", "error", "pids", "processStartTimes",
+  "version",
+  "status",
+  "profile",
+  "flavor",
+  "dataDir",
+  "testProject",
+  "electronTitle",
+  "rendererUrl",
+  "browserUrl",
+  "authFile",
+  "logDir",
+  "statusPath",
+  "startedAt",
+  "updatedAt",
+  "error",
+  "pids",
+  "processStartTimes",
 ]);
 
 export function parseRuntimeStatusManifest(value: unknown): RuntimeStatusManifest {
@@ -78,16 +92,19 @@ export function parseRuntimeStatusManifest(value: unknown): RuntimeStatusManifes
   }
   const candidate = value as Record<string, unknown>;
   for (const key of Object.keys(candidate)) {
-    if (!RUNTIME_STATUS_KEYS.has(key)) throw new Error(`Runtime status contains unsupported field: ${key}`);
+    if (!RUNTIME_STATUS_KEYS.has(key))
+      throw new Error(`Runtime status contains unsupported field: ${key}`);
   }
-  if (candidate.version !== 1
-    || !["starting", "ready", "stopping", "stopped", "failed"].includes(String(candidate.status))
-    || typeof candidate.profile !== "string"
-    || typeof candidate.statusPath !== "string"
-    || typeof candidate.pids !== "object"
-    || candidate.pids === null
-    || typeof candidate.processStartTimes !== "object"
-    || candidate.processStartTimes === null) {
+  if (
+    candidate.version !== 1 ||
+    !["starting", "ready", "stopping", "stopped", "failed"].includes(String(candidate.status)) ||
+    typeof candidate.profile !== "string" ||
+    typeof candidate.statusPath !== "string" ||
+    typeof candidate.pids !== "object" ||
+    candidate.pids === null ||
+    typeof candidate.processStartTimes !== "object" ||
+    candidate.processStartTimes === null
+  ) {
     throw new Error("Runtime status format is invalid");
   }
   return candidate as RuntimeStatusManifest;
@@ -212,9 +229,20 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile {
     throw new Error("Unsupported runtime profile format");
   }
   const requiredStrings: Array<keyof RuntimeProfile> = [
-    "id", "displayName", "repositoryRoot", "profileRoot", "dataDir", "runtimeDir",
-    "worktreeDir", "logDir", "fixtureDir", "dockerOwner", "dockerImage",
-    "rendererHost", "gatewayHost", "electronTitle",
+    "id",
+    "displayName",
+    "repositoryRoot",
+    "profileRoot",
+    "dataDir",
+    "runtimeDir",
+    "worktreeDir",
+    "logDir",
+    "fixtureDir",
+    "dockerOwner",
+    "dockerImage",
+    "rendererHost",
+    "gatewayHost",
+    "electronTitle",
   ];
   for (const key of requiredStrings) {
     if (typeof candidate[key] !== "string" || !(candidate[key] as string).trim()) {
@@ -229,12 +257,18 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile {
     throw new Error("Development profiles must bind only to 127.0.0.1");
   }
   for (const key of ["rendererPort", "gatewayPort"] as const) {
-    if (!Number.isInteger(candidate[key]) || (candidate[key] ?? -1) < 0 || (candidate[key] ?? 65536) > 65535) {
+    if (
+      !Number.isInteger(candidate[key]) ||
+      (candidate[key] ?? -1) < 0 ||
+      (candidate[key] ?? 65536) > 65535
+    ) {
       throw new Error(`Runtime profile ${key} is invalid`);
     }
   }
-  if (!Array.isArray(candidate.credentialSources)
-    || candidate.credentialSources.some((entry) => !isAgentPlatform(entry))) {
+  if (
+    !Array.isArray(candidate.credentialSources) ||
+    candidate.credentialSources.some((entry) => !isAgentPlatform(entry))
+  ) {
     throw new Error("Runtime profile credentialSources is invalid");
   }
   if (candidate.agentPlatforms === undefined) {
@@ -243,14 +277,25 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile {
     // parse, and `dev:stop`/`dev:reset` would fall back to a profile rebuilt
     // from arguments rather than the one actually on disk.
     candidate.agentPlatforms = [];
-  } else if (!Array.isArray(candidate.agentPlatforms)
-    || candidate.agentPlatforms.some((entry) => !isAgentPlatform(entry))) {
+  } else if (
+    !Array.isArray(candidate.agentPlatforms) ||
+    candidate.agentPlatforms.some((entry) => !isAgentPlatform(entry))
+  ) {
     throw new Error("Runtime profile agentPlatforms is invalid");
   }
   const parsed = candidate as RuntimeProfile;
-  assertProfileIsolatedFromProduction(parsed.profileRoot, defaultRuntimeProfileRoots().productionDataDir);
+  assertProfileIsolatedFromProduction(
+    parsed.profileRoot,
+    defaultRuntimeProfileRoots().productionDataDir,
+  );
   const expectedRoot = path.resolve(parsed.profileRoot);
-  for (const child of [parsed.dataDir, parsed.runtimeDir, parsed.worktreeDir, parsed.logDir, parsed.fixtureDir]) {
+  for (const child of [
+    parsed.dataDir,
+    parsed.runtimeDir,
+    parsed.worktreeDir,
+    parsed.logDir,
+    parsed.fixtureDir,
+  ]) {
     if (!isSameOrInside(child, expectedRoot) || path.resolve(child) === expectedRoot) {
       throw new Error("Runtime profile paths must be children of profileRoot");
     }
@@ -262,7 +307,9 @@ export function loadRuntimeProfileSync(filePath: string): RuntimeProfile {
   return parseRuntimeProfile(JSON.parse(readFileSync(filePath, "utf8")) as unknown);
 }
 
-export function runtimeProfileFromEnvironment(env: NodeJS.ProcessEnv = process.env): RuntimeProfile | null {
+export function runtimeProfileFromEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+): RuntimeProfile | null {
   const filePath = env.ORKESTRATOR_RUNTIME_PROFILE_FILE?.trim();
   if (!filePath) return null;
   if (!existsSync(filePath)) throw new Error(`Runtime profile does not exist: ${filePath}`);
@@ -288,12 +335,19 @@ export function assertSafeProfileResetTarget(options: {
     path.resolve(options.repositoryRoot ?? options.profile.repositoryRoot),
     path.resolve(roots.developmentRoot),
   ];
-  if (forbidden.includes(target)) throw new Error(`Refusing unsafe profile reset target: ${target}`);
+  if (forbidden.includes(target))
+    throw new Error(`Refusing unsafe profile reset target: ${target}`);
   if (!isSameOrInside(target, path.join(path.resolve(roots.developmentRoot), "profiles"))) {
     throw new Error("Refusing profile reset outside the development profiles root");
   }
   const sentinel = options.sentinel as { version?: unknown; profile?: unknown } | null;
-  if (!sentinel || sentinel.version !== DEV_PROFILE_FORMAT_VERSION || sentinel.profile !== options.profile.id) {
-    throw new Error("Development profile sentinel is missing or does not match the selected profile");
+  if (
+    !sentinel ||
+    sentinel.version !== DEV_PROFILE_FORMAT_VERSION ||
+    sentinel.profile !== options.profile.id
+  ) {
+    throw new Error(
+      "Development profile sentinel is missing or does not match the selected profile",
+    );
   }
 }

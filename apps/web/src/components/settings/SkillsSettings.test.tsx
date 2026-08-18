@@ -23,13 +23,19 @@ mock.module("@/lib/native/backend", () => ({
     invokeCalls.push({ command, args });
     if (command === "list_agent_skills") {
       if (listOverride) return listOverride(String(args?.provider));
-      return Promise.resolve(skillScans[String(args?.provider)] ?? emptyScan(String(args?.provider)));
+      return Promise.resolve(
+        skillScans[String(args?.provider)] ?? emptyScan(String(args?.provider)),
+      );
     }
     if (command === "read_agent_skill") {
       if (failReadWith) return Promise.reject(new Error(failReadWith));
       if (readOverride) return readOverride(String(args?.provider), String(args?.filePath));
       return Promise.resolve(
-        skillFiles[String(args?.filePath)] ?? { path: args?.filePath, content: "", truncated: false },
+        skillFiles[String(args?.filePath)] ?? {
+          path: args?.filePath,
+          content: "",
+          truncated: false,
+        },
       );
     }
     if (command === "reveal_in_file_manager" && failRevealWith) {
@@ -60,8 +66,7 @@ function deferred<T>() {
 
 describe("stripFrontmatter", () => {
   test("removes a YAML block that remark would otherwise render as a heading", () => {
-    expect(stripFrontmatter("---\nname: a\ndescription: b\n---\n\n# Body"))
-      .toBe("\n# Body");
+    expect(stripFrontmatter("---\nname: a\ndescription: b\n---\n\n# Body")).toBe("\n# Body");
   });
 
   test("leaves a document without frontmatter untouched", () => {
@@ -69,13 +74,11 @@ describe("stripFrontmatter", () => {
   });
 
   test("does not eat a horizontal rule further down the document", () => {
-    expect(stripFrontmatter("---\nname: a\n---\n\nOne\n\n---\n\nTwo"))
-      .toBe("\nOne\n\n---\n\nTwo");
+    expect(stripFrontmatter("---\nname: a\n---\n\nOne\n\n---\n\nTwo")).toBe("\nOne\n\n---\n\nTwo");
   });
 
   test("supports a BOM, CRLF line endings, and the YAML document-end marker", () => {
-    expect(stripFrontmatter("﻿---\r\nname: a\r\n...\r\n# Body"))
-      .toBe("# Body");
+    expect(stripFrontmatter("﻿---\r\nname: a\r\n...\r\n# Body")).toBe("# Body");
   });
 
   test("tolerates trailing whitespace on the opening fence", () => {
@@ -157,9 +160,11 @@ function listText() {
  * matcher on a happy-dom node serializes the whole tree.
  */
 function footerText() {
-  const nodes = Array.from(document.querySelectorAll("div")).filter((node) =>
-    node.childElementCount === 0
-    && /directories present|Scanning…|Scan failed/.test(node.textContent ?? ""));
+  const nodes = Array.from(document.querySelectorAll("div")).filter(
+    (node) =>
+      node.childElementCount === 0 &&
+      /directories present|Scanning…|Scan failed/.test(node.textContent ?? ""),
+  );
   if (nodes.length !== 1) return `<${nodes.length} footer nodes>`;
   return nodes[0]!.textContent!.replace(/\s+/g, " ").trim();
 }
@@ -170,7 +175,11 @@ describe("SkillsSettings", () => {
 
     render(<SkillsSettings />);
 
-    await waitFor(() => expect(screen.getByText("No skills found in any of this agent's skill directories.")).toBeTruthy());
+    await waitFor(() =>
+      expect(
+        screen.getByText("No skills found in any of this agent's skill directories."),
+      ).toBeTruthy(),
+    );
     expect(footerText()).toBe("0 skills · 0 of 0 directories present");
     expect(screen.queryByRole("alert") === null).toBe(true);
   });
@@ -192,10 +201,12 @@ describe("SkillsSettings", () => {
       render(<SkillsSettings />);
 
       await waitFor(() =>
-        expect(screen.getByText("The backend returned an unreadable skill catalogue")).toBeTruthy());
+        expect(screen.getByText("The backend returned an unreadable skill catalogue")).toBeTruthy(),
+      );
       expect(footerText()).toBe("Scan failed");
-      expect(screen.queryByText("No skills found in any of this agent's skill directories.") === null)
-        .toBe(true);
+      expect(
+        screen.queryByText("No skills found in any of this agent's skill directories.") === null,
+      ).toBe(true);
     });
   }
 
@@ -224,26 +235,27 @@ describe("SkillsSettings", () => {
   test("uses controlled environment callbacks and hides host-only controls", async () => {
     const listSkills = mock(async (provider: AgentSkillProvider): Promise<AgentSkillScan> => ({
       provider,
-      roots: [{
-        path: "/workspace/.agents/skills",
-        label: "./.agents/skills",
-        scope: "project" as const,
-        exists: true,
-        skillCount: 1,
-        truncated: false,
-      }],
-      skills: [skill({
-        name: "environment-review",
-        filePath: "/workspace/.agents/skills/review/SKILL.md",
-        location: "./.agents/skills/review",
-        scope: "project",
-      }) as AgentSkill],
+      roots: [
+        {
+          path: "/workspace/.agents/skills",
+          label: "./.agents/skills",
+          scope: "project" as const,
+          exists: true,
+          skillCount: 1,
+          truncated: false,
+        },
+      ],
+      skills: [
+        skill({
+          name: "environment-review",
+          filePath: "/workspace/.agents/skills/review/SKILL.md",
+          location: "./.agents/skills/review",
+          scope: "project",
+        }) as AgentSkill,
+      ],
       errors: [],
     }));
-    const readSkill = mock(async (
-      provider: AgentSkillProvider,
-      filePath: string,
-    ) => ({
+    const readSkill = mock(async (provider: AgentSkillProvider, filePath: string) => ({
       path: filePath,
       content: `Loaded ${provider} environment skill`,
       truncated: false,
@@ -262,29 +274,45 @@ describe("SkillsSettings", () => {
 
     await waitFor(() => expect(screen.getByText("Loaded codex environment skill")).toBeTruthy());
     expect(listSkills).toHaveBeenCalledWith("codex");
-    expect(readSkill).toHaveBeenCalledWith(
-      "codex",
-      "/workspace/.agents/skills/review/SKILL.md",
-    );
+    expect(readSkill).toHaveBeenCalledWith("codex", "/workspace/.agents/skills/review/SKILL.md");
     expect(screen.queryByRole("tab", { name: "Claude" }) === null).toBe(true);
     expect(screen.queryByRole("tab", { name: "Codex" }) === null).toBe(true);
     expect(screen.queryByRole("tab", { name: "Cursor" }) === null).toBe(true);
     expect(screen.queryByRole("tab", { name: "Grok" }) === null).toBe(true);
     expect(screen.queryByRole("tab", { name: "OpenCode" }) === null).toBe(true);
-    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(
+      true,
+    );
   });
 
   test("lists the agent's skills with name and location, and renders the first one", async () => {
     skillScans.claude = {
       provider: "claude",
-      roots: [{ path: "/home/me/.claude/skills", label: "~/.claude/skills", scope: "user", exists: true, skillCount: 2 }],
+      roots: [
+        {
+          path: "/home/me/.claude/skills",
+          label: "~/.claude/skills",
+          scope: "user",
+          exists: true,
+          skillCount: 2,
+        },
+      ],
       skills: [
         skill({ name: "alpha", location: "~/.claude/skills/alpha", filePath: "/a/SKILL.md" }),
-        skill({ name: "zeta", location: "~/.agents/skills/zeta", filePath: "/z/SKILL.md", scope: "shared" }),
+        skill({
+          name: "zeta",
+          location: "~/.agents/skills/zeta",
+          filePath: "/z/SKILL.md",
+          scope: "shared",
+        }),
       ],
       errors: [],
     };
-    skillFiles["/a/SKILL.md"] = { path: "/a/SKILL.md", content: "Alpha body paragraph", truncated: false };
+    skillFiles["/a/SKILL.md"] = {
+      path: "/a/SKILL.md",
+      content: "Alpha body paragraph",
+      truncated: false,
+    };
 
     render(<SkillsSettings />);
 
@@ -295,8 +323,11 @@ describe("SkillsSettings", () => {
 
     // The first skill is auto-selected so the detail pane is never blank.
     await waitFor(() => expect(screen.getByText("Alpha body paragraph")).toBeTruthy());
-    expect(invokeCalls.some((call) =>
-      call.command === "read_agent_skill" && call.args?.filePath === "/a/SKILL.md")).toBe(true);
+    expect(
+      invokeCalls.some(
+        (call) => call.command === "read_agent_skill" && call.args?.filePath === "/a/SKILL.md",
+      ),
+    ).toBe(true);
   });
 
   test("selecting a skill loads that skill's markdown", async () => {
@@ -309,8 +340,16 @@ describe("SkillsSettings", () => {
       ],
       errors: [],
     };
-    skillFiles["/a/SKILL.md"] = { path: "/a/SKILL.md", content: "Alpha body paragraph", truncated: false };
-    skillFiles["/b/SKILL.md"] = { path: "/b/SKILL.md", content: "Beta body paragraph", truncated: false };
+    skillFiles["/a/SKILL.md"] = {
+      path: "/a/SKILL.md",
+      content: "Alpha body paragraph",
+      truncated: false,
+    };
+    skillFiles["/b/SKILL.md"] = {
+      path: "/b/SKILL.md",
+      content: "Beta body paragraph",
+      truncated: false,
+    };
 
     render(<SkillsSettings />);
 
@@ -320,8 +359,14 @@ describe("SkillsSettings", () => {
   });
 
   test("switching tabs scans that agent's skills", async () => {
-    skillScans.claude = { ...emptyScan("claude"), skills: [skill({ name: "claude-only", filePath: "/c/SKILL.md" })] };
-    skillScans.codex = { ...emptyScan("codex"), skills: [skill({ name: "codex-only", filePath: "/x/SKILL.md" })] };
+    skillScans.claude = {
+      ...emptyScan("claude"),
+      skills: [skill({ name: "claude-only", filePath: "/c/SKILL.md" })],
+    };
+    skillScans.codex = {
+      ...emptyScan("codex"),
+      skills: [skill({ name: "codex-only", filePath: "/x/SKILL.md" })],
+    };
 
     render(<SkillsSettings />);
     await waitFor(() => expect(list().getByText("claude-only")).toBeTruthy());
@@ -330,26 +375,33 @@ describe("SkillsSettings", () => {
 
     await waitFor(() => expect(list().getByText("codex-only")).toBeTruthy());
     expect(list().queryByText("claude-only") === null).toBe(true);
-    expect(invokeCalls.filter((call) => call.command === "list_agent_skills").map((call) => call.args?.provider))
-      .toEqual(["claude", "codex"]);
+    expect(
+      invokeCalls
+        .filter((call) => call.command === "list_agent_skills")
+        .map((call) => call.args?.provider),
+    ).toEqual(["claude", "codex"]);
   });
 
   test("exposes Cursor Agent and Grok Build alongside the other agents", async () => {
     skillScans.cursor = {
       ...emptyScan("cursor"),
-      skills: [skill({
-        name: "cursor-only",
-        filePath: "/cursor/SKILL.md",
-        location: "~/.cursor/skills/cursor-only",
-      })],
+      skills: [
+        skill({
+          name: "cursor-only",
+          filePath: "/cursor/SKILL.md",
+          location: "~/.cursor/skills/cursor-only",
+        }),
+      ],
     };
     skillScans.grok = {
       ...emptyScan("grok"),
-      skills: [skill({
-        name: "grok-only",
-        filePath: "/grok/SKILL.md",
-        location: "~/.grok/skills/grok-only",
-      })],
+      skills: [
+        skill({
+          name: "grok-only",
+          filePath: "/grok/SKILL.md",
+          location: "~/.grok/skills/grok-only",
+        }),
+      ],
     };
 
     render(<SkillsSettings />);
@@ -363,12 +415,18 @@ describe("SkillsSettings", () => {
     clickTab(/Grok/);
     await waitFor(() => expect(list().getByText("grok-only")).toBeTruthy());
     expect(list().getByText("~/.grok/skills/grok-only")).toBeTruthy();
-    expect(invokeCalls.filter((call) => call.command === "list_agent_skills").map((call) => call.args?.provider))
-      .toEqual(["claude", "cursor", "grok"]);
+    expect(
+      invokeCalls
+        .filter((call) => call.command === "list_agent_skills")
+        .map((call) => call.args?.provider),
+    ).toEqual(["claude", "cursor", "grok"]);
   });
 
   test("the raw toggle shows the file source instead of rendered markdown", async () => {
-    skillScans.claude = { ...emptyScan("claude"), skills: [skill({ name: "alpha", filePath: "/a/SKILL.md" })] };
+    skillScans.claude = {
+      ...emptyScan("claude"),
+      skills: [skill({ name: "alpha", filePath: "/a/SKILL.md" })],
+    };
     skillFiles["/a/SKILL.md"] = {
       path: "/a/SKILL.md",
       content: "# Alpha heading",
@@ -378,7 +436,9 @@ describe("SkillsSettings", () => {
     render(<SkillsSettings />);
 
     // Rendered: the "#" is consumed by the heading, so only the text survives.
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Alpha heading" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Alpha heading" })).toBeTruthy(),
+    );
     expect(screen.queryByText("# Alpha heading") === null).toBe(true);
 
     clickTab("Raw");
@@ -459,7 +519,12 @@ describe("SkillsSettings", () => {
         skill({ name: "managed-skill", filePath: "/managed/SKILL.md", scope: "admin" }),
         skill({ name: "shared-skill", filePath: "/shared/SKILL.md", scope: "shared" }),
         skill({ name: "system-skill", filePath: "/system/SKILL.md", scope: "system" }),
-        skill({ name: "plugin-skill", filePath: "/plugin/SKILL.md", scope: "plugin", plugin: "tools" }),
+        skill({
+          name: "plugin-skill",
+          filePath: "/plugin/SKILL.md",
+          scope: "plugin",
+          plugin: "tools",
+        }),
       ],
     };
 
@@ -511,7 +576,10 @@ describe("SkillsSettings", () => {
   });
 
   test("surfaces a read failure in the detail pane", async () => {
-    skillScans.claude = { ...emptyScan("claude"), skills: [skill({ name: "alpha", filePath: "/a/SKILL.md" })] };
+    skillScans.claude = {
+      ...emptyScan("claude"),
+      skills: [skill({ name: "alpha", filePath: "/a/SKILL.md" })],
+    };
     failReadWith = "Refusing to read a file outside the agent skill directories";
 
     render(<SkillsSettings />);
@@ -523,7 +591,10 @@ describe("SkillsSettings", () => {
     render(<SkillsSettings />);
 
     await waitFor(() =>
-      expect(screen.getByText(/No skills found in any of this agent's skill directories/)).toBeTruthy());
+      expect(
+        screen.getByText(/No skills found in any of this agent's skill directories/),
+      ).toBeTruthy(),
+    );
     expect(screen.getByText("Select a skill to read its SKILL.md.")).toBeTruthy();
   });
 
@@ -571,7 +642,9 @@ describe("SkillsSettings", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Rescan skill directories" }));
 
-    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("rescan unavailable"));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("rescan unavailable"),
+    );
     expect(list().getByText("alpha")).toBeTruthy();
     expect(screen.getByText("Existing body")).toBeTruthy();
   });
@@ -618,7 +691,8 @@ describe("SkillsSettings", () => {
     };
     const alphaFile = deferred<unknown>();
     const betaFile = deferred<unknown>();
-    readOverride = (_provider, path) => path === "/a/SKILL.md" ? alphaFile.promise : betaFile.promise;
+    readOverride = (_provider, path) =>
+      path === "/a/SKILL.md" ? alphaFile.promise : betaFile.promise;
 
     render(<SkillsSettings />);
     await waitFor(() => expect(list().getByText("beta")).toBeTruthy());
@@ -670,9 +744,9 @@ describe("SkillsSettings", () => {
 
     writeText.mockRejectedValueOnce(new Error("clipboard unavailable"));
     fireEvent.click(screen.getByRole("button", { name: "Copy skill path" }));
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Could not copy the path to the clipboard",
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Could not copy the path to the clipboard"),
+    );
   });
 
   test("reveals the selected path and reports reveal failures", async () => {
@@ -682,16 +756,23 @@ describe("SkillsSettings", () => {
     };
 
     render(<SkillsSettings />);
-    const revealButton = await screen.findByRole("button", { name: "Reveal skill in file manager" });
+    const revealButton = await screen.findByRole("button", {
+      name: "Reveal skill in file manager",
+    });
     fireEvent.click(revealButton);
-    await waitFor(() => expect(invokeCalls.some((call) =>
-      call.command === "reveal_in_file_manager" && call.args?.path === "/a/SKILL.md")).toBe(true));
+    await waitFor(() =>
+      expect(
+        invokeCalls.some(
+          (call) => call.command === "reveal_in_file_manager" && call.args?.path === "/a/SKILL.md",
+        ),
+      ).toBe(true),
+    );
 
     failRevealWith = "file manager unavailable";
     fireEvent.click(revealButton);
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(
-      "Could not reveal the skill in the file manager",
-    ));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Could not reveal the skill in the file manager"),
+    );
   });
 
   test("remembers a selection per provider across tab switches", async () => {
@@ -711,7 +792,11 @@ describe("SkillsSettings", () => {
     };
     skillFiles["/a/SKILL.md"] = { path: "/a/SKILL.md", content: "Alpha body", truncated: false };
     skillFiles["/z/SKILL.md"] = { path: "/z/SKILL.md", content: "Zeta body", truncated: false };
-    skillFiles["/y/SKILL.md"] = { path: "/y/SKILL.md", content: "Codex second body", truncated: false };
+    skillFiles["/y/SKILL.md"] = {
+      path: "/y/SKILL.md",
+      content: "Codex second body",
+      truncated: false,
+    };
 
     render(<SkillsSettings />);
     await waitFor(() => expect(list().getByText("zeta")).toBeTruthy());
@@ -749,8 +834,9 @@ describe("SkillsSettings", () => {
 
     fireEvent.click(list().getByText("beta"));
 
-    await waitFor(() => expect(list().getAllByRole("button")[1]!.getAttribute("aria-current"))
-      .toBe("true"));
+    await waitFor(() =>
+      expect(list().getAllByRole("button")[1]!.getAttribute("aria-current")).toBe("true"),
+    );
     expect(list().getAllByRole("button")[0]!.getAttribute("aria-current") === null).toBe(true);
     // Rendered mode strips the frontmatter, so the header is the only place the
     // description survives.
@@ -772,15 +858,18 @@ describe("SkillsSettings", () => {
     await waitFor(() => expect(list().getByText("beta")).toBeTruthy());
     fireEvent.click(list().getByText("beta"));
     await waitFor(() => expect(screen.getByText("Beta body")).toBeTruthy());
-    const readsBeforeFilter = invokeCalls.filter((call) => call.command === "read_agent_skill").length;
+    const readsBeforeFilter = invokeCalls.filter(
+      (call) => call.command === "read_agent_skill",
+    ).length;
 
     fireEvent.change(screen.getByLabelText("Filter skills"), { target: { value: "alpha" } });
     await waitFor(() => expect(listText()).not.toContain("beta"));
 
     expect(screen.getByText("Beta body")).toBeTruthy();
     expect(screen.queryByText("Alpha body") === null).toBe(true);
-    expect(invokeCalls.filter((call) => call.command === "read_agent_skill"))
-      .toHaveLength(readsBeforeFilter);
+    expect(invokeCalls.filter((call) => call.command === "read_agent_skill")).toHaveLength(
+      readsBeforeFilter,
+    );
   });
 
   test("hides frontmatter from the rendered view but keeps it in raw mode", async () => {
@@ -796,7 +885,9 @@ describe("SkillsSettings", () => {
 
     render(<SkillsSettings />);
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Alpha heading" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Alpha heading" })).toBeTruthy(),
+    );
     expect(screen.queryByText(/description: metadata only/) === null).toBe(true);
 
     clickTab("Raw");
@@ -820,7 +911,9 @@ describe("SkillsSettings", () => {
     // A skill can come from a plugin or marketplace, so fetching a remote image
     // would leak the viewer's IP and the fact that they opened this skill.
     await waitFor(() => expect(screen.getByText(/remote image blocked/)).toBeTruthy());
-    expect(container.querySelector('img[src="https://attacker.example/px.png"]') === null).toBe(true);
+    expect(container.querySelector('img[src="https://attacker.example/px.png"]') === null).toBe(
+      true,
+    );
     expect(screen.getByText(/Tracker/)).toBeTruthy();
     expect(screen.getByAltText("Diagram").getAttribute("src")).toBe("./diagram.png");
   });
@@ -860,7 +953,9 @@ describe("SkillsSettings", () => {
     await waitFor(() => expect(list().getByText("beta")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "Copy skill path" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Skill path copied" })).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Skill path copied" })).toBeTruthy(),
+    );
 
     // Well inside the 1.5s confirmation window: the button belongs to the pane,
     // not to the skill that was copied.
@@ -879,8 +974,9 @@ describe("SkillsSettings", () => {
     // Before the first scan lands there is nothing to count, and "0 skills · 0
     // of 0 directories present" would read as a definitive answer.
     await waitFor(() => expect(footerText()).toBe("Scanning…"));
-    expect(screen.getByRole("button", { name: "Rescan skill directories" })
-      .hasAttribute("disabled")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: "Rescan skill directories" }).hasAttribute("disabled"),
+    ).toBe(true);
     expect(screen.queryByRole("list", { name: "Skills" }) === null).toBe(true);
     expect(screen.queryByText(/No skills found/) === null).toBe(true);
 
@@ -896,8 +992,9 @@ describe("SkillsSettings", () => {
     });
 
     await waitFor(() => expect(footerText()).toBe("1 skill · 1 of 2 directories present"));
-    expect(screen.getByRole("button", { name: "Rescan skill directories" })
-      .hasAttribute("disabled")).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "Rescan skill directories" }).hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   test("says so in the footer when the first scan fails", async () => {

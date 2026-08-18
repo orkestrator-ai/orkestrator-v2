@@ -56,7 +56,9 @@ function sourceFiles(root: string): string[] {
 }
 
 function resolveSpec(fromFile: string, spec: string): string | null {
-  const base = resolve(dirname(fromFile), spec).replace(/\.js$/, "").replace(/\.tsx?$/, "");
+  const base = resolve(dirname(fromFile), spec)
+    .replace(/\.js$/, "")
+    .replace(/\.tsx?$/, "");
   for (const ext of [".ts", ".tsx"]) if (existsSync(base + ext)) return base + ext;
   return null;
 }
@@ -68,11 +70,15 @@ function resolveSpec(fromFile: string, spec: string): string | null {
 function valueImports(file: string): string[] {
   const text = readFileSync(file, "utf8");
   const deps: string[] = [];
-  for (const match of text.matchAll(/^\s*(?:import|export)\s+(?![\s\S]{0,10}?\btype\s)[^;]*?from\s+"(\.[^"]+)"/gm)) {
+  for (const match of text.matchAll(
+    /^\s*(?:import|export)\s+(?![\s\S]{0,10}?\btype\s)[^;]*?from\s+"(\.[^"]+)"/gm,
+  )) {
     const dep = resolveSpec(file, match[1]);
     if (dep) deps.push(dep);
   }
-  for (const match of text.matchAll(/^\s*(?:import|export)\s+\*\s+(?:as\s+\w+\s+)?from\s+"(\.[^"]+)"/gm)) {
+  for (const match of text.matchAll(
+    /^\s*(?:import|export)\s+\*\s+(?:as\s+\w+\s+)?from\s+"(\.[^"]+)"/gm,
+  )) {
     const dep = resolveSpec(file, match[1]);
     if (dep) deps.push(dep);
   }
@@ -121,9 +127,7 @@ describe("backend and bridge module import cycles", () => {
 
   test("no runtime import cycle exists outside the recorded set", () => {
     const found = findCycles().map((cycle) => cycle.join(" <-> "));
-    const allowed = new Set(
-      KNOWN_CYCLES.map((entry) => [...entry.cycle].sort().join(" <-> ")),
-    );
+    const allowed = new Set(KNOWN_CYCLES.map((entry) => [...entry.cycle].sort().join(" <-> ")));
 
     const introduced = found.filter((cycle) => !allowed.has(cycle));
     expect(introduced).toEqual([]);
@@ -133,9 +137,9 @@ describe("backend and bridge module import cycles", () => {
     // A stale entry is as bad as a missing one: it lets the next real cycle
     // hide behind an allowance that no longer describes anything.
     const found = new Set(findCycles().map((cycle) => cycle.join(" <-> ")));
-    const stale = KNOWN_CYCLES
-      .map((entry) => [...entry.cycle].sort().join(" <-> "))
-      .filter((cycle) => !found.has(cycle));
+    const stale = KNOWN_CYCLES.map((entry) => [...entry.cycle].sort().join(" <-> ")).filter(
+      (cycle) => !found.has(cycle),
+    );
 
     expect(stale).toEqual([]);
   });

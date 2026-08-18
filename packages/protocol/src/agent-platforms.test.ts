@@ -13,7 +13,10 @@ describe("agent platform registry", () => {
   });
 
   test("normalizes untrusted selections without duplicates", () => {
-    expect(normalizeAgentPlatforms(["grok", "cursor", "grok", "other"])).toEqual(["cursor", "grok"]);
+    expect(normalizeAgentPlatforms(["grok", "cursor", "grok", "other"])).toEqual([
+      "cursor",
+      "grok",
+    ]);
     expect(normalizeAgentPlatforms(null, ["claude"])).toEqual(["claude"]);
   });
 

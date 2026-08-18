@@ -29,7 +29,9 @@ let deferredListens: Array<{ event: string; resolve: () => void }> = [];
 
 const listenMock = mock((event: string, handler: Handler): Promise<UnlistenFn> => {
   listenCalls.push({ event, handler });
-  const stop: UnlistenFn = () => { unlistenCount += 1; };
+  const stop: UnlistenFn = () => {
+    unlistenCount += 1;
+  };
   const mode = listenModesByEvent.get(event) ?? listenMode;
   if (mode === "reject") return Promise.reject(new Error("no transport"));
   if (mode === "deferred") {
@@ -124,8 +126,12 @@ describe("onResourceChanged", () => {
   test("delivers to every subscriber of the same kind", async () => {
     let first = 0;
     let second = 0;
-    onResourceChanged("environment", () => { first += 1; });
-    onResourceChanged("environment", () => { second += 1; });
+    onResourceChanged("environment", () => {
+      first += 1;
+    });
+    onResourceChanged("environment", () => {
+      second += 1;
+    });
 
     dispatchResourceChange(change());
     await tick(COALESCED);
@@ -136,7 +142,9 @@ describe("onResourceChanged", () => {
 
   test("stops delivering after unsubscribe", async () => {
     let calls = 0;
-    const unsubscribe = onResourceChanged("environment", () => { calls += 1; });
+    const unsubscribe = onResourceChanged("environment", () => {
+      calls += 1;
+    });
     unsubscribe();
 
     dispatchResourceChange(change());
@@ -147,8 +155,12 @@ describe("onResourceChanged", () => {
 
   test("unsubscribing one handler leaves its siblings attached", async () => {
     let kept = 0;
-    const drop = onResourceChanged("environment", () => { throw new Error("unreachable"); });
-    onResourceChanged("environment", () => { kept += 1; });
+    const drop = onResourceChanged("environment", () => {
+      throw new Error("unreachable");
+    });
+    onResourceChanged("environment", () => {
+      kept += 1;
+    });
     drop();
 
     dispatchResourceChange(change());
@@ -160,8 +172,12 @@ describe("onResourceChanged", () => {
   test("a handler that unsubscribes itself mid-delivery does not disturb the others", async () => {
     // deliver() iterates a copy for exactly this reason.
     let sibling = 0;
-    const unsubscribe = onResourceChanged("environment", () => { unsubscribe(); });
-    onResourceChanged("environment", () => { sibling += 1; });
+    const unsubscribe = onResourceChanged("environment", () => {
+      unsubscribe();
+    });
+    onResourceChanged("environment", () => {
+      sibling += 1;
+    });
 
     dispatchResourceChange(change());
     await tick(COALESCED);
@@ -171,8 +187,12 @@ describe("onResourceChanged", () => {
 
   test("a throwing handler does not stop the remaining handlers", async () => {
     let reached = 0;
-    onResourceChanged("environment", () => { throw new Error("handler exploded"); });
-    onResourceChanged("environment", () => { reached += 1; });
+    onResourceChanged("environment", () => {
+      throw new Error("handler exploded");
+    });
+    onResourceChanged("environment", () => {
+      reached += 1;
+    });
 
     dispatchResourceChange(change());
     await tick(COALESCED);
@@ -232,7 +252,9 @@ describe("dispatchResourceChange coalescing", () => {
 
   test("delivers again for a change arriving after the window closed", async () => {
     let calls = 0;
-    onResourceChanged("environment", () => { calls += 1; });
+    onResourceChanged("environment", () => {
+      calls += 1;
+    });
 
     dispatchResourceChange(change({ revision: 1 }));
     await tick(COALESCED);
@@ -251,7 +273,9 @@ describe("dispatchResourceChange coalescing", () => {
 describe("resetResourceSync", () => {
   test("drops a queued dispatch before it is delivered", async () => {
     let calls = 0;
-    onResourceChanged("environment", () => { calls += 1; });
+    onResourceChanged("environment", () => {
+      calls += 1;
+    });
 
     dispatchResourceChange(change());
     resetResourceSync();
@@ -315,13 +339,19 @@ describe("startResourceSync", () => {
 
   test("drops a malformed payload rather than triggering a refetch", async () => {
     let calls = 0;
-    onResourceChanged("environment", () => { calls += 1; });
+    onResourceChanged("environment", () => {
+      calls += 1;
+    });
     startResourceSync();
     await tick(0);
 
-    for (const payload of [null, "environment", { resource: "nope", id: "x", revision: 1 },
+    for (const payload of [
+      null,
+      "environment",
+      { resource: "nope", id: "x", revision: 1 },
       { resource: "environment", id: "", revision: 1 },
-      { resource: "environment", id: "env-1", revision: Number.NaN }]) {
+      { resource: "environment", id: "env-1", revision: Number.NaN },
+    ]) {
       listenCalls[0]!.handler({ payload });
     }
     await tick(COALESCED);
@@ -383,9 +413,7 @@ describe("startResourceSync", () => {
     await tick(0);
     expect(deferredListens).toHaveLength(1);
 
-    const connected = listenCalls.find(
-      ({ event }) => event === "native-event-stream-connected",
-    );
+    const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
     connected?.handler({ payload: undefined });
     expect(resync).toHaveBeenCalledTimes(1);
 
@@ -417,9 +445,7 @@ describe("startResourceSync", () => {
     await tick(10);
     resync.mockClear();
 
-    const connected = listenCalls.find(
-      ({ event }) => event === "native-event-stream-connected",
-    );
+    const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
     connected?.handler({ payload: undefined });
     connected?.handler({ payload: undefined });
 
@@ -462,9 +488,7 @@ describe("startResourceSync", () => {
     resync.mockClear();
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
-    const connected = listenCalls.find(
-      ({ event }) => event === "native-event-stream-connected",
-    );
+    const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
     connected?.handler({ payload: undefined });
     resync.mockClear();
 
@@ -495,9 +519,7 @@ describe("startResourceSync", () => {
     const realNow = Date.now;
     Date.now = () => realNow() + 30_000;
     try {
-      const connected = listenCalls.find(
-        ({ event }) => event === "native-event-stream-connected",
-      );
+      const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
       connected?.handler({ payload: undefined });
       expect(resync).toHaveBeenCalledTimes(1);
     } finally {
@@ -514,9 +536,7 @@ describe("startResourceSync", () => {
     // beside it must not refetch everything a second time.
     expect(resync).toHaveBeenCalledTimes(1);
 
-    const connected = listenCalls.find(
-      ({ event }) => event === "native-event-stream-connected",
-    );
+    const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
     connected?.handler({ payload: undefined });
     expect(resync).toHaveBeenCalledTimes(1);
   });
@@ -545,9 +565,7 @@ describe("startResourceSync", () => {
     await tick(10);
 
     const resource = listenCalls.find(({ event }) => event === "resource-changed");
-    const connected = listenCalls.find(
-      ({ event }) => event === "native-event-stream-connected",
-    );
+    const connected = listenCalls.find(({ event }) => event === "native-event-stream-connected");
     resource?.handler({ payload: change({ revision: 40 }) });
     connected?.handler({ payload: undefined });
     resync.mockClear();
@@ -618,7 +636,12 @@ describe("startResourceSync", () => {
 
 describe("manifest reconciliation", () => {
   test.each([
-    ["a rejected manifest", async () => { throw new Error("manifest offline"); }],
+    [
+      "a rejected manifest",
+      async () => {
+        throw new Error("manifest offline");
+      },
+    ],
     ["a malformed manifest", async () => ({ generation: "bad" }) as never],
   ])("falls back to a full reconciliation for %s", async (_label, loadManifest) => {
     const requests: Array<{ resources: string[] | null; reason: string }> = [];
@@ -666,9 +689,12 @@ describe("manifest reconciliation", () => {
 
   test("does not hydrate a manifest that resolves after disposal", async () => {
     let resolveManifest!: (manifest: ResourceRevisionManifest) => void;
-    const loadManifest = mock(() => new Promise<ResourceRevisionManifest>((resolve) => {
-      resolveManifest = resolve;
-    }));
+    const loadManifest = mock(
+      () =>
+        new Promise<ResourceRevisionManifest>((resolve) => {
+          resolveManifest = resolve;
+        }),
+    );
     const resync = mock(() => undefined);
     onResourceResync(resync);
 
@@ -693,9 +719,7 @@ describe("manifest reconciliation", () => {
     expect(requests[0]).toEqual(["project"]);
     expect(requests[1]).toEqual(["environment"]);
     expect(requests[2]).toEqual(
-      RESOURCE_MANIFEST_KINDS.filter((kind) =>
-        kind !== "project" && kind !== "environment"
-      ),
+      RESOURCE_MANIFEST_KINDS.filter((kind) => kind !== "project" && kind !== "environment"),
     );
   });
 
@@ -706,11 +730,12 @@ describe("manifest reconciliation", () => {
       return 42 as unknown as ReturnType<typeof setInterval>;
     }) as unknown as typeof setInterval;
     const first = fullManifest();
-    const loadManifest = mock(async (
-      knownGeneration?: string,
-    ): Promise<ResourceRevisionManifest> => knownGeneration === first.generation
-      ? { generation: first.generation, reset: false, revisions: {} }
-      : first);
+    const loadManifest = mock(
+      async (knownGeneration?: string): Promise<ResourceRevisionManifest> =>
+        knownGeneration === first.generation
+          ? { generation: first.generation, reset: false, revisions: {} }
+          : first,
+    );
     const resync = mock(() => undefined);
     onResourceResync(resync);
     startResourceSync({ loadManifest });
@@ -732,10 +757,10 @@ describe("manifest reconciliation", () => {
       return calls === 1
         ? initial
         : {
-          generation: initial.generation,
-          reset: false,
-          revisions: { config: "c".repeat(32) },
-        };
+            generation: initial.generation,
+            reset: false,
+            revisions: { config: "c".repeat(32) },
+          };
     };
     const requests: Array<string[] | null> = [];
     onResourceResync((request) => {

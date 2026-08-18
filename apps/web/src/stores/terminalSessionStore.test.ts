@@ -33,7 +33,9 @@ describe("terminalSessionStore compose drafts", () => {
     const sessionKey = "container-1:tab-1";
 
     store.setComposeDraftText(sessionKey, "draft command");
-    expect(useTerminalSessionStore.getState().getComposeDraftText(sessionKey)).toBe("draft command");
+    expect(useTerminalSessionStore.getState().getComposeDraftText(sessionKey)).toBe(
+      "draft command",
+    );
 
     store.setComposeDraftText(sessionKey, "");
     expect(useTerminalSessionStore.getState().getComposeDraftText(sessionKey)).toBe("");
@@ -83,7 +85,11 @@ describe("terminalSessionStore compose drafts", () => {
 
   test("reads and updates every session identifier and buffer field", () => {
     const store = useTerminalSessionStore.getState();
-    store.setSession("tab", { sessionId: "pty", persistentSessionId: "persist", serializedBuffer: "old" });
+    store.setSession("tab", {
+      sessionId: "pty",
+      persistentSessionId: "persist",
+      serializedBuffer: "old",
+    });
     expect(store.getSessionId("tab")).toBe("pty");
     expect(store.getPersistentSessionId("tab")).toBe("persist");
 

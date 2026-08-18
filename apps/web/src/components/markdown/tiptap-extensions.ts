@@ -3,12 +3,7 @@ import { Code } from "@tiptap/extension-code";
 import { Image } from "@tiptap/extension-image";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Paragraph } from "@tiptap/extension-paragraph";
-import {
-  Table,
-  TableCell,
-  TableHeader,
-  TableRow,
-} from "@tiptap/extension-table";
+import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import { Markdown, MarkdownManager } from "@tiptap/markdown";
 import StarterKit from "@tiptap/starter-kit";
 import { marked } from "marked";
@@ -88,9 +83,7 @@ function readMarkdownLine(markdown: string, start: number): MarkdownLine {
  * document content, so the rich editor retains it outside ProseMirror and
  * prepends it again when serializing an edit.
  */
-export function splitMarkdownFrontmatter(
-  markdown: string,
-): MarkdownFrontmatterSplit {
+export function splitMarkdownFrontmatter(markdown: string): MarkdownFrontmatterSplit {
   const openingStart = markdown.startsWith("\uFEFF") ? 1 : 0;
   const openingLine = readMarkdownLine(markdown, openingStart);
   const closingDelimiter = YAML_OPENING_DELIMITER.test(openingLine.content)
@@ -136,9 +129,7 @@ export function splitMarkdownFrontmatter(
     }
 
     const nextLineIsBlank =
-      bodyStart === markdown.length ||
-      markdown[bodyStart] === "\n" ||
-      markdown[bodyStart] === "\r";
+      bodyStart === markdown.length || markdown[bodyStart] === "\n" || markdown[bodyStart] === "\r";
     if (!nextLineIsBlank) {
       bodyStart = whitespaceStart;
       break;
@@ -152,10 +143,7 @@ export function splitMarkdownFrontmatter(
 }
 
 /** Reattach preserved frontmatter without fusing an EOF delimiter to new body text. */
-export function restoreMarkdownFrontmatter(
-  frontmatter: string,
-  body: string,
-): string {
+export function restoreMarkdownFrontmatter(frontmatter: string, body: string): string {
   if (
     !frontmatter ||
     !body ||
@@ -217,16 +205,11 @@ function findUnsupportedTokenTypes(value: unknown, unsupported: Set<string>): vo
   if (!value || typeof value !== "object") return;
 
   const record = value as Record<string, unknown>;
-  if (
-    typeof record.type === "string" &&
-    !RICH_MARKDOWN_TOKEN_TYPES.has(record.type)
-  ) {
+  if (typeof record.type === "string" && !RICH_MARKDOWN_TOKEN_TYPES.has(record.type)) {
     unsupported.add(record.type);
   }
 
-  Object.values(record).forEach((item) =>
-    findUnsupportedTokenTypes(item, unsupported),
-  );
+  Object.values(record).forEach((item) => findUnsupportedTokenTypes(item, unsupported));
 }
 
 let markdownValidator:
@@ -255,9 +238,7 @@ function validateMarkdownSchema(markdown: string): void {
  * serialize without losing information. Unsafe documents stay editable in
  * raw mode instead of being silently normalized into a lossy projection.
  */
-export function assessMarkdownForRichEditing(
-  markdown: string,
-): MarkdownRichEditingAssessment {
+export function assessMarkdownForRichEditing(markdown: string): MarkdownRichEditingAssessment {
   try {
     const { body } = splitMarkdownFrontmatter(markdown);
 

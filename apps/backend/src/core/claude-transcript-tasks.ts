@@ -46,8 +46,7 @@ function contentBlocks(line: unknown): TranscriptContentBlock[] {
   const raw = candidate.message?.content ?? candidate.content;
   if (!Array.isArray(raw)) return [];
   return raw.filter(
-    (block): block is TranscriptContentBlock =>
-      typeof block === "object" && block !== null,
+    (block): block is TranscriptContentBlock => typeof block === "object" && block !== null,
   );
 }
 
@@ -62,8 +61,10 @@ function toolResultText(raw: unknown): string | undefined {
 
   const text = raw
     .map((entry) =>
-      typeof entry === "object" && entry !== null && typeof (entry as { text?: unknown }).text === "string"
-        ? ((entry as { text: string }).text)
+      typeof entry === "object" &&
+      entry !== null &&
+      typeof (entry as { text?: unknown }).text === "string"
+        ? (entry as { text: string }).text
         : "",
     )
     .filter((part) => part.length > 0)

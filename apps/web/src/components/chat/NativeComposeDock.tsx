@@ -53,9 +53,7 @@ export function NativeComposeDock({
         <div
           className={cn(
             "overflow-hidden text-center transition-[max-height,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-            centered
-              ? "max-h-16 translate-y-0 opacity-100"
-              : "max-h-0 -translate-y-2 opacity-0",
+            centered ? "max-h-16 translate-y-0 opacity-100" : "max-h-0 -translate-y-2 opacity-0",
           )}
         >
           <h2 className="text-xl font-bold text-white sm:text-2xl">{title}</h2>
@@ -94,9 +92,7 @@ export function NativeComposeDock({
           <div
             className={cn(
               "overflow-hidden transition-[max-height,opacity,transform] duration-300 ease-out motion-reduce:transition-none",
-              centered
-                ? "max-h-12 translate-y-0 opacity-100"
-                : "max-h-0 -translate-y-2 opacity-0",
+              centered ? "max-h-12 translate-y-0 opacity-100" : "max-h-0 -translate-y-2 opacity-0",
             )}
           >
             {actions}

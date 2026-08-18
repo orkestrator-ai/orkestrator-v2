@@ -111,10 +111,9 @@ describe("/event/subscribe", () => {
       expect((await app.request("/session/list?token=sse-test-token")).status).toBe(401);
 
       const controller = new AbortController();
-      const response = await app.request(
-        `/event/subscribe?token=${encodeURIComponent(token)}`,
-        { signal: controller.signal },
-      );
+      const response = await app.request(`/event/subscribe?token=${encodeURIComponent(token)}`, {
+        signal: controller.signal,
+      });
       expect(response.status).toBe(200);
       controller.abort();
     } finally {
@@ -179,10 +178,7 @@ describe("/event/subscribe", () => {
     expect(connected!.data.replayed).toBe(2);
 
     const replayed = frames.filter((frame) => frame.event.startsWith("session."));
-    expect(replayed.map((frame) => frame.data.sessionId)).toEqual([
-      "gap-missed-1",
-      "gap-missed-2",
-    ]);
+    expect(replayed.map((frame) => frame.data.sessionId)).toEqual(["gap-missed-1", "gap-missed-2"]);
     // The event before the cursor must not be re-sent.
     expect(replayed.some((frame) => frame.data.sessionId === "gap")).toBe(false);
   });
@@ -240,9 +236,7 @@ describe("/event/subscribe", () => {
     expect(frames.some((frame) => frame.data.sessionId === "other")).toBe(false);
     expect(
       frames.some(
-        (frame) =>
-          frame.event === "message.updated"
-          && frame.data.sessionId === "target",
+        (frame) => frame.event === "message.updated" && frame.data.sessionId === "target",
       ),
     ).toBe(true);
   });
@@ -274,11 +268,9 @@ describe("/event/subscribe", () => {
     });
     const unrelatedRevision2 = __testing.eventRingForTesting().latestRevision;
 
-    const frames = await collect(
-      `?since=${cursor}&sessionId=replay-target`,
-      () => undefined,
-      { expected: 3 },
-    );
+    const frames = await collect(`?since=${cursor}&sessionId=replay-target`, () => undefined, {
+      expected: 3,
+    });
 
     expect(frames.find((frame) => frame.event === "connected")!.data.replayed).toBe(3);
     const replayed = frames.filter((frame) => frame.event !== "connected");
@@ -297,8 +289,7 @@ describe("/event/subscribe", () => {
     });
     expect(replayed[2]!.data).toEqual({});
     expect(
-      replayed.some((frame) =>
-        JSON.stringify(frame.data).includes("unrelated replay payload")),
+      replayed.some((frame) => JSON.stringify(frame.data).includes("unrelated replay payload")),
     ).toBe(false);
   });
 
@@ -314,8 +305,10 @@ describe("/event/subscribe", () => {
         });
       }
 
-      const revisions = __testing.eventRingForTesting().since(cursor).events
-        .map((entry) => entry.revision);
+      const revisions = __testing
+        .eventRingForTesting()
+        .since(cursor)
+        .events.map((entry) => entry.revision);
       const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 3 });
       const replayed = frames.filter((frame) => frame.event !== "connected");
 
@@ -478,13 +471,15 @@ describe("/event/subscribe", () => {
     });
 
     const frames = await collect(`?since=${cursor}`, () => undefined);
-    expect(frames).toContainEqual(expect.objectContaining({
-      event: "session.reconcile-required",
-      data: {
-        sessionId: "ordered-overflow",
-        reason: "ordered-event-queue-overflow",
-      },
-    }));
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        event: "session.reconcile-required",
+        data: {
+          sessionId: "ordered-overflow",
+          reason: "ordered-event-queue-overflow",
+        },
+      }),
+    );
   });
 
   test("accepts the cursor from a Last-Event-ID header", async () => {
@@ -497,9 +492,7 @@ describe("/event/subscribe", () => {
     });
 
     expect(frames.find((frame) => frame.event === "connected")!.data.replayed).toBe(1);
-    expect(
-      frames.some((frame) => frame.data.sessionId === "via-header"),
-    ).toBe(true);
+    expect(frames.some((frame) => frame.data.sessionId === "via-header")).toBe(true);
   });
 
   test("asks for a reconcile when the cursor is from the future", async () => {
@@ -575,9 +568,9 @@ describe("/event/subscribe", () => {
       const frames = await collect("", () => undefined);
       const connected = frames.find((frame) => frame.event === "connected")!;
       expect(Number(connected.id)).toBe(anchor);
-      expect(
-        frames.filter((frame) => frame.data.sessionId === "fresh-anchor-race"),
-      ).toHaveLength(1);
+      expect(frames.filter((frame) => frame.data.sessionId === "fresh-anchor-race")).toHaveLength(
+        1,
+      );
     } finally {
       __testing.setSseRouteTestHooksForTesting(null);
     }
@@ -674,8 +667,9 @@ describe("/event/subscribe", () => {
 
     try {
       const frames = await collect(`?since=${cursor}`, () => undefined, { expected: 0 });
-      expect(frames.filter((frame) => String(frame.data.sessionId).startsWith("overflow-")))
-        .toHaveLength(0);
+      expect(
+        frames.filter((frame) => String(frame.data.sessionId).startsWith("overflow-")),
+      ).toHaveLength(0);
       expect(errors.some((message) => message.includes("replay buffer overflowed"))).toBe(true);
     } finally {
       console.error = originalError;
@@ -709,9 +703,7 @@ describe("/session/:id/prompt", () => {
         body: JSON.stringify(body),
       });
       expect(response.status).toBe(400);
-      expect((await response.json()).error).toContain(
-        "requestId must be a non-empty string",
-      );
+      expect((await response.json()).error).toContain("requestId must be a non-empty string");
     }
   });
 });

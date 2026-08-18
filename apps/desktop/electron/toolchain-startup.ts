@@ -25,22 +25,24 @@ export function createToolchainProgressController(options: {
   const ensureWindow = (): Promise<ProgressWindow | null> => {
     if (progressWindowPromise) return progressWindowPromise;
     const creation = options.createWindow();
-    const tracked = creation.then((window) => {
-      if (closed) {
-        closeWindow(window);
-        return null;
-      }
-      progressWindow = window;
-      window.once("closed", () => {
-        if (progressWindow === window) progressWindow = null;
+    const tracked = creation
+      .then((window) => {
+        if (closed) {
+          closeWindow(window);
+          return null;
+        }
+        progressWindow = window;
+        window.once("closed", () => {
+          if (progressWindow === window) progressWindow = null;
+          if (progressWindowPromise === tracked) progressWindowPromise = null;
+        });
+        return window;
+      })
+      .catch((error: unknown) => {
+        options.logError(error);
         if (progressWindowPromise === tracked) progressWindowPromise = null;
+        return null;
       });
-      return window;
-    }).catch((error: unknown) => {
-      options.logError(error);
-      if (progressWindowPromise === tracked) progressWindowPromise = null;
-      return null;
-    });
     progressWindowPromise = tracked;
     return tracked;
   };

@@ -27,15 +27,12 @@ const TERMINAL_KEYS: TerminalKey[] = [
   { label: "Right arrow", data: "\u001b[C", icon: ArrowRight },
 ];
 
-export function resolveTerminalKeyData(
-  data: string,
-  applicationCursorKeysMode: boolean,
-): string {
+export function resolveTerminalKeyData(data: string, applicationCursorKeysMode: boolean): string {
   if (
-    applicationCursorKeysMode
-    && data.length === 3
-    && data.startsWith("\u001b[")
-    && "ABCD".includes(data[2] ?? "")
+    applicationCursorKeysMode &&
+    data.length === 3 &&
+    data.startsWith("\u001b[") &&
+    "ABCD".includes(data[2] ?? "")
   ) {
     return `\u001bO${data[2]}`;
   }

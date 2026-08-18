@@ -15,8 +15,10 @@ import {
  * whose entire change was still in the working tree.
  */
 const MULTI_REVIEW_WORKTREE_WORDING: WorktreeSnapshotWording = {
-  clean: "**Authoritative worktree state**: the backend confirmed this environment worktree was clean when the review started, so the change under review is the committed range. Treat validation at the captured head as safe to run in place.",
-  dirty: "**Authoritative worktree state**: the backend observed these uncommitted paths in this environment worktree when the review started. Nothing in this review commits them, so they are part of the change under review: include them in the Step 1 snapshot, review them from this worktree, and never review a fresh clone, checkout, or worktree that omits them.",
+  clean:
+    "**Authoritative worktree state**: the backend confirmed this environment worktree was clean when the review started, so the change under review is the committed range. Treat validation at the captured head as safe to run in place.",
+  dirty:
+    "**Authoritative worktree state**: the backend observed these uncommitted paths in this environment worktree when the review started. Nothing in this review commits them, so they are part of the change under review: include them in the Step 1 snapshot, review them from this worktree, and never review a fresh clone, checkout, or worktree that omits them.",
 };
 
 const UNPROBED_WORKTREE: ReviewWorktreeSnapshot = {
@@ -53,7 +55,12 @@ export function createMultiReviewerPrompt(input: {
 }
 
 export function createMultiReviewConsolidationPrompt(input: {
-  reports: Array<{ reviewerId: string; agent: string; model: string; report: StructuredReviewReport }>;
+  reports: Array<{
+    reviewerId: string;
+    agent: string;
+    model: string;
+    report: StructuredReviewReport;
+  }>;
   targetBranch: string;
   worktree?: ReviewWorktreeSnapshot;
 }): string {

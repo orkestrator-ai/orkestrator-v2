@@ -1,5 +1,35 @@
-import { createHash, AGENT_INTERACTION_ORIGINS, isAgentInteractionPolicy, isAgentSkillProvider, resolveGitHubRepository, isStartFeaturePlanningInput, assertValidPromptAttachments, assertValidPromptImages } from "./commands-dependencies.js";
-import type { AgentInteractionOrigin, AgentInteractionPolicy, AgentModelConfigKey, AppConfig, CodexModelCatalogEntry, CodexReasoningEffort, EnvironmentType, OpenCodeModelCatalogEntry, PortMapping, AgentSkillProvider, JsonRecord, StorageService, GitHubIssueStatus, GitHubRepositoryRef, NativeAgentControlUpdate, NativeAgentSessionAction, DispatchNativeAgentPromptInput, FeaturePlanningService, FeaturePlanningKind, StartFeaturePlanningInput } from "./commands-dependencies.js";
+import {
+  createHash,
+  AGENT_INTERACTION_ORIGINS,
+  isAgentInteractionPolicy,
+  isAgentSkillProvider,
+  resolveGitHubRepository,
+  isStartFeaturePlanningInput,
+  assertValidPromptAttachments,
+  assertValidPromptImages,
+} from "./commands-dependencies.js";
+import type {
+  AgentInteractionOrigin,
+  AgentInteractionPolicy,
+  AgentModelConfigKey,
+  AppConfig,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  PortMapping,
+  AgentSkillProvider,
+  JsonRecord,
+  StorageService,
+  GitHubIssueStatus,
+  GitHubRepositoryRef,
+  NativeAgentControlUpdate,
+  NativeAgentSessionAction,
+  DispatchNativeAgentPromptInput,
+  FeaturePlanningService,
+  FeaturePlanningKind,
+  StartFeaturePlanningInput,
+} from "./commands-dependencies.js";
 import type { CommandContext } from "./commands-context.js";
 
 export const UNTRACKED_SCAN_CONCURRENCY = 8;
@@ -31,8 +61,8 @@ export function asOptionalAgentInteractionOrigin(
 ): AgentInteractionOrigin | undefined {
   if (value === undefined) return undefined;
   if (
-    typeof value !== "string"
-    || !AGENT_INTERACTION_ORIGINS.includes(value as AgentInteractionOrigin)
+    typeof value !== "string" ||
+    !AGENT_INTERACTION_ORIGINS.includes(value as AgentInteractionOrigin)
   ) {
     throw new Error("Expected origin to be a supported agent interaction origin");
   }
@@ -56,11 +86,7 @@ export function asAgentSkillProvider(value: unknown): AgentSkillProvider {
   return value;
 }
 
-export function assertOnlyKeys(
-  value: JsonRecord,
-  allowed: readonly string[],
-  name: string,
-): void {
+export function assertOnlyKeys(value: JsonRecord, allowed: readonly string[], name: string): void {
   const allowedSet = new Set(allowed);
   const unexpected = Object.keys(value).find((key) => !allowedSet.has(key));
   if (unexpected) throw new Error(`Unexpected ${name} field: ${unexpected}`);
@@ -83,7 +109,9 @@ export async function requireGitHubProject(
   if (!project) throw new Error(`Project not found: ${projectId}`);
   const token = config.global.githubToken?.trim();
   if (!token) {
-    throw new Error("GitHub is not configured. Add a global GitHub token in Settings and try again.");
+    throw new Error(
+      "GitHub is not configured. Add a global GitHub token in Settings and try again.",
+    );
   }
   return { token, repository: resolveGitHubRepository(project.gitUrl) };
 }
@@ -136,26 +164,22 @@ export function resolveStoredOrInheritedApiKey(
   return { source: "none" };
 }
 
-export function resolveAnthropicApiKey(
-  global: AppConfig["global"],
-): { apiKey?: string; source: ApiKeySource } {
-  return resolveStoredOrInheritedApiKey(
-    global.anthropicApiKey,
-    process.env.ANTHROPIC_API_KEY,
-  );
+export function resolveAnthropicApiKey(global: AppConfig["global"]): {
+  apiKey?: string;
+  source: ApiKeySource;
+} {
+  return resolveStoredOrInheritedApiKey(global.anthropicApiKey, process.env.ANTHROPIC_API_KEY);
 }
 
 /**
  * Single source of truth for the Cursor key. `createDockerContainer` forwards
  * `apiKey`; the renderer is told only `source`, never the value.
  */
-export function resolveCursorApiKey(
-  global: AppConfig["global"],
-): { apiKey?: string; source: ApiKeySource } {
-  return resolveStoredOrInheritedApiKey(
-    global.cursorApiKey,
-    process.env.CURSOR_API_KEY,
-  );
+export function resolveCursorApiKey(global: AppConfig["global"]): {
+  apiKey?: string;
+  source: ApiKeySource;
+} {
+  return resolveStoredOrInheritedApiKey(global.cursorApiKey, process.env.CURSOR_API_KEY);
 }
 
 export function cursorApiKeyFingerprint(apiKey: string | undefined): string {
@@ -210,7 +234,10 @@ export function asGitHubIssueStatus(value: unknown): GitHubIssueStatus {
 export const linearCompletionCommentLocks = new Map<string, Promise<unknown>>();
 export const githubCompletionCommentLocks = new Map<string, Promise<unknown>>();
 
-export async function withLinearCompletionCommentLock<T>(pipelineId: string, task: () => Promise<T>): Promise<T> {
+export async function withLinearCompletionCommentLock<T>(
+  pipelineId: string,
+  task: () => Promise<T>,
+): Promise<T> {
   const previous = linearCompletionCommentLocks.get(pipelineId) ?? Promise.resolve();
   const current = previous.then(task);
   linearCompletionCommentLocks.set(pipelineId, current);
@@ -223,7 +250,10 @@ export async function withLinearCompletionCommentLock<T>(pipelineId: string, tas
   }
 }
 
-export async function withGitHubCompletionCommentLock<T>(pipelineId: string, task: () => Promise<T>): Promise<T> {
+export async function withGitHubCompletionCommentLock<T>(
+  pipelineId: string,
+  task: () => Promise<T>,
+): Promise<T> {
   const previous = githubCompletionCommentLocks.get(pipelineId) ?? Promise.resolve();
   const current = previous.then(task);
   githubCompletionCommentLocks.set(pipelineId, current);
@@ -255,7 +285,8 @@ export function asRequiredBoolean(value: unknown, name: string): boolean {
 }
 
 export function asNumber(value: unknown, name: string): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Expected ${name} to be a number`);
+  if (typeof value !== "number" || !Number.isFinite(value))
+    throw new Error(`Expected ${name} to be a number`);
   return value;
 }
 
@@ -267,11 +298,15 @@ export function asPositiveInteger(value: unknown, name: string): number {
 }
 
 export function asTerminalDimension(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
 }
 
 export function asStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 export function asNonBlankString(value: unknown, name: string): string {
@@ -292,11 +327,7 @@ export function asNonBlankString(value: unknown, name: string): string {
  */
 export const MAX_EXECUTION_PROFILE_ID_LENGTH = 256;
 
-export function asBoundedNonBlankString(
-  value: unknown,
-  name: string,
-  maxLength: number,
-): string {
+export function asBoundedNonBlankString(value: unknown, name: string, maxLength: number): string {
   const normalized = asNonBlankString(value, name);
   if (normalized.length > maxLength) {
     throw new Error(`Expected ${name} to be at most ${maxLength} characters`);
@@ -304,61 +335,47 @@ export function asBoundedNonBlankString(
   return normalized;
 }
 
-export function asDispatchNativeAgentPromptInput(
-  args: JsonRecord,
-): DispatchNativeAgentPromptInput {
+export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNativeAgentPromptInput {
   const agent = asString(args.agent, "agent") as import("./models.js").NativeAgentProvider;
   return {
     environmentId: asNonBlankString(args.environmentId, "environmentId"),
     agent,
-    logicalSessionKey: asNonBlankString(
-      args.logicalSessionKey,
-      "logicalSessionKey",
-    ),
+    logicalSessionKey: asNonBlankString(args.logicalSessionKey, "logicalSessionKey"),
     origin: asOptionalAgentInteractionOrigin(args.origin),
     interactionPolicy: asOptionalAgentInteractionPolicy(args.interactionPolicy),
     title: typeof args.title === "string" ? args.title : undefined,
     model: typeof args.model === "string" ? args.model : undefined,
-    reasoningEffort:
-      typeof args.reasoningEffort === "string"
-        ? args.reasoningEffort
-        : undefined,
+    reasoningEffort: typeof args.reasoningEffort === "string" ? args.reasoningEffort : undefined,
     phase:
       typeof args.phase === "string"
-        ? args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase
+        ? (args.phase as import("@orkestrator/protocol/build-pipeline").PipelineSessionPhase)
         : undefined,
     prompt: asNonBlankString(args.prompt, "prompt"),
     requestId: asNonBlankString(args.requestId, "requestId"),
-    images: Array.isArray(args.images)
-      ? assertValidPromptImages(args.images)
-      : undefined,
+    images: Array.isArray(args.images) ? assertValidPromptImages(args.images) : undefined,
     attachments: Array.isArray(args.attachments)
       ? assertValidPromptAttachments(args.attachments)
       : undefined,
     schema:
-      args.schema
-      && typeof args.schema === "object"
-      && !Array.isArray(args.schema)
-        ? args.schema as import("@orkestrator/protocol/structured-output").JsonSchema
+      args.schema && typeof args.schema === "object" && !Array.isArray(args.schema)
+        ? (args.schema as import("@orkestrator/protocol/structured-output").JsonSchema)
         : undefined,
     // Cursor/Grok preserve the ACP session's current mode unless explicit.
-    mode: args.mode === "build"
-      ? "build"
-      : args.mode === "plan"
-        ? "plan"
-        : (agent === "cursor" || agent === "grok" ? undefined : "plan"),
+    mode:
+      args.mode === "build"
+        ? "build"
+        : args.mode === "plan"
+          ? "plan"
+          : agent === "cursor" || agent === "grok"
+            ? undefined
+            : "plan",
     fastMode: typeof args.fastMode === "boolean" ? args.fastMode : undefined,
     subAgent: typeof args.subAgent === "string" ? args.subAgent : undefined,
-    executionAgent:
-      typeof args.executionAgent === "string" ? args.executionAgent : undefined,
+    executionAgent: typeof args.executionAgent === "string" ? args.executionAgent : undefined,
     includeLocalSettings:
-      typeof args.includeLocalSettings === "boolean"
-        ? args.includeLocalSettings
-        : undefined,
+      typeof args.includeLocalSettings === "boolean" ? args.includeLocalSettings : undefined,
     promptSuggestions:
-      typeof args.promptSuggestions === "boolean"
-        ? args.promptSuggestions
-        : undefined,
+      typeof args.promptSuggestions === "boolean" ? args.promptSuggestions : undefined,
   };
 }
 
@@ -368,8 +385,13 @@ export function asNativeAgentControlUpdate(
 ): NativeAgentControlUpdate {
   const raw = asRecord(value, name);
   const allowed = new Set([
-    "modelId", "reasoningId", "fastMode", "mode", "executionProfileId",
-    "includeLocalSettings", "promptSuggestions",
+    "modelId",
+    "reasoningId",
+    "fastMode",
+    "mode",
+    "executionProfileId",
+    "includeLocalSettings",
+    "promptSuggestions",
   ]);
   if (Object.keys(raw).some((key) => !allowed.has(key))) {
     throw new Error("Native agent control update has unknown fields");
@@ -382,25 +404,34 @@ export function asNativeAgentControlUpdate(
     mode = raw.mode;
   }
   const update: NativeAgentControlUpdate = {
-    ...(raw.modelId === undefined
-      ? {} : { modelId: asNonBlankString(raw.modelId, "modelId") }),
+    ...(raw.modelId === undefined ? {} : { modelId: asNonBlankString(raw.modelId, "modelId") }),
     ...(raw.reasoningId === undefined
-      ? {} : { reasoningId: asNonBlankString(raw.reasoningId, "reasoningId") }),
+      ? {}
+      : { reasoningId: asNonBlankString(raw.reasoningId, "reasoningId") }),
     ...(raw.fastMode === undefined
-      ? {} : { fastMode: asRequiredBoolean(raw.fastMode, "fastMode") }),
+      ? {}
+      : { fastMode: asRequiredBoolean(raw.fastMode, "fastMode") }),
     ...(mode === undefined ? {} : { mode }),
     ...(raw.executionProfileId === undefined
-      ? {} : { executionProfileId: raw.executionProfileId === null
-        ? null
-        : asBoundedNonBlankString(
-          raw.executionProfileId,
-          "executionProfileId",
-          MAX_EXECUTION_PROFILE_ID_LENGTH,
-        ) }),
+      ? {}
+      : {
+          executionProfileId:
+            raw.executionProfileId === null
+              ? null
+              : asBoundedNonBlankString(
+                  raw.executionProfileId,
+                  "executionProfileId",
+                  MAX_EXECUTION_PROFILE_ID_LENGTH,
+                ),
+        }),
     ...(raw.includeLocalSettings === undefined
-      ? {} : { includeLocalSettings: asRequiredBoolean(raw.includeLocalSettings, "includeLocalSettings") }),
+      ? {}
+      : {
+          includeLocalSettings: asRequiredBoolean(raw.includeLocalSettings, "includeLocalSettings"),
+        }),
     ...(raw.promptSuggestions === undefined
-      ? {} : { promptSuggestions: asRequiredBoolean(raw.promptSuggestions, "promptSuggestions") }),
+      ? {}
+      : { promptSuggestions: asRequiredBoolean(raw.promptSuggestions, "promptSuggestions") }),
   };
   if (Object.keys(update).length === 0) {
     throw new Error("Native agent control update must not be empty");
@@ -413,15 +444,27 @@ export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAc
   const kind = asNonBlankString(raw.kind, "action.kind");
   switch (kind) {
     case "compact":
-      return { kind, ...(raw.modelId === undefined ? {} : { modelId: asNonBlankString(raw.modelId, "action.modelId") }) };
+      return {
+        kind,
+        ...(raw.modelId === undefined
+          ? {}
+          : { modelId: asNonBlankString(raw.modelId, "action.modelId") }),
+      };
     case "rewind-files":
       return {
         kind,
         messageId: asNonBlankString(raw.messageId, "action.messageId"),
-        ...(raw.dryRun === undefined ? {} : { dryRun: asRequiredBoolean(raw.dryRun, "action.dryRun") }),
+        ...(raw.dryRun === undefined
+          ? {}
+          : { dryRun: asRequiredBoolean(raw.dryRun, "action.dryRun") }),
       };
     case "undo":
-      return { kind, ...(raw.messageId === undefined ? {} : { messageId: asNonBlankString(raw.messageId, "action.messageId") }) };
+      return {
+        kind,
+        ...(raw.messageId === undefined
+          ? {}
+          : { messageId: asNonBlankString(raw.messageId, "action.messageId") }),
+      };
     case "redo":
     case "share":
     case "unshare":
@@ -440,9 +483,7 @@ export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAc
 
 export function asOpenCodeModelVariants(value: unknown, name: string): string[] {
   if (!Array.isArray(value)) throw new Error(`Expected ${name} to be an array`);
-  return value.map((variant, index) =>
-    asNonBlankString(variant, `${name}[${index}]`)
-  );
+  return value.map((variant, index) => asNonBlankString(variant, `${name}[${index}]`));
 }
 
 export function asOpenCodeModelCost(value: unknown, name: string): number {
@@ -494,16 +535,15 @@ export function asOpenCodeModelCatalogEntry(
     ...(model.contextWindow === undefined
       ? {}
       : {
-          contextWindow: asOpenCodeContextWindow(
-            model.contextWindow,
-            `${name}.contextWindow`,
-          ),
+          contextWindow: asOpenCodeContextWindow(model.contextWindow, `${name}.contextWindow`),
         }),
     ...(model.supportsImageInput === undefined
       ? {}
       : typeof model.supportsImageInput === "boolean"
         ? { supportsImageInput: model.supportsImageInput }
-        : (() => { throw new Error(`Expected ${name}.supportsImageInput to be a boolean`); })()),
+        : (() => {
+            throw new Error(`Expected ${name}.supportsImageInput to be a boolean`);
+          })()),
   };
 }
 
@@ -557,10 +597,7 @@ export const CODEX_MODEL_REASONING_EFFORTS = new Set<CodexReasoningEffort>([
   "ultra",
 ]);
 
-export function asCodexReasoningEffort(
-  value: unknown,
-  name: string,
-): CodexReasoningEffort {
+export function asCodexReasoningEffort(value: unknown, name: string): CodexReasoningEffort {
   const effort = asNonBlankString(value, name) as CodexReasoningEffort;
   if (!CODEX_MODEL_REASONING_EFFORTS.has(effort)) {
     throw new Error(`Expected ${name} to be a supported reasoning effort`);
@@ -587,38 +624,40 @@ export function asCachedCodexModels(value: unknown): CodexModelCatalogEntry[] {
       ],
       name,
     );
-    const reasoningEfforts = model.reasoningEfforts === undefined
-      ? undefined
-      : Array.isArray(model.reasoningEfforts)
-        ? model.reasoningEfforts.map((effort, effortIndex) =>
-            asCodexReasoningEffort(effort, `${name}.reasoningEfforts[${effortIndex}]`)
-          )
-        : (() => {
-            throw new Error(`Expected ${name}.reasoningEfforts to be an array`);
-          })();
-    const reasoningOptions = model.reasoningOptions === undefined
-      ? undefined
-      : Array.isArray(model.reasoningOptions)
-        ? model.reasoningOptions.map((candidateOption, optionIndex) => {
-            const optionName = `${name}.reasoningOptions[${optionIndex}]`;
-            const option = asRecord(candidateOption, optionName);
-            assertOnlyKeys(option, ["effort", "label", "description"], optionName);
-            return {
-              effort: asCodexReasoningEffort(option.effort, `${optionName}.effort`),
-              label: asNonBlankString(option.label, `${optionName}.label`),
-              ...(option.description === undefined
-                ? {}
-                : {
-                    description: asNonBlankString(
-                      option.description,
-                      `${optionName}.description`,
-                    ),
-                  }),
-            };
-          })
-        : (() => {
-            throw new Error(`Expected ${name}.reasoningOptions to be an array`);
-          })();
+    const reasoningEfforts =
+      model.reasoningEfforts === undefined
+        ? undefined
+        : Array.isArray(model.reasoningEfforts)
+          ? model.reasoningEfforts.map((effort, effortIndex) =>
+              asCodexReasoningEffort(effort, `${name}.reasoningEfforts[${effortIndex}]`),
+            )
+          : (() => {
+              throw new Error(`Expected ${name}.reasoningEfforts to be an array`);
+            })();
+    const reasoningOptions =
+      model.reasoningOptions === undefined
+        ? undefined
+        : Array.isArray(model.reasoningOptions)
+          ? model.reasoningOptions.map((candidateOption, optionIndex) => {
+              const optionName = `${name}.reasoningOptions[${optionIndex}]`;
+              const option = asRecord(candidateOption, optionName);
+              assertOnlyKeys(option, ["effort", "label", "description"], optionName);
+              return {
+                effort: asCodexReasoningEffort(option.effort, `${optionName}.effort`),
+                label: asNonBlankString(option.label, `${optionName}.label`),
+                ...(option.description === undefined
+                  ? {}
+                  : {
+                      description: asNonBlankString(
+                        option.description,
+                        `${optionName}.description`,
+                      ),
+                    }),
+              };
+            })
+          : (() => {
+              throw new Error(`Expected ${name}.reasoningOptions to be an array`);
+            })();
     return {
       id: asNonBlankString(model.id, `${name}.id`),
       name: asNonBlankString(model.name, `${name}.name`),
@@ -668,10 +707,7 @@ export const FEATURE_PLAN_UPDATE_FIELDS = [
   "buildPipelineId",
 ] as const;
 
-export function asOptionalNonBlankFeaturePlanId(
-  value: unknown,
-  name: string,
-): string | undefined {
+export function asOptionalNonBlankFeaturePlanId(value: unknown, name: string): string | undefined {
   if (value === undefined) return undefined;
   return asNonBlankString(value, name);
 }
@@ -690,18 +726,14 @@ export function asFeaturePlanMessage(value: unknown, name: string): JsonRecord {
     role,
     content: asString(message.content, `${name}.content`),
     createdAt: asNonBlankString(message.createdAt, `${name}.createdAt`),
-    ...(message.modelId === undefined
-      ? {}
-      : { modelId: asFeaturePlanModelId(message.modelId) }),
+    ...(message.modelId === undefined ? {} : { modelId: asFeaturePlanModelId(message.modelId) }),
     ...(stateApplication === undefined ? {} : { stateApplication }),
   };
 }
 
 export function asFeaturePlanMessages(value: unknown, name: string): JsonRecord[] {
   if (!Array.isArray(value)) throw new Error(`Expected ${name} to be an array`);
-  return value.map((message, index) =>
-    asFeaturePlanMessage(message, `${name}[${index}]`)
-  );
+  return value.map((message, index) => asFeaturePlanMessage(message, `${name}[${index}]`));
 }
 
 export function asFeaturePlanStories(value: unknown): JsonRecord[] {
@@ -711,15 +743,7 @@ export function asFeaturePlanStories(value: unknown): JsonRecord[] {
     const story = asRecord(candidate, name);
     assertOnlyKeys(
       story,
-      [
-        "id",
-        "title",
-        "description",
-        "acceptanceCriteria",
-        "messages",
-        "createdAt",
-        "updatedAt",
-      ],
+      ["id", "title", "description", "acceptanceCriteria", "messages", "createdAt", "updatedAt"],
       name,
     );
     if (!Array.isArray(story.acceptanceCriteria)) {
@@ -730,7 +754,7 @@ export function asFeaturePlanStories(value: unknown): JsonRecord[] {
       title: asString(story.title, `${name}.title`),
       description: asString(story.description, `${name}.description`),
       acceptanceCriteria: story.acceptanceCriteria.map((criterion, criterionIndex) =>
-        asString(criterion, `${name}.acceptanceCriteria[${criterionIndex}]`)
+        asString(criterion, `${name}.acceptanceCriteria[${criterionIndex}]`),
       ),
       messages: asFeaturePlanMessages(story.messages, `${name}.messages`),
       createdAt: asNonBlankString(story.createdAt, `${name}.createdAt`),
@@ -749,11 +773,11 @@ export function asFeaturePlanUpdates(
   if (updates.summary !== undefined) parsed.summary = asString(updates.summary, "updates.summary");
   if (updates.status !== undefined) {
     if (
-      updates.status !== "collecting"
-      && updates.status !== "confirming"
-      && updates.status !== "stories"
-      && updates.status !== "building"
-      && updates.status !== "built"
+      updates.status !== "collecting" &&
+      updates.status !== "confirming" &&
+      updates.status !== "stories" &&
+      updates.status !== "building" &&
+      updates.status !== "built"
     ) {
       throw new Error("Expected updates.status to be a valid feature plan status");
     }
@@ -772,10 +796,7 @@ export function asFeaturePlanUpdates(
     "buildPipelineId",
   ] as const) {
     if (Object.hasOwn(updates, field)) {
-      parsed[field] = asOptionalNonBlankFeaturePlanId(
-        updates[field],
-        `updates.${field}`,
-      );
+      parsed[field] = asOptionalNonBlankFeaturePlanId(updates[field], `updates.${field}`);
     }
   }
   return parsed as Parameters<StorageService["updateFeaturePlan"]>[1];
@@ -785,9 +806,7 @@ export function asStartFeaturePlanningInput(args: JsonRecord): StartFeaturePlann
   const input: StartFeaturePlanningInput = {
     featureId: asNonBlankString(args.featureId, "featureId"),
     kind: asFeaturePlanningKind(args.kind),
-    ...(args.storyId === undefined
-      ? {}
-      : { storyId: asNonBlankString(args.storyId, "storyId") }),
+    ...(args.storyId === undefined ? {} : { storyId: asNonBlankString(args.storyId, "storyId") }),
     userMessage: asNonBlankString(args.userMessage, "userMessage"),
   };
   if (!isStartFeaturePlanningInput(input)) {
@@ -813,7 +832,7 @@ export function asFeaturePlanModelId(value: unknown): string | undefined {
 }
 
 export function asPortMappings(value: unknown): PortMapping[] | undefined {
-  return Array.isArray(value) ? value as PortMapping[] : undefined;
+  return Array.isArray(value) ? (value as PortMapping[]) : undefined;
 }
 
 export function asEnvironmentType(value: unknown): EnvironmentType {

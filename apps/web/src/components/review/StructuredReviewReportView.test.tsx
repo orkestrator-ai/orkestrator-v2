@@ -36,24 +36,28 @@ const report: StructuredReviewReport = {
   },
   testResults: { total: 1, passed: 1, failed: 0, notRun: 0, failures: [] },
   strengths: [{ description: "Typed boundary", file: "src/example.ts", line: 12 }],
-  issues: [{
-    severity: "P1",
-    confidence: 91,
-    category: "correctness",
-    title: "Retry state can drift",
-    file: "src/example.ts",
-    line: 18,
-    symbol: "retry",
-    description: "The retry can use stale state.",
-    evidence: "The request ID is replaced.",
-    suggestion: "Persist it first.",
-    verification: "Disconnect and retry.",
-    alternativeFixes: ["Use a journal."],
-  }],
-  testCoverageGaps: [{
-    file: "src/example.test.ts",
-    untestedBehavior: "Recovery after disconnect.",
-  }],
+  issues: [
+    {
+      severity: "P1",
+      confidence: 91,
+      category: "correctness",
+      title: "Retry state can drift",
+      file: "src/example.ts",
+      line: 18,
+      symbol: "retry",
+      description: "The retry can use stale state.",
+      evidence: "The request ID is replaced.",
+      suggestion: "Persist it first.",
+      verification: "Disconnect and retry.",
+      alternativeFixes: ["Use a journal."],
+    },
+  ],
+  testCoverageGaps: [
+    {
+      file: "src/example.test.ts",
+      untestedBehavior: "Recovery after disconnect.",
+    },
+  ],
   verdict: { ready: "with-fixes", reasoning: "One fix is required." },
   summaryOfChange: "Introduces structured reviews.",
   reviewSummary: "The design is sound after the retry fix.",
@@ -76,14 +80,13 @@ describe("StructuredReviewReportView", () => {
       "Summary of change",
       "Review summary",
     ]);
-    expect(
-      screen.getByRole("heading", { name: /Retry state can drift/ }),
-    ).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /Retry state can drift/ })).toBeTruthy();
     expect(screen.getByText("Disconnect and retry.")).toBeTruthy();
     expect(
-      screen.getByText((_, element) =>
-        element?.tagName === "LI"
-        && element.textContent?.includes("Recovery after disconnect.") === true
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "LI" &&
+          element.textContent?.includes("Recovery after disconnect.") === true,
       ),
     ).toBeTruthy();
     expect(screen.getByText("0 not run")).toBeTruthy();
@@ -93,8 +96,9 @@ describe("StructuredReviewReportView", () => {
     render(<StructuredReviewReportView report={report} />);
     expect(screen.queryByLabelText("Raw structured review JSON") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: /Inspect raw JSON/ }));
-    expect(screen.getByLabelText("Raw structured review JSON").textContent)
-      .toContain("\"reviewScope\"");
+    expect(screen.getByLabelText("Raw structured review JSON").textContent).toContain(
+      '"reviewScope"',
+    );
     fireEvent.click(screen.getByRole("button", { name: /Hide raw JSON/ }));
     expect(screen.queryByLabelText("Raw structured review JSON") === null).toBe(true);
   });
@@ -102,15 +106,17 @@ describe("StructuredReviewReportView", () => {
   test("infers the not-run count for a legacy report already held in memory", () => {
     render(
       <StructuredReviewReportView
-        report={{
-          ...report,
-          testResults: {
-            total: 8_107,
-            passed: 8_094,
-            failed: 0,
-            failures: [],
-          },
-        } as any}
+        report={
+          {
+            ...report,
+            testResults: {
+              total: 8_107,
+              passed: 8_094,
+              failed: 0,
+              failures: [],
+            },
+          } as any
+        }
       />,
     );
 
@@ -120,15 +126,17 @@ describe("StructuredReviewReportView", () => {
   test("clamps an inferred not-run count that would go negative", () => {
     render(
       <StructuredReviewReportView
-        report={{
-          ...report,
-          testResults: {
-            total: 2,
-            passed: 3,
-            failed: 1,
-            failures: [],
-          },
-        } as any}
+        report={
+          {
+            ...report,
+            testResults: {
+              total: 2,
+              passed: 3,
+              failed: 1,
+              failures: [],
+            },
+          } as any
+        }
       />,
     );
 
@@ -149,11 +157,13 @@ describe("StructuredReviewReportView", () => {
             },
             filesSkipped: [{ file: "dist/output.js", reason: "generated" }],
             filesLeftUncommitted: [{ file: ".env.local", reason: "sensitive" }],
-            commandsRun: [{
-              command: "bun test",
-              result: "failed",
-              summary: "one failure",
-            }],
+            commandsRun: [
+              {
+                command: "bun test",
+                result: "failed",
+                summary: "one failure",
+              },
+            ],
             commandsNotRun: [{ command: "docker build", reason: "not affected" }],
             limitations: ["Provider integration unavailable"],
           },
@@ -162,11 +172,13 @@ describe("StructuredReviewReportView", () => {
             passed: 1,
             failed: 1,
             notRun: 0,
-            failures: [{
-              testName: "restores state",
-              file: "src/recovery.test.ts",
-              errorMessage: "expected paused",
-            }],
+            failures: [
+              {
+                testName: "restores state",
+                file: "src/recovery.test.ts",
+                errorMessage: "expected paused",
+              },
+            ],
           },
         }}
       />,
@@ -188,8 +200,7 @@ describe("StructuredReviewReportView", () => {
     expect(screen.queryByText("Adds structured reviews.") === null).toBe(true);
     expect(screen.queryByText("Long-running state changed.") === null).toBe(true);
     // A collapsed report still says what it concluded.
-    expect(screen.getByText(/Ready: with-fixes · 1 issue · 1 coverage gap/))
-      .toBeTruthy();
+    expect(screen.getByText(/Ready: with-fixes · 1 issue · 1 coverage gap/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
@@ -204,8 +215,7 @@ describe("StructuredReviewReportView", () => {
 
     expect(screen.queryByRole("button", { name: /Inspect raw JSON/ }) === null).toBe(true);
     expect(screen.queryByText("Validated JSON Schema") === null).toBe(true);
-    expect(screen.getByRole("heading", { name: "Structured review report" }))
-      .toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Structured review report" })).toBeTruthy();
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
   });
 
@@ -230,20 +240,15 @@ describe("StructuredReviewReportView", () => {
   });
 
   test("still offers the raw inspector when only the heading is suppressed", () => {
-    render(
-      <StructuredReviewReportView report={report} showHeading={false} />,
-    );
+    render(<StructuredReviewReportView report={report} showHeading={false} />);
 
     expect(screen.queryByRole("heading", { name: "Structured review report" }) === null).toBe(true);
     expect(screen.getByText("Validated JSON Schema")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Inspect raw JSON/ }))
-      .toBeTruthy();
+    expect(screen.getByRole("button", { name: /Inspect raw JSON/ })).toBeTruthy();
   });
 
   test("keeps an expanded section open across a re-render of the report", () => {
-    const { rerender } = render(
-      <StructuredReviewReportView report={report} collapsibleSections />,
-    );
+    const { rerender } = render(<StructuredReviewReportView report={report} collapsibleSections />);
     fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
 
@@ -251,11 +256,7 @@ describe("StructuredReviewReportView", () => {
     // section component per render would remount it and silently collapse
     // whatever the user had opened.
     rerender(
-      <StructuredReviewReportView
-        report={{ ...report }}
-        collapsibleSections
-        className="changed"
-      />,
+      <StructuredReviewReportView report={{ ...report }} collapsibleSections className="changed" />,
     );
 
     expect(screen.getByText("Adds structured reviews.")).toBeTruthy();
@@ -299,9 +300,7 @@ describe("StructuredReviewReportView", () => {
   });
 
   test("summarizes a collapsed report's counts in both singular and plural", () => {
-    const { rerender } = render(
-      <StructuredReviewReportView report={report} collapsibleSections />,
-    );
+    const { rerender } = render(<StructuredReviewReportView report={report} collapsibleSections />);
     expect(
       screen.getByText("Ready: with-fixes · 1 issue · 1 coverage gap · medium risk"),
     ).toBeTruthy();
@@ -318,9 +317,7 @@ describe("StructuredReviewReportView", () => {
         }}
       />,
     );
-    expect(
-      screen.getByText("Ready: yes · 0 issues · 0 coverage gaps · low risk"),
-    ).toBeTruthy();
+    expect(screen.getByText("Ready: yes · 0 issues · 0 coverage gaps · low risk")).toBeTruthy();
 
     rerender(
       <StructuredReviewReportView
@@ -367,22 +364,23 @@ describe("StructuredReviewReportView", () => {
     expect(screen.getByText("feature")).toBeTruthy();
     expect(screen.getByText("workflow")).toBeTruthy();
     // A strength is its description plus where it lives.
-    expect(screen.getByText((_, element) =>
-      element?.tagName === "LI"
-      && element.textContent === "Typed boundary src/example.ts:12"
-    )).toBeTruthy();
+    expect(
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "LI" && element.textContent === "Typed boundary src/example.ts:12",
+      ),
+    ).toBeTruthy();
   });
 
   test("locates a finding by file and line, and by file alone when there is none", () => {
     const issueLocation = () =>
-      screen.getByText((_, element) =>
-        element?.tagName === "P"
-        && element.className.includes("font-mono")
+      screen.getByText(
+        (_, element) => element?.tagName === "P" && element.className.includes("font-mono"),
       ).textContent;
     const keyChange = () =>
-      screen.getByText((_, element) =>
-        element?.tagName === "LI"
-        && element.textContent?.includes("Parses reports.") === true
+      screen.getByText(
+        (_, element) =>
+          element?.tagName === "LI" && element.textContent?.includes("Parses reports.") === true,
       ).textContent;
 
     const { rerender } = render(<StructuredReviewReportView report={report} />);
@@ -396,11 +394,13 @@ describe("StructuredReviewReportView", () => {
           issues: [{ ...report.issues[0]!, line: null, symbol: "" }],
           whatChanged: {
             ...report.whatChanged,
-            keyCodeChanges: [{
-              file: "src/example.ts",
-              line: null,
-              description: "Parses reports.",
-            }],
+            keyCodeChanges: [
+              {
+                file: "src/example.ts",
+                line: null,
+                description: "Parses reports.",
+              },
+            ],
           },
         }}
       />,
@@ -442,8 +442,9 @@ describe("StructuredReviewReportView", () => {
       />,
     );
 
-    expect(screen.getByText("No high-confidence issues were found in the reviewed scope."))
-      .toBeTruthy();
+    expect(
+      screen.getByText("No high-confidence issues were found in the reviewed scope."),
+    ).toBeTruthy();
     expect(screen.getAllByText("None.").length).toBeGreaterThanOrEqual(2);
   });
 });

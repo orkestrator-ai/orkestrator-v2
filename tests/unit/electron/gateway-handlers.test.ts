@@ -1,15 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import {
-  requestUrl,
-  startGateway,
-} from "./gateway-test-harness.js";
-
+import { requestUrl, startGateway } from "./gateway-test-harness.js";
 
 describe("remote gateway", () => {
-
-
-
   test("returns client errors for malformed, non-object, oversized, and incomplete settings bodies", async () => {
     const { info } = await startGateway({ env: {} });
     const headers = {
@@ -52,5 +45,4 @@ describe("remote gateway", () => {
     expect(wrongMethod.status).toBe(405);
     expect(wrongMethod.headers.allow).toBe("GET, PUT");
   });
-
 });

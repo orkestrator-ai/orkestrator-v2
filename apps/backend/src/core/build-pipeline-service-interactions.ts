@@ -1,11 +1,39 @@
 import { randomUUID } from "node:crypto";
-import type { BuildPipeline, BuildPipelineAgent, PipelineSession, PendingPipelineInteractionResolution, ResumableBuildPhase } from "@orkestrator/protocol/build-pipeline";
-import { BUILD_PIPELINE_VERSION, isBuildPipeline, isActiveBuildPhase } from "@orkestrator/protocol/build-pipeline";
-import { AGENT_INTERACTION_CONTRACT_VERSION, UNATTENDED_AGENT_INTERACTION_POLICY, agentInteractionPolicyAction, type AgentInteractionOutcome } from "@orkestrator/protocol/agent-interactions";
+import type {
+  BuildPipeline,
+  BuildPipelineAgent,
+  PipelineSession,
+  PendingPipelineInteractionResolution,
+  ResumableBuildPhase,
+} from "@orkestrator/protocol/build-pipeline";
+import {
+  BUILD_PIPELINE_VERSION,
+  isBuildPipeline,
+  isActiveBuildPhase,
+} from "@orkestrator/protocol/build-pipeline";
+import {
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  agentInteractionPolicyAction,
+  type AgentInteractionOutcome,
+} from "@orkestrator/protocol/agent-interactions";
 import type { Environment, PersistedBuildPipeline } from "./models.js";
-import { ProviderUnavailableError, type BridgeConnection, type BuildPipelineProvider } from "./build-pipeline-provider.js";
+import {
+  ProviderUnavailableError,
+  type BridgeConnection,
+  type BuildPipelineProvider,
+} from "./build-pipeline-provider.js";
 import { BuildPipelineServiceRecovery } from "./build-pipeline-service-recovery.js";
-import { errorMessage, PreSessionStageStartError, sessionForCurrentPhase, resumablePhase, sessionAgent, elapsedSince, interactionPresentation, logInteractionOutcome } from "./build-pipeline-service-helpers.js";
+import {
+  errorMessage,
+  PreSessionStageStartError,
+  sessionForCurrentPhase,
+  resumablePhase,
+  sessionAgent,
+  elapsedSince,
+  interactionPresentation,
+  logInteractionOutcome,
+} from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceInteractions extends BuildPipelineServiceRecovery {
   protected async recordInteractionOutcome(
@@ -16,20 +44,18 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     resolvedAt: number,
   ): Promise<void> {
     this.applyInteractionOutcome(pipeline, pending, outcome, resolvedAt);
-    const inputSucceeded = pending.action === "decline-and-continue"
-      && outcome === "auto-declined";
+    const inputSucceeded = pending.action === "decline-and-continue" && outcome === "auto-declined";
     await this.saveInteractionOutcome(pipeline, pending, outcome, resolvedAt);
     // The workflow outcome is durable from here. Advancing the journal is a
     // bookkeeping step that `finishDurablyRecordedInteractionJournalEntries`
     // repairs on the next start, so a transient journal write failure must not
     // convert a correctly resolved interaction into a failed build.
-    await this.markInteractionWorkflowRecorded(pending, Date.now())
-      .catch(() => undefined);
+    await this.markInteractionWorkflowRecorded(pending, Date.now()).catch(() => undefined);
     logInteractionOutcome(
       pending,
       outcome,
       resolvedAt,
-      inputSucceeded ? pipeline.autoDeclineCount ?? 0 : 1,
+      inputSucceeded ? (pipeline.autoDeclineCount ?? 0) : 1,
     );
   }
 
@@ -47,9 +73,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     session: PipelineSession,
   ): Promise<boolean> {
     if (!provider.interactions) return false;
-    const snapshot = await provider.interactions.listPendingInteractions(
-      session.sdkSessionId,
-    );
+    const snapshot = await provider.interactions.listPendingInteractions(session.sdkSessionId);
     const journal = await this.storage.getAgentInteractionResolutionJournal();
     let pending = pipeline.pendingInteractionResolution;
     let journalEntry = pending
@@ -63,16 +87,15 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     }
 
     if (!pending) {
-      journalEntry = journal.entries.find((entry) =>
-        entry.claim.workflowType === "build-pipeline"
-        && entry.claim.workflowId === pipeline.id
-        && entry.claim.fence === session.sessionKey
-        && entry.state !== "workflow-recorded"
+      journalEntry = journal.entries.find(
+        (entry) =>
+          entry.claim.workflowType === "build-pipeline" &&
+          entry.claim.workflowId === pipeline.id &&
+          entry.claim.fence === session.sessionKey &&
+          entry.state !== "workflow-recorded",
       );
       if (journalEntry) {
-        const request = snapshot.requests.find((item) =>
-          item.id === journalEntry!.interactionId
-        );
+        const request = snapshot.requests.find((item) => item.id === journalEntry!.interactionId);
         const policyAction = agentInteractionPolicyAction(
           session.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
           journalEntry.kind,
@@ -83,13 +106,11 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
               session,
               journalEntry.id,
               journalEntry.claim.claimedAt,
-              policyAction === "decline-and-continue"
-                ? "decline-and-continue"
-                : "deny-and-fail",
+              policyAction === "decline-and-continue" ? "decline-and-continue" : "deny-and-fail",
             )
           : this.recoveredPendingInteraction(journalEntry, session);
         pipeline.pendingInteractionResolution = pending;
-        if (!await this.savePendingInteractionResolution(pipeline, pending)) {
+        if (!(await this.savePendingInteractionResolution(pipeline, pending))) {
           return true;
         }
       }
@@ -114,18 +135,17 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
         session,
         journalEntry.id,
         journalEntry.claim.claimedAt,
-        policyAction === "decline-and-continue"
-          ? "decline-and-continue"
-          : "deny-and-fail",
+        policyAction === "decline-and-continue" ? "decline-and-continue" : "deny-and-fail",
       );
       pipeline.pendingInteractionResolution = pending;
-      if (!await this.savePendingInteractionResolution(pipeline, pending)) {
+      if (!(await this.savePendingInteractionResolution(pipeline, pending))) {
         return true;
       }
     }
 
-    journalEntry ??= (await this.storage.getAgentInteractionResolutionJournal())
-      .entries.find((entry) => entry.id === pending!.journalId);
+    journalEntry ??= (await this.storage.getAgentInteractionResolutionJournal()).entries.find(
+      (entry) => entry.id === pending!.journalId,
+    );
     if (!journalEntry) {
       // Journal retention drops entries outright once it saturates, so a
       // missing claim is expected rather than a transport problem. Throwing
@@ -145,13 +165,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
       // The claim is gone without evidence that the provider was ever
       // answered, so fail closed and visibly rather than leaving the agent
       // invisibly parked on a request nobody will resolve.
-      await this.recordInteractionOutcome(
-        pipeline,
-        session,
-        pending,
-        "failed",
-        Date.now(),
-      );
+      await this.recordInteractionOutcome(pipeline, session, pending, "failed", Date.now());
       return true;
     }
     if (journalEntry.state === "workflow-recorded") {
@@ -201,8 +215,8 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     const resolutionSnapshot = await provider.interactions.listPendingInteractions(
       session.sdkSessionId,
     );
-    const requestStillLive = resolutionSnapshot.requests.some((request) =>
-      request.id === pending!.interactionId
+    const requestStillLive = resolutionSnapshot.requests.some(
+      (request) => request.id === pending!.interactionId,
     );
     let outcome: AgentInteractionOutcome;
     const resolvedAt = Date.now();
@@ -210,9 +224,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
       // The crash boundary may be immediately after the provider accepted the
       // response. A full authoritative snapshot proving absence is sufficient
       // reconciliation; never re-dispatch an ambiguous response.
-      outcome = pending.action === "decline-and-continue"
-        ? "auto-declined"
-        : "denied";
+      outcome = pending.action === "decline-and-continue" ? "auto-declined" : "denied";
     } else {
       const applied = await provider.interactions.resolveInteraction(
         session.sdkSessionId,
@@ -230,12 +242,12 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
         const reconciled = await provider.interactions.listPendingInteractions(
           session.sdkSessionId,
         );
-        terminal = !reconciled.requests.some((request) =>
-          request.id === pending!.interactionId
-        );
+        terminal = !reconciled.requests.some((request) => request.id === pending!.interactionId);
       }
       outcome = terminal
-        ? pending.action === "decline-and-continue" ? "auto-declined" : "denied"
+        ? pending.action === "decline-and-continue"
+          ? "auto-declined"
+          : "denied"
         : "failed";
     }
     const recorded = await this.markInteractionProviderResolved(
@@ -248,13 +260,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     // while this provider call was in flight, the current owner is responsible
     // for reconciling and recording the result; never write through its fence.
     if (!recorded) return true;
-    await this.recordInteractionOutcome(
-      pipeline,
-      session,
-      pending,
-      outcome,
-      resolvedAt,
-    );
+    await this.recordInteractionOutcome(pipeline, session, pending, outcome, resolvedAt);
     if (outcome !== "auto-declined") {
       // The terminal workflow failure is already durable. Stopping the turn is
       // best-effort cleanup; a failed abort cannot erase or downgrade the
@@ -268,9 +274,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     agent: BuildPipelineAgent,
     environment: Environment,
   ): Promise<BridgeConnection> {
-    const suffix = agent === "opencode"
-      ? "opencode"
-      : agent;
+    const suffix = agent === "opencode" ? "opencode" : agent;
     if (environment.environmentType === "local") {
       const result = await this.invoke<{
         port: number;
@@ -309,17 +313,18 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     pipeline.backendRevision = record.revision;
     pipeline.error = errorMessage(error);
     pipeline.failureContext = {
-      phase: error instanceof PreSessionStageStartError
-        ? error.phase
-        : pipeline.phase as ResumableBuildPhase,
+      phase:
+        error instanceof PreSessionStageStartError
+          ? error.phase
+          : (pipeline.phase as ResumableBuildPhase),
       kind: "stage-transition",
-      sessionId: error instanceof PreSessionStageStartError
-        ? undefined
-        : sessionForCurrentPhase(pipeline)?.sdkSessionId,
+      sessionId:
+        error instanceof PreSessionStageStartError
+          ? undefined
+          : sessionForCurrentPhase(pipeline)?.sdkSessionId,
     };
-    const failedSession = error instanceof PreSessionStageStartError
-      ? undefined
-      : sessionForCurrentPhase(pipeline);
+    const failedSession =
+      error instanceof PreSessionStageStartError ? undefined : sessionForCurrentPhase(pipeline);
     if (failedSession) failedSession.status = "error";
     pipeline.phase = "failed";
     delete pipeline.pendingPromptAttempt;
@@ -346,8 +351,9 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     // review harness would look like a failure on the build harness here — and
     // dropping the healthy one would leave the unreachable one cached forever.
     const session = sessionForCurrentPhase(pipeline);
-    const agent = this.lastProviderAgent.get(pipelineId)
-      ?? (session ? sessionAgent(pipeline, session) : pipeline.agentType);
+    const agent =
+      this.lastProviderAgent.get(pipelineId) ??
+      (session ? sessionAgent(pipeline, session) : pipeline.agentType);
     const providerKey = `${pipeline.environmentId}:${agent}`;
     const provider = this.providers.get(providerKey);
     this.providers.delete(providerKey);
@@ -356,10 +362,9 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     // different harness failing is a new outage and gets its own deadline,
     // rather than inheriting an elapsed time it did not accumulate.
     const previous = pipeline.reconnectAttempt;
-    const continues = previous !== undefined
-      && (previous.agent === undefined || previous.agent === agent);
-    const startedAt = (continues ? previous.startedAt : undefined)
-      ?? new Date().toISOString();
+    const continues =
+      previous !== undefined && (previous.agent === undefined || previous.agent === agent);
+    const startedAt = (continues ? previous.startedAt : undefined) ?? new Date().toISOString();
     const elapsed = elapsedSince(startedAt);
     if (elapsed !== null && elapsed >= this.reconnectDeadlineMs) {
       // Retrying forever is indistinguishable from working, from the outside.
@@ -381,9 +386,8 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
       // Only when this harness owns the current session. A stage transition
       // fails before its own session exists, and naming the previous stage's
       // session there would point recovery at a session on a healthy bridge.
-      sessionId: session && sessionAgent(pipeline, session) === agent
-        ? session.sdkSessionId
-        : undefined,
+      sessionId:
+        session && sessionAgent(pipeline, session) === agent ? session.sdkSessionId : undefined,
       startedAt,
       agent,
     };
@@ -397,16 +401,19 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
   ): Promise<BuildPipeline> {
     const previous = this.locks.get(pipelineId) ?? Promise.resolve();
     let result: BuildPipeline | undefined;
-    const next = previous.catch(() => undefined).then(async () => {
-      const record = await this.requireRecord(pipelineId);
-      const pipeline = record.snapshot as BuildPipeline;
-      pipeline.backendRevision = record.revision;
-      await mutation(pipeline);
-      await this.save(pipeline, record.revision);
-      result = pipeline;
-    }).finally(() => {
-      if (this.locks.get(pipelineId) === next) this.locks.delete(pipelineId);
-    });
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const record = await this.requireRecord(pipelineId);
+        const pipeline = record.snapshot as BuildPipeline;
+        pipeline.backendRevision = record.revision;
+        await mutation(pipeline);
+        await this.save(pipeline, record.revision);
+        result = pipeline;
+      })
+      .finally(() => {
+        if (this.locks.get(pipelineId) === next) this.locks.delete(pipelineId);
+      });
     this.locks.set(pipelineId, next);
     await next;
     return result!;
@@ -434,9 +441,7 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     const structurallyValid: boolean = isBuildPipeline(pipeline);
     if (!structurallyValid) {
       pipeline.backendRevision = expectedRevision;
-      throw new Error(
-        `Refusing to persist an invalid build pipeline snapshot: ${pipeline.id}`,
-      );
+      throw new Error(`Refusing to persist an invalid build pipeline snapshot: ${pipeline.id}`);
     }
     const saved = await this.storage.saveBuildPipeline(
       pipeline.id,
@@ -450,4 +455,3 @@ export abstract class BuildPipelineServiceInteractions extends BuildPipelineServ
     return saved;
   }
 }
-

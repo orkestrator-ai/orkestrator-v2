@@ -8,10 +8,7 @@ import {
 import { OPTIMISTIC_MESSAGE_PREFIX } from "../lib/chat/client-only-messages";
 import { type OpenCodeAttachment, useOpenCodeStore } from "./openCodeStore";
 import type { ContextUsageSnapshot } from "../lib/context-usage";
-import {
-  openCodeQuestionDraftKey,
-  usePromptDraftStore,
-} from "./promptDraftStore";
+import { openCodeQuestionDraftKey, usePromptDraftStore } from "./promptDraftStore";
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
 
 function resetOpenCodeStore() {
@@ -66,7 +63,7 @@ describe("openCodeStore setMessages", () => {
     const serverMessage = createTextMessage("msg-1", "2026-02-11T00:00:00.000Z");
     const errorMessage = createTextMessage(
       `${ERROR_MESSAGE_PREFIX}msg-1`,
-      "2026-02-11T00:01:00.000Z"
+      "2026-02-11T00:01:00.000Z",
     );
 
     store.setSession(sessionKey, {
@@ -89,7 +86,7 @@ describe("openCodeStore setMessages", () => {
     const serverMessage = createTextMessage("msg-2", "2026-02-11T00:00:00.000Z");
     const errorMessage = createTextMessage(
       `${ERROR_MESSAGE_PREFIX}msg-2`,
-      "2026-02-11T00:01:00.000Z"
+      "2026-02-11T00:01:00.000Z",
     );
 
     store.setSession(sessionKey, {
@@ -223,9 +220,7 @@ describe("openCodeStore clearSession", () => {
         isLoading: false,
       });
       store.setDraftText(key, "draft");
-      store.setDraftMentions(key, [
-        { path: `/workspace/${key}.ts`, name: `${key}.ts` },
-      ] as never);
+      store.setDraftMentions(key, [{ path: `/workspace/${key}.ts`, name: `${key}.ts` }] as never);
       store.setSelectedModel(key, "gpt-5");
       store.setSelectedVariant(key, "fast");
       store.setSelectedMode(key, "plan");
@@ -261,16 +256,16 @@ describe("openCodeStore clearSession", () => {
       sessionId: "session-kept",
       questions: [],
     });
-    usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("session-closed", "question-closed"),
-      "answer",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("session-kept", "question-kept"),
-      "answer",
-      "other",
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(
+        openCodeQuestionDraftKey("session-closed", "question-closed"),
+        "answer",
+        "target",
+      );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(openCodeQuestionDraftKey("session-kept", "question-kept"), "answer", "other");
     store.addPendingPermission({
       id: "permission-kept",
       sessionId: "session-kept",
@@ -310,14 +305,14 @@ describe("openCodeStore clearSession", () => {
     expect(next.getPendingQuestion("question-kept")).toBeTruthy();
     expect(next.getPendingPermission("permission-kept")).toBeTruthy();
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("session-closed", "question-closed"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(openCodeQuestionDraftKey("session-closed", "question-closed")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("session-kept", "question-kept"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(openCodeQuestionDraftKey("session-kept", "question-kept")),
     ).toBe(true);
   });
 
@@ -342,16 +337,12 @@ describe("openCodeStore clearSession", () => {
       sessionId: "session-other",
       questions: [],
     } as never);
-    usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("session-closed", "req-1"),
-      "answer",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("session-other", "req-2"),
-      "answer",
-      "other",
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(openCodeQuestionDraftKey("session-closed", "req-1"), "answer", "target");
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(openCodeQuestionDraftKey("session-other", "req-2"), "answer", "other");
 
     store.clearSession(closed);
 
@@ -359,14 +350,12 @@ describe("openCodeStore clearSession", () => {
     expect(next.getPendingQuestion("req-1")).toBeUndefined();
     expect(next.getPendingQuestion("req-2")).toBeTruthy();
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("session-closed", "req-1"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(openCodeQuestionDraftKey("session-closed", "req-1")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("session-other", "req-2"),
-      ),
+      usePromptDraftStore.getState().drafts.has(openCodeQuestionDraftKey("session-other", "req-2")),
     ).toBe(true);
   });
 
@@ -492,9 +481,7 @@ describe("openCodeStore same-environment tab isolation", () => {
     expect(state.getSession(tabA)?.title).toBe("Planning tab");
     expect(state.getSession(tabB)?.title).toBe("Build tab");
     expect(state.getContextUsage(tabA)?.modelId).toBe("openai/gpt-5");
-    expect(state.getContextUsage(tabB)?.modelId).toBe(
-      "anthropic/claude-sonnet",
-    );
+    expect(state.getContextUsage(tabB)?.modelId).toBe("anthropic/claude-sonnet");
 
     store.clearSession(tabA);
 
@@ -596,9 +583,7 @@ describe("openCodeStore slash commands", () => {
       { name: "/build", description: "Build" },
       { name: "/fix", description: "Fix" },
     ]);
-    expect(store.getSlashCommands("env-999")).toEqual([
-      { name: "/test", description: "Test" },
-    ]);
+    expect(store.getSlashCommands("env-999")).toEqual([{ name: "/test", description: "Test" }]);
   });
 
   test("clearEnvironment removes slash commands for that environment", () => {
@@ -610,9 +595,7 @@ describe("openCodeStore slash commands", () => {
     store.clearEnvironment("env-123");
 
     expect(store.getSlashCommands("env-123")).toEqual([]);
-    expect(store.getSlashCommands("env-999")).toEqual([
-      { name: "/test", description: "Test" },
-    ]);
+    expect(store.getSlashCommands("env-999")).toEqual([{ name: "/test", description: "Test" }]);
   });
 });
 
@@ -627,9 +610,7 @@ describe("openCodeStore models", () => {
     store.setModels("env-123", [
       { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", provider: "anthropic" },
     ]);
-    store.setModels("env-999", [
-      { id: "openai/gpt-5", name: "GPT-5", provider: "openai" },
-    ]);
+    store.setModels("env-999", [{ id: "openai/gpt-5", name: "GPT-5", provider: "openai" }]);
 
     expect(store.getModels("env-123")).toEqual([
       { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", provider: "anthropic" },
@@ -645,9 +626,7 @@ describe("openCodeStore models", () => {
     store.setModels("env-123", [
       { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4", provider: "anthropic" },
     ]);
-    store.setModels("env-999", [
-      { id: "openai/gpt-5", name: "GPT-5", provider: "openai" },
-    ]);
+    store.setModels("env-999", [{ id: "openai/gpt-5", name: "GPT-5", provider: "openai" }]);
 
     store.clearEnvironment("env-123");
 
@@ -735,7 +714,10 @@ describe("openCodeStore queue", () => {
 
     expect(useOpenCodeStore.getState().getQueueLength(sessionKey)).toBe(2);
     expect(
-      useOpenCodeStore.getState().getQueuedMessages(sessionKey).map((m) => m.id),
+      useOpenCodeStore
+        .getState()
+        .getQueuedMessages(sessionKey)
+        .map((m) => m.id),
     ).toEqual(["queue-1", "queue-2"]);
 
     store.setQueueProjection(sessionKey, []);
@@ -770,7 +752,6 @@ describe("openCodeStore queue", () => {
     expect(useOpenCodeStore.getState().getQueueLength("env-env-123:tab-2")).toBe(0);
     expect(useOpenCodeStore.getState().getQueueLength("env-env-999:tab-1")).toBe(1);
   });
-
 });
 
 describe("openCodeStore pending permissions", () => {
@@ -792,9 +773,7 @@ describe("openCodeStore pending permissions", () => {
 
     store.addPendingPermission(permission);
 
-    const permissions = useOpenCodeStore
-      .getState()
-      .getPendingPermissionsForSession("session-1");
+    const permissions = useOpenCodeStore.getState().getPendingPermissionsForSession("session-1");
 
     expect(permissions).toHaveLength(1);
     expect(permissions[0]?.id).toBe("perm-1");
@@ -836,12 +815,8 @@ describe("openCodeStore pending permissions", () => {
   test("returns the same empty array for a session with no pending permissions", () => {
     // useSyncExternalStore compares snapshots by reference, so a fresh [] on every
     // read would rerender forever.
-    const first = useOpenCodeStore
-      .getState()
-      .getPendingPermissionsForSession("session-none");
-    const second = useOpenCodeStore
-      .getState()
-      .getPendingPermissionsForSession("session-none");
+    const first = useOpenCodeStore.getState().getPendingPermissionsForSession("session-none");
+    const second = useOpenCodeStore.getState().getPendingPermissionsForSession("session-none");
 
     expect(first).toBe(second);
     expect(first).toEqual([]);
@@ -900,16 +875,12 @@ describe("openCodeStore pending permissions", () => {
       sessionId: "session-3",
       questions: [],
     });
-    usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("session-1", "question-a"),
-      "answer",
-      "target",
-    );
-    usePromptDraftStore.getState().setDraftValue(
-      openCodeQuestionDraftKey("session-3", "question-c"),
-      "answer",
-      "other",
-    );
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(openCodeQuestionDraftKey("session-1", "question-a"), "answer", "target");
+    usePromptDraftStore
+      .getState()
+      .setDraftValue(openCodeQuestionDraftKey("session-3", "question-c"), "answer", "other");
 
     store.clearEnvironment("env-123");
 
@@ -917,14 +888,14 @@ describe("openCodeStore pending permissions", () => {
     expect(useOpenCodeStore.getState().getPendingPermission("perm-b")).toBeUndefined();
     expect(useOpenCodeStore.getState().getPendingPermission("perm-c")).toBeDefined();
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("session-1", "question-a"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(openCodeQuestionDraftKey("session-1", "question-a")),
     ).toBe(false);
     expect(
-      usePromptDraftStore.getState().drafts.has(
-        openCodeQuestionDraftKey("session-3", "question-c"),
-      ),
+      usePromptDraftStore
+        .getState()
+        .drafts.has(openCodeQuestionDraftKey("session-3", "question-c")),
     ).toBe(true);
   });
 });
@@ -1246,12 +1217,8 @@ describe("openCodeStore questions and event subscriptions", () => {
   test("returns the same empty array for a session with no pending questions", () => {
     // Same reference-stability contract as the permissions selector: a new []
     // per read would loop useSyncExternalStore.
-    const first = useOpenCodeStore
-      .getState()
-      .getPendingQuestionsForSession("session-none");
-    const second = useOpenCodeStore
-      .getState()
-      .getPendingQuestionsForSession("session-none");
+    const first = useOpenCodeStore.getState().getPendingQuestionsForSession("session-none");
+    const second = useOpenCodeStore.getState().getPendingQuestionsForSession("session-none");
 
     expect(first).toBe(second);
     expect(first).toEqual([]);
@@ -1447,10 +1414,7 @@ describe("openCodeStore runtime health and agents", () => {
     const store = useOpenCodeStore.getState();
     store.setRuntimeHealth("env-1", HEALTH);
 
-    expect(store.getAgents("env-1").map((agent) => agent.name)).toEqual([
-      "build",
-      "plan",
-    ]);
+    expect(store.getAgents("env-1").map((agent) => agent.name)).toEqual(["build", "plan"]);
   });
 
   test("getAgents returns a stable reference when there is no snapshot", () => {
@@ -1481,13 +1445,15 @@ describe("openCodeStore runtime health and agents", () => {
     store.setRuntimeHealth("env-1", HEALTH);
     store.setRuntimeHealth("env-env-1:tab-1", {
       ...HEALTH,
-      diffs: [{
-        file: "private.patch",
-        patch: "sensitive retained patch",
-        additions: 1,
-        deletions: 0,
-        status: "modified",
-      }],
+      diffs: [
+        {
+          file: "private.patch",
+          patch: "sensitive retained patch",
+          additions: 1,
+          deletions: 0,
+          status: "modified",
+        },
+      ],
     });
     store.setRuntimeHealth("env-2", HEALTH);
     store.setRuntimeHealth("env-env-2:tab-1", HEALTH);

@@ -33,7 +33,7 @@ const decoder = new TextDecoder();
 async function readUntil(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   predicate: (text: string) => boolean,
-  timeoutMs = 2000
+  timeoutMs = 2000,
 ): Promise<string> {
   const startedAt = Date.now();
   let buffer = "";
@@ -281,11 +281,13 @@ describe("serializeEventData", () => {
   });
 
   test("preserves an explicit prompt-suggestion removal on the wire", () => {
-    expect(serializeEventData({
-      type: "session.updated",
-      sessionId: "s-1",
-      data: { promptSuggestion: null },
-    })).toBe('{"sessionId":"s-1","promptSuggestion":null}');
+    expect(
+      serializeEventData({
+        type: "session.updated",
+        sessionId: "s-1",
+        data: { promptSuggestion: null },
+      }),
+    ).toBe('{"sessionId":"s-1","promptSuggestion":null}');
   });
 });
 
@@ -303,31 +305,38 @@ describe("SSE replay ring", () => {
     });
     const through = eventEmitter.currentRevision;
 
-    const replay = getReplayFrames({
-      generation: eventEmitter.generation,
-      revision: before,
-    }, through);
+    const replay = getReplayFrames(
+      {
+        generation: eventEmitter.generation,
+        revision: before,
+      },
+      through,
+    );
     expect(replay.resetRequired).toBe(false);
-    expect(replay.frames.map((frame) => frame.revision)).toEqual([
-      before + 1,
-      before + 2,
-    ]);
-    expect(replay.frames.map((frame) => frame.event)).toEqual([
-      "session.updated",
-      "session.idle",
-    ]);
+    expect(replay.frames.map((frame) => frame.revision)).toEqual([before + 1, before + 2]);
+    expect(replay.frames.map((frame) => frame.event)).toEqual(["session.updated", "session.idle"]);
   });
 
   test("requires a reset for stale-generation and future cursors", () => {
     const through = eventEmitter.currentRevision;
-    expect(getReplayFrames({
-      generation: "dead-bridge-generation",
-      revision: through,
-    }, through)).toEqual({ frames: [], resetRequired: true });
-    expect(getReplayFrames({
-      generation: eventEmitter.generation,
-      revision: through + 1,
-    }, through)).toEqual({ frames: [], resetRequired: true });
+    expect(
+      getReplayFrames(
+        {
+          generation: "dead-bridge-generation",
+          revision: through,
+        },
+        through,
+      ),
+    ).toEqual({ frames: [], resetRequired: true });
+    expect(
+      getReplayFrames(
+        {
+          generation: eventEmitter.generation,
+          revision: through + 1,
+        },
+        through,
+      ),
+    ).toEqual({ frames: [], resetRequired: true });
   });
 
   test("parses only bounded generation-aware cursors", () => {
@@ -350,10 +359,13 @@ describe("SSE replay ring", () => {
         data: { status: "running" },
       });
     }
-    const replay = getReplayFrames({
-      generation: eventEmitter.generation,
-      revision: before,
-    }, eventEmitter.currentRevision);
+    const replay = getReplayFrames(
+      {
+        generation: eventEmitter.generation,
+        revision: before,
+      },
+      eventEmitter.currentRevision,
+    );
     expect(replay).toEqual({ frames: [], resetRequired: true });
   });
 
@@ -365,30 +377,32 @@ describe("SSE replay ring", () => {
       data: { value: "retained" },
     };
     const secondBytes =
-      Buffer.byteLength(serializeEventData(secondEvent))
-      + Buffer.byteLength(secondEvent.type);
+      Buffer.byteLength(serializeEventData(secondEvent)) + Buffer.byteLength(secondEvent.type);
     const replay = createReplayBuffer({
       maxFrames: 10,
       maxBytes: secondBytes,
     });
 
-    replay.append({
-      type: "session.updated",
-      sessionId: "first",
-      data: { value: "evicted" },
-    }, 1, generation);
+    replay.append(
+      {
+        type: "session.updated",
+        sessionId: "first",
+        data: { value: "evicted" },
+      },
+      1,
+      generation,
+    );
     replay.append(secondEvent, 2, generation);
 
-    expect(replay.getFrames(
-      { generation, revision: 0 },
-      2,
-      generation,
-    )).toEqual({ frames: [], resetRequired: true });
-    expect(replay.getFrames(
-      { generation, revision: 1 },
-      2,
-      generation,
-    ).frames.map((frame) => frame.revision)).toEqual([2]);
+    expect(replay.getFrames({ generation, revision: 0 }, 2, generation)).toEqual({
+      frames: [],
+      resetRequired: true,
+    });
+    expect(
+      replay
+        .getFrames({ generation, revision: 1 }, 2, generation)
+        .frames.map((frame) => frame.revision),
+    ).toEqual([2]);
   });
 });
 
@@ -430,9 +444,7 @@ describe("GET /subscribe (SSE)", () => {
         data: { status: "running" },
       });
 
-      const forwarded = await readUntil(reader!, (b) =>
-        b.includes("event: session.updated")
-      );
+      const forwarded = await readUntil(reader!, (b) => b.includes("event: session.updated"));
       expect(forwarded).toContain('"sessionId":"s-events-test"');
       expect(forwarded).toContain('"status":"running"');
     } finally {
@@ -504,9 +516,8 @@ describe("GET /subscribe (SSE)", () => {
     expect(reader).toBeDefined();
 
     try {
-      const frames = await readUntil(
-        reader!,
-        (buffer) => buffer.includes('"sessionId":"query-replay-session"'),
+      const frames = await readUntil(reader!, (buffer) =>
+        buffer.includes('"sessionId":"query-replay-session"'),
       );
       expect(frames).toContain(`id: ${eventEmitter.generation}:${before}`);
       expect(frames).toContain("event: connected");
@@ -531,9 +542,8 @@ describe("GET /subscribe (SSE)", () => {
     expect(reader).toBeDefined();
 
     try {
-      const frames = await readUntil(
-        reader!,
-        (buffer) => buffer.includes("event: replay.required"),
+      const frames = await readUntil(reader!, (buffer) =>
+        buffer.includes("event: replay.required"),
       );
       expect(frames).toContain("id: stale-generation:7");
       expect(frames).toContain('"resetRequired":true');
@@ -552,15 +562,13 @@ describe("GET /subscribe (SSE)", () => {
     ]) {
       const subscribersBefore = eventEmitter.subscriberCount;
       const controller = new AbortController();
-      const response = await app.request(
-        `/subscribe?since=${encodeURIComponent(cursor)}`,
-        { signal: controller.signal },
-      );
+      const response = await app.request(`/subscribe?since=${encodeURIComponent(cursor)}`, {
+        signal: controller.signal,
+      });
       const reader = response.body?.getReader();
       try {
-        const frames = await readUntil(
-          reader!,
-          (buffer) => buffer.includes("event: replay.required"),
+        const frames = await readUntil(reader!, (buffer) =>
+          buffer.includes("event: replay.required"),
         );
         expect(frames).toContain('"resetRequired":true');
       } finally {
@@ -583,17 +591,14 @@ describe("GET /subscribe (SSE)", () => {
     }
     const controller = new AbortController();
     const response = await app.request(
-      `/subscribe?since=${encodeURIComponent(
-        `${eventEmitter.generation}:${before}`,
-      )}`,
+      `/subscribe?since=${encodeURIComponent(`${eventEmitter.generation}:${before}`)}`,
       { signal: controller.signal },
     );
     const reader = response.body?.getReader();
 
     try {
-      const frames = await readUntil(
-        reader!,
-        (buffer) => buffer.includes("event: replay.required"),
+      const frames = await readUntil(reader!, (buffer) =>
+        buffer.includes("event: replay.required"),
       );
       expect(frames).toContain('"resetRequired":true');
       expect(frames).not.toContain(`"sessionId":"route-window-0"`);
@@ -616,9 +621,7 @@ describe("GET /subscribe (SSE)", () => {
     }
     const controller = new AbortController();
     const response = await app.request(
-      `/subscribe?since=${encodeURIComponent(
-        `${eventEmitter.generation}:${before}`,
-      )}`,
+      `/subscribe?since=${encodeURIComponent(`${eventEmitter.generation}:${before}`)}`,
       { signal: controller.signal },
     );
     const reader = response.body?.getReader();
@@ -631,22 +634,21 @@ describe("GET /subscribe (SSE)", () => {
           sessionId: `emitted-during-replay-${index}`,
         });
       }
-      const frames = await readUntil(
-        reader!,
-        (buffer) => buffer.includes('"sessionId":"emitted-during-replay-3"'),
+      const frames = await readUntil(reader!, (buffer) =>
+        buffer.includes('"sessionId":"emitted-during-replay-3"'),
       );
       for (let index = 1; index <= 3; index += 1) {
-        expect(frames.match(
-          new RegExp(`"sessionId":"emitted-during-replay-${index}"`, "g"),
-        )).toHaveLength(1);
+        expect(
+          frames.match(new RegExp(`"sessionId":"emitted-during-replay-${index}"`, "g")),
+        ).toHaveLength(1);
       }
-      const revisions = [...frames.matchAll(
-        new RegExp(`^id: ${eventEmitter.generation}:(\\d+)$`, "gm"),
-      )].map((match) => Number(match[1]));
+      const revisions = [
+        ...frames.matchAll(new RegExp(`^id: ${eventEmitter.generation}:(\\d+)$`, "gm")),
+      ].map((match) => Number(match[1]));
       expect(revisions.length).toBeGreaterThan(100);
-      expect(revisions.every(
-        (revision, index) => index === 0 || revision > revisions[index - 1]!,
-      )).toBe(true);
+      expect(
+        revisions.every((revision, index) => index === 0 || revision > revisions[index - 1]!),
+      ).toBe(true);
     } finally {
       controller.abort();
       await reader?.cancel().catch(() => {});
@@ -667,9 +669,7 @@ describe("GET /subscribe (SSE)", () => {
     }
     const controller = new AbortController();
     const response = await app.request(
-      `/subscribe?since=${encodeURIComponent(
-        `${eventEmitter.generation}:${before}`,
-      )}`,
+      `/subscribe?since=${encodeURIComponent(`${eventEmitter.generation}:${before}`)}`,
       { signal: controller.signal },
     );
 
@@ -733,10 +733,13 @@ describe("GET /subscribe (SSE)", () => {
 
   test("route-level handshake byte overflow closes and removes the subscriber", async () => {
     const boundedApp = new Hono();
-    boundedApp.route("/", createEventsRouter({
-      maxPendingFrames: 100,
-      maxPendingBytes: 32,
-    }));
+    boundedApp.route(
+      "/",
+      createEventsRouter({
+        maxPendingFrames: 100,
+        maxPendingBytes: 32,
+      }),
+    );
     const subscribersBefore = eventEmitter.subscriberCount;
     const response = await boundedApp.request("/subscribe");
 
@@ -763,10 +766,7 @@ describe("GET /subscribe (SSE)", () => {
     expect(reader).toBeDefined();
 
     try {
-      const frames = await readUntil(
-        reader!,
-        (buffer) => buffer.includes("event: keepalive"),
-      );
+      const frames = await readUntil(reader!, (buffer) => buffer.includes("event: keepalive"));
       expect(frames).toContain("event: connected");
       expect(frames).toContain("event: keepalive");
     } finally {

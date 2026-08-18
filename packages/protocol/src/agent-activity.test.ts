@@ -35,12 +35,7 @@ describe("isAgentActivityTimestamp", () => {
   test("rejects the implementation-defined forms Date.parse also accepts", () => {
     // Date.parse takes all of these, which would make an "ISO timestamp"
     // contract a lie and let two clients disagree about what a token means.
-    for (const value of [
-      "Jul 27 2026 12:00:00",
-      "2026-07-27",
-      "2026/07/27 12:00:00",
-      "12:00:00",
-    ]) {
+    for (const value of ["Jul 27 2026 12:00:00", "2026-07-27", "2026/07/27 12:00:00", "12:00:00"]) {
       expect(isAgentActivityTimestamp(value)).toBe(false);
     }
   });
@@ -58,24 +53,23 @@ describe("isAgentActivityTimestamp", () => {
 
 describe("parseUsableAgentActivityTime", () => {
   test("returns a comparable time for a usable token", () => {
-    expect(parseUsableAgentActivityTime("2026-07-27T12:00:00.000Z", Date.parse(
-      "2026-07-27T12:00:00.000Z",
-    ))).toBe(Date.parse("2026-07-27T12:00:00.000Z"));
+    expect(
+      parseUsableAgentActivityTime(
+        "2026-07-27T12:00:00.000Z",
+        Date.parse("2026-07-27T12:00:00.000Z"),
+      ),
+    ).toBe(Date.parse("2026-07-27T12:00:00.000Z"));
   });
 
   test("treats the skew allowance as inclusive at its boundary", () => {
     const reference = Date.parse("2026-07-27T12:00:00.000Z");
-    const atLimit = new Date(
-      reference + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
-    ).toISOString();
-    const pastLimit = new Date(
-      reference + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS + 1,
-    ).toISOString();
+    const atLimit = new Date(reference + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS).toISOString();
+    const pastLimit = new Date(reference + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS + 1).toISOString();
 
-    expect(parseUsableAgentActivityTime(atLimit, reference))
-      .toBe(reference + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS);
-    expect(parseUsableAgentActivityTime(pastLimit, reference))
-      .toBe(Number.NEGATIVE_INFINITY);
+    expect(parseUsableAgentActivityTime(atLimit, reference)).toBe(
+      reference + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS,
+    );
+    expect(parseUsableAgentActivityTime(pastLimit, reference)).toBe(Number.NEGATIVE_INFINITY);
   });
 
   test("loses every ordering comparison when the token is unusable", () => {
@@ -92,8 +86,7 @@ describe("parseUsableAgentActivityTime", () => {
     const farFuture = new Date(
       Date.now() + AGENT_ACTIVITY_MAX_FUTURE_SKEW_MS + 60_000,
     ).toISOString();
-    expect(parseUsableAgentActivityTime(farFuture))
-      .toBe(Number.NEGATIVE_INFINITY);
+    expect(parseUsableAgentActivityTime(farFuture)).toBe(Number.NEGATIVE_INFINITY);
   });
 });
 
@@ -102,39 +95,51 @@ describe("aggregateAgentActivityState", () => {
 
   test("is idle only when nothing is happening", () => {
     expect(aggregateAgentActivityState({})).toBe("idle");
-    expect(aggregateAgentActivityState({
-      frontend: { state: "idle", updatedAt: at },
-      "claude-terminal": { state: "idle", updatedAt: at },
-    })).toBe("idle");
+    expect(
+      aggregateAgentActivityState({
+        frontend: { state: "idle", updatedAt: at },
+        "claude-terminal": { state: "idle", updatedAt: at },
+      }),
+    ).toBe("idle");
   });
 
   test("lets waiting outrank idle and working outrank both", () => {
-    expect(aggregateAgentActivityState({
-      frontend: { state: "idle", updatedAt: at },
-      "claude-terminal": { state: "waiting", updatedAt: at },
-    })).toBe("waiting");
-    expect(aggregateAgentActivityState({
-      frontend: { state: "waiting", updatedAt: at },
-      "claude-terminal": { state: "working", updatedAt: at },
-    })).toBe("working");
+    expect(
+      aggregateAgentActivityState({
+        frontend: { state: "idle", updatedAt: at },
+        "claude-terminal": { state: "waiting", updatedAt: at },
+      }),
+    ).toBe("waiting");
+    expect(
+      aggregateAgentActivityState({
+        frontend: { state: "waiting", updatedAt: at },
+        "claude-terminal": { state: "working", updatedAt: at },
+      }),
+    ).toBe("working");
     // Precedence must not depend on iteration order.
-    expect(aggregateAgentActivityState({
-      frontend: { state: "working", updatedAt: at },
-      "claude-terminal": { state: "waiting", updatedAt: at },
-    })).toBe("working");
+    expect(
+      aggregateAgentActivityState({
+        frontend: { state: "working", updatedAt: at },
+        "claude-terminal": { state: "waiting", updatedAt: at },
+      }),
+    ).toBe("working");
   });
 
   test("ignores absent sources", () => {
-    expect(aggregateAgentActivityState({
-      frontend: undefined,
-      "claude-terminal": { state: "waiting", updatedAt: at },
-    })).toBe("waiting");
+    expect(
+      aggregateAgentActivityState({
+        frontend: undefined,
+        "claude-terminal": { state: "waiting", updatedAt: at },
+      }),
+    ).toBe("waiting");
   });
 
   test("aggregates independently keyed renderer observations", () => {
-    expect(aggregateAgentActivityState({
-      "renderer-a": { state: "idle", updatedAt: at },
-      "renderer-b": { state: "working", updatedAt: at },
-    })).toBe("working");
+    expect(
+      aggregateAgentActivityState({
+        "renderer-a": { state: "idle", updatedAt: at },
+        "renderer-b": { state: "working", updatedAt: at },
+      }),
+    ).toBe("working");
   });
 });

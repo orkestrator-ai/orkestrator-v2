@@ -4,10 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { listen, type UnlistenFn } from "@/lib/native/events";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
-import {
-  decodeTerminalOutputPayload,
-  type TerminalOutputPayload,
-} from "@/hooks/useTerminal";
+import { decodeTerminalOutputPayload, type TerminalOutputPayload } from "@/hooks/useTerminal";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import {
   createInteractiveTerminal,
@@ -24,9 +21,7 @@ import {
   DEFAULT_TERMINAL_SCROLLBACK,
   resolveTerminalBackgroundColor,
 } from "@/constants/terminal";
-import {
-  MobileTerminalKeyBar,
-} from "@/components/terminal/MobileTerminalKeyBar";
+import { MobileTerminalKeyBar } from "@/components/terminal/MobileTerminalKeyBar";
 
 const INTERACTIVE_RECOVERY_MAX_ATTEMPTS = 2;
 
@@ -65,12 +60,10 @@ export function ClaudeTmuxInteractiveTerminal({
     isMobileRef.current = isMobile;
   }, [isMobile]);
 
-  const terminalAppearance = useConfigStore(
-    (state) => state.config.global.terminalAppearance,
-  ) ?? DEFAULT_TERMINAL_APPEARANCE;
-  const terminalScrollback = useConfigStore(
-    (state) => state.config.global.terminalScrollback,
-  );
+  const terminalAppearance =
+    useConfigStore((state) => state.config.global.terminalAppearance) ??
+    DEFAULT_TERMINAL_APPEARANCE;
+  const terminalScrollback = useConfigStore((state) => state.config.global.terminalScrollback);
   const terminalBackgroundColor = resolveTerminalBackgroundColor(
     terminalAppearance.backgroundColor,
   );
@@ -201,23 +194,11 @@ export function ClaudeTmuxInteractiveTerminal({
       if (event.type !== "keydown") return true;
 
       const key = event.key.toLowerCase();
-      if (
-        key === "w"
-        && event.metaKey
-        && !event.ctrlKey
-        && !event.altKey
-        && !event.shiftKey
-      ) {
+      if (key === "w" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
         return false;
       }
 
-      if (
-        key === "enter"
-        && event.shiftKey
-        && !event.ctrlKey
-        && !event.metaKey
-        && !event.altKey
-      ) {
+      if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();
         terminal.input("\n");
         return false;
@@ -283,11 +264,7 @@ export function ClaudeTmuxInteractiveTerminal({
           if (recoveryInFlight) return;
           recoveryInFlight = (async () => {
             let recoveryError: unknown;
-            for (
-              let attempt = 0;
-              attempt < INTERACTIVE_RECOVERY_MAX_ATTEMPTS;
-              attempt += 1
-            ) {
+            for (let attempt = 0; attempt < INTERACTIVE_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
               try {
                 await startInteractiveTerminal(sessionId);
                 if (!cancelled && sessionIdRef.current === sessionId) {
@@ -382,11 +359,7 @@ export function ClaudeTmuxInteractiveTerminal({
 
   return (
     <div
-      className={cn(
-        "relative h-full min-h-0 bg-black",
-        isMobile && "flex flex-col",
-        className,
-      )}
+      className={cn("relative h-full min-h-0 bg-black", isMobile && "flex flex-col", className)}
       style={{ backgroundColor: terminalBackgroundColor }}
     >
       <div

@@ -1,8 +1,4 @@
-import type {
-  ClaudeBackgroundTask,
-  ClaudeMessage,
-  ClaudeMessagePart,
-} from "@/lib/claude-client";
+import type { ClaudeBackgroundTask, ClaudeMessage, ClaudeMessagePart } from "@/lib/claude-client";
 import type {
   NativeAgentActivityPart,
   NativeAgentGroupPart,
@@ -29,26 +25,28 @@ interface AttachmentTag {
 }
 
 function decodeXmlAttribute(value: string): string {
-  return value.replace(
-    /&(?:quot|apos|amp|lt|gt|#\d+|#x[\da-f]+);/gi,
-    (entity) => {
-      switch (entity.toLowerCase()) {
-        case "&quot;": return '"';
-        case "&apos;": return "'";
-        case "&amp;": return "&";
-        case "&lt;": return "<";
-        case "&gt;": return ">";
-        default: {
-          const isHex = entity.toLowerCase().startsWith("&#x");
-          const digits = entity.slice(isHex ? 3 : 2, -1);
-          const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
-          return Number.isSafeInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
-            ? String.fromCodePoint(codePoint)
-            : entity;
-        }
+  return value.replace(/&(?:quot|apos|amp|lt|gt|#\d+|#x[\da-f]+);/gi, (entity) => {
+    switch (entity.toLowerCase()) {
+      case "&quot;":
+        return '"';
+      case "&apos;":
+        return "'";
+      case "&amp;":
+        return "&";
+      case "&lt;":
+        return "<";
+      case "&gt;":
+        return ">";
+      default: {
+        const isHex = entity.toLowerCase().startsWith("&#x");
+        const digits = entity.slice(isHex ? 3 : 2, -1);
+        const codePoint = Number.parseInt(digits, isHex ? 16 : 10);
+        return Number.isSafeInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : entity;
       }
-    },
-  );
+    }
+  });
 }
 
 function parseAttachmentTag(tagContent: string): AttachmentTag | null {
@@ -58,9 +56,7 @@ function parseAttachmentTag(tagContent: string): AttachmentTag | null {
 
   const type = typeMatch?.[1] ? decodeXmlAttribute(typeMatch[1]) : undefined;
   const path = pathMatch?.[1] ? decodeXmlAttribute(pathMatch[1]) : undefined;
-  const filename = filenameMatch?.[1]
-    ? decodeXmlAttribute(filenameMatch[1])
-    : "";
+  const filename = filenameMatch?.[1] ? decodeXmlAttribute(filenameMatch[1]) : "";
 
   if (type && path) {
     return { type, path, filename };
@@ -68,9 +64,10 @@ function parseAttachmentTag(tagContent: string): AttachmentTag | null {
   return null;
 }
 
-export function parseNativeAttachmentsFromContent(
-  content: string,
-): { cleanContent: string; attachments: NativeFilePart[] } {
+export function parseNativeAttachmentsFromContent(content: string): {
+  cleanContent: string;
+  attachments: NativeFilePart[];
+} {
   const attachments: NativeFilePart[] = [];
   const attachedFilesRegex = /<attached-files>\s*([\s\S]*?)\s*<\/attached-files>/g;
   let cleanContent = content;
@@ -109,16 +106,11 @@ export function parseNativeAttachmentsFromContent(
  */
 export function isTaskTool(toolName?: string): boolean {
   const normalized = toolName?.trim().toLowerCase();
-  return normalized === "task"
-    || normalized === "agent"
-    || normalized === "spawn_subagent";
+  return normalized === "task" || normalized === "agent" || normalized === "spawn_subagent";
 }
 
 function isToolActivity(part: NativeMessagePart): boolean {
-  return (
-    part.type === "thinking" ||
-    part.type === "tool-invocation"
-  );
+  return part.type === "thinking" || part.type === "tool-invocation";
 }
 
 function isAgentActivity(part: NativeMessagePart): part is NativeAgentActivityPart {
@@ -158,8 +150,7 @@ function isBackgroundTaskLaunchPart(
   // decorated with the same lifecycle but launched nothing, so it stays an
   // ordinary tool row rather than becoming a second card for one task.
   if (isBackgroundTaskActionTool(part.toolName)) return false;
-  return part.toolArgs?.run_in_background === true
-    || isBackgroundCapableShellTool(part.toolName);
+  return part.toolArgs?.run_in_background === true || isBackgroundCapableShellTool(part.toolName);
 }
 
 function groupTaskParts(
@@ -172,9 +163,7 @@ function groupTaskParts(
   let currentTask: NativeTaskGroupPart | null = null;
 
   for (const part of parts) {
-    const explicitParent = part.parentTaskUseId
-      ? taskGroups.get(part.parentTaskUseId)
-      : undefined;
+    const explicitParent = part.parentTaskUseId ? taskGroups.get(part.parentTaskUseId) : undefined;
     if (explicitParent && !(part.type === "tool-invocation" && shouldPromote(part))) {
       explicitParent.childTools.push(part);
       currentTask = explicitParent;
@@ -218,9 +207,7 @@ function groupTaskParts(
       continue;
     }
 
-    const parentTask = options.implicitSequentialParenting
-      ? currentTask ?? undefined
-      : undefined;
+    const parentTask = options.implicitSequentialParenting ? (currentTask ?? undefined) : undefined;
 
     if (parentTask) {
       parentTask.childTools.push(part);
@@ -245,8 +232,9 @@ function groupTaskParts(
 function groupNativeSubagentTaskParts(parts: NativeMessagePart[]): NativeMessagePart[] {
   return groupTaskParts(
     parts,
-    (part) => (isTaskTool(part.toolName) && part.agentState !== undefined)
-      || isBackgroundTaskLaunchPart(part),
+    (part) =>
+      (isTaskTool(part.toolName) && part.agentState !== undefined) ||
+      isBackgroundTaskLaunchPart(part),
     { implicitSequentialParenting: false },
   );
 }
@@ -269,9 +257,7 @@ function isStreamCollapsibleTextPart(
   );
 }
 
-export function dedupeStreamedNativeParts(
-  parts: NativeMessagePart[],
-): NativeMessagePart[] {
+export function dedupeStreamedNativeParts(parts: NativeMessagePart[]): NativeMessagePart[] {
   const result: NativeMessagePart[] = [];
 
   for (const part of parts) {
@@ -378,12 +364,8 @@ export function groupNativeAgentActivity(parts: NativeMessagePart[]): NativeMess
  * grouping — otherwise it still forms a tool group and the transcript shows an
  * empty bordered block.
  */
-export function dropEmptyThinkingParts(
-  parts: NativeMessagePart[],
-): NativeMessagePart[] {
-  return parts.filter(
-    (part) => part.type !== "thinking" || part.content.trim().length > 0,
-  );
+export function dropEmptyThinkingParts(parts: NativeMessagePart[]): NativeMessagePart[] {
+  return parts.filter((part) => part.type !== "thinking" || part.content.trim().length > 0);
 }
 
 /**
@@ -596,35 +578,36 @@ export function normalizeClaudeMessage(message: ClaudeMessage): NativeMessage {
 }
 
 function normalizeClaudeMessageUncached(message: ClaudeMessage): NativeMessage {
-  const { cleanContent, attachments } = message.role === "user"
-    ? parseNativeAttachmentsFromContent(message.content)
-    : { cleanContent: message.content, attachments: [] };
+  const { cleanContent, attachments } =
+    message.role === "user"
+      ? parseNativeAttachmentsFromContent(message.content)
+      : { cleanContent: message.content, attachments: [] };
 
-  const rawParts = message.role === "user"
-    ? [
-        ...(cleanContent ? [{ type: "text" as const, content: cleanContent }] : []),
-        ...attachments,
-      ]
-    : message.parts
-        .map(normalizeClaudePart)
-        .filter((part): part is NativeMessagePart => part !== null);
+  const rawParts =
+    message.role === "user"
+      ? [
+          ...(cleanContent ? [{ type: "text" as const, content: cleanContent }] : []),
+          ...attachments,
+        ]
+      : message.parts
+          .map(normalizeClaudePart)
+          .filter((part): part is NativeMessagePart => part !== null);
 
-  const taskGroupedParts = message.role === "assistant"
-    ? groupTaskParts(
-        rawParts,
-        (part) => isTaskTool(part.toolName) || isBackgroundTaskLaunchPart(part),
-        { implicitSequentialParenting: true },
-      )
-    : rawParts;
+  const taskGroupedParts =
+    message.role === "assistant"
+      ? groupTaskParts(
+          rawParts,
+          (part) => isTaskTool(part.toolName) || isBackgroundTaskLaunchPart(part),
+          { implicitSequentialParenting: true },
+        )
+      : rawParts;
 
   return {
     id: message.id,
     role: message.role,
     content: cleanContent,
     parts: groupNativeAgentActivity(
-      groupNativeToolActivity(
-        dropEmptyThinkingParts(dedupeStreamedNativeParts(taskGroupedParts)),
-      ),
+      groupNativeToolActivity(dropEmptyThinkingParts(dedupeStreamedNativeParts(taskGroupedParts))),
     ),
     createdAt: message.createdAt,
     ...(message.modelId ? { modelId: message.modelId } : {}),
@@ -700,10 +683,7 @@ export function isBackgroundTaskActionTool(toolName?: string): boolean {
  * optimistic and bridge-direct messages that carry their result inline.
  */
 function backgroundTaskIdFromLaunchOutput(
-  part: Pick<
-    ClaudeMessagePart,
-    "backgroundTaskId" | "toolArgs" | "toolName" | "toolOutput"
-  >,
+  part: Pick<ClaudeMessagePart, "backgroundTaskId" | "toolArgs" | "toolName" | "toolOutput">,
 ): string | undefined {
   if (part.backgroundTaskId) return part.backgroundTaskId;
   return recoverBackgroundTaskLaunchId(part);
@@ -718,13 +698,12 @@ function backgroundTaskIdFromLaunchOutput(
  * arguments the command was launched with, so the argument alone would leave
  * both unlabelled and uncontrollable.
  */
-function isBackgroundTaskLaunch(
-  part: ClaudeMessagePart,
-  recoveredId: string | undefined,
-): boolean {
+function isBackgroundTaskLaunch(part: ClaudeMessagePart, recoveredId: string | undefined): boolean {
   if (part.type !== "tool-invocation") return false;
-  return part.toolArgs?.run_in_background === true
-    || (recoveredId !== undefined && isBackgroundCapableShellTool(part.toolName));
+  return (
+    part.toolArgs?.run_in_background === true ||
+    (recoveredId !== undefined && isBackgroundCapableShellTool(part.toolName))
+  );
 }
 
 function sameBackgroundTask(
@@ -732,9 +711,9 @@ function sameBackgroundTask(
   right: ClaudeMessagePart["backgroundTask"],
 ): boolean {
   return (
-    left?.id === right?.id
-    && left?.description === right?.description
-    && left?.status === right?.status
+    left?.id === right?.id &&
+    left?.description === right?.description &&
+    left?.status === right?.status
   );
 }
 
@@ -760,11 +739,13 @@ function settledAtField(settledAt: string | undefined): { settledAt?: string } {
  * edge left on a revived task would drag it back up the transcript.
  */
 function backgroundTaskSettledAt(
-  task: {
-    status?: ClaudeBackgroundTask["status"];
-    endedAt?: number;
-    settledAt?: string;
-  } | undefined,
+  task:
+    | {
+        status?: ClaudeBackgroundTask["status"];
+        endedAt?: number;
+        settledAt?: string;
+      }
+    | undefined,
 ): string | undefined {
   if (!task || !task.status) return undefined;
   if (task.status === "pending" || task.status === "running" || task.status === "paused") {
@@ -829,17 +810,14 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
         hasSubagentLaunch = true;
       }
       const recoveredId = backgroundTaskIdFromLaunchOutput(part);
-      const authoritative = (part.toolUseId
-        ? tasksByToolUseId.get(part.toolUseId)
-        : undefined)
-        ?? (recoveredId ? tasksById.get(recoveredId) : undefined);
+      const authoritative =
+        (part.toolUseId ? tasksByToolUseId.get(part.toolUseId) : undefined) ??
+        (recoveredId ? tasksById.get(recoveredId) : undefined);
       const taskId = authoritative?.id ?? recoveredId;
       if (!taskId) continue;
       launchesByTaskId.set(taskId, {
         id: taskId,
-        description:
-          authoritative?.description
-          ?? stringArgument(part.toolArgs, "description"),
+        description: authoritative?.description ?? stringArgument(part.toolArgs, "description"),
         status: authoritative?.status,
         settledAt: backgroundTaskSettledAt(authoritative),
       });
@@ -865,10 +843,9 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
 
       const isAgentTool = isTaskTool(part.toolName);
       const recoveredId = backgroundTaskIdFromLaunchOutput(part);
-      const authoritativeLaunch = (part.toolUseId
-        ? tasksByToolUseId.get(part.toolUseId)
-        : undefined)
-        ?? (recoveredId ? tasksById.get(recoveredId) : undefined);
+      const authoritativeLaunch =
+        (part.toolUseId ? tasksByToolUseId.get(part.toolUseId) : undefined) ??
+        (recoveredId ? tasksById.get(recoveredId) : undefined);
 
       let agentState = part.agentState;
       let backgroundTask = part.backgroundTask;
@@ -877,8 +854,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
         backgroundTask = {
           id: authoritativeLaunch.id,
           description:
-            authoritativeLaunch.description
-            ?? stringArgument(part.toolArgs, "description"),
+            authoritativeLaunch.description ?? stringArgument(part.toolArgs, "description"),
           status: authoritativeLaunch.status,
           ...settledAtField(backgroundTaskSettledAt(authoritativeLaunch)),
         };
@@ -890,24 +866,23 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
          * infer a child from a task-shaped tool name alone, since other
          * providers use those names for ordinary foreground work.
          */
-        agentState = part.toolState === "failure"
-          ? "failed"
-          : part.toolState === "success"
-            ? "finished"
-            : "active";
+        agentState =
+          part.toolState === "failure"
+            ? "failed"
+            : part.toolState === "success"
+              ? "finished"
+              : "active";
       }
 
       if (!isAgentTool && isBackgroundTaskLaunch(part, recoveredId)) {
         const launch =
-          authoritativeLaunch
-          ?? (recoveredId ? tasksById.get(recoveredId) : undefined)
-          ?? (recoveredId ? launchesByTaskId.get(recoveredId) : undefined);
+          authoritativeLaunch ??
+          (recoveredId ? tasksById.get(recoveredId) : undefined) ??
+          (recoveredId ? launchesByTaskId.get(recoveredId) : undefined);
         if (launch) {
           backgroundTask = {
             id: launch.id,
-            description:
-              launch.description
-              ?? stringArgument(part.toolArgs, "description"),
+            description: launch.description ?? stringArgument(part.toolArgs, "description"),
             status: launch.status,
             ...settledAtField(backgroundTaskSettledAt(launch)),
           };
@@ -923,9 +898,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
         }
       } else if (isBackgroundTaskActionTool(part.toolName)) {
         const taskId = stringArgument(part.toolArgs, "task_id", "taskId");
-        const task = taskId
-          ? tasksById.get(taskId) ?? launchesByTaskId.get(taskId)
-          : undefined;
+        const task = taskId ? (tasksById.get(taskId) ?? launchesByTaskId.get(taskId)) : undefined;
         /*
          * Only decorate a row whose task we actually resolved. An id with no
          * launch and no snapshot behind it adds nothing the renderer cannot
@@ -943,8 +916,8 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
       }
 
       if (
-        part.agentState === agentState
-        && sameBackgroundTask(part.backgroundTask, backgroundTask)
+        part.agentState === agentState &&
+        sameBackgroundTask(part.backgroundTask, backgroundTask)
       ) {
         return part;
       }
@@ -965,10 +938,7 @@ export function applyClaudeBackgroundTaskStates<TMessage extends NativeMessage>(
   return messagesChanged ? nextMessages : messages;
 }
 
-function collectBackgroundTaskIds(
-  parts: readonly NativeMessagePart[],
-  ids: Set<string>,
-): void {
+function collectBackgroundTaskIds(parts: readonly NativeMessagePart[], ids: Set<string>): void {
   for (const part of parts) {
     if (part.type === "task-group") {
       const id = part.task.backgroundTask?.id;
@@ -989,9 +959,7 @@ function collectBackgroundTaskIds(
  * authoritative snapshot instead. Only promoted launches count: an action row
  * that merely names a task offers nothing to act on.
  */
-export function collectRenderedBackgroundTaskIds(
-  messages: readonly NativeMessage[],
-): Set<string> {
+export function collectRenderedBackgroundTaskIds(messages: readonly NativeMessage[]): Set<string> {
   const ids = new Set<string>();
   for (const message of messages) collectBackgroundTaskIds(message.parts, ids);
   return ids;
@@ -1007,9 +975,7 @@ export interface BackgroundTaskSnapshot {
   settledAt?: string;
 }
 
-function backgroundTaskAgentStateFromStatus(
-  status: NativeBackgroundTaskStatus,
-): NativeAgentState {
+function backgroundTaskAgentStateFromStatus(status: NativeBackgroundTaskStatus): NativeAgentState {
   switch (status) {
     case "pending":
     case "running":
@@ -1048,23 +1014,25 @@ function createBackgroundTaskMessage(
     role: "assistant",
     content: "",
     createdAt,
-    parts: [{
-      type: "task-group",
-      content: label,
-      task: {
-        type: "tool-invocation",
+    parts: [
+      {
+        type: "task-group",
         content: label,
-        toolName: "BackgroundTask",
-        agentState: backgroundTaskAgentStateFromStatus(task.status),
-        backgroundTask: {
-          id: task.id,
-          status: task.status,
-          ...(task.description ? { description: task.description } : {}),
-          ...(task.settledAt ? { settledAt: task.settledAt } : {}),
+        task: {
+          type: "tool-invocation",
+          content: label,
+          toolName: "BackgroundTask",
+          agentState: backgroundTaskAgentStateFromStatus(task.status),
+          backgroundTask: {
+            id: task.id,
+            status: task.status,
+            ...(task.description ? { description: task.description } : {}),
+            ...(task.settledAt ? { settledAt: task.settledAt } : {}),
+          },
         },
+        childTools: [],
       },
-      childTools: [],
-    }],
+    ],
   };
 }
 
@@ -1098,35 +1066,35 @@ export function rowlessBackgroundTaskMessages(
 
   const rendered = collectRenderedBackgroundTaskIds(messages);
   const anchors = createNativeAgentSettleAnchors(messages);
-  const rows = tasks.filter((task) =>
-    !rendered.has(task.id)
-    && (isLiveBackgroundTask(task.status)
-      || anchors.resolve(task.settledAt) !== undefined));
+  const rows = tasks.filter(
+    (task) =>
+      !rendered.has(task.id) &&
+      (isLiveBackgroundTask(task.status) || anchors.resolve(task.settledAt) !== undefined),
+  );
   if (rows.length === 0) return EMPTY_ROWLESS_TASKS;
 
-  return rows.map((task) => createBackgroundTaskMessage(
-    task,
-    /*
-     * A live card sits at the bottom, so it takes the newest row's clock — the
-     * one belonging to the position it actually holds. A settled one is placed
-     * by its own settle position, and carrying that as the row's timestamp
-     * keeps the header honest about when it stopped.
-     *
-     * A tab that resumed into a running task has neither: it has the snapshot
-     * before it has a transcript. Its own launch clock is then the only honest
-     * answer, and is why the snapshot carries one — without it this fell to the
-     * epoch, and the card claimed to have started in 1970.
-     *
-     * The epoch remains only because a row must carry some clock and a provider
-     * that reports neither leaves nothing to carry. Every task the Claude
-     * bridge reports has a `startedAt`, so that last resort is not a path this
-     * renders in practice.
-     */
-    task.settledAt
-      ?? messages.at(-1)?.createdAt
-      ?? task.startedAt
-      ?? new Date(0).toISOString(),
-  ));
+  return rows.map((task) =>
+    createBackgroundTaskMessage(
+      task,
+      /*
+       * A live card sits at the bottom, so it takes the newest row's clock — the
+       * one belonging to the position it actually holds. A settled one is placed
+       * by its own settle position, and carrying that as the row's timestamp
+       * keeps the header honest about when it stopped.
+       *
+       * A tab that resumed into a running task has neither: it has the snapshot
+       * before it has a transcript. Its own launch clock is then the only honest
+       * answer, and is why the snapshot carries one — without it this fell to the
+       * epoch, and the card claimed to have started in 1970.
+       *
+       * The epoch remains only because a row must carry some clock and a provider
+       * that reports neither leaves nothing to carry. Every task the Claude
+       * bridge reports has a `startedAt`, so that last resort is not a path this
+       * renders in practice.
+       */
+      task.settledAt ?? messages.at(-1)?.createdAt ?? task.startedAt ?? new Date(0).toISOString(),
+    ),
+  );
 }
 
 interface TranscriptBlockSegment {
@@ -1181,9 +1149,7 @@ const splitAssistantTranscriptBlocksCache = new WeakMap<NativeMessage, NativeMes
  * is another. Crossing that boundary ends the current section so each block
  * can show when it was sent, plus its own copy/fork actions.
  */
-export function splitAssistantTranscriptBlocks(
-  message: NativeMessage,
-): NativeMessage[] {
+export function splitAssistantTranscriptBlocks(message: NativeMessage): NativeMessage[] {
   const cached = splitAssistantTranscriptBlocksCache.get(message);
   if (cached) return cached;
   const rows = splitAssistantTranscriptBlocksUncached(message);
@@ -1192,15 +1158,11 @@ export function splitAssistantTranscriptBlocks(
 }
 
 /** @deprecated Use {@link splitAssistantTranscriptBlocks}. */
-export function splitClaudeAssistantTextBlocks(
-  message: NativeMessage,
-): NativeMessage[] {
+export function splitClaudeAssistantTextBlocks(message: NativeMessage): NativeMessage[] {
   return splitAssistantTranscriptBlocks(message);
 }
 
-function splitAssistantTranscriptBlocksUncached(
-  message: NativeMessage,
-): NativeMessage[] {
+function splitAssistantTranscriptBlocksUncached(message: NativeMessage): NativeMessage[] {
   if (message.role !== "assistant") return [message];
 
   const segments: TranscriptBlockSegment[] = [];
@@ -1232,10 +1194,7 @@ function splitAssistantTranscriptBlocksUncached(
 
   return segments.map((segment, index) => ({
     ...message,
-    id:
-      index === 0
-        ? message.id
-        : `${message.id}:text-block:${segment.firstPartIndex}`,
+    id: index === 0 ? message.id : `${message.id}:text-block:${segment.firstPartIndex}`,
     content: segment.parts
       .filter((part) => part.type === "text")
       .map((part) => part.content)
@@ -1250,9 +1209,7 @@ function splitAssistantTranscriptBlocksUncached(
  * normalizer, this may expand one long assistant turn into multiple transcript
  * rows so each text and tool section receives its own timestamp and copy action.
  */
-export function normalizeClaudeMessagesForDisplay(
-  messages: ClaudeMessage[],
-): NativeMessage[] {
+export function normalizeClaudeMessagesForDisplay(messages: ClaudeMessage[]): NativeMessage[] {
   return messages.flatMap((message) =>
     splitAssistantTranscriptBlocks(normalizeClaudeMessage(message)),
   );

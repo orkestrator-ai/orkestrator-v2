@@ -26,29 +26,37 @@ describe("hydrateAgentModelCatalogCache", () => {
   });
 
   test("hydrates every shared model store from the persisted backend cache", async () => {
-    const claudeModels: ClaudeModel[] = [{
-      id: "claude-cached",
-      name: "Claude Cached",
-      supportsEffort: true,
-      supportedEffortLevels: ["low", "high"],
-    }];
-    const codexModels: CodexModel[] = [{
-      id: "gpt-cached",
-      name: "GPT Cached",
-      reasoningEfforts: ["medium", "xhigh"],
-      defaultReasoningEffort: "medium",
-    }];
-    const cursorModels = [{
-      platform: "cursor" as const,
-      id: "cursor-cached",
-      label: "Cursor Cached",
-      reasoning: [{ id: "high", label: "High" }],
-    }];
-    const grokModels = [{
-      platform: "grok" as const,
-      id: "grok-cached",
-      label: "Grok Cached",
-    }];
+    const claudeModels: ClaudeModel[] = [
+      {
+        id: "claude-cached",
+        name: "Claude Cached",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "high"],
+      },
+    ];
+    const codexModels: CodexModel[] = [
+      {
+        id: "gpt-cached",
+        name: "GPT Cached",
+        reasoningEfforts: ["medium", "xhigh"],
+        defaultReasoningEffort: "medium",
+      },
+    ];
+    const cursorModels = [
+      {
+        platform: "cursor" as const,
+        id: "cursor-cached",
+        label: "Cursor Cached",
+        reasoning: [{ id: "high", label: "High" }],
+      },
+    ];
+    const grokModels = [
+      {
+        platform: "grok" as const,
+        id: "grok-cached",
+        label: "Grok Cached",
+      },
+    ];
     invokeMock.mockResolvedValue({
       schemaVersion: 1,
       claude: { updatedAt: "2026-07-30T10:00:00.000Z", models: claudeModels },
@@ -78,10 +86,12 @@ describe("hydrateAgentModelCatalogCache", () => {
   });
 
   test("hydrates an available agent without disturbing the absent agent", async () => {
-    const claudeModels: ClaudeModel[] = [{
-      id: "claude-only",
-      name: "Claude Only",
-    }];
+    const claudeModels: ClaudeModel[] = [
+      {
+        id: "claude-only",
+        name: "Claude Only",
+      },
+    ];
     invokeMock.mockResolvedValue({
       schemaVersion: 1,
       claude: {
@@ -97,14 +107,18 @@ describe("hydrateAgentModelCatalogCache", () => {
   });
 
   test("treats explicit empty catalogues as missing cached data", async () => {
-    const existingClaude: ClaudeModel[] = [{
-      id: "claude-existing",
-      name: "Claude Existing",
-    }];
-    const existingCodex: CodexModel[] = [{
-      id: "gpt-existing",
-      name: "GPT Existing",
-    }];
+    const existingClaude: ClaudeModel[] = [
+      {
+        id: "claude-existing",
+        name: "Claude Existing",
+      },
+    ];
+    const existingCodex: CodexModel[] = [
+      {
+        id: "gpt-existing",
+        name: "GPT Existing",
+      },
+    ];
     useClaudeStore.setState({ models: existingClaude });
     useCodexStore.setState({ models: existingCodex });
     invokeMock.mockResolvedValue({
@@ -130,9 +144,7 @@ describe("hydrateAgentModelCatalogCache", () => {
     const existingCodex = useCodexStore.getState().models;
     invokeMock.mockRejectedValue(new Error("cache unavailable"));
 
-    await expect(hydrateAgentModelCatalogCache()).rejects.toThrow(
-      "cache unavailable",
-    );
+    await expect(hydrateAgentModelCatalogCache()).rejects.toThrow("cache unavailable");
 
     expect(useClaudeStore.getState().models).toBe(existingClaude);
     expect(useCodexStore.getState().models).toBe(existingCodex);
@@ -143,7 +155,10 @@ describe("hydrateAgentModelCatalogCache", () => {
       schemaVersion: 1;
       claude: { updatedAt: string; models: ClaudeModel[] };
       codex: { updatedAt: string; models: CodexModel[] };
-      cursor: { updatedAt: string; models: Array<{ platform: "cursor"; id: string; label: string }> };
+      cursor: {
+        updatedAt: string;
+        models: Array<{ platform: "cursor"; id: string; label: string }>;
+      };
     }>();
     invokeMock.mockImplementation(() => cacheRead.promise);
     const hydration = hydrateAgentModelCatalogCache();

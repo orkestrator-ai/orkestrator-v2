@@ -109,21 +109,15 @@ function forEachLeaf(node: PaneNode, visit: (leaf: PaneNode) => void): void {
   forEachLeaf(node.children[1], visit);
 }
 
-export function readStoredPaneSelection(
-  environmentId: string,
-): StoredPaneSelection | null {
-  const entry = readEntries().find(
-    (candidate) => candidate.environmentId === environmentId,
-  );
+export function readStoredPaneSelection(environmentId: string): StoredPaneSelection | null {
+  const entry = readEntries().find((candidate) => candidate.environmentId === environmentId);
   if (!entry) return null;
   return { activePaneId: entry.activePaneId, activeTabIds: entry.activeTabIds };
 }
 
 export function clearStoredPaneSelection(environmentId: string): void {
   const entries = readEntries();
-  const remaining = entries.filter(
-    (candidate) => candidate.environmentId !== environmentId,
-  );
+  const remaining = entries.filter((candidate) => candidate.environmentId !== environmentId);
   if (remaining.length === entries.length) return;
   writeEntries(remaining);
 }
@@ -155,18 +149,13 @@ export function applyStoredPaneSelection(
     }
     return {
       ...node,
-      children: [
-        restoreSelection(node.children[0]),
-        restoreSelection(node.children[1]),
-      ],
+      children: [restoreSelection(node.children[0]), restoreSelection(node.children[1])],
     };
   };
 
   return {
     ...state,
     root: restoreSelection(state.root),
-    activePaneId: paneIds.has(stored.activePaneId)
-      ? stored.activePaneId
-      : state.activePaneId,
+    activePaneId: paneIds.has(stored.activePaneId) ? stored.activePaneId : state.activePaneId,
   };
 }

@@ -63,10 +63,7 @@ interface UseNativeComposeBarPasteOptions {
 }
 
 function generateImageFilename(): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")
-    .slice(0, 19);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const random = Math.random().toString(36).substring(2, 8);
   return `clipboard-${timestamp}-${random}.png`;
 }
@@ -94,20 +91,18 @@ function isDesktopRenderer(): boolean {
 }
 
 function dispatchRestoredPasteInput(target: HTMLElement, text: string): void {
-  const event = typeof InputEvent === "function"
-    ? new InputEvent("input", {
-        bubbles: true,
-        data: text,
-        inputType: "insertFromPaste",
-      })
-    : new Event("input", { bubbles: true });
+  const event =
+    typeof InputEvent === "function"
+      ? new InputEvent("input", {
+          bubbles: true,
+          data: text,
+          inputType: "insertFromPaste",
+        })
+      : new Event("input", { bubbles: true });
   target.dispatchEvent(event);
 }
 
-function captureTextPasteFallback(
-  event: ClipboardEvent,
-  target: Element,
-): (() => void) | null {
+function captureTextPasteFallback(event: ClipboardEvent, target: Element): (() => void) | null {
   const clipboardData = event.clipboardData;
   if (!clipboardData) return null;
 
@@ -130,12 +125,11 @@ function captureTextPasteFallback(
 
   if (target instanceof HTMLElement && target.isContentEditable) {
     const selection = window.getSelection();
-    const selectedRange = selection?.rangeCount
-      ? selection.getRangeAt(0)
-      : null;
-    const range = selectedRange && target.contains(selectedRange.commonAncestorContainer)
-      ? selectedRange.cloneRange()
-      : null;
+    const selectedRange = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    const range =
+      selectedRange && target.contains(selectedRange.commonAncestorContainer)
+        ? selectedRange.cloneRange()
+        : null;
 
     return () => {
       const textNode = document.createTextNode(text);
@@ -184,9 +178,7 @@ export function useNativeComposeBarPaste({
       // input cannot also insert a filename, URL, or empty text payload.
       const pastedBlob = getPastedImageBlob(event);
       const nativePaste = !pastedBlob && isDesktopRenderer();
-      let pendingTextRestore = nativePaste
-        ? captureTextPasteFallback(event, activeEl)
-        : null;
+      let pendingTextRestore = nativePaste ? captureTextPasteFallback(event, activeEl) : null;
       // At most once: several bail-outs restore and then run further code that
       // could itself throw into the catch below, which restores again.
       const restoreTextPaste = () => {
@@ -290,5 +282,13 @@ export function useNativeComposeBarPaste({
     return () => {
       document.removeEventListener("paste", handlePaste, { capture: true });
     };
-  }, [inputContainerRef, containerId, worktreePath, onAttach, canAttachImage, onImageRejected, logLabel]);
+  }, [
+    inputContainerRef,
+    containerId,
+    worktreePath,
+    onAttach,
+    canAttachImage,
+    onImageRejected,
+    logLabel,
+  ]);
 }

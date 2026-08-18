@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  CLAUDE_AUTH_LOGIN_COMMAND,
-  isClaudeAuthenticationError,
-} from "./claude-auth";
+import { CLAUDE_AUTH_LOGIN_COMMAND, isClaudeAuthenticationError } from "./claude-auth";
 
 describe("claude-auth", () => {
   test("exports the expected login command", () => {

@@ -1,4 +1,7 @@
-import { isGatewayBrowserPreviewSupported, resolveGatewayBrowserPreviewUrl } from "@/lib/gateway-url";
+import {
+  isGatewayBrowserPreviewSupported,
+  resolveGatewayBrowserPreviewUrl,
+} from "@/lib/gateway-url";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
 
@@ -27,7 +30,9 @@ function isRendererServedAddress(previewUrl: URL): boolean {
 
 export function resolveBrowserAddress(value: string): BrowserAddress {
   if (!isGatewayBrowserPreviewSupported()) {
-    throw new Error("Browser previews are only available in the desktop app when connected remotely.");
+    throw new Error(
+      "Browser previews are only available in the desktop app when connected remotely.",
+    );
   }
 
   const trimmed = value.trim();
@@ -64,7 +69,9 @@ export function resolveBrowserAddress(value: string): BrowserAddress {
   const displayUrl = url.toString();
   const iframeUrl = resolveGatewayBrowserPreviewUrl(displayUrl);
   if (iframeUrl === displayUrl && isRendererServedAddress(url)) {
-    throw new Error("This address serves the Orkestrator app itself. Enter the address of a service you want to preview.");
+    throw new Error(
+      "This address serves the Orkestrator app itself. Enter the address of a service you want to preview.",
+    );
   }
   return { displayUrl, iframeUrl };
 }

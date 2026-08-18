@@ -66,8 +66,7 @@ export const useClaudeOptionsStore = create<ClaudeOptionsState>()((set, get) => 
       },
     })),
 
-  getPendingNativeLaunch: (environmentId) =>
-    get().pendingNativeLaunches[environmentId],
+  getPendingNativeLaunch: (environmentId) => get().pendingNativeLaunches[environmentId],
 
   clearPendingNativeLaunch: (environmentId) =>
     set((state) => {

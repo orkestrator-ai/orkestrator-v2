@@ -57,8 +57,7 @@ export class UpdateCoalescer {
     }
     if (this.timer) return;
 
-    const intervalMs =
-      typeof this.intervalMs === "function" ? this.intervalMs() : this.intervalMs;
+    const intervalMs = typeof this.intervalMs === "function" ? this.intervalMs() : this.intervalMs;
     const elapsed = now - this.lastPublishedAt;
     const delay = elapsed >= intervalMs ? 0 : intervalMs - elapsed;
     this.timer = setTimeout(() => {

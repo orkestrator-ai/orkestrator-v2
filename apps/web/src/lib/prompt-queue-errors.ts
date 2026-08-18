@@ -19,11 +19,11 @@ export class PromptQueueActionError extends Error {
  * boundary this error crosses would otherwise get a structurally identical
  * error that fails `instanceof`.
  */
-export function isPromptQueueActionError(
-  error: unknown,
-): error is PromptQueueActionError {
-  return error instanceof PromptQueueActionError
-    || (error instanceof Error && error.name === "PromptQueueActionError");
+export function isPromptQueueActionError(error: unknown): error is PromptQueueActionError {
+  return (
+    error instanceof PromptQueueActionError ||
+    (error instanceof Error && error.name === "PromptQueueActionError")
+  );
 }
 
 export const COMPOSER_OCCUPIED_MESSAGE =
@@ -35,14 +35,11 @@ export const COMPOSER_OCCUPIED_MESSAGE =
  * draft it did not create, and overwriting locally would discard input the user
  * never chose to lose.
  */
-export function composerOccupiedError(
-  options?: ErrorOptions,
-): PromptQueueActionError {
+export function composerOccupiedError(options?: ErrorOptions): PromptQueueActionError {
   return new PromptQueueActionError(COMPOSER_OCCUPIED_MESSAGE, options);
 }
 
 /** The backend's refusal to overwrite a compose draft it did not create. */
 export function isComposeDraftOccupiedBackendError(error: unknown): boolean {
-  return error instanceof Error
-    && /compose draft already exists/i.test(error.message);
+  return error instanceof Error && /compose draft already exists/i.test(error.message);
 }

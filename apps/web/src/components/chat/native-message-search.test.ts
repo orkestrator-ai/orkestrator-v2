@@ -1,17 +1,12 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { marked } from "marked";
-import {
-  getNativeMessageSearchText,
-  markdownToAgentSearchText,
-} from "./native-message-search";
+import { getNativeMessageSearchText, markdownToAgentSearchText } from "./native-message-search";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 describe("markdownToAgentSearchText", () => {
   test("returns the visible text across fragmented inline Markdown", () => {
     expect(
-      markdownToAgentSearchText(
-        "# Heading\n\nA **bold** [link](https://example.com) and `code`.",
-      ),
+      markdownToAgentSearchText("# Heading\n\nA **bold** [link](https://example.com) and `code`."),
     ).toBe("Heading\nA bold link and code.");
   });
 
@@ -56,9 +51,7 @@ describe("getNativeMessageSearchText", () => {
       ],
     };
 
-    expect(getNativeMessageSearchText(message)).toBe(
-      "First visible part\n\nSecond part",
-    );
+    expect(getNativeMessageSearchText(message)).toBe("First visible part\n\nSecond part");
   });
 
   test("uses raw content for system, error, and legacy messages", () => {
@@ -70,30 +63,32 @@ describe("getNativeMessageSearchText", () => {
       parts: [],
     };
     expect(getNativeMessageSearchText(base)).toBe("legacy content");
-    expect(getNativeMessageSearchText({
-      ...base,
-      id: "system-1",
-      role: "system",
-      content: "system content",
-      parts: [{ type: "text", content: "**different**" }],
-    })).toBe("system content");
-    expect(getNativeMessageSearchText({
-      ...base,
-      id: "error-1",
-      content: "error content",
-      parts: [{ type: "text", content: "**different**" }],
-    })).toBe("error content");
+    expect(
+      getNativeMessageSearchText({
+        ...base,
+        id: "system-1",
+        role: "system",
+        content: "system content",
+        parts: [{ type: "text", content: "**different**" }],
+      }),
+    ).toBe("system content");
+    expect(
+      getNativeMessageSearchText({
+        ...base,
+        id: "error-1",
+        content: "error content",
+        parts: [{ type: "text", content: "**different**" }],
+      }),
+    ).toBe("error content");
   });
 
   test("falls back to the original source when Markdown parsing throws", () => {
     const failingParser = (() => {
       throw new Error("parser extension failed");
     }) as unknown as typeof marked;
-    const parseSpy = spyOn(marked, "parse")
-      .mockImplementationOnce(failingParser);
+    const parseSpy = spyOn(marked, "parse").mockImplementationOnce(failingParser);
     try {
-      expect(markdownToAgentSearchText("source **text**"))
-        .toBe("source **text**");
+      expect(markdownToAgentSearchText("source **text**")).toBe("source **text**");
     } finally {
       parseSpy.mockRestore();
     }
@@ -115,10 +110,12 @@ describe("getNativeMessageSearchText for folded JSON payloads", () => {
     // matches that find can count but can never highlight.
     const text = getNativeMessageSearchText({
       ...base,
-      parts: [{
-        type: "text",
-        content: '{"complete":true,"rationale":"Tree clean."}',
-      }],
+      parts: [
+        {
+          type: "text",
+          content: '{"complete":true,"rationale":"Tree clean."}',
+        },
+      ],
     });
 
     expect(text).toBe("Verification passedTree clean.");
@@ -126,10 +123,12 @@ describe("getNativeMessageSearchText for folded JSON payloads", () => {
   });
 
   test("indexes a folded generic payload by its title and count", () => {
-    expect(getNativeMessageSearchText({
-      ...base,
-      parts: [{ type: "text", content: '{"stageName":"verify"}' }],
-    })).toBe("JSON payload1 field");
+    expect(
+      getNativeMessageSearchText({
+        ...base,
+        parts: [{ type: "text", content: '{"stageName":"verify"}' }],
+      }),
+    ).toBe("JSON payload1 field");
   });
 
   test("leaves an unfolded fenced block fully indexed", () => {
@@ -137,10 +136,12 @@ describe("getNativeMessageSearchText for folded JSON payloads", () => {
     // character of it is still mounted and still findable.
     const text = getNativeMessageSearchText({
       ...base,
-      parts: [{
-        type: "text",
-        content: '```json\n{"compilerOptions":{"strict":true}}\n```',
-      }],
+      parts: [
+        {
+          type: "text",
+          content: '```json\n{"compilerOptions":{"strict":true}}\n```',
+        },
+      ],
     });
 
     expect(text).toContain("compilerOptions");
@@ -151,29 +152,35 @@ describe("getNativeMessageSearchText for folded JSON payloads", () => {
       ...base,
       id: "user-1",
       role: "user",
-      parts: [{
-        type: "text",
-        content: '{"complete":true,"rationale":"Tree clean."}',
-      }],
+      parts: [
+        {
+          type: "text",
+          content: '{"complete":true,"rationale":"Tree clean."}',
+        },
+      ],
     });
 
     expect(text).toContain('"rationale"');
   });
 
   test("folds a JSON-only legacy message that has no text parts", () => {
-    expect(getNativeMessageSearchText({
-      ...base,
-      content: '{"complete":false,"rationale":"Unmet."}',
-    })).toBe("Verification failedUnmet.");
+    expect(
+      getNativeMessageSearchText({
+        ...base,
+        content: '{"complete":false,"rationale":"Unmet."}',
+      }),
+    ).toBe("Verification failedUnmet.");
   });
 
   test("keeps legacy user JSON from message.content indexed as written", () => {
-    expect(getNativeMessageSearchText({
-      ...base,
-      id: "user-legacy",
-      role: "user",
-      content: '{"complete":true,"rationale":"Keep raw."}',
-    })).toContain('"rationale"');
+    expect(
+      getNativeMessageSearchText({
+        ...base,
+        id: "user-legacy",
+        role: "user",
+        content: '{"complete":true,"rationale":"Keep raw."}',
+      }),
+    ).toContain('"rationale"');
   });
 
   test("keeps a prose sibling part indexed alongside a folded one", () => {

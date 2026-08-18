@@ -78,9 +78,7 @@ export function resolveCreateEnvironmentAgentDefaults(options: {
       : configured.agent;
   const agent = firstEnabledAgentPlatform(options.enabledAgents, preferredPlatform);
   const rememberedForAgent = remembered?.platform === agent ? remembered : undefined;
-  const rememberedModel = rememberedForAgent
-    ? rememberedForAgent.model ?? "default"
-    : undefined;
+  const rememberedModel = rememberedForAgent ? (rememberedForAgent.model ?? "default") : undefined;
   const model = firstModelFor(agent, catalog, {
     ...configured.models,
     ...(rememberedModel ? { [agent]: rememberedModel } : {}),

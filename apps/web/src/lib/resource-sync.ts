@@ -9,11 +9,7 @@ import {
   type ResourceRevisionManifest,
   type ResourceRevisionMap,
 } from "@orkestrator/protocol/resource-events";
-import {
-  listen,
-  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-  type UnlistenFn,
-} from "@/lib/native/events";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 
 /**
  * Client half of the backend change feed.
@@ -41,9 +37,7 @@ export interface ResourceResyncRequest {
   reason: "explicit" | "manifest";
 }
 
-type ResourceResyncHandler = (
-  request: ResourceResyncRequest,
-) => void | Promise<void>;
+type ResourceResyncHandler = (request: ResourceResyncRequest) => void | Promise<void>;
 
 export interface ResourceSyncOptions {
   loadManifest?: (
@@ -95,10 +89,7 @@ function coalesceKey(change: ResourceChange): string {
  * Subscribes to one resource kind. Returns an unsubscribe function; callers in
  * React must call it on cleanup or a remounted component double-refetches.
  */
-export function onResourceChanged(
-  resource: ResourceKind,
-  handler: ResourceHandler,
-): () => void {
+export function onResourceChanged(resource: ResourceKind, handler: ResourceHandler): () => void {
   let set = handlers.get(resource);
   if (!set) {
     set = new Set();
@@ -128,10 +119,12 @@ async function deliverResourceResync(request: ResourceResyncRequest): Promise<bo
   const pending: Promise<void>[] = [];
   for (const handler of [...resyncHandlers]) {
     try {
-      pending.push(Promise.resolve(handler(request)).catch((error) => {
-        succeeded = false;
-        console.error("[resource-sync] Resync handler threw:", error);
-      }));
+      pending.push(
+        Promise.resolve(handler(request)).catch((error) => {
+          succeeded = false;
+          console.error("[resource-sync] Resync handler threw:", error);
+        }),
+      );
     } catch (error) {
       succeeded = false;
       console.error("[resource-sync] Resync handler threw:", error);
@@ -154,10 +147,7 @@ function deliver(change: ResourceChange): void {
     try {
       handler(change);
     } catch (error) {
-      console.error(
-        `[resource-sync] Handler for ${change.resource} threw:`,
-        error,
-      );
+      console.error(`[resource-sync] Handler for ${change.resource} threw:`, error);
     }
   }
 }
@@ -222,10 +212,7 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
           manifestRequested = false;
           let manifest: ResourceRevisionManifest;
           try {
-            manifest = await loadManifest(
-              knownGeneration,
-              knownRevisions,
-            );
+            manifest = await loadManifest(knownGeneration, knownRevisions);
             if (!isResourceRevisionManifest(manifest)) {
               throw new Error("Invalid resource revision manifest");
             }
@@ -291,49 +278,39 @@ export function startResourceSync(options: ResourceSyncOptions = {}): () => void
     })();
   };
 
-  const attach = (
-    event: string,
-    handler: (event: { payload: unknown }) => void,
-  ): void => {
-    void listen<unknown>(event, handler).then((stop) => {
-      if (disposed) {
-        stop();
-        return;
-      }
-      unlistens.push(stop);
-      attachedListeners += 1;
-      // Wait until both subscriptions exist so the connection notification
-      // cannot race past its own listener. The zero-delay task also lets store
-      // and hook subscribers mounted in the same React commit attach first.
-      if (attachedListeners === 2) {
-        setTimeout(() => {
-          if (!disposed && !connectionAnnounced) {
-            bootResyncAt = Date.now();
-            requestManifestResync();
-          }
-        }, 0);
-      }
-    }).catch((error) => {
-      console.error(
-        `[resource-sync] Failed to subscribe to ${event}:`,
-        error,
-      );
-    });
+  const attach = (event: string, handler: (event: { payload: unknown }) => void): void => {
+    void listen<unknown>(event, handler)
+      .then((stop) => {
+        if (disposed) {
+          stop();
+          return;
+        }
+        unlistens.push(stop);
+        attachedListeners += 1;
+        // Wait until both subscriptions exist so the connection notification
+        // cannot race past its own listener. The zero-delay task also lets store
+        // and hook subscribers mounted in the same React commit attach first.
+        if (attachedListeners === 2) {
+          setTimeout(() => {
+            if (!disposed && !connectionAnnounced) {
+              bootResyncAt = Date.now();
+              requestManifestResync();
+            }
+          }, 0);
+        }
+      })
+      .catch((error) => {
+        console.error(`[resource-sync] Failed to subscribe to ${event}:`, error);
+      });
   };
 
   attach(RESOURCE_CHANGED_EVENT, (event) => {
     if (!isResourceChange(event.payload)) {
-      console.warn(
-        "[resource-sync] Dropping malformed resource-changed payload:",
-        event.payload,
-      );
+      console.warn("[resource-sync] Dropping malformed resource-changed payload:", event.payload);
       return;
     }
     const revision = event.payload.revision;
-    if (
-      lastRevision !== null
-      && (revision <= lastRevision || revision > lastRevision + 1)
-    ) {
+    if (lastRevision !== null && (revision <= lastRevision || revision > lastRevision + 1)) {
       requestManifestResync();
     }
     lastRevision = revision;

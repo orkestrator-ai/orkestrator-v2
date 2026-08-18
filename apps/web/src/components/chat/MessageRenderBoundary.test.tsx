@@ -1,13 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
-import {
-  MessageRenderBoundary,
-  messageRenderResetKey,
-} from "./MessageRenderBoundary";
-import type {
-  NativeMessage,
-  NativeMessagePart,
-} from "@/lib/chat/native-message-types";
+import { MessageRenderBoundary, messageRenderResetKey } from "./MessageRenderBoundary";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 
 function Bomb({ shouldThrow }: { shouldThrow: boolean }) {
   if (shouldThrow) throw new Error("message renderer exploded");
@@ -90,9 +84,7 @@ describe("MessageRenderBoundary", () => {
       renderAttempts += 1;
       throw new Error("message renderer exploded");
     };
-    const parts: NativeMessagePart[] = [
-      { type: "text", content: "Reviewing the diff." },
-    ];
+    const parts: NativeMessagePart[] = [{ type: "text", content: "Reviewing the diff." }];
 
     const { container, rerender } = render(
       <MessageRenderBoundary resetKey={messageRenderResetKey(message(parts))}>
@@ -129,30 +121,31 @@ describe("messageRenderResetKey", () => {
       { type: "tool-invocation", content: "git diff", toolState: "pending" },
     ];
     expect(messageRenderResetKey(message(parts, "tail"))).toBe(
-      messageRenderResetKey(message([
-        { type: "text", content: "Inspecting the changed files" },
-        { type: "tool-invocation", content: "git diff", toolState: "pending" },
-      ], "tail")),
+      messageRenderResetKey(
+        message(
+          [
+            { type: "text", content: "Inspecting the changed files" },
+            { type: "tool-invocation", content: "git diff", toolState: "pending" },
+          ],
+          "tail",
+        ),
+      ),
     );
   });
 
   test("changes when a streaming part grows", () => {
-    const before = messageRenderResetKey(message([
-      { type: "text", content: "Inspecting" },
-    ]));
-    const after = messageRenderResetKey(message([
-      { type: "text", content: "Inspecting the" },
-    ]));
+    const before = messageRenderResetKey(message([{ type: "text", content: "Inspecting" }]));
+    const after = messageRenderResetKey(message([{ type: "text", content: "Inspecting the" }]));
     expect(after).not.toBe(before);
   });
 
   test("changes when a tool row settles without changing its text", () => {
-    const pending = messageRenderResetKey(message([
-      { type: "tool-invocation", content: "git diff", toolState: "pending" },
-    ]));
-    const settled = messageRenderResetKey(message([
-      { type: "tool-invocation", content: "git diff", toolState: "failure" },
-    ]));
+    const pending = messageRenderResetKey(
+      message([{ type: "tool-invocation", content: "git diff", toolState: "pending" }]),
+    );
+    const settled = messageRenderResetKey(
+      message([{ type: "tool-invocation", content: "git diff", toolState: "failure" }]),
+    );
     expect(settled).not.toBe(pending);
   });
 
@@ -162,8 +155,9 @@ describe("messageRenderResetKey", () => {
       content: "",
       parts: [{ type: "tool-invocation", content: childContent }],
     });
-    expect(messageRenderResetKey(message([group("rg foo")])))
-      .not.toBe(messageRenderResetKey(message([group("rg foobar")])));
+    expect(messageRenderResetKey(message([group("rg foo")]))).not.toBe(
+      messageRenderResetKey(message([group("rg foobar")])),
+    );
   });
 
   test("sees growth nested inside a task group's children", () => {
@@ -176,8 +170,9 @@ describe("messageRenderResetKey", () => {
         content: `step ${index}`,
       })),
     });
-    expect(messageRenderResetKey(message([task(1)])))
-      .not.toBe(messageRenderResetKey(message([task(2)])));
+    expect(messageRenderResetKey(message([task(1)]))).not.toBe(
+      messageRenderResetKey(message([task(2)])),
+    );
   });
 
   test("sees a subagent row's actions stream in", () => {
@@ -189,8 +184,9 @@ describe("messageRenderResetKey", () => {
         content: "rg",
       })),
     });
-    expect(messageRenderResetKey(message([subagent(1)])))
-      .not.toBe(messageRenderResetKey(message([subagent(2)])));
+    expect(messageRenderResetKey(message([subagent(1)]))).not.toBe(
+      messageRenderResetKey(message([subagent(2)])),
+    );
   });
 
   test("terminates on a self-referential part instead of recursing forever", () => {

@@ -25,19 +25,14 @@ import {
   type TabInfo,
   getNativeAgentData,
 } from "@/types/paneLayout";
-import {
-  boundBrowserHistory,
-  sanitizeBrowserHistoryForPersistence,
-} from "@/lib/browser-history";
+import { boundBrowserHistory, sanitizeBrowserHistoryForPersistence } from "@/lib/browser-history";
 
 type SavePaneLayout = (
   environmentId: string,
   layout: PersistedPaneLayoutInput,
   expectedRevision: number,
 ) => Promise<PersistedPaneLayout>;
-type LoadPaneLayout = (
-  environmentId: string,
-) => Promise<PersistedPaneLayout | null>;
+type LoadPaneLayout = (environmentId: string) => Promise<PersistedPaneLayout | null>;
 
 interface PendingPaneLayoutWrite {
   input: PersistedPaneLayoutInput;
@@ -67,9 +62,7 @@ const writeSettledHandlers = new Set<PaneLayoutWriteSettledHandler>();
  * because the write it deferred to eventually settles. Without this signal a
  * failed write silently strands the remote snapshot that was dropped for it.
  */
-export function onPaneLayoutWriteSettled(
-  handler: PaneLayoutWriteSettledHandler,
-): () => void {
+export function onPaneLayoutWriteSettled(handler: PaneLayoutWriteSettledHandler): () => void {
   writeSettledHandlers.add(handler);
   return () => {
     writeSettledHandlers.delete(handler);
@@ -77,11 +70,7 @@ export function onPaneLayoutWriteSettled(
 }
 
 function sanitizeTab(tab: TabInfo): TabInfo {
-  const {
-    initialPrompt: _initialPrompt,
-    initialCommands: _initialCommands,
-    ...rest
-  } = tab;
+  const { initialPrompt: _initialPrompt, initialCommands: _initialCommands, ...rest } = tab;
 
   const nativeAgentData = getNativeAgentData(rest);
   const persistedNativeAgentData = nativeAgentData
@@ -97,9 +86,7 @@ function sanitizeTab(tab: TabInfo): TabInfo {
       },
     };
   }
-  return persistedNativeAgentData
-    ? { ...rest, nativeAgentData: persistedNativeAgentData }
-    : rest;
+  return persistedNativeAgentData ? { ...rest, nativeAgentData: persistedNativeAgentData } : rest;
 }
 
 function sanitizeRoot(node: PaneNode): PaneNode {
@@ -200,10 +187,7 @@ type PaneLayoutEnqueue = (
   input: PersistedPaneLayoutInput,
   baseInput?: PersistedPaneLayoutInput,
 ) => Promise<void>;
-type PaneLayoutAdopt = (
-  environmentId: string,
-  state: EnvironmentPaneState,
-) => boolean;
+type PaneLayoutAdopt = (environmentId: string, state: EnvironmentPaneState) => boolean;
 
 interface AuthoritativePaneLayout {
   input: PersistedPaneLayoutInput;
@@ -254,16 +238,13 @@ export function flushPaneLayoutNow(
     }
     const currentInput = isPaneNode(current.root)
       ? {
-        version: current.version,
-        containerId: current.containerId,
-        activePaneId: current.activePaneId,
-        root: current.root,
-      }
+          version: current.version,
+          containerId: current.containerId,
+          activePaneId: current.activePaneId,
+          root: current.root,
+        }
       : null;
-    if (
-      currentInput
-      && JSON.stringify(currentInput) === JSON.stringify(input)
-    ) {
+    if (currentInput && JSON.stringify(currentInput) === JSON.stringify(input)) {
       return;
     }
     if (currentInput && currentInput.version > input.version) {
@@ -276,9 +257,7 @@ export function flushPaneLayoutNow(
       await save(environmentId, input, current.revision);
       return;
     }
-    throw new Error(
-      "Cannot safely flush pane layout without an authoritative merge base",
-    );
+    throw new Error("Cannot safely flush pane layout without an authoritative merge base");
   });
 }
 
@@ -339,20 +318,17 @@ export async function migratePaneLayoutBrowserHistory(
   return true;
 }
 
-export function startPaneLayoutPersistence(
-  options: PaneLayoutPersistenceOptions = {},
-): () => void {
+export function startPaneLayoutPersistence(options: PaneLayoutPersistenceOptions = {}): () => void {
   const useBackendIntents = options.save === undefined && options.load === undefined;
   const save = options.save ?? backend.savePaneLayout;
   const load = options.load ?? backend.getPaneLayout;
-  const hydrateDependencies =
-    options.hydrateDependencies ?? hydratePaneLayoutDependencies;
+  const hydrateDependencies = options.hydrateDependencies ?? hydratePaneLayoutDependencies;
   // Production mutations are dispatched in the same turn. Tests may still
   // inject a delay to exercise coalescing and conflict ordering explicitly.
   const debounceMs = options.debounceMs ?? 0;
   const selectionDebounceMs =
-    options.selectionDebounceMs
-    ?? (options.debounceMs === undefined ? 0 : Math.min(debounceMs, 200));
+    options.selectionDebounceMs ??
+    (options.debounceMs === undefined ? 0 : Math.min(debounceMs, 200));
   const maxConflictRetries = options.maxConflictRetries ?? 3;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
   const selectionTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -378,9 +354,7 @@ export function startPaneLayoutPersistence(
     selectionTimers.delete(environmentId);
   };
 
-  const persistedInput = (
-    layout: PersistedPaneLayout,
-  ): PersistedPaneLayoutInput | null => {
+  const persistedInput = (layout: PersistedPaneLayout): PersistedPaneLayoutInput | null => {
     if (!isPaneNode(layout.root)) return null;
     return {
       version: layout.version,
@@ -390,19 +364,14 @@ export function startPaneLayoutPersistence(
     };
   };
 
-  const emptyMergeBase = (
-    input: PersistedPaneLayoutInput,
-  ): PersistedPaneLayoutInput => {
+  const emptyMergeBase = (input: PersistedPaneLayoutInput): PersistedPaneLayoutInput => {
     const emptyRoot = (node: PaneNode): PaneNode => {
       if (node.kind === "leaf") {
         return { ...node, tabs: [], activeTabId: null };
       }
       return {
         ...node,
-        children: [
-          emptyRoot(node.children[0]),
-          emptyRoot(node.children[1]),
-        ],
+        children: [emptyRoot(node.children[0]), emptyRoot(node.children[1])],
       };
     };
     return {
@@ -438,8 +407,9 @@ export function startPaneLayoutPersistence(
       if (!current || paneStore.hydration.get(environmentId) !== "done") {
         return true;
       }
-      return JSON.stringify(createPersistedPaneLayoutInput(current))
-        !== JSON.stringify(desiredInput);
+      return (
+        JSON.stringify(createPersistedPaneLayoutInput(current)) !== JSON.stringify(desiredInput)
+      );
     };
     if (hasNewerLocalEdit()) return;
 
@@ -447,8 +417,8 @@ export function startPaneLayoutPersistence(
       await hydrateDependencies(savedInput.root);
     } catch (error) {
       console.warn(
-        "[PaneLayout] Skipped installing a saved layout whose dependencies "
-          + "could not be hydrated:",
+        "[PaneLayout] Skipped installing a saved layout whose dependencies " +
+          "could not be hydrated:",
         error,
       );
       return;
@@ -509,14 +479,10 @@ export function startPaneLayoutPersistence(
       const currentInput = current ? persistedInput(current) : null;
       if (current && currentInput) {
         if (currentInput.version > desiredInput.version) {
-          throw new Error(
-            paneLayoutUnsupportedVersionMessage(currentInput.version),
-          );
+          throw new Error(paneLayoutUnsupportedVersionMessage(currentInput.version));
         }
         if (JSON.stringify(currentInput) !== JSON.stringify(desiredInput)) {
-          throw new Error(
-            "Cannot safely persist pane layout without an authoritative merge base",
-          );
+          throw new Error("Cannot safely persist pane layout without an authoritative merge base");
         }
         base = { input: currentInput, revision: current.revision };
       } else {
@@ -525,16 +491,11 @@ export function startPaneLayoutPersistence(
       authoritative.set(environmentId, base);
     }
     if (
-      base.input.version === desired.version
-      && base.input.containerId === desired.containerId
-      && JSON.stringify(base.input) !== JSON.stringify(writeBaseInput)
+      base.input.version === desired.version &&
+      base.input.containerId === desired.containerId &&
+      JSON.stringify(base.input) !== JSON.stringify(writeBaseInput)
     ) {
-      desired = mergePersistedPaneLayouts(
-        writeBaseInput,
-        desired,
-        base.input,
-        { selectionIntent },
-      );
+      desired = mergePersistedPaneLayouts(writeBaseInput, desired, base.input, { selectionIntent });
     }
 
     for (let attempt = 0; ; attempt += 1) {
@@ -568,29 +529,24 @@ export function startPaneLayoutPersistence(
         // A renderer that cannot interpret a future schema must not replace it
         // with its own default tree during conflict recovery.
         if (remoteInput.version > desired.version) {
-          throw new Error(
-            paneLayoutUnsupportedVersionMessage(remoteInput.version),
-          );
+          throw new Error(paneLayoutUnsupportedVersionMessage(remoteInput.version));
         }
         // Layouts from another container generation are not a common merge
         // base. Retaining any of their tabs would resurrect stale sessions
         // after a container restart, so replace them at their current revision.
         const sameGeneration =
-          remoteInput.version === desired.version
-          && remoteInput.containerId === desired.containerId;
+          remoteInput.version === desired.version &&
+          remoteInput.containerId === desired.containerId;
         if (sameGeneration) {
           const commonBase =
-            base.revision > 0
-              && base.input.version === desired.version
-              && base.input.containerId === desired.containerId
+            base.revision > 0 &&
+            base.input.version === desired.version &&
+            base.input.containerId === desired.containerId
               ? base.input
               : emptyMergeBase(desired);
-          desired = mergePersistedPaneLayouts(
-            commonBase,
-            desired,
-            remoteInput,
-            { selectionIntent },
-          );
+          desired = mergePersistedPaneLayouts(commonBase, desired, remoteInput, {
+            selectionIntent,
+          });
         }
         base = { input: remoteInput, revision: current.revision };
         authoritative.set(environmentId, base);
@@ -600,10 +556,7 @@ export function startPaneLayoutPersistence(
 
   const reportWriteFailure = (environmentId: string, error: unknown): void => {
     console.error("[PaneLayout] Failed to persist pane layout:", error);
-    if (
-      isPaneLayoutUnsupportedVersion(error)
-      && !reportedVersionFailures.has(environmentId)
-    ) {
+    if (isPaneLayoutUnsupportedVersion(error) && !reportedVersionFailures.has(environmentId)) {
       reportedVersionFailures.add(environmentId);
       toast.error("Pane layout changes are not being saved", {
         description:
@@ -620,12 +573,7 @@ export function startPaneLayoutPersistence(
     const previousWrite = writeChains.get(environmentId) ?? Promise.resolve();
     const nextWrite = previousWrite
       .catch(() => undefined)
-      .then(() => persistWithRebase(
-        environmentId,
-        input,
-        baseInput,
-        selectionIntent,
-      ))
+      .then(() => persistWithRebase(environmentId, input, baseInput, selectionIntent))
       .catch((error) => {
         if (lastEnqueued.get(environmentId) === serialized) {
           lastEnqueued.delete(environmentId);
@@ -647,8 +595,9 @@ export function startPaneLayoutPersistence(
         // queued head before starting it so an unrelated Zustand update cannot
         // enqueue the same latest selection a second time.
         lastEnqueued.set(environmentId, pendingSelection.serialized);
-        void enqueueWrite(environmentId, pendingSelection)
-          .catch((error) => reportWriteFailure(environmentId, error));
+        void enqueueWrite(environmentId, pendingSelection).catch((error) =>
+          reportWriteFailure(environmentId, error),
+        );
         return;
       }
       // Only announce a genuinely idle environment. A queued debounced write
@@ -659,10 +608,7 @@ export function startPaneLayoutPersistence(
         try {
           handler(environmentId);
         } catch (error) {
-          console.warn(
-            "[PaneLayout] A write-settled handler threw:",
-            error,
-          );
+          console.warn("[PaneLayout] A write-settled handler threw:", error);
         }
       }
     };
@@ -670,40 +616,38 @@ export function startPaneLayoutPersistence(
     return nextWrite;
   };
 
-  const enqueueLatestSelection = (
-    environmentId: string,
-    write: PendingPaneLayoutWrite,
-  ): void => {
+  const enqueueLatestSelection = (environmentId: string, write: PendingPaneLayoutWrite): void => {
     const pending = pendingSelectionWrites.get(environmentId);
     pendingSelectionWrites.set(environmentId, {
       ...write,
       baseInput: pending?.baseInput ?? write.baseInput,
-      selectionIntent: mergeSelectionIntents(
-        pending?.selectionIntent,
-        write.selectionIntent,
-      ),
+      selectionIntent: mergeSelectionIntents(pending?.selectionIntent, write.selectionIntent),
     });
     cancelSelectionTimer(environmentId);
     if (selectionDebounceMs === 0) {
       void flushSelectionEnvironment(environmentId)?.catch((error) =>
-        reportWriteFailure(environmentId, error)
+        reportWriteFailure(environmentId, error),
       );
       return;
     }
-    selectionTimers.set(environmentId, setTimeout(() => {
-      void flushSelectionEnvironment(environmentId)?.catch((error) =>
-        reportWriteFailure(environmentId, error)
-      );
-    }, selectionDebounceMs));
+    selectionTimers.set(
+      environmentId,
+      setTimeout(() => {
+        void flushSelectionEnvironment(environmentId)?.catch((error) =>
+          reportWriteFailure(environmentId, error),
+        );
+      }, selectionDebounceMs),
+    );
   };
 
   // Joins the same chain as the debounced writes so ordering holds. Priming
   // `lastEnqueued` also stops the subscriber echoing this exact layout back.
   const enqueueImmediate: PaneLayoutEnqueue = (environmentId, input, explicitBaseInput) => {
     const serialized = JSON.stringify(input);
-    const matchingPending = pendingWrites.get(environmentId)?.serialized === serialized
-      ? pendingWrites.get(environmentId)
-      : undefined;
+    const matchingPending =
+      pendingWrites.get(environmentId)?.serialized === serialized
+        ? pendingWrites.get(environmentId)
+        : undefined;
     if (matchingPending) {
       cancelTimer(environmentId);
       pendingWrites.delete(environmentId);
@@ -719,11 +663,11 @@ export function startPaneLayoutPersistence(
       input,
       serialized,
       baseInput:
-        explicitBaseInput
-        ?? matchingPending?.baseInput
-        ?? pendingSelection?.baseInput
-        ?? authoritative.get(environmentId)?.input
-        ?? input,
+        explicitBaseInput ??
+        matchingPending?.baseInput ??
+        pendingSelection?.baseInput ??
+        authoritative.get(environmentId)?.input ??
+        input,
       selectionIntent: mergeSelectionIntents(
         matchingPending?.selectionIntent,
         pendingSelection?.selectionIntent,
@@ -739,9 +683,7 @@ export function startPaneLayoutPersistence(
     return enqueueWrite(environmentId, pending);
   };
 
-  const flushSelectionEnvironment = (
-    environmentId: string,
-  ): Promise<void> | undefined => {
+  const flushSelectionEnvironment = (environmentId: string): Promise<void> | undefined => {
     const pending = pendingSelectionWrites.get(environmentId);
     if (!pending) return undefined;
     cancelSelectionTimer(environmentId);
@@ -749,25 +691,22 @@ export function startPaneLayoutPersistence(
     return enqueueWrite(environmentId, pending);
   };
 
-  const flushAll = (): Promise<void> => Promise.all(
-    [...new Set([
-      ...pendingWrites.keys(),
-      ...pendingSelectionWrites.keys(),
-    ])].map((environmentId) =>
-      flushEnvironment(environmentId)
-      ?? flushSelectionEnvironment(environmentId)
-      ?? Promise.resolve()
-    ),
-  ).then(() => undefined);
+  const flushAll = (): Promise<void> =>
+    Promise.all(
+      [...new Set([...pendingWrites.keys(), ...pendingSelectionWrites.keys()])].map(
+        (environmentId) =>
+          flushEnvironment(environmentId) ??
+          flushSelectionEnvironment(environmentId) ??
+          Promise.resolve(),
+      ),
+    ).then(() => undefined);
 
   const handlePageHide = () => {
     void flushAll().catch((error) => reportWriteFailure("pagehide", error));
   };
   const handleVisibilityChange = () => {
     if (document.visibilityState === "hidden") {
-      void flushAll().catch((error) =>
-        reportWriteFailure("visibility", error)
-      );
+      void flushAll().catch((error) => reportWriteFailure("visibility", error));
     }
   };
 
@@ -780,9 +719,9 @@ export function startPaneLayoutPersistence(
     // roll the newer local tab out of the UI; its completed write will announce
     // another authoritative revision.
     if (
-      pendingWrites.has(environmentId)
-      || pendingSelectionWrites.has(environmentId)
-      || writeChains.has(environmentId)
+      pendingWrites.has(environmentId) ||
+      pendingSelectionWrites.has(environmentId) ||
+      writeChains.has(environmentId)
     ) {
       return false;
     }
@@ -791,9 +730,9 @@ export function startPaneLayoutPersistence(
     const known = authoritative.get(environmentId);
     if (known && revision < known.revision) return false;
     if (
-      known
-      && revision === known.revision
-      && JSON.stringify(input) !== JSON.stringify(known.input)
+      known &&
+      revision === known.revision &&
+      JSON.stringify(input) !== JSON.stringify(known.input)
     ) {
       return false;
     }
@@ -872,11 +811,9 @@ export function startPaneLayoutPersistence(
         ? createPersistedPaneLayoutInput(previousEnvironment)
         : input;
       const selectionIntent = selectionIntentBetween(previousInput, input);
-      const selectionOnly = previousEnvironment
-        && JSON.stringify(withoutSelection(input))
-          === JSON.stringify(withoutSelection(
-            previousInput,
-          ));
+      const selectionOnly =
+        previousEnvironment &&
+        JSON.stringify(withoutSelection(input)) === JSON.stringify(withoutSelection(previousInput));
 
       if (selectionOnly) {
         const pendingStructural = pendingWrites.get(environmentId);
@@ -891,9 +828,9 @@ export function startPaneLayoutPersistence(
           // rebase. Explicit selection intent separately makes A -> B -> A end
           // on the final A even when A equals that durable base.
           baseInput:
-            pendingStructural?.baseInput
-            ?? authoritative.get(environmentId)?.input
-            ?? previousInput,
+            pendingStructural?.baseInput ??
+            authoritative.get(environmentId)?.input ??
+            previousInput,
           selectionIntent: mergeSelectionIntents(
             pendingStructural?.selectionIntent,
             selectionIntent,
@@ -915,10 +852,10 @@ export function startPaneLayoutPersistence(
         input,
         serialized,
         baseInput:
-          pendingStructural?.baseInput
-          ?? pendingSelection?.baseInput
-          ?? authoritative.get(environmentId)?.input
-          ?? previousInput,
+          pendingStructural?.baseInput ??
+          pendingSelection?.baseInput ??
+          authoritative.get(environmentId)?.input ??
+          previousInput,
         selectionIntent: mergeSelectionIntents(
           mergeSelectionIntents(
             pendingStructural?.selectionIntent,
@@ -929,15 +866,18 @@ export function startPaneLayoutPersistence(
       });
       if (debounceMs === 0) {
         void flushEnvironment(environmentId)?.catch((error) =>
-          reportWriteFailure(environmentId, error)
+          reportWriteFailure(environmentId, error),
         );
         continue;
       }
-      timers.set(environmentId, setTimeout(() => {
-        void flushEnvironment(environmentId)?.catch((error) =>
-          reportWriteFailure(environmentId, error)
-        );
-      }, debounceMs));
+      timers.set(
+        environmentId,
+        setTimeout(() => {
+          void flushEnvironment(environmentId)?.catch((error) =>
+            reportWriteFailure(environmentId, error),
+          );
+        }, debounceMs),
+      );
     }
   });
 

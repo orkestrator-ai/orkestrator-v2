@@ -18,7 +18,10 @@ type IpcEventLike = {
 
 type IpcMainLike = {
   handle(channel: string, listener: (event: IpcEventLike, ...args: unknown[]) => unknown): void;
-  on?(channel: string, listener: (event: IpcEventLike & { returnValue: unknown }, ...args: unknown[]) => void): void;
+  on?(
+    channel: string,
+    listener: (event: IpcEventLike & { returnValue: unknown }, ...args: unknown[]) => void,
+  ): void;
 };
 
 type ClipboardLike = {
@@ -40,7 +43,10 @@ type ClipboardNativeImageLike = {
 };
 
 type DialogLike = {
-  showOpenDialog(windowOrOptions: BrowserWindow | OpenDialogOptions, maybeOptions?: OpenDialogOptions): Promise<{ canceled: boolean; filePaths: string[] }>;
+  showOpenDialog(
+    windowOrOptions: BrowserWindow | OpenDialogOptions,
+    maybeOptions?: OpenDialogOptions,
+  ): Promise<{ canceled: boolean; filePaths: string[] }>;
 };
 
 type AppLike = {
@@ -160,7 +166,10 @@ export function registerMainIpc({
     const backend = getBackend();
     if (!backend) throw new Error("Backend is not initialized");
     if (typeof command !== "string") throw new Error("Expected command to be a string");
-    const safeArgs = args && typeof args === "object" && !Array.isArray(args) ? args as Record<string, unknown> : {};
+    const safeArgs =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
     return backend.invoke(command, safeArgs);
   });
 
@@ -172,15 +181,16 @@ export function registerMainIpc({
     const clipboardImage = clipboardApi.readImage();
     if (clipboardImage.isEmpty()) return null;
     const sourceSize = clipboardImage.getSize();
-    const image = sourceSize.width > MAX_CLIPBOARD_TRANSFER_DIMENSION ||
+    const image =
+      sourceSize.width > MAX_CLIPBOARD_TRANSFER_DIMENSION ||
       sourceSize.height > MAX_CLIPBOARD_TRANSFER_DIMENSION
-      ? clipboardImage.resize({
-          ...(sourceSize.width >= sourceSize.height
-            ? { width: MAX_CLIPBOARD_TRANSFER_DIMENSION }
-            : { height: MAX_CLIPBOARD_TRANSFER_DIMENSION }),
-          quality: "best",
-        })
-      : clipboardImage;
+        ? clipboardImage.resize({
+            ...(sourceSize.width >= sourceSize.height
+              ? { width: MAX_CLIPBOARD_TRANSFER_DIMENSION }
+              : { height: MAX_CLIPBOARD_TRANSFER_DIMENSION }),
+            quality: "best",
+          })
+        : clipboardImage;
     const size = image.getSize();
     return {
       width: size.width,
@@ -189,13 +199,21 @@ export function registerMainIpc({
     };
   });
   handle("orkestrator:clipboard:write-image", (_event, dataUrl: unknown) => {
-    clipboardApi.writeImage(nativeImageApi.createFromDataURL(typeof dataUrl === "string" ? dataUrl : ""));
+    clipboardApi.writeImage(
+      nativeImageApi.createFromDataURL(typeof dataUrl === "string" ? dataUrl : ""),
+    );
   });
 
   handle("orkestrator:dialog:open", async (_event, options?: unknown) => {
-    const typedOptions = options && typeof options === "object" && !Array.isArray(options)
-      ? options as { directory?: boolean; multiple?: boolean; title?: string; defaultPath?: string }
-      : {};
+    const typedOptions =
+      options && typeof options === "object" && !Array.isArray(options)
+        ? (options as {
+            directory?: boolean;
+            multiple?: boolean;
+            title?: string;
+            defaultPath?: string;
+          })
+        : {};
     const properties: NonNullable<OpenDialogOptions["properties"]> = [
       typedOptions.directory ? "openDirectory" : "openFile",
       ...(typedOptions.multiple ? ["multiSelections" as const] : []),
@@ -210,7 +228,7 @@ export function registerMainIpc({
       ? await dialogApi.showOpenDialog(window, dialogOptions)
       : await dialogApi.showOpenDialog(dialogOptions);
     if (result.canceled) return null;
-    return typedOptions.multiple ? result.filePaths : result.filePaths[0] ?? null;
+    return typedOptions.multiple ? result.filePaths : (result.filePaths[0] ?? null);
   });
 
   handle("orkestrator:web-client:get-status", () => getWebClientStatus());
@@ -283,7 +301,8 @@ export function registerMainIpc({
     });
   });
   handle("orkestrator:browser-preview:set-bounds", (_event, tabId: unknown, bounds: unknown) =>
-    previews().setBounds(browserPreviewTabId(tabId), browserPreviewBounds(bounds)));
+    previews().setBounds(browserPreviewTabId(tabId), browserPreviewBounds(bounds)),
+  );
   handle("orkestrator:browser-preview:set-visible", (_event, tabId: unknown, visible: unknown) => {
     if (typeof visible !== "boolean") throw new Error("Expected browser preview visibility");
     return previews().setVisible(browserPreviewTabId(tabId), visible);
@@ -292,13 +311,18 @@ export function registerMainIpc({
     return previews().navigate(browserPreviewTabId(tabId), browserPreviewUrl(url));
   });
   handle("orkestrator:browser-preview:go-back", (_event, tabId: unknown) =>
-    previews().goBack(browserPreviewTabId(tabId)));
+    previews().goBack(browserPreviewTabId(tabId)),
+  );
   handle("orkestrator:browser-preview:go-forward", (_event, tabId: unknown) =>
-    previews().goForward(browserPreviewTabId(tabId)));
+    previews().goForward(browserPreviewTabId(tabId)),
+  );
   handle("orkestrator:browser-preview:reload", (_event, tabId: unknown) =>
-    previews().reload(browserPreviewTabId(tabId)));
+    previews().reload(browserPreviewTabId(tabId)),
+  );
   handle("orkestrator:browser-preview:open-devtools", (_event, tabId: unknown) =>
-    previews().openDevTools(browserPreviewTabId(tabId)));
+    previews().openDevTools(browserPreviewTabId(tabId)),
+  );
   handle("orkestrator:browser-preview:destroy", (_event, tabId: unknown) =>
-    previews().destroy(browserPreviewTabId(tabId)));
+    previews().destroy(browserPreviewTabId(tabId)),
+  );
 }

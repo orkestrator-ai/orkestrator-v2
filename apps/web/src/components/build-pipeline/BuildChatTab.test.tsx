@@ -1,19 +1,5 @@
-import {
-  afterAll,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   type ResumableBuildPhase,
@@ -23,10 +9,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
-import {
-  mockToastError,
-  mockToastSuccess,
-} from "../../../../../tests/mocks/sonner";
+import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const realBackendSnapshot = { ...realBackend };
@@ -63,7 +46,9 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
               // Mirror the real list so the tab's resolver actually runs here.
               resolvePreviousMessage
                 ? resolvePreviousMessage(messages, index)
-                : index > 0 ? messages[index - 1] : null,
+                : index > 0
+                  ? messages[index - 1]
+                  : null,
             )}
           </div>
         ))}
@@ -90,9 +75,7 @@ const cancelBuildPipelineMock = mock(async (pipelineId: string) => ({
 }));
 const sendMessageMock = mock(async (pipelineId: string, text: string) => ({
   ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
-  pendingUserMessages: [
-    { id: "queued-1", text, createdAt: "2026-07-29T00:02:00.000Z" },
-  ],
+  pendingUserMessages: [{ id: "queued-1", text, createdAt: "2026-07-29T00:02:00.000Z" }],
   backendRevision: 12,
 }));
 const retryReviewMock = mock(async (pipelineId: string) => ({
@@ -112,12 +95,9 @@ const retryInteractionFailureMock = mock(async (pipelineId: string) => ({
   phase: "building" as const,
   error: undefined,
   failureContext: undefined,
-  backendRevision:
-    useBuildPipelineStore.getState().pipelines.get(pipelineId)!.backendRevision + 1,
+  backendRevision: useBuildPipelineStore.getState().pipelines.get(pipelineId)!.backendRevision + 1,
 }));
-const getBuildPipelineConditionalMock = mock(
-  async (_pipelineId: string) => null as unknown,
-);
+const getBuildPipelineConditionalMock = mock(async (_pipelineId: string) => null as unknown);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -135,10 +115,7 @@ const { BuildChatTab } = await import("./BuildChatTab");
 
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
-  mock.module(
-    "@/components/chat/VirtualizedMessageList",
-    () => realVirtualizedMessageListSnapshot,
-  );
+  mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
 });
 
 const pipeline: BuildPipeline = {
@@ -158,11 +135,13 @@ const pipeline: BuildPipeline = {
       status: "idle",
       startedAt: "2026-07-29T00:00:00.000Z",
       label: "Build Session",
-      messages: [{
-        id: "answer-1",
-        role: "assistant",
-        parts: [{ type: "text", content: "Implementation complete" }],
-      }],
+      messages: [
+        {
+          id: "answer-1",
+          role: "assistant",
+          parts: [{ type: "text", content: "Implementation complete" }],
+        },
+      ],
     },
     {
       phase: "verify",
@@ -172,10 +151,12 @@ const pipeline: BuildPipeline = {
       status: "idle",
       startedAt: "2026-07-29T00:01:00.000Z",
       label: "Verification Session",
-      messages: [{
-        info: { id: "answer-2", role: "assistant" },
-        parts: [{ type: "text", text: "All criteria pass" }],
-      }],
+      messages: [
+        {
+          info: { id: "answer-2", role: "assistant" },
+          parts: [{ type: "text", text: "All criteria pass" }],
+        },
+      ],
     },
   ],
   currentSessionIndex: 1,
@@ -214,12 +195,16 @@ describe("BuildChatTab backend projection", () => {
   });
 
   test("renders the same backend sessions and transcripts for every client", () => {
-    render(<BuildChatTab data={{
-      pipelineId: pipeline.id,
-      environmentId: pipeline.environmentId,
-      taskId: pipeline.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
 
     expect(screen.getByText("Backend-owned build")).toBeTruthy();
     expect(screen.getByText("All criteria pass")).toBeTruthy();
@@ -232,12 +217,16 @@ describe("BuildChatTab backend projection", () => {
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
     });
-    const { rerender } = render(<BuildChatTab data={{
-      pipelineId: "missing",
-      environmentId: "env-1",
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    const { rerender } = render(
+      <BuildChatTab
+        data={{
+          pipelineId: "missing",
+          environmentId: "env-1",
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
     expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
 
     useBuildPipelineStore.getState().replacePipeline({
@@ -248,12 +237,16 @@ describe("BuildChatTab backend projection", () => {
       currentSessionIndex: -1,
       backendRevision: 9,
     });
-    rerender(<BuildChatTab data={{
-      pipelineId: "empty",
-      environmentId: "env-1",
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    rerender(
+      <BuildChatTab
+        data={{
+          pipelineId: "empty",
+          environmentId: "env-1",
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
     expect(screen.getByText("The backend is preparing the first stage.")).toBeTruthy();
     expect(screen.getByText("Waiting for the backend to start a build stage.")).toBeTruthy();
   });
@@ -264,20 +257,26 @@ describe("BuildChatTab backend projection", () => {
       id: "malformed",
       phase: "failed",
       error: "Verification crashed",
-      sessions: [{
-        ...pipeline.sessions[0]!,
-        status: "error",
-        messages: [null, 42, {}, { content: [] }] as unknown[],
-      }],
+      sessions: [
+        {
+          ...pipeline.sessions[0]!,
+          status: "error",
+          messages: [null, 42, {}, { content: [] }] as unknown[],
+        },
+      ],
       currentSessionIndex: 0,
       backendRevision: 9,
     });
-    render(<BuildChatTab data={{
-      pipelineId: "malformed",
-      environmentId: "env-1",
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: "malformed",
+          environmentId: "env-1",
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
 
     expect(screen.getByText("Verification crashed")).toBeTruthy();
     expect(screen.getByText("No text transcript was produced for this stage.")).toBeTruthy();
@@ -317,12 +316,16 @@ describe("BuildChatTab backend projection", () => {
       backendRevision: 9,
     });
     pauseBuildPipelineMock.mockRejectedValueOnce(new Error("pause unavailable"));
-    render(<BuildChatTab data={{
-      pipelineId: pipeline.id,
-      environmentId: pipeline.environmentId,
-      taskId: pipeline.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
 
     const pause = screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement;
     fireEvent.click(pause);
@@ -331,9 +334,7 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to pause build", {
       description: "pause unavailable",
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
-      "building",
-    );
+    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("building");
   });
 
   test("reports a non-Error resume rejection and re-enables the control", async () => {
@@ -343,12 +344,16 @@ describe("BuildChatTab backend projection", () => {
       backendRevision: 9,
     });
     resumeBuildPipelineMock.mockRejectedValueOnce("resume unavailable");
-    render(<BuildChatTab data={{
-      pipelineId: pipeline.id,
-      environmentId: pipeline.environmentId,
-      taskId: pipeline.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
 
     const resume = screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement;
     fireEvent.click(resume);
@@ -358,9 +363,7 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to resume build", {
       description: "resume unavailable",
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
-      "paused",
-    );
+    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("paused");
   });
 
   test("reports a cancelled-control failure without replacing the snapshot", async () => {
@@ -370,12 +373,16 @@ describe("BuildChatTab backend projection", () => {
       backendRevision: 9,
     });
     cancelBuildPipelineMock.mockRejectedValueOnce(503);
-    render(<BuildChatTab data={{
-      pipelineId: pipeline.id,
-      environmentId: pipeline.environmentId,
-      taskId: pipeline.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
 
     const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
     fireEvent.click(cancel);
@@ -385,15 +392,15 @@ describe("BuildChatTab backend projection", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to cancel build", {
       description: "503",
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe(
-      "building",
-    );
+    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("building");
   });
 
   test("sends one control request however fast the button is clicked", async () => {
     let release: (() => void) | undefined;
     pauseBuildPipelineMock.mockImplementationOnce(async (pipelineId: string) => {
-      await new Promise<void>((resolve) => { release = resolve; });
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
       return {
         ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
         phase: "paused" as const,
@@ -405,12 +412,16 @@ describe("BuildChatTab backend projection", () => {
       phase: "building",
       backendRevision: 9,
     });
-    render(<BuildChatTab data={{
-      pipelineId: pipeline.id,
-      environmentId: pipeline.environmentId,
-      taskId: pipeline.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
 
     const pause = screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement;
     fireEvent.click(pause);
@@ -421,9 +432,10 @@ describe("BuildChatTab backend projection", () => {
     fireEvent.click(pause);
 
     expect(pauseBuildPipelineMock).toHaveBeenCalledTimes(1);
-    await act(async () => { release?.(); });
-    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase)
-      .toBe("paused");
+    await act(async () => {
+      release?.();
+    });
+    expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("paused");
   });
 
   test("surfaces persisted GitHub completion-comment recovery in the build tab", () => {
@@ -441,17 +453,23 @@ describe("BuildChatTab backend projection", () => {
       completionCommentError: "GitHub unavailable",
       backendRevision: 9,
     });
-    render(<BuildChatTab data={{
-      pipelineId: pipeline.id,
-      environmentId: pipeline.environmentId,
-      taskId: pipeline.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
 
     expect(screen.getByText(/GitHub completion comment failed/)).toBeTruthy();
-    expect(screen.getByRole("button", {
-      name: "Retry GitHub completion comment",
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: "Retry GitHub completion comment",
+      }),
+    ).toBeTruthy();
   });
 
   test("offers only the interaction retry and renders its failure message once", async () => {
@@ -467,12 +485,16 @@ describe("BuildChatTab backend projection", () => {
       },
       backendRevision: 15,
     });
-    render(<BuildChatTab data={{
-      pipelineId: pipeline.id,
-      environmentId: pipeline.environmentId,
-      taskId: pipeline.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
 
     expect(screen.getAllByText("Unexpected authorization")).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "Retry Review" }) === null).toBe(true);
@@ -481,8 +503,7 @@ describe("BuildChatTab backend projection", () => {
 
     await waitFor(() => {
       expect(retryInteractionFailureMock).toHaveBeenCalledWith(pipeline.id);
-      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase)
-        .toBe("building");
+      expect(useBuildPipelineStore.getState().pipelines.get(pipeline.id)?.phase).toBe("building");
     });
   });
 });
@@ -498,22 +519,24 @@ describe("BuildChatTab presentation", () => {
     label: "Review Session",
     structuredRequestId: "review-request",
     structuredResultStatus: "accepted",
-    messages: [{
-      id: "review-answer",
-      role: "assistant",
-      content: "The review is complete",
-      parts: [
-        { type: "text", content: "The review is complete" },
-        {
-          type: "tool-invocation",
-          content: "shell",
-          toolName: "shell",
-          toolArgs: { command: "git diff --stat" },
-          toolState: "success",
-          toolOutput: "1 file changed",
-        },
-      ],
-    }],
+    messages: [
+      {
+        id: "review-answer",
+        role: "assistant",
+        content: "The review is complete",
+        parts: [
+          { type: "text", content: "The review is complete" },
+          {
+            type: "tool-invocation",
+            content: "shell",
+            toolName: "shell",
+            toolArgs: { command: "git diff --stat" },
+            toolState: "success",
+            toolOutput: "1 file changed",
+          },
+        ],
+      },
+    ],
   };
   const reviewed: BuildPipeline = {
     ...pipeline,
@@ -529,12 +552,16 @@ describe("BuildChatTab presentation", () => {
       pipelines: new Map([[next.id, next]]),
       buildEnvironmentIds: new Set([next.environmentId]),
     });
-    render(<BuildChatTab data={{
-      pipelineId: next.id,
-      environmentId: next.environmentId,
-      taskId: next.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: next.id,
+          environmentId: next.environmentId,
+          taskId: next.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
   }
 
   /*
@@ -552,8 +579,9 @@ describe("BuildChatTab presentation", () => {
   }
 
   function renderedParts(): RenderedPart[] {
-    return (listProps.messages as Array<{ parts: RenderedPart[] }>)
-      .flatMap((message) => message.parts);
+    return (listProps.messages as Array<{ parts: RenderedPart[] }>).flatMap(
+      (message) => message.parts,
+    );
   }
 
   function visibleToolInvocations(): string[] {
@@ -585,7 +613,8 @@ describe("BuildChatTab presentation", () => {
     renderTab(reviewed);
 
     const selected = () =>
-      screen.getAllByRole("tab")
+      screen
+        .getAllByRole("tab")
         .filter((tab) => tab.getAttribute("aria-selected") === "true")
         .map((tab) => tab.textContent);
 
@@ -593,8 +622,7 @@ describe("BuildChatTab presentation", () => {
     expect(selected()).toEqual([expect.stringContaining("Verification Session")]);
 
     fireEvent.click(screen.getByText("Build Session"));
-    await waitFor(() =>
-      expect(selected()).toEqual([expect.stringContaining("Build Session")]));
+    await waitFor(() => expect(selected()).toEqual([expect.stringContaining("Build Session")]));
   });
 
   test("renders tool activity through the shared transcript components", () => {
@@ -639,29 +667,30 @@ describe("BuildChatTab presentation", () => {
         session.phase === "review"
           ? {
               ...session,
-              messages: [{
-                id: "review-answer",
-                role: "assistant",
-                content: final,
-                parts: [
-                  { type: "text", content: provisional },
-                  {
-                    type: "tool-invocation",
-                    content: "git diff --stat",
-                    toolName: "shell",
-                    toolState: "success",
-                  },
-                  { type: "text", content: final },
-                ],
-              }],
+              messages: [
+                {
+                  id: "review-answer",
+                  role: "assistant",
+                  content: final,
+                  parts: [
+                    { type: "text", content: provisional },
+                    {
+                      type: "tool-invocation",
+                      content: "git diff --stat",
+                      toolName: "shell",
+                      toolState: "success",
+                    },
+                    { type: "text", content: final },
+                  ],
+                },
+              ],
             }
-          : session
+          : session,
       ),
     });
 
     fireEvent.click(screen.getByText("Review Session"));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Structured review report")).toBeTruthy());
 
     expect(screen.getAllByText("Structured review report")).toHaveLength(1);
     expect(screen.queryByText(/Ready: no/) === null).toBe(true);
@@ -685,34 +714,35 @@ describe("BuildChatTab presentation", () => {
         session.phase === "review"
           ? {
               ...session,
-              messages: [{
-                id: "review-answer",
-                role: "assistant",
-                content: draft,
-                parts: [
-                  { type: "text", content: "Inspecting the changed files." },
-                  { type: "text", content: draft },
-                  {
-                    type: "tool-invocation",
-                    content: "git diff --stat",
-                    toolName: "shell",
-                    toolState: "success",
-                  },
-                  { type: "text", content: fencedDraft },
-                  {
-                    type: "text",
-                    content: 'The config `{"strict":true}` is already covered.',
-                  },
-                ],
-              }],
+              messages: [
+                {
+                  id: "review-answer",
+                  role: "assistant",
+                  content: draft,
+                  parts: [
+                    { type: "text", content: "Inspecting the changed files." },
+                    { type: "text", content: draft },
+                    {
+                      type: "tool-invocation",
+                      content: "git diff --stat",
+                      toolName: "shell",
+                      toolState: "success",
+                    },
+                    { type: "text", content: fencedDraft },
+                    {
+                      type: "text",
+                      content: 'The config `{"strict":true}` is already covered.',
+                    },
+                  ],
+                },
+              ],
             }
-          : session
+          : session,
       ),
     });
 
     fireEvent.click(screen.getByText("Review Session"));
-    await waitFor(() =>
-      expect(screen.getByText("Inspecting the changed files.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Inspecting the changed files.")).toBeTruthy());
 
     expect(visibleTextContents()).toEqual([
       "Inspecting the changed files.",
@@ -745,28 +775,30 @@ describe("BuildChatTab presentation", () => {
           ...pipeline.sessions[1]!,
           agent: "codex",
           structuredResultStatus: "accepted",
-          messages: [{
-            id: "verification-answer",
-            role: "assistant",
-            content: final,
-            parts: [
-              { type: "text", content: inspecting },
-              {
-                type: "tool-invocation",
-                content: "bun test",
-                toolName: "bash",
-                toolState: "success",
-              },
-              { type: "text", content: testing },
-              {
-                type: "tool-invocation",
-                content: "bun run build",
-                toolName: "bash",
-                toolState: "success",
-              },
-              { type: "text", content: final },
-            ],
-          }],
+          messages: [
+            {
+              id: "verification-answer",
+              role: "assistant",
+              content: final,
+              parts: [
+                { type: "text", content: inspecting },
+                {
+                  type: "tool-invocation",
+                  content: "bun test",
+                  toolName: "bash",
+                  toolState: "success",
+                },
+                { type: "text", content: testing },
+                {
+                  type: "tool-invocation",
+                  content: "bun run build",
+                  toolName: "bash",
+                  toolState: "success",
+                },
+                { type: "text", content: final },
+              ],
+            },
+          ],
         },
       ],
     });
@@ -791,20 +823,22 @@ describe("BuildChatTab presentation", () => {
           agent: "codex",
           status: "running",
           structuredResultStatus: "pending",
-          messages: [{
-            id: "verification-answer",
-            role: "assistant",
-            content: inspecting,
-            parts: [
-              { type: "text", content: inspecting },
-              {
-                type: "tool-invocation",
-                content: "bun test",
-                toolName: "bash",
-                toolState: "pending",
-              },
-            ],
-          }],
+          messages: [
+            {
+              id: "verification-answer",
+              role: "assistant",
+              content: inspecting,
+              parts: [
+                { type: "text", content: inspecting },
+                {
+                  type: "tool-invocation",
+                  content: "bun test",
+                  toolName: "bash",
+                  toolState: "pending",
+                },
+              ],
+            },
+          ],
         },
       ],
     });
@@ -824,20 +858,22 @@ describe("BuildChatTab presentation", () => {
       agent: "codex" as const,
       status: "idle" as const,
       structuredResultStatus: "pending" as const,
-      messages: [{
-        id: "verification-answer",
-        role: "assistant",
-        content: provisional,
-        parts: [
-          { type: "text", content: provisional },
-          {
-            type: "tool-invocation",
-            content: "bun test",
-            toolName: "bash",
-            toolState: "pending",
-          },
-        ],
-      }],
+      messages: [
+        {
+          id: "verification-answer",
+          role: "assistant",
+          content: provisional,
+          parts: [
+            { type: "text", content: provisional },
+            {
+              type: "tool-invocation",
+              content: "bun test",
+              toolName: "bash",
+              toolState: "pending",
+            },
+          ],
+        },
+      ],
     };
 
     renderTab({
@@ -875,12 +911,14 @@ describe("BuildChatTab presentation", () => {
           ...pipeline.sessions[1]!,
           status: "idle",
           structuredResultStatus: "pending",
-          messages: [{
-            id: "verification-answer",
-            role: "assistant",
-            content: provisional,
-            parts: [{ type: "text", content: provisional }],
-          }],
+          messages: [
+            {
+              id: "verification-answer",
+              role: "assistant",
+              content: provisional,
+              parts: [{ type: "text", content: provisional }],
+            },
+          ],
         },
       ],
     });
@@ -901,15 +939,17 @@ describe("BuildChatTab presentation", () => {
       sdkSessionId: "old-review-session",
       structuredRequestId: "old-review-request",
       label: "Old Review Session",
-      messages: [{
-        id: "old-review-answer",
-        role: "assistant",
-        content: historical,
-        parts: [
-          { type: "text", content: provisional },
-          { type: "text", content: historical },
-        ],
-      }],
+      messages: [
+        {
+          id: "old-review-answer",
+          role: "assistant",
+          content: historical,
+          parts: [
+            { type: "text", content: provisional },
+            { type: "text", content: historical },
+          ],
+        },
+      ],
     };
     const latestReview = {
       ...reviewSession,
@@ -920,21 +960,16 @@ describe("BuildChatTab presentation", () => {
     };
     renderTab({
       ...reviewed,
-      sessions: [
-        pipeline.sessions[0]!,
-        oldReview,
-        latestReview,
-        pipeline.sessions[1]!,
-      ],
+      sessions: [pipeline.sessions[0]!, oldReview, latestReview, pipeline.sessions[1]!],
       currentSessionIndex: 3,
       structuredReviewRequestId: "latest-review-request",
     });
 
     fireEvent.click(screen.getByText("Old Review Session"));
-    await waitFor(() =>
-      expect(screen.getByText("Structured review report")).toBeTruthy());
-    expect(listProps.messages[0]?.parts.map((part: { content: string }) => part.content))
-      .toEqual([historical]);
+    await waitFor(() => expect(screen.getByText("Structured review report")).toBeTruthy());
+    expect(listProps.messages[0]?.parts.map((part: { content: string }) => part.content)).toEqual([
+      historical,
+    ]);
     expect(screen.queryByText("Still reviewing.") === null).toBe(true);
   });
 
@@ -953,15 +988,17 @@ describe("BuildChatTab presentation", () => {
       sessionKey: "legacy-review-key",
       sdkSessionId: "legacy-review-session",
       label: "Legacy Review Session",
-      messages: [{
-        id: "legacy-review-answer",
-        role: "assistant",
-        content: historical,
-        parts: [
-          { type: "text", content: provisional },
-          { type: "text", content: historical },
-        ],
-      }],
+      messages: [
+        {
+          id: "legacy-review-answer",
+          role: "assistant",
+          content: historical,
+          parts: [
+            { type: "text", content: provisional },
+            { type: "text", content: historical },
+          ],
+        },
+      ],
     };
     const latestReview = {
       ...reviewSession,
@@ -973,32 +1010,22 @@ describe("BuildChatTab presentation", () => {
 
     renderTab({
       ...reviewed,
-      sessions: [
-        pipeline.sessions[0]!,
-        legacyReview,
-        latestReview,
-        pipeline.sessions[1]!,
-      ],
+      sessions: [pipeline.sessions[0]!, legacyReview, latestReview, pipeline.sessions[1]!],
       currentSessionIndex: 3,
       structuredReviewRequestId: "latest-review-request",
     });
 
     fireEvent.click(screen.getByText("Legacy Review Session"));
-    await waitFor(() =>
-      expect(screen.getByText("Structured review report")).toBeTruthy());
-    expect(listProps.messages[0]?.parts.map((part: { content: string }) => part.content))
-      .toEqual([historical]);
+    await waitFor(() => expect(screen.getByText("Structured review report")).toBeTruthy());
+    expect(listProps.messages[0]?.parts.map((part: { content: string }) => part.content)).toEqual([
+      historical,
+    ]);
     expect(screen.queryByText("Still reviewing.") === null).toBe(true);
 
     cleanup();
     renderTab({
       ...reviewed,
-      sessions: [
-        pipeline.sessions[0]!,
-        legacyReview,
-        latestReview,
-        pipeline.sessions[1]!,
-      ],
+      sessions: [pipeline.sessions[0]!, legacyReview, latestReview, pipeline.sessions[1]!],
       currentSessionIndex: 3,
       // A retry deletes the accepted report before the replacement review lands,
       // so the legacy stage's last payload was never authoritative.
@@ -1024,21 +1051,23 @@ describe("BuildChatTab presentation", () => {
       ...pipeline.sessions[1]!,
       agent: "codex" as const,
       structuredResultStatus: undefined,
-      messages: [{
-        id: "verification-answer",
-        role: "assistant",
-        content: final,
-        parts: [
-          { type: "text", content: provisional },
-          {
-            type: "tool-invocation",
-            content: "bun test",
-            toolName: "bash",
-            toolState: "success",
-          },
-          { type: "text", content: final },
-        ],
-      }],
+      messages: [
+        {
+          id: "verification-answer",
+          role: "assistant",
+          content: final,
+          parts: [
+            { type: "text", content: provisional },
+            {
+              type: "tool-invocation",
+              content: "bun test",
+              toolName: "bash",
+              toolState: "success",
+            },
+            { type: "text", content: final },
+          ],
+        },
+      ],
     };
     const prSession = {
       phase: "pr" as const,
@@ -1080,16 +1109,14 @@ describe("BuildChatTab presentation", () => {
   test("keeps the report's sections collapsed and its JSON out of the transcript", async () => {
     renderTab(reviewed);
     fireEvent.click(screen.getByText("Review Session"));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Structured review report")).toBeTruthy());
 
     expect(screen.queryByRole("button", { name: /Inspect raw JSON/ }) === null).toBe(true);
     expect(screen.queryByLabelText("Raw structured review JSON") === null).toBe(true);
     expect(screen.queryByText("Updates the review workflow.") === null).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: /What Changed/ }));
-    await waitFor(() =>
-      expect(screen.getByText("Updates the review workflow.")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Updates the review workflow.")).toBeTruthy());
   });
 
   test("falls back to the newest review stage for a report with no request id", async () => {
@@ -1099,14 +1126,13 @@ describe("BuildChatTab presentation", () => {
       sessions: reviewed.sessions.map((session) =>
         session.sessionKey === "review-key"
           ? { ...session, structuredRequestId: undefined }
-          : session
+          : session,
       ),
       backendRevision: 41,
     });
 
     fireEvent.click(screen.getByText("Review Session"));
-    await waitFor(() =>
-      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Structured review report")).toBeTruthy());
   });
 
   test("falls back to the newest review stage when the request id matches none", async () => {
@@ -1122,16 +1148,14 @@ describe("BuildChatTab presentation", () => {
     expect(hint.textContent).toContain("Review Session");
 
     fireEvent.click(hint);
-    await waitFor(() =>
-      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Structured review report")).toBeTruthy());
   });
 
   test("moves between stages with the arrow keys, as a tablist promises", async () => {
     renderTab(reviewed);
     const tablist = screen.getByRole("tablist");
     const selected = () =>
-      screen.getAllByRole("tab")
-        .find((tab) => tab.getAttribute("aria-selected") === "true")
+      screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true")
         ?.textContent ?? null;
 
     expect(selected()).toContain("Verification Session");
@@ -1160,8 +1184,7 @@ describe("BuildChatTab presentation", () => {
     const tablist = screen.getByRole("tablist");
 
     fireEvent.keyDown(tablist, { key: "Home" });
-    await waitFor(() =>
-      expect(screen.getByText("Implementation complete")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Implementation complete")).toBeTruthy());
 
     // Selecting from the keyboard is a choice, not an auto-follow, so a later
     // backend push must not drag the user off the stage they picked.
@@ -1180,7 +1203,8 @@ describe("BuildChatTab presentation", () => {
   test("keeps one stage in the page tab sequence, not all of them", async () => {
     renderTab(reviewed);
     const tabStops = () =>
-      screen.getAllByRole("tab")
+      screen
+        .getAllByRole("tab")
         .filter((tab) => tab.getAttribute("tabindex") === "0")
         .map((tab) => tab.textContent);
 
@@ -1188,16 +1212,14 @@ describe("BuildChatTab presentation", () => {
     expect(tabStops()).toEqual([expect.stringContaining("Verification Session")]);
 
     fireEvent.click(screen.getByText("Build Session"));
-    await waitFor(() =>
-      expect(tabStops()).toEqual([expect.stringContaining("Build Session")]));
+    await waitFor(() => expect(tabStops()).toEqual([expect.stringContaining("Build Session")]));
   });
 
   test("ignores keys that mean nothing to a tablist", () => {
     renderTab(reviewed);
     const tablist = screen.getByRole("tablist");
     const selected = () =>
-      screen.getAllByRole("tab")
-        .find((tab) => tab.getAttribute("aria-selected") === "true")
+      screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true")
         ?.textContent ?? null;
 
     fireEvent.keyDown(tablist, { key: "a" });
@@ -1217,8 +1239,7 @@ describe("BuildChatTab presentation", () => {
     expect(hint.textContent).toContain("Review Session");
 
     fireEvent.click(hint);
-    await waitFor(() =>
-      expect(screen.getByLabelText("Structured review report")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Structured review report")).toBeTruthy());
     // Once the report is on screen the pointer to it is redundant.
     expect(screen.queryByRole("button", { name: /The review reported/ }) === null).toBe(true);
   });
@@ -1226,7 +1247,8 @@ describe("BuildChatTab presentation", () => {
   test("badges the stage that holds the report, and only that stage", () => {
     renderTab(reviewed);
 
-    const badged = screen.getAllByRole("tab")
+    const badged = screen
+      .getAllByRole("tab")
       .filter((tab) => tab.textContent?.includes("Report · 1 issue"))
       .map((tab) => tab.textContent);
     expect(badged).toEqual([expect.stringContaining("Review Session")]);
@@ -1243,14 +1265,13 @@ describe("BuildChatTab presentation", () => {
     renderTab(reviewed);
     const panel = screen.getByRole("tabpanel");
     const selectedTabId = () =>
-      screen.getAllByRole("tab")
-        .find((tab) => tab.getAttribute("aria-selected") === "true")?.id ?? null;
+      screen.getAllByRole("tab").find((tab) => tab.getAttribute("aria-selected") === "true")?.id ??
+      null;
 
     expect(panel.getAttribute("aria-labelledby")).toBe(selectedTabId());
 
     fireEvent.click(screen.getByText("Review Session"));
-    await waitFor(() =>
-      expect(panel.getAttribute("aria-labelledby")).toBe(selectedTabId()));
+    await waitFor(() => expect(panel.getAttribute("aria-labelledby")).toBe(selectedTabId()));
     // Two build tabs can be mounted at once, so the ids cannot be constants.
     expect(panel.id).not.toBe("build-stage-transcript");
     expect(screen.getAllByRole("tab").every((tab) => tab.id.length > 0)).toBe(true);
@@ -1394,8 +1415,7 @@ describe("BuildChatTab presentation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry Build Stage" }));
 
     await waitFor(() => {
-      expect(useBuildPipelineStore.getState().pipelines.get(reviewed.id))
-        .toEqual(failedAgain);
+      expect(useBuildPipelineStore.getState().pipelines.get(reviewed.id)).toEqual(failedAgain);
     });
     expect(mockToastError).toHaveBeenCalledWith("Failed to restart the stage", {
       description: "fresh session could not be created",
@@ -1511,22 +1531,23 @@ describe("BuildChatTab transcript wiring", () => {
   });
 
   function renderTab(props: { isActive?: boolean; ownsGlobalShortcuts?: boolean } = {}) {
-    render(<BuildChatTab
-      data={{
-        pipelineId: pipeline.id,
-        environmentId: pipeline.environmentId,
-        taskId: pipeline.taskId,
-        isLocal: true,
-      }}
-      {...props}
-    />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: pipeline.id,
+          environmentId: pipeline.environmentId,
+          taskId: pipeline.taskId,
+          isLocal: true,
+        }}
+        {...props}
+      />,
+    );
   }
 
   test("keys each row on its message id so a re-render does not remount it", () => {
     renderTab();
 
-    expect(listProps.messages.map((message: { id: string }) => message.id))
-      .toEqual(["answer-2"]);
+    expect(listProps.messages.map((message: { id: string }) => message.id)).toEqual(["answer-2"]);
     expect(listProps.computeItemKey(0, listProps.messages[0])).toBe("answer-2");
   });
 
@@ -1539,7 +1560,13 @@ describe("BuildChatTab transcript wiring", () => {
 
     const messages = [
       { id: "u", role: "user", content: "Q", createdAt: "2026-03-21T10:00:00.000Z", parts: [] },
-      { id: "empty", role: "assistant", content: "", createdAt: "2026-03-21T10:00:10.000Z", parts: [] },
+      {
+        id: "empty",
+        role: "assistant",
+        content: "",
+        createdAt: "2026-03-21T10:00:10.000Z",
+        parts: [],
+      },
       {
         id: "answer",
         role: "assistant",
@@ -1628,20 +1655,22 @@ describe("BuildChatTab per-step harnesses", () => {
     status: "idle",
     startedAt: "2026-07-29T00:02:00.000Z",
     label: "Codex Review Session",
-    messages: [{
-      id: "codex-review-answer",
-      role: "assistant",
-      parts: [
-        { type: "text", content: "Reviewed the diff" },
-        {
-          type: "subagent",
-          content: "diff-auditor",
-          subagentId: "sub-1",
-          subagentName: "diff-auditor",
-          subagentActions: [],
-        },
-      ],
-    }],
+    messages: [
+      {
+        id: "codex-review-answer",
+        role: "assistant",
+        parts: [
+          { type: "text", content: "Reviewed the diff" },
+          {
+            type: "subagent",
+            content: "diff-auditor",
+            subagentId: "sub-1",
+            subagentName: "diff-auditor",
+            subagentActions: [],
+          },
+        ],
+      },
+    ],
   };
 
   /**
@@ -1659,26 +1688,28 @@ describe("BuildChatTab per-step harnesses", () => {
     status: "idle",
     startedAt: "2026-07-29T00:00:00.000Z",
     label: "Claude Build Session",
-    messages: [{
-      id: "claude-build-answer",
-      role: "assistant",
-      content: "",
-      timestamp: "2026-07-29T00:00:10.000Z",
-      parts: [
-        {
-          type: "tool-invocation",
-          toolName: "Task",
-          toolUseId: "task-1",
-          toolArgs: { description: "Audit the diff" },
-        },
-        {
-          type: "tool-invocation",
-          toolName: "Bash",
-          parentTaskUseId: "task-1",
-          toolArgs: { command: "git diff" },
-        },
-      ],
-    }],
+    messages: [
+      {
+        id: "claude-build-answer",
+        role: "assistant",
+        content: "",
+        timestamp: "2026-07-29T00:00:10.000Z",
+        parts: [
+          {
+            type: "tool-invocation",
+            toolName: "Task",
+            toolUseId: "task-1",
+            toolArgs: { description: "Audit the diff" },
+          },
+          {
+            type: "tool-invocation",
+            toolName: "Bash",
+            parentTaskUseId: "task-1",
+            toolArgs: { command: "git diff" },
+          },
+        ],
+      },
+    ],
   };
 
   // The build ran on Claude; the launcher configured the review step on Codex,
@@ -1698,17 +1729,22 @@ describe("BuildChatTab per-step harnesses", () => {
       pipelines: new Map([[next.id, next]]),
       buildEnvironmentIds: new Set([next.environmentId]),
     });
-    render(<BuildChatTab data={{
-      pipelineId: next.id,
-      environmentId: next.environmentId,
-      taskId: next.taskId,
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          pipelineId: next.id,
+          environmentId: next.environmentId,
+          taskId: next.taskId,
+          isLocal: true,
+        }}
+      />,
+    );
   }
 
   function partTypes(): string[] {
-    return (listProps.messages as Array<{ parts: Array<{ type: string }> }>)
-      .flatMap((message) => message.parts.map((part) => part.type));
+    return (listProps.messages as Array<{ parts: Array<{ type: string }> }>).flatMap((message) =>
+      message.parts.map((part) => part.type),
+    );
   }
 
   beforeEach(() => {
@@ -1734,14 +1770,16 @@ describe("BuildChatTab per-step harnesses", () => {
     // pipeline's build agent.
     expect(screen.getByText("codex")).toBeTruthy();
     expect(screen.queryByText("claude") === null).toBe(true);
-    expect(listProps.renderMessage(0, listProps.messages[0], null).props)
-      .toMatchObject({ assistantLabel: "Codex" });
+    expect(listProps.renderMessage(0, listProps.messages[0], null).props).toMatchObject({
+      assistantLabel: "Codex",
+    });
 
     fireEvent.click(screen.getByText("Claude Build Session"));
     await waitFor(() => expect(screen.getByText("claude")).toBeTruthy());
     expect(screen.queryByText("codex") === null).toBe(true);
-    expect(listProps.renderMessage(0, listProps.messages[0], null).props)
-      .toMatchObject({ assistantLabel: "Claude" });
+    expect(listProps.renderMessage(0, listProps.messages[0], null).props).toMatchObject({
+      assistantLabel: "Claude",
+    });
   });
 
   test("re-decodes with the right adapter each time the stage changes", async () => {
@@ -1774,8 +1812,9 @@ describe("BuildChatTab per-step harnesses", () => {
     expect(partTypes()).toEqual(["text", "subagent"]);
     expect(screen.getByText("Reviewed the diff")).toBeTruthy();
     expect(screen.getByText("opencode")).toBeTruthy();
-    expect(listProps.renderMessage(0, listProps.messages[0], null).props)
-      .toMatchObject({ assistantLabel: "OpenCode" });
+    expect(listProps.renderMessage(0, listProps.messages[0], null).props).toMatchObject({
+      assistantLabel: "OpenCode",
+    });
   });
 });
 
@@ -1804,35 +1843,37 @@ describe("BuildChatTab rehydration", () => {
       updatedAt: "2026-07-29T00:00:00.000Z",
     }));
 
-    render(<BuildChatTab data={{
-      environmentId: "env-1",
-      pipelineId: pipeline.id,
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          environmentId: "env-1",
+          pipelineId: pipeline.id,
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
 
     expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
     await waitFor(() => {
       expect(screen.getByText("Backend-owned build")).toBeTruthy();
     });
-    expect(getBuildPipelineConditionalMock).toHaveBeenCalledWith(
-      pipeline.id,
-      undefined,
-      undefined,
-    );
+    expect(getBuildPipelineConditionalMock).toHaveBeenCalledWith(pipeline.id, undefined, undefined);
   });
 
   test("does not refetch in a loop when the pipeline genuinely does not exist", async () => {
-    render(<BuildChatTab data={{
-      environmentId: "env-1",
-      pipelineId: "missing",
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
-
-    await waitFor(() =>
-      expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1)
+    render(
+      <BuildChatTab
+        data={{
+          environmentId: "env-1",
+          pipelineId: "missing",
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
     );
+
+    await waitFor(() => expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1));
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(getBuildPipelineConditionalMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Loading build pipeline…")).toBeTruthy();
@@ -1846,12 +1887,16 @@ describe("BuildChatTab rehydration", () => {
     getBuildPipelineConditionalMock.mockRejectedValueOnce(hydrationError);
 
     try {
-      render(<BuildChatTab data={{
-        environmentId: "env-1",
-        pipelineId: pipeline.id,
-        taskId: "task-1",
-        isLocal: true,
-      }} />);
+      render(
+        <BuildChatTab
+          data={{
+            environmentId: "env-1",
+            pipelineId: pipeline.id,
+            taskId: "task-1",
+            isLocal: true,
+          }}
+        />,
+      );
 
       await waitFor(() => {
         expect(warnMock).toHaveBeenCalledWith(
@@ -1886,12 +1931,16 @@ describe("BuildChatTab rehydration", () => {
       buildEnvironmentIds: new Set(["env-1"]),
     });
 
-    render(<BuildChatTab data={{
-      environmentId: "env-1",
-      pipelineId: pipeline.id,
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          environmentId: "env-1",
+          pipelineId: pipeline.id,
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
 
     expect(screen.getByText("Backend-owned build")).toBeTruthy();
     expect(getBuildPipelineConditionalMock).not.toHaveBeenCalled();
@@ -1919,12 +1968,16 @@ describe("BuildChatTab stage following", () => {
       currentSessionIndex: 0,
     };
     renderWith(building);
-    render(<BuildChatTab data={{
-      environmentId: "env-1",
-      pipelineId: pipeline.id,
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          environmentId: "env-1",
+          pipelineId: pipeline.id,
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
     expect(screen.getByText("Implementation complete")).toBeTruthy();
 
     // The backend advances to the verification stage.
@@ -1937,17 +1990,20 @@ describe("BuildChatTab stage following", () => {
 
   test("holds a stage the user selected even as the pipeline advances", async () => {
     renderWith({ ...pipeline, phase: "verifying" });
-    render(<BuildChatTab data={{
-      environmentId: "env-1",
-      pipelineId: pipeline.id,
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          environmentId: "env-1",
+          pipelineId: pipeline.id,
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
     await waitFor(() => expect(screen.getByText("All criteria pass")).toBeTruthy());
 
     fireEvent.click(screen.getByText("Build Session"));
-    await waitFor(() =>
-      expect(screen.getByText("Implementation complete")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Implementation complete")).toBeTruthy());
 
     // A new snapshot arrives; the explicit choice must survive it.
     renderWith({ ...pipeline, phase: "complete", backendRevision: 20 });
@@ -1957,15 +2013,18 @@ describe("BuildChatTab stage following", () => {
   });
 
   test("resumes following when the selected stage leaves the snapshot", async () => {
-    render(<BuildChatTab data={{
-      environmentId: "env-1",
-      pipelineId: pipeline.id,
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          environmentId: "env-1",
+          pipelineId: pipeline.id,
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
     fireEvent.click(screen.getByText("Build Session"));
-    await waitFor(() =>
-      expect(screen.getByText("Implementation complete")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Implementation complete")).toBeTruthy());
 
     // A retry replaced the session list; the pinned id no longer exists, so
     // holding it would leave the transcript permanently blank.
@@ -1996,12 +2055,16 @@ describe("BuildChatTab agent messaging", () => {
   });
 
   function renderTab() {
-    render(<BuildChatTab data={{
-      environmentId: "env-1",
-      pipelineId: running.id,
-      taskId: "task-1",
-      isLocal: true,
-    }} />);
+    render(
+      <BuildChatTab
+        data={{
+          environmentId: "env-1",
+          pipelineId: running.id,
+          taskId: "task-1",
+          isLocal: true,
+        }}
+      />,
+    );
   }
 
   test("queues a message through the backend and clears the box", async () => {
@@ -2012,14 +2075,11 @@ describe("BuildChatTab agent messaging", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send message" }));
 
     await waitFor(() =>
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        running.id,
-        "also update the README",
-      ));
+      expect(sendMessageMock).toHaveBeenCalledWith(running.id, "also update the README"),
+    );
     await waitFor(() => expect(box.value).toBe(""));
     // The authoritative reply is installed, so the queue depth is visible.
-    await waitFor(() =>
-      expect(screen.getByText(/1 message queued/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/1 message queued/)).toBeTruthy());
   });
 
   test("submits on Enter and inserts a newline on Shift+Enter", async () => {
@@ -2031,14 +2091,15 @@ describe("BuildChatTab agent messaging", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
 
     fireEvent.keyDown(box, { key: "Enter" });
-    await waitFor(() =>
-      expect(sendMessageMock).toHaveBeenCalledWith(running.id, "ship it"));
+    await waitFor(() => expect(sendMessageMock).toHaveBeenCalledWith(running.id, "ship it"));
   });
 
   test("does not queue the same text twice from a second Enter", async () => {
     let release: (() => void) | undefined;
     sendMessageMock.mockImplementationOnce(async (pipelineId: string) => {
-      await new Promise<void>((resolve) => { release = resolve; });
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
       return {
         ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
         pendingUserMessages: [],
@@ -2056,7 +2117,9 @@ describe("BuildChatTab agent messaging", () => {
     fireEvent.keyDown(box, { key: "Enter" });
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    await act(async () => { release?.(); });
+    await act(async () => {
+      release?.();
+    });
     expect((box as HTMLTextAreaElement).value).toBe("");
   });
 
@@ -2065,8 +2128,7 @@ describe("BuildChatTab agent messaging", () => {
     const box = screen.getByLabelText("Send a message to the agent");
 
     // Truncating in the browser beats a rejected round trip that loses the text.
-    expect(box.getAttribute("maxlength"))
-      .toBe(String(MAX_PIPELINE_USER_MESSAGE_LENGTH));
+    expect(box.getAttribute("maxlength")).toBe(String(MAX_PIPELINE_USER_MESSAGE_LENGTH));
   });
 
   test("keeps the draft when the backend refuses the message", async () => {
@@ -2110,10 +2172,9 @@ describe("BuildChatTab agent messaging", () => {
     }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
 
-    fireEvent.change(
-      screen.getByLabelText("Send a message to the agent"),
-      { target: { value: "   " } },
-    );
+    fireEvent.change(screen.getByLabelText("Send a message to the agent"), {
+      target: { value: "   " },
+    });
     expect(button.disabled).toBe(true);
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
@@ -2135,8 +2196,8 @@ describe("BuildChatTab agent messaging", () => {
 
     await waitFor(() => expect(retryReviewMock).toHaveBeenCalledWith(running.id));
     await waitFor(() =>
-      expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
-        .toBe("reviewing"));
+      expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase).toBe("reviewing"),
+    );
   });
 
   test("reports a queue of more than one message as a queue", () => {
@@ -2157,7 +2218,9 @@ describe("BuildChatTab agent messaging", () => {
   test("disables the send button and shows progress while a send is in flight", async () => {
     let release: (() => void) | undefined;
     sendMessageMock.mockImplementationOnce(async (pipelineId: string) => {
-      await new Promise<void>((resolve) => { release = resolve; });
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
       return {
         ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
         pendingUserMessages: [],
@@ -2165,10 +2228,9 @@ describe("BuildChatTab agent messaging", () => {
       };
     });
     renderTab();
-    fireEvent.change(
-      screen.getByLabelText("Send a message to the agent"),
-      { target: { value: "hold on" } },
-    );
+    fireEvent.change(screen.getByLabelText("Send a message to the agent"), {
+      target: { value: "hold on" },
+    });
 
     const button = screen.getByRole("button", {
       name: "Send message",
@@ -2200,8 +2262,7 @@ describe("BuildChatTab agent messaging", () => {
     expect(mockToastError).toHaveBeenCalledWith("Failed to restart the review", {
       description: "no review stage",
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
-      .toBe("building");
+    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase).toBe("building");
   });
 
   test("formats a non-Error review restart rejection", async () => {
@@ -2215,15 +2276,13 @@ describe("BuildChatTab agent messaging", () => {
         description: "review provider offline",
       });
     });
-    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase)
-      .toBe("building");
+    expect(useBuildPipelineStore.getState().pipelines.get(running.id)?.phase).toBe("building");
   });
 
   test("follows the restarted review instead of the stage the user was reading", async () => {
     renderTab();
     fireEvent.click(screen.getByText("Build Session"));
-    await waitFor(() =>
-      expect(screen.getByText("Implementation complete")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Implementation complete")).toBeTruthy());
 
     // A retry appends a new stage. Holding the pinned one would leave the user
     // watching a transcript that has stopped moving.
@@ -2232,20 +2291,25 @@ describe("BuildChatTab agent messaging", () => {
       return {
         ...current,
         phase: "reviewing" as const,
-        sessions: [...current.sessions, {
-          phase: "review" as const,
-          iteration: 1,
-          sessionKey: "retry-key",
-          sdkSessionId: "retry-session",
-          status: "idle" as const,
-          startedAt: "2026-07-29T00:05:00.000Z",
-          label: "Retry Review Session",
-          messages: [{
-            id: "retry-answer",
-            role: "assistant",
-            content: "Reviewing again",
-          }],
-        }],
+        sessions: [
+          ...current.sessions,
+          {
+            phase: "review" as const,
+            iteration: 1,
+            sessionKey: "retry-key",
+            sdkSessionId: "retry-session",
+            status: "idle" as const,
+            startedAt: "2026-07-29T00:05:00.000Z",
+            label: "Retry Review Session",
+            messages: [
+              {
+                id: "retry-answer",
+                role: "assistant",
+                content: "Reviewing again",
+              },
+            ],
+          },
+        ],
         currentSessionIndex: current.sessions.length,
         backendRevision: 52,
       };
@@ -2253,17 +2317,21 @@ describe("BuildChatTab agent messaging", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Retry Review/ }));
 
-    await waitFor(() =>
-      expect(screen.getByText("Reviewing again")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Reviewing again")).toBeTruthy());
   });
 
   test("does not offer a review retry before the first stage exists", () => {
     useBuildPipelineStore.setState({
-      pipelines: new Map([[running.id, {
-        ...running,
-        sessions: [],
-        currentSessionIndex: -1,
-      }]]),
+      pipelines: new Map([
+        [
+          running.id,
+          {
+            ...running,
+            sessions: [],
+            currentSessionIndex: -1,
+          },
+        ],
+      ]),
       buildEnvironmentIds: new Set(["env-1"]),
     });
     renderTab();

@@ -78,10 +78,7 @@ Begin by running git status to understand the current state.`;
  * Shares its body with the other interactive review workflows via
  * `buildReviewBody()`.
  */
-function createDefaultReviewPrompt(
-  targetBranch: string,
-  reviewInstruction?: unknown,
-): string {
+function createDefaultReviewPrompt(targetBranch: string, reviewInstruction?: unknown): string {
   return [
     "You are performing a commit and code review workflow. Fix the review snapshot first, then overlap independent validation and analysis where supported.",
     "",
@@ -114,10 +111,7 @@ export function createReviewPrompt(targetBranch: string, reviewInstruction?: unk
   return createDefaultReviewPrompt(targetBranch, reviewInstruction);
 }
 
-export {
-  DEFAULT_REVIEW_INSTRUCTION,
-  REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN,
-};
+export { DEFAULT_REVIEW_INSTRUCTION, REVIEW_INSTRUCTION_TARGET_BRANCH_TOKEN };
 
 /**
  * Generates the prompt for pushing changes to an existing PR.

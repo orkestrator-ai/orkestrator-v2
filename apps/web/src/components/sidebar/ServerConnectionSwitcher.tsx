@@ -45,17 +45,23 @@ export function ServerConnectionSwitcher() {
   useEffect(() => {
     const api = getConnectionsApi();
     if (!api) return;
-    void api.list().then(setConnections).catch((caught) => {
-      toast.error("Could not load saved connections", { description: errorMessage(caught) });
-    });
+    void api
+      .list()
+      .then(setConnections)
+      .catch((caught) => {
+        toast.error("Could not load saved connections", { description: errorMessage(caught) });
+      });
   }, []);
 
   const active = useMemo(
     () => connections?.connections.find((connection) => connection.active) ?? null,
     [connections],
   );
-  const credentialStorage = connections?.credentialStorage
-    ?? (connections?.connections.some((connection) => connection.kind === "local") ? "secure" : "session-only");
+  const credentialStorage =
+    connections?.credentialStorage ??
+    (connections?.connections.some((connection) => connection.kind === "local")
+      ? "secure"
+      : "session-only");
 
   const openConnectionDialog = (connection?: ConnectionSummary) => {
     setAddress(connection?.address ?? "");
@@ -119,7 +125,10 @@ export function ServerConnectionSwitcher() {
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
               {active?.name ?? "Loading…"}
             </span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-500 transition-colors group-hover:text-zinc-300" aria-hidden="true" />
+            <ChevronDown
+              className="h-3.5 w-3.5 shrink-0 text-zinc-500 transition-colors group-hover:text-zinc-300"
+              aria-hidden="true"
+            />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-72" sideOffset={6}>
@@ -146,7 +155,8 @@ export function ServerConnectionSwitcher() {
                 <span className="block truncate text-sm text-zinc-100">{connection.name}</span>
                 {connection.address && (
                   <span className="block truncate text-xs text-zinc-500">
-                    {connection.requiresToken ? "Token required · " : ""}{connection.address}
+                    {connection.requiresToken ? "Token required · " : ""}
+                    {connection.address}
                   </span>
                 )}
               </span>
@@ -187,7 +197,9 @@ export function ServerConnectionSwitcher() {
                   disabled={connecting}
                   required
                 />
-                <p className="text-xs leading-relaxed text-zinc-500">Use the HTTPS origin, without a path.</p>
+                <p className="text-xs leading-relaxed text-zinc-500">
+                  Use the HTTPS origin, without a path.
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -221,17 +233,29 @@ export function ServerConnectionSwitcher() {
               </div>
 
               {error && (
-                <div className="rounded-md border border-red-500/25 bg-red-500/[0.07] px-3 py-2 text-sm text-red-300" role="alert">
+                <div
+                  className="rounded-md border border-red-500/25 bg-red-500/[0.07] px-3 py-2 text-sm text-red-300"
+                  role="alert"
+                >
                   {error}
                 </div>
               )}
             </div>
 
             <DialogFooter className="border-t border-zinc-800/90 px-6 py-4 sm:justify-between">
-              <Button type="button" variant="ghost" onClick={() => setDialogOpen(false)} disabled={connecting}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setDialogOpen(false)}
+                disabled={connecting}
+              >
                 Cancel
               </Button>
-              <Button type="submit" className="bg-orange-500 text-black hover:bg-orange-400" disabled={connecting}>
+              <Button
+                type="submit"
+                className="bg-orange-500 text-black hover:bg-orange-400"
+                disabled={connecting}
+              >
                 {connecting && <Loader2 className="h-4 w-4 animate-spin" />}
                 {connecting ? "Connecting…" : "Connect"}
               </Button>

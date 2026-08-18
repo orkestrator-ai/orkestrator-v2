@@ -174,14 +174,20 @@ export function NativeComposeBar({
                     ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
                     : "bg-muted/50 text-muted-foreground hover:bg-muted",
                 )}
-                aria-label={queue.error
-                  ? `${queue.length} queued prompts blocked: ${queue.error.message}`
-                  : undefined}
-                title={queue.error
-                  ? `Queued prompt was not sent: ${queue.error.message}`
-                  : "View queued prompts"}
+                aria-label={
+                  queue.error
+                    ? `${queue.length} queued prompts blocked: ${queue.error.message}`
+                    : undefined
+                }
+                title={
+                  queue.error
+                    ? `Queued prompt was not sent: ${queue.error.message}`
+                    : "View queued prompts"
+                }
               >
-                {queue.error ? <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" /> : null}
+                {queue.error ? (
+                  <AlertCircle className="h-3 w-3 shrink-0" aria-hidden="true" />
+                ) : null}
                 <span>+{queue.length} queued</span>
               </button>
             ) : null}

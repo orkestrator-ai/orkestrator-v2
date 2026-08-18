@@ -87,7 +87,10 @@ export function parseGeneratedSessionTitle(response: string): string | null {
     }
   }
 
-  const firstLine = response.split("\n").map((line) => line.trim()).find(Boolean);
+  const firstLine = response
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
   return firstLine ? sanitizeSessionTitle(firstLine) : null;
 }
 
@@ -140,35 +143,39 @@ Return JSON matching the supplied schema and nothing else.`;
 
 export function buildSessionTitleModelCatalog(): Record<string, unknown> {
   return {
-    models: [{
-      slug: SESSION_TITLE_MODEL,
-      display_name: "Session title generator",
-      description: "Tool-free model profile for short session titles.",
-      default_reasoning_level: SESSION_TITLE_REASONING_EFFORT,
-      supported_reasoning_levels: [{
-        effort: SESSION_TITLE_REASONING_EFFORT,
-        description: "Fast title generation",
-      }],
-      shell_type: "disabled",
-      visibility: "none",
-      supported_in_api: true,
-      priority: 0,
-      availability_nux: null,
-      upgrade: null,
-      base_instructions: SESSION_TITLE_BASE_INSTRUCTIONS,
-      supports_reasoning_summaries: false,
-      support_verbosity: false,
-      default_verbosity: "low",
-      apply_patch_tool_type: null,
-      truncation_policy: { mode: "tokens", limit: 10_000 },
-      supports_parallel_tool_calls: false,
-      experimental_supported_tools: [],
-      input_modalities: ["text"],
-      supports_search_tool: false,
-      use_responses_lite: true,
-      tool_mode: "direct",
-      multi_agent_version: "disabled",
-    }],
+    models: [
+      {
+        slug: SESSION_TITLE_MODEL,
+        display_name: "Session title generator",
+        description: "Tool-free model profile for short session titles.",
+        default_reasoning_level: SESSION_TITLE_REASONING_EFFORT,
+        supported_reasoning_levels: [
+          {
+            effort: SESSION_TITLE_REASONING_EFFORT,
+            description: "Fast title generation",
+          },
+        ],
+        shell_type: "disabled",
+        visibility: "none",
+        supported_in_api: true,
+        priority: 0,
+        availability_nux: null,
+        upgrade: null,
+        base_instructions: SESSION_TITLE_BASE_INSTRUCTIONS,
+        supports_reasoning_summaries: false,
+        support_verbosity: false,
+        default_verbosity: "low",
+        apply_patch_tool_type: null,
+        truncation_policy: { mode: "tokens", limit: 10_000 },
+        supports_parallel_tool_calls: false,
+        experimental_supported_tools: [],
+        input_modalities: ["text"],
+        supports_search_tool: false,
+        use_responses_lite: true,
+        tool_mode: "direct",
+        multi_agent_version: "disabled",
+      },
+    ],
   };
 }
 
@@ -201,7 +208,7 @@ export function buildSessionTitleCommandArgs(
     "--config",
     `model_catalog_json=${JSON.stringify(modelCatalogPath)}`,
     "--config",
-    "web_search=\"disabled\"",
+    'web_search="disabled"',
     "--ask-for-approval",
     "never",
     "--sandbox",
@@ -342,11 +349,13 @@ async function runCodexTitleCommand(
         } else if (code === 0) {
           resolve(Buffer.concat(stdoutChunks).toString("utf8"));
         } else {
-          reject(new Error(
-            signal
-              ? `Codex session-title generation exited from signal ${signal}`
-              : `Codex session-title generation exited with code ${code ?? "unknown"}`,
-          ));
+          reject(
+            new Error(
+              signal
+                ? `Codex session-title generation exited from signal ${signal}`
+                : `Codex session-title generation exited with code ${code ?? "unknown"}`,
+            ),
+          );
         }
       });
     });
@@ -362,10 +371,9 @@ export async function generateSessionTitleWithCodexExec(
   sourcePrompt: string,
   options: SessionTitleCommandOptions = {},
 ): Promise<string> {
-  const temporaryDirectory = await mkdtemp(join(
-    options.temporaryRoot ?? tmpdir(),
-    "orkestrator-session-title-",
-  ));
+  const temporaryDirectory = await mkdtemp(
+    join(options.temporaryRoot ?? tmpdir(), "orkestrator-session-title-"),
+  );
   const outputPath = join(temporaryDirectory, "title.txt");
   const modelCatalogPath = join(temporaryDirectory, "model-catalog.json");
   const outputSchemaPath = join(temporaryDirectory, "title-schema.json");
@@ -388,17 +396,22 @@ export async function generateSessionTitleWithCodexExec(
       options,
     );
 
-    const response = await readFile(outputPath).then((content) => {
-      if (content.length > maxOutputBytes) {
-        throw new Error("Codex session-title output exceeded the limit");
-      }
-      return content.toString("utf8");
-    }).catch((error: unknown) => {
-      if (error instanceof Error && error.message === "Codex session-title output exceeded the limit") {
-        throw error;
-      }
-      return stdout;
-    });
+    const response = await readFile(outputPath)
+      .then((content) => {
+        if (content.length > maxOutputBytes) {
+          throw new Error("Codex session-title output exceeded the limit");
+        }
+        return content.toString("utf8");
+      })
+      .catch((error: unknown) => {
+        if (
+          error instanceof Error &&
+          error.message === "Codex session-title output exceeded the limit"
+        ) {
+          throw error;
+        }
+        return stdout;
+      });
     const title = parseGeneratedSessionTitle(response);
     if (!title) {
       throw new Error("Codex returned an empty or invalid session title");
@@ -436,16 +449,16 @@ export async function readPersistedSessionTitleEntries(
       const entry = JSON.parse(line) as PersistedSessionTitleEntry;
       const threadId = typeof entry.threadId === "string" ? entry.threadId.trim() : "";
       const title = typeof entry.title === "string" ? sanitizeSessionTitle(entry.title) : null;
-      const source: PersistedSessionTitleSource | null = entry.source === undefined
-        ? "generated"
-        : entry.source === "explicit" || entry.source === "generated" || entry.source === "prompt"
-          ? entry.source
-          : null;
+      const source: PersistedSessionTitleSource | null =
+        entry.source === undefined
+          ? "generated"
+          : entry.source === "explicit" || entry.source === "generated" || entry.source === "prompt"
+            ? entry.source
+            : null;
       if (!threadId || !title || !source) continue;
 
-      const parsedUpdatedAt = typeof entry.updatedAt === "string"
-        ? Date.parse(entry.updatedAt)
-        : Number.NaN;
+      const parsedUpdatedAt =
+        typeof entry.updatedAt === "string" ? Date.parse(entry.updatedAt) : Number.NaN;
       const candidate = {
         title,
         source,
@@ -454,15 +467,11 @@ export async function readPersistedSessionTitleEntries(
       };
       const current = selected.get(threadId);
       if (
-        !current
-        || persistedSourcePriority(candidate.source) > persistedSourcePriority(current.source)
-        || (
-          persistedSourcePriority(candidate.source) === persistedSourcePriority(current.source)
-          && (
-            candidate.updatedAt > current.updatedAt
-            || (candidate.updatedAt === current.updatedAt && candidate.line > current.line)
-          )
-        )
+        !current ||
+        persistedSourcePriority(candidate.source) > persistedSourcePriority(current.source) ||
+        (persistedSourcePriority(candidate.source) === persistedSourcePriority(current.source) &&
+          (candidate.updatedAt > current.updatedAt ||
+            (candidate.updatedAt === current.updatedAt && candidate.line > current.line)))
       ) {
         selected.set(threadId, candidate);
       }
@@ -471,10 +480,15 @@ export async function readPersistedSessionTitleEntries(
     }
   }
 
-  return new Map(Array.from(selected, ([threadId, entry]) => [threadId, {
-    title: entry.title,
-    source: entry.source,
-  }]));
+  return new Map(
+    Array.from(selected, ([threadId, entry]) => [
+      threadId,
+      {
+        title: entry.title,
+        source: entry.source,
+      },
+    ]),
+  );
 }
 
 export async function persistSessionTitle(
@@ -488,9 +502,10 @@ export async function persistSessionTitle(
   if (!normalizedThreadId || !normalizedTitle) return;
 
   const source = options.source ?? "generated";
-  const requestedUpdatedAt = options.updatedAt instanceof Date
-    ? options.updatedAt
-    : new Date(options.updatedAt ?? Date.now());
+  const requestedUpdatedAt =
+    options.updatedAt instanceof Date
+      ? options.updatedAt
+      : new Date(options.updatedAt ?? Date.now());
   if (!Number.isFinite(requestedUpdatedAt.getTime())) {
     throw new Error("Session title updatedAt must be a valid date");
   }

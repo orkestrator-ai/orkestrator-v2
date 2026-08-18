@@ -15,9 +15,9 @@ async function createTempDir(prefix: string): Promise<string> {
 
 afterEach(async () => {
   commandTesting.resetLocalServerLifecycle();
-  await Promise.all(tempDirs.splice(0).map((directory) =>
-    rm(directory, { recursive: true, force: true })
-  ));
+  await Promise.all(
+    tempDirs.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
 describe("OrkestratorBackend", () => {
@@ -65,10 +65,10 @@ describe("OrkestratorBackend", () => {
     });
     expect(commandTesting.trackedDiffStatsIds()).toContain("active-during-shutdown");
 
-    await expect(Promise.all([
-      backend.shutdown(),
-      backend.shutdown(),
-    ])).resolves.toEqual([undefined, undefined]);
+    await expect(Promise.all([backend.shutdown(), backend.shutdown()])).resolves.toEqual([
+      undefined,
+      undefined,
+    ]);
     expect(commandTesting.trackedDiffStatsIds()).toEqual([]);
     await expect(backend.invoke("greet", { name: "late" })).rejects.toThrow(
       "Backend is shutting down",

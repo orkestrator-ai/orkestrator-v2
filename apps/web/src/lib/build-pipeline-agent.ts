@@ -1,15 +1,10 @@
 import type { AppConfig, ClaudeMode, CodexMode, DefaultAgent, OpenCodeMode } from "@/types";
 import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
-export function resolveBuildPipelineAgent(
-  config: AppConfig,
-  projectId: string,
-): DefaultAgent {
+export function resolveBuildPipelineAgent(config: AppConfig, projectId: string): DefaultAgent {
   return firstEnabledAgentPlatform(
     config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
-    config.repositories[projectId]?.defaultAgent
-      ?? config.global.defaultAgent
-      ?? "claude",
+    config.repositories[projectId]?.defaultAgent ?? config.global.defaultAgent ?? "claude",
   );
 }
 
@@ -24,9 +19,7 @@ export function resolveActiveBuildPipelineAgent({
   config: AppConfig;
   projectId: string;
 }): DefaultAgent {
-  return pipelineAgent
-    ?? environmentDefaultAgent
-    ?? resolveBuildPipelineAgent(config, projectId);
+  return pipelineAgent ?? environmentDefaultAgent ?? resolveBuildPipelineAgent(config, projectId);
 }
 
 export type AgentModeSettings = {

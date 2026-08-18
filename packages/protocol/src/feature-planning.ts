@@ -50,15 +50,10 @@ export interface FeaturePlannerFeature {
  * Prompt construction and state-block parsing
  * ------------------------------------------------------------------ */
 
-const FEATURE_STATE_BLOCK_RE =
-  /<feature_planner_state>\s*([\s\S]*?)\s*<\/feature_planner_state>/i;
-const STORY_STATE_BLOCK_RE =
-  /<story_refinement>\s*([\s\S]*?)\s*<\/story_refinement>/i;
+const FEATURE_STATE_BLOCK_RE = /<feature_planner_state>\s*([\s\S]*?)\s*<\/feature_planner_state>/i;
+const STORY_STATE_BLOCK_RE = /<story_refinement>\s*([\s\S]*?)\s*<\/story_refinement>/i;
 
-function singleTerminalStatePayload(
-  content: string,
-  pattern: RegExp,
-): string | null {
+function singleTerminalStatePayload(content: string, pattern: RegExp): string | null {
   const match = content.match(pattern);
   if (!match?.[1] || match.index === undefined) return null;
   // The model contract requires exactly one state block at the end. Applying
@@ -131,17 +126,16 @@ export function createFeaturePlannerResumePrompt(
   userMessage: string,
 ): string {
   const transcript = feature.messages
-    .map((message) =>
-      `${message.role.toUpperCase()}: ${stripFeaturePlannerStateBlocks(message.content)}`
+    .map(
+      (message) =>
+        `${message.role.toUpperCase()}: ${stripFeaturePlannerStateBlocks(message.content)}`,
     )
     .join("\n\n");
 
   const existingStories = feature.stories.length
-    ? `\n\nExisting stories (reuse the exact id when you regenerate or revise any of these):\n${
-      feature.stories
+    ? `\n\nExisting stories (reuse the exact id when you regenerate or revise any of these):\n${feature.stories
         .map((story) => `- id: ${story.id} | title: ${story.title}`)
-        .join("\n")
-    }`
+        .join("\n")}`
     : "";
 
   return `${FEATURE_PLANNER_SYSTEM_PROMPT}
@@ -168,12 +162,10 @@ export function selectFeaturePlannerPrompt(params: {
   sessionId: string;
 }): string {
   const { feature, userMessage, previousSessionId, sessionId } = params;
-  const isContinuingSameSession = !!previousSessionId
-    && previousSessionId === sessionId;
+  const isContinuingSameSession = !!previousSessionId && previousSessionId === sessionId;
   if (isContinuingSameSession) return userMessage;
 
-  const userMessageCount =
-    feature.messages.filter((message) => message.role === "user").length;
+  const userMessageCount = feature.messages.filter((message) => message.role === "user").length;
   return userMessageCount <= 1
     ? createFeaturePlannerInitialPrompt(userMessage)
     : createFeaturePlannerResumePrompt(feature, userMessage);
@@ -184,8 +176,9 @@ export function createStoryRefinementPrompt(
   userMessage: string,
 ): string {
   const transcript = story.messages
-    .map((message) =>
-      `${message.role.toUpperCase()}: ${stripStoryRefinementStateBlocks(message.content)}`
+    .map(
+      (message) =>
+        `${message.role.toUpperCase()}: ${stripStoryRefinementStateBlocks(message.content)}`,
     )
     .join("\n\n");
 
@@ -210,9 +203,7 @@ User message:
 ${userMessage}`;
 }
 
-export function parseFeaturePlannerState(
-  content: string,
-): ParsedFeaturePlannerState | null {
+export function parseFeaturePlannerState(content: string): ParsedFeaturePlannerState | null {
   const payload = singleTerminalStatePayload(content, FEATURE_STATE_BLOCK_RE);
   if (payload === null) return null;
   try {
@@ -221,10 +212,10 @@ export function parseFeaturePlannerState(
       return null;
     }
     if (
-      parsed.phase !== undefined
-      && parsed.phase !== "collecting"
-      && parsed.phase !== "confirming"
-      && parsed.phase !== "stories"
+      parsed.phase !== undefined &&
+      parsed.phase !== "collecting" &&
+      parsed.phase !== "confirming" &&
+      parsed.phase !== "stories"
     ) {
       return null;
     }
@@ -247,17 +238,12 @@ export function parseFeaturePlannerState(
         if (candidate.id !== undefined && typeof candidate.id !== "string") {
           return null;
         }
-        if (
-          typeof candidate.title !== "string"
-          || typeof candidate.description !== "string"
-        ) {
+        if (typeof candidate.title !== "string" || typeof candidate.description !== "string") {
           return null;
         }
         if (
-          !Array.isArray(candidate.acceptanceCriteria)
-          || !candidate.acceptanceCriteria.every(
-            (criterion) => typeof criterion === "string",
-          )
+          !Array.isArray(candidate.acceptanceCriteria) ||
+          !candidate.acceptanceCriteria.every((criterion) => typeof criterion === "string")
         ) {
           return null;
         }
@@ -269,9 +255,7 @@ export function parseFeaturePlannerState(
   }
 }
 
-export function parseStoryRefinement(
-  content: string,
-): ParsedStoryRefinement | null {
+export function parseStoryRefinement(content: string): ParsedStoryRefinement | null {
   const payload = singleTerminalStatePayload(content, STORY_STATE_BLOCK_RE);
   if (payload === null) return null;
   try {
@@ -285,20 +269,13 @@ export function parseStoryRefinement(
     if (parsed.title !== undefined && typeof parsed.title !== "string") {
       return null;
     }
-    if (
-      parsed.description !== undefined
-      && typeof parsed.description !== "string"
-    ) {
+    if (parsed.description !== undefined && typeof parsed.description !== "string") {
       return null;
     }
     if (
-      parsed.acceptanceCriteria !== undefined
-      && (
-        !Array.isArray(parsed.acceptanceCriteria)
-        || !parsed.acceptanceCriteria.every(
-          (criterion) => typeof criterion === "string",
-        )
-      )
+      parsed.acceptanceCriteria !== undefined &&
+      (!Array.isArray(parsed.acceptanceCriteria) ||
+        !parsed.acceptanceCriteria.every((criterion) => typeof criterion === "string"))
     ) {
       return null;
     }
@@ -338,30 +315,32 @@ export function createStoryCardsFromParsedState(
     // Prefer matching by the round-tripped id so a renamed story keeps its
     // refinement history; fall back to title for stories the model emits
     // without an id (e.g. brand-new cards or models that drop the id).
-    const existing = (story.id ? existingById.get(story.id) : undefined)
-      ?? existingByTitle.get(story.title.toLowerCase());
+    const existing =
+      (story.id ? existingById.get(story.id) : undefined) ??
+      existingByTitle.get(story.title.toLowerCase());
     return {
       id: existing?.id ?? story.id ?? newStoryId(),
       title: story.title,
       description: story.description,
-      acceptanceCriteria: Array.isArray(story.acceptanceCriteria)
-        ? story.acceptanceCriteria
-        : [],
-      messages: existing?.messages ?? [{
-        id: newStoryId(),
-        role: "assistant" as const,
-        content: "What would you like to refine on this user story?",
-        createdAt: now,
-      }],
+      acceptanceCriteria: Array.isArray(story.acceptanceCriteria) ? story.acceptanceCriteria : [],
+      messages: existing?.messages ?? [
+        {
+          id: newStoryId(),
+          role: "assistant" as const,
+          content: "What would you like to refine on this user story?",
+          createdAt: now,
+        },
+      ],
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
   });
 }
 
-export function formatFeatureStoriesForBuild(
-  feature: FeaturePlannerFeature,
-): { title: string; description: string } {
+export function formatFeatureStoriesForBuild(feature: FeaturePlannerFeature): {
+  title: string;
+  description: string;
+} {
   const title = feature.title.trim() || "Feature plan";
   const storySections = feature.stories.map((story, index) =>
     [
@@ -369,7 +348,9 @@ export function formatFeatureStoriesForBuild(
       story.description,
       "Acceptance criteria:",
       ...story.acceptanceCriteria.map((criterion) => `- ${criterion}`),
-    ].filter(Boolean).join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n"),
   );
 
   return {
@@ -379,7 +360,9 @@ export function formatFeatureStoriesForBuild(
       "Implementation instruction: Build all user stories below. Use Codex threads or sub-agents in parallel wherever the stories are independent, then integrate the work and validate the complete result.",
       "User stories:",
       storySections.join("\n\n"),
-    ].filter(Boolean).join("\n\n"),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
   };
 }
 
@@ -418,13 +401,8 @@ export const FEATURE_PLANNING_PHASES = [
 export type FeaturePlanningPhase = (typeof FEATURE_PLANNING_PHASES)[number];
 
 /** Phases the backend advances on its own. */
-export const FEATURE_PLANNING_ACTIVE_PHASES = [
-  "dispatching",
-  "running",
-  "persisting",
-] as const;
-export type ActiveFeaturePlanningPhase =
-  (typeof FEATURE_PLANNING_ACTIVE_PHASES)[number];
+export const FEATURE_PLANNING_ACTIVE_PHASES = ["dispatching", "running", "persisting"] as const;
+export type ActiveFeaturePlanningPhase = (typeof FEATURE_PLANNING_ACTIVE_PHASES)[number];
 
 export const FEATURE_PLANNING_FAILURE_CODES = [
   "environment",
@@ -434,8 +412,7 @@ export const FEATURE_PLANNING_FAILURE_CODES = [
   "parse",
   "persistence",
 ] as const;
-export type FeaturePlanningFailureCode =
-  (typeof FEATURE_PLANNING_FAILURE_CODES)[number];
+export type FeaturePlanningFailureCode = (typeof FEATURE_PLANNING_FAILURE_CODES)[number];
 
 export interface FeaturePlanningFailure {
   code: FeaturePlanningFailureCode;
@@ -507,23 +484,15 @@ export interface StartFeaturePlanningInput {
   userMessage: string;
 }
 
-export function isFeaturePlanningPhase(
-  value: unknown,
-): value is FeaturePlanningPhase {
+export function isFeaturePlanningPhase(value: unknown): value is FeaturePlanningPhase {
   return FEATURE_PLANNING_PHASES.includes(value as FeaturePlanningPhase);
 }
 
-export function isActiveFeaturePlanningPhase(
-  value: unknown,
-): value is ActiveFeaturePlanningPhase {
-  return FEATURE_PLANNING_ACTIVE_PHASES.includes(
-    value as ActiveFeaturePlanningPhase,
-  );
+export function isActiveFeaturePlanningPhase(value: unknown): value is ActiveFeaturePlanningPhase {
+  return FEATURE_PLANNING_ACTIVE_PHASES.includes(value as ActiveFeaturePlanningPhase);
 }
 
-export function isTerminalFeaturePlanningPhase(
-  phase: FeaturePlanningPhase,
-): boolean {
+export function isTerminalFeaturePlanningPhase(phase: FeaturePlanningPhase): boolean {
   return phase === "complete" || phase === "failed";
 }
 
@@ -550,29 +519,23 @@ function isIsoTimestamp(value: unknown): value is string {
   // `Date.parse` alone accepts locale-like strings. Require the date-time
   // separator and an explicit UTC/offset suffix so persisted wall-clock values
   // have unambiguous ordering across backend and renderer timezones.
-  return /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
-    && Number.isFinite(Date.parse(value));
+  return (
+    /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/i.test(value) && Number.isFinite(Date.parse(value))
+  );
 }
 
 function isOptionalIsoTimestamp(value: unknown): boolean {
   return value === undefined || isIsoTimestamp(value);
 }
 
-function isFeaturePlanningFailure(
-  value: unknown,
-): value is FeaturePlanningFailure {
+function isFeaturePlanningFailure(value: unknown): value is FeaturePlanningFailure {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   return (
-    FEATURE_PLANNING_FAILURE_CODES.includes(
-      candidate.code as FeaturePlanningFailureCode,
-    )
-    && isBoundedString(
-      candidate.message,
-      FEATURE_PLANNING_LIMITS.maxFailureMessageLength,
-    )
-    && isIsoTimestamp(candidate.occurredAt)
-    && isActiveFeaturePlanningPhase(candidate.retryPhase)
+    FEATURE_PLANNING_FAILURE_CODES.includes(candidate.code as FeaturePlanningFailureCode) &&
+    isBoundedString(candidate.message, FEATURE_PLANNING_LIMITS.maxFailureMessageLength) &&
+    isIsoTimestamp(candidate.occurredAt) &&
+    isActiveFeaturePlanningPhase(candidate.retryPhase)
   );
 }
 
@@ -583,17 +546,15 @@ function isFeaturePlanningFailure(
  * backend writes — that is the whole reason it lives here rather than being
  * restated on each side.
  */
-export function isFeaturePlanningRecord(
-  value: unknown,
-): value is FeaturePlanningRecord {
+export function isFeaturePlanningRecord(value: unknown): value is FeaturePlanningRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   const { maxIdLength } = FEATURE_PLANNING_LIMITS;
   if (candidate.version !== FEATURE_PLANNING_RECORD_VERSION) return false;
   if (
-    !isBoundedId(candidate.operationId, maxIdLength)
-    || !isBoundedId(candidate.featureId, maxIdLength)
-    || !isBoundedId(candidate.projectId, maxIdLength)
+    !isBoundedId(candidate.operationId, maxIdLength) ||
+    !isBoundedId(candidate.featureId, maxIdLength) ||
+    !isBoundedId(candidate.projectId, maxIdLength)
   ) {
     return false;
   }
@@ -602,71 +563,58 @@ export function isFeaturePlanningRecord(
     return false;
   }
   if (candidate.kind === "feature" && candidate.storyId !== undefined) return false;
+  if (!isBoundedString(candidate.userMessage, FEATURE_PLANNING_LIMITS.maxUserMessageLength)) {
+    return false;
+  }
   if (
-    !isBoundedString(
-      candidate.userMessage,
-      FEATURE_PLANNING_LIMITS.maxUserMessageLength,
-    )
+    !isOptionalBoundedId(candidate.userMessageId, maxIdLength) ||
+    !isOptionalBoundedId(candidate.environmentId, maxIdLength) ||
+    !isOptionalBoundedId(candidate.providerSessionId, maxIdLength) ||
+    !isOptionalBoundedId(candidate.dispatchId, maxIdLength) ||
+    !isOptionalBoundedId(candidate.requestId, maxIdLength) ||
+    !isOptionalBoundedId(candidate.responseMessageId, maxIdLength) ||
+    !isOptionalBoundedId(candidate.responseModelId, maxIdLength)
   ) {
     return false;
   }
   if (
-    !isOptionalBoundedId(candidate.userMessageId, maxIdLength)
-    || !isOptionalBoundedId(candidate.environmentId, maxIdLength)
-    || !isOptionalBoundedId(candidate.providerSessionId, maxIdLength)
-    || !isOptionalBoundedId(candidate.dispatchId, maxIdLength)
-    || !isOptionalBoundedId(candidate.requestId, maxIdLength)
-    || !isOptionalBoundedId(candidate.responseMessageId, maxIdLength)
-    || !isOptionalBoundedId(candidate.responseModelId, maxIdLength)
-  ) {
-    return false;
-  }
-  if (
-    candidate.dispatchState !== undefined
-    && candidate.dispatchState !== "prepared"
-    && candidate.dispatchState !== "sent"
+    candidate.dispatchState !== undefined &&
+    candidate.dispatchState !== "prepared" &&
+    candidate.dispatchState !== "sent"
   ) {
     return false;
   }
   if (candidate.baselineAssistantIds !== undefined) {
     const ids = candidate.baselineAssistantIds;
     if (
-      !Array.isArray(ids)
-      || ids.length > FEATURE_PLANNING_LIMITS.maxBaselineAssistantIds
-      || !ids.every((id) => isBoundedId(id, maxIdLength))
+      !Array.isArray(ids) ||
+      ids.length > FEATURE_PLANNING_LIMITS.maxBaselineAssistantIds ||
+      !ids.every((id) => isBoundedId(id, maxIdLength))
     ) {
       return false;
     }
   }
   if (!isFeaturePlanningPhase(candidate.phase)) return false;
   if (
-    !isOptionalBoundedString(
-      candidate.rawResponse,
-      FEATURE_PLANNING_LIMITS.maxRawResponseLength,
-    )
+    !isOptionalBoundedString(candidate.rawResponse, FEATURE_PLANNING_LIMITS.maxRawResponseLength)
   ) {
     return false;
   }
-  if (
-    candidate.failure !== undefined
-    && !isFeaturePlanningFailure(candidate.failure)
-  ) {
+  if (candidate.failure !== undefined && !isFeaturePlanningFailure(candidate.failure)) {
     return false;
   }
   return (
-    isOptionalIsoTimestamp(candidate.attemptStartedAt)
-    && isOptionalIsoTimestamp(candidate.dispatchedAt)
-    && isIsoTimestamp(candidate.startedAt)
-    && isIsoTimestamp(candidate.updatedAt)
-    && typeof candidate.backendRevision === "number"
-    && Number.isSafeInteger(candidate.backendRevision)
-    && candidate.backendRevision >= 0
+    isOptionalIsoTimestamp(candidate.attemptStartedAt) &&
+    isOptionalIsoTimestamp(candidate.dispatchedAt) &&
+    isIsoTimestamp(candidate.startedAt) &&
+    isIsoTimestamp(candidate.updatedAt) &&
+    typeof candidate.backendRevision === "number" &&
+    Number.isSafeInteger(candidate.backendRevision) &&
+    candidate.backendRevision >= 0
   );
 }
 
-export function isStartFeaturePlanningInput(
-  value: unknown,
-): value is StartFeaturePlanningInput {
+export function isStartFeaturePlanningInput(value: unknown): value is StartFeaturePlanningInput {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Record<string, unknown>;
   const { maxIdLength, maxUserMessageLength } = FEATURE_PLANNING_LIMITS;
@@ -677,8 +625,8 @@ export function isStartFeaturePlanningInput(
   }
   if (candidate.kind === "feature" && candidate.storyId !== undefined) return false;
   return (
-    isBoundedString(candidate.userMessage, maxUserMessageLength)
-    && candidate.userMessage.trim().length > 0
+    isBoundedString(candidate.userMessage, maxUserMessageLength) &&
+    candidate.userMessage.trim().length > 0
   );
 }
 
@@ -697,9 +645,7 @@ export function boundRawResponse(content: string): string {
     // Do not split a UTF-16 surrogate pair when the cut happens inside emoji
     // or another supplementary-plane character.
     const lastCodeUnit = content.charCodeAt(length - 1);
-    const safeLength = lastCodeUnit >= 0xD800 && lastCodeUnit <= 0xDBFF
-      ? length - 1
-      : length;
+    const safeLength = lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff ? length - 1 : length;
     return content.slice(0, safeLength);
   };
 
@@ -707,24 +653,23 @@ export function boundRawResponse(content: string): string {
   // provider exceeds the storage bound with conversational prose, retain that
   // terminal result rather than truncating it into invalid JSON and turning a
   // successful turn into an unrecoverable parse failure.
-  const stateBlocks = Array.from(content.matchAll(
-    /<feature_planner_state>\s*[\s\S]*?\s*<\/feature_planner_state>|<story_refinement>\s*[\s\S]*?\s*<\/story_refinement>/gi,
-  ));
+  const stateBlocks = Array.from(
+    content.matchAll(
+      /<feature_planner_state>\s*[\s\S]*?\s*<\/feature_planner_state>|<story_refinement>\s*[\s\S]*?\s*<\/story_refinement>/gi,
+    ),
+  );
   const terminalMatch = stateBlocks.at(-1);
-  const trailingContent = terminalMatch?.index === undefined
-    ? ""
-    : content.slice(terminalMatch.index + terminalMatch[0].length);
-  const terminalStateBlock = terminalMatch && trailingContent.trim().length === 0
-    ? `${terminalMatch[0]}${trailingContent}`
-    : undefined;
+  const trailingContent =
+    terminalMatch?.index === undefined
+      ? ""
+      : content.slice(terminalMatch.index + terminalMatch[0].length);
+  const terminalStateBlock =
+    terminalMatch && trailingContent.trim().length === 0
+      ? `${terminalMatch[0]}${trailingContent}`
+      : undefined;
   const separator = "…\n\n";
-  if (
-    terminalStateBlock
-    && terminalStateBlock.length + separator.length <= maxRawResponseLength
-  ) {
-    const prefixLength = maxRawResponseLength
-      - separator.length
-      - terminalStateBlock.length;
+  if (terminalStateBlock && terminalStateBlock.length + separator.length <= maxRawResponseLength) {
+    const prefixLength = maxRawResponseLength - separator.length - terminalStateBlock.length;
     return `${boundedPrefix(prefixLength)}${separator}${terminalStateBlock}`;
   }
 

@@ -21,10 +21,7 @@ plugins.get("/", async (c) => {
     });
   } catch (error) {
     console.error("[plugins] Error getting plugins:", error);
-    return c.json(
-      { error: error instanceof Error ? error.message : "Failed to get plugins" },
-      500
-    );
+    return c.json({ error: error instanceof Error ? error.message : "Failed to get plugins" }, 500);
   }
 });
 
@@ -42,7 +39,7 @@ plugins.get("/commands", async (c) => {
     console.error("[plugins] Error discovering slash commands:", error);
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to discover slash commands" },
-      500
+      500,
     );
   }
 });

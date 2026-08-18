@@ -1,7 +1,11 @@
 /// <reference types="vite/client" />
 
 interface Window {
-  __orkestratorClientPlatform?: "desktop-browser" | "ios-wkwebview" | "ipad-wkwebview" | "iphone-wkwebview";
+  __orkestratorClientPlatform?:
+    | "desktop-browser"
+    | "ios-wkwebview"
+    | "ipad-wkwebview"
+    | "iphone-wkwebview";
   orkestratorGateway?: {
     enabled: boolean;
     /** True when gateway metadata was supplied by the Electron preload. */
@@ -44,9 +48,15 @@ interface Window {
     };
     connections?: {
       list(): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
-      connect(input: import("@orkestrator/protocol/connections").ConnectToRemoteInput): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
-      use(connectionId: string): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
-      forget(connectionId: string): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      connect(
+        input: import("@orkestrator/protocol/connections").ConnectToRemoteInput,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      use(
+        connectionId: string,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
+      forget(
+        connectionId: string,
+      ): Promise<import("@orkestrator/protocol/connections").ConnectionList>;
     };
     process: {
       exit(code?: number): Promise<void>;
@@ -57,14 +67,33 @@ interface Window {
       setZoomFactor?(factor: number): Promise<boolean>;
     };
     browserPreview?: {
-      attach(input: import("@orkestrator/protocol/browser-preview").BrowserPreviewAttachInput): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
-      setBounds(tabId: string, bounds: import("@orkestrator/protocol/browser-preview").BrowserPreviewBounds): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
-      setVisible(tabId: string, visible: boolean): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState | null>;
-      navigate(tabId: string, url: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
-      goBack(tabId: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
-      goForward(tabId: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
-      reload(tabId: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
-      openDevTools(tabId: string): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      attach(
+        input: import("@orkestrator/protocol/browser-preview").BrowserPreviewAttachInput,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      setBounds(
+        tabId: string,
+        bounds: import("@orkestrator/protocol/browser-preview").BrowserPreviewBounds,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      setVisible(
+        tabId: string,
+        visible: boolean,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState | null>;
+      navigate(
+        tabId: string,
+        url: string,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      goBack(
+        tabId: string,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      goForward(
+        tabId: string,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      reload(
+        tabId: string,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
+      openDevTools(
+        tabId: string,
+      ): Promise<import("@orkestrator/protocol/browser-preview").BrowserPreviewState>;
       destroy(tabId: string): Promise<void>;
     };
   };

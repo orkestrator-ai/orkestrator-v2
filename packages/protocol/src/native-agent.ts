@@ -17,14 +17,16 @@ export function isNativeAgentTabData(value: unknown): value is NativeAgentTabDat
   const data = value as Record<string, unknown>;
   const optionalString = (field: string) =>
     data[field] === undefined || typeof data[field] === "string";
-  return (data.platform === undefined || isAgentPlatform(data.platform))
-    && typeof data.environmentId === "string"
-    && data.environmentId.length > 0
-    && optionalString("containerId")
-    && optionalString("sessionId")
-    && (data.hostPort === undefined
-      || (Number.isSafeInteger(data.hostPort) && (data.hostPort as number) > 0))
-    && (data.isLocal === undefined || typeof data.isLocal === "boolean");
+  return (
+    (data.platform === undefined || isAgentPlatform(data.platform)) &&
+    typeof data.environmentId === "string" &&
+    data.environmentId.length > 0 &&
+    optionalString("containerId") &&
+    optionalString("sessionId") &&
+    (data.hostPort === undefined ||
+      (Number.isSafeInteger(data.hostPort) && (data.hostPort as number) > 0)) &&
+    (data.isLocal === undefined || typeof data.isLocal === "boolean")
+  );
 }
 
 export interface AgentReasoningOption {
@@ -49,10 +51,8 @@ export const DEFAULT_REASONING_ID = "default";
  */
 export const FALLBACK_REASONING_ID = "high";
 
-function reasoningOptionIds(
-  options: readonly string[] | readonly { id: string }[],
-): string[] {
-  return options.map((option) => typeof option === "string" ? option : option.id);
+function reasoningOptionIds(options: readonly string[] | readonly { id: string }[]): string[] {
+  return options.map((option) => (typeof option === "string" ? option : option.id));
 }
 
 /**
@@ -147,10 +147,7 @@ export function openCodeModelLocalId(modelId: string): string {
  * OpenCode often reports `name` as the fully qualified id (`opencode-go/deepseek-v4-flash`).
  * The provider belongs on the second line, so that prefix is stripped when present.
  */
-export function openCodeModelDisplayLabel(
-  modelId: string,
-  name?: string | null,
-): string {
+export function openCodeModelDisplayLabel(modelId: string, name?: string | null): string {
   const localId = openCodeModelLocalId(modelId);
   const raw = name?.trim() || localId || modelId;
   const providerId = openCodeModelProviderId(modelId);
@@ -210,9 +207,7 @@ export function normalizeOpenCodeModelProviders(value: unknown): string[] {
     providers.push(id);
     if (providers.length >= MAX_OPENCODE_MODEL_PROVIDERS) break;
   }
-  return providers.length > 0
-    ? providers
-    : [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
+  return providers.length > 0 ? providers : [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
 }
 
 /**
@@ -232,10 +227,7 @@ export function isSelectableOpenCodeModelId(
   modelId: string,
   allowedProviders: readonly string[],
 ): boolean {
-  return isSelectableOpenCodeProvider(
-    openCodeModelProviderId(modelId),
-    allowedProviders,
-  );
+  return isSelectableOpenCodeProvider(openCodeModelProviderId(modelId), allowedProviders);
 }
 
 /**
@@ -245,9 +237,7 @@ export function isSelectableOpenCodeModelId(
  * separator would collide `["a,b"]` with `["a","b"]` and serve one list's
  * catalogue to the other.
  */
-export function openCodeModelProvidersKey(
-  allowedProviders: readonly string[],
-): string {
+export function openCodeModelProvidersKey(allowedProviders: readonly string[]): string {
   return JSON.stringify(allowedProviders);
 }
 
@@ -259,9 +249,7 @@ export function openCodeModelProvidersKey(
  * Dropping those providers would leave the user pointed at a model no picker
  * will list, so each one is preserved alongside the managed pair.
  */
-export function migrateOpenCodeModelProviders(
-  storedModelIds: readonly unknown[],
-): string[] {
+export function migrateOpenCodeModelProviders(storedModelIds: readonly unknown[]): string[] {
   const providers = [...DEFAULT_OPENCODE_MODEL_PROVIDERS];
   for (const candidate of storedModelIds) {
     if (typeof candidate !== "string") continue;
@@ -317,8 +305,7 @@ export const EMPTY_NATIVE_AGENT_COMPOSER_STATE: NativeAgentComposerState = {
  */
 export const FALLBACK_EXECUTION_PROFILE_IDS = ["build", "plan"] as const;
 
-export type FallbackExecutionProfileId =
-  (typeof FALLBACK_EXECUTION_PROFILE_IDS)[number];
+export type FallbackExecutionProfileId = (typeof FALLBACK_EXECUTION_PROFILE_IDS)[number];
 
 export function isFallbackExecutionProfileId(id: string): boolean {
   return (FALLBACK_EXECUTION_PROFILE_IDS as readonly string[]).includes(id);
@@ -385,9 +372,7 @@ export interface NativeAgentToggleControl {
   disabled?: boolean;
 }
 
-export type NativeAgentComposerControl =
-  | NativeAgentSelectControl
-  | NativeAgentToggleControl;
+export type NativeAgentComposerControl = NativeAgentSelectControl | NativeAgentToggleControl;
 
 export interface NativeAgentCapabilities {
   attachments: {
@@ -460,9 +445,7 @@ function richNativeAgentCapabilities(): NativeAgentCapabilities {
  * `false` on the other would enqueue a prompt the queue list could never show,
  * so the divergence was invisible until a user hit it.
  */
-export function nativeAgentCapabilities(
-  agent: AgentPlatform,
-): NativeAgentCapabilities {
+export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabilities {
   const capabilities = richNativeAgentCapabilities();
   if (agent === "cursor" || agent === "grok") {
     return {
@@ -693,8 +676,10 @@ function boundedBackgroundTaskId(value: unknown): string | undefined {
 
 /** True for a shell tool whose result can report a task id its arguments omitted. */
 export function isBackgroundCapableShellTool(toolName: unknown): boolean {
-  return typeof toolName === "string"
-    && BACKGROUND_CAPABLE_SHELL_TOOL_NAMES.has(toolName.trim().toLowerCase());
+  return (
+    typeof toolName === "string" &&
+    BACKGROUND_CAPABLE_SHELL_TOOL_NAMES.has(toolName.trim().toLowerCase())
+  );
 }
 
 /**
@@ -711,10 +696,11 @@ export function isBackgroundTaskLaunchCandidate(part: {
   toolArgs?: unknown;
 }): boolean {
   const args = part.toolArgs;
-  const explicit = Boolean(args)
-    && typeof args === "object"
-    && !Array.isArray(args)
-    && (args as Record<string, unknown>).run_in_background === true;
+  const explicit =
+    Boolean(args) &&
+    typeof args === "object" &&
+    !Array.isArray(args) &&
+    (args as Record<string, unknown>).run_in_background === true;
   return explicit || isBackgroundCapableShellTool(part.toolName);
 }
 
@@ -749,9 +735,7 @@ export function recoverBackgroundTaskLaunchId(part: {
       return undefined;
     }
     const record = parsed as Record<string, unknown>;
-    return boundedBackgroundTaskId(
-      record.backgroundTaskId ?? record.task_id ?? record.taskId,
-    );
+    return boundedBackgroundTaskId(record.backgroundTaskId ?? record.task_id ?? record.taskId);
   } catch {
     return undefined;
   }

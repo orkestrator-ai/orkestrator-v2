@@ -1,9 +1,6 @@
 import { useRef, useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
@@ -17,11 +14,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -29,14 +22,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import {
-  FolderGit2,
-  Trash2,
-  ChevronRight,
-  Plus,
-  Settings2,
-  LayoutGrid,
-} from "lucide-react";
+import { FolderGit2, Trash2, ChevronRight, Plus, Settings2, LayoutGrid } from "lucide-react";
 import type { Project, Environment } from "@/types";
 import { cn } from "@/lib/utils";
 import { SortableEnvironmentItem } from "./SortableEnvironmentItem";
@@ -49,7 +35,10 @@ interface SortableProjectGroupProps {
   onToggleCollapse: () => void;
   selectedEnvironmentId: string | null;
   onSelectProject: () => void;
-  onSelectEnvironment: (environmentId: string, modifiers?: { shiftKey?: boolean; metaKey?: boolean }) => void;
+  onSelectEnvironment: (
+    environmentId: string,
+    modifiers?: { shiftKey?: boolean; metaKey?: boolean },
+  ) => void;
   onDeleteProject: (projectId: string) => void | Promise<void>;
   onOpenSettings: () => void;
   onDeleteEnvironment: (environmentId: string) => void;
@@ -87,14 +76,9 @@ export function SortableProjectGroup({
   const projectTooltipAnchorRef = useRef<HTMLButtonElement>(null);
   const projectTooltip = useHoverTooltip();
 
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: project.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: project.id,
+  });
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -137,7 +121,7 @@ export function SortableProjectGroup({
               "relative mx-1 flex items-center group/project rounded-lg border transition-colors",
               isSelected
                 ? "border-zinc-700/70 bg-zinc-800/85"
-                : "border-transparent hover:bg-zinc-800/55"
+                : "border-transparent hover:bg-zinc-800/55",
             )}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
@@ -216,7 +200,7 @@ export function SortableProjectGroup({
               size="icon"
               className={cn(
                 "h-6 w-6 text-muted-foreground opacity-100 transition-opacity hover:text-foreground md:opacity-0",
-                isHovered && "md:opacity-100"
+                isHovered && "md:opacity-100",
               )}
               onClick={handleAddEnvironment}
               title="Create environment"
@@ -232,7 +216,7 @@ export function SortableProjectGroup({
               <ChevronRight
                 className={cn(
                   "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                  !isCollapsed && "rotate-90"
+                  !isCollapsed && "rotate-90",
                 )}
               />
             </CollapsibleTrigger>

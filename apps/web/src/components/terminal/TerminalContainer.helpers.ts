@@ -178,9 +178,7 @@ export function handoffSetupFocusToStartupAgent(
   startupTabId: string,
 ): boolean {
   const leaves = getAllLeaves(state.root);
-  const agentLeaf = leaves.find((leaf) =>
-    leaf.tabs.some((tab) => tab.id === startupTabId),
-  );
+  const agentLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.id === startupTabId));
   if (!agentLeaf) return false;
   const focusedLeaf = leaves.find((leaf) => leaf.id === state.activePaneId);
   if (!focusedLeaf) return false;
@@ -189,17 +187,13 @@ export function handoffSetupFocusToStartupAgent(
   if (focusedLeaf !== agentLeaf && !paneSelectionIsSetupHandoffSource(focusedLeaf)) {
     return false;
   }
-  if (
-    agentLeaf.activeTabId === startupTabId
-    && state.activePaneId === agentLeaf.id
-  ) {
+  if (agentLeaf.activeTabId === startupTabId && state.activePaneId === agentLeaf.id) {
     return false;
   }
 
   usePaneLayoutStore.getState().setActiveTab(agentLeaf.id, startupTabId, environmentId);
   return true;
 }
-
 
 export type TerminalTabDragEndAction =
   | { type: "none" }
@@ -438,8 +432,7 @@ export function createAgentNativeTab({
 export function seedDeferredNativePlatform(tab: TabInfo, platform: AgentPlatform): void {
   const data = tab.nativeAgentData;
   if (tab.type !== "agent-native" || !data || data.platform) return;
-  useNativeComposeStore.getState().updateDraft(
-    createNativeSessionKey(data.environmentId, tab.id),
-    { platform },
-  );
+  useNativeComposeStore
+    .getState()
+    .updateDraft(createNativeSessionKey(data.environmentId, tab.id), { platform });
 }

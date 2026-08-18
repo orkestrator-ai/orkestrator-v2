@@ -40,9 +40,7 @@ function adapter(platform: AgentPlatform, label: string): NativeAgentAdapter {
   return { platform, label, capabilities: nativeAgentCapabilities(platform) };
 }
 
-export const nativeAgentAdapters: Readonly<
-  Record<AgentPlatform, NativeAgentAdapter>
-> = {
+export const nativeAgentAdapters: Readonly<Record<AgentPlatform, NativeAgentAdapter>> = {
   claude: adapter("claude", "Claude"),
   codex: adapter("codex", "Codex"),
   opencode: adapter("opencode", "OpenCode"),
@@ -60,9 +58,7 @@ export function getNativeAgentAdapter(platform: AgentPlatform): NativeAgentAdapt
  * `hasOwnProperty` keeps `"constructor"` and friends from resolving through
  * `Object.prototype` to something that is not an adapter.
  */
-export function findNativeAgentAdapter(
-  platform: string,
-): NativeAgentAdapter | undefined {
+export function findNativeAgentAdapter(platform: string): NativeAgentAdapter | undefined {
   return Object.prototype.hasOwnProperty.call(nativeAgentAdapters, platform)
     ? nativeAgentAdapters[platform as AgentPlatform]
     : undefined;

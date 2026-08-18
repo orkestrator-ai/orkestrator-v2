@@ -80,68 +80,68 @@ import { StorageNative } from "./storage-native.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export abstract class StoragePrompts extends StorageNative {
@@ -156,8 +156,9 @@ export abstract class StoragePrompts extends StorageNative {
     if (!isNonBlankString(environmentId)) {
       throw new Error("Prompt queue environment ID must not be blank");
     }
-    return Object.values(await this.loadPromptQueues())
-      .filter((queue) => queue.environmentId === environmentId);
+    return Object.values(await this.loadPromptQueues()).filter(
+      (queue) => queue.environmentId === environmentId,
+    );
   }
 
   async listAllPromptQueues(): Promise<PersistedPromptQueue[]> {
@@ -197,19 +198,10 @@ export abstract class StoragePrompts extends StorageNative {
       if (previous && previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
       }
-      if (
-        expectedRevision !== undefined
-        && (previous?.revision ?? 0) !== expectedRevision
-      ) {
+      if (expectedRevision !== undefined && (previous?.revision ?? 0) !== expectedRevision) {
         throw new Error("Prompt queue revision conflict");
       }
-      return this.savePromptQueueMutation(
-        queues,
-        queueKey,
-        environmentId,
-        messages,
-        previous,
-      );
+      return this.savePromptQueueMutation(queues, queueKey, environmentId, messages, previous);
     });
   }
 
@@ -242,13 +234,9 @@ export abstract class StoragePrompts extends StorageNative {
         throw new Error("Prompt queue belongs to another environment");
       }
       if (
-        (
-          isRecord(previous?.outstandingClaim?.message)
-          && previous.outstandingClaim.message.id === message.id
-        )
-        || previous?.messages.some((candidate) =>
-          isRecord(candidate) && candidate.id === message.id
-        )
+        (isRecord(previous?.outstandingClaim?.message) &&
+          previous.outstandingClaim.message.id === message.id) ||
+        previous?.messages.some((candidate) => isRecord(candidate) && candidate.id === message.id)
       ) {
         return previous;
       }
@@ -288,24 +276,27 @@ export abstract class StoragePrompts extends StorageNative {
         throw new Error("Prompt queue belongs to another environment");
       }
       if (
-        previous?.outstandingClaim
-        && isRecord(previous.outstandingClaim.message)
-        && previous.outstandingClaim.message.id === message.id
+        previous?.outstandingClaim &&
+        isRecord(previous.outstandingClaim.message) &&
+        previous.outstandingClaim.message.id === message.id
       ) {
         return this.savePromptQueueMutation(
           queues,
           queueKey,
           environmentId,
-          [message, ...previous.messages.filter((candidate) =>
-            !isRecord(candidate) || candidate.id !== message.id
-          )],
+          [
+            message,
+            ...previous.messages.filter(
+              (candidate) => !isRecord(candidate) || candidate.id !== message.id,
+            ),
+          ],
           previous,
           null,
         );
       }
-      if (previous?.messages.some((candidate) =>
-        isRecord(candidate) && candidate.id === message.id
-      )) {
+      if (
+        previous?.messages.some((candidate) => isRecord(candidate) && candidate.id === message.id)
+      ) {
         return previous;
       }
       return this.savePromptQueueMutation(
@@ -341,8 +332,8 @@ export abstract class StoragePrompts extends StorageNative {
       if (previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
       }
-      const index = previous.messages.findIndex((candidate) =>
-        isRecord(candidate) && candidate.id === messageId
+      const index = previous.messages.findIndex(
+        (candidate) => isRecord(candidate) && candidate.id === messageId,
       );
       if (index < 0) return { removed: null, queue: previous };
       const messages = [...previous.messages];
@@ -385,8 +376,8 @@ export abstract class StoragePrompts extends StorageNative {
       if (previous.environmentId !== environmentId) {
         throw new Error("Prompt queue belongs to another environment");
       }
-      const index = previous.messages.findIndex((candidate) =>
-        isRecord(candidate) && candidate.id === messageId
+      const index = previous.messages.findIndex(
+        (candidate) => isRecord(candidate) && candidate.id === messageId,
       );
       const target = direction === "up" ? index - 1 : index + 1;
       if (index < 0 || target < 0 || target >= previous.messages.length) {
@@ -394,13 +385,7 @@ export abstract class StoragePrompts extends StorageNative {
       }
       const messages = [...previous.messages];
       [messages[index], messages[target]] = [messages[target], messages[index]];
-      return this.savePromptQueueMutation(
-        queues,
-        queueKey,
-        environmentId,
-        messages,
-        previous,
-      );
+      return this.savePromptQueueMutation(queues, queueKey, environmentId, messages, previous);
     });
   }
 
@@ -444,10 +429,9 @@ export abstract class StoragePrompts extends StorageNative {
         const recoveredId = isRecord(recoveredMessage) ? recoveredMessage.id : undefined;
         const recoveredMessages = [
           recoveredMessage,
-          ...current.messages.filter((candidate) =>
-            recoveredId === undefined
-            || !isRecord(candidate)
-            || candidate.id !== recoveredId
+          ...current.messages.filter(
+            (candidate) =>
+              recoveredId === undefined || !isRecord(candidate) || candidate.id !== recoveredId,
           ),
         ];
         current = await this.savePromptQueueMutation(
@@ -462,10 +446,7 @@ export abstract class StoragePrompts extends StorageNative {
 
       const messages = current?.messages ?? [];
       const head = messages[0];
-      if (
-        !isRecord(head)
-        || head.id !== expectedMessageId
-      ) {
+      if (!isRecord(head) || head.id !== expectedMessageId) {
         return { claimed: null, claimToken: null, queue: current ?? null };
       }
 
@@ -481,9 +462,7 @@ export abstract class StoragePrompts extends StorageNative {
           token: claimToken,
           message: head,
           claimedAt: claimedAt.toISOString(),
-          expiresAt: new Date(
-            claimedAt.getTime() + this.promptQueueClaimLeaseMs,
-          ).toISOString(),
+          expiresAt: new Date(claimedAt.getTime() + this.promptQueueClaimLeaseMs).toISOString(),
         },
       );
       return { claimed: head, claimToken, queue: saved };
@@ -507,8 +486,7 @@ export abstract class StoragePrompts extends StorageNative {
       if (!isRecord(message) || !isNonBlankString(message.id)) return null;
       const inFlight = {
         message,
-        requestId:
-          isNonBlankString(message.requestId) ? message.requestId : message.id,
+        requestId: isNonBlankString(message.requestId) ? message.requestId : message.id,
         reservedAt: nowIso(),
       };
       const saved: PersistedPromptQueue = {
@@ -607,11 +585,7 @@ export abstract class StoragePrompts extends StorageNative {
     requestId: string,
     message = "Queued prompt was rejected. Edit it or retry explicitly.",
   ): Promise<PersistedPromptQueue | null> {
-    if (
-      !isNonBlankString(queueKey)
-      || !isNonBlankString(requestId)
-      || !isNonBlankString(message)
-    ) {
+    if (!isNonBlankString(queueKey) || !isNonBlankString(requestId) || !isNonBlankString(message)) {
       throw new Error("Prompt queue failure identity must not be blank");
     }
     return this.enqueuePromptQueueMutation(async () => {
@@ -644,9 +618,7 @@ export abstract class StoragePrompts extends StorageNative {
     });
   }
 
-  async retryPromptQueueDispatch(
-    queueKey: string,
-  ): Promise<PersistedPromptQueue | null> {
+  async retryPromptQueueDispatch(queueKey: string): Promise<PersistedPromptQueue | null> {
     if (!isNonBlankString(queueKey)) {
       throw new Error("Prompt queue key must not be blank");
     }
@@ -742,10 +714,9 @@ export abstract class StoragePrompts extends StorageNative {
         environmentId,
         [
           message,
-          ...previous.messages.filter((candidate) =>
-            messageId === undefined
-            || !isRecord(candidate)
-            || candidate.id !== messageId
+          ...previous.messages.filter(
+            (candidate) =>
+              messageId === undefined || !isRecord(candidate) || candidate.id !== messageId,
           ),
         ],
         previous,
@@ -784,10 +755,7 @@ export abstract class StoragePrompts extends StorageNative {
     if (Buffer.byteLength(queueKey, "utf8") > MAX_PROMPT_QUEUE_SOURCE_KEY_BYTES) {
       throw new Error("Prompt queue transfer key is too large");
     }
-    if (
-      Buffer.byteLength(messageId, "utf8")
-      > MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES
-    ) {
+    if (Buffer.byteLength(messageId, "utf8") > MAX_PROMPT_QUEUE_SOURCE_MESSAGE_ID_BYTES) {
       throw new Error("Prompt queue transfer message ID is too large");
     }
     if (!isNonBlankString(draftKey)) throw new Error("Compose draft key must not be blank");
@@ -805,8 +773,8 @@ export abstract class StoragePrompts extends StorageNative {
           "Prompt queue",
         );
         if (
-          (ownerType === "environment" && ownerId !== environmentId)
-          || (ownerType === "project" && ownerId !== environment.projectId)
+          (ownerType === "environment" && ownerId !== environmentId) ||
+          (ownerType === "project" && ownerId !== environment.projectId)
         ) {
           throw new Error("Compose draft owner does not own the prompt queue");
         }
@@ -818,21 +786,19 @@ export abstract class StoragePrompts extends StorageNative {
         if (previousQueue.environmentId !== environmentId) {
           throw new Error("Prompt queue belongs to another environment");
         }
-        const messageIndex = previousQueue.messages.findIndex((candidate) =>
-          isRecord(candidate) && candidate.id === messageId
+        const messageIndex = previousQueue.messages.findIndex(
+          (candidate) => isRecord(candidate) && candidate.id === messageId,
         );
         if (messageIndex < 0) {
           return { removed: null, queue: previousQueue, draft: null };
         }
         const authoritativeMessage = previousQueue.messages[messageIndex];
         if (
-          !isRecord(authoritativeMessage)
-          || typeof authoritativeMessage.text !== "string"
-          || !Array.isArray(authoritativeMessage.attachments)
+          !isRecord(authoritativeMessage) ||
+          typeof authoritativeMessage.text !== "string" ||
+          !Array.isArray(authoritativeMessage.attachments)
         ) {
-          throw new Error(
-            "Queued prompt must have text and attachments before transfer",
-          );
+          throw new Error("Queued prompt must have text and attachments before transfer");
         }
         const value = {
           text: authoritativeMessage.text,
@@ -844,15 +810,12 @@ export abstract class StoragePrompts extends StorageNative {
         const previousDraft = drafts[draftKey];
         let draft: PersistedComposeDraft;
         if (previousDraft) {
-          if (
-            previousDraft.ownerType !== ownerType
-            || previousDraft.ownerId !== ownerId
-          ) {
+          if (previousDraft.ownerType !== ownerType || previousDraft.ownerId !== ownerId) {
             throw new Error("Compose draft belongs to another owner");
           }
           if (
-            previousDraft.sourcePromptQueue?.queueKey !== queueKey
-            || previousDraft.sourcePromptQueue.messageId !== messageId
+            previousDraft.sourcePromptQueue?.queueKey !== queueKey ||
+            previousDraft.sourcePromptQueue.messageId !== messageId
           ) {
             throw new Error("Compose draft already exists");
           }
@@ -885,7 +848,7 @@ export abstract class StoragePrompts extends StorageNative {
           previousQueue,
         );
         return { removed: removed ?? null, queue, draft };
-      })
+      }),
     );
   }
 
@@ -912,8 +875,7 @@ export abstract class StoragePrompts extends StorageNative {
       await this.scrubSensitiveJsonBackups(
         this.promptQueuesFile(),
         (storedKey, queue) =>
-          isPersistedPromptQueue(queue, storedKey)
-          && queue.environmentId !== environmentId,
+          isPersistedPromptQueue(queue, storedKey) && queue.environmentId !== environmentId,
       );
       return removedKeys;
     });
@@ -932,17 +894,18 @@ export abstract class StoragePrompts extends StorageNative {
       }
     };
     const next = this.composeDraftMutation.then(run, run);
-    this.composeDraftMutation = next.then(() => undefined, () => undefined);
+    this.composeDraftMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
-  protected validComposeDrafts(
-    stored: unknown,
-  ): Record<string, PersistedComposeDraft> {
+  protected validComposeDrafts(stored: unknown): Record<string, PersistedComposeDraft> {
     if (!isRecord(stored)) return {};
     return Object.fromEntries(
       Object.entries(stored).filter(([storedKey, draft]) =>
-        isPersistedComposeDraft(draft, storedKey)
+        isPersistedComposeDraft(draft, storedKey),
       ),
     ) as Record<string, PersistedComposeDraft>;
   }
@@ -951,6 +914,4 @@ export abstract class StoragePrompts extends StorageNative {
     const stored = await this.loadJson<unknown>(this.composeDraftsFile(), () => ({}));
     return this.validComposeDrafts(stored);
   }
-
-
 }

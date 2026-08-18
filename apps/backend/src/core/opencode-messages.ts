@@ -49,10 +49,7 @@ function stringifyOpenCodeToolValue(value: unknown): string | undefined {
   }
 }
 
-function openCodeRecordString(
-  value: unknown,
-  ...keys: string[]
-): string | undefined {
+function openCodeRecordString(value: unknown, ...keys: string[]): string | undefined {
   const record = asRecord(value);
   if (!record) return undefined;
   for (const key of keys) {
@@ -107,8 +104,9 @@ export function collectRawOpenCodeSubagentIds(messages: readonly unknown[]): str
       const toolName = nonEmptyString(part?.tool)?.toLowerCase();
       if (toolName !== "task" && toolName !== "agent") continue;
       const metadata = asRecord(state?.metadata) ?? asRecord(part?.metadata);
-      const id = openCodeRecordString(metadata, "sessionId", "sessionID", "jobId")
-        ?? openCodeTaskEnvelope(stringifyOpenCodeToolValue(state?.output)).sessionId;
+      const id =
+        openCodeRecordString(metadata, "sessionId", "sessionID", "jobId") ??
+        openCodeTaskEnvelope(stringifyOpenCodeToolValue(state?.output)).sessionId;
       if (id) ids.add(id);
     }
   }
@@ -120,15 +118,20 @@ export function hydrateNormalizedOpenCodeSubagents(
   childMessages: ReadonlyMap<string, readonly Record<string, unknown>[]>,
 ): Record<string, unknown>[] {
   const countTools = (parts: readonly Record<string, unknown>[]): number =>
-    parts.reduce((count, part) =>
-      count
-      + (part.type === "tool-invocation" ? 1 : 0)
-      + (Array.isArray(part.subagentActions)
-        ? countTools(part.subagentActions.flatMap((entry) => {
-            const record = asRecord(entry);
-            return record ? [record] : [];
-          }))
-        : 0), 0);
+    parts.reduce(
+      (count, part) =>
+        count +
+        (part.type === "tool-invocation" ? 1 : 0) +
+        (Array.isArray(part.subagentActions)
+          ? countTools(
+              part.subagentActions.flatMap((entry) => {
+                const record = asRecord(entry);
+                return record ? [record] : [];
+              }),
+            )
+          : 0),
+      0,
+    );
   const hydrateParts = (
     rawParts: unknown,
     ancestry: ReadonlySet<string>,
@@ -144,15 +147,15 @@ export function hydrateNormalizedOpenCodeSubagents(
       const nextAncestry = new Set(ancestry);
       nextAncestry.add(id);
       const actions = transcript.flatMap((message) =>
-        message.role === "assistant"
-          ? hydrateParts(message.parts, nextAncestry)
-          : [],
+        message.role === "assistant" ? hydrateParts(message.parts, nextAncestry) : [],
       );
-      return [{
-        ...part,
-        subagentActions: actions,
-        subagentActionCount: countTools(actions),
-      }];
+      return [
+        {
+          ...part,
+          subagentActions: actions,
+          subagentActionCount: countTools(actions),
+        },
+      ];
     });
   };
   return messages.map((message) => ({
@@ -168,16 +171,18 @@ export function normalizeOpenCodeInteractiveMessage(
   const envelope = asRecord(value);
   const info = asRecord(envelope?.info);
   if (!envelope || !info) return null;
-  const role = info.role === "user" || info.role === "assistant" || info.role === "system"
-    ? info.role
-    : "assistant";
+  const role =
+    info.role === "user" || info.role === "assistant" || info.role === "system"
+      ? info.role
+      : "assistant";
   const messageId = nonEmptyString(info.id) ?? `opencode-message-${index}`;
   const rawCreatedAt = asRecord(info.time)?.created;
-  const createdAt = typeof rawCreatedAt === "number" && Number.isFinite(rawCreatedAt)
-    ? new Date(rawCreatedAt).toISOString()
-    : typeof rawCreatedAt === "string" && Number.isFinite(Date.parse(rawCreatedAt))
+  const createdAt =
+    typeof rawCreatedAt === "number" && Number.isFinite(rawCreatedAt)
       ? new Date(rawCreatedAt).toISOString()
-      : "1970-01-01T00:00:00.000Z";
+      : typeof rawCreatedAt === "string" && Number.isFinite(Date.parse(rawCreatedAt))
+        ? new Date(rawCreatedAt).toISOString()
+        : "1970-01-01T00:00:00.000Z";
   const parts: Record<string, unknown>[] = [];
   let content = "";
   for (const candidate of Array.isArray(envelope.parts) ? envelope.parts.slice(0, 2_048) : []) {
@@ -211,38 +216,39 @@ export function normalizeOpenCodeInteractiveMessage(
     const state = asRecord(part.state);
     const toolName = nonEmptyString(part.tool) ?? "Unknown tool";
     const rawStatus = state?.status;
-    const toolState = rawStatus === "completed"
-      ? "success"
-      : rawStatus === "error"
-        ? "failure"
-        : rawStatus === "pending" || rawStatus === "running"
-          ? "pending"
-          : undefined;
-    const isSubagent = toolName.toLowerCase() === "task"
-      || toolName.toLowerCase() === "agent";
+    const toolState =
+      rawStatus === "completed"
+        ? "success"
+        : rawStatus === "error"
+          ? "failure"
+          : rawStatus === "pending" || rawStatus === "running"
+            ? "pending"
+            : undefined;
+    const isSubagent = toolName.toLowerCase() === "task" || toolName.toLowerCase() === "agent";
     const input = asRecord(state?.input) ?? undefined;
     const toolOutput = stringifyOpenCodeToolValue(state?.output);
     const taskEnvelope = isSubagent ? openCodeTaskEnvelope(toolOutput) : {};
     const metadata = asRecord(state?.metadata) ?? asRecord(part.metadata);
     const subagentId = isSubagent
-      ? openCodeRecordString(metadata, "sessionId", "sessionID", "jobId")
-        ?? taskEnvelope.sessionId
+      ? (openCodeRecordString(metadata, "sessionId", "sessionID", "jobId") ??
+        taskEnvelope.sessionId)
       : undefined;
     const subagentName = isSubagent
-      ? openCodeRecordString(input, "description")
-        ?? (typeof state?.title === "string" ? state.title : toolName)
+      ? (openCodeRecordString(input, "description") ??
+        (typeof state?.title === "string" ? state.title : toolName))
       : undefined;
     const subagentRole = isSubagent
       ? openCodeRecordString(input, "subagent_type", "agent")
       : undefined;
-    const subagentPrompt = isSubagent
-      ? openCodeRecordString(input, "prompt")
-      : undefined;
-    const normalizedToolState = taskEnvelope.state === "running"
-      ? "pending"
-      : taskEnvelope.state === "completed"
-        ? "success"
-        : taskEnvelope.state === "error" ? "failure" : toolState;
+    const subagentPrompt = isSubagent ? openCodeRecordString(input, "prompt") : undefined;
+    const normalizedToolState =
+      taskEnvelope.state === "running"
+        ? "pending"
+        : taskEnvelope.state === "completed"
+          ? "success"
+          : taskEnvelope.state === "error"
+            ? "failure"
+            : toolState;
     parts.push({
       type: isSubagent ? "subagent" : "tool-invocation",
       content: typeof state?.title === "string" ? state.title : toolName,
@@ -251,16 +257,17 @@ export function normalizeOpenCodeInteractiveMessage(
       ...(normalizedToolState ? { toolState: normalizedToolState } : {}),
       ...(typeof state?.title === "string" ? { toolTitle: state.title } : {}),
       ...(toolOutput === undefined ? {} : { toolOutput }),
-      ...(state?.error === undefined
-        ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),
-      ...(isSubagent ? {
-        ...(subagentId ? { subagentId } : {}),
-        ...(subagentName ? { subagentName } : {}),
-        ...(subagentRole ? { subagentRole } : {}),
-        ...(subagentPrompt ? { subagentPrompt } : {}),
-        subagentActions: [],
-        subagentActionCount: 0,
-      } : {}),
+      ...(state?.error === undefined ? {} : { toolError: stringifyOpenCodeToolValue(state.error) }),
+      ...(isSubagent
+        ? {
+            ...(subagentId ? { subagentId } : {}),
+            ...(subagentName ? { subagentName } : {}),
+            ...(subagentRole ? { subagentRole } : {}),
+            ...(subagentPrompt ? { subagentPrompt } : {}),
+            subagentActions: [],
+            subagentActionCount: 0,
+          }
+        : {}),
       ...source,
     });
   }
@@ -290,12 +297,13 @@ export function normalizeOpenCodeTerminalState(value: unknown): {
     return { kind: "stopped", message: "Query stopped by user." };
   }
   const data = asRecord(error?.data);
-  const detail = typeof info.error === "string"
-    ? info.error
-    : nonEmptyString(data?.message)
-      ?? nonEmptyString(error?.message)
-      ?? name
-      ?? "OpenCode session failed";
+  const detail =
+    typeof info.error === "string"
+      ? info.error
+      : (nonEmptyString(data?.message) ??
+        nonEmptyString(error?.message) ??
+        name ??
+        "OpenCode session failed");
   return {
     kind: "error",
     message: boundedText(detail, "OpenCode session failed"),

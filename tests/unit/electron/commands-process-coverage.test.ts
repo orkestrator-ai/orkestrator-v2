@@ -11,9 +11,12 @@ import {
   dockerOwnerNamespace,
 } from "../../../apps/backend/src/core/docker-ownership";
 
-const { createCommandRegistry, __testing } = await import("../../../apps/backend/src/core/commands");
+const { createCommandRegistry, __testing } =
+  await import("../../../apps/backend/src/core/commands");
 
-type Handler = NonNullable<ReturnType<typeof createCommandRegistry>["get"] extends (name: string) => infer T ? T : never>;
+type Handler = NonNullable<
+  ReturnType<typeof createCommandRegistry>["get"] extends (name: string) => infer T ? T : never
+>;
 
 const originalPath = process.env.PATH;
 const originalHome = process.env.HOME;
@@ -21,8 +24,7 @@ const originalHomedir = os.homedir;
 const originalDockerLog = process.env.FAKE_DOCKER_LOG;
 const originalLauncherLog = process.env.FAKE_LAUNCHER_LOG;
 const originalLauncherFailExecutable = process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
-const originalLauncherFailSecondaryExecutable =
-  process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
+const originalLauncherFailSecondaryExecutable = process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
 const originalLauncherExitCode = process.env.FAKE_LAUNCHER_EXIT_CODE;
 const originalDockerStatus = process.env.FAKE_DOCKER_STATUS;
 const originalDockerPort = process.env.FAKE_DOCKER_PORT;
@@ -32,10 +34,8 @@ const originalDockerNoPort = process.env.FAKE_DOCKER_NO_PORT;
 const originalCodexBridgeToken = process.env.FAKE_CODEX_BRIDGE_TOKEN;
 const originalClaudeBridgeToken = process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
 const originalOpenCodeServerPassword = process.env.FAKE_OPENCODE_SERVER_PASSWORD;
-const originalOpenCodeGitHubPluginFingerprint =
-  process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
-const originalClaudeGitHubEnvironmentFingerprint =
-  process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
+const originalOpenCodeGitHubPluginFingerprint = process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
+const originalClaudeGitHubEnvironmentFingerprint = process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
 const originalDockerHostResolves = process.env.FAKE_DOCKER_HOST_RESOLVES;
 const originalDockerHostsOutput = process.env.FAKE_DOCKER_HOSTS_OUTPUT;
 const originalDockerDesktopGateway = process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
@@ -225,7 +225,9 @@ function createContext(initialEnvironment = environment()): {
     emit: mock((event: string, payload: unknown) => events.push({ event, payload })),
     storage: {
       getDataDir: () => root,
-      getEnvironment: mock(async (id: string) => id === initialEnvironment.id ? initialEnvironment : null),
+      getEnvironment: mock(async (id: string) =>
+        id === initialEnvironment.id ? initialEnvironment : null,
+      ),
       loadEnvironments: mock(async () => [initialEnvironment]),
       updateEnvironment: mock(async (id: string, update: Record<string, unknown>) => {
         if (id !== initialEnvironment.id) throw new Error(`Environment not found: ${id}`);
@@ -233,7 +235,7 @@ function createContext(initialEnvironment = environment()): {
         Object.assign(initialEnvironment, update);
         return initialEnvironment;
       }),
-      getProject: mock(async (id: string) => id === "project-1" ? project : null),
+      getProject: mock(async (id: string) => (id === "project-1" ? project : null)),
       loadConfig: mock(async () => ({
         version: "1.0.0",
         global: globalConfig,
@@ -259,7 +261,11 @@ function createContext(initialEnvironment = environment()): {
 let registry: ReturnType<typeof createCommandRegistry>;
 let fixture: ReturnType<typeof createContext>;
 
-async function invoke(name: string, args: Record<string, unknown> = {}, context = fixture.context): Promise<unknown> {
+async function invoke(
+  name: string,
+  args: Record<string, unknown> = {},
+  context = fixture.context,
+): Promise<unknown> {
   const handler = registry.get(name) as Handler | undefined;
   expect(handler).toBeDefined();
   return handler!(args, context);
@@ -303,7 +309,9 @@ async function waitFor(predicate: () => boolean, description: string): Promise<v
   throw new Error(`Timed out waiting for ${description}`);
 }
 
-async function startHealthServer(status = 200): Promise<{ port: number; close: () => Promise<void> }> {
+async function startHealthServer(
+  status = 200,
+): Promise<{ port: number; close: () => Promise<void> }> {
   const server = http.createServer((_request, response) => {
     response.writeHead(status);
     response.end("ok");
@@ -315,7 +323,10 @@ async function startHealthServer(status = 200): Promise<{ port: number; close: (
   const port = (server.address() as AddressInfo).port;
   return {
     port,
-    close: () => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())),
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
   };
 }
 
@@ -363,9 +374,10 @@ async function startOpenCodeServer(): Promise<{
   });
   return {
     port: (server.address() as AddressInfo).port,
-    close: () => new Promise<void>((resolve, reject) =>
-      server.close((error) => error ? reject(error) : resolve())
-    ),
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
     configurations,
   };
 }
@@ -380,7 +392,16 @@ beforeAll(async () => {
   await fs.mkdir(fakeHome, { recursive: true });
   await fs.writeFile(path.join(binDir, "docker"), DOCKER_SCRIPT);
   await fs.chmod(path.join(binDir, "docker"), 0o755);
-  for (const executable of ["gh", "open", "xdg-open", "dbus-send", "explorer.exe", "explorer", "code", "cursor"]) {
+  for (const executable of [
+    "gh",
+    "open",
+    "xdg-open",
+    "dbus-send",
+    "explorer.exe",
+    "explorer",
+    "code",
+    "cursor",
+  ]) {
     await fs.writeFile(path.join(binDir, executable), LAUNCHER_SCRIPT);
     await fs.chmod(path.join(binDir, executable), 0o755);
   }
@@ -412,8 +433,7 @@ beforeEach(async () => {
   delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
   process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT =
     __testing.OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT;
-  process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT =
-    __testing.CLAUDE_GITHUB_ENV_FINGERPRINT;
+  process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT = __testing.CLAUDE_GITHUB_ENV_FINGERPRINT;
   delete process.env.FAKE_DOCKER_HOST_RESOLVES;
   delete process.env.FAKE_DOCKER_HOSTS_OUTPUT;
   delete process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
@@ -437,13 +457,13 @@ afterAll(async () => {
   else process.env.FAKE_DOCKER_LOG = originalDockerLog;
   if (originalLauncherLog === undefined) delete process.env.FAKE_LAUNCHER_LOG;
   else process.env.FAKE_LAUNCHER_LOG = originalLauncherLog;
-  if (originalLauncherFailExecutable === undefined) delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
+  if (originalLauncherFailExecutable === undefined)
+    delete process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE;
   else process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = originalLauncherFailExecutable;
   if (originalLauncherFailSecondaryExecutable === undefined) {
     delete process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE;
   } else {
-    process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE =
-      originalLauncherFailSecondaryExecutable;
+    process.env.FAKE_LAUNCHER_FAIL_SECONDARY_EXECUTABLE = originalLauncherFailSecondaryExecutable;
   }
   if (originalLauncherExitCode === undefined) delete process.env.FAKE_LAUNCHER_EXIT_CODE;
   else process.env.FAKE_LAUNCHER_EXIT_CODE = originalLauncherExitCode;
@@ -461,19 +481,18 @@ afterAll(async () => {
   else process.env.FAKE_CODEX_BRIDGE_TOKEN = originalCodexBridgeToken;
   if (originalClaudeBridgeToken === undefined) delete process.env.FAKE_CLAUDE_BRIDGE_TOKEN;
   else process.env.FAKE_CLAUDE_BRIDGE_TOKEN = originalClaudeBridgeToken;
-  if (originalOpenCodeServerPassword === undefined) delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
+  if (originalOpenCodeServerPassword === undefined)
+    delete process.env.FAKE_OPENCODE_SERVER_PASSWORD;
   else process.env.FAKE_OPENCODE_SERVER_PASSWORD = originalOpenCodeServerPassword;
   if (originalOpenCodeGitHubPluginFingerprint === undefined) {
     delete process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT;
   } else {
-    process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT =
-      originalOpenCodeGitHubPluginFingerprint;
+    process.env.FAKE_OPENCODE_GITHUB_PLUGIN_FINGERPRINT = originalOpenCodeGitHubPluginFingerprint;
   }
   if (originalClaudeGitHubEnvironmentFingerprint === undefined) {
     delete process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT;
   } else {
-    process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT =
-      originalClaudeGitHubEnvironmentFingerprint;
+    process.env.FAKE_CLAUDE_GITHUB_ENV_FINGERPRINT = originalClaudeGitHubEnvironmentFingerprint;
   }
   if (originalDockerHostResolves === undefined) delete process.env.FAKE_DOCKER_HOST_RESOLVES;
   else process.env.FAKE_DOCKER_HOST_RESOLVES = originalDockerHostResolves;
@@ -481,13 +500,16 @@ afterAll(async () => {
   else process.env.FAKE_DOCKER_HOSTS_OUTPUT = originalDockerHostsOutput;
   if (originalDockerDesktopGateway === undefined) delete process.env.FAKE_DOCKER_DESKTOP_GATEWAY;
   else process.env.FAKE_DOCKER_DESKTOP_GATEWAY = originalDockerDesktopGateway;
-  if (originalDockerExplicitHostEntry === undefined) delete process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
+  if (originalDockerExplicitHostEntry === undefined)
+    delete process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY;
   else process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY = originalDockerExplicitHostEntry;
   if (originalDockerGateway === undefined) delete process.env.FAKE_DOCKER_GATEWAY;
   else process.env.FAKE_DOCKER_GATEWAY = originalDockerGateway;
-  if (originalClaudeAgentToolsFingerprint === undefined) delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
+  if (originalClaudeAgentToolsFingerprint === undefined)
+    delete process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT;
   else process.env.FAKE_CLAUDE_AGENT_TOOLS_FINGERPRINT = originalClaudeAgentToolsFingerprint;
-  if (originalCodexAgentToolsFingerprint === undefined) delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
+  if (originalCodexAgentToolsFingerprint === undefined)
+    delete process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT;
   else process.env.FAKE_CODEX_AGENT_TOOLS_FINGERPRINT = originalCodexAgentToolsFingerprint;
   await fs.rm(root, { recursive: true, force: true });
 });
@@ -505,13 +527,17 @@ describe("process and platform command behavior", () => {
   });
 
   test("provisions and controls a container with validated arguments", async () => {
-    expect(await invoke("provision_environment", { environmentId: "environment-1" })).toBe("container-created-123");
+    expect(await invoke("provision_environment", { environmentId: "environment-1" })).toBe(
+      "container-created-123",
+    );
     expect(fixture.updates).toContainEqual({ containerId: "container-created-123" });
 
     await invoke("docker_start_container", { containerId: "container-a" });
     await invoke("docker_stop_container", { containerId: "container-a" });
     await invoke("docker_remove_container", { containerId: "container-a" });
-    await expect(invoke("docker_start_container", { containerId: 7 })).rejects.toThrow("Expected containerId to be a string");
+    await expect(invoke("docker_start_container", { containerId: 7 })).rejects.toThrow(
+      "Expected containerId to be a string",
+    );
 
     const log = await readCommandLog();
     const owner = dockerOwnerNamespace(root);
@@ -548,9 +574,7 @@ describe("process and platform command behavior", () => {
     await invoke("provision_environment", { environmentId: "environment-1" });
 
     const log = await readCommandLog();
-    expect(log).toContain(
-      `-v ${originPath}:/orkestrator-agent-test-origin.git`,
-    );
+    expect(log).toContain(`-v ${originPath}:/orkestrator-agent-test-origin.git`);
     expect(log).not.toContain(`${originPath}:/orkestrator-agent-test-origin.git:ro`);
     expect(log).toContain("GIT_URL=/orkestrator-agent-test-origin.git");
     expect(log).not.toContain(`GIT_URL=${originPath}`);
@@ -611,12 +635,18 @@ describe("process and platform command behavior", () => {
     expect(await readCommandLog()).not.toContain(
       `--filter label=orkestrator-owner=${dockerOwnerNamespace(root)} --format`,
     );
-    expect(await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 })).toBe(43123);
+    expect(
+      await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 }),
+    ).toBe(43123);
     process.env.FAKE_DOCKER_NO_PORT = "1";
-    expect(await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 })).toBeNull();
+    expect(
+      await invoke("get_container_host_port", { containerId: "container-a", containerPort: 4096 }),
+    ).toBeNull();
     delete process.env.FAKE_DOCKER_NO_PORT;
 
-    expect(await invoke("get_container_logs", { containerId: "container-a", tail: "25" })).toBe("historical container log\n");
+    expect(await invoke("get_container_logs", { containerId: "container-a", tail: "25" })).toBe(
+      "historical container log\n",
+    );
     await invoke("stream_container_logs", { containerId: "container-a" });
     await waitFor(() => fixture.events.length === 2, "stdout and stderr container-log events");
     expect(fixture.events).toEqual([
@@ -644,16 +674,18 @@ describe("process and platform command behavior", () => {
     );
     // A second pass removes legacy containers that predate ownership labels,
     // so the cleanup matches what the listings adopt as this installation's.
-    expect(pruneLog).toContain("docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner");
+    expect(pruneLog).toContain(
+      "docker container prune -f --filter label=app=orkestrator-v2 --filter label!=orkestrator-owner",
+    );
     expect(pruneLog).not.toContain("docker system prune");
     expect(pruneLog).not.toContain("--volumes");
   });
 
   test("reattaches a container and persists its inspected status", async () => {
-    const result = await invoke("reattach_container", {
+    const result = (await invoke("reattach_container", {
       projectId: "project-1",
       containerId: "0123456789abcdef",
-    }) as Environment;
+    })) as Environment;
 
     expect(result.name).toBe("reattached-01234567");
     expect(result.containerId).toBe("0123456789abcdef");
@@ -665,31 +697,45 @@ describe("process and platform command behavior", () => {
     await invoke("stop_opencode_server", { containerId: "container-a" });
     await invoke("stop_claude_server", { containerId: "container-a" });
     await invoke("stop_codex_server", { containerId: "container-a" });
-    expect(await invoke("get_opencode_server_log", { containerId: "container-a" })).toBe("opencode log\n");
-    expect(await invoke("get_claude_server_log", { containerId: "container-a" })).toBe("claude log\n");
-    expect(await invoke("get_codex_server_log", { containerId: "container-a" })).toBe("codex log\n");
+    expect(await invoke("get_opencode_server_log", { containerId: "container-a" })).toBe(
+      "opencode log\n",
+    );
+    expect(await invoke("get_claude_server_log", { containerId: "container-a" })).toBe(
+      "claude log\n",
+    );
+    expect(await invoke("get_codex_server_log", { containerId: "container-a" })).toBe(
+      "codex log\n",
+    );
 
     process.env.FAKE_DOCKER_NO_PORT = "1";
-    expect(await invoke("get_opencode_server_status", { containerId: "container-a" })).toEqual({ running: false, hostPort: null });
-    expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({ running: false, hostPort: null });
-    expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({ running: false, hostPort: null });
+    expect(await invoke("get_opencode_server_status", { containerId: "container-a" })).toEqual({
+      running: false,
+      hostPort: null,
+    });
+    expect(await invoke("get_claude_server_status", { containerId: "container-a" })).toEqual({
+      running: false,
+      hostPort: null,
+    });
+    expect(await invoke("get_codex_server_status", { containerId: "container-a" })).toEqual({
+      running: false,
+      hostPort: null,
+    });
     delete process.env.FAKE_DOCKER_NO_PORT;
 
     const healthyStatus = await startHealthServer(200);
     process.env.FAKE_DOCKER_PORT = String(healthyStatus.port);
     process.env.FAKE_OPENCODE_SERVER_PASSWORD = "o".repeat(43);
     try {
-      expect(
-        await invoke("get_opencode_server_status", { containerId: "container-a" }),
-      ).toEqual({
+      expect(await invoke("get_opencode_server_status", { containerId: "container-a" })).toEqual({
         running: true,
         hostPort: healthyStatus.port,
         authToken: "o".repeat(43),
       });
       for (const agent of ["claude", "codex"]) {
-        expect(
-          await invoke(`get_${agent}_server_status`, { containerId: "container-a" }),
-        ).toEqual({ running: true, hostPort: healthyStatus.port });
+        expect(await invoke(`get_${agent}_server_status`, { containerId: "container-a" })).toEqual({
+          running: true,
+          hostPort: healthyStatus.port,
+        });
       }
     } finally {
       await healthyStatus.close();
@@ -699,18 +745,30 @@ describe("process and platform command behavior", () => {
     process.env.FAKE_DOCKER_PORT = String(unhealthyStatus.port);
     try {
       for (const agent of ["opencode", "claude", "codex"]) {
-        expect(
-          await invoke(`get_${agent}_server_status`, { containerId: "container-a" }),
-        ).toEqual({ running: false, hostPort: unhealthyStatus.port });
+        expect(await invoke(`get_${agent}_server_status`, { containerId: "container-a" })).toEqual({
+          running: false,
+          hostPort: unhealthyStatus.port,
+        });
       }
     } finally {
       await unhealthyStatus.close();
     }
 
-    expect(await invoke("get_opencode_model_preferences")).toEqual({ recent: [], favorite: [], variant: {} });
+    expect(await invoke("get_opencode_model_preferences")).toEqual({
+      recent: [],
+      favorite: [],
+      variant: {},
+    });
     const preferencePath = path.join(fakeHome, ".local", "state", "opencode", "model.json");
     await fs.mkdir(path.dirname(preferencePath), { recursive: true });
-    await fs.writeFile(preferencePath, JSON.stringify({ recent: ["provider/model"], favorite: [], variant: { "provider/model": "fast" } }));
+    await fs.writeFile(
+      preferencePath,
+      JSON.stringify({
+        recent: ["provider/model"],
+        favorite: [],
+        variant: { "provider/model": "fast" },
+      }),
+    );
     expect(await invoke("get_opencode_model_preferences")).toEqual({
       recent: ["provider/model"],
       favorite: [],
@@ -760,11 +818,9 @@ describe("process and platform command behavior", () => {
       agentTools,
     } as CommandContext;
     try {
-      await expect(invoke(
-        "get_opencode_server_status",
-        { containerId: "container-existing" },
-        context,
-      )).resolves.toEqual({
+      await expect(
+        invoke("get_opencode_server_status", { containerId: "container-existing" }, context),
+      ).resolves.toEqual({
         running: true,
         hostPort: openCode.port,
         authToken: "o".repeat(43),
@@ -772,11 +828,7 @@ describe("process and platform command behavior", () => {
         // flight rather than an unqualified "everything is wired up".
         agentTools: "pending",
       });
-      expect(agentTools.connection).toHaveBeenCalledWith(
-        "environment-1",
-        "project-1",
-        "container",
-      );
+      expect(agentTools.connection).toHaveBeenCalledWith("environment-1", "project-1", "container");
       await waitFor(
         () => openCode.configurations.length === 1,
         "background OpenCode agent-tool reconciliation",
@@ -793,15 +845,12 @@ describe("process and platform command behavior", () => {
 
       // Once the POST lands, the same observer reports usable ticket tools.
       await waitFor(
-        () => __testing.openCodeAgentToolsState("container:container-existing")
-          === "connected",
+        () => __testing.openCodeAgentToolsState("container:container-existing") === "connected",
         "the recorded connected outcome",
       );
-      await expect(invoke(
-        "get_opencode_server_status",
-        { containerId: "container-existing" },
-        context,
-      )).resolves.toMatchObject({ running: true, agentTools: "connected" });
+      await expect(
+        invoke("get_opencode_server_status", { containerId: "container-existing" }, context),
+      ).resolves.toMatchObject({ running: true, agentTools: "connected" });
       // The memo means the second status read did no further MCP I/O.
       expect(openCode.configurations).toHaveLength(1);
 
@@ -831,8 +880,7 @@ describe("process and platform command behavior", () => {
   test("removes a Linux host-gateway override when Docker Desktop DNS is available", async () => {
     process.env.FAKE_DOCKER_DESKTOP_GATEWAY = "1";
     process.env.FAKE_DOCKER_HOSTS_OUTPUT = "192.168.65.254 host.docker.internal\n";
-    process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY =
-      "172.17.0.1 host.docker.internal";
+    process.env.FAKE_DOCKER_EXPLICIT_HOST_ENTRY = "172.17.0.1 host.docker.internal";
 
     await __testing.ensureContainerAgentToolsHost("container-existing");
 
@@ -866,9 +914,9 @@ describe("process and platform command behavior", () => {
   test("fails closed when Docker does not report a usable gateway for the alias repair", async () => {
     process.env.FAKE_DOCKER_GATEWAY = "not-an-ip";
 
-    await expect(
-      __testing.ensureContainerAgentToolsHost("container-existing"),
-    ).rejects.toThrow("Could not determine the Docker host gateway");
+    await expect(__testing.ensureContainerAgentToolsHost("container-existing")).rejects.toThrow(
+      "Could not determine the Docker host gateway",
+    );
 
     const log = await readCommandLog();
     expect(log).toContain(
@@ -896,20 +944,16 @@ describe("process and platform command behavior", () => {
     };
     const context = { ...fixture.context, agentTools } as CommandContext;
     try {
-      await expect(invoke(
-        "get_claude_server_status",
-        { containerId: "container-existing" },
-        context,
-      )).resolves.toEqual({
+      await expect(
+        invoke("get_claude_server_status", { containerId: "container-existing" }, context),
+      ).resolves.toEqual({
         running: true,
         hostPort: healthy.port,
         authToken: "c".repeat(43),
       });
-      await expect(invoke(
-        "get_codex_server_status",
-        { containerId: "container-existing" },
-        context,
-      )).resolves.toEqual({
+      await expect(
+        invoke("get_codex_server_status", { containerId: "container-existing" }, context),
+      ).resolves.toEqual({
         running: true,
         hostPort: healthy.port,
         authToken: "d".repeat(43),
@@ -932,10 +976,7 @@ describe("process and platform command behavior", () => {
       models: [{ id: "opencode/cached", name: "Cached", provider: "opencode" }],
     };
     const getOpenCodeModelCatalog = mock(async (_projectId: string) => cached);
-    const cacheOpenCodeModelCatalog = mock(async (
-      _projectId: string,
-      models: unknown[],
-    ) => ({
+    const cacheOpenCodeModelCatalog = mock(async (_projectId: string, models: unknown[]) => ({
       ...cached,
       catalogVersion: "updated",
       models,
@@ -950,11 +991,7 @@ describe("process and platform command behavior", () => {
     } as CommandContext;
 
     expect(
-      await invoke(
-        "get_opencode_model_catalog_cache",
-        { projectId: " project-a " },
-        context,
-      ),
+      await invoke("get_opencode_model_catalog_cache", { projectId: " project-a " }, context),
     ).toEqual(cached);
     expect(getOpenCodeModelCatalog).toHaveBeenCalledWith("project-a");
 
@@ -970,15 +1007,24 @@ describe("process and platform command behavior", () => {
       },
     ];
     expect(
-      await invoke(
-        "cache_opencode_model_catalog",
-        { projectId: " project-a ", models },
-        context,
-      ),
+      await invoke("cache_opencode_model_catalog", { projectId: " project-a ", models }, context),
     ).toEqual({
       ...cached,
       catalogVersion: "updated",
-      models: [{
+      models: [
+        {
+          id: "opencode/openai/gpt-5",
+          name: "GPT-5",
+          provider: "opencode",
+          variants: ["low", "high"],
+          inputCost: 0,
+          outputCost: Number.MAX_VALUE,
+          contextWindow: Number.MAX_SAFE_INTEGER,
+        },
+      ],
+    });
+    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [
+      {
         id: "opencode/openai/gpt-5",
         name: "GPT-5",
         provider: "opencode",
@@ -986,17 +1032,8 @@ describe("process and platform command behavior", () => {
         inputCost: 0,
         outputCost: Number.MAX_VALUE,
         contextWindow: Number.MAX_SAFE_INTEGER,
-      }],
-    });
-    expect(cacheOpenCodeModelCatalog).toHaveBeenCalledWith("project-a", [{
-      id: "opencode/openai/gpt-5",
-      name: "GPT-5",
-      provider: "opencode",
-      variants: ["low", "high"],
-      inputCost: 0,
-      outputCost: Number.MAX_VALUE,
-      contextWindow: Number.MAX_SAFE_INTEGER,
-    }]);
+      },
+    ]);
 
     await expect(
       invoke(
@@ -1055,53 +1092,148 @@ describe("process and platform command behavior", () => {
           { id: "opencode/b", name: "B", provider: "opencode", inputCost: -1 },
         ],
       }),
-    ).rejects.toThrow(
-      /at least one model.*contextWindow to be a positive safe integer/s,
-    );
+    ).rejects.toThrow(/at least one model.*contextWindow to be a positive safe integer/s);
   });
 
   test.each([
     ["missing project id", "get_opencode_model_catalog_cache", {}, "projectId"],
     ["blank project id", "get_opencode_model_catalog_cache", { projectId: " " }, "non-blank"],
-    ["unexpected get argument", "get_opencode_model_catalog_cache", { projectId: "p", extra: true }, "Unexpected arguments field"],
-    ["models is not an array", "cache_opencode_model_catalog", { projectId: "p", models: {} }, "models to be an array"],
-    ["empty models", "cache_opencode_model_catalog", { projectId: "p", models: [] }, "at least one model"],
-    ["model is not an object", "cache_opencode_model_catalog", { projectId: "p", models: [null] }, "models[0] to be an object"],
-    ["unexpected model field", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", extra: true }] }, "Unexpected models[0] field"],
-    ["blank model id", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: " ", name: "A", provider: "p" }] }, "models[0].id to be a non-blank string"],
-    ["blank model name", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: " ", provider: "p" }] }, "models[0].name to be a non-blank string"],
-    ["blank model provider", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: " " }] }, "models[0].provider to be a non-blank string"],
-    ["variants is not an array", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: "fast" }] }, "variants to be an array"],
-    ["non-string variant", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [1] }] }, "variants[0] to be a string"],
-    ["blank variant", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [" "] }] }, "variants[0] to be a non-blank string"],
-    ["negative input cost", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", inputCost: -1 }] }, "inputCost to be non-negative"],
-    ["infinite output cost", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", outputCost: Number.POSITIVE_INFINITY }] }, "outputCost to be a number"],
-    ["zero context", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 0 }] }, "contextWindow to be a positive safe integer"],
-    ["fractional context", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 1.5 }] }, "contextWindow to be a positive safe integer"],
-    ["unsafe context", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: Number.MAX_SAFE_INTEGER + 1 }] }, "contextWindow to be a positive safe integer"],
-    ["unexpected cache argument", "cache_opencode_model_catalog", { projectId: "p", models: [{ id: "a", name: "A", provider: "p" }], extra: true }, "Unexpected arguments field"],
-  ] as const)("rejects malformed OpenCode catalogue command input: %s", async (
-    _label,
-    command,
-    args,
-    message,
-  ) => {
-    await expect(invoke(command, args)).rejects.toThrow(message);
-  });
+    [
+      "unexpected get argument",
+      "get_opencode_model_catalog_cache",
+      { projectId: "p", extra: true },
+      "Unexpected arguments field",
+    ],
+    [
+      "models is not an array",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: {} },
+      "models to be an array",
+    ],
+    [
+      "empty models",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [] },
+      "at least one model",
+    ],
+    [
+      "model is not an object",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [null] },
+      "models[0] to be an object",
+    ],
+    [
+      "unexpected model field",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", extra: true }] },
+      "Unexpected models[0] field",
+    ],
+    [
+      "blank model id",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: " ", name: "A", provider: "p" }] },
+      "models[0].id to be a non-blank string",
+    ],
+    [
+      "blank model name",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: " ", provider: "p" }] },
+      "models[0].name to be a non-blank string",
+    ],
+    [
+      "blank model provider",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: " " }] },
+      "models[0].provider to be a non-blank string",
+    ],
+    [
+      "variants is not an array",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: "fast" }] },
+      "variants to be an array",
+    ],
+    [
+      "non-string variant",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [1] }] },
+      "variants[0] to be a string",
+    ],
+    [
+      "blank variant",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", variants: [" "] }] },
+      "variants[0] to be a non-blank string",
+    ],
+    [
+      "negative input cost",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", inputCost: -1 }] },
+      "inputCost to be non-negative",
+    ],
+    [
+      "infinite output cost",
+      "cache_opencode_model_catalog",
+      {
+        projectId: "p",
+        models: [{ id: "a", name: "A", provider: "p", outputCost: Number.POSITIVE_INFINITY }],
+      },
+      "outputCost to be a number",
+    ],
+    [
+      "zero context",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 0 }] },
+      "contextWindow to be a positive safe integer",
+    ],
+    [
+      "fractional context",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p", contextWindow: 1.5 }] },
+      "contextWindow to be a positive safe integer",
+    ],
+    [
+      "unsafe context",
+      "cache_opencode_model_catalog",
+      {
+        projectId: "p",
+        models: [{ id: "a", name: "A", provider: "p", contextWindow: Number.MAX_SAFE_INTEGER + 1 }],
+      },
+      "contextWindow to be a positive safe integer",
+    ],
+    [
+      "unexpected cache argument",
+      "cache_opencode_model_catalog",
+      { projectId: "p", models: [{ id: "a", name: "A", provider: "p" }], extra: true },
+      "Unexpected arguments field",
+    ],
+  ] as const)(
+    "rejects malformed OpenCode catalogue command input: %s",
+    async (_label, command, args, message) => {
+      await expect(invoke(command, args)).rejects.toThrow(message);
+    },
+  );
 
   test("stops the in-container Codex bridge without the pattern matching its own shell", async () => {
-    await expect(invoke("stop_codex_server", { containerId: "container-a" })).resolves.toBeUndefined();
+    await expect(
+      invoke("stop_codex_server", { containerId: "container-a" }),
+    ).resolves.toBeUndefined();
 
     const log = await readCommandLog();
-    expect(log).toContain("pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token");
+    expect(log).toContain(
+      "pkill -f '[c]odex-bridge/dist/index.js' || true; rm -f /tmp/codex-bridge-token",
+    );
     expect(log).not.toContain("pkill -f 'codex-bridge'");
   });
 
   test("stops the in-container Claude bridge without the pattern matching its own shell", async () => {
-    await expect(invoke("stop_claude_server", { containerId: "container-a" })).resolves.toBeUndefined();
+    await expect(
+      invoke("stop_claude_server", { containerId: "container-a" }),
+    ).resolves.toBeUndefined();
 
     const log = await readCommandLog();
-    expect(log).toContain("pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token");
+    expect(log).toContain(
+      "pkill -f '[c]laude-bridge/dist/index.js' || true; rm -f /tmp/claude-bridge-token",
+    );
     expect(log).not.toContain("pkill -f 'claude-bridge'");
   });
 
@@ -1166,34 +1298,43 @@ describe("process and platform command behavior", () => {
 
   test("launches browser, file manager, and editors without a shell", async () => {
     await invoke("open_in_browser", { url: "https://example.com/path?q=one&next=two" });
-    await expect(invoke("open_in_browser", { url: "file:///tmp/private" })).rejects.toThrow("Unsupported browser URL protocol");
+    await expect(invoke("open_in_browser", { url: "file:///tmp/private" })).rejects.toThrow(
+      "Unsupported browser URL protocol",
+    );
     await invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" });
     await invoke("open_in_editor", { containerId: "container-a", editor: "cursor" });
     await invoke("open_in_editor", { containerId: "container-b", editor: "vscode" });
     await invoke("open_local_in_editor", { path: "/tmp/project", editor: "code" });
 
     const invocations = await readLauncherInvocations();
-    const browserLauncher = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer.exe" : "xdg-open";
+    const browserLauncher =
+      process.platform === "darwin"
+        ? "open"
+        : process.platform === "win32"
+          ? "explorer.exe"
+          : "xdg-open";
     expect(invocations).toContainEqual({
       executable: browserLauncher,
       args: ["https://example.com/path?q=one&next=two"],
     });
-    expect(invocations).toContainEqual(process.platform === "darwin"
-      ? { executable: "open", args: ["-R", "/tmp/project/file.ts"] }
-      : process.platform === "win32"
-        ? { executable: "explorer", args: ["/select,", "/tmp/project/file.ts"] }
-        : {
-            executable: "dbus-send",
-            args: [
-              "--session",
-              "--print-reply",
-              "--dest=org.freedesktop.FileManager1",
-              "/org/freedesktop/FileManager1",
-              "org.freedesktop.FileManager1.ShowItems",
-              "array:string:file:///tmp/project/file.ts",
-              "string:",
-            ],
-          });
+    expect(invocations).toContainEqual(
+      process.platform === "darwin"
+        ? { executable: "open", args: ["-R", "/tmp/project/file.ts"] }
+        : process.platform === "win32"
+          ? { executable: "explorer", args: ["/select,", "/tmp/project/file.ts"] }
+          : {
+              executable: "dbus-send",
+              args: [
+                "--session",
+                "--print-reply",
+                "--dest=org.freedesktop.FileManager1",
+                "/org/freedesktop/FileManager1",
+                "org.freedesktop.FileManager1.ShowItems",
+                "array:string:file:///tmp/project/file.ts",
+                "string:",
+              ],
+            },
+    );
     expect(invocations).toContainEqual({
       executable: "cursor",
       args: ["--folder-uri", "vscode-remote://attached-container+636f6e7461696e65722d61/workspace"],
@@ -1262,10 +1403,10 @@ describe("process and platform command behavior", () => {
   test("propagates editor launcher exit and spawn failures", async () => {
     process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "cursor";
     process.env.FAKE_LAUNCHER_EXIT_CODE = "23";
-    const exitFailure = await invoke("open_in_editor", {
+    const exitFailure = (await invoke("open_in_editor", {
       containerId: "container-a",
       editor: "cursor",
-    }).catch((error: unknown) => error) as {
+    }).catch((error: unknown) => error)) as {
       message?: string;
       exitCode?: number | null;
       executableMissing?: boolean;
@@ -1283,10 +1424,10 @@ describe("process and platform command behavior", () => {
     await fs.rename(codePath, hiddenCodePath);
     process.env.PATH = binDir;
     try {
-      const spawnFailure = await invoke("open_in_editor", {
+      const spawnFailure = (await invoke("open_in_editor", {
         containerId: "container-b",
         editor: "vscode",
-      }).catch((error: unknown) => error) as {
+      }).catch((error: unknown) => error)) as {
         executableMissing?: boolean;
         exitCode?: number | null;
       };
@@ -1299,15 +1440,34 @@ describe("process and platform command behavior", () => {
   });
 
   test("resolves domains and validate_domains delegates to the same behavior", async () => {
-    const resolved = await invoke("test_domain_resolution", { domains: ["localhost", "bad domain"] }) as Array<Record<string, unknown>>;
-    expect(resolved[0]).toMatchObject({ domain: "localhost", valid: true, resolvable: true, error: null });
+    const resolved = (await invoke("test_domain_resolution", {
+      domains: ["localhost", "bad domain"],
+    })) as Array<Record<string, unknown>>;
+    expect(resolved[0]).toMatchObject({
+      domain: "localhost",
+      valid: true,
+      resolvable: true,
+      error: null,
+    });
     expect(resolved[0]?.ips).toBeArray();
     expect((resolved[0]?.ips as string[]).length).toBeGreaterThan(0);
-    expect(resolved[1]).toMatchObject({ domain: "bad domain", valid: true, resolvable: false, ips: [] });
+    expect(resolved[1]).toMatchObject({
+      domain: "bad domain",
+      valid: true,
+      resolvable: false,
+      ips: [],
+    });
     expect(resolved[1]?.error).toBeString();
 
-    const delegated = await invoke("validate_domains", { domains: ["localhost"] }) as Array<Record<string, unknown>>;
-    expect(delegated[0]).toMatchObject({ domain: "localhost", valid: true, resolvable: true, error: null });
+    const delegated = (await invoke("validate_domains", { domains: ["localhost"] })) as Array<
+      Record<string, unknown>
+    >;
+    expect(delegated[0]).toMatchObject({
+      domain: "localhost",
+      valid: true,
+      resolvable: true,
+      error: null,
+    });
   });
 });
 
@@ -1372,8 +1532,7 @@ describe("Linear and looped review command behavior", () => {
         listLoopedReviewWorkflows: mock(async (environmentId: string) => {
           calls.push({ method: "list", args: [environmentId] });
           return Object.values(workflows).filter(
-            (workflow) =>
-              (workflow as { environmentId?: string }).environmentId === environmentId,
+            (workflow) => (workflow as { environmentId?: string }).environmentId === environmentId,
           );
         }),
         deleteLoopedReviewWorkflow: mock(async (workflowId: string) => {
@@ -1397,9 +1556,9 @@ describe("Linear and looped review command behavior", () => {
     await expect(invoke("get_linear_issues", {}, context)).rejects.toThrow(
       "Linear is not connected",
     );
-    await expect(
-      invoke("get_linear_issue", { issueId: "ENG-1" }, context),
-    ).rejects.toThrow("Linear is not connected");
+    await expect(invoke("get_linear_issue", { issueId: "ENG-1" }, context)).rejects.toThrow(
+      "Linear is not connected",
+    );
 
     // The auth gate runs before any network call.
     expect(getLinearAuth).toHaveBeenCalledTimes(2);
@@ -1437,7 +1596,7 @@ describe("Linear and looped review command behavior", () => {
       });
     }) as unknown as typeof fetch;
 
-    const issues = await invoke("get_linear_issues", {}, context) as Array<
+    const issues = (await invoke("get_linear_issues", {}, context)) as Array<
       Record<string, unknown>
     >;
 
@@ -1463,10 +1622,7 @@ describe("Linear and looped review command behavior", () => {
       viewer: { id: "viewer-1", name: "Ada" },
     });
     globalThis.fetch = mock(async () =>
-      jsonResponse(
-        { errors: [{ message: "Authentication failed for lin_api_secret" }] },
-        401,
-      ),
+      jsonResponse({ errors: [{ message: "Authentication failed for lin_api_secret" }] }, 401),
     ) as unknown as typeof fetch;
 
     const error = await invoke("get_linear_issues", {}, context).then(
@@ -1496,12 +1652,14 @@ describe("Linear and looped review command behavior", () => {
           data: {
             issue: {
               comments: {
-                nodes: [{
-                  id: "comment-1",
-                  body: "Looks good",
-                  createdAt: "2026-01-02T00:00:00.000Z",
-                  user: { name: "Grace" },
-                }],
+                nodes: [
+                  {
+                    id: "comment-1",
+                    body: "Looks good",
+                    createdAt: "2026-01-02T00:00:00.000Z",
+                    user: { name: "Grace" },
+                  },
+                ],
                 pageInfo: { hasNextPage: false, endCursor: null },
               },
             },
@@ -1521,11 +1679,10 @@ describe("Linear and looped review command behavior", () => {
       });
     }) as unknown as typeof fetch;
 
-    const issue = await invoke(
-      "get_linear_issue",
-      { issueId: "ENG-1" },
-      context,
-    ) as Record<string, unknown>;
+    const issue = (await invoke("get_linear_issue", { issueId: "ENG-1" }, context)) as Record<
+      string,
+      unknown
+    >;
 
     expect(issue).toMatchObject({
       id: "issue-1",
@@ -1549,9 +1706,9 @@ describe("Linear and looped review command behavior", () => {
       jsonResponse({ data: { issue: null } }),
     ) as unknown as typeof fetch;
 
-    await expect(
-      invoke("get_linear_issue", { issueId: "ENG-404" }, context),
-    ).rejects.toThrow("Linear issue not found: ENG-404");
+    await expect(invoke("get_linear_issue", { issueId: "ENG-404" }, context)).rejects.toThrow(
+      "Linear issue not found: ENG-404",
+    );
   });
 
   test("validates the issueId argument of get_linear_issue", async () => {
@@ -1589,22 +1746,20 @@ describe("Linear and looped review command behavior", () => {
     };
     const { context, calls } = createWorkflowContext(workflows);
 
-    expect(await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context))
-      .toMatchObject({ id: "workflow-1", revision: 3, snapshot: { phase: "reviewing" } });
+    expect(
+      await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context),
+    ).toMatchObject({ id: "workflow-1", revision: 3, snapshot: { phase: "reviewing" } });
 
     // Listing is environment-scoped: another environment's workflow is excluded.
     expect(
-      await invoke(
-        "list_looped_review_workflows",
-        { environmentId: "environment-1" },
-        context,
-      ),
+      await invoke("list_looped_review_workflows", { environmentId: "environment-1" }, context),
     ).toMatchObject([{ id: "workflow-1" }]);
 
     await invoke("delete_looped_review_workflow", { workflowId: "workflow-1" }, context);
 
-    expect(await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context))
-      .toBeNull();
+    expect(
+      await invoke("get_looped_review_workflow", { workflowId: "workflow-1" }, context),
+    ).toBeNull();
     expect(calls).toEqual([
       { method: "get", args: ["workflow-1"] },
       { method: "list", args: ["environment-1"] },
@@ -1619,8 +1774,9 @@ describe("Linear and looped review command behavior", () => {
   test("returns nothing for an unknown looped review workflow or environment", async () => {
     const { context } = createWorkflowContext({});
 
-    expect(await invoke("get_looped_review_workflow", { workflowId: "missing" }, context))
-      .toBeNull();
+    expect(
+      await invoke("get_looped_review_workflow", { workflowId: "missing" }, context),
+    ).toBeNull();
     expect(
       await invoke("list_looped_review_workflows", { environmentId: "missing" }, context),
     ).toEqual([]);
@@ -1631,15 +1787,15 @@ describe("Linear and looped review command behavior", () => {
   test("validates looped review workflow arguments", async () => {
     const { context, calls } = createWorkflowContext({});
 
-    await expect(
-      invoke("get_looped_review_workflow", { workflowId: 1 }, context),
-    ).rejects.toThrow("Expected workflowId to be a string");
+    await expect(invoke("get_looped_review_workflow", { workflowId: 1 }, context)).rejects.toThrow(
+      "Expected workflowId to be a string",
+    );
     await expect(
       invoke("list_looped_review_workflows", { environmentId: null }, context),
     ).rejects.toThrow("Expected environmentId to be a string");
-    await expect(
-      invoke("delete_looped_review_workflow", {}, context),
-    ).rejects.toThrow("Expected workflowId to be a string");
+    await expect(invoke("delete_looped_review_workflow", {}, context)).rejects.toThrow(
+      "Expected workflowId to be a string",
+    );
 
     expect(calls).toEqual([]);
   });

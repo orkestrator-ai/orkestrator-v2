@@ -17,23 +17,13 @@
  */
 import { afterEach, beforeEach, describe, test, expect } from "bun:test";
 
-
 import { EventEmitter } from "node:events";
 
-
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 
 import { tmpdir } from "node:os";
 
-
 import { join } from "node:path";
-
 
 import {
   AppServerRuntime,
@@ -48,18 +38,13 @@ import {
   type RuntimeSseEvent,
 } from "./app-server-runtime.js";
 
-
 import { AppServerEngine } from "./engine/app-server-engine.js";
-
 
 import type { AppServerSupervisorOptions } from "./app-server/process-supervisor.js";
 
-
 import { FakeReadable, FakeWritable } from "./app-server/testing/fake-app-server.js";
 
-
 import { MAX_LOCAL_MESSAGES, phaseToExternalStatus } from "./sessions/thread-registry.js";
-
 
 import {
   BRIDGE_SESSION_REGISTRY_VERSION,
@@ -67,26 +52,19 @@ import {
   hashCwd,
 } from "./sessions/persistence.js";
 
-
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
-
 
 import { persistSessionTitle } from "./session-titles.js";
 
-
 import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
 
-
 import { AppServerProcessExitError, AppServerTimeoutError } from "./app-server/errors.js";
-
 
 import type {
   EngineEvent,
   EngineRateLimitWindow,
   EngineRateLimitWindowUpdate,
 } from "./engine/types.js";
-
-
 
 /**
  * Returned by a handler to model a request app-server never answers — the exact
@@ -95,21 +73,17 @@ import type {
  */
 export const NO_RESPONSE = Symbol("no-response");
 
-
-
 export async function waitUntil(
   predicate: () => boolean | Promise<boolean>,
   message: string,
   timeoutMs = 500,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!await predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error(message);
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
 }
-
-
 
 export function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -118,8 +92,6 @@ export function deferredSignal(): { promise: Promise<void>; resolve: () => void 
   });
   return { promise, resolve };
 }
-
-
 
 export async function captureConsoleErrors(
   work: (errors: unknown[][]) => Promise<void>,
@@ -136,8 +108,6 @@ export async function captureConsoleErrors(
     console.error = original;
   }
 }
-
-
 
 /** Scripted app-server child, driven by a per-method handler map. */
 export class ScriptedChild extends EventEmitter {
@@ -162,8 +132,7 @@ export class ScriptedChild extends EventEmitter {
   }
 
   waitForRequest(method: string, occurrence = 1): Promise<void> {
-    const countRequests = () =>
-      this.requests.filter((request) => request.method === method).length;
+    const countRequests = () => this.requests.filter((request) => request.method === method).length;
     if (countRequests() >= occurrence) return Promise.resolve();
     return new Promise((resolve) => {
       const onRequest = () => {
@@ -214,13 +183,10 @@ export class ScriptedChild extends EventEmitter {
       // A handler may answer late, which is how a test models a slow app-server
       // without stalling the whole read loop.
       if (result instanceof Promise) {
-        void result.then(
-          (resolved) => {
-            if (resolved === NO_RESPONSE) return;
-            this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result: resolved });
-          },
-          respondWithError,
-        );
+        void result.then((resolved) => {
+          if (resolved === NO_RESPONSE) return;
+          this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result: resolved });
+        }, respondWithError);
         return;
       }
       this.stdout.pushMessage({ jsonrpc: "2.0", id: message.id, result });
@@ -247,9 +213,10 @@ export class ScriptedChild extends EventEmitter {
   }
 }
 
-
-
-export function threadPayload(id: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+export function threadPayload(
+  id: string,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     id,
     sessionId: id,
@@ -264,8 +231,6 @@ export function threadPayload(id: string, extra: Record<string, unknown> = {}): 
     ...extra,
   };
 }
-
-
 
 export const BASE_HANDLERS: Record<string, (params: Record<string, unknown>) => unknown> = {
   initialize: () => ({
@@ -288,8 +253,6 @@ export const BASE_HANDLERS: Record<string, (params: Record<string, unknown>) => 
   "thread/read": () => ({ thread: threadPayload("thread-1") }),
 };
 
-
-
 export interface Harness {
   runtime: AppServerRuntime;
   engine: AppServerEngine;
@@ -300,17 +263,11 @@ export interface Harness {
   waitForEvent: (predicate: (event: RuntimeSseEvent) => boolean) => Promise<RuntimeSseEvent>;
 }
 
-
-
 export let codexHome = "";
-
 
 export let previousCodexHome: string | undefined;
 
-
 export let previousCwd: string | undefined;
-
-
 
 beforeEach(() => {
   codexHome = mkdtempSync(join(tmpdir(), "ork-runtime-"));
@@ -323,8 +280,6 @@ beforeEach(() => {
   process.env.CWD = "/tmp/ws";
 });
 
-
-
 afterEach(() => {
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
@@ -332,8 +287,6 @@ afterEach(() => {
   else process.env.CWD = previousCwd;
   if (codexHome) rmSync(codexHome, { recursive: true, force: true });
 });
-
-
 
 export async function harness(
   handlers: Record<string, (params: Record<string, unknown>) => unknown> = {},
@@ -403,7 +356,9 @@ export async function harness(
       }
     },
     loadCachedModels: async () => ({
-      models: [{ id: "cached-model", name: "Cached", reasoningEfforts: [], reasoningOptions: [] } as never],
+      models: [
+        { id: "cached-model", name: "Cached", reasoningEfforts: [], reasoningOptions: [] } as never,
+      ],
       source: "cache",
     }),
     // Deltas are published on a cadence; zero keeps most tests deterministic.
@@ -470,8 +425,6 @@ export async function harness(
     waitForEvent,
   };
 }
-
-
 
 /** Writes a rollout with real `turn_context` boundaries, as Codex does. */
 export function writeRolloutWithTurns(

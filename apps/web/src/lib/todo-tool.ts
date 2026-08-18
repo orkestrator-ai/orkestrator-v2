@@ -21,7 +21,10 @@ export function isTodoItem(item: unknown): item is TodoItem {
 function normalizeTodoStatus(status: unknown): TodoStatus | undefined {
   if (typeof status !== "string") return undefined;
 
-  const normalized = status.trim().toLowerCase().replace(/[-\s]+/g, "_");
+  const normalized = status
+    .trim()
+    .toLowerCase()
+    .replace(/[-\s]+/g, "_");
 
   if (normalized === "complete" || normalized === "done") return "completed";
   if (normalized === "running" || normalized === "active") return "in_progress";
@@ -29,9 +32,7 @@ function normalizeTodoStatus(status: unknown): TodoStatus | undefined {
   if (normalized === "canceled") return "cancelled";
   if (normalized === "deleted") return "cancelled";
 
-  return TODO_STATUSES.includes(normalized as TodoStatus)
-    ? (normalized as TodoStatus)
-    : undefined;
+  return TODO_STATUSES.includes(normalized as TodoStatus) ? (normalized as TodoStatus) : undefined;
 }
 
 function readString(...values: unknown[]): string | undefined {
@@ -84,19 +85,11 @@ function bestTaskContent(...values: unknown[]): string | undefined {
     .map((value) => readString(value))
     .filter((value): value is string => typeof value === "string");
 
-  return (
-    candidates.find((value) => !looksLikePlaceholderTaskLabel(value)) ??
-    candidates[0]
-  );
+  return candidates.find((value) => !looksLikePlaceholderTaskLabel(value)) ?? candidates[0];
 }
 
 function taskContentFromRecord(record: Record<string, unknown>): string | undefined {
-  const taskId = readString(
-    record.taskId,
-    record.taskID,
-    record.task_id,
-    record.id,
-  );
+  const taskId = readString(record.taskId, record.taskID, record.task_id, record.id);
   const content = bestTaskContent(
     record.subject,
     record.title,
@@ -137,10 +130,12 @@ function parseTaskItemsFromPayload(
     const status = normalizeTodoStatus(record.status);
     if (options?.requireRecognizedStatus && !status) return [];
 
-    return [{
-      content,
-      status: status ?? "pending",
-    }];
+    return [
+      {
+        content,
+        status: status ?? "pending",
+      },
+    ];
   });
 }
 

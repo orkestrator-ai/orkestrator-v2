@@ -34,7 +34,9 @@ describe("AlertDialog primitives", () => {
         >
           <AlertDialogHeader className="custom-header">
             <AlertDialogTitle className="custom-title">Confirm action</AlertDialogTitle>
-            <AlertDialogDescription className="custom-description">This cannot be undone.</AlertDialogDescription>
+            <AlertDialogDescription className="custom-description">
+              This cannot be undone.
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="custom-footer">
             <AlertDialogCancel className="custom-cancel">Cancel</AlertDialogCancel>
@@ -49,14 +51,26 @@ describe("AlertDialog primitives", () => {
     expect(dialog.dataset.slot).toBe("alert-dialog-content");
     expect(dialog.className).toContain("z-50");
     expect(dialog.className).toContain("custom-content");
-    expect(document.querySelector('[data-slot="alert-dialog-overlay"]')?.className).toContain("custom-overlay");
-    expect(document.querySelector('[data-slot="alert-dialog-overlay"]')?.className).toContain("z-50");
+    expect(document.querySelector('[data-slot="alert-dialog-overlay"]')?.className).toContain(
+      "custom-overlay",
+    );
+    expect(document.querySelector('[data-slot="alert-dialog-overlay"]')?.className).toContain(
+      "z-50",
+    );
     expect(screen.getByText("Confirm action").dataset.slot).toBe("alert-dialog-title");
-    expect(screen.getByText("This cannot be undone.").dataset.slot).toBe("alert-dialog-description");
-    expect(dialog.querySelector('[data-slot="alert-dialog-header"]')?.className).toContain("custom-header");
-    expect(dialog.querySelector('[data-slot="alert-dialog-footer"]')?.className).toContain("custom-footer");
+    expect(screen.getByText("This cannot be undone.").dataset.slot).toBe(
+      "alert-dialog-description",
+    );
+    expect(dialog.querySelector('[data-slot="alert-dialog-header"]')?.className).toContain(
+      "custom-header",
+    );
+    expect(dialog.querySelector('[data-slot="alert-dialog-footer"]')?.className).toContain(
+      "custom-footer",
+    );
     expect(screen.getByRole("button", { name: "Cancel" }).dataset.slot).toBe("alert-dialog-cancel");
-    expect(screen.getByRole("button", { name: "Continue" }).dataset.slot).toBe("alert-dialog-action");
+    expect(screen.getByRole("button", { name: "Continue" }).dataset.slot).toBe(
+      "alert-dialog-action",
+    );
   });
 
   test("runs a caller cancel handler and closes through the Radix cancel behavior", async () => {
@@ -103,11 +117,15 @@ describe("AlertDialog primitives", () => {
     );
 
     const dialog = document.querySelector<HTMLElement>('[data-slot="alert-dialog-content"]')!;
-    const selectContent = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="select-content"]'));
+    const selectContent = await waitFor(() =>
+      document.querySelector<HTMLElement>('[data-slot="select-content"]'),
+    );
     expect(selectContent).toBeTruthy();
     expect(selectContent?.className).toContain("z-50");
     expect(dialog.className).toContain("z-50");
-    expect(dialog.compareDocumentPosition(selectContent!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      dialog.compareDocumentPosition(selectContent!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(screen.getByText("Project Two")).toBeTruthy();
   });
 
@@ -136,7 +154,9 @@ describe("AlertDialog primitives", () => {
 
     const dialog = document.querySelector<HTMLElement>('[data-slot="alert-dialog-content"]')!;
     const overlay = document.querySelector<HTMLElement>('[data-slot="alert-dialog-overlay"]')!;
-    const selectContent = await waitFor(() => document.querySelector<HTMLElement>('[data-slot="select-content"]'));
+    const selectContent = await waitFor(() =>
+      document.querySelector<HTMLElement>('[data-slot="select-content"]'),
+    );
 
     // Raising the dialog gives it its own stacking context, so a `z-50` popover
     // portalled to the body would render behind it however late it appears in

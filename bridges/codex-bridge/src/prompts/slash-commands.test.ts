@@ -36,9 +36,7 @@ afterAll(async () => {
     process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = originalRuntimeEnvScript;
   }
   await Promise.all(
-    temporaryDirectories.map((directory) =>
-      rm(directory, { recursive: true, force: true })
-    ),
+    temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -95,14 +93,18 @@ describe("slash command parsing and metadata", () => {
   });
 
   test("extracts simple frontmatter and leaves ordinary content untouched", () => {
-    expect(extractFrontmatter([
-      "---",
-      'description: "Review this change"',
-      "argument_hint: '<path:line>'",
-      "ignored line",
-      "---",
-      "Template body",
-    ].join("\n"))).toEqual({
+    expect(
+      extractFrontmatter(
+        [
+          "---",
+          'description: "Review this change"',
+          "argument_hint: '<path:line>'",
+          "ignored line",
+          "---",
+          "Template body",
+        ].join("\n"),
+      ),
+    ).toEqual({
       body: "Template body",
       fields: {
         description: "Review this change",
@@ -116,34 +118,37 @@ describe("slash command parsing and metadata", () => {
   });
 
   test("summarizes the task section and returns undefined for placeholder-only content", () => {
-    expect(summarizePromptTemplate([
-      "# Heading",
-      "Preamble",
-      "## Your Task",
-      "- Current branch: main",
-      "Review the selected change carefully.",
-    ].join("\n"))).toBe("Review the selected change carefully.");
-    expect(summarizePromptTemplate("# Heading\n$ARGUMENTS\n- Current branch: x"))
-      .toBeUndefined();
+    expect(
+      summarizePromptTemplate(
+        [
+          "# Heading",
+          "Preamble",
+          "## Your Task",
+          "- Current branch: main",
+          "Review the selected change carefully.",
+        ].join("\n"),
+      ),
+    ).toBe("Review the selected change carefully.");
+    expect(summarizePromptTemplate("# Heading\n$ARGUMENTS\n- Current branch: x")).toBeUndefined();
   });
 
   test("serializes prompt and builtin definitions without private prompt fields", () => {
-    expect(serializeSlashCommand({
-      name: "/review",
-      description: "Review",
-      argumentHint: "<path>",
-      source: "prompt",
-      path: "/private/prompts/review.md",
-      template: "private template",
-    })).toEqual({
+    expect(
+      serializeSlashCommand({
+        name: "/review",
+        description: "Review",
+        argumentHint: "<path>",
+        source: "prompt",
+        path: "/private/prompts/review.md",
+        template: "private template",
+      }),
+    ).toEqual({
       name: "/review",
       description: "Review",
       argumentHint: "<path>",
       source: "prompt",
     });
-    expect(serializeSlashCommand(BUILTIN_SLASH_COMMANDS[0]!)).toEqual(
-      BUILTIN_SLASH_COMMANDS[0],
-    );
+    expect(serializeSlashCommand(BUILTIN_SLASH_COMMANDS[0]!)).toEqual(BUILTIN_SLASH_COMMANDS[0]);
   });
 });
 
@@ -151,25 +156,32 @@ describe("prompt command discovery", () => {
   test("walks nested Markdown prompts, applies metadata fallbacks, and skips unreadable roots", async () => {
     const root = await temporaryDirectory();
     await mkdir(join(root, "nested"), { recursive: true });
-    await writeFile(join(root, "nested", "review.md"), [
-      "---",
-      "short_description: Review a change",
-      "arguments: <path>",
-      "---",
-      "Review $ARGUMENTS.",
-    ].join("\n"));
+    await writeFile(
+      join(root, "nested", "review.md"),
+      [
+        "---",
+        "short_description: Review a change",
+        "arguments: <path>",
+        "---",
+        "Review $ARGUMENTS.",
+      ].join("\n"),
+    );
     await writeFile(join(root, "summary.MD"), "## Your Task\nSummarize this repository.");
     await writeFile(join(root, "fallback.md"), "# Heading\n$ARGUMENTS");
     await writeFile(join(root, "empty.md"), "");
     await writeFile(join(root, "ignored.txt"), "ignored");
 
     const commands = await collectPromptSlashCommandsFromDir(root);
-    expect(commands.map((command) => ({
-      name: command.name,
-      description: command.description,
-      argumentHint: command.argumentHint,
-      template: command.template,
-    })).sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+    expect(
+      commands
+        .map((command) => ({
+          name: command.name,
+          description: command.description,
+          argumentHint: command.argumentHint,
+          template: command.template,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    ).toEqual([
       {
         name: "/fallback",
         description: "Run fallback prompt",
@@ -215,12 +227,15 @@ describe("prompt command discovery", () => {
       "/shared",
       "/steer",
     ]);
-    expect(definitions.find((definition) => definition.name === "/help")?.source)
-      .toBe("prompt");
-    expect(definitions.find((definition) => definition.name === "/steer"))
-      .toMatchObject({ source: "builtin", argumentHint: "<instructions>" });
-    expect(definitions.find((definition) => definition.name === "/shared"))
-      .toMatchObject({ source: "prompt", template: "Local shared prompt" });
+    expect(definitions.find((definition) => definition.name === "/help")?.source).toBe("prompt");
+    expect(definitions.find((definition) => definition.name === "/steer")).toMatchObject({
+      source: "builtin",
+      argumentHint: "<instructions>",
+    });
+    expect(definitions.find((definition) => definition.name === "/shared")).toMatchObject({
+      source: "prompt",
+      template: "Local shared prompt",
+    });
   });
 });
 
@@ -239,9 +254,9 @@ describe("prompt expansion and shaping", () => {
         cwd,
       ),
     ).toBe("preferred-stdout");
-    expect(
-      await runInlinePromptCommand("printf failed-stderr >&2; exit 4", cwd),
-    ).toBe("failed-stderr");
+    expect(await runInlinePromptCommand("printf failed-stderr >&2; exit 4", cwd)).toBe(
+      "failed-stderr",
+    );
   });
 
   test("does not expose managed GitHub credentials to repository prompt commands", async () => {
@@ -255,7 +270,7 @@ describe("prompt expansion and shaping", () => {
 
     try {
       const expanded = await expandPromptTemplate(
-        "Credential check: !`if [ -n \"${GITHUB_TOKEN:-}\" ] || [ -n \"${GH_TOKEN:-}\" ]; then printf exposed; else printf scrubbed; fi`",
+        'Credential check: !`if [ -n "${GITHUB_TOKEN:-}" ] || [ -n "${GH_TOKEN:-}" ]; then printf exposed; else printf scrubbed; fi`',
         "",
         cwd,
       );
@@ -300,13 +315,14 @@ describe("prompt expansion and shaping", () => {
     process.env.SHELL = "/bin/sh";
     process.env.ORKESTRATOR_RUNTIME_ENV_SCRIPT = join(cwd, "missing-runtime-env.sh");
 
-    expect(await expandPromptTemplate(
-      "Task: $ARGUMENTS\nFirst !`printf one`, second !`printf two`.",
-      "review",
-      cwd,
-    )).toBe("Task: review\nFirst one, second two.");
-    expect(await expandPromptTemplate("No substitutions", "unused", cwd))
-      .toBe("No substitutions");
+    expect(
+      await expandPromptTemplate(
+        "Task: $ARGUMENTS\nFirst !`printf one`, second !`printf two`.",
+        "review",
+        cwd,
+      ),
+    ).toBe("Task: review\nFirst one, second two.");
+    expect(await expandPromptTemplate("No substitutions", "unused", cwd)).toBe("No substitutions");
   });
 
   test("resolves build and plan modes and wraps only plan prompts", () => {
@@ -323,15 +339,18 @@ describe("prompt expansion and shaping", () => {
 
   test("builds bare text or ordered text-and-image user input", () => {
     expect(buildPromptInput("hello", [])).toBe("hello");
-    expect(buildPromptInput("hello", [
-      { type: "image", path: "/tmp/one.png", filename: "one.png" },
-      { type: "image", path: "/tmp/two.png", dataUrl: "data:image/png;base64,x" },
-    ])).toEqual([
+    expect(
+      buildPromptInput("hello", [
+        { type: "image", path: "/tmp/one.png", filename: "one.png" },
+        { type: "image", path: "/tmp/two.png", dataUrl: "data:image/png;base64,x" },
+      ]),
+    ).toEqual([
       { type: "text", text: "hello" },
       { type: "local_image", path: "/tmp/one.png" },
       { type: "local_image", path: "/tmp/two.png" },
     ]);
-    expect(buildPromptInput("", [{ type: "image", path: "/tmp/only.png" }]))
-      .toEqual([{ type: "local_image", path: "/tmp/only.png" }]);
+    expect(buildPromptInput("", [{ type: "image", path: "/tmp/only.png" }])).toEqual([
+      { type: "local_image", path: "/tmp/only.png" },
+    ]);
   });
 });

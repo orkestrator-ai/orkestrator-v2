@@ -45,11 +45,7 @@ export function createAcpClient(baseUrl: string, authToken: string): AcpClient {
   return { baseUrl: resolveGatewayLoopbackBaseUrl(baseUrl), authToken };
 }
 
-async function request<T>(
-  client: AcpClient,
-  pathname: string,
-  init?: RequestInit,
-): Promise<T> {
+async function request<T>(client: AcpClient, pathname: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${client.baseUrl}${pathname}`, {
     ...init,
     headers: {
@@ -61,7 +57,7 @@ async function request<T>(
       ...init?.headers,
     },
   });
-  const body = await response.json().catch(() => ({})) as { error?: string };
+  const body = (await response.json().catch(() => ({}))) as { error?: string };
   if (!response.ok) throw new Error(body.error || `ACP bridge request failed (${response.status})`);
   return body as T;
 }
@@ -71,8 +67,9 @@ export function createAcpSession(client: AcpClient): Promise<AcpSessionSnapshot>
 }
 
 export function getAcpSession(client: AcpClient, sessionId: string): Promise<AcpSessionSnapshot> {
-  return request<AcpSessionSnapshot>(client, `/session/${encodeURIComponent(sessionId)}`)
-    .then((session) => ({ ...session, composer: normalizeAcpComposer(session.composer) }));
+  return request<AcpSessionSnapshot>(client, `/session/${encodeURIComponent(sessionId)}`).then(
+    (session) => ({ ...session, composer: normalizeAcpComposer(session.composer) }),
+  );
 }
 
 /**
@@ -121,8 +118,9 @@ export function sendAcpPrompt(client: AcpClient, sessionId: string, prompt: stri
 }
 
 export function getAcpModels(client: AcpClient): Promise<NativeAgentComposerState["models"]> {
-  return request<{ models?: NativeAgentComposerState["models"] }>(client, "/global/models")
-    .then((response) => Array.isArray(response.models) ? response.models : []);
+  return request<{ models?: NativeAgentComposerState["models"] }>(client, "/global/models").then(
+    (response) => (Array.isArray(response.models) ? response.models : []),
+  );
 }
 
 export function setAcpSessionConfig(
@@ -135,17 +133,22 @@ export function setAcpSessionConfig(
     mode?: "build" | "plan";
   },
 ): Promise<NativeAgentComposerState> {
-  return request<NativeAgentComposerState>(client, `/session/${encodeURIComponent(sessionId)}/config`, {
-    method: "POST",
-    body: JSON.stringify(patch),
-  }).then((composer) => normalizeAcpComposer(composer));
+  return request<NativeAgentComposerState>(
+    client,
+    `/session/${encodeURIComponent(sessionId)}/config`,
+    {
+      method: "POST",
+      body: JSON.stringify(patch),
+    },
+  ).then((composer) => normalizeAcpComposer(composer));
 }
 
 export function normalizeAcpComposer(
   value: NativeAgentComposerState | undefined | null,
 ): NativeAgentComposerState {
-  return optionalAcpComposer(value)
-    ?? { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE, models: [], modes: [] };
+  return (
+    optionalAcpComposer(value) ?? { ...EMPTY_NATIVE_AGENT_COMPOSER_STATE, models: [], modes: [] }
+  );
 }
 
 /** `undefined` when there is nothing usable, so callers can keep what they hold. */
@@ -161,8 +164,10 @@ export function cancelAcpPrompt(client: AcpClient, sessionId: string): Promise<v
 }
 
 export function getAcpApprovals(client: AcpClient, sessionId: string): Promise<AcpApproval[]> {
-  return request<{ approvals: AcpApproval[] }>(client, `/session/${encodeURIComponent(sessionId)}/approvals`)
-    .then((response) => response.approvals);
+  return request<{ approvals: AcpApproval[] }>(
+    client,
+    `/session/${encodeURIComponent(sessionId)}/approvals`,
+  ).then((response) => response.approvals);
 }
 
 export function resolveAcpApproval(
@@ -171,10 +176,14 @@ export function resolveAcpApproval(
   approvalId: string,
   optionId?: string,
 ): Promise<void> {
-  return request(client, `/session/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`, {
-    method: "POST",
-    body: JSON.stringify(optionId ? { optionId } : {}),
-  });
+  return request(
+    client,
+    `/session/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify(optionId ? { optionId } : {}),
+    },
+  );
 }
 
 export function deleteAcpSession(client: AcpClient, sessionId: string): Promise<void> {

@@ -1,34 +1,8 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
-import {
-  githubIssueDetailKey,
-  useGitHubIssuesStore,
-} from "@/stores/githubIssuesStore";
-import type {
-  GitHubIssue,
-  GitHubIssueDetail,
-  GitHubIssueStatus,
-} from "@/types/github";
-import {
-  GitHubIssuesView,
-  resolveGitHubIssueDrop,
-} from "./GitHubIssuesView";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { githubIssueDetailKey, useGitHubIssuesStore } from "@/stores/githubIssuesStore";
+import type { GitHubIssue, GitHubIssueDetail, GitHubIssueStatus } from "@/types/github";
+import { GitHubIssuesView, resolveGitHubIssueDrop } from "./GitHubIssuesView";
 
 const repository = {
   owner: "acme",
@@ -88,19 +62,18 @@ describe("GitHubIssuesView", () => {
     changeStatusMock.mockResolvedValue(undefined);
     useGitHubIssuesStore.setState({
       ...originalState,
-      snapshots: new Map([[
-        "project-1",
-        {
-          repository,
-          viewer: { login: "reviewer" },
-          issues,
-        },
-      ]]),
-      details: new Map([
+      snapshots: new Map([
         [
-          githubIssueDetailKey("project-1", 2),
-          { ...issues[1], comments: [] } as GitHubIssueDetail,
+          "project-1",
+          {
+            repository,
+            viewer: { login: "reviewer" },
+            issues,
+          },
         ],
+      ]),
+      details: new Map([
+        [githubIssueDetailKey("project-1", 2), { ...issues[1], comments: [] } as GitHubIssueDetail],
       ]),
       loadingProjects: new Set(),
       loadingDetails: new Set(),
@@ -155,17 +128,11 @@ describe("GitHubIssuesView", () => {
     fireEvent.click(screen.getByRole("button", { name: /Refresh/ }));
     await waitFor(() => expect(loadIssuesMock).toHaveBeenCalledTimes(2));
 
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Status for issue #2" }),
-    );
+    fireEvent.click(screen.getByRole("combobox", { name: "Status for issue #2" }));
     fireEvent.click(await screen.findByRole("option", { name: "In Progress" }));
 
     await waitFor(() => {
-      expect(changeStatusMock).toHaveBeenCalledWith(
-        "project-1",
-        2,
-        "inprogress",
-      );
+      expect(changeStatusMock).toHaveBeenCalledWith("project-1", 2, "inprogress");
     });
   });
 
@@ -187,19 +154,16 @@ describe("GitHubIssuesView", () => {
 
     render(<GitHubIssuesView projectId="project-1" />);
 
-    expect(
-      (screen.getByRole("button", { name: /Refresh/ }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+    expect((screen.getByRole("button", { name: /Refresh/ }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   test("opens an issue in the in-app detail view and returns to the board", async () => {
     render(<GitHubIssuesView projectId="project-1" />);
 
     fireEvent.click(screen.getByText("Ready to start"));
-    expect(
-      await screen.findByRole("button", { name: "Back to GitHub issues" }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Back to GitHub issues" })).toBeTruthy();
     await waitFor(() => {
       expect(loadIssueMock).toHaveBeenCalledWith("project-1", 2);
     });
@@ -222,9 +186,7 @@ describe("GitHubIssuesView", () => {
 
   test("shows the authoritative status mutation failure on the board", () => {
     useGitHubIssuesStore.setState({
-      mutationErrors: new Map([
-        ["status:project-1:2", "Permission denied while moving issue"],
-      ]),
+      mutationErrors: new Map([["status:project-1:2", "Permission denied while moving issue"]]),
     });
 
     render(<GitHubIssuesView projectId="project-1" />);
@@ -242,10 +204,9 @@ describe("GitHubIssuesView", () => {
 
     act(() => {
       useGitHubIssuesStore.setState({
-        snapshots: new Map([[
-          "project-1",
-          { repository, viewer: { login: "reviewer" }, issues: [] },
-        ]]),
+        snapshots: new Map([
+          ["project-1", { repository, viewer: { login: "reviewer" }, issues: [] }],
+        ]),
         loadingProjects: new Set(),
       });
     });

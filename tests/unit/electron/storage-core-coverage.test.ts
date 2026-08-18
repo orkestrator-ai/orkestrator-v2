@@ -25,9 +25,7 @@ function configLockFor(storage: StorageService): Promise<() => Promise<void>> {
 }
 
 afterEach(async () => {
-  await Promise.all(
-    tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
 describe("StorageService core coverage", () => {
@@ -259,17 +257,13 @@ describe("StorageService core coverage", () => {
     );
 
     await storage.updateEnvironment(environment.id, { networkAccessMode: "invalid" });
-    expect((await storage.getEnvironment(environment.id))?.networkAccessMode).toBe(
-      "restricted",
-    );
+    expect((await storage.getEnvironment(environment.id))?.networkAccessMode).toBe("restricted");
 
     await storage.updateEnvironment(environment.id, { networkAccessMode: "full" });
     expect((await storage.getEnvironment(environment.id))?.networkAccessMode).toBe("full");
 
     await storage.updateEnvironment(environment.id, { networkAccessMode: "restricted" });
-    expect((await storage.getEnvironment(environment.id))?.networkAccessMode).toBe(
-      "restricted",
-    );
+    expect((await storage.getEnvironment(environment.id))?.networkAccessMode).toBe("restricted");
   });
 
   test("accepts only well-formed Claude model catalog snapshots", async () => {
@@ -281,17 +275,19 @@ describe("StorageService core coverage", () => {
     );
     const validCatalog = {
       environmentId: environment.id,
-      models: [{
-        id: "claude-sonnet",
-        name: "Claude Sonnet",
-        resolvedModel: "claude-sonnet-5",
-        description: "Balanced",
-        supportsFastMode: true,
-        supportsEffort: true,
-        supportsAdaptiveThinking: false,
-        supportsAutoMode: true,
-        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-      }],
+      models: [
+        {
+          id: "claude-sonnet",
+          name: "Claude Sonnet",
+          resolvedModel: "claude-sonnet-5",
+          description: "Balanced",
+          supportsFastMode: true,
+          supportsEffort: true,
+          supportsAdaptiveThinking: false,
+          supportsAutoMode: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+      ],
       source: "sdk",
       fetchedAt: new Date().toISOString(),
       stale: false,
@@ -303,8 +299,9 @@ describe("StorageService core coverage", () => {
     await storage.updateEnvironment(environment.id, {
       claudeModelCatalog: validCatalog,
     });
-    expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog)
-      .toEqual(validCatalog);
+    expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog).toEqual(
+      validCatalog,
+    );
 
     const invalidCatalogs: unknown[] = [
       [],
@@ -318,7 +315,10 @@ describe("StorageService core coverage", () => {
       { ...validCatalog, models: [{ ...validCatalog.models[0], resolvedModel: 1 }] },
       { ...validCatalog, models: [{ ...validCatalog.models[0], description: false }] },
       { ...validCatalog, models: [{ ...validCatalog.models[0], supportsFastMode: "yes" }] },
-      { ...validCatalog, models: [{ ...validCatalog.models[0], supportedEffortLevels: ["ultra"] }] },
+      {
+        ...validCatalog,
+        models: [{ ...validCatalog.models[0], supportedEffortLevels: ["ultra"] }],
+      },
       { ...validCatalog, sdkVersion: 1 },
       { ...validCatalog, cliVersion: false },
       { ...validCatalog, error: {} },
@@ -327,13 +327,13 @@ describe("StorageService core coverage", () => {
       await storage.updateEnvironment(environment.id, {
         claudeModelCatalog: invalidCatalog,
       });
-      expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog)
-        .toEqual(validCatalog);
+      expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog).toEqual(
+        validCatalog,
+      );
     }
 
     await storage.updateEnvironment(environment.id, { claudeModelCatalog: null });
-    expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog)
-      .toBeUndefined();
+    expect((await storage.getEnvironment(environment.id))?.claudeModelCatalog).toBeUndefined();
   });
 
   test("sets and clears the persisted GitHub token", async () => {
@@ -380,10 +380,7 @@ describe("StorageService core coverage", () => {
       await originalSaveJson(...args);
     };
     try {
-      await storage.setAllEnvironmentStatusesForContainer(
-        "missing-container",
-        "running",
-      );
+      await storage.setAllEnvironmentStatusesForContainer("missing-container", "running");
     } finally {
       storageInternals.saveJson = originalSaveJson;
     }

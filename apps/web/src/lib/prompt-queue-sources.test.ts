@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realBackend from "@/lib/backend";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
@@ -16,33 +8,19 @@ import type { PersistedPromptQueue } from "@/types";
 import { isPromptQueueActionError } from "@/lib/prompt-queue-errors";
 
 const realBackendSnapshot = { ...realBackend };
-const enqueuePromptQueueMessage = mock(
-  async (..._args: unknown[]): Promise<unknown> => undefined,
-);
-const requeuePromptQueueMessage = mock(
-  async (..._args: unknown[]): Promise<unknown> => undefined,
-);
-const removePromptQueueMessage = mock(
-  async (..._args: unknown[]): Promise<unknown> => undefined,
-);
-const movePromptQueueMessage = mock(
-  async (..._args: unknown[]): Promise<unknown> => undefined,
-);
-const claimPromptQueueHead = mock(
-  async (..._args: unknown[]): Promise<unknown> => undefined,
-);
+const enqueuePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
+const requeuePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
+const removePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
+const movePromptQueueMessage = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
+const claimPromptQueueHead = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
 const acknowledgePromptQueueClaim = mock(
   async (..._args: unknown[]): Promise<unknown> => undefined,
 );
-const rejectPromptQueueClaim = mock(
-  async (..._args: unknown[]): Promise<unknown> => undefined,
-);
+const rejectPromptQueueClaim = mock(async (..._args: unknown[]): Promise<unknown> => undefined);
 const transferPromptQueueMessageToComposeDraft = mock(
   async (..._args: unknown[]): Promise<unknown> => undefined,
 );
-const saveComposeDraft = mock(
-  async (..._args: unknown[]): Promise<unknown> => ({ revision: 8 }),
-);
+const saveComposeDraft = mock(async (..._args: unknown[]): Promise<unknown> => ({ revision: 8 }));
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -91,15 +69,16 @@ type TestQueuedMessage = {
 };
 
 function setClaudeProjection(messages: TestQueuedMessage[]): void {
-  (useClaudeStore as unknown as {
-    setState: (partial: { messageQueue: Map<string, TestQueuedMessage[]> }) => void;
-  }).setState({ messageQueue: new Map([["env-env-1:tab-1", messages]]) });
+  (
+    useClaudeStore as unknown as {
+      setState: (partial: { messageQueue: Map<string, TestQueuedMessage[]> }) => void;
+    }
+  ).setState({ messageQueue: new Map([["env-env-1:tab-1", messages]]) });
 }
 
 function getClaudeProjection(sessionKey: string): TestQueuedMessage[] | undefined {
   return (
-    useClaudeStore.getState().messageQueue as unknown as
-      Map<string, TestQueuedMessage[]>
+    useClaudeStore.getState().messageQueue as unknown as Map<string, TestQueuedMessage[]>
   ).get(sessionKey);
 }
 
@@ -135,8 +114,9 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const store of Object.values(stores)) {
-    (store as unknown as { setState: (partial: unknown) => void })
-      .setState({ messageQueue: new Map() });
+    (store as unknown as { setState: (partial: unknown) => void }).setState({
+      messageQueue: new Map(),
+    });
   }
 });
 
@@ -193,7 +173,6 @@ describe("store adapters", () => {
 
         expect(source.getQueues()).toBe(applied);
       });
-
     });
   }
 });
@@ -225,9 +204,7 @@ describe("backend mutation adapters", () => {
   const queueKey = `claude\u0000${sessionKey}`;
 
   test("enqueues and requeues using authoritative snapshots", async () => {
-    enqueuePromptQueueMessage.mockResolvedValueOnce(
-      snapshot(queueKey, "env-1", [{ id: "m1" }], 1),
-    );
+    enqueuePromptQueueMessage.mockResolvedValueOnce(snapshot(queueKey, "env-1", [{ id: "m1" }], 1));
     requeuePromptQueueMessage.mockResolvedValueOnce(
       snapshot(queueKey, "env-1", [{ id: "m0" }, { id: "m1" }], 2),
     );
@@ -235,20 +212,9 @@ describe("backend mutation adapters", () => {
     await enqueueAgentPrompt("claude", sessionKey, { id: "m1" });
     await requeueAgentPrompt("claude", sessionKey, { id: "m0" });
 
-    expect(enqueuePromptQueueMessage).toHaveBeenCalledWith(
-      queueKey,
-      "env-1",
-      { id: "m1" },
-    );
-    expect(requeuePromptQueueMessage).toHaveBeenCalledWith(
-      queueKey,
-      "env-1",
-      { id: "m0" },
-    );
-    expect(getClaudeProjection(sessionKey)).toEqual([
-      { id: "m0" },
-      { id: "m1" },
-    ]);
+    expect(enqueuePromptQueueMessage).toHaveBeenCalledWith(queueKey, "env-1", { id: "m1" });
+    expect(requeuePromptQueueMessage).toHaveBeenCalledWith(queueKey, "env-1", { id: "m0" });
+    expect(getClaudeProjection(sessionKey)).toEqual([{ id: "m0" }, { id: "m1" }]);
   });
 
   test("removes, moves, and transfers while applying returned snapshots", async () => {
@@ -274,14 +240,9 @@ describe("backend mutation adapters", () => {
     });
 
     await moveAgentPrompt("claude", sessionKey, "m2", "up");
-    await expect(removeAgentPrompt("claude", sessionKey, "m2"))
-      .resolves.toEqual({ id: "m2" });
+    await expect(removeAgentPrompt("claude", sessionKey, "m2")).resolves.toEqual({ id: "m2" });
     await expect(
-      transferAgentPromptToComposeDraft<TestQueuedMessage>(
-        "claude",
-        sessionKey,
-        "m1",
-      ),
+      transferAgentPromptToComposeDraft<TestQueuedMessage>("claude", sessionKey, "m1"),
     ).resolves.toEqual({ id: "m1", text: "edit", attachments: [] });
 
     expect(transferPromptQueueMessageToComposeDraft).toHaveBeenCalledWith(
@@ -306,9 +267,7 @@ describe("backend mutation adapters", () => {
     await moveAgentPrompt("claude", sessionKey, "ghost", "up");
     // A missing queue leaves the current move projection alone; the resource
     // change/hydration path owns deletion reconciliation.
-    expect(getClaudeProjection(sessionKey)).toEqual([
-      { id: "ghost" },
-    ]);
+    expect(getClaudeProjection(sessionKey)).toEqual([{ id: "ghost" }]);
 
     transferPromptQueueMessageToComposeDraft.mockResolvedValueOnce({
       removed: null,
@@ -343,10 +302,7 @@ describe("backend mutation adapters", () => {
     });
     await acknowledgeAgentPromptClaim("claude", sessionKey, "claim-1");
     await rejectAgentPromptClaim("claude", sessionKey, "claim-2");
-    expect(getClaudeProjection(sessionKey)).toEqual([
-      { id: "m1" },
-      { id: "m2" },
-    ]);
+    expect(getClaudeProjection(sessionKey)).toEqual([{ id: "m1" }, { id: "m2" }]);
   });
 
   test("rejects unknown agents and unscoped session keys without invoking backend", async () => {
@@ -364,21 +320,13 @@ describe("backend mutation adapters", () => {
       ["move", (agent, key) => moveAgentPrompt(agent, key, "m1", "up")],
       ["acknowledge", (agent, key) => acknowledgeAgentPromptClaim(agent, key, "token")],
       ["reject", (agent, key) => rejectAgentPromptClaim(agent, key, "token")],
-      [
-        "transfer",
-        (agent, key) => transferAgentPromptToComposeDraft(
-          agent as "claude",
-          key,
-          "m1",
-        ),
-      ],
+      ["transfer", (agent, key) => transferAgentPromptToComposeDraft(agent as "claude", key, "m1")],
     ];
 
     for (const [label, mutate] of mutations) {
-      await expect(
-        mutate("unknown", sessionKey),
-        `${label} with an unknown agent`,
-      ).rejects.toThrow("Unknown prompt queue agent");
+      await expect(mutate("unknown", sessionKey), `${label} with an unknown agent`).rejects.toThrow(
+        "Unknown prompt queue agent",
+      );
       await expect(
         mutate("claude", "unscoped"),
         `${label} with an unscoped session key`,
@@ -421,9 +369,9 @@ describe("backend mutation adapters", () => {
       "env-9",
       { id: "t1", text: "tmux prompt", attachments: [] },
     );
-    expect(
-      useClaudeTmuxStore.getState().getQueuedMessages(tmuxSessionKey),
-    ).toEqual([{ id: "t1", text: "tmux prompt", attachments: [] }]);
+    expect(useClaudeTmuxStore.getState().getQueuedMessages(tmuxSessionKey)).toEqual([
+      { id: "t1", text: "tmux prompt", attachments: [] },
+    ]);
   });
 
   test("syncs the compose draft revision cursor after a transfer", async () => {
@@ -446,12 +394,11 @@ describe("backend mutation adapters", () => {
 
     await transferAgentPromptToComposeDraft("claude", sessionKey, "m1");
 
-    await persistComposeDraft(
-      "claude:env-1:env-env-1%3Atab-1",
-      "environment",
-      "env-1",
-      { text: "edit", mentions: [], attachments: [] },
-    );
+    await persistComposeDraft("claude:env-1:env-env-1%3Atab-1", "environment", "env-1", {
+      text: "edit",
+      mentions: [],
+      attachments: [],
+    });
     expect(saveComposeDraft).toHaveBeenCalledWith(
       "claude:env-1:env-env-1%3Atab-1",
       "environment",
@@ -469,9 +416,7 @@ describe("backend mutation adapters", () => {
       draft: null,
     });
 
-    await expect(
-      transferAgentPromptToComposeDraft("claude", sessionKey, "m1"),
-    ).resolves.toBeNull();
+    await expect(transferAgentPromptToComposeDraft("claude", sessionKey, "m1")).resolves.toBeNull();
     expect(getClaudeProjection(sessionKey)).toEqual([{ id: "m1" }]);
   });
 
@@ -483,13 +428,13 @@ describe("backend mutation adapters", () => {
       new Error("Compose draft already exists"),
     );
 
-    const error = await transferAgentPromptToComposeDraft("claude", sessionKey, "m1")
-      .then(() => null, (thrown: unknown) => thrown);
+    const error = await transferAgentPromptToComposeDraft("claude", sessionKey, "m1").then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
 
     expect(isPromptQueueActionError(error)).toBe(true);
-    expect((error as Error).message).toContain(
-      "Send or clear it before editing a queued prompt",
-    );
+    expect((error as Error).message).toContain("Send or clear it before editing a queued prompt");
     expect(getClaudeProjection(sessionKey)).toEqual([{ id: "m1" }]);
   });
 
@@ -499,8 +444,10 @@ describe("backend mutation adapters", () => {
       new Error("Queue storage is unavailable"),
     );
 
-    const error = await transferAgentPromptToComposeDraft("claude", sessionKey, "m1")
-      .then(() => null, (thrown: unknown) => thrown);
+    const error = await transferAgentPromptToComposeDraft("claude", sessionKey, "m1").then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
 
     expect(isPromptQueueActionError(error)).toBe(false);
     expect((error as Error).message).toBe("Queue storage is unavailable");
@@ -509,11 +456,9 @@ describe("backend mutation adapters", () => {
   test("propagates backend rejection without changing the projection", async () => {
     setClaudeProjection([{ id: "current" }]);
     enqueuePromptQueueMessage.mockRejectedValueOnce(new Error("backend unavailable"));
-    await expect(
-      enqueueAgentPrompt("claude", sessionKey, { id: "new" }),
-    ).rejects.toThrow("backend unavailable");
-    expect(getClaudeProjection(sessionKey)).toEqual([
-      { id: "current" },
-    ]);
+    await expect(enqueueAgentPrompt("claude", sessionKey, { id: "new" })).rejects.toThrow(
+      "backend unavailable",
+    );
+    expect(getClaudeProjection(sessionKey)).toEqual([{ id: "current" }]);
   });
 });

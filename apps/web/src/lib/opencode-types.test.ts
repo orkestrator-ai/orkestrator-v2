@@ -1,26 +1,12 @@
-import { afterEach,describe,expect,mock,test } from "bun:test";
+import { afterEach, describe, expect, mock, test } from "bun:test";
 
-
-import {
-formatOpenCodeError,
-isOpenCodeMessageAbortedError
-} from "./opencode-client";
-
-
-
-
-
-
+import { formatOpenCodeError, isOpenCodeMessageAbortedError } from "./opencode-client";
 
 const originalFetch = globalThis.fetch;
-
-
 
 function setTestUrl(url: string): void {
   (window as unknown as Window & { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(url);
 }
-
-
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
@@ -28,8 +14,6 @@ afterEach(() => {
   setTestUrl("about:blank");
   mock.restore();
 });
-
-
 
 describe("opencode-client formatOpenCodeError", () => {
   test("redacts sensitive values from raw error details", () => {
@@ -45,10 +29,7 @@ describe("opencode-client formatOpenCodeError", () => {
           refresh_token: "refresh-secret",
           safeField: "safe-value",
         },
-        attempts: [
-          "Bearer array-secret",
-          { accessToken: "nested-array-secret" },
-        ],
+        attempts: ["Bearer array-secret", { accessToken: "nested-array-secret" }],
       },
     });
 
@@ -73,9 +54,11 @@ describe("opencode-client formatOpenCodeError", () => {
     expect(formatOpenCodeError(null)).toBe("An unknown error occurred");
     expect(formatOpenCodeError(new Error("offline"))).toContain("offline");
     expect(formatOpenCodeError({ data: { type: "TimeoutError" } })).toContain("TimeoutError");
-    expect(formatOpenCodeError({
-      data: { errorType: "RateLimit", message: "Try later" },
-    })).toStartWith("RateLimit: Try later");
+    expect(
+      formatOpenCodeError({
+        data: { errorType: "RateLimit", message: "Try later" },
+      }),
+    ).toStartWith("RateLimit: Try later");
   });
 
   test("handles circular details and truncates oversized raw errors", () => {
@@ -125,18 +108,20 @@ describe("opencode-client formatOpenCodeError", () => {
   });
 });
 
-
-
 describe("opencode-client isOpenCodeMessageAbortedError", () => {
   test("recognizes only the SDK's intentional-abort discriminator", () => {
-    expect(isOpenCodeMessageAbortedError({
-      name: "MessageAbortedError",
-      data: { message: "Aborted" },
-    })).toBe(true);
-    expect(isOpenCodeMessageAbortedError({
-      name: "UnknownError",
-      data: { message: "MessageAbortedError" },
-    })).toBe(false);
+    expect(
+      isOpenCodeMessageAbortedError({
+        name: "MessageAbortedError",
+        data: { message: "Aborted" },
+      }),
+    ).toBe(true);
+    expect(
+      isOpenCodeMessageAbortedError({
+        name: "UnknownError",
+        data: { message: "MessageAbortedError" },
+      }),
+    ).toBe(false);
     expect(isOpenCodeMessageAbortedError("MessageAbortedError: Aborted")).toBe(false);
     expect(isOpenCodeMessageAbortedError(null)).toBe(false);
     expect(isOpenCodeMessageAbortedError(undefined)).toBe(false);
@@ -160,10 +145,12 @@ describe("opencode-client isOpenCodeMessageAbortedError", () => {
   test("does not match a nested or differently-cased discriminator", () => {
     // Only the top-level `name` is the SDK's NamedError discriminator; a nested
     // copy is a real failure whose payload happens to mention the abort.
-    expect(isOpenCodeMessageAbortedError({
-      name: "ProviderError",
-      data: { name: "MessageAbortedError" },
-    })).toBe(false);
+    expect(
+      isOpenCodeMessageAbortedError({
+        name: "ProviderError",
+        data: { name: "MessageAbortedError" },
+      }),
+    ).toBe(false);
     expect(isOpenCodeMessageAbortedError({ name: "messageabortederror" })).toBe(false);
     expect(isOpenCodeMessageAbortedError({ data: { message: "Aborted" } })).toBe(false);
     expect(isOpenCodeMessageAbortedError([])).toBe(false);

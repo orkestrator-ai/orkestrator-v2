@@ -1,17 +1,8 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 import { DndContext } from "@dnd-kit/core";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { GitHubIssue } from "@/types/github";
-import {
-  GitHubIssueCard,
-  getGitHubStageLabel,
-} from "./GitHubIssueCard";
+import { GitHubIssueCard, getGitHubStageLabel } from "./GitHubIssueCard";
 
 const issue: GitHubIssue = {
   id: 101,
@@ -38,9 +29,7 @@ const issue: GitHubIssue = {
 describe("GitHubIssueCard", () => {
   beforeEach(cleanup);
 
-  function renderCard(
-    overrides: Partial<React.ComponentProps<typeof GitHubIssueCard>> = {},
-  ) {
+  function renderCard(overrides: Partial<React.ComponentProps<typeof GitHubIssueCard>> = {}) {
     const onOpen = mock(() => undefined);
     const onStatusChange = mock(() => undefined);
     render(
@@ -68,9 +57,7 @@ describe("GitHubIssueCard", () => {
     expect(screen.getByText("+1")).toBeTruthy();
     expect(screen.getByLabelText("3 comments")).toBeTruthy();
     expect(screen.getByLabelText("Assigned to grace")).toBeTruthy();
-    expect(
-      (screen.getByText("priority") as HTMLElement).style.color,
-    ).toBe("#6b7280");
+    expect((screen.getByText("priority") as HTMLElement).style.color).toBe("#6b7280");
   });
 
   test("opens the issue and changes its workflow status", async () => {
@@ -79,9 +66,7 @@ describe("GitHubIssueCard", () => {
     fireEvent.click(screen.getByText("Ship the issue workflow"));
     expect(onOpen).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(
-      screen.getByRole("combobox", { name: "Status for issue #42" }),
-    );
+    fireEvent.click(screen.getByRole("combobox", { name: "Status for issue #42" }));
     fireEvent.click(await screen.findByRole("option", { name: "Review" }));
 
     await waitFor(() => {
@@ -93,8 +78,7 @@ describe("GitHubIssueCard", () => {
     renderCard({ statusPending: true });
 
     expect(
-      (screen.getByRole("button", { name: "Drag issue #42" }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: "Drag issue #42" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(
       (

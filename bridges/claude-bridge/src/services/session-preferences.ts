@@ -11,15 +11,7 @@
 // a whole-file rewrite from one bridge could drop an entry another bridge had
 // just written, while per-session files never contend.
 
-import {
-  mkdir,
-  open,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { claudeSessionPreferencesDir } from "./claude-home.js";
 
@@ -54,8 +46,7 @@ export const MAX_DISPATCHED_REQUEST_IDS = 64;
  * SDK, but it also arrives via HTTP session ids; this keeps a hostile or
  * mangled id from ever being joined into a path.
  */
-const SDK_SESSION_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SDK_SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CLIENT_SESSION_BRIDGE_ID_PATTERN = /^session-client-[0-9a-f]{32}$/;
 
 function normalizedSessionId(sdkSessionId: string): string | null {
@@ -65,9 +56,7 @@ function normalizedSessionId(sdkSessionId: string): string | null {
 
 function preferencesPath(sdkSessionId: string): string | null {
   const normalized = normalizedSessionId(sdkSessionId);
-  return normalized
-    ? join(claudeSessionPreferencesDir(), `${normalized}.json`)
-    : null;
+  return normalized ? join(claudeSessionPreferencesDir(), `${normalized}.json`) : null;
 }
 
 /**
@@ -93,19 +82,17 @@ type LockSnapshot = {
 };
 
 function errorCode(error: unknown): string | undefined {
-  return error && typeof error === "object" && "code" in error
-    ? String(error.code)
-    : undefined;
+  return error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
 }
 
 function parseLockMetadata(raw: string): LockMetadata | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<LockMetadata>;
-    return typeof parsed.token === "string"
-        && parsed.token.length > 0
-        && typeof parsed.pid === "number"
-        && Number.isSafeInteger(parsed.pid)
-        && parsed.pid > 0
+    return typeof parsed.token === "string" &&
+      parsed.token.length > 0 &&
+      typeof parsed.pid === "number" &&
+      Number.isSafeInteger(parsed.pid) &&
+      parsed.pid > 0
       ? { token: parsed.token, pid: parsed.pid }
       : undefined;
   } catch {
@@ -141,11 +128,10 @@ function processIsAlive(pid: number): boolean {
 }
 
 function snapshotIsRecoverable(snapshot: LockSnapshot): boolean {
-  return Date.now() - snapshot.mtimeMs > PREFERENCE_LOCK_STALE_MS
-    && (
-      snapshot.metadata === undefined
-      || !processIsAlive(snapshot.metadata.pid)
-    );
+  return (
+    Date.now() - snapshot.mtimeMs > PREFERENCE_LOCK_STALE_MS &&
+    (snapshot.metadata === undefined || !processIsAlive(snapshot.metadata.pid))
+  );
 }
 
 /**
@@ -155,21 +141,19 @@ function snapshotIsRecoverable(snapshot: LockSnapshot): boolean {
  * one stale lock, only one may unlink that inode. The loser re-reads the main
  * lock instead of deleting a replacement the winner has already acquired.
  */
-async function recoverStaleLock(
-  lockPath: string,
-  candidate: LockSnapshot,
-): Promise<boolean> {
+async function recoverStaleLock(lockPath: string, candidate: LockSnapshot): Promise<boolean> {
   if (!snapshotIsRecoverable(candidate)) return false;
-  const recoveryPath =
-    `${lockPath}.recover-${candidate.dev}-${candidate.ino}`;
+  const recoveryPath = `${lockPath}.recover-${candidate.dev}-${candidate.ino}`;
   let recoveryHandle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     recoveryHandle = await open(recoveryPath, "wx", 0o600);
     try {
-      await recoveryHandle.writeFile(JSON.stringify({
-        token: crypto.randomUUID(),
-        pid: process.pid,
-      } satisfies LockMetadata));
+      await recoveryHandle.writeFile(
+        JSON.stringify({
+          token: crypto.randomUUID(),
+          pid: process.pid,
+        } satisfies LockMetadata),
+      );
     } catch (error) {
       await recoveryHandle.close().catch(() => {});
       recoveryHandle = undefined;
@@ -186,10 +170,10 @@ async function recoverStaleLock(
       if (abandoned && snapshotIsRecoverable(abandoned)) {
         const current = await readLockSnapshot(recoveryPath);
         if (
-          current
-          && current.dev === abandoned.dev
-          && current.ino === abandoned.ino
-          && snapshotIsRecoverable(current)
+          current &&
+          current.dev === abandoned.dev &&
+          current.ino === abandoned.ino &&
+          snapshotIsRecoverable(current)
         ) {
           await rm(recoveryPath, { force: true });
         }
@@ -203,10 +187,10 @@ async function recoverStaleLock(
   try {
     const current = await readLockSnapshot(lockPath);
     if (
-      current
-      && current.dev === candidate.dev
-      && current.ino === candidate.ino
-      && snapshotIsRecoverable(current)
+      current &&
+      current.dev === candidate.dev &&
+      current.ino === candidate.ino &&
+      snapshotIsRecoverable(current)
     ) {
       await rm(lockPath, { force: true });
       return true;
@@ -217,8 +201,8 @@ async function recoverStaleLock(
     try {
       const currentRecovery = await stat(recoveryPath);
       if (
-        currentRecovery.dev === acquiredRecovery.dev
-        && currentRecovery.ino === acquiredRecovery.ino
+        currentRecovery.dev === acquiredRecovery.dev &&
+        currentRecovery.ino === acquiredRecovery.ino
       ) {
         await rm(recoveryPath, { force: true });
       }
@@ -228,10 +212,7 @@ async function recoverStaleLock(
   }
 }
 
-async function withPreferenceFileLock<T>(
-  path: string,
-  operation: () => Promise<T>,
-): Promise<T> {
+async function withPreferenceFileLock<T>(path: string, operation: () => Promise<T>): Promise<T> {
   await mkdir(claudeSessionPreferencesDir(), { recursive: true });
   const lockPath = `${path}.lock`;
   const startedAt = Date.now();
@@ -240,10 +221,12 @@ async function withPreferenceFileLock<T>(
     try {
       handle = await open(lockPath, "wx", 0o600);
       try {
-        await handle.writeFile(JSON.stringify({
-          token: crypto.randomUUID(),
-          pid: process.pid,
-        } satisfies LockMetadata));
+        await handle.writeFile(
+          JSON.stringify({
+            token: crypto.randomUUID(),
+            pid: process.pid,
+          } satisfies LockMetadata),
+        );
       } catch (error) {
         await handle.close().catch(() => {});
         handle = undefined;
@@ -253,7 +236,7 @@ async function withPreferenceFileLock<T>(
     } catch (error) {
       if (errorCode(error) !== "EEXIST") throw error;
       const lockSnapshot = await readLockSnapshot(lockPath);
-      if (!lockSnapshot || await recoverStaleLock(lockPath, lockSnapshot)) continue;
+      if (!lockSnapshot || (await recoverStaleLock(lockPath, lockSnapshot))) continue;
       if (Date.now() - startedAt >= PREFERENCE_LOCK_TIMEOUT_MS) {
         throw new Error("Timed out waiting for session preference lock");
       }
@@ -274,10 +257,7 @@ async function withPreferenceFileLock<T>(
     // suspended. Never let that old owner unlink the replacement's live lock.
     try {
       const currentLock = await stat(lockPath);
-      if (
-        currentLock.dev === acquiredLock.dev
-        && currentLock.ino === acquiredLock.ino
-      ) {
+      if (currentLock.dev === acquiredLock.dev && currentLock.ino === acquiredLock.ino) {
         await rm(lockPath, { force: true });
       }
     } catch {
@@ -299,23 +279,18 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
   }
   const record = parsed as Record<string, unknown>;
   if (
-    Object.hasOwn(record, "clientSessionBridgeId")
-    && (
-      typeof record.clientSessionBridgeId !== "string"
-      || !CLIENT_SESSION_BRIDGE_ID_PATTERN.test(record.clientSessionBridgeId)
-    )
+    Object.hasOwn(record, "clientSessionBridgeId") &&
+    (typeof record.clientSessionBridgeId !== "string" ||
+      !CLIENT_SESSION_BRIDGE_ID_PATTERN.test(record.clientSessionBridgeId))
   ) {
     return undefined;
   }
-  if (
-    Object.hasOwn(record, "planMode")
-    && typeof record.planMode !== "boolean"
-  ) {
+  if (Object.hasOwn(record, "planMode") && typeof record.planMode !== "boolean") {
     return undefined;
   }
   if (
-    Object.hasOwn(record, "dispatchedRequestIds")
-    && !Array.isArray(record.dispatchedRequestIds)
+    Object.hasOwn(record, "dispatchedRequestIds") &&
+    !Array.isArray(record.dispatchedRequestIds)
   ) {
     return undefined;
   }
@@ -328,11 +303,7 @@ function parsePreferences(raw: string): SessionPreferences | undefined {
     const unique = new Set<string>();
     for (const value of record.dispatchedRequestIds) {
       const normalized = typeof value === "string" ? value.trim() : "";
-      if (
-        typeof value === "string"
-        && normalized.length > 0
-        && normalized.length <= 200
-      ) {
+      if (typeof value === "string" && normalized.length > 0 && normalized.length <= 200) {
         unique.add(normalized);
       }
     }
@@ -365,10 +336,14 @@ function unavailablePreferences(): SessionPreferences {
 export function sessionPreferencesUnavailable(
   preferences: SessionPreferences | undefined,
 ): boolean {
-  return preferences !== undefined
-    && (preferences as SessionPreferences & {
-      [UNAVAILABLE_PREFERENCES]?: boolean;
-    })[UNAVAILABLE_PREFERENCES] === true;
+  return (
+    preferences !== undefined &&
+    (
+      preferences as SessionPreferences & {
+        [UNAVAILABLE_PREFERENCES]?: boolean;
+      }
+    )[UNAVAILABLE_PREFERENCES] === true
+  );
 }
 
 /**
@@ -385,12 +360,7 @@ export async function readSessionPreferences(
   try {
     raw = await readFile(path, "utf-8");
   } catch (error) {
-    if (
-      error
-      && typeof error === "object"
-      && "code" in error
-      && error.code === "ENOENT"
-    ) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
       return undefined;
     }
     return unavailablePreferences();
@@ -398,10 +368,7 @@ export async function readSessionPreferences(
   return parsePreferences(raw) ?? unavailablePreferences();
 }
 
-async function writePreferencesFile(
-  path: string,
-  preferences: SessionPreferences,
-): Promise<void> {
+async function writePreferencesFile(path: string, preferences: SessionPreferences): Promise<void> {
   await mkdir(claudeSessionPreferencesDir(), { recursive: true });
   // Written via rename so a crash mid-write leaves either the old file or the
   // new one, never a truncated document the reader would treat as "never set".
@@ -470,10 +437,7 @@ export async function deleteSessionPreferences(sdkSessionId: string): Promise<vo
   const previous = pendingWrites.get(writeKey) ?? Promise.resolve();
   const deletion = previous
     .catch(() => {})
-    .then(() => withPreferenceFileLock(
-      path,
-      () => rm(path, { force: true }),
-    ));
+    .then(() => withPreferenceFileLock(path, () => rm(path, { force: true })));
   pendingWrites.set(writeKey, deletion);
   void deletion
     .finally(() => {

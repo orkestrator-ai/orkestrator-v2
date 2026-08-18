@@ -10,10 +10,12 @@ import {
 } from "./run-ios-simulator";
 
 const root = path.resolve(import.meta.dir, "..");
-const developerDirectory = process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
+const developerDirectory =
+  process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer";
 const project = path.join(root, "apps/ios/OrkestratorMobile.xcodeproj");
-const derivedData = process.env.ORKESTRATOR_IOS_TEST_DERIVED_DATA
-  ?? path.join(process.env.TMPDIR ?? "/tmp", "orkestrator-mobile-test-derived");
+const derivedData =
+  process.env.ORKESTRATOR_IOS_TEST_DERIVED_DATA ??
+  path.join(process.env.TMPDIR ?? "/tmp", "orkestrator-mobile-test-derived");
 
 function fail(message: string): never {
   console.error(`[iOS tests] ${message}`);
@@ -46,23 +48,35 @@ try {
 
 const configuredDeviceName = process.env.ORKESTRATOR_IOS_SIMULATOR;
 const deviceName = configuredDeviceName ?? "iPhone 17 Pro";
-const selected = selectSimulatorDevice(simulatorList, deviceName)
-  ?? (configuredDeviceName ? undefined : selectFirstAvailableSimulator(simulatorList));
+const selected =
+  selectSimulatorDevice(simulatorList, deviceName) ??
+  (configuredDeviceName ? undefined : selectFirstAvailableSimulator(simulatorList));
 if (!selected) {
-  fail(`No available simulator named "${deviceName}". Available: ${availableSimulatorNames(simulatorList).join(", ")}`);
+  fail(
+    `No available simulator named "${deviceName}". Available: ${availableSimulatorNames(simulatorList).join(", ")}`,
+  );
 }
 
-const result = spawnSync("xcodebuild", [
-  "-project", project,
-  "-scheme", "OrkestratorMobile",
-  "-configuration", "Debug",
-  "-destination", `id=${selected.udid}`,
-  "-derivedDataPath", derivedData,
-  "test",
-], {
-  cwd: root,
-  env: { ...process.env, DEVELOPER_DIR: developerDirectory },
-  stdio: "inherit",
-});
+const result = spawnSync(
+  "xcodebuild",
+  [
+    "-project",
+    project,
+    "-scheme",
+    "OrkestratorMobile",
+    "-configuration",
+    "Debug",
+    "-destination",
+    `id=${selected.udid}`,
+    "-derivedDataPath",
+    derivedData,
+    "test",
+  ],
+  {
+    cwd: root,
+    env: { ...process.env, DEVELOPER_DIR: developerDirectory },
+    stdio: "inherit",
+  },
+);
 if (result.error) fail(result.error.message);
 if (result.status !== 0) process.exit(result.status ?? 1);

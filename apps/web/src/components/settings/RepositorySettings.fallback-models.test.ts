@@ -20,20 +20,12 @@ describe("RepositorySettings FALLBACK_CLAUDE_MODELS", () => {
     for (const id of ["default", "opus[1m]", "claude-fable-5[1m]", "sonnet"]) {
       const model = FALLBACK_CLAUDE_MODELS.find((m) => m.id === id);
       expect(model?.supportsEffort).toBe(true);
-      expect(model?.supportedEffortLevels).toEqual([
-        "low",
-        "medium",
-        "high",
-        "xhigh",
-        "max",
-      ]);
+      expect(model?.supportedEffortLevels).toEqual(["low", "medium", "high", "xhigh", "max"]);
     }
   });
 
   test("Haiku is the non-reasoning tier", () => {
-    const haiku = FALLBACK_CLAUDE_MODELS.find(
-      (m) => m.id === "haiku",
-    );
+    const haiku = FALLBACK_CLAUDE_MODELS.find((m) => m.id === "haiku");
     expect(haiku?.supportsEffort).toBeUndefined();
   });
 

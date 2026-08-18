@@ -34,6 +34,8 @@ describe("gateway token validation", () => {
     const header = gatewayTokenCookieHeader("valid token value 123");
     expect(header).toContain("orkestrator_gateway_auth=valid%20token%20value%20123");
     expect(header).toContain("HttpOnly; SameSite=Strict; Path=/");
-    expect(new TextEncoder().encode(header).byteLength).toBeLessThanOrEqual(GATEWAY_COOKIE_MAX_BYTES);
+    expect(new TextEncoder().encode(header).byteLength).toBeLessThanOrEqual(
+      GATEWAY_COOKIE_MAX_BYTES,
+    );
   });
 });

@@ -18,8 +18,7 @@ export const AGENT_SKILL_PROVIDERS = ["claude", "codex", "cursor", "grok", "open
 export type AgentSkillProvider = (typeof AGENT_SKILL_PROVIDERS)[number];
 
 export function isAgentSkillProvider(value: unknown): value is AgentSkillProvider {
-  return typeof value === "string"
-    && (AGENT_SKILL_PROVIDERS as readonly string[]).includes(value);
+  return typeof value === "string" && (AGENT_SKILL_PROVIDERS as readonly string[]).includes(value);
 }
 
 /**
@@ -30,7 +29,14 @@ export function isAgentSkillProvider(value: unknown): value is AgentSkillProvide
  */
 export type AgentSkillScope = "project" | "admin" | "user" | "shared" | "system" | "plugin";
 
-const SCOPE_ORDER: readonly AgentSkillScope[] = ["project", "admin", "user", "shared", "system", "plugin"];
+const SCOPE_ORDER: readonly AgentSkillScope[] = [
+  "project",
+  "admin",
+  "user",
+  "shared",
+  "system",
+  "plugin",
+];
 
 export interface AgentSkillRoot {
   /** Absolute path of the directory holding `<name>/SKILL.md`. */
@@ -132,7 +138,9 @@ function opencodeConfigHome(): string {
   // See codexHome(): tests must not escape into the host's XDG config tree.
   if (homeOverride !== undefined) return path.join(homeOverride, ".config", "opencode");
   const xdg = process.env.XDG_CONFIG_HOME?.trim();
-  return xdg ? path.join(path.resolve(xdg), "opencode") : path.join(homeDir(), ".config", "opencode");
+  return xdg
+    ? path.join(path.resolve(xdg), "opencode")
+    : path.join(homeDir(), ".config", "opencode");
 }
 
 /** `/Users/me/.claude/skills` -> `~/.claude/skills`, for display only. */
@@ -209,7 +217,9 @@ async function readJsonFile(filePath: string): Promise<unknown> {
  * globbing would list the same skill two or three times.
  */
 async function claudePluginRoots(): Promise<RootSpec[]> {
-  const manifest = await readJsonFile(path.join(homeDir(), ".claude", "plugins", "installed_plugins.json"));
+  const manifest = await readJsonFile(
+    path.join(homeDir(), ".claude", "plugins", "installed_plugins.json"),
+  );
   if (!manifest || typeof manifest !== "object") return [];
   const plugins = (manifest as { plugins?: unknown }).plugins;
   if (!plugins || typeof plugins !== "object") return [];
@@ -243,7 +253,9 @@ async function claudePluginRoots(): Promise<RootSpec[]> {
  * not worth it, so this reads just the table headers and their `enabled` flag.
  * A plugin we fail to recognise is simply not listed — never listed as enabled.
  */
-async function codexEnabledPlugins(configPath: string): Promise<Array<{ plugin: string; marketplace: string }>> {
+async function codexEnabledPlugins(
+  configPath: string,
+): Promise<Array<{ plugin: string; marketplace: string }>> {
   let raw: string;
   try {
     raw = await fs.readFile(configPath, "utf8");
@@ -377,11 +389,12 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
   const agentsSkills = path.join(home, ".agents", "skills");
 
   if (provider === "claude") {
-    const managed = process.platform === "darwin"
-      ? "/Library/Application Support/ClaudeCode/skills"
-      : process.platform === "win32"
-        ? path.join(process.env.PROGRAMDATA || "C:\\ProgramData", "ClaudeCode", "skills")
-        : "/etc/claude-code/skills";
+    const managed =
+      process.platform === "darwin"
+        ? "/Library/Application Support/ClaudeCode/skills"
+        : process.platform === "win32"
+          ? path.join(process.env.PROGRAMDATA || "C:\\ProgramData", "ClaudeCode", "skills")
+          : "/etc/claude-code/skills";
     return [
       // Fixed machine roots would make synthetic-home tests inspect the host.
       ...(homeOverride !== undefined ? [] : [{ path: managed, scope: "admin" as const }]),
@@ -409,7 +422,12 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
       { path: path.join(home, ".cursor", "skills-cursor"), scope: "system", recursive: true },
       { path: agentsSkills, scope: "shared", recursive: true },
       { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
-      { path: path.join(codexHome(), "skills"), scope: "shared", skip: [".system"], recursive: true },
+      {
+        path: path.join(codexHome(), "skills"),
+        scope: "shared",
+        skip: [".system"],
+        recursive: true,
+      },
     ];
   }
 
@@ -479,8 +497,8 @@ export function parseSkillFrontmatter(head: string): { name?: string; descriptio
       index = cursor - 1;
       value = body.join(" ").replace(/\s+/g, " ").trim();
     } else if (
-      (value.startsWith('"') && value.endsWith('"') && value.length > 1)
-      || (value.startsWith("'") && value.endsWith("'") && value.length > 1)
+      (value.startsWith('"') && value.endsWith('"') && value.length > 1) ||
+      (value.startsWith("'") && value.endsWith("'") && value.length > 1)
     ) {
       value = value.slice(1, -1);
     }
@@ -706,11 +724,13 @@ export async function scanAgentSkills(provider: AgentSkillProvider): Promise<Age
 
   // Alphabetical by name; within a duplicated name the copy that actually loads
   // comes first, so the shadowed one reads as the alternative beneath it.
-  skills.sort((a, b) =>
-    a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
-    || Number(a.shadowed) - Number(b.shadowed)
-    || SCOPE_ORDER.indexOf(a.scope) - SCOPE_ORDER.indexOf(b.scope)
-    || a.location.localeCompare(b.location));
+  skills.sort(
+    (a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }) ||
+      Number(a.shadowed) - Number(b.shadowed) ||
+      SCOPE_ORDER.indexOf(a.scope) - SCOPE_ORDER.indexOf(b.scope) ||
+      a.location.localeCompare(b.location),
+  );
 
   return {
     provider,
@@ -740,7 +760,8 @@ export async function readAgentSkillFile(
 ): Promise<AgentSkillFile> {
   if (!path.isAbsolute(filePath)) throw new Error("Expected filePath to be absolute");
   const normalized = path.normalize(filePath);
-  if (path.basename(normalized) !== "SKILL.md") throw new Error("Expected filePath to be a SKILL.md");
+  if (path.basename(normalized) !== "SKILL.md")
+    throw new Error("Expected filePath to be a SKILL.md");
 
   const specs = await rootSpecsFor(provider);
   // The separator is load-bearing: without it `~/.claude/skills-evil/x/SKILL.md`
@@ -759,12 +780,7 @@ export async function readAgentSkillFile(
     const capacity = Math.min(size + 1, MAX_SKILL_FILE_BYTES + 1);
     buffer = Buffer.alloc(capacity);
     while (bytesRead < buffer.byteLength) {
-      const result = await handle.read(
-        buffer,
-        bytesRead,
-        buffer.byteLength - bytesRead,
-        bytesRead,
-      );
+      const result = await handle.read(buffer, bytesRead, buffer.byteLength - bytesRead, bytesRead);
       if (result.bytesRead === 0) break;
       bytesRead += result.bytesRead;
     }

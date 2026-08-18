@@ -1,6 +1,20 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { readAgentSkillFile, scanAgentSkills, commandExists, homePath, pathExists } from "./commands-dependencies.js";
-import { asString, asAgentSkillProvider, assertOnlyKeys, runEnvironmentAgentSkills, hasPackagedOrPathBinary, hasManagedAcpBinary, getContainerGitHubCredentialStatus } from "./commands-helpers.js";
+import {
+  readAgentSkillFile,
+  scanAgentSkills,
+  commandExists,
+  homePath,
+  pathExists,
+} from "./commands-dependencies.js";
+import {
+  asString,
+  asAgentSkillProvider,
+  assertOnlyKeys,
+  runEnvironmentAgentSkills,
+  hasPackagedOrPathBinary,
+  hasManagedAcpBinary,
+  getContainerGitHubCredentialStatus,
+} from "./commands-helpers.js";
 
 export function registerToolingCommands(
   register: CommandRegistrar,
@@ -26,11 +40,7 @@ export function registerToolingCommands(
     );
   });
   register("list_environment_agent_skills", async (args, context) => {
-    assertOnlyKeys(
-      args,
-      ["environmentId", "provider"],
-      "list_environment_agent_skills argument",
-    );
+    assertOnlyKeys(args, ["environmentId", "provider"], "list_environment_agent_skills argument");
     const environmentId = asString(args.environmentId, "environmentId");
     const environment = await context.storage.getEnvironment(environmentId);
     if (!environment) throw new Error(`Environment not found: ${environmentId}`);
@@ -60,8 +70,11 @@ export function registerToolingCommands(
   });
 
   register("has_claude_credentials", (_args, context) => {
-    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude")) return false;
-    return pathExists(homePath(".claude", ".credentials.json")).then(async (exists) => exists || pathExists(homePath(".claude.json")));
+    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude"))
+      return false;
+    return pathExists(homePath(".claude", ".credentials.json")).then(
+      async (exists) => exists || pathExists(homePath(".claude.json")),
+    );
   });
   register("get_credential_status", async (_args, context) => ({
     available: await commands.get("has_claude_credentials")?.({}, context),
@@ -69,7 +82,8 @@ export function registerToolingCommands(
   }));
   register("check_claude_cli", (_args, context) => hasPackagedOrPathBinary(context, "claude"));
   register("check_claude_config", (_args, context) => {
-    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude")) return false;
+    if (context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("claude"))
+      return false;
     return pathExists(homePath(".claude.json"));
   });
   register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
@@ -81,25 +95,28 @@ export function registerToolingCommands(
   register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
   register("check_github_cli", () => commandExists("gh"));
   register("get_container_github_credential_status", async (_args, context) =>
-    getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global));
-  register("check_any_ai_cli", async (_args, context) =>
-    await hasPackagedOrPathBinary(context, "claude")
-    || await hasPackagedOrPathBinary(context, "opencode")
-    || await hasPackagedOrPathBinary(context, "codex")
-    || await hasManagedAcpBinary(context, "cursor")
-    || await hasManagedAcpBinary(context, "grok"));
+    getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global),
+  );
+  register(
+    "check_any_ai_cli",
+    async (_args, context) =>
+      (await hasPackagedOrPathBinary(context, "claude")) ||
+      (await hasPackagedOrPathBinary(context, "opencode")) ||
+      (await hasPackagedOrPathBinary(context, "codex")) ||
+      (await hasManagedAcpBinary(context, "cursor")) ||
+      (await hasManagedAcpBinary(context, "grok")),
+  );
   register("get_available_ai_cli", async (_args, context) =>
-    await hasPackagedOrPathBinary(context, "claude")
+    (await hasPackagedOrPathBinary(context, "claude"))
       ? "claude"
-      : await hasPackagedOrPathBinary(context, "opencode")
+      : (await hasPackagedOrPathBinary(context, "opencode"))
         ? "opencode"
-        : await hasPackagedOrPathBinary(context, "codex")
+        : (await hasPackagedOrPathBinary(context, "codex"))
           ? "codex"
-          : await hasManagedAcpBinary(context, "cursor")
+          : (await hasManagedAcpBinary(context, "cursor"))
             ? "cursor"
-            : await hasManagedAcpBinary(context, "grok")
+            : (await hasManagedAcpBinary(context, "grok"))
               ? "grok"
-              : null);
-
-
+              : null,
+  );
 }

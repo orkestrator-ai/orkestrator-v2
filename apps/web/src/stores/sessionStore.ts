@@ -51,13 +51,10 @@ interface SessionState {
     environmentId: string,
     containerId: string,
     tabId: string,
-    sessionType: SessionType
+    sessionType: SessionType,
   ) => Promise<Session>;
   /** Update session status */
-  updateSessionStatus: (
-    sessionId: string,
-    status: SessionStatus
-  ) => Promise<void>;
+  updateSessionStatus: (sessionId: string, status: SessionStatus) => Promise<void>;
   /** Update session activity timestamp */
   updateSessionActivity: (sessionId: string) => Promise<void>;
   /** Delete a session */
@@ -73,10 +70,7 @@ interface SessionState {
   /** Load session buffer from file */
   loadSessionBuffer: (sessionId: string) => Promise<string | null>;
   /** Sync sessions with container state */
-  syncSessionsWithContainer: (
-    environmentId: string,
-    containerRunning: boolean
-  ) => Promise<void>;
+  syncSessionsWithContainer: (environmentId: string, containerRunning: boolean) => Promise<void>;
   /** Reorder sessions within an environment */
   reorderSessions: (environmentId: string, sessionIds: string[]) => Promise<void>;
   /** Clear all sessions from the store (doesn't delete from backend) */
@@ -128,8 +122,8 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         // reordered but identical record would publish a spurious update) and
         // erases undefined-valued fields (a cleared field would be dropped).
         const unchanged =
-          existing.length === sessions.length
-          && sessions.every((session) => {
+          existing.length === sessions.length &&
+          sessions.every((session) => {
             const current = existingById.get(session.id);
             return current !== undefined && deepEqualJson(current, session);
           });
@@ -181,12 +175,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   },
 
   createSession: async (environmentId, containerId, tabId, sessionType) => {
-    const session = await apiCreateSession(
-      environmentId,
-      containerId,
-      tabId,
-      sessionType
-    );
+    const session = await apiCreateSession(environmentId, containerId, tabId, sessionType);
     set((state) => {
       const newSessions = new Map(state.sessions);
       newSessions.set(session.id, session);
@@ -359,10 +348,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
 
   syncSessionsWithContainer: async (environmentId, containerRunning) => {
     try {
-      const sessions = await apiSyncSessionsWithContainer(
-        environmentId,
-        containerRunning
-      );
+      const sessions = await apiSyncSessionsWithContainer(environmentId, containerRunning);
       set((state) => {
         const newSessions = new Map(state.sessions);
         // Clear existing sessions for this environment first
@@ -447,13 +433,12 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   // Selectors
   getSessionsByEnvironment: (environmentId) => {
     const sessions = Array.from(get().sessions.values()).filter(
-      (s) => s.environmentId === environmentId
+      (s) => s.environmentId === environmentId,
     );
     return sortByOrder(sessions);
   },
 
   getSession: (sessionId) => get().sessions.get(sessionId),
 
-  isLoadingEnvironment: (environmentId) =>
-    get().loadingEnvironments.has(environmentId),
+  isLoadingEnvironment: (environmentId) => get().loadingEnvironments.has(environmentId),
 }));

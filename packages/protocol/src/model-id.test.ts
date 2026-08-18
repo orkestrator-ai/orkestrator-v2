@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 
 test("the model helpers are available through the package export", async () => {
   const exported = await import("@orkestrator/protocol/model-id");

@@ -44,8 +44,8 @@ const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
 
 function mockFetchJson(data: unknown, status = 200) {
-  globalThis.fetch = mock(async () =>
-    new Response(JSON.stringify(data), { status })
+  globalThis.fetch = mock(
+    async () => new Response(JSON.stringify(data), { status }),
   ) as unknown as typeof fetch;
 }
 
@@ -56,9 +56,7 @@ function mockFetchError() {
 }
 
 function mockFetchStatus(status: number) {
-  globalThis.fetch = mock(async () =>
-    new Response(null, { status })
-  ) as unknown as typeof fetch;
+  globalThis.fetch = mock(async () => new Response(null, { status })) as unknown as typeof fetch;
 }
 
 function mockFetchSequence(steps: Array<Response | Error>) {
@@ -110,16 +108,12 @@ describe("claude-client", () => {
         });
       }) as unknown as typeof fetch;
 
-      const authenticated = createClient(
-        "http://127.0.0.1:5000",
-        "claude-secret",
-      );
+      const authenticated = createClient("http://127.0.0.1:5000", "claude-secret");
       await getModels(authenticated);
 
       expect(requests).toHaveLength(1);
       expect(requests[0]?.url).toBe("http://127.0.0.1:5000/config/models");
-      expect(requests[0]?.headers.get("x-orkestrator-claude-token"))
-        .toBe("claude-secret");
+      expect(requests[0]?.headers.get("x-orkestrator-claude-token")).toBe("claude-secret");
     });
   });
 
@@ -212,7 +206,15 @@ describe("claude-client", () => {
 
   describe("listSessions", () => {
     test("returns sessions array on success", async () => {
-      const sessions = [{ id: "s-1", title: "A", status: "idle" as const, createdAt: "2026-01-01", lastActivity: "2026-01-01" }];
+      const sessions = [
+        {
+          id: "s-1",
+          title: "A",
+          status: "idle" as const,
+          createdAt: "2026-01-01",
+          lastActivity: "2026-01-01",
+        },
+      ];
       mockFetchJson({ sessions });
       const result = await listSessions(client);
       expect(result).toEqual(sessions);
@@ -231,7 +233,13 @@ describe("claude-client", () => {
 
   describe("getSession", () => {
     test("returns session details on success", async () => {
-      const session = { id: "s-1", title: "A", status: "idle" as const, createdAt: "2026-01-01", lastActivity: "2026-01-01" };
+      const session = {
+        id: "s-1",
+        title: "A",
+        status: "idle" as const,
+        createdAt: "2026-01-01",
+        lastActivity: "2026-01-01",
+      };
       mockFetchJson(session);
       const result = await getSession(client, "s-1");
       expect(result).toEqual(session);
@@ -320,10 +328,7 @@ describe("claude-client", () => {
         [{ planMode: "yes" }, "planMode"],
         [{ turnStartedAt: "yesterday-ish" }, "turnStartedAt"],
         [{ backgroundTasks: "none" }, "backgroundTasks"],
-        [
-          { completionBlockedByBackgroundTasks: "yes" },
-          "completionBlockedByBackgroundTasks",
-        ],
+        [{ completionBlockedByBackgroundTasks: "yes" }, "completionBlockedByBackgroundTasks"],
       ] as const) {
         mockFetchJson({ ...base, ...malformed });
         const result = await lookupSession(client, "s-1");
@@ -450,12 +455,14 @@ describe("claude-client", () => {
         status: "running",
         createdAt: "2026-01-01",
         lastActivity: "2026-01-01",
-        rateLimits: [{
-          label: "Five Hour",
-          usedPercent: 17,
-          resetsAt: "2026-08-04T10:00:00.000Z",
-          windowMinutes: 300,
-        }],
+        rateLimits: [
+          {
+            label: "Five Hour",
+            usedPercent: 17,
+            resetsAt: "2026-08-04T10:00:00.000Z",
+            windowMinutes: 300,
+          },
+        ],
       });
 
       const result = await lookupSession(client, "s-1");
@@ -463,12 +470,14 @@ describe("claude-client", () => {
         kind: "found",
         session: {
           contextUsage: undefined,
-          rateLimits: [{
-            label: "Five Hour",
-            usedPercent: 17,
-            resetsAt: "2026-08-04T10:00:00.000Z",
-            windowMinutes: 300,
-          }],
+          rateLimits: [
+            {
+              label: "Five Hour",
+              usedPercent: 17,
+              resetsAt: "2026-08-04T10:00:00.000Z",
+              windowMinutes: 300,
+            },
+          ],
         },
       });
     });
@@ -528,13 +537,9 @@ describe("claude-client", () => {
       expect(result).toMatchObject({
         kind: "found",
         session: {
-          rateLimits: [
-            { label: "Five Hour", usedPercent: 18, windowMinutes: 300 },
-          ],
+          rateLimits: [{ label: "Five Hour", usedPercent: 18, windowMinutes: 300 }],
           contextUsage: {
-            rateLimits: [
-              { label: "Five Hour", usedPercent: 18, windowMinutes: 300 },
-            ],
+            rateLimits: [{ label: "Five Hour", usedPercent: 18, windowMinutes: 300 }],
           },
           invalidMetadataFields: ["rateLimits"],
         },
@@ -594,23 +599,12 @@ describe("claude-client", () => {
         return new Response(JSON.stringify({ planMode: true }), { status: 200 });
       }) as unknown as typeof fetch;
 
-      const authenticatedClient = createClient(
-        "http://127.0.0.1:4001",
-        "bridge-token",
-      );
-      await updateSessionPreferences(
-        authenticatedClient,
-        "session-1",
-        { planMode: true },
-      );
+      const authenticatedClient = createClient("http://127.0.0.1:4001", "bridge-token");
+      await updateSessionPreferences(authenticatedClient, "session-1", { planMode: true });
 
-      expect(request?.url).toBe(
-        "http://127.0.0.1:4001/session/session-1/preferences",
-      );
+      expect(request?.url).toBe("http://127.0.0.1:4001/session/session-1/preferences");
       expect(request?.method).toBe("PUT");
-      expect(request?.headers.get("X-Orkestrator-Claude-Token")).toBe(
-        "bridge-token",
-      );
+      expect(request?.headers.get("X-Orkestrator-Claude-Token")).toBe("bridge-token");
       expect(await request?.json()).toEqual({ planMode: true });
     });
 
@@ -628,26 +622,20 @@ describe("claude-client", () => {
         return new Response(null, { status: requests.length === 1 ? 204 : 404 });
       }) as unknown as typeof fetch;
 
-      const authenticatedClient = createClient(
-        "http://127.0.0.1:4001",
-        "bridge-token",
-      );
+      const authenticatedClient = createClient("http://127.0.0.1:4001", "bridge-token");
       await dismissPromptSuggestion(authenticatedClient, "session-1");
       await dismissPromptSuggestion(authenticatedClient, "session-1");
       expect(requests.map((request) => request.method)).toEqual(["DELETE", "DELETE"]);
       expect(
         requests.every(
-          (request) =>
-            request.headers.get("X-Orkestrator-Claude-Token") === "bridge-token",
+          (request) => request.headers.get("X-Orkestrator-Claude-Token") === "bridge-token",
         ),
       ).toBe(true);
     });
 
     test("reports non-404 suggestion dismissal failures", async () => {
       mockFetchStatus(500);
-      await expect(
-        dismissPromptSuggestion(client, "session-1"),
-      ).rejects.toThrow("HTTP 500");
+      await expect(dismissPromptSuggestion(client, "session-1")).rejects.toThrow("HTTP 500");
     });
   });
 
@@ -690,22 +678,26 @@ describe("claude-client", () => {
         estimated: false,
         source: "provider" as const,
         updatedAt: "2026-07-28T12:00:00.000Z",
-        rateLimits: [{
-          label: "Five Hour",
-          usedPercent: 21,
-          resetsAt: "2026-07-28T17:00:00.000Z",
-          windowMinutes: 300,
-        }],
+        rateLimits: [
+          {
+            label: "Five Hour",
+            usedPercent: 21,
+            resetsAt: "2026-07-28T17:00:00.000Z",
+            windowMinutes: 300,
+          },
+        ],
         credits: {
           hasCredits: true,
           unlimited: false,
           balance: "10.00",
         },
-        contextCategories: [{
-          name: "system",
-          tokens: 10,
-          color: "#abcdef",
-        }],
+        contextCategories: [
+          {
+            name: "system",
+            tokens: 10,
+            color: "#abcdef",
+          },
+        ],
       };
 
       expect(parseClaudeContextUsage(complete)).toEqual(complete);
@@ -713,27 +705,28 @@ describe("claude-client", () => {
 
     test("drops malformed string, boolean, and category metadata independently", () => {
       const dropped: string[] = [];
-      expect(parseClaudeContextUsage({
-        ...usage,
-        modelId: 42,
-        updatedAt: false,
-        estimated: "no",
-        contextCategories: "system",
-      }, dropped)).toEqual({
+      expect(
+        parseClaudeContextUsage(
+          {
+            ...usage,
+            modelId: 42,
+            updatedAt: false,
+            estimated: "no",
+            contextCategories: "system",
+          },
+          dropped,
+        ),
+      ).toEqual({
         ...usage,
         contextCategories: undefined,
       });
-      expect(dropped.sort()).toEqual([
-        "contextCategories",
-        "estimated",
-        "modelId",
-        "updatedAt",
-      ]);
+      expect(dropped.sort()).toEqual(["contextCategories", "estimated", "modelId", "updatedAt"]);
     });
 
     test("rejects only the required numeric triple", () => {
-      expect(parseClaudeContextUsage({ ...usage, percentUsed: Number.POSITIVE_INFINITY }))
-        .toBeUndefined();
+      expect(
+        parseClaudeContextUsage({ ...usage, percentUsed: Number.POSITIVE_INFINITY }),
+      ).toBeUndefined();
       expect(parseClaudeContextUsage({ ...usage, percentUsed: 101 })).toBeUndefined();
       expect(parseClaudeContextUsage({ ...usage, usedTokens: -1 })).toBeUndefined();
       // An overdrawn core reading is a broken triple, not a droppable extra:
@@ -746,10 +739,12 @@ describe("claude-client", () => {
       expect(parseClaudeContextUsage({ ...usage, percentUsed: 100 })).toMatchObject({
         percentUsed: 100,
       });
-      expect(parseClaudeContextUsage({
-        ...usage,
-        rateLimits: [{ label: "five hour", usedPercent: 100 }],
-      })).toMatchObject({
+      expect(
+        parseClaudeContextUsage({
+          ...usage,
+          rateLimits: [{ label: "five hour", usedPercent: 100 }],
+        }),
+      ).toMatchObject({
         rateLimits: [{ label: "five hour", usedPercent: 100 }],
       });
       // usedTokens === totalTokens is a full-but-valid window.
@@ -762,13 +757,18 @@ describe("claude-client", () => {
     test("drops an out-of-range rate-limit window but keeps the reading", () => {
       const dropped: string[] = [];
       // The bridge forwards utilization unclamped, so >100 does happen.
-      expect(parseClaudeContextUsage({
-        ...usage,
-        rateLimits: [
-          { label: "five hour", usedPercent: 101 },
-          { label: "weekly", usedPercent: 20 },
-        ],
-      }, dropped)).toEqual({
+      expect(
+        parseClaudeContextUsage(
+          {
+            ...usage,
+            rateLimits: [
+              { label: "five hour", usedPercent: 101 },
+              { label: "weekly", usedPercent: 20 },
+            ],
+          },
+          dropped,
+        ),
+      ).toEqual({
         ...usage,
         rateLimits: [{ label: "weekly", usedPercent: 20 }],
       });
@@ -780,50 +780,56 @@ describe("claude-client", () => {
       expect(parseClaudeRateLimits([])).toEqual([]);
 
       const malformedSnapshot: string[] = [];
-      expect(parseClaudeRateLimits("not-an-array", malformedSnapshot))
-        .toBeUndefined();
+      expect(parseClaudeRateLimits("not-an-array", malformedSnapshot)).toBeUndefined();
       expect(malformedSnapshot).toEqual(["rateLimits"]);
 
       const partialSnapshot: string[] = [];
-      expect(parseClaudeRateLimits([
+      expect(
+        parseClaudeRateLimits(
+          [
+            {
+              label: "Weekly",
+              usedPercent: 15,
+              resetsAt: "2026-08-04T10:00:00.000Z",
+              windowMinutes: 10_080,
+            },
+            null,
+            { label: "Broken", windowMinutes: -1 },
+          ],
+          partialSnapshot,
+        ),
+      ).toEqual([
         {
           label: "Weekly",
           usedPercent: 15,
           resetsAt: "2026-08-04T10:00:00.000Z",
           windowMinutes: 10_080,
         },
-        null,
-        { label: "Broken", windowMinutes: -1 },
-      ], partialSnapshot)).toEqual([{
-        label: "Weekly",
-        usedPercent: 15,
-        resetsAt: "2026-08-04T10:00:00.000Z",
-        windowMinutes: 10_080,
-      }]);
+      ]);
       expect(partialSnapshot).toEqual(["rateLimits"]);
     });
 
     test("drops other malformed optional decorations individually", () => {
       const dropped: string[] = [];
-      expect(parseClaudeContextUsage({
-        ...usage,
-        inputTokens: "20",
-        contextCategories: [{ name: "system", tokens: -1 }],
-        credits: { hasCredits: "yes" },
-        source: "telepathy",
-      }, dropped)).toEqual({
+      expect(
+        parseClaudeContextUsage(
+          {
+            ...usage,
+            inputTokens: "20",
+            contextCategories: [{ name: "system", tokens: -1 }],
+            credits: { hasCredits: "yes" },
+            source: "telepathy",
+          },
+          dropped,
+        ),
+      ).toEqual({
         usedTokens: 25,
         totalTokens: 100,
         percentUsed: 25,
         outputTokens: 5,
         rateLimits: usage.rateLimits,
       });
-      expect(dropped.sort()).toEqual([
-        "contextCategories",
-        "credits",
-        "inputTokens",
-        "source",
-      ]);
+      expect(dropped.sort()).toEqual(["contextCategories", "credits", "inputTokens", "source"]);
     });
 
     test("keeps valid background tasks while dropping malformed ones", () => {
@@ -838,11 +844,16 @@ describe("claude-client", () => {
       expect(parseClaudeBackgroundTasks(tasks)).toEqual(tasks);
 
       const dropped: string[] = [];
-      expect(parseClaudeBackgroundTasks({
-        ...tasks,
-        mismatch: { id: "other", status: "running" },
-        clock: { id: "clock", status: "running", startedAt: Number.NaN },
-      }, dropped)).toEqual(tasks);
+      expect(
+        parseClaudeBackgroundTasks(
+          {
+            ...tasks,
+            mismatch: { id: "other", status: "running" },
+            clock: { id: "clock", status: "running", startedAt: Number.NaN },
+          },
+          dropped,
+        ),
+      ).toEqual(tasks);
       expect(dropped.sort()).toEqual(["clock", "mismatch"]);
 
       // Only a value that is not a record at all rejects the snapshot.
@@ -851,22 +862,17 @@ describe("claude-client", () => {
     });
 
     test("accepts every supported background-task lifecycle status", () => {
-      const statuses = [
-        "pending",
-        "running",
-        "paused",
-        "completed",
-        "failed",
-        "killed",
-      ] as const;
-      const tasks = Object.fromEntries(statuses.map((status) => [
-        status,
-        {
-          id: status,
+      const statuses = ["pending", "running", "paused", "completed", "failed", "killed"] as const;
+      const tasks = Object.fromEntries(
+        statuses.map((status) => [
           status,
-          toolUseId: `tool-${status}`,
-        },
-      ]));
+          {
+            id: status,
+            status,
+            toolUseId: `tool-${status}`,
+          },
+        ]),
+      );
 
       expect(parseClaudeBackgroundTasks(tasks)).toEqual(tasks);
     });
@@ -888,24 +894,34 @@ describe("claude-client", () => {
         error: "command failed",
       };
       const dropped: string[] = [];
-      expect(parseClaudeBackgroundTasks({
-        build: complete,
-        primitive: 17,
-      }, dropped)).toEqual({ build: complete });
+      expect(
+        parseClaudeBackgroundTasks(
+          {
+            build: complete,
+            primitive: 17,
+          },
+          dropped,
+        ),
+      ).toEqual({ build: complete });
       expect(dropped).toEqual(["primitive"]);
     });
 
     test("rejects each malformed optional background-task field", () => {
       const dropped: string[] = [];
-      expect(parseClaudeBackgroundTasks({
-        description: { id: "description", status: "running", description: 1 },
-        toolUseId: { id: "toolUseId", status: "running", toolUseId: 1 },
-        backgrounded: { id: "backgrounded", status: "running", isBackgrounded: "yes" },
-        ended: { id: "ended", status: "completed", endedAt: Number.POSITIVE_INFINITY },
-        error: { id: "error", status: "failed", error: false },
-        emptyId: { id: "", status: "pending" },
-        status: { id: "status", status: "unknown" },
-      }, dropped)).toEqual({});
+      expect(
+        parseClaudeBackgroundTasks(
+          {
+            description: { id: "description", status: "running", description: 1 },
+            toolUseId: { id: "toolUseId", status: "running", toolUseId: 1 },
+            backgrounded: { id: "backgrounded", status: "running", isBackgrounded: "yes" },
+            ended: { id: "ended", status: "completed", endedAt: Number.POSITIVE_INFINITY },
+            error: { id: "error", status: "failed", error: false },
+            emptyId: { id: "", status: "pending" },
+            status: { id: "status", status: "unknown" },
+          },
+          dropped,
+        ),
+      ).toEqual({});
       expect(dropped.sort()).toEqual([
         "backgrounded",
         "description",
@@ -926,12 +942,15 @@ describe("claude-client", () => {
             id: "msg-1",
             role: "assistant",
             content: "",
-            parts: [{
-              type: "tool-invocation", content: "",
-              toolName: "TodoWrite",
-              toolArgs: { todos: [{ content: "task", status: "in_progress" }] },
-              toolState: "success",
-            }],
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "",
+                toolName: "TodoWrite",
+                toolArgs: { todos: [{ content: "task", status: "in_progress" }] },
+                toolState: "success",
+              },
+            ],
             createdAt: "2026-03-10T11:00:00.000Z",
           },
         ],
@@ -943,13 +962,23 @@ describe("claude-client", () => {
 
     test("returns messages as-is when no TodoWrite parts exist", async () => {
       mockFetchJson({
-        messages: [{
-          id: "msg-1",
-          role: "assistant",
-          content: "Hello",
-          parts: [{ type: "tool-invocation", content: "", toolName: "Read", toolArgs: { file_path: "/foo" }, toolState: "success" }],
-          createdAt: "2026-03-10T11:00:00.000Z",
-        }],
+        messages: [
+          {
+            id: "msg-1",
+            role: "assistant",
+            content: "Hello",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "",
+                toolName: "Read",
+                toolArgs: { file_path: "/foo" },
+                toolState: "success",
+              },
+            ],
+            createdAt: "2026-03-10T11:00:00.000Z",
+          },
+        ],
       });
       const messages = await getSessionMessages(client, "s-1");
       expect(messages).toHaveLength(1);
@@ -969,34 +998,39 @@ describe("claude-client", () => {
 
     test("throws on non-404 error status when strict refresh is requested", async () => {
       mockFetchStatus(500);
-      expect(
-        getSessionMessages(client, "s-1", { throwOnError: true }),
-      ).rejects.toThrow("HTTP 500");
+      expect(getSessionMessages(client, "s-1", { throwOnError: true })).rejects.toThrow("HTTP 500");
     });
   });
 
   describe("sendPrompt", () => {
     test("keeps ambiguous dispatches locked for authoritative reconciliation", () => {
-      expect(shouldReconcileClaudePrompt({
-        ok: false,
-        outcome: "unknown",
-        requestId: "request-1",
-      })).toBe(true);
-      expect(shouldReconcileClaudePrompt({
-        ok: false,
-        outcome: "rejected",
-        requestId: "request-1",
-        httpStatus: 409,
-      })).toBe(false);
+      expect(
+        shouldReconcileClaudePrompt({
+          ok: false,
+          outcome: "unknown",
+          requestId: "request-1",
+        }),
+      ).toBe(true);
+      expect(
+        shouldReconcileClaudePrompt({
+          ok: false,
+          outcome: "rejected",
+          requestId: "request-1",
+          httpStatus: 409,
+        }),
+      ).toBe(false);
       expect(shouldReconcileClaudePrompt(true)).toBe(true);
       expect(shouldReconcileClaudePrompt(false)).toBe(false);
     });
 
     test("returns the accepted request identity on 202", async () => {
-      mockFetchJson({
-        status: "processing",
-        turnStartedAt: "2026-07-31T20:00:00.000Z",
-      }, 202);
+      mockFetchJson(
+        {
+          status: "processing",
+          turnStartedAt: "2026-07-31T20:00:00.000Z",
+        },
+        202,
+      );
       const result = await sendPrompt(client, "s-1", "Hello");
       expect(result).toMatchObject({
         ok: true,
@@ -1092,17 +1126,16 @@ describe("claude-client", () => {
       await sendPrompt(client, "s-1", "Hello", { requestId: "retry-me" });
       await sendPrompt(client, "s-1", "Hello", { requestId: "retry-me" });
 
-      expect(bodies.map((body) => JSON.parse(body).requestId)).toEqual([
-        "retry-me",
-        "retry-me",
-      ]);
+      expect(bodies.map((body) => JSON.parse(body).requestId)).toEqual(["retry-me", "retry-me"]);
     });
 
     test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
       mockFetchStatus(500);
-      expect(await sendPrompt(client, "s-1", "Hello", {
-        requestId: "rejected-request",
-      })).toEqual({
+      expect(
+        await sendPrompt(client, "s-1", "Hello", {
+          requestId: "rejected-request",
+        }),
+      ).toEqual({
         ok: false,
         outcome: "rejected",
         requestId: "rejected-request",
@@ -1110,9 +1143,11 @@ describe("claude-client", () => {
       });
 
       mockFetchError();
-      expect(await sendPrompt(client, "s-1", "Hello", {
-        requestId: "ambiguous-request",
-      })).toEqual({
+      expect(
+        await sendPrompt(client, "s-1", "Hello", {
+          requestId: "ambiguous-request",
+        }),
+      ).toEqual({
         ok: false,
         outcome: "unknown",
         requestId: "ambiguous-request",
@@ -1184,14 +1219,10 @@ describe("claude-client", () => {
 
     test("returns null when dispatch is rejected or its transport is unavailable", async () => {
       mockFetchStatus(409);
-      await expect(
-        sendStructuredPrompt(client, "s-1", "Review", schema),
-      ).resolves.toBeNull();
+      await expect(sendStructuredPrompt(client, "s-1", "Review", schema)).resolves.toBeNull();
 
       mockFetchError();
-      await expect(
-        sendStructuredPrompt(client, "s-1", "Review", schema),
-      ).resolves.toBeNull();
+      await expect(sendStructuredPrompt(client, "s-1", "Review", schema)).resolves.toBeNull();
     });
 
     test("reads success, pending, malformed envelopes, and malformed JSON", async () => {
@@ -1202,9 +1233,7 @@ describe("claude-client", () => {
         value: { summary: "done" },
       } as const;
       mockFetchJson({ structuredOutput: success });
-      await expect(
-        getStructuredOutput(client, "s-1", "request/1"),
-      ).resolves.toEqual(success);
+      await expect(getStructuredOutput(client, "s-1", "request/1")).resolves.toEqual(success);
       expect(globalThis.fetch).toHaveBeenLastCalledWith(
         "http://127.0.0.1:4001/session/s-1/structured-output?requestId=request%2F1",
         expect.anything(),
@@ -1226,8 +1255,9 @@ describe("claude-client", () => {
         error: { code: "malformed_output" },
       });
 
-      globalThis.fetch = mock(async () =>
-        new Response("{", { status: 200, headers: { "Content-Type": "application/json" } })
+      globalThis.fetch = mock(
+        async () =>
+          new Response("{", { status: 200, headers: { "Content-Type": "application/json" } }),
       ) as unknown as typeof fetch;
       await expect(getStructuredOutput(client, "s-1", "request-1")).resolves.toMatchObject({
         ok: false,
@@ -1290,9 +1320,7 @@ describe("claude-client", () => {
 
     describe("forkClaudeSession", () => {
       test("returns the forked session id and title", async () => {
-        const calls = captureFetch(() =>
-          Response.json({ sessionId: "s-2", title: "Fork" }),
-        );
+        const calls = captureFetch(() => Response.json({ sessionId: "s-2", title: "Fork" }));
 
         expect(
           await forkClaudeSession(client, "s-1", {
@@ -1339,8 +1367,8 @@ describe("claude-client", () => {
       });
 
       test("throws rather than surfacing a malformed body", async () => {
-        globalThis.fetch = mock(async () =>
-          new Response("not json", { status: 200 }),
+        globalThis.fetch = mock(
+          async () => new Response("not json", { status: 200 }),
         ) as unknown as typeof fetch;
         await expect(forkClaudeSession(client, "s-1")).rejects.toThrow(
           "did not include a session id",
@@ -1388,9 +1416,7 @@ describe("claude-client", () => {
 
       test("throws on a non-2xx response", async () => {
         mockFetchStatus(500);
-        await expect(rewindClaudeFiles(client, "s-1", "msg-3")).rejects.toThrow(
-          "HTTP 500",
-        );
+        await expect(rewindClaudeFiles(client, "s-1", "msg-3")).rejects.toThrow("HTTP 500");
       });
     });
 
@@ -1399,9 +1425,7 @@ describe("claude-client", () => {
         const calls = captureFetch(() => new Response(null, { status: 200 }));
 
         expect(await stopClaudeBackgroundTask(client, "s-1", "task-1")).toBe(true);
-        expect(calls[0]?.[0]).toBe(
-          "http://127.0.0.1:4001/session/s-1/tasks/task-1/stop",
-        );
+        expect(calls[0]?.[0]).toBe("http://127.0.0.1:4001/session/s-1/tasks/task-1/stop");
         expect(calls[0]?.[1]?.method).toBe("POST");
       });
 
@@ -1427,7 +1451,13 @@ describe("claude-client", () => {
 
   describe("getPendingQuestions", () => {
     test("returns questions array on success", async () => {
-      const questions = [{ id: "q-1", sessionId: "s-1", questions: [{ question: "Continue?", header: "", options: [] }] }];
+      const questions = [
+        {
+          id: "q-1",
+          sessionId: "s-1",
+          questions: [{ question: "Continue?", header: "", options: [] }],
+        },
+      ];
       mockFetchJson({ questions });
       const result = await getPendingQuestions(client, "s-1");
       expect(result).toEqual(questions);
@@ -1445,16 +1475,16 @@ describe("claude-client", () => {
 
     test("can surface refresh failures to strict callers", async () => {
       mockFetchStatus(500);
-      await expect(
-        getPendingQuestions(client, "s-1", { throwOnError: true }),
-      ).rejects.toThrow("HTTP 500");
+      await expect(getPendingQuestions(client, "s-1", { throwOnError: true })).rejects.toThrow(
+        "HTTP 500",
+      );
 
       globalThis.fetch = mock(async () => {
         throw "non-error question rejection";
       }) as unknown as typeof fetch;
-      await expect(
-        getPendingQuestions(client, "s-1", { throwOnError: true }),
-      ).rejects.toThrow("Failed to get pending Claude questions");
+      await expect(getPendingQuestions(client, "s-1", { throwOnError: true })).rejects.toThrow(
+        "Failed to get pending Claude questions",
+      );
     });
   });
 
@@ -1469,22 +1499,22 @@ describe("claude-client", () => {
     test("returns an empty snapshot on ordinary failures and throws in strict mode", async () => {
       mockFetchStatus(503);
       expect(await getPendingPlanApprovals(client, "s-1")).toEqual([]);
-      await expect(
-        getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
-      ).rejects.toThrow("HTTP 503");
+      await expect(getPendingPlanApprovals(client, "s-1", { throwOnError: true })).rejects.toThrow(
+        "HTTP 503",
+      );
 
       mockFetchError();
       expect(await getPendingPlanApprovals(client, "s-1")).toEqual([]);
-      await expect(
-        getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
-      ).rejects.toThrow("network error");
+      await expect(getPendingPlanApprovals(client, "s-1", { throwOnError: true })).rejects.toThrow(
+        "network error",
+      );
 
       globalThis.fetch = mock(async () => {
         throw { reason: "non-error approval rejection" };
       }) as unknown as typeof fetch;
-      await expect(
-        getPendingPlanApprovals(client, "s-1", { throwOnError: true }),
-      ).rejects.toThrow("Failed to get pending Claude plan approvals");
+      await expect(getPendingPlanApprovals(client, "s-1", { throwOnError: true })).rejects.toThrow(
+        "Failed to get pending Claude plan approvals",
+      );
     });
   });
 
@@ -1560,17 +1590,12 @@ describe("claude-client", () => {
 
     test("adds the bridge credential to the EventSource query", async () => {
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
-      const authenticated = createClient(
-        "http://127.0.0.1:4001",
-        "claude secret/with symbols",
-      );
+      const authenticated = createClient("http://127.0.0.1:4001", "claude secret/with symbols");
       const iterator = subscribeToEvents(authenticated)[Symbol.asyncIterator]();
 
       const sourceUrl = new URL(MockEventSource.latest!.url);
       expect(sourceUrl.pathname).toBe("/event/subscribe");
-      expect(sourceUrl.searchParams.get("token")).toBe(
-        "claude secret/with symbols",
-      );
+      expect(sourceUrl.searchParams.get("token")).toBe("claude secret/with symbols");
 
       await iterator.return?.();
     });
@@ -1632,9 +1657,7 @@ describe("claude-client", () => {
       await first.return?.();
 
       const second = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
-      expect(MockEventSource.latest?.url).toBe(
-        "http://127.0.0.1:9876/event/subscribe?since=42",
-      );
+      expect(MockEventSource.latest?.url).toBe("http://127.0.0.1:9876/event/subscribe?since=42");
       await second.return?.();
     });
 
@@ -1708,9 +1731,7 @@ describe("claude-client", () => {
       await first.return?.();
 
       const second = subscribeToEvents(cursorClient)[Symbol.asyncIterator]();
-      expect(MockEventSource.latest?.url).toBe(
-        "http://127.0.0.1:9878/event/subscribe",
-      );
+      expect(MockEventSource.latest?.url).toBe("http://127.0.0.1:9878/event/subscribe");
       await second.return?.();
     });
 
@@ -1733,9 +1754,7 @@ describe("claude-client", () => {
       }
 
       const evicted = subscribeToEvents(clients[0]!)[Symbol.asyncIterator]();
-      expect(MockEventSource.latest!.url).toBe(
-        "http://127.0.0.1:10000/event/subscribe",
-      );
+      expect(MockEventSource.latest!.url).toBe("http://127.0.0.1:10000/event/subscribe");
       await evicted.return?.();
 
       const retained = subscribeToEvents(clients.at(-1)!)[Symbol.asyncIterator]();
@@ -1754,18 +1773,16 @@ describe("claude-client", () => {
       const iterator = subscribeToEvents(client, controller.signal)[Symbol.asyncIterator]();
       await expect(iterator.next()).resolves.toMatchObject({ done: true });
       await expect(iterator.return?.()).resolves.toMatchObject({ done: true });
-      await expect(iterator.throw?.(new Error("consumer failed")))
-        .rejects.toThrow("consumer failed");
+      await expect(iterator.throw?.(new Error("consumer failed"))).rejects.toThrow(
+        "consumer failed",
+      );
       expect(MockEventSource.latest).toBeNull();
     });
 
     test("aborting resolves a pending read and cleans up the subscription", async () => {
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       const controller = new AbortController();
-      const iterator = subscribeToEvents(
-        client,
-        controller.signal,
-      )[Symbol.asyncIterator]();
+      const iterator = subscribeToEvents(client, controller.signal)[Symbol.asyncIterator]();
       const source = MockEventSource.latest!;
       const pending = iterator.next();
 
@@ -1806,12 +1823,13 @@ describe("claude-client", () => {
       globalThis.EventSource = MockEventSource as unknown as typeof EventSource;
       const iterator = subscribeToEvents(client)[Symbol.asyncIterator]();
       const source = MockEventSource.latest!;
-      (source as unknown as { listeners: Map<string, (event: MessageEvent) => void> })
-        .listeners.get("keepalive")?.({
-          type: "keepalive",
-          data: "{not-json",
-          lastEventId: "10",
-        } as MessageEvent);
+      (
+        source as unknown as { listeners: Map<string, (event: MessageEvent) => void> }
+      ).listeners.get("keepalive")?.({
+        type: "keepalive",
+        data: "{not-json",
+        lastEventId: "10",
+      } as MessageEvent);
       source.emit("keepalive", { createdAt: "valid" }, "11");
       await expect(iterator.next()).resolves.toMatchObject({
         done: false,
@@ -1925,7 +1943,9 @@ describe("claude-client", () => {
 
     test("returns applied when rejected with feedback", async () => {
       mockFetchJson({ status: "rejected" });
-      expect(await respondToPlanApproval(client, "s-1", "a-1", false, "needs changes")).toBe("applied");
+      expect(await respondToPlanApproval(client, "s-1", "a-1", false, "needs changes")).toBe(
+        "applied",
+      );
     });
 
     test("distinguishes a stale approval from retryable HTTP and network failures", async () => {
@@ -2020,7 +2040,12 @@ describe("claude-client", () => {
     });
 
     test("concatenates an empty streamed text part without adding output", () => {
-      expect(contentFromParts([{ type: "text", content: "" }, { type: "text", content: "x" }])).toBe("x");
+      expect(
+        contentFromParts([
+          { type: "text", content: "" },
+          { type: "text", content: "x" },
+        ]),
+      ).toBe("x");
     });
 
     test("returns an empty string for no parts", () => {
@@ -2035,7 +2060,13 @@ describe("claude-client", () => {
       content: "hello",
       parts: [
         { type: "text", content: "hello" },
-        { type: "tool-invocation", content: "", toolName: "Read", toolUseId: "t-1", toolState: "pending" },
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Read",
+          toolUseId: "t-1",
+          toolState: "pending",
+        },
       ],
       createdAt: "2026-07-20T12:00:00.000Z",
       revision: 4,
@@ -2160,10 +2191,7 @@ describe("claude-client", () => {
         // `parts.length = <these>` throws a RangeError.
         for (const partCount of [undefined, -1, 1.5, Number.NaN, "2"]) {
           expect(
-            applyClaudeMessagePatch(
-              base,
-              nextPatch({ partCount: partCount as unknown as number }),
-            ),
+            applyClaudeMessagePatch(base, nextPatch({ partCount: partCount as unknown as number })),
           ).toBeNull();
         }
       });
@@ -2189,9 +2217,7 @@ describe("claude-client", () => {
           applyClaudeMessagePatch(
             base,
             nextPatch({
-              changedParts: [
-                { index: 0, part: undefined as unknown as ClaudeMessagePart },
-              ],
+              changedParts: [{ index: 0, part: undefined as unknown as ClaudeMessagePart }],
             }),
           ),
         ).toBeNull();

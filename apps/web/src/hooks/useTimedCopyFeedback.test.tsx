@@ -16,7 +16,9 @@ describe("useTimedCopyFeedback", () => {
   });
 
   test("does not show copied feedback when clipboard writing fails", async () => {
-    const copyText = mock(async () => { throw new Error("clipboard unavailable"); });
+    const copyText = mock(async () => {
+      throw new Error("clipboard unavailable");
+    });
     const { result } = renderHook(() => useTimedCopyFeedback(10, copyText));
 
     let error: unknown;
@@ -37,7 +39,9 @@ describe("useTimedCopyFeedback", () => {
     const originalClearTimeout = window.clearTimeout;
     window.clearTimeout = clearTimeoutSpy as typeof window.clearTimeout;
     try {
-      const { result, unmount } = renderHook(() => useTimedCopyFeedback(10_000, async () => undefined));
+      const { result, unmount } = renderHook(() =>
+        useTimedCopyFeedback(10_000, async () => undefined),
+      );
       await act(async () => result.current.copy("token-value"));
       unmount();
       expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);

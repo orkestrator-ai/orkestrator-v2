@@ -14,11 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Select,
   SelectContent,
@@ -63,20 +59,14 @@ import type {
   PortProtocol,
 } from "@/types";
 import type { AgentType } from "@/stores";
-import {
-  useCodexStore,
-  useConfigStore,
-} from "@/stores";
+import { useCodexStore, useConfigStore } from "@/stores";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
 import { effortLabel, modelsForAgent } from "@/lib/agent-launch";
 import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-agent-defaults";
-import {
-  getCachedOpenCodeModelCatalog,
-  type CachedOpenCodeModel,
-} from "@/lib/backend";
+import { getCachedOpenCodeModelCatalog, type CachedOpenCodeModel } from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
   firstEnabledAgentPlatform,
@@ -105,16 +95,11 @@ function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | 
       record.name.trim().length > 0 &&
       typeof record.provider === "string" &&
       record.provider.trim().length > 0 &&
-      (
-        record.variants === undefined ||
-        (
-          Array.isArray(record.variants) &&
+      (record.variants === undefined ||
+        (Array.isArray(record.variants) &&
           record.variants.every(
-            (variant) =>
-              typeof variant === "string" && variant.trim().length > 0,
-          )
-        )
-      )
+            (variant) => typeof variant === "string" && variant.trim().length > 0,
+          )))
     );
   });
 }
@@ -124,7 +109,12 @@ function normalizeCachedOpenCodeModels(value: unknown): CachedOpenCodeModel[] | 
  * over app-level settings, with final fallbacks.
  */
 export function resolveAgentDefaults(
-  globalConfig: { defaultAgent?: string; claudeMode?: string; opencodeMode?: string; codexMode?: string },
+  globalConfig: {
+    defaultAgent?: string;
+    claudeMode?: string;
+    opencodeMode?: string;
+    codexMode?: string;
+  },
   repoConfig?: { defaultAgent?: string; agentStyle?: string },
 ) {
   const defaultAgent = repoConfig?.defaultAgent || globalConfig.defaultAgent || "claude";
@@ -135,8 +125,10 @@ export function resolveAgentDefaults(
 }
 
 const UNSELECTED_CARD_CLASSES = "border-transparent bg-zinc-900 hover:border-zinc-600";
-const MOBILE_TAB_TRIGGER_CLASSES = "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[10px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
-const MOBILE_TAB_CONTENT_CLASSES = "create-environment-mobile-tab-panel mt-0 data-[state=inactive]:hidden";
+const MOBILE_TAB_TRIGGER_CLASSES =
+  "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[10px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
+const MOBILE_TAB_CONTENT_CLASSES =
+  "create-environment-mobile-tab-panel mt-0 data-[state=inactive]:hidden";
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
 
@@ -149,19 +141,10 @@ export function getEncodedImageSizeError(base64Length: number): string | null {
 type MobileSection = "prompt" | "environment" | "agent" | "access" | "ports";
 type MobileTabTransitionDirection = "forward" | "backward";
 
-const MOBILE_SECTION_ORDER: MobileSection[] = [
-  "prompt",
-  "environment",
-  "agent",
-  "access",
-  "ports",
-];
+const MOBILE_SECTION_ORDER: MobileSection[] = ["prompt", "environment", "agent", "access", "ports"];
 
 function generateImageFilename(): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, "-")
-    .slice(0, 19);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const random = Math.random().toString(36).substring(2, 8);
   return `initial-prompt-${timestamp}-${random}.png`;
 }
@@ -223,9 +206,8 @@ export function CreateEnvironmentDialog({
   const repoConfig = projectId ? config.repositories[projectId] : undefined;
 
   const enabledAgentPlatforms = useMemo(
-    () => (
-      config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
-    ) as AgentPlatform[],
+    () =>
+      (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]) as AgentPlatform[],
     [config.global.enabledAgentPlatforms],
   );
   /**
@@ -234,10 +216,11 @@ export function CreateEnvironmentDialog({
    * that already remembers a selection, keeps what it has.
    */
   const newProjectDefault = useMemo(
-    () => resolveActionDefault(config.global.actionDefaults, "newProject", {
-      fallbackAgent: (config.global.defaultAgent ?? "claude") as AgentPlatform,
-      enabledAgents: enabledAgentPlatforms,
-    }),
+    () =>
+      resolveActionDefault(config.global.actionDefaults, "newProject", {
+        fallbackAgent: (config.global.defaultAgent ?? "claude") as AgentPlatform,
+        enabledAgents: enabledAgentPlatforms,
+      }),
     [config.global.actionDefaults, config.global.defaultAgent, enabledAgentPlatforms],
   );
   // Resolve effective defaults: project-level overrides > app-level
@@ -254,9 +237,7 @@ export function CreateEnvironmentDialog({
   const configCodexMode = resolved.codexMode as CodexMode;
   const configEnvironmentType: EnvironmentType = repoConfig?.lastEnvironmentType ?? "containerized";
   const effectiveDefaultEnvironmentType: EnvironmentType =
-    !dockerAvailable
-      && localEnvironmentAvailable
-      && configEnvironmentType === "containerized"
+    !dockerAvailable && localEnvironmentAvailable && configEnvironmentType === "containerized"
       ? "local"
       : !localEnvironmentAvailable && configEnvironmentType === "local" && dockerAvailable
         ? "containerized"
@@ -266,19 +247,19 @@ export function CreateEnvironmentDialog({
   const openCodeModels = useOpenCodeStore((state) => state.models);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
-  const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<
-    CachedOpenCodeModel[]
-  >([]);
-  const { favorites: favoriteModels, toggleFavorite: toggleFavoriteModel, reorderFavorites } = useAgentModelFavorites();
+  const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<CachedOpenCodeModel[]>([]);
+  const {
+    favorites: favoriteModels,
+    toggleFavorite: toggleFavoriteModel,
+    reorderFavorites,
+  } = useAgentModelFavorites();
   const configuredOpenCodeModel =
-    (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined)
-    ?? (newProjectDefault.agent === "opencode" ? newProjectDefault.model : undefined)
-    ?? config.global.opencodeModel;
+    (configDefaultAgent === "opencode" ? repoConfig?.defaultModel : undefined) ??
+    (newProjectDefault.agent === "opencode" ? newProjectDefault.model : undefined) ??
+    config.global.opencodeModel;
   const configuredOpenCodeEffort =
-    (configDefaultAgent === "opencode" ? repoConfig?.defaultEffort : undefined)
-    ?? (newProjectDefault.agent === "opencode"
-      ? newProjectDefault.reasoningEffort
-      : undefined);
+    (configDefaultAgent === "opencode" ? repoConfig?.defaultEffort : undefined) ??
+    (newProjectDefault.agent === "opencode" ? newProjectDefault.reasoningEffort : undefined);
   /**
    * `buildReviewModelCatalog` synthesises a single `{ id: "default" }` OpenCode
    * entry when no environment has cached a live catalog yet. That id is a UI
@@ -294,136 +275,127 @@ export function CreateEnvironmentDialog({
       Array.from(openCodeModels.values()).some((models) => models.length > 0),
     [cachedOpenCodeModels, openCodeModels],
   );
-  const modelCatalog = useMemo(
-    () => {
-      const liveCatalog = buildReviewModelCatalog(undefined);
-      const hasLiveCatalog = Array.from(openCodeModels.values()).some(
-        (models) => models.length > 0,
-      );
-      const catalog =
-        !hasLiveCatalog && cachedOpenCodeModels.length > 0
-          ? {
-              ...liveCatalog,
-              opencode: cachedOpenCodeModels.map((candidate) => ({
-                id: candidate.id,
-                name: openCodeModelDisplayLabel(candidate.id, candidate.name),
-                description: candidate.provider,
-                reasoningEfforts: [...(candidate.variants ?? [])],
-              })),
-            }
-          : liveCatalog;
-      const withConfigured = (() => {
-        if (!configuredOpenCodeModel) return catalog;
-        const configuredModel = catalog.opencode.find(
-          (candidate) => candidate.id === configuredOpenCodeModel,
-        );
-        if (configuredModel) {
-          if (
-            !configuredOpenCodeEffort
-            || configuredModel.reasoningEfforts?.includes(configuredOpenCodeEffort)
-          ) {
-            return catalog;
+  const modelCatalog = useMemo(() => {
+    const liveCatalog = buildReviewModelCatalog(undefined);
+    const hasLiveCatalog = Array.from(openCodeModels.values()).some((models) => models.length > 0);
+    const catalog =
+      !hasLiveCatalog && cachedOpenCodeModels.length > 0
+        ? {
+            ...liveCatalog,
+            opencode: cachedOpenCodeModels.map((candidate) => ({
+              id: candidate.id,
+              name: openCodeModelDisplayLabel(candidate.id, candidate.name),
+              description: candidate.provider,
+              reasoningEfforts: [...(candidate.variants ?? [])],
+            })),
           }
-          return {
-            ...catalog,
-            opencode: catalog.opencode.map((candidate) =>
-              candidate.id === configuredOpenCodeModel
-                ? {
-                    ...candidate,
-                    reasoningEfforts: [
-                      ...(candidate.reasoningEfforts ?? []),
-                      configuredOpenCodeEffort,
-                    ],
-                  }
-                : candidate
-            ),
-          };
+        : liveCatalog;
+    const withConfigured = (() => {
+      if (!configuredOpenCodeModel) return catalog;
+      const configuredModel = catalog.opencode.find(
+        (candidate) => candidate.id === configuredOpenCodeModel,
+      );
+      if (configuredModel) {
+        if (
+          !configuredOpenCodeEffort ||
+          configuredModel.reasoningEfforts?.includes(configuredOpenCodeEffort)
+        ) {
+          return catalog;
         }
         return {
           ...catalog,
-          opencode: [
-            {
-              id: configuredOpenCodeModel,
-              name: openCodeModelDisplayLabel(configuredOpenCodeModel),
-              description: "Configured default",
-              reasoningEfforts: configuredOpenCodeEffort
-                ? [configuredOpenCodeEffort]
-                : [],
-            },
-            ...catalog.opencode,
-          ],
+          opencode: catalog.opencode.map((candidate) =>
+            candidate.id === configuredOpenCodeModel
+              ? {
+                  ...candidate,
+                  reasoningEfforts: [
+                    ...(candidate.reasoningEfforts ?? []),
+                    configuredOpenCodeEffort,
+                  ],
+                }
+              : candidate,
+          ),
         };
-      })();
+      }
       return {
-        ...withConfigured,
-        opencode: includeMissingOpenCodeModels(
-          withConfigured.opencode,
-          favoriteModels
-            .filter((favorite) => favorite.platform === "opencode")
-            .map((favorite) => favorite.modelId),
-          normalizeOpenCodeModelProviders(config.global.openCodeModelProviders),
-        ),
+        ...catalog,
+        opencode: [
+          {
+            id: configuredOpenCodeModel,
+            name: openCodeModelDisplayLabel(configuredOpenCodeModel),
+            description: "Configured default",
+            reasoningEfforts: configuredOpenCodeEffort ? [configuredOpenCodeEffort] : [],
+          },
+          ...catalog.opencode,
+        ],
       };
-    },
+    })();
+    return {
+      ...withConfigured,
+      opencode: includeMissingOpenCodeModels(
+        withConfigured.opencode,
+        favoriteModels
+          .filter((favorite) => favorite.platform === "opencode")
+          .map((favorite) => favorite.modelId),
+        normalizeOpenCodeModelProviders(config.global.openCodeModelProviders),
+      ),
+    };
+  }, [
+    claudeModels,
+    cachedOpenCodeModels,
+    codexModels,
+    config.global.openCodeModelProviders,
+    configuredOpenCodeEffort,
+    configuredOpenCodeModel,
+    cursorModels,
+    favoriteModels,
+    grokModels,
+    openCodeModels,
+  ]);
+
+  const configuredAgentDefaults = useMemo(
+    () => ({
+      agent: configDefaultAgent,
+      claudeMode: configClaudeMode,
+      opencodeMode: configOpencodeMode,
+      codexMode: configCodexMode,
+      models: {
+        ...(config.global.claudeModel ? { claude: config.global.claudeModel } : {}),
+        codex: config.global.codexModel,
+        opencode: config.global.opencodeModel,
+        ...(newProjectDefault.model ? { [newProjectDefault.agent]: newProjectDefault.model } : {}),
+        ...(repoConfig?.defaultModel ? { [configDefaultAgent]: repoConfig.defaultModel } : {}),
+      },
+      reasoningEfforts: {
+        codex: config.global.codexReasoningEffort,
+        ...(newProjectDefault.reasoningEffort
+          ? { [newProjectDefault.agent]: newProjectDefault.reasoningEffort }
+          : {}),
+        ...(repoConfig?.defaultEffort ? { [configDefaultAgent]: repoConfig.defaultEffort } : {}),
+      },
+    }),
     [
-      claudeModels,
-      cachedOpenCodeModels,
-      codexModels,
-      config.global.openCodeModelProviders,
-      configuredOpenCodeEffort,
-      configuredOpenCodeModel,
-      cursorModels,
-      favoriteModels,
-      grokModels,
-      openCodeModels,
+      config.global.claudeModel,
+      config.global.codexModel,
+      config.global.codexReasoningEffort,
+      config.global.opencodeModel,
+      configClaudeMode,
+      configCodexMode,
+      configDefaultAgent,
+      configOpencodeMode,
+      newProjectDefault,
+      repoConfig?.defaultEffort,
+      repoConfig?.defaultModel,
     ],
   );
-
-  const configuredAgentDefaults = useMemo(() => ({
-    agent: configDefaultAgent,
-    claudeMode: configClaudeMode,
-    opencodeMode: configOpencodeMode,
-    codexMode: configCodexMode,
-    models: {
-      ...(config.global.claudeModel ? { claude: config.global.claudeModel } : {}),
-      codex: config.global.codexModel,
-      opencode: config.global.opencodeModel,
-      ...(newProjectDefault.model
-        ? { [newProjectDefault.agent]: newProjectDefault.model }
-        : {}),
-      ...(repoConfig?.defaultModel
-        ? { [configDefaultAgent]: repoConfig.defaultModel }
-        : {}),
-    },
-    reasoningEfforts: {
-      codex: config.global.codexReasoningEffort,
-      ...(newProjectDefault.reasoningEffort
-        ? { [newProjectDefault.agent]: newProjectDefault.reasoningEffort }
-        : {}),
-      ...(repoConfig?.defaultEffort
-        ? { [configDefaultAgent]: repoConfig.defaultEffort }
-        : {}),
-    },
-  }), [
-    config.global.claudeModel,
-    config.global.codexModel,
-    config.global.codexReasoningEffort,
-    config.global.opencodeModel,
-    configClaudeMode,
-    configCodexMode,
-    configDefaultAgent,
-    configOpencodeMode,
-    newProjectDefault,
-    repoConfig?.defaultEffort,
-    repoConfig?.defaultModel,
-  ]);
   const initialAgentDefaults = useMemo(
-    () => resolveCreateEnvironmentAgentDefaults({
-      catalog: modelCatalog,
-      enabledAgents: enabledAgentPlatforms,
-      configured: configuredAgentDefaults,
-      remembered: repoConfig?.lastEnvironmentAgentSelection,
-    }),
+    () =>
+      resolveCreateEnvironmentAgentDefaults({
+        catalog: modelCatalog,
+        enabledAgents: enabledAgentPlatforms,
+        configured: configuredAgentDefaults,
+        remembered: repoConfig?.lastEnvironmentAgentSelection,
+      }),
     [
       configuredAgentDefaults,
       enabledAgentPlatforms,
@@ -443,9 +415,13 @@ export function CreateEnvironmentDialog({
         model: defaults.model,
         reasoningEffort: defaults.reasoningEffort,
       };
-    }, [configuredAgentDefaults, modelCatalog, repoConfig?.lastEnvironmentAgentSelection]);
+    },
+    [configuredAgentDefaults, modelCatalog, repoConfig?.lastEnvironmentAgentSelection],
+  );
 
-  const [environmentType, setEnvironmentType] = useState<EnvironmentType>(effectiveDefaultEnvironmentType);
+  const [environmentType, setEnvironmentType] = useState<EnvironmentType>(
+    effectiveDefaultEnvironmentType,
+  );
   const [environmentName, setEnvironmentName] = useState("");
   const [launchAgent, setLaunchAgent] = useState(true);
   const [agentType, setAgentType] = useState<AgentType>(initialAgentDefaults.agent);
@@ -453,11 +429,11 @@ export function CreateEnvironmentDialog({
   const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(initialAgentDefaults.opencodeMode);
   const [codexMode, setCodexMode] = useState<CodexMode>(initialAgentDefaults.codexMode);
   const [model, setModel] = useState(initialAgentDefaults.model);
-  const [reasoningEffort, setReasoningEffort] = useState(
-    initialAgentDefaults.reasoningEffort,
-  );
+  const [reasoningEffort, setReasoningEffort] = useState(initialAgentDefaults.reasoningEffort);
   const [initialPrompt, setInitialPrompt] = useState("");
-  const [initialPromptAttachments, setInitialPromptAttachments] = useState<InitialPromptImageAttachment[]>([]);
+  const [initialPromptAttachments, setInitialPromptAttachments] = useState<
+    InitialPromptImageAttachment[]
+  >([]);
   const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("full");
   const [portMappings, setPortMappings] = useState<PortMapping[]>(defaultPortMappings);
   const [showPortConfig, setShowPortConfig] = useState(defaultPortMappings.length > 0);
@@ -471,17 +447,17 @@ export function CreateEnvironmentDialog({
 
   useEffect(() => {
     if (
-      open
-      && !dockerAvailable
-      && localEnvironmentAvailable
-      && environmentType === "containerized"
+      open &&
+      !dockerAvailable &&
+      localEnvironmentAvailable &&
+      environmentType === "containerized"
     ) {
       setEnvironmentType("local");
     } else if (
-      open
-      && !localEnvironmentAvailable
-      && dockerAvailable
-      && environmentType === "local"
+      open &&
+      !localEnvironmentAvailable &&
+      dockerAvailable &&
+      environmentType === "local"
     ) {
       setEnvironmentType("containerized");
     }
@@ -504,20 +480,12 @@ export function CreateEnvironmentDialog({
       void getCachedOpenCodeModelCatalog(normalizedProjectId)
         .then((snapshot) => {
           const models = normalizeCachedOpenCodeModels(snapshot?.models);
-          if (
-            !cancelled &&
-            snapshot &&
-            snapshot.projectId === normalizedProjectId &&
-            models
-          ) {
+          if (!cancelled && snapshot && snapshot.projectId === normalizedProjectId && models) {
             setCachedOpenCodeModels(models);
           }
         })
         .catch((error) => {
-          console.warn(
-            "[CreateEnvironmentDialog] Failed to load cached OpenCode models:",
-            error,
-          );
+          console.warn("[CreateEnvironmentDialog] Failed to load cached OpenCode models:", error);
         });
     }
 
@@ -564,76 +532,75 @@ export function CreateEnvironmentDialog({
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
-  }, [
-    defaultPortMappings,
-    effectiveDefaultEnvironmentType,
-    initialAgentDefaults,
-  ]);
+  }, [defaultPortMappings, effectiveDefaultEnvironmentType, initialAgentDefaults]);
 
-  const handlePromptPaste = useCallback(async (event: ClipboardEvent) => {
-    if (!open || !launchAgent || document.activeElement !== promptRef.current) return;
+  const handlePromptPaste = useCallback(
+    async (event: ClipboardEvent) => {
+      if (!open || !launchAgent || document.activeElement !== promptRef.current) return;
 
-    const requestId = ++promptPasteRequestIdRef.current;
-    const isCurrentRequest = () =>
-      requestId === promptPasteRequestIdRef.current &&
-      document.activeElement === promptRef.current;
+      const requestId = ++promptPasteRequestIdRef.current;
+      const isCurrentRequest = () =>
+        requestId === promptPasteRequestIdRef.current &&
+        document.activeElement === promptRef.current;
 
-    try {
-      const pastedBlob = getPastedImageBlob(event);
-      if (pastedBlob) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
+      try {
+        const pastedBlob = getPastedImageBlob(event);
+        if (pastedBlob) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+
+        const image = await readImage(pastedBlob);
+        if (!isCurrentRequest()) return;
+        const rgba = await image.rgba();
+        if (!isCurrentRequest()) return;
+        const { width, height } = await image.size();
+        if (!isCurrentRequest()) return;
+
+        let canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
+        ctx.putImageData(imageData, 0, 0);
+        canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
+        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+
+        const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+        if (!encodedImage) {
+          toast.error("Image too large", {
+            description: "The image could not be resized below the 8MB attachment limit.",
+          });
+          return;
+        }
+        canvas = encodedImage.canvas;
+        const { dataUrl: previewUrl, base64Data } = encodedImage;
+        canvas.width = 0;
+        canvas.height = 0;
+
+        if (!pastedBlob) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+        }
+
+        setInitialPromptAttachments((prev) => [
+          ...prev,
+          {
+            id: createUuid(),
+            name: generateImageFilename(),
+            previewUrl,
+            base64Data,
+          },
+        ]);
+        toast.success("Image attached");
+      } catch {
+        // No image in the clipboard; let normal text paste continue.
       }
-
-      const image = await readImage(pastedBlob);
-      if (!isCurrentRequest()) return;
-      const rgba = await image.rgba();
-      if (!isCurrentRequest()) return;
-      const { width, height } = await image.size();
-      if (!isCurrentRequest()) return;
-
-      let canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
-      ctx.putImageData(imageData, 0, 0);
-      canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
-      canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
-
-      const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
-      if (!encodedImage) {
-        toast.error("Image too large", {
-          description: "The image could not be resized below the 8MB attachment limit.",
-        });
-        return;
-      }
-      canvas = encodedImage.canvas;
-      const { dataUrl: previewUrl, base64Data } = encodedImage;
-      canvas.width = 0;
-      canvas.height = 0;
-
-      if (!pastedBlob) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      }
-
-      setInitialPromptAttachments((prev) => [
-        ...prev,
-        {
-          id: createUuid(),
-          name: generateImageFilename(),
-          previewUrl,
-          base64Data,
-        },
-      ]);
-      toast.success("Image attached");
-    } catch {
-      // No image in the clipboard; let normal text paste continue.
-    }
-  }, [launchAgent, open]);
+    },
+    [launchAgent, open],
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -700,15 +667,16 @@ export function CreateEnvironmentDialog({
   const selectedModel = availableModels.find((candidate) => candidate.id === model);
   const availableReasoningEfforts =
     availableModels.find((candidate) => candidate.id === model)?.reasoningEfforts ?? [];
-  const reasoningOptions = availableReasoningEfforts.length > 0
-    ? [
-        { id: "default", label: "Default" },
-        ...availableReasoningEfforts.map((effort) => ({
-          id: effort,
-          label: effortLabel(effort),
-        })),
-      ]
-    : [];
+  const reasoningOptions =
+    availableReasoningEfforts.length > 0
+      ? [
+          { id: "default", label: "Default" },
+          ...availableReasoningEfforts.map((effort) => ({
+            id: effort,
+            label: effortLabel(effort),
+          })),
+        ]
+      : [];
 
   useEffect(() => {
     if (!open) return;
@@ -722,19 +690,12 @@ export function CreateEnvironmentDialog({
     }
 
     if (
-      reasoningEffort !== "default"
-      && !selectedModel.reasoningEfforts?.includes(reasoningEffort)
+      reasoningEffort !== "default" &&
+      !selectedModel.reasoningEfforts?.includes(reasoningEffort)
     ) {
       setReasoningEffort("default");
     }
-  }, [
-    agentType,
-    availableModels,
-    getInitialAgentSelection,
-    model,
-    open,
-    reasoningEffort,
-  ]);
+  }, [agentType, availableModels, getInitialAgentSelection, model, open, reasoningEffort]);
 
   const selectAgent = useCallback(
     (nextAgent: AgentType) => {
@@ -769,9 +730,10 @@ export function CreateEnvironmentDialog({
       const targetModels = modelsForAgent(modelCatalog, nextModel.platform);
       const supportedEfforts =
         targetModels.find((candidate) => candidate.id === nextModel.id)?.reasoningEfforts ?? [];
-      const nextReasoningEffort = nextModel.platform === agentType
-        ? reasoningEffort
-        : getInitialAgentSelection(nextModel.platform).reasoningEffort;
+      const nextReasoningEffort =
+        nextModel.platform === agentType
+          ? reasoningEffort
+          : getInitialAgentSelection(nextModel.platform).reasoningEffort;
 
       setAgentType(nextModel.platform);
       setModel(nextModel.id);
@@ -833,14 +795,9 @@ export function CreateEnvironmentDialog({
     setPortMappings((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  const updatePortMapping = useCallback(
-    (index: number, updates: Partial<PortMapping>) => {
-      setPortMappings((prev) =>
-        prev.map((m, i) => (i === index ? { ...m, ...updates } : m))
-      );
-    },
-    []
-  );
+  const updatePortMapping = useCallback((index: number, updates: Partial<PortMapping>) => {
+    setPortMappings((prev) => prev.map((m, i) => (i === index ? { ...m, ...updates } : m)));
+  }, []);
 
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
@@ -858,7 +815,7 @@ export function CreateEnvironmentDialog({
       }
       onOpenChange(isOpen);
     },
-    [onOpenChange, resetForm, projectId, initialPrompt]
+    [onOpenChange, resetForm, projectId, initialPrompt],
   );
 
   // Validate port mappings - returns true if all valid
@@ -900,8 +857,7 @@ export function CreateEnvironmentDialog({
             agentType === "opencode" && model === "default" && !hasAvailableOpenCodeModels
               ? undefined
               : model,
-          reasoningEffort:
-            reasoningEffort === "default" ? undefined : reasoningEffort,
+          reasoningEffort: reasoningEffort === "default" ? undefined : reasoningEffort,
           initialPrompt: initialPrompt.trim(),
           initialPromptAttachments,
           networkAccessMode,
@@ -919,7 +875,29 @@ export function CreateEnvironmentDialog({
         console.error("Failed to create environment:", err);
       }
     },
-    [dockerAvailable, environmentType, environmentName, launchAgent, agentType, claudeMode, opencodeMode, codexMode, model, hasAvailableOpenCodeModels, reasoningEffort, initialPrompt, initialPromptAttachments, localEnvironmentAvailable, networkAccessMode, portMappings, onCreate, resetForm, onOpenChange, projectId, validatePortMappings]
+    [
+      dockerAvailable,
+      environmentType,
+      environmentName,
+      launchAgent,
+      agentType,
+      claudeMode,
+      opencodeMode,
+      codexMode,
+      model,
+      hasAvailableOpenCodeModels,
+      reasoningEffort,
+      initialPrompt,
+      initialPromptAttachments,
+      localEnvironmentAvailable,
+      networkAccessMode,
+      portMappings,
+      onCreate,
+      resetForm,
+      onOpenChange,
+      projectId,
+      validatePortMappings,
+    ],
   );
 
   const handlePromptKeyDown = useCallback(
@@ -927,19 +905,12 @@ export function CreateEnvironmentDialog({
       // Only handle plain Enter (no modifier keys) to submit the form
       // Shift+Enter allows normal newline behavior
       // Cmd/Ctrl+key combinations (copy, paste, etc.) pass through normally
-      if (
-        e.key === "Enter" &&
-        !e.shiftKey &&
-        !e.metaKey &&
-        !e.ctrlKey &&
-        !e.altKey &&
-        !isLoading
-      ) {
+      if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !isLoading) {
         e.preventDefault();
         formRef.current?.requestSubmit();
       }
     },
-    [isLoading]
+    [isLoading],
   );
 
   return (
@@ -958,7 +929,11 @@ export function CreateEnvironmentDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <form ref={formRef} onSubmit={handleSubmit} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-1">
+        <form
+          ref={formRef}
+          onSubmit={handleSubmit}
+          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-1"
+        >
           <Tabs
             value={mobileSection}
             onValueChange={(value) => selectMobileSection(value as MobileSection)}
@@ -976,33 +951,21 @@ export function CreateEnvironmentDialog({
                 <MessageSquareText className="h-4 w-4" />
                 <span>Prompt</span>
               </TabsTrigger>
-              <TabsTrigger
-                value="environment"
-                className={MOBILE_TAB_TRIGGER_CLASSES}
-              >
+              <TabsTrigger value="environment" className={MOBILE_TAB_TRIGGER_CLASSES}>
                 <Container className="h-4 w-4" />
                 <span>Setup</span>
               </TabsTrigger>
-              <TabsTrigger
-                value="agent"
-                className={MOBILE_TAB_TRIGGER_CLASSES}
-              >
+              <TabsTrigger value="agent" className={MOBILE_TAB_TRIGGER_CLASSES}>
                 <Bot className="h-4 w-4" />
                 <span>Agent</span>
               </TabsTrigger>
               {environmentType === "containerized" && (
                 <>
-                  <TabsTrigger
-                    value="access"
-                    className={MOBILE_TAB_TRIGGER_CLASSES}
-                  >
+                  <TabsTrigger value="access" className={MOBILE_TAB_TRIGGER_CLASSES}>
                     <Shield className="h-4 w-4" />
                     <span>Access</span>
                   </TabsTrigger>
-                  <TabsTrigger
-                    value="ports"
-                    className={MOBILE_TAB_TRIGGER_CLASSES}
-                  >
+                  <TabsTrigger value="ports" className={MOBILE_TAB_TRIGGER_CLASSES}>
                     <Network className="h-4 w-4" />
                     <span>Ports</span>
                   </TabsTrigger>
@@ -1016,82 +979,84 @@ export function CreateEnvironmentDialog({
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
               className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
             >
-          {/* Environment Type Selector */}
-          <div className="space-y-2 sm:col-span-2">
-            <Label>Environment Type</Label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => setEnvironmentType("containerized")}
-                disabled={isLoading || !dockerAvailable}
-                title={!dockerAvailable ? "Start Docker to use container environments" : undefined}
-                className={cn(
-                  "p-3 rounded-lg border-2 text-left transition-colors",
-                  environmentType === "containerized"
-                    ? "border-primary bg-primary/5"
-                    : UNSELECTED_CARD_CLASSES,
-                  (isLoading || !dockerAvailable) && "opacity-50 cursor-not-allowed"
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <Container className="h-4 w-4" />
-                  <div>
-                    <div className="font-medium text-sm">Containerized</div>
-                    <div className="text-xs text-muted-foreground">
-                      {dockerAvailable ? "Isolated Docker environment" : "Unavailable while Docker is stopped"}
+              {/* Environment Type Selector */}
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Environment Type</Label>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => setEnvironmentType("containerized")}
+                    disabled={isLoading || !dockerAvailable}
+                    title={
+                      !dockerAvailable ? "Start Docker to use container environments" : undefined
+                    }
+                    className={cn(
+                      "p-3 rounded-lg border-2 text-left transition-colors",
+                      environmentType === "containerized"
+                        ? "border-primary bg-primary/5"
+                        : UNSELECTED_CARD_CLASSES,
+                      (isLoading || !dockerAvailable) && "opacity-50 cursor-not-allowed",
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Container className="h-4 w-4" />
+                      <div>
+                        <div className="font-medium text-sm">Containerized</div>
+                        <div className="text-xs text-muted-foreground">
+                          {dockerAvailable
+                            ? "Isolated Docker environment"
+                            : "Unavailable while Docker is stopped"}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-              </button>
+                  </button>
 
-              <button
-                type="button"
-                onClick={() => setEnvironmentType("local")}
-                disabled={isLoading || !localEnvironmentAvailable}
-                title={
-                  !localEnvironmentAvailable
-                    ? "Add a local project checkout to use worktree environments"
-                    : undefined
-                }
-                className={cn(
-                  "p-3 rounded-lg border-2 text-left transition-colors",
-                  environmentType === "local"
-                    ? "border-primary bg-primary/5"
-                    : UNSELECTED_CARD_CLASSES,
-                  (isLoading || !localEnvironmentAvailable) && "opacity-50 cursor-not-allowed"
-                )}
-              >
-                <div className="flex items-center gap-2">
-                  <Laptop className="h-4 w-4" />
-                  <div>
-                    <div className="font-medium text-sm">Local</div>
-                    <div className="text-xs text-muted-foreground">
-                      {localEnvironmentAvailable
-                        ? "Git worktree on your machine"
-                        : "Unavailable without a local project checkout"}
+                  <button
+                    type="button"
+                    onClick={() => setEnvironmentType("local")}
+                    disabled={isLoading || !localEnvironmentAvailable}
+                    title={
+                      !localEnvironmentAvailable
+                        ? "Add a local project checkout to use worktree environments"
+                        : undefined
+                    }
+                    className={cn(
+                      "p-3 rounded-lg border-2 text-left transition-colors",
+                      environmentType === "local"
+                        ? "border-primary bg-primary/5"
+                        : UNSELECTED_CARD_CLASSES,
+                      (isLoading || !localEnvironmentAvailable) && "opacity-50 cursor-not-allowed",
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Laptop className="h-4 w-4" />
+                      <div>
+                        <div className="font-medium text-sm">Local</div>
+                        <div className="text-xs text-muted-foreground">
+                          {localEnvironmentAvailable
+                            ? "Git worktree on your machine"
+                            : "Unavailable without a local project checkout"}
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  </button>
                 </div>
-              </button>
-            </div>
-          </div>
+              </div>
 
-            {/* Environment Name */}
-            <div className="space-y-2">
-              <Label htmlFor="environment-name">
-                Environment Name <span className="text-muted-foreground">(optional)</span>
-              </Label>
-              <Input
-                id="environment-name"
-                placeholder="e.g., feature-dark-mode"
-                value={environmentName}
-                onChange={(e) => setEnvironmentName(e.target.value)}
-                disabled={isLoading}
-              />
-              <p className="text-xs text-muted-foreground">
-                Also used as the git branch name.
-              </p>
-            </div>
+              {/* Environment Name */}
+              <div className="space-y-2">
+                <Label htmlFor="environment-name">
+                  Environment Name <span className="text-muted-foreground">(optional)</span>
+                </Label>
+                <Input
+                  id="environment-name"
+                  placeholder="e.g., feature-dark-mode"
+                  value={environmentName}
+                  onChange={(e) => setEnvironmentName(e.target.value)}
+                  disabled={isLoading}
+                />
+                <p className="text-xs text-muted-foreground">Also used as the git branch name.</p>
+              </div>
             </TabsContent>
 
             {/* Network Access Mode - only for containerized environments */}
@@ -1102,52 +1067,52 @@ export function CreateEnvironmentDialog({
                 data-mobile-transition={mobileTabTransitionDirection ?? undefined}
                 className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
               >
-            {/* Network Access Mode - only for containerized environments */}
-              <div className="space-y-2">
-                <Label>Network Access</Label>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setNetworkAccessMode("restricted")}
-                    disabled={isLoading}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left transition-colors",
-                      networkAccessMode === "restricted"
-                        ? "border-primary bg-primary/5"
-                        : UNSELECTED_CARD_CLASSES,
-                      isLoading && "opacity-50 cursor-not-allowed"
-                    )}
-                  >
-                    <div className="flex items-center gap-1.5 font-medium text-sm">
-                      <Shield className="h-3.5 w-3.5" />
-                      Restricted
-                    </div>
-                  </button>
+                {/* Network Access Mode - only for containerized environments */}
+                <div className="space-y-2">
+                  <Label>Network Access</Label>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setNetworkAccessMode("restricted")}
+                      disabled={isLoading}
+                      className={cn(
+                        "p-2 rounded-lg border-2 text-left transition-colors",
+                        networkAccessMode === "restricted"
+                          ? "border-primary bg-primary/5"
+                          : UNSELECTED_CARD_CLASSES,
+                        isLoading && "opacity-50 cursor-not-allowed",
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5 font-medium text-sm">
+                        <Shield className="h-3.5 w-3.5" />
+                        Restricted
+                      </div>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setNetworkAccessMode("full")}
-                    disabled={isLoading}
-                    className={cn(
-                      "p-2 rounded-lg border-2 text-left transition-colors",
-                      networkAccessMode === "full"
-                        ? "border-primary bg-primary/5"
-                        : UNSELECTED_CARD_CLASSES,
-                      isLoading && "opacity-50 cursor-not-allowed"
-                    )}
-                  >
-                    <div className="flex items-center gap-1.5 font-medium text-sm">
-                      <Globe className="h-3.5 w-3.5" />
-                      Full Access
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setNetworkAccessMode("full")}
+                      disabled={isLoading}
+                      className={cn(
+                        "p-2 rounded-lg border-2 text-left transition-colors",
+                        networkAccessMode === "full"
+                          ? "border-primary bg-primary/5"
+                          : UNSELECTED_CARD_CLASSES,
+                        isLoading && "opacity-50 cursor-not-allowed",
+                      )}
+                    >
+                      <div className="flex items-center gap-1.5 font-medium text-sm">
+                        <Globe className="h-3.5 w-3.5" />
+                        Full Access
+                      </div>
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {networkAccessMode === "restricted"
+                      ? "Only GitHub, npm, Anthropic API allowed."
+                      : "Unrestricted internet access."}
+                  </p>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  {networkAccessMode === "restricted"
-                    ? "Only GitHub, npm, Anthropic API allowed."
-                    : "Unrestricted internet access."}
-                </p>
-              </div>
               </TabsContent>
             )}
 
@@ -1157,267 +1122,260 @@ export function CreateEnvironmentDialog({
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
               className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
             >
-          {/* Startup + mode row */}
-          <div className="space-y-2">
-            {/* Launch Agent Toggle */}
-            <div className="space-y-2">
-              <Label className="text-sm">Container Startup</Label>
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label htmlFor="launch-agent" className="text-sm">Launch Agent</Label>
-                <p className="text-xs text-muted-foreground">
-                  Auto-start when ready
-                </p>
-              </div>
-              <Switch
-                id="launch-agent"
-                checked={launchAgent}
-                onCheckedChange={setLaunchAgent}
-                disabled={isLoading}
-              />
-              </div>
-            </div>
-
-          </div>
-
-          {/* Compact agent launch configuration */}
-          <div
-            className={cn(
-              "space-y-3 sm:col-span-2",
-              !launchAgent && "opacity-50",
-            )}
-          >
-            <div className="flex min-h-5 items-center justify-between gap-4">
-              <Label className="text-sm">Default Agent</Label>
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="use-tui"
-                  checked={selectedMode === "terminal"}
-                  onCheckedChange={setUseTui}
-                  disabled={isLoading || !launchAgent || agentType === "cursor" || agentType === "grok"}
-                />
-                <Label
-                  htmlFor="use-tui"
-                  className="cursor-pointer text-sm font-normal"
-                >
-                  Use TUI
-                </Label>
-              </div>
-            </div>
-            <div className="rounded-xl border border-border/70 bg-zinc-950/45 p-2">
-              <AgentModelPicker
-                id="agent-model"
-                ariaLabel="Agent, model and reasoning"
-                models={pickerModels}
-                enabledPlatforms={enabledAgentPlatforms}
-                selectedPlatform={agentType}
-                favorites={favoriteModels}
-                onPlatformChange={selectAgent}
-                onToggleFavorite={toggleFavoriteModel}
-                onReorderFavorites={reorderFavorites}
-                selectedModelId={model}
-                selectedModelLabel={selectedModel?.name ?? "Select model"}
-                onModelChange={selectModel}
-                onModelSelect={selectAgentModel}
-                reasoningOptions={reasoningOptions}
-                selectedReasoningId={reasoningEffort}
-                selectedReasoningLabel={
-                  reasoningOptions.find((option) => option.id === reasoningEffort)?.label
-                }
-                onReasoningChange={selectReasoningEffort}
-                disabled={isLoading || !launchAgent}
-                title="Choose agent, model, and reasoning"
-                className="min-h-9 w-full max-w-none justify-start md:max-w-none md:flex-1"
-              />
-            </div>
-          </div>
-            </TabsContent>
-
-          {/* Port Configuration - only for containerized environments */}
-          {environmentType === "containerized" && (
-          <TabsContent
-            value="ports"
-            forceMount
-            data-mobile-transition={mobileTabTransitionDirection ?? undefined}
-            className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
-          >
-          <Collapsible open={showPortConfig} onOpenChange={setShowPortConfig}>
-            <CollapsibleTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                className="w-full justify-between p-3 h-auto rounded-lg border border-input bg-muted/30 hover:bg-muted/50"
-                disabled={isLoading}
-              >
-                <div className="flex items-center gap-2">
-                  <Network className="h-4 w-4" />
-                  <span className="text-sm font-medium">Port Configuration</span>
-                  {portMappings.length > 0 && (
-                    <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                      {portMappings.length} port{portMappings.length !== 1 ? "s" : ""}
-                    </span>
-                  )}
-                </div>
-                <ChevronDown
-                  className={cn(
-                    "h-4 w-4 transition-transform duration-200",
-                    showPortConfig && "rotate-180"
-                  )}
-                />
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="pt-3 space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Expose container ports to the host machine. These are set at container creation.
-              </p>
-              {portMappings.length > 0 && (
-                <div className="-mb-1 hidden items-center gap-2 sm:flex">
-                  <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
-                    <span className="text-xs text-muted-foreground">Container</span>
-                    <span></span>
-                    <span className="text-xs text-muted-foreground">Host</span>
-                    <span className="w-20"></span>
-                    <span className="h-8 w-8"></span>
+              {/* Startup + mode row */}
+              <div className="space-y-2">
+                {/* Launch Agent Toggle */}
+                <div className="space-y-2">
+                  <Label className="text-sm">Container Startup</Label>
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="launch-agent" className="text-sm">
+                        Launch Agent
+                      </Label>
+                      <p className="text-xs text-muted-foreground">Auto-start when ready</p>
+                    </div>
+                    <Switch
+                      id="launch-agent"
+                      checked={launchAgent}
+                      onCheckedChange={setLaunchAgent}
+                      disabled={isLoading}
+                    />
                   </div>
                 </div>
-              )}
-              {portMappings.map((mapping, index) => (
-                <div key={index} className="flex items-center gap-2">
-                  <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
-                    <Input
-                      type="number"
-                      placeholder="Container"
-                      value={mapping.containerPort}
-                      onChange={(e) =>
-                        updatePortMapping(index, {
-                          containerPort: parseInt(e.target.value) || 0,
-                        })
+              </div>
+
+              {/* Compact agent launch configuration */}
+              <div className={cn("space-y-3 sm:col-span-2", !launchAgent && "opacity-50")}>
+                <div className="flex min-h-5 items-center justify-between gap-4">
+                  <Label className="text-sm">Default Agent</Label>
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="use-tui"
+                      checked={selectedMode === "terminal"}
+                      onCheckedChange={setUseTui}
+                      disabled={
+                        isLoading || !launchAgent || agentType === "cursor" || agentType === "grok"
                       }
-                      className="text-sm"
-                      min={1}
-                      max={65535}
-                      disabled={isLoading}
                     />
-                    <span className="text-muted-foreground">:</span>
-                    <Input
-                      type="number"
-                      placeholder="Host"
-                      value={mapping.hostPort}
-                      onChange={(e) =>
-                        updatePortMapping(index, {
-                          hostPort: parseInt(e.target.value) || 0,
-                        })
-                      }
-                      className="text-sm"
-                      min={1}
-                      max={65535}
-                      disabled={isLoading}
-                    />
-                    <Select
-                      value={mapping.protocol}
-                      onValueChange={(value: PortProtocol) =>
-                        updatePortMapping(index, { protocol: value })
-                      }
-                      disabled={isLoading}
-                    >
-                      <SelectTrigger
-                        aria-label="Protocol"
-                        className="col-span-3 col-start-1 w-full sm:col-span-1 sm:col-start-auto sm:w-20"
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="tcp">TCP</SelectItem>
-                        <SelectItem value="udp">UDP</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label htmlFor="use-tui" className="cursor-pointer text-sm font-normal">
+                      Use TUI
+                    </Label>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-border/70 bg-zinc-950/45 p-2">
+                  <AgentModelPicker
+                    id="agent-model"
+                    ariaLabel="Agent, model and reasoning"
+                    models={pickerModels}
+                    enabledPlatforms={enabledAgentPlatforms}
+                    selectedPlatform={agentType}
+                    favorites={favoriteModels}
+                    onPlatformChange={selectAgent}
+                    onToggleFavorite={toggleFavoriteModel}
+                    onReorderFavorites={reorderFavorites}
+                    selectedModelId={model}
+                    selectedModelLabel={selectedModel?.name ?? "Select model"}
+                    onModelChange={selectModel}
+                    onModelSelect={selectAgentModel}
+                    reasoningOptions={reasoningOptions}
+                    selectedReasoningId={reasoningEffort}
+                    selectedReasoningLabel={
+                      reasoningOptions.find((option) => option.id === reasoningEffort)?.label
+                    }
+                    onReasoningChange={selectReasoningEffort}
+                    disabled={isLoading || !launchAgent}
+                    title="Choose agent, model, and reasoning"
+                    className="min-h-9 w-full max-w-none justify-start md:max-w-none md:flex-1"
+                  />
+                </div>
+              </div>
+            </TabsContent>
+
+            {/* Port Configuration - only for containerized environments */}
+            {environmentType === "containerized" && (
+              <TabsContent
+                value="ports"
+                forceMount
+                data-mobile-transition={mobileTabTransitionDirection ?? undefined}
+                className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
+              >
+                <Collapsible open={showPortConfig} onOpenChange={setShowPortConfig}>
+                  <CollapsibleTrigger asChild>
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
-                      onClick={() => removePortMapping(index)}
+                      className="w-full justify-between p-3 h-auto rounded-lg border border-input bg-muted/30 hover:bg-muted/50"
                       disabled={isLoading}
-                      className="col-start-4 row-start-2 h-8 w-8 sm:col-start-auto sm:row-start-auto"
                     >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={addPortMapping}
-                disabled={isLoading}
-                className="w-full"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Port Mapping
-              </Button>
-            </CollapsibleContent>
-          </Collapsible>
-          </TabsContent>
-          )}
-
-          <TabsContent
-            value="prompt"
-            forceMount
-            data-mobile-transition={mobileTabTransitionDirection ?? undefined}
-            className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
-          >
-          {/* Initial Prompt */}
-          {launchAgent && (
-            <div className="space-y-2">
-              <Label htmlFor="initial-prompt">
-                Initial Prompt <span className="text-muted-foreground">(optional)</span>
-              </Label>
-              <Textarea
-                ref={promptRef}
-                id="initial-prompt"
-                placeholder={
-                  agentType === "claude"
-                    ? "Enter a task for Claude to work on..."
-                    : agentType === "codex"
-                      ? "Enter a task for Codex to work on..."
-                      : "Enter a task for OpenCode to work on..."
-                }
-                value={initialPrompt}
-                onChange={(e) => setInitialPrompt(e.target.value)}
-                onKeyDown={handlePromptKeyDown}
-                disabled={isLoading}
-                rows={3}
-                className="resize-y max-h-[calc(15*theme(lineHeight.normal)*1em)] overflow-y-auto"
-              />
-              {initialPromptAttachments.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {initialPromptAttachments.map((attachment) => (
-                    <div
-                      key={attachment.id}
-                      className="group relative h-16 w-16 overflow-hidden rounded-md border border-border bg-muted"
-                    >
-                      <img
-                        src={attachment.previewUrl}
-                        alt={attachment.name}
-                        className="h-full w-full object-cover"
+                      <div className="flex items-center gap-2">
+                        <Network className="h-4 w-4" />
+                        <span className="text-sm font-medium">Port Configuration</span>
+                        {portMappings.length > 0 && (
+                          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                            {portMappings.length} port{portMappings.length !== 1 ? "s" : ""}
+                          </span>
+                        )}
+                      </div>
+                      <ChevronDown
+                        className={cn(
+                          "h-4 w-4 transition-transform duration-200",
+                          showPortConfig && "rotate-180",
+                        )}
                       />
-                      <button
-                        type="button"
-                        onClick={() => removeInitialPromptAttachment(attachment.id)}
-                        disabled={isLoading}
-                        className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-                        aria-label={`Remove ${attachment.name}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="pt-3 space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Expose container ports to the host machine. These are set at container
+                      creation.
+                    </p>
+                    {portMappings.length > 0 && (
+                      <div className="-mb-1 hidden items-center gap-2 sm:flex">
+                        <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
+                          <span className="text-xs text-muted-foreground">Container</span>
+                          <span></span>
+                          <span className="text-xs text-muted-foreground">Host</span>
+                          <span className="w-20"></span>
+                          <span className="h-8 w-8"></span>
+                        </div>
+                      </div>
+                    )}
+                    {portMappings.map((mapping, index) => (
+                      <div key={index} className="flex items-center gap-2">
+                        <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
+                          <Input
+                            type="number"
+                            placeholder="Container"
+                            value={mapping.containerPort}
+                            onChange={(e) =>
+                              updatePortMapping(index, {
+                                containerPort: parseInt(e.target.value) || 0,
+                              })
+                            }
+                            className="text-sm"
+                            min={1}
+                            max={65535}
+                            disabled={isLoading}
+                          />
+                          <span className="text-muted-foreground">:</span>
+                          <Input
+                            type="number"
+                            placeholder="Host"
+                            value={mapping.hostPort}
+                            onChange={(e) =>
+                              updatePortMapping(index, {
+                                hostPort: parseInt(e.target.value) || 0,
+                              })
+                            }
+                            className="text-sm"
+                            min={1}
+                            max={65535}
+                            disabled={isLoading}
+                          />
+                          <Select
+                            value={mapping.protocol}
+                            onValueChange={(value: PortProtocol) =>
+                              updatePortMapping(index, { protocol: value })
+                            }
+                            disabled={isLoading}
+                          >
+                            <SelectTrigger
+                              aria-label="Protocol"
+                              className="col-span-3 col-start-1 w-full sm:col-span-1 sm:col-start-auto sm:w-20"
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="tcp">TCP</SelectItem>
+                              <SelectItem value="udp">UDP</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => removePortMapping(index)}
+                            disabled={isLoading}
+                            className="col-start-4 row-start-2 h-8 w-8 sm:col-start-auto sm:row-start-auto"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={addPortMapping}
+                      disabled={isLoading}
+                      className="w-full"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Port Mapping
+                    </Button>
+                  </CollapsibleContent>
+                </Collapsible>
+              </TabsContent>
+            )}
+
+            <TabsContent
+              value="prompt"
+              forceMount
+              data-mobile-transition={mobileTabTransitionDirection ?? undefined}
+              className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
+            >
+              {/* Initial Prompt */}
+              {launchAgent && (
+                <div className="space-y-2">
+                  <Label htmlFor="initial-prompt">
+                    Initial Prompt <span className="text-muted-foreground">(optional)</span>
+                  </Label>
+                  <Textarea
+                    ref={promptRef}
+                    id="initial-prompt"
+                    placeholder={
+                      agentType === "claude"
+                        ? "Enter a task for Claude to work on..."
+                        : agentType === "codex"
+                          ? "Enter a task for Codex to work on..."
+                          : "Enter a task for OpenCode to work on..."
+                    }
+                    value={initialPrompt}
+                    onChange={(e) => setInitialPrompt(e.target.value)}
+                    onKeyDown={handlePromptKeyDown}
+                    disabled={isLoading}
+                    rows={3}
+                    className="resize-y max-h-[calc(15*theme(lineHeight.normal)*1em)] overflow-y-auto"
+                  />
+                  {initialPromptAttachments.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {initialPromptAttachments.map((attachment) => (
+                        <div
+                          key={attachment.id}
+                          className="group relative h-16 w-16 overflow-hidden rounded-md border border-border bg-muted"
+                        >
+                          <img
+                            src={attachment.previewUrl}
+                            alt={attachment.name}
+                            className="h-full w-full object-cover"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeInitialPromptAttachment(attachment.id)}
+                            disabled={isLoading}
+                            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
+                            aria-label={`Remove ${attachment.name}`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
-            </div>
-          )}
-          </TabsContent>
-
+            </TabsContent>
           </Tabs>
         </form>
 
@@ -1434,9 +1392,10 @@ export function CreateEnvironmentDialog({
             type="button"
             onClick={() => formRef.current?.requestSubmit()}
             disabled={
-              isLoading
-              || (environmentType === "containerized" && (!dockerAvailable || !validatePortMappings()))
-              || (environmentType === "local" && !localEnvironmentAvailable)
+              isLoading ||
+              (environmentType === "containerized" &&
+                (!dockerAvailable || !validatePortMappings())) ||
+              (environmentType === "local" && !localEnvironmentAvailable)
             }
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

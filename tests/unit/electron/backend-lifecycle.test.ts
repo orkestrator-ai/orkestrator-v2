@@ -7,10 +7,29 @@ import {
 describe("desktop backend lifecycle", () => {
   test("forwards every web client operation to the current backend", async () => {
     const backend = {
-      getWebClientStatus: mock(async () => ({ enabled: true, running: false, url: null, error: null })),
-      setWebClientEnabled: mock(async (enabled: boolean) => ({ enabled, running: enabled, url: null, error: null })),
-      resetWebClientServe: mock(async () => ({ enabled: true, running: true, url: null, error: null })),
-      getTokenSettings: mock(async () => ({ token: "gateway-token-123456", editable: true, source: "file" as const })),
+      getWebClientStatus: mock(async () => ({
+        enabled: true,
+        running: false,
+        url: null,
+        error: null,
+      })),
+      setWebClientEnabled: mock(async (enabled: boolean) => ({
+        enabled,
+        running: enabled,
+        url: null,
+        error: null,
+      })),
+      resetWebClientServe: mock(async () => ({
+        enabled: true,
+        running: true,
+        url: null,
+        error: null,
+      })),
+      getTokenSettings: mock(async () => ({
+        token: "gateway-token-123456",
+        editable: true,
+        source: "file" as const,
+      })),
       setToken: mock(async (token: string) => ({ token, editable: true, source: "file" as const })),
     };
     const controls = createBackendWebClientControls(() => backend as never);
@@ -36,7 +55,11 @@ describe("desktop backend lifecycle", () => {
       getWebClientStatus: async () => ({ enabled: false, running: false, url: null, error: null }),
       setWebClientEnabled: async (enabled) => ({ enabled, running: false, url: null, error: null }),
       resetWebClientServe: async () => ({ enabled: true, running: true, url: null, error: null }),
-      getTokenSettings: async () => ({ token: "gateway-token-123456", editable: true, source: "file" }),
+      getTokenSettings: async () => ({
+        token: "gateway-token-123456",
+        editable: true,
+        source: "file",
+      }),
       setToken: async (token) => ({ token, editable: true, source: "file" }),
     } as never;
     await expect(controls.getWebClientStatus()).resolves.toMatchObject({ enabled: false });
@@ -44,10 +67,12 @@ describe("desktop backend lifecycle", () => {
 
   test("stops the backend when Electron begins quitting", () => {
     let beforeQuit: (() => void) | undefined;
-    const app = { on: mock((event: string, listener: () => void) => {
-      if (event === "before-quit") beforeQuit = listener;
-      return app as never;
-    }) };
+    const app = {
+      on: mock((event: string, listener: () => void) => {
+        if (event === "before-quit") beforeQuit = listener;
+        return app as never;
+      }),
+    };
     const backendProcess = { stop: mock(() => undefined) };
 
     registerBackendShutdown(app as never, backendProcess as never);

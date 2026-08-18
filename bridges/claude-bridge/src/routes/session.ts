@@ -107,14 +107,13 @@ function isValidImageDataUrl(value: string): boolean {
   if (!match) return false;
   const data = match[1].replace(/\s+/g, "");
   const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
-  const decodedBytes = data.length % 4 === 0
-    ? (data.length / 4) * 3 - padding
-    : Number.POSITIVE_INFINITY;
+  const decodedBytes =
+    data.length % 4 === 0 ? (data.length / 4) * 3 - padding : Number.POSITIVE_INFINITY;
   return (
-    data.length > 0
-    && data.length % 4 === 0
-    && /^[A-Za-z0-9+/]+={0,2}$/.test(data)
-    && decodedBytes <= MAX_IMAGE_ATTACHMENT_BYTES
+    data.length > 0 &&
+    data.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(data) &&
+    decodedBytes <= MAX_IMAGE_ATTACHMENT_BYTES
   );
 }
 
@@ -124,18 +123,23 @@ function isBoundedClaudeQuestionAnswers(
 ): value is string[][] {
   if (!Array.isArray(value) || value.length !== questionCount) return false;
   if (value.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest) return false;
-  if (Buffer.byteLength(JSON.stringify(value), "utf8")
-    > AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes) {
+  if (
+    Buffer.byteLength(JSON.stringify(value), "utf8") >
+    AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
+  ) {
     return false;
   }
-  return value.every((answers) =>
-    Array.isArray(answers)
-    && answers.length > 0
-    && answers.length <= AGENT_INTERACTION_LIMITS.maxAnswerCount
-    && answers.every((answer) =>
-      typeof answer === "string"
-      && Buffer.byteLength(answer, "utf8")
-        <= AGENT_INTERACTION_LIMITS.maxFreeTextBytes));
+  return value.every(
+    (answers) =>
+      Array.isArray(answers) &&
+      answers.length > 0 &&
+      answers.length <= AGENT_INTERACTION_LIMITS.maxAnswerCount &&
+      answers.every(
+        (answer) =>
+          typeof answer === "string" &&
+          Buffer.byteLength(answer, "utf8") <= AGENT_INTERACTION_LIMITS.maxFreeTextBytes,
+      ),
+  );
 }
 
 // Create a new session
@@ -146,7 +150,10 @@ session.post("/create", async (c) => {
     const clientSessionKey = body.clientSessionKey as string | undefined;
 
     const newSession = await createOrRecoverSession(title, clientSessionKey);
-    console.debug("[session] Created session", { sessionId: newSession.id, title: newSession.title });
+    console.debug("[session] Created session", {
+      sessionId: newSession.id,
+      title: newSession.title,
+    });
 
     const response: CreateSessionResponse = {
       sessionId: newSession.id,
@@ -158,7 +165,7 @@ session.post("/create", async (c) => {
     console.error("[session] Error creating session:", error);
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to create session" },
-      500
+      500,
     );
   }
 });
@@ -208,7 +215,7 @@ async function resolveSession(
   | { ok: false; body: { error: string }; status: 400 | 404 | 409 | 500 }
 > {
   try {
-    return { ok: true, session: getSession(id) ?? await ensurePersistedSession(id) };
+    return { ok: true, session: getSession(id) ?? (await ensurePersistedSession(id)) };
   } catch (error) {
     console.error(`[session] ${failureMessage}:`, error);
     return {
@@ -263,8 +270,7 @@ session.get("/:id", async (c) => {
     promptSuggestion: sessionData.promptSuggestion,
     planMode: sessionData.planMode,
     backgroundTasks: sessionData.backgroundTasks ?? {},
-    completionBlockedByBackgroundTasks:
-      sessionData.completionBlockedByBackgroundTasks === true,
+    completionBlockedByBackgroundTasks: sessionData.completionBlockedByBackgroundTasks === true,
     rewindInProgress: sessionData.rewindInProgress === true,
   });
 });
@@ -279,30 +285,22 @@ session.put("/:id/preferences", async (c) => {
       return c.json({ error: "Request body must be valid JSON" }, 400);
     }
     if (
-      body === null
-      || typeof body !== "object"
-      || Array.isArray(body)
-      || Object.getPrototypeOf(body) !== Object.prototype
+      body === null ||
+      typeof body !== "object" ||
+      Array.isArray(body) ||
+      Object.getPrototypeOf(body) !== Object.prototype
     ) {
       return c.json({ error: "Request body must be a JSON object" }, 400);
     }
     const record = body as Record<string, unknown>;
-    const unexpectedField = Object.keys(record).find(
-      (key) => key !== "planMode",
-    );
+    const unexpectedField = Object.keys(record).find((key) => key !== "planMode");
     if (unexpectedField) {
-      return c.json(
-        { error: `Unexpected session preference field: ${unexpectedField}` },
-        400,
-      );
+      return c.json({ error: `Unexpected session preference field: ${unexpectedField}` }, 400);
     }
     if (!Object.hasOwn(record, "planMode")) {
       return c.json({ error: "planMode is required" }, 400);
     }
-    if (
-      Object.hasOwn(record, "planMode")
-      && typeof record.planMode !== "boolean"
-    ) {
+    if (Object.hasOwn(record, "planMode") && typeof record.planMode !== "boolean") {
       return c.json({ error: "planMode must be a boolean" }, 400);
     }
     const updated = await setSessionPreferences(id, {
@@ -334,9 +332,9 @@ session.get("/:id/structured-output", (c) => {
   }
   const requestId = c.req.query("requestId")?.trim();
   if (
-    requestId
-    && sessionData.structuredOutputRequestId
-    && requestId !== sessionData.structuredOutputRequestId
+    requestId &&
+    sessionData.structuredOutputRequestId &&
+    requestId !== sessionData.structuredOutputRequestId
   ) {
     return c.json({ structuredOutput: null, requestId });
   }
@@ -353,7 +351,7 @@ session.get("/:id/structured-output", (c) => {
 // task tool part is still present.
 session.get("/:id/tasks", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  const sessionData = getSession(id) ?? (await ensurePersistedSession(id));
 
   if (!sessionData) {
     return c.json({ error: "Session not found" }, 404);
@@ -401,13 +399,24 @@ session.post("/:id/prompt", async (c) => {
     const prompt = body.prompt;
     const model = body.model as string | undefined;
     const rawEffort = body.effort as string | undefined;
-    const effort = rawEffort && ["low", "medium", "high", "xhigh", "max"].includes(rawEffort)
-      ? (rawEffort as "low" | "medium" | "high" | "xhigh" | "max")
-      : undefined;
+    const effort =
+      rawEffort && ["low", "medium", "high", "xhigh", "max"].includes(rawEffort)
+        ? (rawEffort as "low" | "medium" | "high" | "xhigh" | "max")
+        : undefined;
     const rawPermissionMode = body.permissionMode as string | undefined;
-    const permissionMode = rawPermissionMode && ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"].includes(rawPermissionMode)
-      ? (rawPermissionMode as "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto")
-      : undefined;
+    const permissionMode =
+      rawPermissionMode &&
+      ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "auto"].includes(
+        rawPermissionMode,
+      )
+        ? (rawPermissionMode as
+            | "default"
+            | "acceptEdits"
+            | "bypassPermissions"
+            | "plan"
+            | "dontAsk"
+            | "auto")
+        : undefined;
     const attachments = body.attachments as
       | Array<{
           type: "file" | "image";
@@ -418,27 +427,22 @@ session.post("/:id/prompt", async (c) => {
       | undefined;
     const fastMode = typeof body.fastMode === "boolean" ? body.fastMode : undefined;
     const agent =
-      typeof body.agent === "string" && body.agent.trim()
-        ? body.agent.trim()
-        : undefined;
+      typeof body.agent === "string" && body.agent.trim() ? body.agent.trim() : undefined;
     const includeLocalSettings =
-      typeof body.includeLocalSettings === "boolean"
-        ? body.includeLocalSettings
-        : undefined;
+      typeof body.includeLocalSettings === "boolean" ? body.includeLocalSettings : undefined;
     const promptSuggestions =
-      typeof body.promptSuggestions === "boolean"
-        ? body.promptSuggestions
-        : undefined;
+      typeof body.promptSuggestions === "boolean" ? body.promptSuggestions : undefined;
     const outputSchema = body.outputSchema;
     // Every prompt is deduplicated on this id, not just structured ones: a plain
     // prompt retried after a lost HTTP response would otherwise run its shell
     // commands and file edits twice. Clients always send one; the fallback keeps
     // structured turns addressable for callers that predate that.
-    const requestId = typeof body.requestId === "string" && body.requestId.trim().length > 0
-      ? body.requestId.trim()
-      : outputSchema === undefined
-        ? undefined
-        : crypto.randomUUID();
+    const requestId =
+      typeof body.requestId === "string" && body.requestId.trim().length > 0
+        ? body.requestId.trim()
+        : outputSchema === undefined
+          ? undefined
+          : crypto.randomUUID();
 
     if (outputSchema !== undefined && !isJsonSchema(outputSchema)) {
       return c.json({ error: "outputSchema must be a JSON Schema object" }, 400);
@@ -447,34 +451,34 @@ session.post("/:id/prompt", async (c) => {
       return c.json({ error: "requestId must be at most 200 characters" }, 400);
     }
 
-    const attachmentsAreValid = attachments === undefined || (
-      Array.isArray(attachments)
-      && attachments.every((attachment) =>
-        attachment
-        && (attachment.type === "file" || attachment.type === "image")
-        && typeof attachment.path === "string"
-        && (attachment.dataUrl === undefined || typeof attachment.dataUrl === "string")
-        && (attachment.filename === undefined || typeof attachment.filename === "string")
-        && (attachment.type === "image" || attachment.dataUrl === undefined)
-        && (
-          attachment.dataUrl === undefined
-          || isValidImageDataUrl(attachment.dataUrl)
-        )
-        && (
-          attachment.path.trim().length > 0
-          || (attachment.type === "image" && attachment.dataUrl !== undefined)
-        )
-      )
-    );
+    const attachmentsAreValid =
+      attachments === undefined ||
+      (Array.isArray(attachments) &&
+        attachments.every(
+          (attachment) =>
+            attachment &&
+            (attachment.type === "file" || attachment.type === "image") &&
+            typeof attachment.path === "string" &&
+            (attachment.dataUrl === undefined || typeof attachment.dataUrl === "string") &&
+            (attachment.filename === undefined || typeof attachment.filename === "string") &&
+            (attachment.type === "image" || attachment.dataUrl === undefined) &&
+            (attachment.dataUrl === undefined || isValidImageDataUrl(attachment.dataUrl)) &&
+            (attachment.path.trim().length > 0 ||
+              (attachment.type === "image" && attachment.dataUrl !== undefined)),
+        ));
     if (!attachmentsAreValid) {
-      return c.json({
-        error: "Attachments are invalid; inline images must be valid base64 and no larger than 8MB",
-      }, 400);
+      return c.json(
+        {
+          error:
+            "Attachments are invalid; inline images must be valid base64 and no larger than 8MB",
+        },
+        400,
+      );
     }
 
     if (
-      typeof prompt !== "string"
-      || (prompt.trim().length === 0 && (!attachments || attachments.length === 0))
+      typeof prompt !== "string" ||
+      (prompt.trim().length === 0 && (!attachments || attachments.length === 0))
     ) {
       return c.json({ error: "Prompt is required" }, 400);
     }
@@ -485,12 +489,15 @@ session.post("/:id/prompt", async (c) => {
     if (requestId) {
       const dispatchState = getPromptDispatchState(id, requestId);
       if (dispatchState === "processing") {
-        return c.json({
-          status: "processing",
-          requestId,
-          duplicate: true,
-          turnStartedAt: sessionData.turnStartedAt,
-        }, 202);
+        return c.json(
+          {
+            status: "processing",
+            requestId,
+            duplicate: true,
+            turnStartedAt: sessionData.turnStartedAt,
+          },
+          202,
+        );
       }
       if (dispatchState === "already-processed") {
         return c.json({ status: "already-processed", requestId, duplicate: true });
@@ -539,11 +546,14 @@ session.post("/:id/prompt", async (c) => {
         });
       }
       console.debug("[session] Prompt accepted", { sessionId: id });
-      return c.json({
-        status: "processing",
-        requestId,
-        turnStartedAt: sessionData.turnStartedAt,
-      }, 202);
+      return c.json(
+        {
+          status: "processing",
+          requestId,
+          turnStartedAt: sessionData.turnStartedAt,
+        },
+        202,
+      );
     }
     if (sessionData.status === "running") {
       return c.json({ error: "Session is already processing a prompt" }, 409);
@@ -581,11 +591,14 @@ session.post("/:id/prompt", async (c) => {
     });
 
     console.debug("[session] Prompt accepted", { sessionId: id });
-    return c.json({
-      status: "processing",
-      requestId,
-      turnStartedAt: sessionData.turnStartedAt,
-    }, 202);
+    return c.json(
+      {
+        status: "processing",
+        requestId,
+        turnStartedAt: sessionData.turnStartedAt,
+      },
+      202,
+    );
   } catch (error) {
     console.error("[session] Error sending prompt:", error);
     return c.json(
@@ -604,12 +617,11 @@ session.delete("/:id/questions/:questionId", (c) => {
     return c.json({ error: "Session not found" }, 404);
   }
 
-  const pendingQuestion = getPendingQuestions(sessionId).find((question) => question.id === questionId);
+  const pendingQuestion = getPendingQuestions(sessionId).find(
+    (question) => question.id === questionId,
+  );
   if (!pendingQuestion || !dismissQuestion(questionId)) {
-    return c.json(
-      stalePrompt("Question is no longer pending"),
-      STALE_PROMPT_STATUS,
-    );
+    return c.json(stalePrompt("Question is no longer pending"), STALE_PROMPT_STATUS);
   }
 
   return c.json({ status: "dismissed" });
@@ -672,7 +684,7 @@ session.post("/:id/rename", async (c) => {
 
 session.post("/:id/fork", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  const sessionData = getSession(id) ?? (await ensurePersistedSession(id));
   if (!sessionData) return c.json({ error: "Session not found" }, 404);
 
   const body = await c.req.json().catch(() => ({}));
@@ -680,16 +692,16 @@ session.post("/:id/fork", async (c) => {
     typeof body.upToMessageId === "string" && body.upToMessageId.trim()
       ? body.upToMessageId.trim()
       : undefined;
-  const title =
-    typeof body.title === "string" && body.title.trim()
-      ? body.title.trim()
-      : undefined;
+  const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : undefined;
   try {
     const forked = await forkPersistedSession(id, { upToMessageId, title });
-    return c.json({
-      sessionId: forked.id,
-      title: forked.title,
-    }, 201);
+    return c.json(
+      {
+        sessionId: forked.id,
+        title: forked.title,
+      },
+      201,
+    );
   } catch (error) {
     console.error("[session] Failed to fork session:", error);
     return c.json(
@@ -719,12 +731,11 @@ session.post("/:id/compact", async (c) => {
 
 session.post("/:id/rewind", async (c) => {
   const id = c.req.param("id");
-  const sessionData = getSession(id) ?? await ensurePersistedSession(id);
+  const sessionData = getSession(id) ?? (await ensurePersistedSession(id));
   if (!sessionData) return c.json({ error: "Session not found" }, 404);
 
   const body = await c.req.json().catch(() => ({}));
-  const messageId =
-    typeof body.messageId === "string" ? body.messageId.trim() : "";
+  const messageId = typeof body.messageId === "string" ? body.messageId.trim() : "";
   if (!messageId) return c.json({ error: "messageId is required" }, 400);
   const dryRun = body.dryRun === true;
   try {
@@ -741,17 +752,11 @@ session.post("/:id/rewind", async (c) => {
 
 session.post("/:id/tasks/:taskId/stop", async (c) => {
   try {
-    const stopped = await stopBackgroundTask(
-      c.req.param("id"),
-      c.req.param("taskId"),
-    );
+    const stopped = await stopBackgroundTask(c.req.param("id"), c.req.param("taskId"));
     if (stopped.ok) return c.json({ status: "stopped" });
     // "No control channel" is a conflict, not a 404: the task exists and the
     // user can see it — nothing live can currently reach it.
-    return c.json(
-      { error: stopped.message },
-      stopped.reason === "no_control_channel" ? 409 : 404,
-    );
+    return c.json({ error: stopped.message }, stopped.reason === "no_control_channel" ? 409 : 404);
   } catch (error) {
     console.error("[session] Failed to stop background task:", error);
     return c.json(
@@ -864,16 +869,10 @@ session.post("/:id/questions/:questionId/answer", questionAnswerBodyLimit, async
 
     if (!pendingQuestion) {
       console.log("[session] Pending question not found:", questionId);
-      return c.json(
-        stalePrompt("Question is no longer pending"),
-        STALE_PROMPT_STATUS,
-      );
+      return c.json(stalePrompt("Question is no longer pending"), STALE_PROMPT_STATUS);
     }
 
-    if (!isBoundedClaudeQuestionAnswers(
-      answersArray,
-      pendingQuestion.questions.length,
-    )) {
+    if (!isBoundedClaudeQuestionAnswers(answersArray, pendingQuestion.questions.length)) {
       return c.json({ error: "Answers must be a bounded string array for every question" }, 400);
     }
 
@@ -901,16 +900,13 @@ session.post("/:id/questions/:questionId/answer", questionAnswerBodyLimit, async
     } else {
       // Raced between the lookup above and the answer: it was resolved by
       // something else in between, which is stale rather than missing.
-      return c.json(
-        stalePrompt("Question is no longer pending"),
-        STALE_PROMPT_STATUS,
-      );
+      return c.json(stalePrompt("Question is no longer pending"), STALE_PROMPT_STATUS);
     }
   } catch (error) {
     console.error("[session] Error answering question:", error);
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to answer question" },
-      500
+      500,
     );
   }
 });
@@ -947,13 +943,11 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
       return c.json({ error: "'approved' boolean is required" }, 400);
     }
 
-    const pendingApproval = getPendingPlanApprovals(sessionId)
-      .find((approval) => approval.id === approvalId);
+    const pendingApproval = getPendingPlanApprovals(sessionId).find(
+      (approval) => approval.id === approvalId,
+    );
     if (!pendingApproval) {
-      return c.json(
-        stalePrompt("Plan approval is no longer pending"),
-        STALE_PROMPT_STATUS,
-      );
+      return c.json(stalePrompt("Plan approval is no longer pending"), STALE_PROMPT_STATUS);
     }
 
     console.log("[session] Plan approval response received", {
@@ -968,16 +962,13 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
     if (responded) {
       return c.json({ status: approved ? "approved" : "rejected" });
     } else {
-      return c.json(
-        stalePrompt("Plan approval is no longer pending"),
-        STALE_PROMPT_STATUS,
-      );
+      return c.json(stalePrompt("Plan approval is no longer pending"), STALE_PROMPT_STATUS);
     }
   } catch (error) {
     console.error("[session] Error responding to plan approval:", error);
     return c.json(
       { error: error instanceof Error ? error.message : "Failed to respond to plan approval" },
-      500
+      500,
     );
   }
 });

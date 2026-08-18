@@ -7,10 +7,7 @@ export { useClaudeOptionsStore } from "./claudeOptionsStore";
 export type { ClaudeOptions, AgentType } from "./claudeOptionsStore";
 export { useAgentActivityStore } from "./agentActivityStore";
 export type { AgentActivityState } from "./agentActivityStore";
-export {
-  syncCachedAcpModels,
-  useAgentModelCatalogStore,
-} from "./agentModelCatalogStore";
+export { syncCachedAcpModels, useAgentModelCatalogStore } from "./agentModelCatalogStore";
 export { useFilesPanelStore } from "./filesPanelStore";
 export type { FilesPanelTab } from "./filesPanelStore";
 export { usePaneLayoutStore, getAllLeaves } from "./paneLayoutStore";
@@ -21,15 +18,24 @@ export { useCodexStore } from "./codexStore";
 export { useErrorDialogStore } from "./errorDialogStore";
 export type { ErrorDetails } from "./errorDialogStore";
 export { useFileDirtyStore } from "./fileDirtyStore";
-export { useKanbanStore, type KanbanTask, type KanbanStatus, type KanbanComment, type ProjectNotes } from "./kanbanStore";
-export { useFeaturePlanStore, type FeaturePlan, type FeaturePlanMessage, type FeaturePlanStatus, type FeatureStoryCard } from "./featurePlanStore";
+export {
+  useKanbanStore,
+  type KanbanTask,
+  type KanbanStatus,
+  type KanbanComment,
+  type ProjectNotes,
+} from "./kanbanStore";
+export {
+  useFeaturePlanStore,
+  type FeaturePlan,
+  type FeaturePlanMessage,
+  type FeaturePlanStatus,
+  type FeatureStoryCard,
+} from "./featurePlanStore";
 export { useGitHubIssuesStore, githubIssueDetailKey } from "./githubIssuesStore";
 export { usePrMonitorStore } from "./prMonitorStore";
 export { useBuildPipelineStore } from "./buildPipelineStore";
-export {
-  useLoopedReviewStore,
-  LOOPED_REVIEW_DEFAULT_ALLOWANCE,
-} from "./loopedReviewStore";
+export { useLoopedReviewStore, LOOPED_REVIEW_DEFAULT_ALLOWANCE } from "./loopedReviewStore";
 export { useMultiReviewStore } from "./multiReviewStore";
 export type {
   BuildPipeline,

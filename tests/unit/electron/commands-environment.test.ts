@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -146,8 +141,6 @@ exit 1
     }));
     return created;
   }
-
-
 
   test("routes all manifest-backed snapshot commands through their resource cursor", async () => {
     const generation = "a".repeat(32);
@@ -172,17 +165,19 @@ exit 1
       getKanbanTasks: mock(async () => []),
       getProjectNotes: mock(async () => ({ projectId: "project-1", content: "notes" })),
       getFeaturePlans: mock(async () => []),
-      readConditionalResourceSnapshot: mock(async (
-        _resource: string,
-        requestedGeneration: string,
-        _requestedRevision: string,
-        load: () => Promise<unknown> | unknown,
-      ) => ({
-        status: "changed" as const,
-        generation: requestedGeneration,
-        revision,
-        snapshot: await load(),
-      })),
+      readConditionalResourceSnapshot: mock(
+        async (
+          _resource: string,
+          requestedGeneration: string,
+          _requestedRevision: string,
+          load: () => Promise<unknown> | unknown,
+        ) => ({
+          status: "changed" as const,
+          generation: requestedGeneration,
+          revision,
+          snapshot: await load(),
+        }),
+      ),
     };
     const context = { storage } as unknown as CommandContext;
     const commands = createCommandRegistry();
@@ -204,29 +199,74 @@ exit 1
           repositories: {},
         },
       },
-      { command: "get_environment_snapshots", resource: "environment", args: { projectId: "project-1" }, snapshot: [] },
-      { command: "get_sessions_by_environment", resource: "session", args: { environmentId: "env-1" }, snapshot: [] },
-      { command: "get_pane_layout", resource: "pane-layout", args: { environmentId: "env-1" }, snapshot: null },
-      { command: "list_looped_review_workflows", resource: "looped-review", args: { environmentId: "env-1" }, snapshot: [] },
-      { command: "list_build_pipelines", resource: "build-pipeline", args: { projectId: "project-1" }, snapshot: [] },
-      { command: "list_prompt_queues", resource: "prompt-queue", args: { environmentId: "env-1" }, snapshot: [] },
-      { command: "get_kanban_tasks", resource: "kanban", args: { projectId: "project-1" }, snapshot: [] },
+      {
+        command: "get_environment_snapshots",
+        resource: "environment",
+        args: { projectId: "project-1" },
+        snapshot: [],
+      },
+      {
+        command: "get_sessions_by_environment",
+        resource: "session",
+        args: { environmentId: "env-1" },
+        snapshot: [],
+      },
+      {
+        command: "get_pane_layout",
+        resource: "pane-layout",
+        args: { environmentId: "env-1" },
+        snapshot: null,
+      },
+      {
+        command: "list_looped_review_workflows",
+        resource: "looped-review",
+        args: { environmentId: "env-1" },
+        snapshot: [],
+      },
+      {
+        command: "list_build_pipelines",
+        resource: "build-pipeline",
+        args: { projectId: "project-1" },
+        snapshot: [],
+      },
+      {
+        command: "list_prompt_queues",
+        resource: "prompt-queue",
+        args: { environmentId: "env-1" },
+        snapshot: [],
+      },
+      {
+        command: "get_kanban_tasks",
+        resource: "kanban",
+        args: { projectId: "project-1" },
+        snapshot: [],
+      },
       {
         command: "get_project_notes",
         resource: "project-notes",
         args: { projectId: "project-1" },
         snapshot: { projectId: "project-1", content: "notes" },
       },
-      { command: "get_feature_plans", resource: "feature-plan", args: { projectId: "project-1" }, snapshot: [] },
+      {
+        command: "get_feature_plans",
+        resource: "feature-plan",
+        args: { projectId: "project-1" },
+        snapshot: [],
+      },
     ] as const;
 
     for (const entry of cases) {
       storage.readConditionalResourceSnapshot.mockClear();
-      await expect(commands.get(entry.command)?.({
-        ...entry.args,
-        knownManifestGeneration: generation,
-        knownResourceRevision: revision,
-      }, context)).resolves.toEqual({
+      await expect(
+        commands.get(entry.command)?.(
+          {
+            ...entry.args,
+            knownManifestGeneration: generation,
+            knownResourceRevision: revision,
+          },
+          context,
+        ),
+      ).resolves.toEqual({
         status: "changed",
         generation,
         revision,
@@ -244,11 +284,16 @@ exit 1
         generation,
         revision,
       }));
-      await expect(commands.get(entry.command)?.({
-        ...entry.args,
-        knownManifestGeneration: generation,
-        knownResourceRevision: revision,
-      }, context)).resolves.toEqual({
+      await expect(
+        commands.get(entry.command)?.(
+          {
+            ...entry.args,
+            knownManifestGeneration: generation,
+            knownResourceRevision: revision,
+          },
+          context,
+        ),
+      ).resolves.toEqual({
         status: "unchanged",
         generation,
         revision,
@@ -256,63 +301,75 @@ exit 1
     }
   });
 
+  test(
+    "retains a failed pending rename so a later backend start can retry it",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("timestamp-name");
+      const environment = createEnvironment({
+        id: "env-pending-rename-retry",
+        name: "timestamp-name",
+        branch: "timestamp-name",
+        environmentType: "local",
+        worktreePath,
+        status: "stopped",
+        setupScriptsComplete: true,
+        pendingRenamePrompt: "Please review the OAuth callback flow",
+      });
+      const { context, emitted } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const originalConsoleWarn = console.warn;
+      const consoleWarnMock = mock(() => undefined);
+      console.warn = consoleWarnMock as typeof console.warn;
 
-
-  test("retains a failed pending rename so a later backend start can retry it", async () => {
-    const worktreePath = await createGitRepoOnBranch("timestamp-name");
-    const environment = createEnvironment({
-      id: "env-pending-rename-retry",
-      name: "timestamp-name",
-      branch: "timestamp-name",
-      environmentType: "local",
-      worktreePath,
-      status: "stopped",
-      setupScriptsComplete: true,
-      pendingRenamePrompt: "Please review the OAuth callback flow",
-    });
-    const { context, emitted } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const originalConsoleWarn = console.warn;
-    const consoleWarnMock = mock(() => undefined);
-    console.warn = consoleWarnMock as typeof console.warn;
-
-    try {
-      await withFakeCodex(`#!/bin/sh
+      try {
+        await withFakeCodex(
+          `#!/bin/sh
 printf 'codex auth required\\n' >&2
 exit 1
-`, async () => {
-        const firstRegistry = createCommandRegistry();
-        await firstRegistry.get("start_environment")?.({ environmentId: environment.id }, context);
-        await waitForCondition(
-          () => consoleWarnMock.mock.calls.some(([message]) =>
-            message === "[ElectronBackend] Failed to rename environment from pending prompt:"
-          ),
-          "failed pending rename to settle",
+`,
+          async () => {
+            const firstRegistry = createCommandRegistry();
+            await firstRegistry.get("start_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await waitForCondition(
+              () =>
+                consoleWarnMock.mock.calls.some(
+                  ([message]) =>
+                    message ===
+                    "[ElectronBackend] Failed to rename environment from pending prompt:",
+                ),
+              "failed pending rename to settle",
+            );
+          },
         );
-      });
 
-      expect(environment.pendingRenamePrompt).toBe("Please review the OAuth callback flow");
-      expect(emitted.some(({ event }) => event === "environment-renamed")).toBe(false);
+        expect(environment.pendingRenamePrompt).toBe("Please review the OAuth callback flow");
+        expect(emitted.some(({ event }) => event === "environment-renamed")).toBe(false);
 
-      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-        // A fresh registry represents the backend process rebuilding its in-memory
-        // task state while retaining the persisted environment snapshot.
-        const restartedRegistry = createCommandRegistry();
-        await restartedRegistry.get("start_environment")?.({ environmentId: environment.id }, context);
-        await waitForCondition(
-          () => emitted.some(({ event }) => event === "environment-renamed"),
-          "retried pending environment rename",
-        );
-      });
+        await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+          // A fresh registry represents the backend process rebuilding its in-memory
+          // task state while retaining the persisted environment snapshot.
+          const restartedRegistry = createCommandRegistry();
+          await restartedRegistry.get("start_environment")?.(
+            { environmentId: environment.id },
+            context,
+          );
+          await waitForCondition(
+            () => emitted.some(({ event }) => event === "environment-renamed"),
+            "retried pending environment rename",
+          );
+        });
 
-      expect(environment.name).toBe("review-oauth-flow");
-      expect(environment.pendingRenamePrompt).toBeUndefined();
-    } finally {
-      console.warn = originalConsoleWarn;
-    }
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+        expect(environment.name).toBe("review-oauth-flow");
+        expect(environment.pendingRenamePrompt).toBeUndefined();
+      } finally {
+        console.warn = originalConsoleWarn;
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("projects launch-only fields only while a launch remains pending", () => {
     const environment = createEnvironment({
@@ -343,8 +400,6 @@ exit 1
     });
   });
 
-
-
   /**
    * The bodies stay backend-only, but the renderer still has to know whether a
    * targeted detail read is worth making — and whether failing that read should
@@ -353,28 +408,25 @@ exit 1
    */
   test("always reports whether stripped attachment bodies exist", () => {
     const withAttachments = createEnvironment({
-      initialPromptAttachments: [{
-        id: "image-1",
-        name: "private.png",
-        base64Data: "cHJpdmF0ZQ==",
-      }],
+      initialPromptAttachments: [
+        {
+          id: "image-1",
+          name: "private.png",
+          base64Data: "cHJpdmF0ZQ==",
+        },
+      ],
     });
     expect(toClientEnvironment(withAttachments)).toMatchObject({
       hasInitialPromptAttachments: true,
     });
-    expect(toClientEnvironment(withAttachments)).not.toHaveProperty(
-      "initialPromptAttachments",
-    );
+    expect(toClientEnvironment(withAttachments)).not.toHaveProperty("initialPromptAttachments");
 
-    expect(toClientEnvironment(createEnvironment({})).hasInitialPromptAttachments)
-      .toBe(false);
+    expect(toClientEnvironment(createEnvironment({})).hasInitialPromptAttachments).toBe(false);
     expect(
       toClientEnvironment(createEnvironment({ initialPromptAttachments: [] }))
         .hasInitialPromptAttachments,
     ).toBe(false);
   });
-
-
 
   test("injects the current managed GitHub credential into every OpenCode shell", async () => {
     const directory = await createTempDir("ork-opencode-github-plugin-");
@@ -384,9 +436,9 @@ exit 1
       pluginFile,
       commandTesting.buildOpenCodeGitHubEnvironmentPluginSource(credentialFile),
     );
-    const pluginModule = await import(
+    const pluginModule = (await import(
       `${pathToFileURL(pluginFile).href}?test=${randomUUID()}`
-    ) as {
+    )) as {
       OrkestratorGitHubEnvironmentPlugin: () => Promise<{
         "shell.env": (
           input: Record<string, string>,
@@ -420,8 +472,6 @@ exit 1
     await expect(readEnvironment()).resolves.toEqual({});
   });
 
-
-
   test("preserves unusual Git paths and binary stats in NUL-delimited output", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
     const textPaths = [
@@ -443,26 +493,28 @@ exit 1
       await fs.writeFile(path.join(worktree, filePath), "base\nchanged\n");
     }
     await fs.writeFile(path.join(worktree, "binary.bin"), Buffer.from([3, 0, 4]));
-    const changes = await createCommandRegistry().get("get_local_git_status")?.(
+    const changes = (await createCommandRegistry().get("get_local_git_status")?.(
       { worktreePath: worktree, targetBranch: base },
       createContext(createEnvironment()).context,
-    ) as Array<{ path: string; additions: number; deletions: number }>;
+    )) as Array<{ path: string; additions: number; deletions: number }>;
 
     for (const filePath of textPaths) {
-      expect(changes).toContainEqual(expect.objectContaining({
-        path: filePath,
-        additions: 1,
-        deletions: 0,
-      }));
+      expect(changes).toContainEqual(
+        expect.objectContaining({
+          path: filePath,
+          additions: 1,
+          deletions: 0,
+        }),
+      );
     }
-    expect(changes).toContainEqual(expect.objectContaining({
-      path: "binary.bin",
-      additions: 0,
-      deletions: 0,
-    }));
+    expect(changes).toContainEqual(
+      expect.objectContaining({
+        path: "binary.bin",
+        additions: 0,
+        deletions: 0,
+      }),
+    );
   });
-
-
 
   test("rejects a local HEAD that git did not report as a commit sha", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
@@ -475,13 +527,12 @@ exit 1
     const { context } = createContext(environment);
 
     await withFakeGitSubcommandOutput("rev-parse", "not-a-commit", async () => {
-      await expect(commandTesting.establishCreatedFromCommit(environment, context))
-        .rejects.toThrow("Git returned an invalid HEAD commit");
+      await expect(commandTesting.establishCreatedFromCommit(environment, context)).rejects.toThrow(
+        "Git returned an invalid HEAD commit",
+      );
     });
     expect(environment.createdFromCommit).toBeUndefined();
   });
-
-
 
   test("returns the persisted Claude catalog as last-known-good when refresh fails", async () => {
     const worktreePath = await createTempDir("ork-electron-worktree-stale-claude-models-");
@@ -501,11 +552,10 @@ exit 1
     context.appRoot = missingBridgeRoot;
     context.resourceRoot = missingBridgeRoot;
 
-    const snapshot = await createCommandRegistry()
-      .get("get_claude_model_catalog")?.(
-        { environmentId: environment.id },
-        context,
-      );
+    const snapshot = await createCommandRegistry().get("get_claude_model_catalog")?.(
+      { environmentId: environment.id },
+      context,
+    );
 
     expect(snapshot).toMatchObject({
       environmentId: environment.id,
@@ -516,5 +566,4 @@ exit 1
     expect(snapshot).toHaveProperty("error");
     expect(updates).toContainEqual({ claudeModelCatalog: snapshot });
   });
-
 });

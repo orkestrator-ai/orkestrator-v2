@@ -2,7 +2,11 @@
 // Handles session state and interacts with Claude Agent SDK
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import type {
+  ImageBlockParam,
+  TextBlockParam,
+  ContentBlockParam,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   ModelInfo,
   SessionState,
@@ -30,10 +34,7 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -175,12 +176,9 @@ export async function sendPrompt(
   const structuredRequestId = options?.outputSchema
     ? (dispatchRequestId ?? crypto.randomUUID())
     : undefined;
-  const claimedRequestId = !options?.outputSchema
-    ? options?.requestId?.trim()
-    : undefined;
+  const claimedRequestId = !options?.outputSchema ? options?.requestId?.trim() : undefined;
   const ownsClaimedDispatch =
-    claimedRequestId !== undefined
-    && claimedPromptDispatches.get(sessionId) === claimedRequestId;
+    claimedRequestId !== undefined && claimedPromptDispatches.get(sessionId) === claimedRequestId;
   // At-most-once dispatch, for plain prompts as much as structured ones. The
   // HTTP response may have been lost; reusing a request id attaches to the
   // original turn and never launches another SDK query.
@@ -188,9 +186,9 @@ export async function sendPrompt(
     return;
   }
   if (
-    structuredRequestId
-    && session.structuredOutputRequestId === structuredRequestId
-    && (session.status === "running" || session.structuredOutput !== undefined)
+    structuredRequestId &&
+    session.structuredOutputRequestId === structuredRequestId &&
+    (session.status === "running" || session.structuredOutput !== undefined)
   ) {
     return;
   }
@@ -201,10 +199,7 @@ export async function sendPrompt(
     throw new Error("Session is already processing a prompt");
   }
   if (session.rewindInProgress) {
-    throw sessionOperationError(
-      "conflict",
-      "Session is restoring files from a checkpoint",
-    );
+    throw sessionOperationError("conflict", "Session is restoring files from a checkpoint");
   }
   const statusBeforeStartup = session.status;
   const turnStartedAtBeforeStartup = session.turnStartedAt;
@@ -213,8 +208,7 @@ export async function sendPrompt(
   const lastActivityBeforeStartup = session.lastActivity;
   const persistedMessagesLoadedBeforeStartup = session.persistedMessagesLoaded;
   const structuredOutputBeforeStartup = session.structuredOutput;
-  const structuredOutputRequestIdBeforeStartup =
-    session.structuredOutputRequestId;
+  const structuredOutputRequestIdBeforeStartup = session.structuredOutputRequestId;
   const latestTurnGenerationBeforeStartup = session.latestTurnGeneration;
   if (ownsClaimedDispatch) {
     claimedPromptDispatches.delete(sessionId);
@@ -255,9 +249,8 @@ export async function sendPrompt(
   // endpoint (e.g. a toggle made before this session had a durable identity).
   // Other permission modes say nothing about the toggle and are left alone.
   if (
-    (options?.permissionMode === "plan"
-      || options?.permissionMode === "bypassPermissions")
-    && session.planMode !== (options.permissionMode === "plan")
+    (options?.permissionMode === "plan" || options?.permissionMode === "bypassPermissions") &&
+    session.planMode !== (options.permissionMode === "plan")
   ) {
     try {
       await applySessionPlanMode(session, options.permissionMode === "plan");
@@ -286,8 +279,7 @@ export async function sendPrompt(
         session.lastActivity = lastActivityBeforeStartup;
         session.persistedMessagesLoaded = persistedMessagesLoadedBeforeStartup;
         session.structuredOutput = structuredOutputBeforeStartup;
-        session.structuredOutputRequestId =
-          structuredOutputRequestIdBeforeStartup;
+        session.structuredOutputRequestId = structuredOutputRequestIdBeforeStartup;
       }
       if (dispatchRequestId) {
         forgetPromptDispatch(sessionId, dispatchRequestId);
@@ -329,9 +321,7 @@ export async function sendPrompt(
   // Build the display prompt (what the user sees) - includes all attachment references
   let displayPrompt = prompt;
   if (options?.attachments && options.attachments.length > 0) {
-    const attachmentTags = options.attachments
-      .map(attachmentTag)
-      .join("\n");
+    const attachmentTags = options.attachments.map(attachmentTag).join("\n");
     displayPrompt = `${prompt}\n\n<attached-files>\n${attachmentTags}\n</attached-files>`;
   }
   // Build the SDK text prompt - excludes image attachments since those are sent as
@@ -340,9 +330,7 @@ export async function sendPrompt(
   let sdkTextPrompt = prompt;
   const fileAttachments = options?.attachments?.filter((att) => att.type !== "image") ?? [];
   if (fileAttachments.length > 0) {
-    const fileTags = fileAttachments
-      .map(attachmentTag)
-      .join("\n");
+    const fileTags = fileAttachments.map(attachmentTag).join("\n");
     sdkTextPrompt = `${prompt}\n\n<attached-files>\n${fileTags}\n</attached-files>`;
   }
   // Build the final prompt for the SDK - includes planning mode instruction if enabled
@@ -416,10 +404,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
   const { toolTracker, taskRegistry, activeTaskIds } = stream;
   const recordInterruptedStructuredOutputIfCurrent = () => {
     if (
-      !options?.outputSchema
-      || !structuredRequestId
-      || session.structuredOutputRequestId !== structuredRequestId
-      || session.structuredOutput
+      !options?.outputSchema ||
+      !structuredRequestId ||
+      session.structuredOutputRequestId !== structuredRequestId ||
+      session.structuredOutput
     ) {
       return;
     }
@@ -487,9 +475,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     closeSdkInput = heldSdkPrompt.close;
     let receivedResult = false;
     const ownsActiveTurn = () =>
-      !abortController.signal.aborted
-      && sessions.get(sessionId) === session
-      && session.abortController === abortController;
+      !abortController.signal.aborted &&
+      sessions.get(sessionId) === session &&
+      session.abortController === abortController;
     const setCompletionBlockedByBackgroundTasks = (blocked: boolean) => {
       if (!ownsActiveTurn()) return;
       if (session.completionBlockedByBackgroundTasks === blocked) return;
@@ -500,15 +488,14 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         data: { completionBlockedByBackgroundTasks: blocked },
       });
     };
-    const hasLiveTaskOwnedByThisQuery = () => (
-      Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]
-    ).some((task) =>
-      LIVE_BACKGROUND_TASK_STATUSES.has(task.status)
-      && session.backgroundTaskControls?.get(task.id) === queryIteratorControl
-    );
-    const hasBackgroundTaskCandidateOwnedByThisQuery = () => Array.from(
-      session.backgroundTaskCandidates?.values() ?? [],
-    ).includes(queryIteratorControl!);
+    const hasLiveTaskOwnedByThisQuery = () =>
+      (Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]).some(
+        (task) =>
+          LIVE_BACKGROUND_TASK_STATUSES.has(task.status) &&
+          session.backgroundTaskControls?.get(task.id) === queryIteratorControl,
+      );
+    const hasBackgroundTaskCandidateOwnedByThisQuery = () =>
+      Array.from(session.backgroundTaskCandidates?.values() ?? []).includes(queryIteratorControl!);
     const scheduleTitleGeneration = () => {
       const isDefaultTitle = session.title === `Session ${session.id.slice(-6)}`;
       if (isDefaultTitle && !options?._isReprompt && !session.titleGenerationPending) {
@@ -562,10 +549,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       if (retainedContinuationTimer) clearTimeout(retainedContinuationTimer);
       retainedContinuationTimer = setTimeout(() => {
         retainedContinuationTimer = null;
-        if (
-          hasLiveTaskOwnedByThisQuery()
-          || hasBackgroundTaskCandidateOwnedByThisQuery()
-        ) {
+        if (hasLiveTaskOwnedByThisQuery() || hasBackgroundTaskCandidateOwnedByThisQuery()) {
           // Another task this query owns is still running, which is its own
           // reason to hold stdin open — closing it here would kill that task.
           // The control is reachable through `backgroundTaskControls` while
@@ -593,23 +577,21 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     };
     const reclaimReleasedTurnForAssistant = (message: SdkMessageBase) => {
       if (!turnReleasedToBackgroundTasks || ownsActiveTurn()) return;
-      const parentToolUseId = (
-        message as { parent_tool_use_id?: unknown }
-      ).parent_tool_use_id;
+      const parentToolUseId = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
       if (
         !isRootAssistantRecord(
           parentToolUseId,
           (message as { isSidechain?: unknown }).isSidechain,
-        )
-        || sessions.get(sessionId) !== session
-        || session.deleting
+        ) ||
+        sessions.get(sessionId) !== session ||
+        session.deleting ||
         // Releasing lets a follow-up turn start, so more than one turn can be
         // mid-flight. Only the newest may publish `running` and take abort
         // ownership; an older one doing so would point stop at the wrong CLI
         // and lock the newer turn out of its own reclaim.
-        || session.latestTurnGeneration !== turnGeneration
-        || session.status !== "idle"
-        || session.abortController !== undefined
+        session.latestTurnGeneration !== turnGeneration ||
+        session.status !== "idle" ||
+        session.abortController !== undefined
       ) {
         return;
       }
@@ -715,8 +697,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         ...(session.sdkSessionId
           ? { resume: session.sdkSessionId }
           : {
-              sessionId:
-                sdkSessionIdFromBridgeId(session.id) ?? crypto.randomUUID(),
+              sessionId: sdkSessionIdFromBridgeId(session.id) ?? crypto.randomUUID(),
             }),
         enableFileCheckpointing: true,
         promptSuggestions: options?.promptSuggestions === true,
@@ -752,9 +733,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         canUseTool: async (toolName: string, input: any) => {
           if (toolName === "AskUserQuestion") {
-            const questions: QuestionInfo[] = Array.isArray(input.questions)
-              ? input.questions
-              : [];
+            const questions: QuestionInfo[] = Array.isArray(input.questions) ? input.questions : [];
             const questionTexts = questions.map((question) => question.question);
             if (new Set(questionTexts).size !== questionTexts.length) {
               // The Agent SDK answer contract is Record<questionText, string>.
@@ -816,9 +795,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               };
             } catch (error) {
               console.error("[session-manager] Error waiting for answer:", error);
-              const message = error instanceof Error
-                ? error.message
-                : "Question was cancelled";
+              const message = error instanceof Error ? error.message : "Question was cancelled";
               if (pendingQuestions.has(questionId)) {
                 eventEmitter.emit({
                   type: "question.answered",
@@ -844,9 +821,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             try {
               await applySessionPlanMode(session, true);
             } catch (error) {
-              const message = error instanceof Error
-                ? error.message
-                : "Failed to persist plan mode";
+              const message =
+                error instanceof Error ? error.message : "Failed to persist plan mode";
               return {
                 behavior: "deny" as const,
                 message: `Plan mode could not be persisted safely: ${message}`,
@@ -869,7 +845,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
           // Handle ExitPlanMode - wait for user approval before allowing
           if (toolName === "ExitPlanMode") {
-            debugLog("[session-manager] ExitPlanMode requested, waiting for user approval", { sessionId });
+            debugLog("[session-manager] ExitPlanMode requested, waiting for user approval", {
+              sessionId,
+            });
 
             // Create a plan approval request and wait for user decision
             const approvalId = generateMessageId();
@@ -907,8 +885,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               console.log("[session-manager] Plan approval result", {
                 approvalId,
                 approved: response.approved,
-                hasFeedback:
-                  typeof response.feedback === "string" && response.feedback.length > 0,
+                hasFeedback: typeof response.feedback === "string" && response.feedback.length > 0,
               });
 
               if (response.approved) {
@@ -921,9 +898,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
                 try {
                   await applySessionPlanMode(session, false);
                 } catch (error) {
-                  const message = error instanceof Error
-                    ? error.message
-                    : "Failed to persist plan mode";
+                  const message =
+                    error instanceof Error ? error.message : "Failed to persist plan mode";
                   return {
                     behavior: "deny" as const,
                     message: `Plan mode could not be exited safely: ${message}`,
@@ -962,7 +938,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
               }
             } catch (error) {
               console.error("[session-manager] Error waiting for plan approval:", error);
-              const errorMessage = error instanceof Error ? error.message : "Plan approval was cancelled";
+              const errorMessage =
+                error instanceof Error ? error.message : "Plan approval was cancelled";
               if (pendingPlanApprovals.has(approvalId)) {
                 eventEmitter.emit({
                   type: "plan.approval-responded",
@@ -1006,10 +983,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       }
     }
 
-    structuredUsageRefresh = createStructuredUsageRefreshCoordinator(
-      session,
-      queryIterator,
-    );
+    structuredUsageRefresh = createStructuredUsageRefreshCoordinator(session, queryIterator);
     // Prime the limits panel as soon as the live control channel is ready.
     // This intentionally runs off the SDK message-consumer path.
     void structuredUsageRefresh?.trigger();
@@ -1099,7 +1073,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             status: s.status === "connected" ? "connected" : "failed",
             error: s.error,
             tools: s.tools,
-          })
+          }),
         );
 
         // Convert plugin-type MCP servers to plugin statuses
@@ -1177,13 +1151,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           });
         }
       } else if (message.type === "rate_limit_event") {
-        const info = (message as {
-          rate_limit_info?: {
-            rateLimitType?: string;
-            utilization?: number;
-            resetsAt?: number;
-          };
-        }).rate_limit_info;
+        const info = (
+          message as {
+            rate_limit_info?: {
+              rateLimitType?: string;
+              utilization?: number;
+              resetsAt?: number;
+            };
+          }
+        ).rate_limit_info;
         if (info) {
           const label = (info.rateLimitType ?? "usage")
             .replaceAll("_", " ")
@@ -1261,41 +1237,30 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         };
 
         if (
-          (taskMessage.subtype === "task_started"
-            || taskMessage.subtype === "task_progress"
-            || taskMessage.subtype === "task_updated")
-          && taskMessage.task_id
+          (taskMessage.subtype === "task_started" ||
+            taskMessage.subtype === "task_progress" ||
+            taskMessage.subtype === "task_updated") &&
+          taskMessage.task_id
         ) {
-          const correlated = takeProvisionalBackgroundTask(
-            session,
-            taskMessage.tool_use_id,
-          );
-          const previous = session.backgroundTasks?.[taskMessage.task_id]
-            ?? correlated.task;
-          const patchedStatus =
-            taskMessage.patch?.status
-            ?? previous?.status
-            ?? "running";
+          const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
+          const previous = session.backgroundTasks?.[taskMessage.task_id] ?? correlated.task;
+          const patchedStatus = taskMessage.patch?.status ?? previous?.status ?? "running";
           // Task ids are process-unique. Because level and edge messages may
           // be delivered in either order, a late start/progress edge must
           // enrich a terminal record rather than resurrect it.
           const status =
-            previous
-            && !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status)
-            && LIVE_BACKGROUND_TASK_STATUSES.has(patchedStatus)
+            previous &&
+            !LIVE_BACKGROUND_TASK_STATUSES.has(previous.status) &&
+            LIVE_BACKGROUND_TASK_STATUSES.has(patchedStatus)
               ? previous.status
               : patchedStatus;
           const task: BackgroundTaskSnapshot = {
             id: taskMessage.task_id,
             toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
             description:
-              taskMessage.patch?.description
-              ?? taskMessage.description
-              ?? previous?.description,
+              taskMessage.patch?.description ?? taskMessage.description ?? previous?.description,
             status,
-            isBackgrounded:
-              taskMessage.patch?.is_backgrounded
-              ?? previous?.isBackgrounded,
+            isBackgrounded: taskMessage.patch?.is_backgrounded ?? previous?.isBackgrounded,
             startedAt: previous?.startedAt ?? Date.now(),
             endedAt: taskMessage.patch?.end_time ?? previous?.endedAt,
             error: taskMessage.patch?.error ?? previous?.error,
@@ -1323,17 +1288,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           receivedResult = false;
           // The terminal edge. Without it nothing ever leaves `running`, so
           // `GET /session/:id` reported a finished task as live indefinitely.
-          const correlated = takeProvisionalBackgroundTask(
-            session,
-            taskMessage.tool_use_id,
-          );
+          const correlated = takeProvisionalBackgroundTask(session, taskMessage.tool_use_id);
           // A level signal that preceded this edge has already removed the task
           // from the live set; its parked snapshot is the only remaining source
           // of the original description and start time.
           const parked = takeSettlingBackgroundTask(session, taskMessage.task_id);
-          const previous = session.backgroundTasks?.[taskMessage.task_id]
-            ?? parked?.task
-            ?? correlated.task;
+          const previous =
+            session.backgroundTasks?.[taskMessage.task_id] ?? parked?.task ?? correlated.task;
           const terminalStatus: BackgroundTaskSnapshot["status"] =
             taskMessage.status === "failed"
               ? "failed"
@@ -1343,10 +1304,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           const task: BackgroundTaskSnapshot = {
             id: taskMessage.task_id,
             toolUseId: taskMessage.tool_use_id ?? previous?.toolUseId,
-            description:
-              previous?.description
-              ?? taskMessage.description
-              ?? taskMessage.summary,
+            description: previous?.description ?? taskMessage.description ?? taskMessage.summary,
             status: terminalStatus,
             isBackgrounded: previous?.isBackgrounded,
             startedAt: previous?.startedAt ?? Date.now(),
@@ -1360,9 +1318,8 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             ...(session.backgroundTasks ?? {}),
             [task.id]: task,
           });
-          const owner = session.backgroundTaskControls?.get(task.id)
-            ?? parked?.owner
-            ?? correlated.owner;
+          const owner =
+            session.backgroundTaskControls?.get(task.id) ?? parked?.owner ?? correlated.owner;
           session.backgroundTaskControls?.delete(task.id);
           // The notification is injected into the same root loop and may be
           // followed by another assistant/result boundary. `Query.close()` is
@@ -1377,36 +1334,32 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           }
           emitBackgroundTasks();
         } else if (
-          taskMessage.subtype === "background_tasks_changed"
-          && Array.isArray(taskMessage.tasks)
+          taskMessage.subtype === "background_tasks_changed" &&
+          Array.isArray(taskMessage.tasks)
         ) {
           // A level signal replaces live membership only. Terminal bookends
           // are retained (within the bounded history) because the SDK permits
           // this level to arrive after the terminal edge for the same
           // transition; replacing the whole snapshot here erased failures and
           // could even resurrect the task as running.
-          const replacement: Record<string, BackgroundTaskSnapshot> =
-            Object.fromEntries(
-              (Object.entries(session.backgroundTasks ?? {}) as Array<[
-                string,
-                BackgroundTaskSnapshot,
-              ]>).filter(([, task]) => !LIVE_BACKGROUND_TASK_STATUSES.has(task.status)),
-            ) as Record<string, BackgroundTaskSnapshot>;
+          const replacement: Record<string, BackgroundTaskSnapshot> = Object.fromEntries(
+            (
+              Object.entries(session.backgroundTasks ?? {}) as Array<
+                [string, BackgroundTaskSnapshot]
+              >
+            ).filter(([, task]) => !LIVE_BACKGROUND_TASK_STATUSES.has(task.status)),
+          ) as Record<string, BackgroundTaskSnapshot>;
           const previousControls = session.backgroundTaskControls;
           const previousOwners = new Set(previousControls?.values() ?? []);
-          const replacementControls = new Map<
-            string,
-            NonNullable<SessionState["queryControl"]>
-          >();
+          const replacementControls = new Map<string, NonNullable<SessionState["queryControl"]>>();
           // The SDK documents this level signal as per-process. A follow-up
           // turn can therefore publish its own empty set while an older CLI is
           // still running a background Bash task. Preserve every live member
           // owned by another control; only this query's slice is replaced.
           const previouslyLiveOwnedByThisQuery: BackgroundTaskSnapshot[] = [];
-          for (const [id, task] of Object.entries(session.backgroundTasks ?? {}) as Array<[
-            string,
-            BackgroundTaskSnapshot,
-          ]>) {
+          for (const [id, task] of Object.entries(session.backgroundTasks ?? {}) as Array<
+            [string, BackgroundTaskSnapshot]
+          >) {
             if (!LIVE_BACKGROUND_TASK_STATUSES.has(task.status)) continue;
             const owner = previousControls?.get(id);
             if (owner && owner !== queryIterator) {
@@ -1495,7 +1448,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // the SDK continued the agent loop and Claude did see the feedback.
         // Clear the pending feedback so we don't re-prompt unnecessarily.
         if (stream.pendingPlanRejectionFeedback) {
-          debugLog("[session-manager] Claude responded after plan denial, clearing re-prompt feedback", { sessionId });
+          debugLog(
+            "[session-manager] Claude responded after plan denial, clearing re-prompt feedback",
+            { sessionId },
+          );
           stream.pendingPlanRejectionFeedback = null;
         }
 
@@ -1505,7 +1461,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           toolTracker,
           mcpServerNames,
           activeTaskIds,
-          taskRegistry
+          taskRegistry,
         );
 
         // A foreground Bash call can become background work after a timeout or
@@ -1536,9 +1492,10 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // running finalized-block count gives each block its stream index.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const apiMessageId = (message as any).message?.id as string | undefined;
-        const messageKey = apiMessageId
-          ?? (message.uuid as string | undefined)
-          ?? `assistant-${(stream.syntheticMessageKeyCounter += 1)}`;
+        const messageKey =
+          apiMessageId ??
+          (message.uuid as string | undefined) ??
+          `assistant-${(stream.syntheticMessageKeyCounter += 1)}`;
 
         const blocks = stream.getBlocksForMessage(messageKey);
         const blockIndexBase = stream.finalizedBlockCountByApiMessage.get(messageKey) ?? 0;
@@ -1567,19 +1524,13 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // transcript record; the latest is the inclusive end of this message,
         // which is what a fork boundary must point at.
         const sdkMessageUuid = (message as { uuid?: unknown }).uuid;
-        const observedModel = (
-          message as { message?: { model?: unknown } }
-        ).message?.model;
-        const parentToolUseId = (
-          message as { parent_tool_use_id?: unknown }
-        ).parent_tool_use_id;
+        const observedModel = (message as { message?: { model?: unknown } }).message?.model;
+        const parentToolUseId = (message as { parent_tool_use_id?: unknown }).parent_tool_use_id;
         const isRootAssistant = isRootAssistantRecord(
           parentToolUseId,
           (message as { isSidechain?: unknown }).isSidechain,
         );
-        const modelId = isRootAssistant
-          ? normalizeBackendModelId(observedModel)
-          : undefined;
+        const modelId = isRootAssistant ? normalizeBackendModelId(observedModel) : undefined;
         if (!stream.currentAssistantMessage) {
           stream.currentAssistantMessage = {
             id: messageKey,
@@ -1618,7 +1569,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           toolTracker,
           mcpServerNames,
           activeTaskIds,
-          taskRegistry
+          taskRegistry,
         );
 
         const sdkUserMessage = message as SDKUserMessage;
@@ -1633,9 +1584,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           const provisionalId = provisionalBackgroundTaskId(outcome.toolUseId);
           const provisional = session.backgroundTasks?.[provisionalId];
           if (
-            outcome.failed
-            && provisional
-            && LIVE_BACKGROUND_TASK_STATUSES.has(provisional.status)
+            outcome.failed &&
+            provisional &&
+            LIVE_BACKGROUND_TASK_STATUSES.has(provisional.status)
           ) {
             settleBackgroundTask(
               session,
@@ -1669,12 +1620,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             ) {
               console.warn(
                 "[session-manager] ExitPlanMode reported failure despite user approval — overriding to success and scheduling continuation re-prompt",
-                { sessionId, toolUseId: tool.toolUseId, sdkError: tool.toolError }
+                { sessionId, toolUseId: tool.toolUseId, sdkError: tool.toolError },
               );
               toolTracker.updateToolResult(tool.toolUseId, {
                 state: "success",
-                output:
-                  "Plan approved by the user. Proceeding with implementation.",
+                output: "Plan approved by the user. Proceeding with implementation.",
                 error: undefined,
               });
               if (!stream.pendingPlanApprovalContinuation) {
@@ -1710,9 +1660,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // (fork boundary, file rewind) resolves through it, so it is recorded
         // and republished rather than inferred from message ordering.
         if (
-          typeof resultMsg.user_message_uuid === "string"
-          && resultMsg.user_message_uuid.length > 0
-          && userMessage.sdkUuid !== resultMsg.user_message_uuid
+          typeof resultMsg.user_message_uuid === "string" &&
+          resultMsg.user_message_uuid.length > 0 &&
+          userMessage.sdkUuid !== resultMsg.user_message_uuid
         ) {
           userMessage.sdkUuid = resultMsg.user_message_uuid;
           eventEmitter.emit({
@@ -1752,9 +1702,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
             sessionId,
             data: {
               ...(exactUsage ? { contextUsage: exactUsage } : {}),
-              ...(session.rateLimits !== undefined
-                ? { rateLimits: session.rateLimits }
-                : {}),
+              ...(session.rateLimits !== undefined ? { rateLimits: session.rateLimits } : {}),
             },
           });
         }
@@ -1782,8 +1730,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           finishTurnInputIfSettled();
         } else {
           console.error("[session-manager] Query error:", resultMsg.subtype, { sessionId });
-          const resultError = resultMsg.errors?.filter(Boolean).join("\n")
-            || `Claude query failed: ${resultMsg.subtype}`;
+          const resultError =
+            resultMsg.errors?.filter(Boolean).join("\n") ||
+            `Claude query failed: ${resultMsg.subtype}`;
           if (options?.outputSchema) {
             const failure = structuredOutputFailure(
               "claude",
@@ -1822,7 +1771,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // Claude revising, re-send the feedback as a follow-up prompt so Claude
     // actually sees it and generates a revised plan.
     // Guard: only re-prompt once (skip if this call is itself a re-prompt).
-    if (stream.pendingPlanRejectionFeedback && !abortController.signal.aborted && !options?._isReprompt) {
+    if (
+      stream.pendingPlanRejectionFeedback &&
+      !abortController.signal.aborted &&
+      !options?._isReprompt
+    ) {
       const feedbackPrompt = stream.pendingPlanRejectionFeedback;
       stream.pendingPlanRejectionFeedback = null;
 
@@ -1890,10 +1843,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         await sendPrompt(sessionId, continuationPrompt, repromptOptions);
         return;
       } catch (repromptError) {
-        console.error(
-          "[session-manager] Failed to re-prompt after plan approval:",
-          repromptError
-        );
+        console.error("[session-manager] Failed to re-prompt after plan approval:", repromptError);
         return Promise.reject(repromptError);
       }
     }
@@ -1937,11 +1887,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     console.error("[session-manager] Error processing prompt:", error);
 
     if (session.abortController === abortController) {
-      if (
-        options?.outputSchema
-        && structuredRequestId
-        && !session.structuredOutput
-      ) {
+      if (options?.outputSchema && structuredRequestId && !session.structuredOutput) {
         recordStructuredOutput(
           session,
           structuredOutputFailure(
@@ -2023,11 +1969,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     // a hydration that never happened. Clearing it once the turn is over lets
     // the next transcript request retry; leaving it set hid the on-disk history
     // until the bridge restarted.
-    if (
-      transcriptHydrationFailed
-      && sessions.get(sessionId) === session
-      && !session.deleting
-    ) {
+    if (transcriptHydrationFailed && sessions.get(sessionId) === session && !session.deleting) {
       session.persistedMessagesLoaded = false;
     }
     if (heartbeat) {

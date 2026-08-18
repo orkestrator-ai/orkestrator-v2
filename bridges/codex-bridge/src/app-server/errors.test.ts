@@ -100,19 +100,19 @@ describe("app-server error taxonomy", () => {
         }),
       ),
     ).toBe(false);
-    expect(isSafeToRetryImmediately(new AppServerTimeoutError("turn/start", 1))).toBe(
-      false,
-    );
+    expect(isSafeToRetryImmediately(new AppServerTimeoutError("turn/start", 1))).toBe(false);
     expect(isSafeToRetryImmediately(new Error("overload"))).toBe(false);
   });
 
   test("maps each transport error class into a stable engine error", () => {
     expect(
-      toEngineError(new AppServerRpcError("turn/start", {
-        code: -32603,
-        message: "bad",
-        data: { private: true },
-      })),
+      toEngineError(
+        new AppServerRpcError("turn/start", {
+          code: -32603,
+          message: "bad",
+          data: { private: true },
+        }),
+      ),
     ).toMatchObject({ code: "-32603", retryable: false, details: undefined });
     expect(toEngineError(new AppServerTimeoutError("read", 1))).toMatchObject({
       code: "timeout",
@@ -127,11 +127,13 @@ describe("app-server error taxonomy", () => {
     // Only overload is reported retryable, and only a string `data` is surfaced —
     // arbitrary objects may carry prompt or path content.
     expect(
-      toEngineError(new AppServerRpcError("turn/start", {
-        code: APP_SERVER_OVERLOAD_CODE,
-        message: "busy",
-        data: "retry shortly",
-      })),
+      toEngineError(
+        new AppServerRpcError("turn/start", {
+          code: APP_SERVER_OVERLOAD_CODE,
+          message: "busy",
+          data: "retry shortly",
+        }),
+      ),
     ).toMatchObject({
       code: String(APP_SERVER_OVERLOAD_CODE),
       retryable: true,
@@ -162,9 +164,7 @@ describe("app-server error taxonomy", () => {
         }),
       ),
     ).toBe(true);
-    expect(
-      isMissingRolloutError("thread/resume: no rollout found for thread id t1"),
-    ).toBe(true);
+    expect(isMissingRolloutError("thread/resume: no rollout found for thread id t1")).toBe(true);
     expect(isMissingRolloutError("thread/read: no rollout found for thread id t1")).toBe(false);
     // The message usually arrives wrapped in an Error, not as a bare string.
     expect(
@@ -175,17 +175,13 @@ describe("app-server error taxonomy", () => {
         }),
       ),
     ).toBe(true);
-    expect(isMissingRolloutError(new Error("thread/resume failed: spawn error"))).toBe(
-      false,
-    );
+    expect(isMissingRolloutError(new Error("thread/resume failed: spawn error"))).toBe(false);
     expect(isMissingRolloutError(undefined)).toBe(false);
   });
 
   test("normalizes Codex error discriminants without guessing malformed objects", () => {
     expect(codexErrorInfoToCode("usageLimit")).toBe("usageLimit");
-    expect(codexErrorInfoToCode({ contextWindowExceeded: {} })).toBe(
-      "contextWindowExceeded",
-    );
+    expect(codexErrorInfoToCode({ contextWindowExceeded: {} })).toBe("contextWindowExceeded");
     expect(codexErrorInfoToCode({ a: 1, b: 2 })).toBeUndefined();
     expect(codexErrorInfoToCode(null)).toBeUndefined();
   });

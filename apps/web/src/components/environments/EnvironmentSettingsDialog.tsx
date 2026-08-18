@@ -46,7 +46,10 @@ import {
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { Z_FULLSCREEN_DIALOG } from "@/constants/z-index";
 import { cn } from "@/lib/utils";
-import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
+import {
+  FullscreenSettingsLayout,
+  type SettingsMenuItem,
+} from "@/components/settings/FullscreenSettingsLayout";
 import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import * as backend from "@/lib/backend";
 import { useConfigStore } from "@/stores";
@@ -74,13 +77,7 @@ interface EnvironmentSettingsDialogProps {
   onRestart?: (environmentId: string) => Promise<void>;
 }
 
-const AGENT_ORDER: backend.AgentExtensionId[] = [
-  "claude",
-  "codex",
-  "cursor",
-  "grok",
-  "opencode",
-];
+const AGENT_ORDER: backend.AgentExtensionId[] = ["claude", "codex", "cursor", "grok", "opencode"];
 
 const AGENT_EXTENSION_COPY: Record<
   backend.AgentExtensionId,
@@ -127,11 +124,7 @@ function AgentExtensionIcon({
   return <AgentPlatformIcon platform={agent} accent className={className} />;
 }
 
-function ExtensionStatusIcon({
-  status,
-}: {
-  status: backend.AgentExtensionItem["status"];
-}) {
+function ExtensionStatusIcon({ status }: { status: backend.AgentExtensionItem["status"] }) {
   if (status === "connected") {
     return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-500" />;
   }
@@ -192,9 +185,7 @@ function ExtensionCollection({
               className="flex min-w-0 items-center gap-2 rounded-md border border-border/70 bg-muted/30 px-2.5 py-2 text-sm"
             >
               <ExtensionStatusIcon status={item.status} />
-              <span className="min-w-0 flex-1 truncate font-medium">
-                {item.name}
-              </span>
+              <span className="min-w-0 flex-1 truncate font-medium">{item.name}</span>
               <span className="shrink-0 text-[11px] text-muted-foreground">
                 {item.source ?? item.status}
               </span>
@@ -204,9 +195,7 @@ function ExtensionCollection({
       )}
       <p className="mt-auto text-[11px] leading-relaxed text-muted-foreground">
         Configure in{" "}
-        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">
-          {configHint}
-        </code>
+        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]">{configHint}</code>
       </p>
     </div>
   );
@@ -271,8 +260,8 @@ function AgentExtensionSection({
         readSkill={readSkill}
         description={
           <>
-            Skills available to {copy.label} in this environment, including project,
-            personal, shared, built-in, and plugin locations.
+            Skills available to {copy.label} in this environment, including project, personal,
+            shared, built-in, and plugin locations.
           </>
         }
       />
@@ -321,10 +310,10 @@ export function EnvironmentSettingsDialog({
 
   // Network state
   const [useGlobalDefaults, setUseGlobalDefaults] = useState(
-    !environment.allowedDomains || environment.allowedDomains.length === 0
+    !environment.allowedDomains || environment.allowedDomains.length === 0,
   );
   const [customDomains, setCustomDomains] = useState(
-    (environment.allowedDomains || globalDomains).join("\n")
+    (environment.allowedDomains || globalDomains).join("\n"),
   );
   const [domainErrors, setDomainErrors] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
@@ -332,9 +321,7 @@ export function EnvironmentSettingsDialog({
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
 
   // Port mapping state
-  const [portMappings, setPortMappings] = useState<PortMapping[]>(
-    environment.portMappings || []
-  );
+  const [portMappings, setPortMappings] = useState<PortMapping[]>(environment.portMappings || []);
   const [showAddPortForm, setShowAddPortForm] = useState(false);
   const [newPortMapping, setNewPortMapping] = useState<PortMapping>({
     containerPort: 3000,
@@ -347,26 +334,21 @@ export function EnvironmentSettingsDialog({
 
   // Agent settings state
   const [envDefaultAgent, setEnvDefaultAgent] = useState<string>(
-    environment.defaultAgent ?? "global"
+    environment.defaultAgent ?? "global",
   );
-  const [envClaudeMode, setEnvClaudeMode] = useState<string>(
-    environment.claudeMode ?? "global"
-  );
+  const [envClaudeMode, setEnvClaudeMode] = useState<string>(environment.claudeMode ?? "global");
   // "default" = inherit from repo, then global. "sdk" / "tmux" = override.
   const [envClaudeNativeBackend, setEnvClaudeNativeBackend] = useState<string>(
-    environment.claudeNativeBackend ?? "default"
+    environment.claudeNativeBackend ?? "default",
   );
   const [envOpencodeMode, setEnvOpencodeMode] = useState<string>(
-    environment.opencodeMode ?? "global"
+    environment.opencodeMode ?? "global",
   );
-  const [envCodexMode, setEnvCodexMode] = useState<string>(
-    environment.codexMode ?? "global"
-  );
+  const [envCodexMode, setEnvCodexMode] = useState<string>(environment.codexMode ?? "global");
 
   // Effective MCP server and plugin state for every supported agent.
-  const [extensionCatalogs, setExtensionCatalogs] = useState<
-    backend.AgentExtensionCatalog[]
-  >(emptyExtensionCatalogs);
+  const [extensionCatalogs, setExtensionCatalogs] =
+    useState<backend.AgentExtensionCatalog[]>(emptyExtensionCatalogs);
   const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
   /**
    * Gates the placeholder on the *first* load rather than on `isLoading`, which
@@ -382,13 +364,18 @@ export function EnvironmentSettingsDialog({
   const extensionLoadSeq = useRef(0);
 
   // Track if port mappings have changed
-  const portMappingsChanged = JSON.stringify(portMappings) !== JSON.stringify(environment.portMappings || []);
+  const portMappingsChanged =
+    JSON.stringify(portMappings) !== JSON.stringify(environment.portMappings || []);
 
   const agentSettingsChanged =
-    (envDefaultAgent === "global" ? undefined : envDefaultAgent) !== (environment.defaultAgent ?? undefined) ||
-    (envClaudeMode === "global" ? undefined : envClaudeMode) !== (environment.claudeMode ?? undefined) ||
-    (envClaudeNativeBackend === "default" ? undefined : envClaudeNativeBackend) !== (environment.claudeNativeBackend ?? undefined) ||
-    (envOpencodeMode === "global" ? undefined : envOpencodeMode) !== (environment.opencodeMode ?? undefined) ||
+    (envDefaultAgent === "global" ? undefined : envDefaultAgent) !==
+      (environment.defaultAgent ?? undefined) ||
+    (envClaudeMode === "global" ? undefined : envClaudeMode) !==
+      (environment.claudeMode ?? undefined) ||
+    (envClaudeNativeBackend === "default" ? undefined : envClaudeNativeBackend) !==
+      (environment.claudeNativeBackend ?? undefined) ||
+    (envOpencodeMode === "global" ? undefined : envOpencodeMode) !==
+      (environment.opencodeMode ?? undefined) ||
     (envCodexMode === "global" ? undefined : envCodexMode) !== (environment.codexMode ?? undefined);
 
   // Reset state when dialog opens
@@ -402,9 +389,7 @@ export function EnvironmentSettingsDialog({
       const customDomainList = environment.allowedDomains ?? [];
       const hasCustom = customDomainList.length > 0;
       setUseGlobalDefaults(!hasCustom);
-      setCustomDomains(
-        (hasCustom ? customDomainList : globalDomains).join("\n")
-      );
+      setCustomDomains((hasCustom ? customDomainList : globalDomains).join("\n"));
       setDomainErrors([]);
       setTestResults(null);
 
@@ -424,7 +409,17 @@ export function EnvironmentSettingsDialog({
       setEnvCodexMode(environment.codexMode ?? "global");
       setActiveExtensionAgent("claude");
     }
-  }, [open, environment.name, environment.allowedDomains, environment.portMappings, environment.defaultAgent, environment.claudeMode, environment.opencodeMode, environment.codexMode, globalDomains]);
+  }, [
+    open,
+    environment.name,
+    environment.allowedDomains,
+    environment.portMappings,
+    environment.defaultAgent,
+    environment.claudeMode,
+    environment.opencodeMode,
+    environment.codexMode,
+    globalDomains,
+  ]);
 
   // Update custom domains when toggling to global
   useEffect(() => {
@@ -449,29 +444,32 @@ export function EnvironmentSettingsDialog({
     }
   }, [open]);
 
-  const loadExtensions = useCallback(async (options: { refresh?: boolean } = {}) => {
-    const seq = ++extensionLoadSeq.current;
-    const isCurrent = () => seq === extensionLoadSeq.current;
-    setIsLoadingExtensions(true);
-    setExtensionsError(null);
-    try {
-      const catalogs = await backend.getEnvironmentExtensions(environment.id, options);
-      if (!isCurrent()) return;
-      setExtensionCatalogs(orderExtensionCatalogs(catalogs));
-    } catch (err) {
-      if (!isCurrent()) return;
-      console.error("[EnvironmentSettingsDialog] Failed to fetch extensions:", err);
-      setExtensionCatalogs(emptyExtensionCatalogs());
-      setExtensionsError(
-        "Extension settings could not be loaded. Check that the environment is available and try again.",
-      );
-    } finally {
-      if (isCurrent()) {
-        setIsLoadingExtensions(false);
-        setHasLoadedExtensions(true);
+  const loadExtensions = useCallback(
+    async (options: { refresh?: boolean } = {}) => {
+      const seq = ++extensionLoadSeq.current;
+      const isCurrent = () => seq === extensionLoadSeq.current;
+      setIsLoadingExtensions(true);
+      setExtensionsError(null);
+      try {
+        const catalogs = await backend.getEnvironmentExtensions(environment.id, options);
+        if (!isCurrent()) return;
+        setExtensionCatalogs(orderExtensionCatalogs(catalogs));
+      } catch (err) {
+        if (!isCurrent()) return;
+        console.error("[EnvironmentSettingsDialog] Failed to fetch extensions:", err);
+        setExtensionCatalogs(emptyExtensionCatalogs());
+        setExtensionsError(
+          "Extension settings could not be loaded. Check that the environment is available and try again.",
+        );
+      } finally {
+        if (isCurrent()) {
+          setIsLoadingExtensions(false);
+          setHasLoadedExtensions(true);
+        }
       }
-    }
-  }, [environment.id]);
+    },
+    [environment.id],
+  );
 
   // The backend owns discovery so this snapshot remains correct even if no
   // agent chat tab is mounted or its live events were missed while inactive.
@@ -561,8 +559,16 @@ export function EnvironmentSettingsDialog({
     }
 
     // Check for duplicate container port
-    if (portMappings.some(m => m.containerPort === newPortMapping.containerPort && m.protocol === newPortMapping.protocol)) {
-      setPortError(`Port ${newPortMapping.containerPort}/${newPortMapping.protocol} is already mapped`);
+    if (
+      portMappings.some(
+        (m) =>
+          m.containerPort === newPortMapping.containerPort &&
+          m.protocol === newPortMapping.protocol,
+      )
+    ) {
+      setPortError(
+        `Port ${newPortMapping.containerPort}/${newPortMapping.protocol} is already mapped`,
+      );
       return;
     }
 
@@ -659,11 +665,8 @@ export function EnvironmentSettingsDialog({
       // Update domains if not in full access mode
       const isFullAccess = (environment.networkAccessMode ?? "restricted") === "full";
       if (!isFullAccess) {
-        const domainsToSave = useGlobalDefaults ? [] : (domains || []);
-        updated = await backend.updateEnvironmentAllowedDomains(
-          environment.id,
-          domainsToSave
-        );
+        const domainsToSave = useGlobalDefaults ? [] : domains || [];
+        updated = await backend.updateEnvironmentAllowedDomains(environment.id, domainsToSave);
       }
 
       // Update port mappings if changed (only effective after restart for running containers)
@@ -675,11 +678,13 @@ export function EnvironmentSettingsDialog({
       if (agentSettingsChanged) {
         updated = await backend.updateEnvironmentAgentSettings(
           environment.id,
-          envDefaultAgent === "global" ? null : envDefaultAgent as DefaultAgent,
-          envClaudeMode === "global" ? null : envClaudeMode as ClaudeMode,
-          envClaudeNativeBackend === "default" ? null : envClaudeNativeBackend as ClaudeNativeBackend,
-          envOpencodeMode === "global" ? null : envOpencodeMode as OpenCodeMode,
-          envCodexMode === "global" ? null : envCodexMode as CodexMode,
+          envDefaultAgent === "global" ? null : (envDefaultAgent as DefaultAgent),
+          envClaudeMode === "global" ? null : (envClaudeMode as ClaudeMode),
+          envClaudeNativeBackend === "default"
+            ? null
+            : (envClaudeNativeBackend as ClaudeNativeBackend),
+          envOpencodeMode === "global" ? null : (envOpencodeMode as OpenCodeMode),
+          envCodexMode === "global" ? null : (envCodexMode as CodexMode),
         );
       }
 
@@ -707,10 +712,12 @@ export function EnvironmentSettingsDialog({
   const menuItems: SettingsMenuItem[] = [
     { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
     { id: "agent", label: "Agent", icon: <Bot className="h-4 w-4" /> },
-    ...(!isLocalEnvironment ? [
-      { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
-      { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
-    ] : []),
+    ...(!isLocalEnvironment
+      ? [
+          { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
+          { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
+        ]
+      : []),
     { id: "extensions", label: "Extensions", icon: <Puzzle className="h-4 w-4" /> },
   ];
 
@@ -721,7 +728,12 @@ export function EnvironmentSettingsDialog({
           <div className="max-w-2xl space-y-6">
             <div className="space-y-2">
               <Label htmlFor="env-name">Name</Label>
-              <Input id="env-name" value={name} onChange={handleNameChange} placeholder="Environment name" />
+              <Input
+                id="env-name"
+                value={name}
+                onChange={handleNameChange}
+                placeholder="Environment name"
+              />
               {nameError && <p className="text-sm text-destructive">{nameError}</p>}
             </div>
             {isLocalEnvironment && (
@@ -731,7 +743,9 @@ export function EnvironmentSettingsDialog({
                   <Laptop className="h-4 w-4 text-blue-500 shrink-0" />
                   <div>
                     <div className="font-medium text-sm">Local Environment</div>
-                    <div className="text-xs text-muted-foreground">Uses a git worktree on your machine (no Docker container)</div>
+                    <div className="text-xs text-muted-foreground">
+                      Uses a git worktree on your machine (no Docker container)
+                    </div>
                   </div>
                 </div>
                 {environment.worktreePath && (
@@ -750,40 +764,74 @@ export function EnvironmentSettingsDialog({
       case "agent":
         return (
           <div className="max-w-2xl space-y-8">
-            <p className="text-xs text-muted-foreground">Override global defaults for this environment. "Use global default" inherits from app settings.</p>
+            <p className="text-xs text-muted-foreground">
+              Override global defaults for this environment. "Use global default" inherits from app
+              settings.
+            </p>
 
             {/* Default Agent */}
             <div className="space-y-3">
               <Label className="text-sm">Default Agent</Label>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {([
-                  { value: "global", label: `Global (${AGENT_PLATFORM_LABELS[config.global.defaultAgent ?? "claude"]})`, icon: <Bot className="h-4 w-4" /> },
-                  { value: "claude", label: "Claude Code", icon: <AgentPlatformIcon platform="claude" accent className="h-4 w-4" /> },
-                  { value: "codex", label: "Codex", icon: <AgentPlatformIcon platform="codex" accent className="h-4 w-4" /> },
-                  { value: "cursor", label: "Cursor Agent", icon: <AgentPlatformIcon platform="cursor" accent className="h-4 w-4" /> },
-                  { value: "grok", label: "Grok Build", icon: <AgentPlatformIcon platform="grok" accent className="h-4 w-4" /> },
-                  { value: "opencode", label: "OpenCode", icon: <AgentPlatformIcon platform="opencode" accent className="h-4 w-4" /> },
-                ] as const).filter((opt) =>
-                  opt.value === "global"
-                  || (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(opt.value)
-                ).map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setEnvDefaultAgent(opt.value)}
-                    className={cn(
-                      "p-3 rounded-lg border-2 text-left transition-colors",
-                      envDefaultAgent === opt.value
-                        ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600"
-                    )}
-                  >
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      {opt.icon}
-                      {opt.label}
-                    </div>
-                  </button>
-                ))}
+                {(
+                  [
+                    {
+                      value: "global",
+                      label: `Global (${AGENT_PLATFORM_LABELS[config.global.defaultAgent ?? "claude"]})`,
+                      icon: <Bot className="h-4 w-4" />,
+                    },
+                    {
+                      value: "claude",
+                      label: "Claude Code",
+                      icon: <AgentPlatformIcon platform="claude" accent className="h-4 w-4" />,
+                    },
+                    {
+                      value: "codex",
+                      label: "Codex",
+                      icon: <AgentPlatformIcon platform="codex" accent className="h-4 w-4" />,
+                    },
+                    {
+                      value: "cursor",
+                      label: "Cursor Agent",
+                      icon: <AgentPlatformIcon platform="cursor" accent className="h-4 w-4" />,
+                    },
+                    {
+                      value: "grok",
+                      label: "Grok Build",
+                      icon: <AgentPlatformIcon platform="grok" accent className="h-4 w-4" />,
+                    },
+                    {
+                      value: "opencode",
+                      label: "OpenCode",
+                      icon: <AgentPlatformIcon platform="opencode" accent className="h-4 w-4" />,
+                    },
+                  ] as const
+                )
+                  .filter(
+                    (opt) =>
+                      opt.value === "global" ||
+                      (
+                        config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]
+                      ).includes(opt.value),
+                  )
+                  .map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setEnvDefaultAgent(opt.value)}
+                      className={cn(
+                        "p-3 rounded-lg border-2 text-left transition-colors",
+                        envDefaultAgent === opt.value
+                          ? "border-primary bg-primary/5"
+                          : "border-transparent bg-zinc-900 hover:border-zinc-600",
+                      )}
+                    >
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        {opt.icon}
+                        {opt.label}
+                      </div>
+                    </button>
+                  ))}
               </div>
             </div>
 
@@ -791,11 +839,21 @@ export function EnvironmentSettingsDialog({
             <div className="space-y-3">
               <Label className="text-sm">Claude Mode</Label>
               <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {([
-                  { value: "global", label: `Global (${config.global.claudeMode === "native" ? "Native" : "Terminal"})`, icon: <Bot className="h-3.5 w-3.5" /> },
-                  { value: "terminal", label: "Terminal", icon: <Terminal className="h-3.5 w-3.5" /> },
-                  { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
-                ] as const).map((opt) => (
+                {(
+                  [
+                    {
+                      value: "global",
+                      label: `Global (${config.global.claudeMode === "native" ? "Native" : "Terminal"})`,
+                      icon: <Bot className="h-3.5 w-3.5" />,
+                    },
+                    {
+                      value: "terminal",
+                      label: "Terminal",
+                      icon: <Terminal className="h-3.5 w-3.5" />,
+                    },
+                    { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
+                  ] as const
+                ).map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
@@ -804,7 +862,7 @@ export function EnvironmentSettingsDialog({
                       "p-2 rounded-lg border-2 text-left transition-colors",
                       envClaudeMode === opt.value
                         ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600"
+                        : "border-transparent bg-zinc-900 hover:border-zinc-600",
                     )}
                   >
                     <div className="flex items-center gap-2 text-sm font-medium">
@@ -820,22 +878,22 @@ export function EnvironmentSettingsDialog({
             <div className="space-y-3">
               <Label className="text-sm">Claude Native backend</Label>
               <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {([
-                  {
-                    value: "default",
-                    label: `Default (${
-                      (
-                        config.repositories[environment.projectId]?.claudeNativeBackend ??
-                        config.global.claudeNativeBackend ??
-                        "sdk"
-                      ) === "tmux"
-                        ? "Tmux"
-                        : "Agent SDK"
-                    })`,
-                  },
-                  { value: "sdk", label: "Agent SDK" },
-                  { value: "tmux", label: "Tmux" },
-                ] as const).map((opt) => (
+                {(
+                  [
+                    {
+                      value: "default",
+                      label: `Default (${
+                        (config.repositories[environment.projectId]?.claudeNativeBackend ??
+                          config.global.claudeNativeBackend ??
+                          "sdk") === "tmux"
+                          ? "Tmux"
+                          : "Agent SDK"
+                      })`,
+                    },
+                    { value: "sdk", label: "Agent SDK" },
+                    { value: "tmux", label: "Tmux" },
+                  ] as const
+                ).map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
@@ -852,8 +910,8 @@ export function EnvironmentSettingsDialog({
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                Only applies when Claude Mode is Native. Default inherits from
-                the repository setting, then the app default.
+                Only applies when Claude Mode is Native. Default inherits from the repository
+                setting, then the app default.
               </p>
             </div>
 
@@ -861,11 +919,21 @@ export function EnvironmentSettingsDialog({
             <div className="space-y-3">
               <Label className="text-sm">Codex Mode</Label>
               <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {([
-                  { value: "global", label: `Global (${(config.global.codexMode || "native") === "native" ? "Native" : "Terminal"})`, icon: <Bot className="h-3.5 w-3.5" /> },
-                  { value: "terminal", label: "Terminal", icon: <Terminal className="h-3.5 w-3.5" /> },
-                  { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
-                ] as const).map((opt) => (
+                {(
+                  [
+                    {
+                      value: "global",
+                      label: `Global (${(config.global.codexMode || "native") === "native" ? "Native" : "Terminal"})`,
+                      icon: <Bot className="h-3.5 w-3.5" />,
+                    },
+                    {
+                      value: "terminal",
+                      label: "Terminal",
+                      icon: <Terminal className="h-3.5 w-3.5" />,
+                    },
+                    { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
+                  ] as const
+                ).map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
@@ -874,7 +942,7 @@ export function EnvironmentSettingsDialog({
                       "p-2 rounded-lg border-2 text-left transition-colors",
                       envCodexMode === opt.value
                         ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600"
+                        : "border-transparent bg-zinc-900 hover:border-zinc-600",
                     )}
                   >
                     <div className="flex items-center gap-2 text-sm font-medium">
@@ -890,11 +958,21 @@ export function EnvironmentSettingsDialog({
             <div className="space-y-3">
               <Label className="text-sm">OpenCode Mode</Label>
               <div className="grid max-w-md grid-cols-1 gap-2 sm:grid-cols-3">
-                {([
-                  { value: "global", label: `Global (${(config.global.opencodeMode || "terminal") === "native" ? "Native" : "Terminal"})`, icon: <Bot className="h-3.5 w-3.5" /> },
-                  { value: "terminal", label: "Terminal", icon: <Terminal className="h-3.5 w-3.5" /> },
-                  { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
-                ] as const).map((opt) => (
+                {(
+                  [
+                    {
+                      value: "global",
+                      label: `Global (${(config.global.opencodeMode || "terminal") === "native" ? "Native" : "Terminal"})`,
+                      icon: <Bot className="h-3.5 w-3.5" />,
+                    },
+                    {
+                      value: "terminal",
+                      label: "Terminal",
+                      icon: <Terminal className="h-3.5 w-3.5" />,
+                    },
+                    { value: "native", label: "Native", icon: <Bot className="h-3.5 w-3.5" /> },
+                  ] as const
+                ).map((opt) => (
                   <button
                     key={opt.value}
                     type="button"
@@ -903,7 +981,7 @@ export function EnvironmentSettingsDialog({
                       "p-2 rounded-lg border-2 text-left transition-colors",
                       envOpencodeMode === opt.value
                         ? "border-primary bg-primary/5"
-                        : "border-transparent bg-zinc-900 hover:border-zinc-600"
+                        : "border-transparent bg-zinc-900 hover:border-zinc-600",
                     )}
                   >
                     <div className="flex items-center gap-2 text-sm font-medium">
@@ -921,39 +999,100 @@ export function EnvironmentSettingsDialog({
           <div className="max-w-2xl space-y-4">
             <div className="flex items-center gap-2 p-3 rounded-md bg-zinc-800 border border-zinc-700">
               {isFullAccess ? (
-                <><Globe className="h-4 w-4 text-blue-500 shrink-0" /><div><div className="font-medium text-sm">Full Network Access</div><div className="text-xs text-muted-foreground">Unrestricted internet access. Whitelist does not apply.</div></div></>
+                <>
+                  <Globe className="h-4 w-4 text-blue-500 shrink-0" />
+                  <div>
+                    <div className="font-medium text-sm">Full Network Access</div>
+                    <div className="text-xs text-muted-foreground">
+                      Unrestricted internet access. Whitelist does not apply.
+                    </div>
+                  </div>
+                </>
               ) : (
-                <><Shield className="h-4 w-4 text-green-500 shrink-0" /><div><div className="font-medium text-sm">Restricted Network Access</div><div className="text-xs text-muted-foreground">Only whitelisted domains are accessible.</div></div></>
+                <>
+                  <Shield className="h-4 w-4 text-green-500 shrink-0" />
+                  <div>
+                    <div className="font-medium text-sm">Restricted Network Access</div>
+                    <div className="text-xs text-muted-foreground">
+                      Only whitelisted domains are accessible.
+                    </div>
+                  </div>
+                </>
               )}
             </div>
             {!isFullAccess && (
               <>
                 <div className="flex items-center justify-between">
-                  <div className="space-y-0.5"><Label>Use Global Defaults</Label><p className="text-xs text-muted-foreground">Use default allowed domains</p></div>
+                  <div className="space-y-0.5">
+                    <Label>Use Global Defaults</Label>
+                    <p className="text-xs text-muted-foreground">Use default allowed domains</p>
+                  </div>
                   <Switch checked={useGlobalDefaults} onCheckedChange={setUseGlobalDefaults} />
                 </div>
                 <div className="space-y-2">
                   <Label>Allowed Domains</Label>
-                  <Textarea value={customDomains} onChange={handleDomainsChange} disabled={useGlobalDefaults} placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"} rows={8} className={`font-mono text-sm ${domainErrors.length > 0 ? "border-red-500" : ""} ${useGlobalDefaults ? "opacity-50" : ""}`} />
+                  <Textarea
+                    value={customDomains}
+                    onChange={handleDomainsChange}
+                    disabled={useGlobalDefaults}
+                    placeholder={"github.com\nregistry.npmjs.org\napi.anthropic.com"}
+                    rows={8}
+                    className={`font-mono text-sm ${domainErrors.length > 0 ? "border-red-500" : ""} ${useGlobalDefaults ? "opacity-50" : ""}`}
+                  />
                 </div>
                 {domainErrors.length > 0 && (
-                  <div className="text-sm text-red-500 space-y-1">{domainErrors.map((error, i) => (<div key={i} className="flex items-center gap-1"><XCircle className="h-3 w-3" />{error}</div>))}</div>
+                  <div className="text-sm text-red-500 space-y-1">
+                    {domainErrors.map((error, i) => (
+                      <div key={i} className="flex items-center gap-1">
+                        <XCircle className="h-3 w-3" />
+                        {error}
+                      </div>
+                    ))}
+                  </div>
                 )}
-                <Button type="button" variant="outline" size="sm" onClick={handleTestDomains} disabled={isTesting || domainErrors.length > 0 || useGlobalDefaults}>
-                  {isTesting ? (<><Loader2 className="mr-2 h-3 w-3 animate-spin" />Testing...</>) : "Test DNS Resolution"}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleTestDomains}
+                  disabled={isTesting || domainErrors.length > 0 || useGlobalDefaults}
+                >
+                  {isTesting ? (
+                    <>
+                      <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                      Testing...
+                    </>
+                  ) : (
+                    "Test DNS Resolution"
+                  )}
                 </Button>
                 {testResults && (
                   <div className="border border-zinc-700 rounded-md p-3 space-y-2 text-sm max-h-32 overflow-y-auto">
                     <div className="font-medium">DNS Test Results:</div>
                     {testResults.map((result, i) => (
                       <div key={i} className="flex items-start gap-2">
-                        {result.resolvable ? <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" /> : result.valid ? <AlertCircle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" /> : <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />}
-                        <div className="min-w-0"><span className="font-mono text-xs break-all">{result.domain}</span>{result.error && <span className="text-red-500 text-xs block">{result.error}</span>}</div>
+                        {result.resolvable ? (
+                          <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                        ) : result.valid ? (
+                          <AlertCircle className="h-4 w-4 text-yellow-500 mt-0.5 shrink-0" />
+                        ) : (
+                          <XCircle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+                        )}
+                        <div className="min-w-0">
+                          <span className="font-mono text-xs break-all">{result.domain}</span>
+                          {result.error && (
+                            <span className="text-red-500 text-xs block">{result.error}</span>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
                 )}
-                {environment.status === "running" && <p className="text-xs text-muted-foreground">Changes will be applied to the running container immediately.</p>}
+                {environment.status === "running" && (
+                  <p className="text-xs text-muted-foreground">
+                    Changes will be applied to the running container immediately.
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -962,57 +1101,145 @@ export function EnvironmentSettingsDialog({
         return (
           <div className="max-w-2xl space-y-4">
             <div className="flex items-center justify-between">
-              <p className="text-xs text-muted-foreground">Expose container ports to the host machine. Changes require a container restart.</p>
-              {!showAddPortForm && <Button type="button" variant="outline" size="sm" onClick={() => setShowAddPortForm(true)}><Plus className="h-4 w-4 mr-1" />Add Port</Button>}
+              <p className="text-xs text-muted-foreground">
+                Expose container ports to the host machine. Changes require a container restart.
+              </p>
+              {!showAddPortForm && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowAddPortForm(true)}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Port
+                </Button>
+              )}
             </div>
             {portMappings.length > 0 && (
-              <div className="space-y-2">{portMappings.map((mapping, index) => (
-                <div key={`port-${index}`} className="flex items-center justify-between p-2 rounded-md bg-zinc-800/50 border border-zinc-700">
-                  <span className="text-sm font-mono">{mapping.containerPort}:{mapping.hostPort}/{mapping.protocol}</span>
-                  <Button type="button" variant="ghost" size="icon" onClick={() => handleRemovePortMapping(index)} className="h-7 w-7"><Trash2 className="h-4 w-4" /></Button>
-                </div>
-              ))}</div>
+              <div className="space-y-2">
+                {portMappings.map((mapping, index) => (
+                  <div
+                    key={`port-${index}`}
+                    className="flex items-center justify-between p-2 rounded-md bg-zinc-800/50 border border-zinc-700"
+                  >
+                    <span className="text-sm font-mono">
+                      {mapping.containerPort}:{mapping.hostPort}/{mapping.protocol}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => handleRemovePortMapping(index)}
+                      className="h-7 w-7"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
             )}
-            {portError && <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-sm"><XCircle className="h-4 w-4 shrink-0" /><span>{portError}</span></div>}
-            {portMappings.length === 0 && !showAddPortForm && <p className="text-sm text-muted-foreground">No port mappings configured. Click "Add Port" to expose a container port.</p>}
+            {portError && (
+              <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-sm">
+                <XCircle className="h-4 w-4 shrink-0" />
+                <span>{portError}</span>
+              </div>
+            )}
+            {portMappings.length === 0 && !showAddPortForm && (
+              <p className="text-sm text-muted-foreground">
+                No port mappings configured. Click "Add Port" to expose a container port.
+              </p>
+            )}
             {portMappingsChanged && environment.status === "running" && (
-              <div className="flex items-center gap-2 p-2 rounded-md bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 text-sm"><AlertCircle className="h-4 w-4 shrink-0" /><span>Port changes require a container restart to take effect.</span></div>
+              <div className="flex items-center gap-2 p-2 rounded-md bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 text-sm">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>Port changes require a container restart to take effect.</span>
+              </div>
             )}
             {showAddPortForm && (
               <div className="space-y-3 p-3 rounded-md border border-zinc-700">
                 <p className="text-sm font-medium">Add Port Mapping</p>
                 <div className="space-y-2">
                   <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-                    <Input type="number" placeholder="Container" value={newPortMapping.containerPort} onChange={(e) => setNewPortMapping({ ...newPortMapping, containerPort: parseInt(e.target.value) || 0 })} className="text-sm" min={1} max={65535} />
+                    <Input
+                      type="number"
+                      placeholder="Container"
+                      value={newPortMapping.containerPort}
+                      onChange={(e) =>
+                        setNewPortMapping({
+                          ...newPortMapping,
+                          containerPort: parseInt(e.target.value) || 0,
+                        })
+                      }
+                      className="text-sm"
+                      min={1}
+                      max={65535}
+                    />
                     <span className="text-muted-foreground">:</span>
-                    <Input type="number" placeholder="Host" value={newPortMapping.hostPort} onChange={(e) => setNewPortMapping({ ...newPortMapping, hostPort: parseInt(e.target.value) || 0 })} className="text-sm" min={1} max={65535} />
+                    <Input
+                      type="number"
+                      placeholder="Host"
+                      value={newPortMapping.hostPort}
+                      onChange={(e) =>
+                        setNewPortMapping({
+                          ...newPortMapping,
+                          hostPort: parseInt(e.target.value) || 0,
+                        })
+                      }
+                      className="text-sm"
+                      min={1}
+                      max={65535}
+                    />
                   </div>
-                  <Select value={newPortMapping.protocol} onValueChange={(value: PortProtocol) => setNewPortMapping({ ...newPortMapping, protocol: value })}>
-                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-                    <SelectContent><SelectItem value="tcp">TCP</SelectItem><SelectItem value="udp">UDP</SelectItem></SelectContent>
+                  <Select
+                    value={newPortMapping.protocol}
+                    onValueChange={(value: PortProtocol) =>
+                      setNewPortMapping({ ...newPortMapping, protocol: value })
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="tcp">TCP</SelectItem>
+                      <SelectItem value="udp">UDP</SelectItem>
+                    </SelectContent>
                   </Select>
                 </div>
                 <div className="flex justify-end gap-2">
-                  <Button type="button" variant="ghost" size="sm" onClick={() => setShowAddPortForm(false)}>Cancel</Button>
-                  <Button type="button" size="sm" onClick={handleAddPortMapping} disabled={newPortMapping.containerPort < 1 || newPortMapping.hostPort < 1}>Add</Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAddPortForm(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleAddPortMapping}
+                    disabled={newPortMapping.containerPort < 1 || newPortMapping.hostPort < 1}
+                  >
+                    Add
+                  </Button>
                 </div>
               </div>
             )}
           </div>
         );
       case "extensions": {
-        const activeCatalog = extensionCatalogs.find(
-          (catalog) => catalog.agent === activeExtensionAgent,
-        ) ?? extensionCatalogs[0];
+        const activeCatalog =
+          extensionCatalogs.find((catalog) => catalog.agent === activeExtensionAgent) ??
+          extensionCatalogs[0];
         return (
           <div className="max-w-5xl space-y-4">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-medium">Agent extensions</p>
                 <p className="text-xs text-muted-foreground">
-                  Effective MCP servers, plugins, and skills for this environment.
-                  Refreshing health-checks Claude&apos;s approved MCP servers,
-                  which starts each one.
+                  Effective MCP servers, plugins, and skills for this environment. Refreshing
+                  health-checks Claude&apos;s approved MCP servers, which starts each one.
                 </p>
               </div>
               <Button
@@ -1086,29 +1313,35 @@ export function EnvironmentSettingsDialog({
 
   return (
     <>
-    <FullscreenSettingsLayout
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Environment Settings"
-      menuItems={menuItems}
-      footer={
-        <>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={isSaving || hasErrors}>
-            {isSaving ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</>) : "Save Changes"}
-          </Button>
-        </>
-      }
-    >
-      {renderSection}
-    </FullscreenSettingsLayout>
+      <FullscreenSettingsLayout
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Environment Settings"
+        menuItems={menuItems}
+        footer={
+          <>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={isSaving || hasErrors}>
+              {isSaving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Changes"
+              )}
+            </Button>
+          </>
+        }
+      >
+        {renderSection}
+      </FullscreenSettingsLayout>
 
       {/* Restart confirmation dialog */}
       <AlertDialog open={showRestartConfirm} onOpenChange={setShowRestartConfirm}>
-        <AlertDialogContent
-          className={Z_FULLSCREEN_DIALOG}
-          overlayClassName={Z_FULLSCREEN_DIALOG}
-        >
+        <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
             <AlertDialogTitle>Container Recreate Required</AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
@@ -1117,8 +1350,9 @@ export function EnvironmentSettingsDialog({
                 <strong> All running processes will be terminated.</strong>
               </p>
               <p className="text-sm">
-                Your filesystem state (installed packages, file changes) will be preserved.
-                However, any dev servers, build processes, or other running programs will need to be restarted.
+                Your filesystem state (installed packages, file changes) will be preserved. However,
+                any dev servers, build processes, or other running programs will need to be
+                restarted.
               </p>
             </AlertDialogDescription>
           </AlertDialogHeader>

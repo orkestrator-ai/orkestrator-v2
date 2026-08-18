@@ -1,7 +1,18 @@
 import { type OpencodeClient } from "@opencode-ai/sdk/v2/client";
 import { createUuid } from "./uuid";
-import { structuredOutputFailure, type JsonSchema, type StructuredOutputResult, StructuredOutputReadUnavailableError } from "@orkestrator/protocol/structured-output";
-import { boundedOpenCodeMessageHistory, findOpenCodeMessageId, OPEN_CODE_MESSAGE_HISTORY_LIMIT, OpenCodeMessageIdCoordinator, openCodeRequestMarker } from "@orkestrator/protocol/opencode-message-id";
+import {
+  structuredOutputFailure,
+  type JsonSchema,
+  type StructuredOutputResult,
+  StructuredOutputReadUnavailableError,
+} from "@orkestrator/protocol/structured-output";
+import {
+  boundedOpenCodeMessageHistory,
+  findOpenCodeMessageId,
+  OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+  OpenCodeMessageIdCoordinator,
+  openCodeRequestMarker,
+} from "@orkestrator/protocol/opencode-message-id";
 import type { ContextUsageSnapshot } from "./context-usage";
 
 import {
@@ -167,14 +178,12 @@ export async function sendPrompt(
     };
     agent?: string;
     directory?: string;
-  }
+  },
 ): Promise<SendPromptResult> {
   try {
     // Build the parts array with proper typing
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const parts: any[] = [
-      { type: "text" as const, text: message },
-    ];
+    const parts: any[] = [{ type: "text" as const, text: message }];
 
     if (options?.attachments) {
       for (const attachment of options.attachments) {
@@ -223,39 +232,40 @@ export async function sendPrompt(
       client,
       sessionId,
       requestId,
-      async (messageID) => options?.command
-        ? client.session.command({
-          sessionID: sessionId,
-          directory: options.directory,
-          messageID,
-          command: options.command.name.replace(/^\//, ""),
-          // `arguments` is a *required* field on the server's command request
-          // body, so a bare `/init` must still send an empty string. Passing
-          // `undefined` drops the key in `JSON.stringify` and the server answers
-          // 400 — which the caller reads as a failed send and then deletes the
-          // user's own message from the transcript.
-          arguments: options.command.arguments ?? "",
-          model: options.model,
-          agent: options.agent ?? options.mode,
-          variant: options.variant,
-          parts: parts.filter((part) => part.type === "file"),
-        })
-        : client.session.promptAsync({
-          sessionID: sessionId,
-          directory: options?.directory,
-          messageID,
-          parts,
-          model: options?.model ? toOpenCodeModelRef(options.model) : undefined,
-          agent: options?.agent ?? options?.mode,
-          variant: options?.variant,
-          format: options?.outputSchema
-            ? {
-                type: "json_schema",
-                schema: options.outputSchema,
-                retryCount: options.structuredOutputRetryCount,
-              }
-            : undefined,
-        }),
+      async (messageID) =>
+        options?.command
+          ? client.session.command({
+              sessionID: sessionId,
+              directory: options.directory,
+              messageID,
+              command: options.command.name.replace(/^\//, ""),
+              // `arguments` is a *required* field on the server's command request
+              // body, so a bare `/init` must still send an empty string. Passing
+              // `undefined` drops the key in `JSON.stringify` and the server answers
+              // 400 — which the caller reads as a failed send and then deletes the
+              // user's own message from the transcript.
+              arguments: options.command.arguments ?? "",
+              model: options.model,
+              agent: options.agent ?? options.mode,
+              variant: options.variant,
+              parts: parts.filter((part) => part.type === "file"),
+            })
+          : client.session.promptAsync({
+              sessionID: sessionId,
+              directory: options?.directory,
+              messageID,
+              parts,
+              model: options?.model ? toOpenCodeModelRef(options.model) : undefined,
+              agent: options?.agent ?? options?.mode,
+              variant: options?.variant,
+              format: options?.outputSchema
+                ? {
+                    type: "json_schema",
+                    schema: options.outputSchema,
+                    retryCount: options.structuredOutputRetryCount,
+                  }
+                : undefined,
+            }),
     );
 
     if (response && "error" in response && response.error) {
@@ -345,11 +355,7 @@ export function summarizeOpenCodeUsage(
   // Without a catalogue context window there is no denominator. Synthesising one
   // from the used tokens would report exactly 100% for every model missing from
   // the catalogue — including every mount before the async model list arrives.
-  if (
-    typeof contextWindow !== "number"
-    || !Number.isFinite(contextWindow)
-    || contextWindow <= 0
-  ) {
+  if (typeof contextWindow !== "number" || !Number.isFinite(contextWindow) || contextWindow <= 0) {
     return null;
   }
 
@@ -386,8 +392,7 @@ export function summarizeOpenCodeUsage(
     cacheWriteTokens: session.cacheWrite,
     reasoningTokens: session.reasoning,
     lastTurnTokens: usedTokens,
-    sessionTokens:
-      session.input + session.output + session.cacheRead + session.cacheWrite,
+    sessionTokens: session.input + session.output + session.cacheRead + session.cacheWrite,
     costUsd: session.cost,
     durationMs: session.duration,
     // Provider-exact counters against a catalogue context window: never inferred.
@@ -405,8 +410,7 @@ export async function getOpenCodeRuntimeHealth(
   // Some managed OpenCode installations and test doubles expose only a subset of
   // the v2 surface. Defer each lookup into its own promise so a missing namespace
   // becomes one unavailable capability rather than aborting the whole snapshot.
-  const attempt = <T,>(operation: () => Promise<T>): Promise<T> =>
-    Promise.resolve().then(operation);
+  const attempt = <T>(operation: () => Promise<T>): Promise<T> => Promise.resolve().then(operation);
   const [agents, skills, mcp, lsp, formatters, todos, diffs] = await Promise.allSettled([
     attempt(() => client.app.agents({ directory })),
     attempt(() => client.app.skills({ directory })),
@@ -421,22 +425,22 @@ export async function getOpenCodeRuntimeHealth(
       : Promise.resolve({ data: [] }),
   ]);
 
-  const data = <T,>(result: PromiseSettledResult<{ data?: T }>, fallback: T): T =>
-    result.status === "fulfilled" && result.value.data !== undefined
-      ? result.value.data
-      : fallback;
+  const data = <T>(result: PromiseSettledResult<{ data?: T }>, fallback: T): T =>
+    result.status === "fulfilled" && result.value.data !== undefined ? result.value.data : fallback;
   const mcpData = data<Record<string, { status?: string; error?: string }>>(mcp, {});
 
   return {
-    agents: data<Array<{
-      name: string;
-      description?: string;
-      mode: "subagent" | "primary" | "all";
-      native?: boolean;
-      hidden?: boolean;
-      model?: { providerID: string; modelID: string };
-      variant?: string;
-    }>>(agents, [])
+    agents: data<
+      Array<{
+        name: string;
+        description?: string;
+        mode: "subagent" | "primary" | "all";
+        native?: boolean;
+        hidden?: boolean;
+        model?: { providerID: string; modelID: string };
+        variant?: string;
+      }>
+    >(agents, [])
       .filter((agent) => !agent.hidden)
       .map((agent) => ({
         name: agent.name,
@@ -444,9 +448,7 @@ export async function getOpenCodeRuntimeHealth(
         mode: agent.mode,
         native: agent.native,
         hidden: agent.hidden,
-        modelId: agent.model
-          ? `${agent.model.providerID}/${agent.model.modelID}`
-          : undefined,
+        modelId: agent.model ? `${agent.model.providerID}/${agent.model.modelID}` : undefined,
         variant: agent.variant,
       })),
     skills: data<Array<{ name: string; description?: string; location?: string }>>(skills, []),
@@ -455,23 +457,21 @@ export async function getOpenCodeRuntimeHealth(
       status: status.status ?? "unknown",
       error: status.error,
     })),
-    lspServers: data<
-      Array<{ id: string; name: string; root: string; status: string }>
-    >(lsp, []),
-    formatters: data<
-      Array<{ name: string; enabled: boolean; extensions: string[] }>
-    >(formatters, []),
-    todos: data<Array<{ content: string; status: string; priority: string }>>(
-      todos,
+    lspServers: data<Array<{ id: string; name: string; root: string; status: string }>>(lsp, []),
+    formatters: data<Array<{ name: string; enabled: boolean; extensions: string[] }>>(
+      formatters,
       [],
     ),
-    diffs: data<Array<{
-      file?: string;
-      patch?: string;
-      additions: number;
-      deletions: number;
-      status?: "added" | "deleted" | "modified";
-    }>>(diffs, []),
+    todos: data<Array<{ content: string; status: string; priority: string }>>(todos, []),
+    diffs: data<
+      Array<{
+        file?: string;
+        patch?: string;
+        additions: number;
+        deletions: number;
+        status?: "added" | "deleted" | "modified";
+      }>
+    >(diffs, []),
     fetchedAt: new Date().toISOString(),
   };
 }
@@ -481,15 +481,17 @@ export async function forkOpenCodeSession(
   sessionId: string,
   messageId?: string,
 ): Promise<OpenCodeSession> {
-  const response = await client.session.fork({
-    sessionID: sessionId,
-    messageID: messageId,
-  }, { throwOnError: true });
+  const response = await client.session.fork(
+    {
+      sessionID: sessionId,
+      messageID: messageId,
+    },
+    { throwOnError: true },
+  );
   if (!response.data) {
     throw new Error("OpenCode returned an empty fork response");
   }
-  const createdAt = toIsoTimestamp(response.data.time?.created)
-    ?? new Date().toISOString();
+  const createdAt = toIsoTimestamp(response.data.time?.created) ?? new Date().toISOString();
 
   return {
     id: response.data.id,
@@ -512,9 +514,10 @@ export async function forkOpenCodeSession(
  * caller passes the raw stored value straight through, so it is filtered here —
  * destructuring it yielded `providerID: "default", modelID: undefined`.
  */
-export function splitOpenCodeModelId(
-  model: string | undefined,
-): { providerID?: string; modelID?: string } {
+export function splitOpenCodeModelId(model: string | undefined): {
+  providerID?: string;
+  modelID?: string;
+} {
   const trimmed = model?.trim();
   if (!trimmed || trimmed === "default") return {};
   const split = splitModelIdOnFirstSlash(trimmed);
@@ -528,12 +531,15 @@ export async function compactOpenCodeSession(
   model?: string,
 ): Promise<void> {
   const { providerID, modelID } = splitOpenCodeModelId(model);
-  const response = await client.session.summarize({
-    sessionID: sessionId,
-    providerID,
-    modelID,
-    auto: false,
-  }, { throwOnError: true });
+  const response = await client.session.summarize(
+    {
+      sessionID: sessionId,
+      providerID,
+      modelID,
+      auto: false,
+    },
+    { throwOnError: true },
+  );
   void response;
 }
 
@@ -542,10 +548,13 @@ export async function revertOpenCodeSession(
   sessionId: string,
   messageId?: string,
 ): Promise<void> {
-  const response = await client.session.revert({
-    sessionID: sessionId,
-    messageID: messageId,
-  }, { throwOnError: true });
+  const response = await client.session.revert(
+    {
+      sessionID: sessionId,
+      messageID: messageId,
+    },
+    { throwOnError: true },
+  );
   void response;
 }
 
@@ -553,9 +562,12 @@ export async function unrevertOpenCodeSession(
   client: OpencodeClient,
   sessionId: string,
 ): Promise<void> {
-  const response = await client.session.unrevert({
-    sessionID: sessionId,
-  }, { throwOnError: true });
+  const response = await client.session.unrevert(
+    {
+      sessionID: sessionId,
+    },
+    { throwOnError: true },
+  );
   void response;
 }
 
@@ -563,9 +575,12 @@ export async function shareOpenCodeSession(
   client: OpencodeClient,
   sessionId: string,
 ): Promise<string | undefined> {
-  const response = await client.session.share({
-    sessionID: sessionId,
-  }, { throwOnError: true });
+  const response = await client.session.share(
+    {
+      sessionID: sessionId,
+    },
+    { throwOnError: true },
+  );
   if (!response.data) {
     throw new Error("OpenCode returned an empty share response");
   }
@@ -577,9 +592,12 @@ export async function unshareOpenCodeSession(
   client: OpencodeClient,
   sessionId: string,
 ): Promise<void> {
-  const response = await client.session.unshare({
-    sessionID: sessionId,
-  }, { throwOnError: true });
+  const response = await client.session.unshare(
+    {
+      sessionID: sessionId,
+    },
+    { throwOnError: true },
+  );
   void response;
 }
 
@@ -612,10 +630,9 @@ function openCodeStructuredFailure(
   const record = isRecord(error) ? error : {};
   const name = typeof record.name === "string" ? record.name : "";
   const data = isRecord(record.data) ? record.data : {};
-  const message = firstNonEmptyString([
-    data.message,
-    record.message,
-  ]) ?? "OpenCode failed to produce structured output.";
+  const message =
+    firstNonEmptyString([data.message, record.message]) ??
+    "OpenCode failed to produce structured output.";
   const retries = typeof data.retries === "number" ? data.retries : undefined;
   return structuredOutputFailure(
     "opencode",
@@ -655,17 +672,13 @@ export async function getStructuredOutput<T = unknown>(
   } catch (error) {
     throw new StructuredOutputReadUnavailableError(
       "opencode",
-      error instanceof Error
-        ? error.message
-        : "Failed to read OpenCode structured output.",
+      error instanceof Error ? error.message : "Failed to read OpenCode structured output.",
       { requestId, cause: error },
     );
   }
 
   if (!response.data) {
-    return response.error
-      ? openCodeStructuredFailure(response.error, requestId)
-      : null;
+    return response.error ? openCodeStructuredFailure(response.error, requestId) : null;
   }
   let boundedEntries: readonly unknown[];
   try {
@@ -694,29 +707,25 @@ export async function getStructuredOutput<T = unknown>(
       return entry.info.role === "user" && format.type === "json_schema";
     })
     .at(-1)?.info.id;
-  const providerMessageId = requestId === undefined
-    ? undefined
-    : findOpenCodeMessageId(entries, requestId);
-  const expectedParentId = requestId === undefined
-    ? (typeof latestStructuredUserId === "string" ? latestStructuredUserId : undefined)
-    : providerMessageId;
+  const providerMessageId =
+    requestId === undefined ? undefined : findOpenCodeMessageId(entries, requestId);
+  const expectedParentId =
+    requestId === undefined
+      ? typeof latestStructuredUserId === "string"
+        ? latestStructuredUserId
+        : undefined
+      : providerMessageId;
   if (!expectedParentId) return null;
   // Keep the provider-neutral correlation ID on the public result. Only the
   // transcript lookup uses OpenCode's provider-qualified message ID.
   const resultRequestId = requestId ?? expectedParentId;
 
   const assistant = entries
-    .filter((entry) =>
-      entry.info.role === "assistant"
-      && entry.info.parentID === expectedParentId
-    )
+    .filter((entry) => entry.info.role === "assistant" && entry.info.parentID === expectedParentId)
     .at(-1);
   if (!assistant) return null;
   if (assistant.info.error) {
-    return openCodeStructuredFailure(
-      assistant.info.error,
-      resultRequestId,
-    );
+    return openCodeStructuredFailure(assistant.info.error, resultRequestId);
   }
   if (!isRecord(assistant.info.time)) {
     return structuredOutputFailure(
@@ -744,4 +753,3 @@ export async function getStructuredOutput<T = unknown>(
 }
 
 /** Event types from OpenCode SSE stream */
-

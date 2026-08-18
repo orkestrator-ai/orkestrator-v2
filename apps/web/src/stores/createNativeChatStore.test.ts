@@ -20,19 +20,10 @@ type TestAttachment = { id: string; name: string };
 type TestQueued = { id: string; text: string };
 type TestEvent = { type: string };
 
-type TestStore = NativeChatStoreSlice<
-  string,
-  TestMessage,
-  TestAttachment,
-  TestQueued
->;
+type TestStore = NativeChatStoreSlice<string, TestMessage, TestAttachment, TestQueued>;
 
 const useTestStore = create<TestStore>()((set, get, api) => ({
-  ...createNativeChatStoreSlice<string, TestMessage, TestAttachment, TestQueued>()(
-    set,
-    get,
-    api,
-  ),
+  ...createNativeChatStoreSlice<string, TestMessage, TestAttachment, TestQueued>()(set, get, api),
 }));
 
 const useMergedStore = create<TestStore>()((set, get, api) => ({
@@ -41,11 +32,9 @@ const useMergedStore = create<TestStore>()((set, get, api) => ({
   })(set, get, api),
 }));
 
-const useEventStore = create<NativeEventSubscriptionSlice<TestEvent>>()(
-  (set, get, api) => ({
-    ...createEventSubscriptionSlice<TestEvent>("TestAgent")(set, get, api),
-  }),
-);
+const useEventStore = create<NativeEventSubscriptionSlice<TestEvent>>()((set, get, api) => ({
+  ...createEventSubscriptionSlice<TestEvent>("TestAgent")(set, get, api),
+}));
 
 function resetStore(store: typeof useTestStore | typeof useMergedStore) {
   store.setState({
@@ -116,9 +105,7 @@ describe("createNativeChatStoreSlice", () => {
 
     expect(store.getDraftText(sessionKey)).toBe("draft");
     expect(store.getDraftMentions(sessionKey)).toHaveLength(1);
-    expect(store.getAttachments(sessionKey)).toEqual([
-      { id: "att-1", name: "diagram.png" },
-    ]);
+    expect(store.getAttachments(sessionKey)).toEqual([{ id: "att-1", name: "diagram.png" }]);
 
     store.setDraftText(sessionKey, "");
     store.setDraftMentions(sessionKey, []);
@@ -219,28 +206,18 @@ describe("createNativeChatStoreSlice", () => {
       messages: [],
       isLoading: false,
     });
-    const afterSession = useTestStore
-      .getState()
-      .sessionLoadingRevisions.get(sessionKey);
+    const afterSession = useTestStore.getState().sessionLoadingRevisions.get(sessionKey);
 
     store.setSessionLoading(sessionKey, true);
-    const afterRunning = useTestStore
-      .getState()
-      .sessionLoadingRevisions.get(sessionKey);
+    const afterRunning = useTestStore.getState().sessionLoadingRevisions.get(sessionKey);
     const runningSession = store.getSession(sessionKey);
     store.setSessionLoading(sessionKey, true);
-    const afterRepeatedRunning = useTestStore
-      .getState()
-      .sessionLoadingRevisions.get(sessionKey);
+    const afterRepeatedRunning = useTestStore.getState().sessionLoadingRevisions.get(sessionKey);
     expect(store.getSession(sessionKey)).toBe(runningSession);
     store.upsertMessage(sessionKey, { id: "m-1", content: "streaming" });
-    const afterTranscript = useTestStore
-      .getState()
-      .sessionLoadingRevisions.get(sessionKey);
+    const afterTranscript = useTestStore.getState().sessionLoadingRevisions.get(sessionKey);
     store.setSessionLoading(sessionKey, false);
-    const afterIdle = useTestStore
-      .getState()
-      .sessionLoadingRevisions.get(sessionKey);
+    const afterIdle = useTestStore.getState().sessionLoadingRevisions.get(sessionKey);
     const idleSession = store.getSession(sessionKey);
     store.setSessionLoading(sessionKey, false);
 
@@ -250,9 +227,7 @@ describe("createNativeChatStoreSlice", () => {
     expect(store.getSession(sessionKey)).toBe(idleSession);
     expect(afterTranscript).toBe(afterRepeatedRunning);
     expect(afterIdle).toBe(4);
-    expect(
-      useTestStore.getState().sessionLoadingRevisions.get(sessionKey),
-    ).toBe(5);
+    expect(useTestStore.getState().sessionLoadingRevisions.get(sessionKey)).toBe(5);
 
     // Check the running reference before the transcript and idle mutations.
     store.setSessionLoading(sessionKey, true, 123, "turn-2");
@@ -271,18 +246,14 @@ describe("createNativeChatStoreSlice", () => {
       messages: [],
       isLoading: true,
     });
-    const afterFirstSession = useTestStore
-      .getState()
-      .sessionLoadingRevisions.get(sessionKey);
+    const afterFirstSession = useTestStore.getState().sessionLoadingRevisions.get(sessionKey);
 
     // `handleRetry` tears the session down with a null write. The revision has
     // to keep advancing rather than reset: a reconcile that started against
     // `session-1` must still read as stale once a replacement lands under the
     // same key.
     store.setSession(sessionKey, null);
-    const afterDelete = useTestStore
-      .getState()
-      .sessionLoadingRevisions.get(sessionKey);
+    const afterDelete = useTestStore.getState().sessionLoadingRevisions.get(sessionKey);
     expect(useTestStore.getState().sessions.has(sessionKey)).toBe(false);
 
     store.setSession(sessionKey, {
@@ -293,9 +264,7 @@ describe("createNativeChatStoreSlice", () => {
 
     expect(afterFirstSession).toBe(1);
     expect(afterDelete).toBe(2);
-    expect(
-      useTestStore.getState().sessionLoadingRevisions.get(sessionKey),
-    ).toBe(3);
+    expect(useTestStore.getState().sessionLoadingRevisions.get(sessionKey)).toBe(3);
   });
 
   test("setClient with null deletes the client entry", () => {
@@ -346,9 +315,7 @@ describe("createNativeChatStoreSlice", () => {
     store.removeMessage(sessionKey, "not-here");
 
     expect(useTestStore.getState()).toBe(before);
-    expect(store.getSession(sessionKey)?.messages).toEqual([
-      { id: "m-1", content: "kept" },
-    ]);
+    expect(store.getSession(sessionKey)?.messages).toEqual([{ id: "m-1", content: "kept" }]);
   });
 
   test("removeAttachment keeps the state object when the attachment id is absent", () => {
@@ -361,9 +328,7 @@ describe("createNativeChatStoreSlice", () => {
     store.removeAttachment(sessionKey, "not-here");
 
     expect(useTestStore.getState()).toBe(before);
-    expect(store.getAttachments(sessionKey)).toEqual([
-      { id: "att-1", name: "diagram.png" },
-    ]);
+    expect(store.getAttachments(sessionKey)).toEqual([{ id: "att-1", name: "diagram.png" }]);
   });
 
   test("empty attachment, mention, and queue getters return stable references", () => {
@@ -374,12 +339,8 @@ describe("createNativeChatStoreSlice", () => {
      */
     const store = useTestStore.getState();
 
-    expect(store.getAttachments("env-env-1:tab-1")).toBe(
-      store.getAttachments("env-env-1:tab-1"),
-    );
-    expect(store.getAttachments("env-env-1:tab-1")).toBe(
-      store.getAttachments("env-env-2:tab-9"),
-    );
+    expect(store.getAttachments("env-env-1:tab-1")).toBe(store.getAttachments("env-env-1:tab-1"));
+    expect(store.getAttachments("env-env-1:tab-1")).toBe(store.getAttachments("env-env-2:tab-9"));
 
     expect(store.getDraftMentions("env-env-1:tab-1")).toBe(
       store.getDraftMentions("env-env-1:tab-1"),
@@ -408,11 +369,7 @@ describe("pruneSessionKeyedMap", () => {
       "env-env-1:",
     );
 
-    expect(pruned).toEqual(
-      new Map([
-        ["env-env-2:tab-1", "keep"],
-      ]),
-    );
+    expect(pruned).toEqual(new Map([["env-env-2:tab-1", "keep"]]));
   });
 });
 
@@ -427,7 +384,10 @@ describe("sessionKeyPrefixFor", () => {
 describe("buildClearEnvironmentPatch", () => {
   test("drops environment-keyed and session-keyed entries for one environment", () => {
     const state = {
-      clients: new Map([["env-1", "client-1"], ["env-2", "client-2"]]),
+      clients: new Map([
+        ["env-1", "client-1"],
+        ["env-2", "client-2"],
+      ]),
       draftText: new Map([
         ["env-env-1:tab-1", "gone"],
         ["env-env-2:tab-1", "kept"],
@@ -483,9 +443,7 @@ describe("buildClearSessionPatch", () => {
 
   test("returns an empty patch for a session key that holds nothing", () => {
     const state = { draftText: new Map([["env-env-1:tab-1", "kept"]]) };
-    expect(buildClearSessionPatch(state, "env-env-1:tab-9", ["draftText"])).toEqual(
-      {},
-    );
+    expect(buildClearSessionPatch(state, "env-env-1:tab-9", ["draftText"])).toEqual({});
   });
 });
 
@@ -529,9 +487,7 @@ describe("teardownEventSubscription", () => {
   });
 
   test("still aborts when the stream has no async iterator", () => {
-    const subscription = subscriptionWithStream(
-      {} as unknown as AsyncIterable<TestEvent>,
-    );
+    const subscription = subscriptionWithStream({} as unknown as AsyncIterable<TestEvent>);
 
     expect(() => teardownEventSubscription(subscription)).not.toThrow();
     expect(subscription.abortController.signal.aborted).toBe(true);
@@ -592,9 +548,7 @@ describe("createEventSubscriptionSlice", () => {
     store.setEventStream("env-unknown", stream);
 
     expect(useEventStore.getState()).toBe(before);
-    expect(useEventStore.getState().eventSubscriptions.has("env-unknown")).toBe(
-      false,
-    );
+    expect(useEventStore.getState().eventSubscriptions.has("env-unknown")).toBe(false);
     expect(store.hasActiveEventSubscription("env-unknown")).toBe(false);
   });
 
@@ -668,10 +622,14 @@ describe("createEventSubscriptionSlice", () => {
   test("reconnect budget and desync survive subscription replacement until a full resync", () => {
     const store = useEventStore.getState();
     const first = store.getOrCreateEventSubscription("env-1");
-    store.setEventReconnectState("env-1", {
-      reconnectAttempts: 10,
-      desynced: true,
-    }, first.abortController);
+    store.setEventReconnectState(
+      "env-1",
+      {
+        reconnectAttempts: 10,
+        desynced: true,
+      },
+      first.abortController,
+    );
     store.setEventStream("env-1", null, first.abortController);
 
     const replacement = store.getOrCreateEventSubscription("env-1");
@@ -679,13 +637,10 @@ describe("createEventSubscriptionSlice", () => {
     expect(replacement.desynced).toBe(true);
 
     store.markEventSubscriptionHealthy("env-1", replacement.abortController);
-    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.reconnectAttempts)
-      .toBe(0);
-    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.desynced)
-      .toBe(true);
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.reconnectAttempts).toBe(0);
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.desynced).toBe(true);
     store.markEventSubscriptionResynced("env-1", replacement.abortController);
-    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.desynced)
-      .toBe(false);
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")?.desynced).toBe(false);
   });
 
   test("a resync clears the reconnect budget as well as the desync flag", () => {
@@ -697,17 +652,23 @@ describe("createEventSubscriptionSlice", () => {
      */
     const store = useEventStore.getState();
     const first = store.getOrCreateEventSubscription("env-1");
-    store.setEventReconnectState("env-1", {
-      reconnectAttempts: 10,
-      desynced: true,
-    }, first.abortController);
+    store.setEventReconnectState(
+      "env-1",
+      {
+        reconnectAttempts: 10,
+        desynced: true,
+      },
+      first.abortController,
+    );
     store.setEventStream("env-1", null, first.abortController);
     const replacement = store.getOrCreateEventSubscription("env-1");
 
     store.markEventSubscriptionResynced("env-1", replacement.abortController);
 
-    expect(useEventStore.getState().eventSubscriptions.get("env-1"))
-      .toMatchObject({ desynced: false, reconnectAttempts: 0 });
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")).toMatchObject({
+      desynced: false,
+      reconnectAttempts: 0,
+    });
   });
 
   test("a live frame preserves a pending snapshot retry until resync completes", async () => {
@@ -717,19 +678,22 @@ describe("createEventSubscriptionSlice", () => {
     const retryTimer = setTimeout(() => {
       fired = true;
     }, 5);
-    store.setEventReconnectState("env-1", {
-      reconnectAttempts: 10,
-      reconnectTimer: retryTimer,
-      desynced: true,
-    }, subscription.abortController);
+    store.setEventReconnectState(
+      "env-1",
+      {
+        reconnectAttempts: 10,
+        reconnectTimer: retryTimer,
+        desynced: true,
+      },
+      subscription.abortController,
+    );
 
     store.markEventSubscriptionHealthy("env-1", subscription.abortController);
-    expect(useEventStore.getState().eventSubscriptions.get("env-1"))
-      .toMatchObject({
-        desynced: true,
-        reconnectAttempts: 0,
-        reconnectTimer: retryTimer,
-      });
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")).toMatchObject({
+      desynced: true,
+      reconnectAttempts: 0,
+      reconnectTimer: retryTimer,
+    });
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(fired).toBe(true);
@@ -743,16 +707,24 @@ describe("createEventSubscriptionSlice", () => {
     const first = setTimeout(() => {
       firstFired = true;
     }, 5);
-    store.setEventReconnectState("env-1", {
-      reconnectTimer: first,
-      desynced: true,
-    }, subscription.abortController);
+    store.setEventReconnectState(
+      "env-1",
+      {
+        reconnectTimer: first,
+        desynced: true,
+      },
+      subscription.abortController,
+    );
     const replacement = setTimeout(() => {
       replacementFired = true;
     }, 10);
-    store.setEventReconnectState("env-1", {
-      reconnectTimer: replacement,
-    }, subscription.abortController);
+    store.setEventReconnectState(
+      "env-1",
+      {
+        reconnectTimer: replacement,
+      },
+      subscription.abortController,
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 7));
     expect(firstFired).toBe(false);
@@ -760,8 +732,10 @@ describe("createEventSubscriptionSlice", () => {
     await new Promise((resolve) => setTimeout(resolve, 15));
 
     expect(replacementFired).toBe(false);
-    expect(useEventStore.getState().eventSubscriptions.get("env-1"))
-      .toMatchObject({ desynced: false, reconnectTimer: null });
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")).toMatchObject({
+      desynced: false,
+      reconnectTimer: null,
+    });
   });
 
   test("closeEventSubscription cancels a pending desync probe", async () => {
@@ -770,13 +744,17 @@ describe("createEventSubscriptionSlice", () => {
     let fired = false;
     const store = useEventStore.getState();
     const subscription = store.getOrCreateEventSubscription("env-1");
-    store.setEventReconnectState("env-1", {
-      reconnectAttempts: 10,
-      desynced: true,
-      reconnectTimer: setTimeout(() => {
-        fired = true;
-      }, 5),
-    }, subscription.abortController);
+    store.setEventReconnectState(
+      "env-1",
+      {
+        reconnectAttempts: 10,
+        desynced: true,
+        reconnectTimer: setTimeout(() => {
+          fired = true;
+        }, 5),
+      },
+      subscription.abortController,
+    );
 
     store.closeEventSubscription("env-1");
 
@@ -790,17 +768,23 @@ describe("createEventSubscriptionSlice", () => {
     // environment; a late resync from a dropped loop must not clear it.
     const store = useEventStore.getState();
     const dropped = store.getOrCreateEventSubscription("env-1");
-    store.setEventReconnectState("env-1", {
-      reconnectAttempts: 10,
-      desynced: true,
-    }, dropped.abortController);
+    store.setEventReconnectState(
+      "env-1",
+      {
+        reconnectAttempts: 10,
+        desynced: true,
+      },
+      dropped.abortController,
+    );
     store.setEventStream("env-1", null, dropped.abortController);
     store.getOrCreateEventSubscription("env-1");
 
     store.markEventSubscriptionResynced("env-1", dropped.abortController);
 
-    expect(useEventStore.getState().eventSubscriptions.get("env-1"))
-      .toMatchObject({ desynced: true, reconnectAttempts: 10 });
+    expect(useEventStore.getState().eventSubscriptions.get("env-1")).toMatchObject({
+      desynced: true,
+      reconnectAttempts: 10,
+    });
   });
 });
 
@@ -822,15 +806,13 @@ describe("shouldReconnectEventSubscription", () => {
   test("reconnects only the dropped subscription that still owns the environment", () => {
     const owner = new AbortController();
 
-    expect(shouldReconnectEventSubscription(subscription(owner, false), owner))
-      .toBe(true);
+    expect(shouldReconnectEventSubscription(subscription(owner, false), owner)).toBe(true);
   });
 
   test("refuses to resurrect an explicitly closed subscription", () => {
     // `closeEventSubscription`/`clearEnvironment` delete the entry outright.
     // Reconnecting here would restart a stream the app deliberately stopped.
-    expect(shouldReconnectEventSubscription(undefined, new AbortController()))
-      .toBe(false);
+    expect(shouldReconnectEventSubscription(undefined, new AbortController())).toBe(false);
   });
 
   test("stands down when a replacement subscription owns the environment", () => {
@@ -838,18 +820,13 @@ describe("shouldReconnectEventSubscription", () => {
     const replacement = new AbortController();
 
     // Running both loops against one environment would double every event.
-    expect(
-      shouldReconnectEventSubscription(subscription(replacement, true), owner),
-    ).toBe(false);
-    expect(
-      shouldReconnectEventSubscription(subscription(replacement, false), owner),
-    ).toBe(false);
+    expect(shouldReconnectEventSubscription(subscription(replacement, true), owner)).toBe(false);
+    expect(shouldReconnectEventSubscription(subscription(replacement, false), owner)).toBe(false);
   });
 
   test("stands down while its own subscription is still active", () => {
     const owner = new AbortController();
 
-    expect(shouldReconnectEventSubscription(subscription(owner, true), owner))
-      .toBe(false);
+    expect(shouldReconnectEventSubscription(subscription(owner, true), owner)).toBe(false);
   });
 });

@@ -2,10 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  createCommandRegistry,
-  type CommandContext,
-} from "./commands.js";
+import { createCommandRegistry, type CommandContext } from "./commands.js";
 import type { Environment } from "./models.js";
 import { StorageService } from "./storage.js";
 import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.js";
@@ -109,10 +106,9 @@ describe("delete_environment durable child-state cleanup", () => {
       async (invokeDelete, storage) => {
         await expect(invokeDelete()).resolves.toBeUndefined();
         expect(await storage.getEnvironment("e1")).toBeNull();
-        const remaining = JSON.parse(await fs.readFile(
-          path.join(storage.getDataDir(), "native-agent-sessions.json"),
-          "utf8",
-        ));
+        const remaining = JSON.parse(
+          await fs.readFile(path.join(storage.getDataDir(), "native-agent-sessions.json"), "utf8"),
+        );
         expect(remaining["poisoned-key"]).toMatchObject({ version: 2 });
       },
     );
@@ -187,13 +183,7 @@ describe("delete_environment durable child-state cleanup", () => {
   test("deletes the environment-linked pipeline whose stored environment id is blank", async () => {
     await withDeleteCommand(
       async (storage) => {
-        await storage.saveBuildPipeline(
-          "pipeline-1",
-          "p1",
-          "",
-          1,
-          { id: "pipeline-1" },
-        );
+        await storage.saveBuildPipeline("pipeline-1", "p1", "", 1, { id: "pipeline-1" });
         await storage.addEnvironment(environment({ buildPipelineId: "pipeline-1" }));
       },
       async (invokeDelete, storage) => {
@@ -207,24 +197,9 @@ describe("delete_environment durable child-state cleanup", () => {
     await withDeleteCommand(
       async (storage) => {
         await storage.addEnvironment(environment({ buildPipelineId: "pipeline-1" }));
-        await storage.saveBuildPipeline(
-          "pipeline-1",
-          "p1",
-          "e1",
-          1,
-          { id: "pipeline-1" },
-        );
-        await storage.savePromptQueue(
-          "claude env-e1:tab-1",
-          "e1",
-          [{ id: "m1" }],
-        );
-        await storage.saveAgentHandoff(
-          "handoff-1",
-          "e1",
-          1,
-          { messages: [{ id: "m1" }] },
-        );
+        await storage.saveBuildPipeline("pipeline-1", "p1", "e1", 1, { id: "pipeline-1" });
+        await storage.savePromptQueue("claude env-e1:tab-1", "e1", [{ id: "m1" }]);
+        await storage.saveAgentHandoff("handoff-1", "e1", 1, { messages: [{ id: "m1" }] });
       },
       async (invokeDelete, storage) => {
         let releaseCleanup!: () => void;
@@ -244,24 +219,18 @@ describe("delete_environment durable child-state cleanup", () => {
 
         const deletion = invokeDelete();
         await started;
-        await expect(storage.savePromptQueue(
-          "claude env-e1:tab-1",
-          "e1",
-          [{ id: "late" }],
-        )).rejects.toThrow("being deleted");
-        await expect(storage.saveBuildPipeline(
-          "pipeline-1",
-          "p1",
-          "e1",
-          1,
-          { id: "pipeline-1", phase: "late" },
-        )).rejects.toThrow("being deleted");
-        await expect(storage.saveAgentHandoff(
-          "handoff-late",
-          "e1",
-          1,
-          { messages: [] },
-        )).rejects.toThrow("being deleted");
+        await expect(
+          storage.savePromptQueue("claude env-e1:tab-1", "e1", [{ id: "late" }]),
+        ).rejects.toThrow("being deleted");
+        await expect(
+          storage.saveBuildPipeline("pipeline-1", "p1", "e1", 1, {
+            id: "pipeline-1",
+            phase: "late",
+          }),
+        ).rejects.toThrow("being deleted");
+        await expect(
+          storage.saveAgentHandoff("handoff-late", "e1", 1, { messages: [] }),
+        ).rejects.toThrow("being deleted");
 
         releaseCleanup();
         await deletion;

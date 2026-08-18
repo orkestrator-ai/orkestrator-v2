@@ -31,16 +31,13 @@ import type { TabType } from "@/contexts";
 const TAB_ICON_CLASS = "h-3 w-3 shrink-0";
 
 /** Check if a tab type is an OpenCode variant (terminal or native mode) */
-const isOpenCodeTab = (type: TabType): boolean =>
-  type === "opencode";
+const isOpenCodeTab = (type: TabType): boolean => type === "opencode";
 
 /** Check if a tab type is a Claude variant (terminal, native, or tmux mode) */
-const isClaudeTab = (type: TabType): boolean =>
-  type === "claude" || type === "claude-tmux";
+const isClaudeTab = (type: TabType): boolean => type === "claude" || type === "claude-tmux";
 
 /** Check if a tab type is a Codex variant */
-const isCodexTab = (type: TabType): boolean =>
-  type === "codex";
+const isCodexTab = (type: TabType): boolean => type === "codex";
 
 const isCursorTab = (type: TabType): boolean => type === "cursor";
 const isGrokTab = (type: TabType): boolean => type === "grok";
@@ -97,14 +94,7 @@ export function DraggableTab({
   canCloseToRight = true,
   canClose,
 }: DraggableTabProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: createDraggableTabId(tab.id, paneId),
   });
   const tooltipAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -125,35 +115,25 @@ export function DraggableTab({
    */
   const projectionSessionTitle = useNativeAgentProjectionStore((state) =>
     nativeAgentData
-      ? state.projections.get(
-          createSessionKey(nativeAgentData.environmentId, tab.id),
-        )?.title
+      ? state.projections.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title
       : undefined,
   );
   const claudeSessionTitle = useClaudeStore((state) => {
     if (nativeAgentData?.platform !== "claude") return undefined;
-    return state.sessions.get(
-      createSessionKey(nativeAgentData.environmentId, tab.id),
-    )?.title;
+    return state.sessions.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title;
   });
   const codexSessionTitle = useCodexStore((state) => {
     if (nativeAgentData?.platform !== "codex") return undefined;
-    return state.sessions.get(
-      createSessionKey(nativeAgentData.environmentId, tab.id),
-    )?.title;
+    return state.sessions.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title;
   });
   const openCodeSessionTitle = useOpenCodeStore((state) => {
     if (nativeAgentData?.platform !== "opencode") {
       return undefined;
     }
-    return state.sessions.get(
-      createSessionKey(nativeAgentData.environmentId, tab.id),
-    )?.title;
+    return state.sessions.get(createSessionKey(nativeAgentData.environmentId, tab.id))?.title;
   });
-  const nativeSessionTitle = projectionSessionTitle
-    ?? claudeSessionTitle
-    ?? codexSessionTitle
-    ?? openCodeSessionTitle;
+  const nativeSessionTitle =
+    projectionSessionTitle ?? claudeSessionTitle ?? codexSessionTitle ?? openCodeSessionTitle;
   const workflowTitle = getWorkflowTabTitle(tab);
 
   // Get build pipeline title for claude-build tabs
@@ -218,17 +198,18 @@ export function DraggableTab({
     }
 
     if (tab.type === "agent-native") {
-      const label = nativeAgentData?.platform === "opencode"
-        ? "OpenCode"
-        : nativeAgentData?.platform === "cursor"
-          ? "Cursor"
-          : nativeAgentData?.platform === "grok"
-            ? "Grok"
-            : nativeAgentData?.platform === "codex"
-              ? "Codex"
-              : nativeAgentData?.platform === "claude"
-                ? "Claude"
-                : "Agent";
+      const label =
+        nativeAgentData?.platform === "opencode"
+          ? "OpenCode"
+          : nativeAgentData?.platform === "cursor"
+            ? "Cursor"
+            : nativeAgentData?.platform === "grok"
+              ? "Grok"
+              : nativeAgentData?.platform === "codex"
+                ? "Codex"
+                : nativeAgentData?.platform === "claude"
+                  ? "Claude"
+                  : "Agent";
       return `${label} ${tabNumber}`;
     }
 
@@ -241,9 +222,7 @@ export function DraggableTab({
     if (isGrokTab(tab.type)) return `Grok ${tabNumber}`;
     if (isBuildTab(tab.type)) return `Build ${tabNumber}`;
     if (tab.type === "looped-review") {
-      return loopedReviewPhase === "completed"
-        ? `Looped Review ✓`
-        : `Looped Review ${tabNumber}`;
+      return loopedReviewPhase === "completed" ? `Looped Review ✓` : `Looped Review ${tabNumber}`;
     }
     if (tab.type === "multi-review") {
       return multiReviewPhase === "completed" || multiReviewPhase === "interactive"
@@ -309,10 +288,13 @@ export function DraggableTab({
     : workflowTitle
       ? session?.name || nativeSessionTitle
       : undefined;
-  const setTabRefs = useCallback((node: HTMLDivElement | null) => {
-    setNodeRef(node);
-    tooltipAnchorRef.current = node;
-  }, [setNodeRef]);
+  const setTabRefs = useCallback(
+    (node: HTMLDivElement | null) => {
+      setNodeRef(node);
+      tooltipAnchorRef.current = node;
+    },
+    [setNodeRef],
+  );
   const tabTrigger = (
     <div
       ref={setTabRefs}
@@ -336,19 +318,13 @@ export function DraggableTab({
       {isActive && (
         <div
           aria-hidden="true"
-          className={cn(
-            "absolute inset-x-0 top-0 h-0.5 bg-primary",
-            !isFocused && "opacity-60",
-          )}
+          className={cn("absolute inset-x-0 top-0 h-0.5 bg-primary", !isFocused && "opacity-60")}
         />
       )}
       {icon}
       {titleElement}
       {isDirty && (
-        <span
-          className="h-2 w-2 rounded-full bg-muted-foreground"
-          title="Unsaved changes"
-        />
+        <span className="h-2 w-2 rounded-full bg-muted-foreground" title="Unsaved changes" />
       )}
       {canClose && (
         <button
@@ -394,10 +370,7 @@ export function DraggableTab({
           Close others
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem
-          onClick={onCloseToRight}
-          disabled={!canCloseToRight || !onCloseToRight}
-        >
+        <ContextMenuItem onClick={onCloseToRight} disabled={!canCloseToRight || !onCloseToRight}>
           Close to the right
         </ContextMenuItem>
       </ContextMenuContent>

@@ -48,8 +48,9 @@ describe("build review handoff", () => {
     expect(prompt).toContain("handed off from Codex to a new Claude session");
     expect(prompt).toContain("Review the range boundary.");
     expect(prompt).toContain("boundary test failed");
-    expect(prompt.indexOf("boundary test failed"))
-      .toBeLessThan(prompt.indexOf("Address every finding."));
+    expect(prompt.indexOf("boundary test failed")).toBeLessThan(
+      prompt.indexOf("Address every finding."),
+    );
   });
 
   test("escapes transcript markup and survives circular provider records", () => {

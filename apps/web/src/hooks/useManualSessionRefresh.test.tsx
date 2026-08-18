@@ -1,10 +1,7 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, waitFor } from "@testing-library/react";
 import { mockToastError } from "../../../../tests/mocks/sonner";
-import {
-  useManualSessionRefresh,
-  type RefreshSessionOptions,
-} from "./useManualSessionRefresh";
+import { useManualSessionRefresh, type RefreshSessionOptions } from "./useManualSessionRefresh";
 
 function Harness({
   refreshRequestId,
@@ -75,9 +72,7 @@ describe("useManualSessionRefresh", () => {
 
   test("waits until the tab is ready, then honours the pending request", async () => {
     const refresh = mock(async () => {});
-    const { rerender } = render(
-      <Harness refreshRequestId={1} isReady={false} refresh={refresh} />,
-    );
+    const { rerender } = render(<Harness refreshRequestId={1} isReady={false} refresh={refresh} />);
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(refresh).not.toHaveBeenCalled();
 

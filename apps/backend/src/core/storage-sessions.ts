@@ -85,72 +85,77 @@ import { StorageConfig } from "./storage-config.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export abstract class StorageSessions extends StorageConfig {
-  async createSession(environmentId: string, containerId: string, tabId: string, sessionType: SessionType): Promise<Session> {
+  async createSession(
+    environmentId: string,
+    containerId: string,
+    tabId: string,
+    sessionType: SessionType,
+  ): Promise<Session> {
     const sessions = await this.loadJson<Session[]>(this.sessionsFile(), () => []);
     const session = createSessionObject(environmentId, containerId, tabId, sessionType);
     const envSessions = sessions.filter((candidate) => candidate.environmentId === environmentId);
@@ -192,7 +197,7 @@ export abstract class StorageSessions extends StorageConfig {
     layouts: Record<string, PersistedPaneLayout>;
   }> {
     const filePath = this.paneLayoutsFile();
-    if (!await exists(filePath)) return { available: true, layouts: {} };
+    if (!(await exists(filePath))) return { available: true, layouts: {} };
     try {
       const raw = await fs.readFile(filePath, "utf8");
       if (!raw.trim()) throw new Error("Pane layout store is empty");
@@ -243,9 +248,7 @@ export abstract class StorageSessions extends StorageConfig {
       const previous = layouts[environmentId];
       const currentRevision = previous?.revision ?? 0;
       if (currentRevision !== expectedRevision) {
-        throw new Error(
-          paneLayoutRevisionConflictMessage(expectedRevision, currentRevision),
-        );
+        throw new Error(paneLayoutRevisionConflictMessage(expectedRevision, currentRevision));
       }
       const saved: PersistedPaneLayout = {
         version: layout.version,
@@ -296,9 +299,10 @@ export abstract class StorageSessions extends StorageConfig {
         () => ({}),
       );
       const previous = layouts[environmentId];
-      const sameGeneration = previous
-        && previous.version === desired.version
-        && previous.containerId === desired.containerId;
+      const sameGeneration =
+        previous &&
+        previous.version === desired.version &&
+        previous.containerId === desired.containerId;
       let next = sameGeneration
         ? mergePersistedPaneLayouts(
             base,
@@ -313,9 +317,9 @@ export abstract class StorageSessions extends StorageConfig {
           )
         : desired;
       if (
-        environment.setupPhase === "ready"
-        || environment.setupScriptsComplete === true
-        || environment.setupOverride === true
+        environment.setupPhase === "ready" ||
+        environment.setupScriptsComplete === true ||
+        environment.setupOverride === true
       ) {
         next = suppressLateSetupTabAdditions(next, previous, base);
       }
@@ -349,10 +353,15 @@ export abstract class StorageSessions extends StorageConfig {
       );
       const previous = layouts[input.environmentId];
       const root = previous
-        ? JSON.parse(JSON.stringify(previous.root)) as unknown
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
         : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
 
-      type Leaf = { kind: "leaf"; id: string; tabs: Array<Record<string, unknown>>; activeTabId: string | null };
+      type Leaf = {
+        kind: "leaf";
+        id: string;
+        tabs: Array<Record<string, unknown>>;
+        activeTabId: string | null;
+      };
       const leaves: Leaf[] = [];
       const visit = (node: unknown): void => {
         if (!node || typeof node !== "object" || Array.isArray(node)) return;
@@ -367,24 +376,28 @@ export abstract class StorageSessions extends StorageConfig {
       };
       visit(root);
       if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
-      const existing = leaves.find((leaf) => leaf.tabs.some((tab) => {
-        const build = tab.buildTabData;
-        return tab.type === "claude-build"
-          && build !== null
-          && typeof build === "object"
-          && !Array.isArray(build)
-          && (build as Record<string, unknown>).taskId === input.taskId;
-      }));
-      const target = existing
-        ?? leaves.find((leaf) => leaf.id === previous?.activePaneId)
-        ?? leaves[0]!;
+      const existing = leaves.find((leaf) =>
+        leaf.tabs.some((tab) => {
+          const build = tab.buildTabData;
+          return (
+            tab.type === "claude-build" &&
+            build !== null &&
+            typeof build === "object" &&
+            !Array.isArray(build) &&
+            (build as Record<string, unknown>).taskId === input.taskId
+          );
+        }),
+      );
+      const target =
+        existing ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
       const existingTab = existing?.tabs.find((tab) => {
         const build = tab.buildTabData as Record<string, unknown> | undefined;
         return tab.type === "claude-build" && build?.taskId === input.taskId;
       });
-      const tabId = typeof existingTab?.id === "string" && existingTab.id.length > 0
-        ? existingTab.id
-        : `build-${input.pipelineId}`;
+      const tabId =
+        typeof existingTab?.id === "string" && existingTab.id.length > 0
+          ? existingTab.id
+          : `build-${input.pipelineId}`;
       const buildTabData = {
         environmentId: input.environmentId,
         pipelineId: input.pipelineId,
@@ -460,7 +473,7 @@ export abstract class StorageSessions extends StorageConfig {
       if (input.existingOnly && !previous) return null;
 
       const root = previous
-        ? JSON.parse(JSON.stringify(previous.root)) as unknown
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
         : {
             kind: "leaf",
             id: "default",
@@ -489,21 +502,20 @@ export abstract class StorageSessions extends StorageConfig {
       if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
 
       const existingLeaf = leaves.find((leaf) =>
-        leaf.tabs.some((tab) => tab.id === "startup-agent")
+        leaf.tabs.some((tab) => tab.id === "startup-agent"),
       );
       if (input.existingOnly && !existingLeaf) return null;
-      const target = existingLeaf
-        ?? leaves.find((leaf) => leaf.id === previous?.activePaneId)
-        ?? leaves[0]!;
+      const target =
+        existingLeaf ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
       const existingIndex = target.tabs.findIndex((tab) => tab.id === "startup-agent");
       const existingTab = existingIndex >= 0 ? target.tabs[existingIndex]! : undefined;
       if (input.upgradeOnly && existingTab?.type === "agent-native") return previous ?? null;
 
       const previousNativeAgentData =
-        existingTab?.nativeAgentData
-        && typeof existingTab.nativeAgentData === "object"
-        && !Array.isArray(existingTab.nativeAgentData)
-          ? existingTab.nativeAgentData as Record<string, unknown>
+        existingTab?.nativeAgentData &&
+        typeof existingTab.nativeAgentData === "object" &&
+        !Array.isArray(existingTab.nativeAgentData)
+          ? (existingTab.nativeAgentData as Record<string, unknown>)
           : undefined;
       const nativeAgentData: Record<string, unknown> = {
         ...previousNativeAgentData,
@@ -539,7 +551,8 @@ export abstract class StorageSessions extends StorageConfig {
         "multiReviewTabData",
         "browserData",
         "initialCommands",
-      ]) delete tab[foreign];
+      ])
+        delete tab[foreign];
       if (existingIndex >= 0) target.tabs[existingIndex] = tab;
       else target.tabs.push(tab);
 
@@ -554,39 +567,38 @@ export abstract class StorageSessions extends StorageConfig {
         typeof previousNativeAgentData?.sessionId === "string"
           ? previousNativeAgentData.sessionId
           : undefined;
-      const bindsNewProviderSession = input.providerSessionId !== undefined
-        && previousProviderSessionId !== input.providerSessionId;
+      const bindsNewProviderSession =
+        input.providerSessionId !== undefined &&
+        previousProviderSessionId !== input.providerSessionId;
       // Resolved from the same leaf list as `target` so both reads see one
       // parse of one tree, and a hit can be compared by reference.
       const focusedLeaf = previous
         ? leaves.find((leaf) => leaf.id === previous.activePaneId)
         : undefined;
-      const shouldActivateStartupAgent = !input.existingOnly && (
-        existingIndex < 0
-        || (
-          bindsNewProviderSession
-          && environmentIsReadyForSetupHandoff(environment)
-          // Both panes must consent: the startup agent's own pane is the one
-          // whose selection changes, and the focused pane is where the user is
-          // actually looking. Either one holding a deliberately chosen tab
-          // means this is no longer a setup handoff.
-          && selectedTabIsSetupHandoffSource(target)
-          && (focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf))
-        )
-      );
+      const shouldActivateStartupAgent =
+        !input.existingOnly &&
+        (existingIndex < 0 ||
+          (bindsNewProviderSession &&
+            environmentIsReadyForSetupHandoff(environment) &&
+            // Both panes must consent: the startup agent's own pane is the one
+            // whose selection changes, and the focused pane is where the user is
+            // actually looking. Either one holding a deliberately chosen tab
+            // means this is no longer a setup handoff.
+            selectedTabIsSetupHandoffSource(target) &&
+            (focusedLeaf === target || selectedTabIsSetupHandoffSource(focusedLeaf))));
       if (shouldActivateStartupAgent) target.activeTabId = "startup-agent";
 
       // Pane focus follows the tab handoff and nothing else. Unconditionally
       // pointing it at the startup agent's pane moved the user's focus to that
       // pane on every republish, and — because a mismatch also defeated the
       // `unchanged` check below — did it on every sweep in a split layout.
-      const nextActivePaneId = !previous || shouldActivateStartupAgent
-        ? target.id
-        : previous.activePaneId;
+      const nextActivePaneId =
+        !previous || shouldActivateStartupAgent ? target.id : previous.activePaneId;
 
-      const unchanged = previous
-        && previous.activePaneId === nextActivePaneId
-        && JSON.stringify(previous.root) === JSON.stringify(root);
+      const unchanged =
+        previous &&
+        previous.activePaneId === nextActivePaneId &&
+        JSON.stringify(previous.root) === JSON.stringify(root);
       if (unchanged) return previous;
 
       const saved: PersistedPaneLayout = {
@@ -605,6 +617,4 @@ export abstract class StorageSessions extends StorageConfig {
       return saved;
     });
   }
-
-
 }

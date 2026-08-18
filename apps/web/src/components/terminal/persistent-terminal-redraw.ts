@@ -36,7 +36,10 @@ interface ShouldTriggerVisibilityRedrawOptions {
  * Returns null when no bounce is possible (zero/negative dimensions, or both
  * cols and rows are already at the uint16 maximum — an unrealistic scenario).
  */
-export function getTerminalResizeBounceDimensions(cols: number, rows: number): { cols: number; rows: number } | null {
+export function getTerminalResizeBounceDimensions(
+  cols: number,
+  rows: number,
+): { cols: number; rows: number } | null {
   if (cols <= 0 || rows <= 0) {
     return null;
   }
@@ -59,11 +62,7 @@ export function shouldTriggerEnvironmentVisibilityRedraw({
   isConnected,
 }: ShouldTriggerVisibilityRedrawOptions): boolean {
   return (
-    isEnvironmentVisible &&
-    !wasEnvironmentVisible &&
-    isActive &&
-    terminalIsOpened &&
-    isConnected
+    isEnvironmentVisible && !wasEnvironmentVisible && isActive && terminalIsOpened && isConnected
   );
 }
 

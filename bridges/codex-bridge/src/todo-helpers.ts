@@ -4,9 +4,7 @@ export interface TodoListItem {
 }
 
 export function summarizeTodoList(items: TodoListItem[]): string {
-  return items
-    .map((todo) => `${todo.completed ? "[x]" : "[ ]"} ${todo.text}`)
-    .join("\n");
+  return items.map((todo) => `${todo.completed ? "[x]" : "[ ]"} ${todo.text}`).join("\n");
 }
 
 export function mapTodoArgs(items: TodoListItem[]): {

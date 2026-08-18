@@ -1,63 +1,35 @@
-import { describe,expect,mock,test } from "bun:test";
-
+import { describe, expect, mock, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
 
-
 import { tmpdir } from "node:os";
-
 
 import path from "node:path";
 
-
-
-
 import type {
-BuildPipeline,
-PipelineSession,
-PipelineSessionPhase
+  BuildPipeline,
+  PipelineSession,
+  PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 
+import { VERIFICATION_VERDICT_SCHEMA } from "@orkestrator/protocol/build-pipeline";
 
-import {
-VERIFICATION_VERDICT_SCHEMA
-} from "@orkestrator/protocol/build-pipeline";
+import { type StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 
-
-
-
-import {
-type StructuredReviewReport
-} from "@orkestrator/protocol/structured-review";
-
-
-import type {
-JsonSchema,
-StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-
+import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { StorageService } from "./storage.js";
 
+import { BuildPipelineService } from "./build-pipeline-service.js";
 
-import {
-BuildPipelineService,
-} from "./build-pipeline-service.js";
-
-
-import {
-ProviderSessionFailedError
-} from "./build-pipeline-provider.js";
-
+import { ProviderSessionFailedError } from "./build-pipeline-provider.js";
 
 import type {
-BuildPipelineProvider,
-ProviderCreateSessionOptions,
-ProviderSessionRegistration,
-ProviderStatus,
+  BuildPipelineProvider,
+  ProviderCreateSessionOptions,
+  ProviderSessionRegistration,
+  ProviderStatus,
 } from "./build-pipeline-provider.js";
-
-
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -75,11 +47,13 @@ const cleanReview: StructuredReviewReport = {
     overview: "Implemented the task.",
     before: "Missing.",
     after: "Present.",
-    keyCodeChanges: [{
-      file: "src/app.ts",
-      line: 1,
-      description: "Adds the feature.",
-    }],
+    keyCodeChanges: [
+      {
+        file: "src/app.ts",
+        line: 1,
+        description: "Adds the feature.",
+      },
+    ],
     userImpact: "The feature is available.",
   },
   riskProfile: {
@@ -103,8 +77,6 @@ const cleanReview: StructuredReviewReport = {
   reviewSummary: "No findings.",
 };
 
-
-
 class FakeProvider implements BuildPipelineProvider {
   readonly agent = "claude" as const;
   readonly phases = new Map<string, PipelineSessionPhase>();
@@ -126,10 +98,7 @@ class FakeProvider implements BuildPipelineProvider {
   }> = [];
   private counter = 0;
 
-  registerSession(
-    sessionId: string,
-    interaction?: ProviderSessionRegistration,
-  ): void {
+  registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.registered.push({ sessionId, interaction });
   }
 
@@ -163,17 +132,16 @@ class FakeProvider implements BuildPipelineProvider {
   }
 
   async messages(sessionId: string): Promise<unknown[]> {
-    return [{
-      id: `${sessionId}-assistant`,
-      role: "assistant",
-      parts: [{ type: "text", content: "Finished" }],
-    }];
+    return [
+      {
+        id: `${sessionId}-assistant`,
+        role: "assistant",
+        parts: [{ type: "text", content: "Finished" }],
+      },
+    ];
   }
 
-  async structured<T>(
-    sessionId: string,
-    requestId: string,
-  ): Promise<StructuredOutputResult<T>> {
+  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
     const phase = this.phases.get(sessionId);
     return {
       ok: true,
@@ -187,8 +155,6 @@ class FakeProvider implements BuildPipelineProvider {
 
   async abort(_sessionId: string): Promise<void> {}
 }
-
-
 
 async function withService(
   run: (
@@ -207,13 +173,16 @@ async function withService(
       failCommandsOnce: Map<string, number>;
       currentHead: string;
       uncommittedPaths: string[];
-      kanbanTasks: Map<string, {
-        id: string;
-        status: string;
-        prUrl?: string;
-        prState?: string;
-        comments: Array<{ text: string }>;
-      }>;
+      kanbanTasks: Map<
+        string,
+        {
+          id: string;
+          status: string;
+          prUrl?: string;
+          prState?: string;
+          comments: Array<{ text: string }>;
+        }
+      >;
     },
   ) => Promise<void>,
 ): Promise<void> {
@@ -242,13 +211,16 @@ async function withService(
     command: string;
     args: Record<string, unknown>;
   }> = [];
-  const kanbanTasks = new Map<string, {
-    id: string;
-    status: string;
-    prUrl?: string;
-    prState?: string;
-    comments: Array<{ text: string }>;
-  }>();
+  const kanbanTasks = new Map<
+    string,
+    {
+      id: string;
+      status: string;
+      prUrl?: string;
+      prState?: string;
+      comments: Array<{ text: string }>;
+    }
+  >();
   const controls = {
     dataDir,
     detection: {
@@ -268,10 +240,7 @@ async function withService(
     uncommittedPaths: [] as string[],
     kanbanTasks,
   };
-  const invoke = async <T>(
-    command: string,
-    args: Record<string, unknown> = {},
-  ): Promise<T> => {
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push({ command, args });
     if (controls.failCommands.has(command)) {
       throw new Error(`${command} failed`);
@@ -324,8 +293,8 @@ async function withService(
     if (command === "update_feature_plan") return undefined as T;
     if (command === "pr_monitor_watch") return undefined as T;
     if (
-      command === "post_linear_completion_comment"
-      || command === "post_github_completion_comment"
+      command === "post_linear_completion_comment" ||
+      command === "post_github_completion_comment"
     ) {
       return {
         commentId: "comment-1",
@@ -346,18 +315,11 @@ async function withService(
   }
 }
 
-
-
-async function pipeline(
-  storage: StorageService,
-  id: string,
-): Promise<BuildPipeline> {
+async function pipeline(storage: StorageService, id: string): Promise<BuildPipeline> {
   const stored = await storage.getBuildPipeline(id);
   if (!stored) throw new Error("Pipeline disappeared");
   return stored.snapshot as BuildPipeline;
 }
-
-
 
 function startInput(
   overrides: Partial<Parameters<BuildPipelineService["start"]>[0]> = {},
@@ -380,8 +342,6 @@ function startInput(
   };
 }
 
-
-
 /** Runs the two provisioning passes and returns the live build session. */
 async function startBuilding(
   service: BuildPipelineService,
@@ -397,9 +357,6 @@ async function startBuilding(
 }
 
 describe("BuildPipelineService", () => {
-
-
-
   test("owns and advances the complete pipeline without a renderer", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start({
@@ -437,27 +394,23 @@ describe("BuildPipelineService", () => {
         "verify",
         "pr",
       ]);
-      expect(completed.sessions.every((session) =>
-        Array.isArray(session.messages))).toBe(true);
-      expect(completed.sessions.map((session) => [
-        session.phase,
-        session.structuredResultStatus,
-      ])).toEqual([
+      expect(completed.sessions.every((session) => Array.isArray(session.messages))).toBe(true);
+      expect(
+        completed.sessions.map((session) => [session.phase, session.structuredResultStatus]),
+      ).toEqual([
         ["build", undefined],
         ["review", "accepted"],
         ["verify", "accepted"],
         ["pr", undefined],
       ]);
       expect(provider.sent).toHaveLength(4);
-      const verificationDispatch = provider.sent.find((entry) =>
-        provider.phases.get(entry.sessionId) === "verify"
+      const verificationDispatch = provider.sent.find(
+        (entry) => provider.phases.get(entry.sessionId) === "verify",
       );
       expect(verificationDispatch?.schema).toBe(VERIFICATION_VERDICT_SCHEMA);
       expect(completed.verificationResult).toBe("pass");
     });
   });
-
-
 
   test("pause and cancel are backend mutations and abort running work", async () => {
     await withService(async (service, storage, provider) => {
@@ -500,16 +453,16 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("publishes running transcripts from the backend before a stage completes", async () => {
     await withService(async (service, storage, provider) => {
       provider.status = async () => "running";
-      provider.messages = async (sessionId) => [{
-        id: `${sessionId}-assistant`,
-        role: "assistant",
-        parts: [{ type: "text", content: "Implementing the backend runner" }],
-      }];
+      provider.messages = async (sessionId) => [
+        {
+          id: `${sessionId}-assistant`,
+          role: "assistant",
+          parts: [{ type: "text", content: "Implementing the backend runner" }],
+        },
+      ];
       const started = await service.start({
         taskId: "task-live",
         projectId: "project-1",
@@ -539,8 +492,6 @@ describe("BuildPipelineService", () => {
       });
     });
   });
-
-
 
   test("durably links Kanban and feature-plan ownership before advancing", async () => {
     await withService(async (service, storage, _provider, invocations) => {
@@ -587,8 +538,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("persists pause and cancel intent even when abort cannot be confirmed", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start(startInput());
@@ -612,8 +561,6 @@ describe("BuildPipelineService", () => {
       });
     });
   });
-
-
 
   test("does not complete until PR detection returns an authoritative result", async () => {
     await withService(async (service, storage, _provider, invocations, controls) => {
@@ -643,17 +590,17 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("uses container PR detection for containerized build environments", async () => {
     await withService(async (service, storage, _provider, invocations) => {
       await storage.updateEnvironment("env-1", {
         environmentType: "containerized",
         containerId: "container-1",
       });
-      const started = await service.start(startInput({
-        environmentType: "containerized",
-      }));
+      const started = await service.start(
+        startInput({
+          environmentType: "containerized",
+        }),
+      );
       for (let pass = 0; pass < 6; pass += 1) {
         await service.advanceNow(started.id);
       }
@@ -663,12 +610,9 @@ describe("BuildPipelineService", () => {
         command: "detect_pr",
         args: { containerId: "container-1", branch: "build" },
       });
-      expect(invocations.some(({ command }) => command === "detect_pr_local"))
-        .toBe(false);
+      expect(invocations.some(({ command }) => command === "detect_pr_local")).toBe(false);
     });
   });
-
-
 
   test("fails when a containerized build has no container for PR detection", async () => {
     await withService(async (service, storage) => {
@@ -676,9 +620,11 @@ describe("BuildPipelineService", () => {
         environmentType: "containerized",
         containerId: null,
       });
-      const started = await service.start(startInput({
-        environmentType: "containerized",
-      }));
+      const started = await service.start(
+        startInput({
+          environmentType: "containerized",
+        }),
+      );
       for (let pass = 0; pass < 6; pass += 1) {
         await service.advanceNow(started.id);
       }
@@ -689,8 +635,6 @@ describe("BuildPipelineService", () => {
       });
     });
   });
-
-
 
   test("rejects malformed pull request detection results", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
@@ -711,14 +655,14 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("restores Kanban lifecycle transitions, comments, and PR metadata idempotently", async () => {
     await withService(async (service, storage, _provider, _invocations, controls) => {
-      const started = await service.start(startInput({
-        taskId: "task-kanban",
-        source: { type: "kanban", taskId: "task-kanban" },
-      }));
+      const started = await service.start(
+        startInput({
+          taskId: "task-kanban",
+          source: { type: "kanban", taskId: "task-kanban" },
+        }),
+      );
       for (let pass = 0; pass < 6; pass += 1) {
         await service.advanceNow(started.id);
       }
@@ -739,21 +683,21 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("persists terminal comment failures and retries the idempotent command", async () => {
     await withService(async (service, storage, _provider, invocations, controls) => {
       controls.failCommands.add("post_github_completion_comment");
-      const started = await service.start(startInput({
-        source: {
-          type: "github",
-          repositoryOwner: "acme",
-          repositoryName: "repo",
-          issueNumber: 7,
-          issueUrl: "https://github.com/acme/repo/issues/7",
-          status: "open",
-        },
-      }));
+      const started = await service.start(
+        startInput({
+          source: {
+            type: "github",
+            repositoryOwner: "acme",
+            repositoryName: "repo",
+            issueNumber: 7,
+            issueUrl: "https://github.com/acme/repo/issues/7",
+            status: "open",
+          },
+        }),
+      );
       for (let pass = 0; pass < 6; pass += 1) {
         await service.advanceNow(started.id);
       }
@@ -777,12 +721,11 @@ describe("BuildPipelineService", () => {
         completionCommentStatus: "posted",
         completionCommentId: "comment-1",
       });
-      expect(invocations.filter((entry) =>
-        entry.command === "post_github_completion_comment")).toHaveLength(3);
+      expect(
+        invocations.filter((entry) => entry.command === "post_github_completion_comment"),
+      ).toHaveLength(3);
     });
   });
-
-
 
   test("remove disposes a cached provider only after its final pipeline is gone", async () => {
     await withService(async (service, storage, provider) => {
@@ -792,11 +735,12 @@ describe("BuildPipelineService", () => {
       await service.cancel(second.id);
 
       const dispose = mock(async () => {});
-      (provider as FakeProvider & { dispose: () => Promise<void> }).dispose =
-        dispose;
-      const providers = (service as unknown as {
-        providers: Map<string, BuildPipelineProvider>;
-      }).providers;
+      (provider as FakeProvider & { dispose: () => Promise<void> }).dispose = dispose;
+      const providers = (
+        service as unknown as {
+          providers: Map<string, BuildPipelineProvider>;
+        }
+      ).providers;
       providers.set("env-1:claude", provider);
 
       await service.remove(first.id);
@@ -810,8 +754,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("coalesces a timer-style provisioning race without losing the custom name prompt", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-race-"));
     const storage = new StorageService(dataDir);
@@ -820,10 +762,7 @@ describe("BuildPipelineService", () => {
     let createCalls = 0;
     let observedNamingPrompt: unknown;
     let buildPipelineEvents = 0;
-    const invoke = async <T>(
-      command: string,
-      args: Record<string, unknown> = {},
-    ): Promise<T> => {
+    const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
       if (command !== "create_environment") {
         throw new Error(`Unexpected command: ${command}`);
       }
@@ -867,10 +806,12 @@ describe("BuildPipelineService", () => {
       }
     });
     try {
-      const started = await service.start(startInput({
-        existingEnvironmentId: undefined,
-        namingPrompt: "Use the customer's exact naming context",
-      }));
+      const started = await service.start(
+        startInput({
+          existingEnvironmentId: undefined,
+          namingPrompt: "Use the customer's exact naming context",
+        }),
+      );
       expect(started.environmentId).toBe("created-env");
       expect(started.sourceLinkedAt).toBeString();
       expect(started.phase).toBe("starting-environment");
@@ -881,8 +822,6 @@ describe("BuildPipelineService", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
-
-
 
   test("shutdown waits for an in-flight supervisor pass before disposing providers", async () => {
     await withService(async (service, _storage, provider) => {
@@ -916,8 +855,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("coalesces overlapping timer ticks into one in-flight wrapper and one rerun", async () => {
     await withService(async (service, storage) => {
       const originalList = storage.listAllBuildPipelines.bind(storage);
@@ -945,8 +882,6 @@ describe("BuildPipelineService", () => {
       expect(listCalls).toBe(2);
     });
   });
-
-
 
   // A bridge that answers a status read with a terminal turn error is reachable,
   // not broken, so the stage must fail with the provider's own explanation
@@ -978,8 +913,6 @@ describe("BuildPipelineService", () => {
       );
     });
   });
-
-
 
   test("warns on transcript silence without aborting and clears the warning on growth", async () => {
     await withService(async (service, storage, provider) => {
@@ -1013,16 +946,17 @@ describe("BuildPipelineService", () => {
         stallWarning: { sessionId: session.sdkSessionId },
       });
 
-      provider.messages = async () => [{
-        id: "new-progress",
-        role: "assistant",
-        parts: [{ type: "text", content: "Progress resumed" }],
-      }];
+      provider.messages = async () => [
+        {
+          id: "new-progress",
+          role: "assistant",
+          parts: [{ type: "text", content: "Progress resumed" }],
+        },
+      ];
       await service.advanceNow(started.id);
       const resumed = await pipeline(storage, started.id);
       expect(resumed.phase).toBe("building");
       expect(resumed.stallWarning).toBeUndefined();
     });
   });
-
 });

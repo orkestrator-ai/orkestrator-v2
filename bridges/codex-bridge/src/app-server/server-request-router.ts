@@ -90,11 +90,7 @@ export interface ServerRequestRecord {
 }
 
 export interface ServerRequestRouterOptions {
-  respond: (
-    generation: EngineGeneration,
-    id: string | number,
-    result: unknown,
-  ) => Promise<void>;
+  respond: (generation: EngineGeneration, id: string | number, result: unknown) => Promise<void>;
   respondWithError: (
     generation: EngineGeneration,
     id: string | number,
@@ -260,12 +256,9 @@ export class ServerRequestRouter {
     }
     for (const parked of [...this.parkedInteractions.values()]) {
       if (parked.generation !== generation) continue;
-      void this.settleInteraction(
-        parked,
-        { action: "cancel" },
-        "engine-restarted",
-        { skipSend: true },
-      );
+      void this.settleInteraction(parked, { action: "cancel" }, "engine-restarted", {
+        skipSend: true,
+      });
     }
   }
 
@@ -368,9 +361,8 @@ export class ServerRequestRouter {
       if (this.tryPark(key, record, method, request, generation)) return;
     }
     if (
-      (method === "item/tool/requestUserInput"
-        || method === "mcpServer/elicitation/request")
-      && this.options.presentInteraction
+      (method === "item/tool/requestUserInput" || method === "mcpServer/elicitation/request") &&
+      this.options.presentInteraction
     ) {
       if (this.tryParkInteraction(key, record, method, request, generation)) return;
     }
@@ -384,14 +376,20 @@ export class ServerRequestRouter {
        */
       case "item/commandExecution/requestApproval":
         this.violation(method, "approval requested despite approvalPolicy=never");
-        this.explain(record, "Codex asked to run a command that needs approval. Orkestrator declined it because interactive approval is not enabled.");
+        this.explain(
+          record,
+          "Codex asked to run a command that needs approval. Orkestrator declined it because interactive approval is not enabled.",
+        );
         return this.finish(key, record, "declined", () =>
           this.options.respond(generation, request.id, { decision: "decline" }),
         );
 
       case "item/fileChange/requestApproval":
         this.violation(method, "approval requested despite approvalPolicy=never");
-        this.explain(record, "Codex asked to apply a file change that needs approval. Orkestrator declined it because interactive approval is not enabled.");
+        this.explain(
+          record,
+          "Codex asked to apply a file change that needs approval. Orkestrator declined it because interactive approval is not enabled.",
+        );
         return this.finish(key, record, "declined", () =>
           this.options.respond(generation, request.id, { decision: "decline" }),
         );
@@ -400,10 +398,15 @@ export class ServerRequestRouter {
       case "execCommandApproval":
       case "applyPatchApproval":
         this.violation(method, "legacy approval requested despite approvalPolicy=never");
-        this.explain(record, "Codex requested approval through a legacy path. Orkestrator declined it because interactive approval is not enabled.");
+        this.explain(
+          record,
+          "Codex requested approval through a legacy path. Orkestrator declined it because interactive approval is not enabled.",
+        );
         return this.finish(key, record, "declined", () =>
           this.options.respond(generation, request.id, {
-            decision: { denied: { rejection: "Orkestrator does not support interactive approvals" } },
+            decision: {
+              denied: { rejection: "Orkestrator does not support interactive approvals" },
+            },
           }),
         );
 
@@ -414,7 +417,10 @@ export class ServerRequestRouter {
        */
       case "item/permissions/requestApproval":
         this.violation(method, "permission escalation requested");
-        this.explain(record, "Codex requested additional permissions. Orkestrator cannot grant them, so the request was cancelled.");
+        this.explain(
+          record,
+          "Codex requested additional permissions. Orkestrator cannot grant them, so the request was cancelled.",
+        );
         return this.finish(key, record, "cancelled", () =>
           this.options.respondWithError(
             generation,
@@ -430,7 +436,10 @@ export class ServerRequestRouter {
        * leaving the turn hanging would look like a freeze.
        */
       case "item/tool/requestUserInput":
-        this.explain(record, "Codex asked a question, but no Orkestrator tab was attached to answer it. The request was cancelled.");
+        this.explain(
+          record,
+          "Codex asked a question, but no Orkestrator tab was attached to answer it. The request was cancelled.",
+        );
         return this.finish(key, record, "cancelled", () =>
           this.options.respond(generation, request.id, { answers: {} }),
         );
@@ -445,7 +454,10 @@ export class ServerRequestRouter {
          * drift (served on the authenticated `/session/:id/runtime-health`; the
          * public `/global/health` payload stays stripped).
          */
-        this.explain(record, "An MCP server asked for input, but no Orkestrator tab was attached to display it. The request was cancelled.");
+        this.explain(
+          record,
+          "An MCP server asked for input, but no Orkestrator tab was attached to display it. The request was cancelled.",
+        );
         return this.finish(key, record, "cancelled", () =>
           this.options.respond(generation, request.id, {
             action: "cancel",
@@ -457,7 +469,10 @@ export class ServerRequestRouter {
       /** Dynamic tools would have to be executed by us; report failure, not silence. */
       case "item/tool/call":
         this.violation(method, "dynamic tool execution requested");
-        this.explain(record, "Codex asked Orkestrator to execute a tool it does not provide. The call was reported as failed.");
+        this.explain(
+          record,
+          "Codex asked Orkestrator to execute a tool it does not provide. The call was reported as failed.",
+        );
         return this.finish(key, record, "unsupported", () =>
           this.options.respond(generation, request.id, {
             contentItems: [],
@@ -613,11 +628,8 @@ export class ServerRequestRouter {
     }
 
     const payload = buildApprovalResponse(parked.method, decision, parked.rawParams);
-    await this.finish(
-      parked.key,
-      parked.record,
-      approved ? "user-approved" : "user-declined",
-      () => this.options.respond(parked.generation, parked.requestId, payload.result),
+    await this.finish(parked.key, parked.record, approved ? "user-approved" : "user-declined", () =>
+      this.options.respond(parked.generation, parked.requestId, payload.result),
     );
   }
 
@@ -648,17 +660,16 @@ export class ServerRequestRouter {
     }
     if (!accepted) return false;
 
-    const timer = setTimeout(() => {
-      const parked = this.parkedInteractions.get(interaction.interactionId);
-      if (!parked) return;
-      this.counts.interactionsExpired += 1;
-      record.timedOut = true;
-      void this.settleInteraction(
-        parked,
-        { action: "cancel" },
-        "timed-out",
-      );
-    }, Math.max(1, interaction.expiresAt - requestedAt));
+    const timer = setTimeout(
+      () => {
+        const parked = this.parkedInteractions.get(interaction.interactionId);
+        if (!parked) return;
+        this.counts.interactionsExpired += 1;
+        record.timedOut = true;
+        void this.settleInteraction(parked, { action: "cancel" }, "timed-out");
+      },
+      Math.max(1, interaction.expiresAt - requestedAt),
+    );
     timer.unref?.();
 
     this.parkedInteractions.set(interaction.interactionId, {
@@ -705,8 +716,7 @@ export class ServerRequestRouter {
     if (options.skipSend) {
       this.pending.delete(parked.key);
       this.sendStarted.delete(parked.key);
-      parked.record.resolution =
-        resolution === "answered" ? "user-answered" : "cancelled";
+      parked.record.resolution = resolution === "answered" ? "user-answered" : "cancelled";
       parked.record.resolvedAt = this.now();
       this.pushHistory(parked.record);
       return;
@@ -716,11 +726,12 @@ export class ServerRequestRouter {
       parked.key,
       parked.record,
       resolution === "answered" ? "user-answered" : "cancelled",
-      () => this.options.respond(
-        parked.generation,
-        parked.requestId,
-        buildInteractionResponse(parked.request, answer),
-      ),
+      () =>
+        this.options.respond(
+          parked.generation,
+          parked.requestId,
+          buildInteractionResponse(parked.request, answer),
+        ),
     );
   }
 

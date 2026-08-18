@@ -51,24 +51,11 @@ const TOKEN_FIELD_ALIASES = {
     "cache_creation_input_tokens",
     "cache_creation_tokens",
   ],
-  reasoningTokens: [
-    "reasoningTokens",
-    "reasoning_tokens",
-    "thoughtTokens",
-    "thought_tokens",
-  ],
+  reasoningTokens: ["reasoningTokens", "reasoning_tokens", "thoughtTokens", "thought_tokens"],
   apiDurationMs: ["apiDurationMs", "api_duration_ms"],
-  contextUsedTokens: [
-    "contextUsedTokens",
-    "context_used_tokens",
-    "usedTokens",
-    "used_tokens",
-  ],
+  contextUsedTokens: ["contextUsedTokens", "context_used_tokens", "usedTokens", "used_tokens"],
   contextWindow: ["contextWindow", "context_window"],
-} as const satisfies Record<
-  Exclude<keyof AcpTurnUsage, "costUsd">,
-  readonly string[]
->;
+} as const satisfies Record<Exclude<keyof AcpTurnUsage, "costUsd">, readonly string[]>;
 
 /** One trillion tokens; anything larger is a vendor bug, not a session. */
 const MAX_TOKENS = 1e12;
@@ -80,19 +67,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function count(value: unknown): number | undefined {
-  return typeof value === "number"
-    && Number.isFinite(value)
-    && value >= 0
-    && value <= MAX_TOKENS
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_TOKENS
     ? Math.round(value)
     : undefined;
 }
 
 function money(value: unknown): number | undefined {
-  return typeof value === "number"
-    && Number.isFinite(value)
-    && value >= 0
-    && value <= MAX_USD
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= MAX_USD
     ? value
     : undefined;
 }
@@ -102,9 +83,7 @@ function parseUsdCost(value: Record<string, unknown>): number | undefined {
   if (direct !== undefined) return direct;
   const cost = isObject(value.cost) ? value.cost : undefined;
   if (!cost) return undefined;
-  const currency = typeof cost.currency === "string"
-    ? cost.currency.trim().toUpperCase()
-    : "";
+  const currency = typeof cost.currency === "string" ? cost.currency.trim().toUpperCase() : "";
   // Grok's `costUsdTicks` has no documented scale, so a missing currency is
   // not treated as USD. Only an explicit dollar amount is safe to show.
   if (currency !== "USD") return undefined;
@@ -130,11 +109,12 @@ function parseAcpTurnUsageObject(value: Record<string, unknown>): AcpTurnUsage |
   // every payload. The discriminator is required; persist restore already
   // stores the mapped `contextUsedTokens` / `contextWindow` names. `type` is
   // the same fallback `applySessionUpdate` already uses for every kind.
-  const kind = typeof value.sessionUpdate === "string"
-    ? value.sessionUpdate
-    : typeof value.type === "string"
-      ? value.type
-      : "";
+  const kind =
+    typeof value.sessionUpdate === "string"
+      ? value.sessionUpdate
+      : typeof value.type === "string"
+        ? value.type
+        : "";
   if (kind === "usage_update") {
     const occupancy = count(value.used);
     const window = count(value.size);
@@ -178,19 +158,20 @@ export function acpContextUsage(
   usage: AcpTurnUsage,
   details: { modelId?: string; durationMs?: number; updatedAt: string },
 ): NativeAgentContextUsage | null {
-  const usedTokens = usage.contextUsedTokens
-    ?? usage.totalTokens
-    ?? (usage.inputTokens === undefined && usage.outputTokens === undefined
+  const usedTokens =
+    usage.contextUsedTokens ??
+    usage.totalTokens ??
+    (usage.inputTokens === undefined && usage.outputTokens === undefined
       ? undefined
       : (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0));
   if (usedTokens === undefined) return null;
   const durationMs = count(details.durationMs);
-  const contextWindow = usage.contextWindow !== undefined && usage.contextWindow > 0
-    ? usage.contextWindow
-    : undefined;
-  const percentage = contextWindow === undefined
-    ? undefined
-    : Math.max(0, Math.min(100, (usedTokens / contextWindow) * 100));
+  const contextWindow =
+    usage.contextWindow !== undefined && usage.contextWindow > 0 ? usage.contextWindow : undefined;
+  const percentage =
+    contextWindow === undefined
+      ? undefined
+      : Math.max(0, Math.min(100, (usedTokens / contextWindow) * 100));
   return {
     usedTokens,
     ...(contextWindow === undefined ? {} : { maximumTokens: contextWindow }),

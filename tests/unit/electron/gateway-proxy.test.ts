@@ -1,6 +1,30 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import { activeDynamicCompressionCount, allocateBufferedProxySource, browserPreviewDecodeSnapshot, canAppendToProxySourceBuffer, canBufferBodyChunk, canStartDynamicCompression, canTransformProxyRepresentation, COMPRESSION_MIN_BYTES, DynamicCompressionBufferBudget, dynamicProxyCompressionBufferSnapshot, isCompressibleContentType, isDynamicCompressionSizeEligible, MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES, MAX_BUFFERED_BODY_CHUNKS, MAX_CONCURRENT_DYNAMIC_COMPRESSIONS, MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES, MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES, OrkestratorGateway, parseStrictContentLengthHeader, releaseReservationOnResponseSettled, responseStatusCanHaveBody, settleRewrittenProxyBodyResponse, shouldAbandonBufferedProxyBody } from "../../../apps/backend/src/gateway";
+import {
+  activeDynamicCompressionCount,
+  allocateBufferedProxySource,
+  browserPreviewDecodeSnapshot,
+  canAppendToProxySourceBuffer,
+  canBufferBodyChunk,
+  canStartDynamicCompression,
+  canTransformProxyRepresentation,
+  COMPRESSION_MIN_BYTES,
+  DynamicCompressionBufferBudget,
+  dynamicProxyCompressionBufferSnapshot,
+  isCompressibleContentType,
+  isDynamicCompressionSizeEligible,
+  MAX_BROWSER_PREVIEW_DECODED_TOTAL_BYTES,
+  MAX_BUFFERED_BODY_CHUNKS,
+  MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
+  MAX_DYNAMIC_COMPRESSION_SOURCE_BYTES,
+  MAX_DYNAMIC_PROXY_BUFFERED_SOURCE_BYTES,
+  OrkestratorGateway,
+  parseStrictContentLengthHeader,
+  releaseReservationOnResponseSettled,
+  responseStatusCanHaveBody,
+  settleRewrittenProxyBodyResponse,
+  shouldAbandonBufferedProxyBody,
+} from "../../../apps/backend/src/gateway";
 import { EventEmitter } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -17,11 +41,7 @@ import {
   waitUntil,
 } from "./gateway-test-harness.js";
 
-
 describe("remote gateway", () => {
-
-
-
   test("covers dynamic compression MIME, size, chunk, and proxy eligibility boundaries", () => {
     for (const contentType of [
       "text/plain",
@@ -89,8 +109,6 @@ describe("remote gateway", () => {
     expect(parseStrictContentLengthHeader(String(Number.MAX_SAFE_INTEGER + 1))).toBeNull();
   });
 
-
-
   test("bounds dynamic proxy source reservations by count and aggregate bytes", () => {
     const budget = new DynamicCompressionBufferBudget(2, 3 * COMPRESSION_MIN_BYTES);
     const releaseFirst = budget.tryReserve(COMPRESSION_MIN_BYTES);
@@ -150,8 +168,6 @@ describe("remote gateway", () => {
     expect(responseBudget.snapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
   });
 
-
-
   test("guards the buffered proxy source allocation, bound, and abandon decision", () => {
     const allocated = allocateBufferedProxySource(COMPRESSION_MIN_BYTES);
     expect(allocated?.byteLength).toBe(COMPRESSION_MIN_BYTES);
@@ -182,8 +198,6 @@ describe("remote gateway", () => {
     expect(shouldAbandonBufferedProxyBody(true, true, true)).toBe(true);
   });
 
-
-
   test("fails rewritten proxy responses when asynchronous body preparation rejects", async () => {
     const writeHead = mock(() => undefined);
     const end = mock(() => undefined);
@@ -204,15 +218,16 @@ describe("remote gateway", () => {
       finish,
       fail,
     );
-    await waitUntil(() => fail.mock.calls.length === 1, "Rejected preview preparation did not fail");
+    await waitUntil(
+      () => fail.mock.calls.length === 1,
+      "Rejected preview preparation did not fail",
+    );
 
     expect(fail.mock.calls[0]?.[0]).toEqual(new Error("preview preparation failed"));
     expect(writeHead).not.toHaveBeenCalled();
     expect(end).not.toHaveBeenCalled();
     expect(finish).not.toHaveBeenCalled();
   });
-
-
 
   test("settles a rewritten proxy body with its own length, vary, and encoding", async () => {
     const settle = async (
@@ -260,8 +275,6 @@ describe("remote gateway", () => {
     expect(identity.headers.vary).toBeUndefined();
   });
 
-
-
   test("discards a rewritten proxy body when the response already settled or died", async () => {
     for (const scenario of ["settled", "destroyed"] as const) {
       const writeHead = mock(() => undefined);
@@ -300,8 +313,6 @@ describe("remote gateway", () => {
       expect(fail).not.toHaveBeenCalled();
     }
   });
-
-
 
   test("allows configured public client origins without proxying browser traffic", async () => {
     const { info } = await startGateway({
@@ -364,7 +375,9 @@ describe("remote gateway", () => {
       headers: { origin: "https://www.orkestrator.dev" },
     });
     expect(unauthenticated.status).toBe(401);
-    expect(unauthenticated.headers["access-control-allow-origin"]).toBe("https://www.orkestrator.dev");
+    expect(unauthenticated.headers["access-control-allow-origin"]).toBe(
+      "https://www.orkestrator.dev",
+    );
 
     const wrongMethod = await requestUrl(endpoint, {
       method: "POST",
@@ -393,8 +406,6 @@ describe("remote gateway", () => {
     expect(malformed.status).toBe(403);
   });
 
-
-
   test("preserves bodyless and ranged proxy response semantics", async () => {
     const partial = "partial response ".repeat(128);
     const target = createServer((request, response) => {
@@ -402,7 +413,7 @@ describe("remote gateway", () => {
         response.writeHead(304, {
           "content-type": "text/plain; charset=utf-8",
           "content-length": 4096,
-          etag: "\"cached\"",
+          etag: '"cached"',
           "content-md5": "identity-md5",
           "content-digest": "sha-256=:identity:",
           "repr-digest": "sha-256=:identity:",
@@ -416,7 +427,7 @@ describe("remote gateway", () => {
         "content-type": "text/plain; charset=utf-8",
         "content-length": Buffer.byteLength(partial),
         "content-range": `bytes 0-${Buffer.byteLength(partial) - 1}/${Buffer.byteLength(partial) * 2}`,
-        etag: "\"partial\"",
+        etag: '"partial"',
         "accept-ranges": "bytes",
       });
       response.end(partial);
@@ -441,7 +452,7 @@ describe("remote gateway", () => {
     // RFC 9110 requires a 304 to carry the ETag a 200 would have sent, and the
     // gateway transforms nothing here, so identity-representation metadata is
     // preserved. Only the content-coded digests are dropped.
-    expect(notModified.headers.etag).toBe("\"cached\"");
+    expect(notModified.headers.etag).toBe('"cached"');
     expect(notModified.headers["accept-ranges"]).toBe("bytes");
     expect(notModified.headers["repr-digest"]).toBe("sha-256=:identity:");
     expect(notModified.headers.digest).toBe("sha-256=identity");
@@ -460,13 +471,11 @@ describe("remote gateway", () => {
     expect(ranged.headers["content-range"]).toBe(
       `bytes 0-${Buffer.byteLength(partial) - 1}/${Buffer.byteLength(partial) * 2}`,
     );
-    expect(ranged.headers.etag).toBe("\"partial\"");
+    expect(ranged.headers.etag).toBe('"partial"');
     expect(ranged.headers["accept-ranges"]).toBe("bytes");
     expect(ranged.headers["content-encoding"]).toBeUndefined();
     expect(ranged.headers.vary).toContain("Accept-Encoding");
   });
-
-
 
   test("streams identity when all proxy buffer reservations are occupied and reuses released slots", async () => {
     const body = "buffer admission ".repeat(128);
@@ -489,36 +498,40 @@ describe("remote gateway", () => {
     const address = target.address();
     if (!address || typeof address !== "object") throw new Error("Target server did not bind");
     const { info } = await startGateway({ compression: "body" });
-    const endpoint = new URL(
-      `${info.url}__orkestrator/proxy/loopback/${address.port}/parked`,
-    );
+    const endpoint = new URL(`${info.url}__orkestrator/proxy/loopback/${address.port}/parked`);
     const openedHeaders: IncomingHttpHeaders[] = [];
-    const startRequest = () => new Promise<{
-      headers: IncomingHttpHeaders;
-      rawBody: Buffer;
-    }>((resolve, reject) => {
-      const request = httpRequest({
-        hostname: endpoint.hostname,
-        port: endpoint.port,
-        path: endpoint.pathname,
-        headers: {
-          authorization: `Bearer ${info.token}`,
-          "accept-encoding": "gzip",
-        },
-      }, (response) => {
-        openedHeaders.push(response.headers);
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        response.on("aborted", () => reject(new Error("Response aborted")));
-        response.on("error", reject);
-        response.on("end", () => resolve({
-          headers: response.headers,
-          rawBody: Buffer.concat(chunks),
-        }));
+    const startRequest = () =>
+      new Promise<{
+        headers: IncomingHttpHeaders;
+        rawBody: Buffer;
+      }>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: endpoint.hostname,
+            port: endpoint.port,
+            path: endpoint.pathname,
+            headers: {
+              authorization: `Bearer ${info.token}`,
+              "accept-encoding": "gzip",
+            },
+          },
+          (response) => {
+            openedHeaders.push(response.headers);
+            const chunks: Buffer[] = [];
+            response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+            response.on("aborted", () => reject(new Error("Response aborted")));
+            response.on("error", reject);
+            response.on("end", () =>
+              resolve({
+                headers: response.headers,
+                rawBody: Buffer.concat(chunks),
+              }),
+            );
+          },
+        );
+        request.on("error", reject);
+        request.end();
       });
-      request.on("error", reject);
-      request.end();
-    });
     // Every buffered body needs a codec slot from a separate pool of the same
     // size once it completes. Assert the pool is idle up front so a slot leaked
     // by an earlier test fails here instead of silently flipping one of the
@@ -526,9 +539,8 @@ describe("remote gateway", () => {
     expect(activeDynamicCompressionCount()).toBe(0);
     expect(dynamicProxyCompressionBufferSnapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
 
-    const completed = Array.from(
-      { length: MAX_CONCURRENT_DYNAMIC_COMPRESSIONS + 1 },
-      () => startRequest(),
+    const completed = Array.from({ length: MAX_CONCURRENT_DYNAMIC_COMPRESSIONS + 1 }, () =>
+      startRequest(),
     );
     await waitUntil(
       () => parkedResponses.length === MAX_CONCURRENT_DYNAMIC_COMPRESSIONS + 1,
@@ -554,7 +566,9 @@ describe("remote gateway", () => {
     expect(results.filter((result) => result.headers["content-encoding"] === "gzip")).toHaveLength(
       MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
     );
-    expect(results.filter((result) => result.headers["content-encoding"] === undefined)).toHaveLength(1);
+    expect(
+      results.filter((result) => result.headers["content-encoding"] === undefined),
+    ).toHaveLength(1);
 
     parkResponses = false;
     const recovered = await requestUrl(endpoint.toString(), {
@@ -571,8 +585,6 @@ describe("remote gateway", () => {
     );
     expect(dynamicProxyCompressionBufferSnapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
   });
-
-
 
   test("aborts a buffered proxy body that stalls and returns its reservation", async () => {
     const recoveryBody = "stall recovery ".repeat(256);
@@ -606,9 +618,8 @@ describe("remote gateway", () => {
       authorization: `Bearer ${info.token}`,
       "accept-encoding": "gzip",
     };
-    const endpoint = (path: string) => (
-      `${info.url}__orkestrator/proxy/loopback/${address.port}${path}`
-    );
+    const endpoint = (path: string) =>
+      `${info.url}__orkestrator/proxy/loopback/${address.port}${path}`;
 
     const stalledResult = await requestUrl(endpoint("/stall"), { headers });
     expect(stalledResult.status).toBe(502);
@@ -627,8 +638,6 @@ describe("remote gateway", () => {
     expect(recovery.headers["content-encoding"]).toBe("gzip");
     expect(decodeResponseBody(recovery)).toBe(recoveryBody);
   });
-
-
 
   test("keeps a slow but progressing proxy body alive past the idle timeout", async () => {
     const chunk = "slow drip ".repeat(64);
@@ -677,8 +686,6 @@ describe("remote gateway", () => {
     expect(dynamicProxyCompressionBufferSnapshot()).toEqual({ activeCount: 0, activeBytes: 0 });
   });
 
-
-
   test("streams ineligible proxy bodies as identity without changing their metadata", async () => {
     const large = "identity proxy ".repeat(256);
     const small = "small identity";
@@ -688,7 +695,7 @@ describe("remote gateway", () => {
           "content-type": "text/plain; charset=utf-8",
           "content-length": Buffer.byteLength(large),
           "cache-control": "public, No-Transform",
-          etag: "\"no-transform\"",
+          etag: '"no-transform"',
         });
         response.end(large);
         return;
@@ -697,7 +704,7 @@ describe("remote gateway", () => {
         response.writeHead(200, {
           "content-type": "text/plain; charset=utf-8",
           "content-length": Buffer.byteLength(large),
-          etag: "\"head\"",
+          etag: '"head"',
           "content-md5": "identity-md5",
           "content-digest": "sha-256=:identity:",
           "repr-digest": "sha-256=:identity:",
@@ -710,7 +717,7 @@ describe("remote gateway", () => {
       if (request.url === "/chunked") {
         response.writeHead(200, {
           "content-type": "text/plain; charset=utf-8",
-          etag: "\"chunked\"",
+          etag: '"chunked"',
         });
         response.write(large.slice(0, 100));
         response.end(large.slice(100));
@@ -719,7 +726,7 @@ describe("remote gateway", () => {
       response.writeHead(200, {
         "content-type": "text/plain; charset=utf-8",
         "content-length": Buffer.byteLength(small),
-        etag: "\"small\"",
+        etag: '"small"',
       });
       response.end(small);
     });
@@ -732,15 +739,14 @@ describe("remote gateway", () => {
       authorization: `Bearer ${info.token}`,
       "accept-encoding": "gzip",
     };
-    const endpoint = (path: string) => (
-      `${info.url}__orkestrator/proxy/loopback/${address.port}${path}`
-    );
+    const endpoint = (path: string) =>
+      `${info.url}__orkestrator/proxy/loopback/${address.port}${path}`;
 
     const noTransform = await requestUrl(endpoint("/no-transform"), { headers });
     expect(noTransform.body).toBe(large);
     expect(noTransform.headers["content-encoding"]).toBeUndefined();
     expect(noTransform.headers["content-length"]).toBe(String(Buffer.byteLength(large)));
-    expect(noTransform.headers.etag).toBe("\"no-transform\"");
+    expect(noTransform.headers.etag).toBe('"no-transform"');
     expect(noTransform.headers.vary).toBeUndefined();
 
     const head = await requestUrl(endpoint("/head"), { method: "HEAD", headers });
@@ -751,7 +757,7 @@ describe("remote gateway", () => {
     // reports stays internally consistent with the identity Content-Length it
     // also reports. Accept-Ranges is honest because ranged GETs are passed
     // through untransformed.
-    expect(head.headers.etag).toBe("\"head\"");
+    expect(head.headers.etag).toBe('"head"');
     expect(head.headers["accept-ranges"]).toBe("bytes");
     expect(head.headers["repr-digest"]).toBe("sha-256=:identity:");
     expect(head.headers.digest).toBe("sha-256=identity");
@@ -764,17 +770,15 @@ describe("remote gateway", () => {
     const chunked = await requestUrl(endpoint("/chunked"), { headers });
     expect(chunked.body).toBe(large);
     expect(chunked.headers["content-encoding"]).toBeUndefined();
-    expect(chunked.headers.etag).toBe("\"chunked\"");
+    expect(chunked.headers.etag).toBe('"chunked"');
     expect(chunked.headers.vary).toContain("Accept-Encoding");
 
     const belowThreshold = await requestUrl(endpoint("/small"), { headers });
     expect(belowThreshold.body).toBe(small);
     expect(belowThreshold.headers["content-encoding"]).toBeUndefined();
-    expect(belowThreshold.headers.etag).toBe("\"small\"");
+    expect(belowThreshold.headers.etag).toBe('"small"');
     expect(belowThreshold.headers.vary).toContain("Accept-Encoding");
   });
-
-
 
   test("returns 502 and releases admission when an eligible buffered proxy body aborts", async () => {
     const recoveryBody = "recovered ".repeat(512);
@@ -815,8 +819,6 @@ describe("remote gateway", () => {
     expect(decodeResponseBody(recovery)).toBe(recoveryBody);
   });
 
-
-
   test("releases a proxy buffer reservation when the downstream disconnects while buffering", async () => {
     // Abruptly dropping a socket connected to Bun's in-process test server can
     // wedge the runner, so exercise the full disconnect lifecycle in a child.
@@ -826,7 +828,9 @@ describe("remote gateway", () => {
     const rendererRoot = await createRendererRoot(dataDir);
     const scriptPath = path.join(dataDir, "buffer-disconnect-scenario.ts");
     const gatewayModule = path.resolve(import.meta.dir, "../../../apps/backend/src/gateway.ts");
-    await writeFile(scriptPath, `
+    await writeFile(
+      scriptPath,
+      `
       import { createServer, request as httpRequest } from "node:http";
       import { connect } from "node:net";
       import { OrkestratorGateway } from ${JSON.stringify(gatewayModule)};
@@ -920,7 +924,8 @@ describe("remote gateway", () => {
       clearTimeout(failTimer);
       console.log("RESERVATION_RELEASED");
       process.exit(0);
-    `);
+    `,
+    );
 
     const scenario = Bun.spawn([process.execPath, scriptPath], {
       stdout: "pipe",
@@ -935,8 +940,6 @@ describe("remote gateway", () => {
     expect(stdout).toContain("RESERVATION_RELEASED");
     expect(exitCode).toBe(0);
   });
-
-
 
   test("does not double encode an already encoded proxy response", async () => {
     const body = Buffer.from("already encoded ".repeat(512));
@@ -968,8 +971,6 @@ describe("remote gateway", () => {
     expect(gunzipSync(result.rawBody)).toEqual(body);
   });
 
-
-
   test("terminates the downstream response when an upstream proxy aborts after headers", async () => {
     const target = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/plain" });
@@ -979,16 +980,16 @@ describe("remote gateway", () => {
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
-    await expect(requestUrl(
-      `${info.url}__orkestrator/proxy/loopback/${targetAddress.port}/aborted`,
-      { headers: { authorization: `Bearer ${info.token}` } },
-    )).rejects.toThrow("Response aborted");
+    await expect(
+      requestUrl(`${info.url}__orkestrator/proxy/loopback/${targetAddress.port}/aborted`, {
+        headers: { authorization: `Bearer ${info.token}` },
+      }),
+    ).rejects.toThrow("Response aborted");
   });
-
-
 
   test("rewrites loopback proxy redirects and target cookies into the proxy namespace", async () => {
     const target = createServer((request, response) => {
@@ -1017,7 +1018,8 @@ describe("remote gateway", () => {
     });
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
     const proxyPrefix = `/__orkestrator/proxy/loopback/${targetAddress.port}`;
@@ -1049,8 +1051,6 @@ describe("remote gateway", () => {
       await new Promise<void>((resolve) => target.close(() => resolve()));
     }
   });
-
-
 
   test("rejects preview text whose rewritten form exceeds the output limit", async () => {
     let source = "";
@@ -1089,10 +1089,8 @@ describe("remote gateway", () => {
     );
   });
 
-
-
   test("returns decoded preview bytes to the shared budget on success and failure", async () => {
-    const html = "<a href=\"/page\">link</a>".repeat(64);
+    const html = '<a href="/page">link</a>'.repeat(64);
     const target = createServer((request, response) => {
       if (request.url === "/abort.html") {
         response.writeHead(200, {
@@ -1119,9 +1117,8 @@ describe("remote gateway", () => {
       origin: "null",
       "accept-encoding": "gzip",
     };
-    const endpoint = (path: string) => (
-      `${info.url}__orkestrator/browser/loopback/${address.port}${path}`
-    );
+    const endpoint = (path: string) =>
+      `${info.url}__orkestrator/browser/loopback/${address.port}${path}`;
 
     expect(browserPreviewDecodeSnapshot()).toEqual({ activeBytes: 0 });
     // The aggregate ceiling has to leave room for real preview traffic; a single
@@ -1152,15 +1149,20 @@ describe("remote gateway", () => {
     expect(browserPreviewDecodeSnapshot()).toEqual({ activeBytes: 0 });
   });
 
-
-
   test("allows null-origin browser preview preflights and forwards non-simple requests", async () => {
     const received = mock(() => undefined);
     const target = createServer((request, response) => {
       const chunks: Buffer[] = [];
-      request.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+      request.on("data", (chunk) =>
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
+      );
       request.on("end", () => {
-        received(request.method, request.url, request.headers["x-preview-test"], Buffer.concat(chunks).toString("utf8"));
+        received(
+          request.method,
+          request.url,
+          request.headers["x-preview-test"],
+          Buffer.concat(chunks).toString("utf8"),
+        );
         response.writeHead(200, { "content-type": "application/json" });
         response.end('{"ok":true}');
       });
@@ -1168,7 +1170,8 @@ describe("remote gateway", () => {
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
     const targetUrl = `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/api`;
@@ -1203,8 +1206,6 @@ describe("remote gateway", () => {
     expect(received).toHaveBeenCalledWith("POST", "/api", "forwarded", '{"message":"hello"}');
   });
 
-
-
   test("aborts oversized streaming preview bodies without waiting for upstream completion", async () => {
     const target = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
@@ -1214,17 +1215,19 @@ describe("remote gateway", () => {
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
-    const result = await requestUrl(`${info.url}__orkestrator/browser/loopback/${targetAddress.port}/large.js`, {
-      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
-    });
+    const result = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/large.js`,
+      {
+        headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+      },
+    );
     expect(result.status).toBe(502);
     expect(result.body).toContain("exceeded 8388608");
   });
-
-
 
   test("rejects preview text with an unsupported content encoding", async () => {
     const target = createServer((_request, response) => {
@@ -1237,17 +1240,19 @@ describe("remote gateway", () => {
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
-    const result = await requestUrl(`${info.url}__orkestrator/browser/loopback/${targetAddress.port}/`, {
-      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
-    });
+    const result = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/`,
+      {
+        headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+      },
+    );
     expect(result.status).toBe(502);
     expect(result.body).toContain("unsupported content encoding");
   });
-
-
 
   test("redirects preview-referred root requests back into their namespace", async () => {
     const { info } = await startGateway();
@@ -1257,7 +1262,9 @@ describe("remote gateway", () => {
       headers: { referer, origin: "null" },
     });
     expect(redirect.status).toBe(307);
-    expect(redirect.headers.location).toBe("/__orkestrator/browser/loopback/3000/api/status?probe=1");
+    expect(redirect.headers.location).toBe(
+      "/__orkestrator/browser/loopback/3000/api/status?probe=1",
+    );
     expect(redirect.headers["access-control-allow-origin"]).toBe("null");
     expect(redirect.headers["access-control-allow-credentials"]).toBe("true");
     expect(redirect.headers["cache-control"]).toBe("no-store");
@@ -1286,8 +1293,6 @@ describe("remote gateway", () => {
     expect(malformedReferer.status).toBe(401);
   });
 
-
-
   test("cancels the upstream request when the preview client disconnects", async () => {
     // Abruptly dropping an in-process connection to a Bun HTTP server wedges
     // the bun:test runner even after the scenario completes, so the whole
@@ -1296,7 +1301,9 @@ describe("remote gateway", () => {
     const rendererRoot = await createRendererRoot(dataDir);
     const scriptPath = path.join(dataDir, "disconnect-scenario.ts");
     const gatewayModule = path.resolve(import.meta.dir, "../../../apps/backend/src/gateway.ts");
-    await writeFile(scriptPath, `
+    await writeFile(
+      scriptPath,
+      `
       import { createServer } from "node:http";
       import { connect } from "node:net";
       import { OrkestratorGateway } from ${JSON.stringify(gatewayModule)};
@@ -1338,7 +1345,8 @@ describe("remote gateway", () => {
         ].join("\\r\\n"));
       });
       socket.once("data", () => socket.destroy());
-    `);
+    `,
+    );
 
     const scenario = Bun.spawn([process.execPath, scriptPath], {
       stdout: "pipe",
@@ -1353,8 +1361,6 @@ describe("remote gateway", () => {
     expect(stdout).toContain("UPSTREAM_CLOSED");
     expect(exitCode).toBe(0);
   });
-
-
 
   test("serves renderer requests through a configured dev server proxy", async () => {
     const devServer = createServer((request, response) => {
@@ -1377,7 +1383,12 @@ describe("remote gateway", () => {
       bindAddress: "127.0.0.1",
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
+      logger: {
+        debug: mock(() => undefined),
+        error: mock(() => undefined),
+        info: mock(() => undefined),
+        warn: mock(() => undefined),
+      },
       allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
@@ -1394,8 +1405,6 @@ describe("remote gateway", () => {
     }
   });
 
-
-
   test("stops promptly and disconnects an active streaming proxy response", async () => {
     const target = createServer((_request, response) => {
       response.writeHead(200, { "content-type": "text/plain" });
@@ -1403,12 +1412,16 @@ describe("remote gateway", () => {
     });
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { gateway, info } = await startGateway();
-    const request = httpRequest(`${info.url}__orkestrator/proxy/loopback/${targetAddress.port}/stream`, {
-      headers: { authorization: `Bearer ${info.token}` },
-    });
+    const request = httpRequest(
+      `${info.url}__orkestrator/proxy/loopback/${targetAddress.port}/stream`,
+      {
+        headers: { authorization: `Bearer ${info.token}` },
+      },
+    );
     let resolveResponseClosed: () => void = () => undefined;
     const responseClosed = new Promise<void>((resolve) => {
       resolveResponseClosed = resolve;
@@ -1427,7 +1440,9 @@ describe("remote gateway", () => {
       await responseStarted;
       await Promise.race([
         gateway.stop(),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Gateway stop timed out")), 1_000)),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Gateway stop timed out")), 1_000),
+        ),
       ]);
       await expect(responseClosed).resolves.toBeUndefined();
     } finally {
@@ -1436,5 +1451,4 @@ describe("remote gateway", () => {
       await new Promise<void>((resolve) => target.close(() => resolve()));
     }
   });
-
 });

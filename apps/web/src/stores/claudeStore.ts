@@ -17,10 +17,7 @@ import {
   type ClaudeModelCatalogSnapshot,
   type ClaudeBackgroundTask,
 } from "@/lib/claude-client";
-import type {
-  AgentRateLimitWindow,
-  ContextUsageSnapshot,
-} from "@/lib/context-usage";
+import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import {
   claudePlanApprovalDraftKey,
   claudeQuestionDraftKey,
@@ -43,8 +40,7 @@ import {
 export type { ClaudeSessionKey, ClaudeSdkSessionId, ClaudeEffortLevel };
 
 /** Shared event subscription state per environment */
-export type ClaudeEventSubscriptionState =
-  NativeEventSubscriptionState<ClaudeEvent>;
+export type ClaudeEventSubscriptionState = NativeEventSubscriptionState<ClaudeEvent>;
 
 export type ClaudeServerStatus = NativeServerStatus;
 export type ClaudeSessionState = NativeSessionState<ClaudeMessage>;
@@ -89,9 +85,7 @@ function mergeClaudeMessagesPreservingClientOnly(
   incoming: ClaudeMessage[],
 ): ClaudeMessage[] {
   const existingClientMessages = existing.filter(
-    (m) =>
-      m.id.startsWith(ERROR_MESSAGE_PREFIX) ||
-      m.id.startsWith(SYSTEM_MESSAGE_PREFIX),
+    (m) => m.id.startsWith(ERROR_MESSAGE_PREFIX) || m.id.startsWith(SYSTEM_MESSAGE_PREFIX),
   );
   if (existingClientMessages.length === 0) return incoming;
 
@@ -123,9 +117,7 @@ type ClaudeChatSlice = NativeChatStoreSlice<
   QueuedMessage
 >;
 
-interface ClaudeState
-  extends ClaudeChatSlice,
-    NativeEventSubscriptionSlice<ClaudeEvent> {
+interface ClaudeState extends ClaudeChatSlice, NativeEventSubscriptionSlice<ClaudeEvent> {
   // Agent-specific state
   models: ClaudeModel[];
   modelCatalogs: Map<string, ClaudeModelCatalogSnapshot>;
@@ -201,25 +193,13 @@ interface ClaudeState
   setEffort: (sessionKey: ClaudeSessionKey, effort: ClaudeEffortLevel) => void;
   setPlanMode: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
   setFastMode: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
-  setSessionInitData: (
-    environmentId: string,
-    initData: SessionInitData | null,
-  ) => void;
-  setContextUsage: (
-    sessionKey: ClaudeSessionKey,
-    usage: ContextUsageSnapshot | null,
-  ) => void;
-  setRateLimits: (
-    sessionKey: ClaudeSessionKey,
-    rateLimits: AgentRateLimitWindow[] | null,
-  ) => void;
+  setSessionInitData: (environmentId: string, initData: SessionInitData | null) => void;
+  setContextUsage: (sessionKey: ClaudeSessionKey, usage: ContextUsageSnapshot | null) => void;
+  setRateLimits: (sessionKey: ClaudeSessionKey, rateLimits: AgentRateLimitWindow[] | null) => void;
   setSelectedAgent: (sessionKey: ClaudeSessionKey, agent: string | undefined) => void;
   setIncludeLocalSettings: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
   setPromptSuggestionOptIn: (sessionKey: ClaudeSessionKey, enabled: boolean) => void;
-  setPromptSuggestion: (
-    sessionKey: ClaudeSessionKey,
-    suggestion: string | undefined,
-  ) => void;
+  setPromptSuggestion: (sessionKey: ClaudeSessionKey, suggestion: string | undefined) => void;
   setDismissedPromptSuggestion: (
     sessionKey: ClaudeSessionKey,
     suggestion: string | undefined,
@@ -228,18 +208,12 @@ interface ClaudeState
     sessionKey: ClaudeSessionKey,
     tasks: Record<string, ClaudeBackgroundTask>,
   ) => void;
-  setCompletionBlockedByBackgroundTasks: (
-    sessionKey: ClaudeSessionKey,
-    blocked: boolean,
-  ) => void;
+  setCompletionBlockedByBackgroundTasks: (sessionKey: ClaudeSessionKey, blocked: boolean) => void;
   /**
    * Bind a tab to a different provider session and discard metadata that belongs
    * to the old provider identity in the same store transaction.
    */
-  replaceSessionIdentity: (
-    sessionKey: ClaudeSessionKey,
-    session: ClaudeSessionState,
-  ) => void;
+  replaceSessionIdentity: (sessionKey: ClaudeSessionKey, session: ClaudeSessionState) => void;
   clearEnvironment: (environmentId: string) => void;
   /** Drop every session-keyed entry for one closed tab. */
   clearSession: (sessionKey: string) => void;
@@ -252,44 +226,30 @@ interface ClaudeState
   // Selectors
   getSelectedModel: (sessionKey: ClaudeSessionKey) => string | undefined;
   getModels: (environmentId: string) => ClaudeModel[];
-  getModelCatalog: (
-    environmentId: string,
-  ) => ClaudeModelCatalogSnapshot | undefined;
+  getModelCatalog: (environmentId: string) => ClaudeModelCatalogSnapshot | undefined;
   isComposingFor: (sessionKey: ClaudeSessionKey) => boolean;
   getEffort: (sessionKey: ClaudeSessionKey) => ClaudeEffortLevel;
   isPlanMode: (sessionKey: ClaudeSessionKey) => boolean;
   isFastMode: (sessionKey: ClaudeSessionKey) => boolean;
   getSessionInitData: (environmentId: string) => SessionInitData | undefined;
-  getContextUsage: (
-    sessionKey: ClaudeSessionKey,
-  ) => ContextUsageSnapshot | undefined;
-  getRateLimits: (
-    sessionKey: ClaudeSessionKey,
-  ) => AgentRateLimitWindow[] | undefined;
-  getDismissedPromptSuggestion: (
-    sessionKey: ClaudeSessionKey,
-  ) => string | undefined;
+  getContextUsage: (sessionKey: ClaudeSessionKey) => ContextUsageSnapshot | undefined;
+  getRateLimits: (sessionKey: ClaudeSessionKey) => AgentRateLimitWindow[] | undefined;
+  getDismissedPromptSuggestion: (sessionKey: ClaudeSessionKey) => string | undefined;
   getSelectedAgent: (sessionKey: ClaudeSessionKey) => string | undefined;
   includesLocalSettings: (sessionKey: ClaudeSessionKey) => boolean;
-  getPendingQuestionsForSession: (
-    sdkSessionId: ClaudeSdkSessionId,
-  ) => ClaudeQuestionRequest[];
+  getPendingQuestionsForSession: (sdkSessionId: ClaudeSdkSessionId) => ClaudeQuestionRequest[];
   getPendingQuestion: (requestId: string) => ClaudeQuestionRequest | undefined;
   getPendingPlanApprovalsForSession: (
     sdkSessionId: ClaudeSdkSessionId,
   ) => ClaudePlanApprovalRequest[];
-  getPendingPlanApproval: (
-    requestId: string,
-  ) => ClaudePlanApprovalRequest | undefined;
+  getPendingPlanApproval: (requestId: string) => ClaudePlanApprovalRequest | undefined;
 
   /**
    * Find the sessionKey (store Map key) for a given SDK session ID.
    * Useful when handling SSE events that include the SDK session ID but
    * need to update state keyed by sessionKey.
    */
-  getSessionKeyBySdkSessionId: (
-    sdkSessionId: ClaudeSdkSessionId,
-  ) => ClaudeSessionKey | null;
+  getSessionKeyBySdkSessionId: (sdkSessionId: ClaudeSdkSessionId) => ClaudeSessionKey | null;
 }
 
 /**
@@ -322,12 +282,9 @@ const CLAUDE_SESSION_KEYED_MAPS = [
 ] as const satisfies ReadonlyArray<keyof ClaudeState>;
 
 export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
-  ...createNativeChatStoreSlice<
-    ClaudeClient,
-    ClaudeMessage,
-    ClaudeAttachment,
-    QueuedMessage
-  >({ mergeMessages: mergeClaudeMessagesPreservingClientOnly })(set, get, api),
+  ...createNativeChatStoreSlice<ClaudeClient, ClaudeMessage, ClaudeAttachment, QueuedMessage>({
+    mergeMessages: mergeClaudeMessagesPreservingClientOnly,
+  })(set, get, api),
 
   ...createEventSubscriptionSlice<ClaudeEvent>("claudeStore")(set, get, api),
 
@@ -365,9 +322,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       const session = state.sessions.get(sessionKey);
       if (!session) return state;
 
-      const index = session.messages.findIndex(
-        (message) => message.id === patch.messageId,
-      );
+      const index = session.messages.findIndex((message) => message.id === patch.messageId);
       const target = index === -1 ? undefined : session.messages[index];
       if (!target) return state;
 
@@ -530,10 +485,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
       const revisions = new Map(state.backgroundTaskRevisions);
       if (Object.keys(tasks).length > 0) next.set(sessionKey, tasks);
       else next.delete(sessionKey);
-      revisions.set(
-        sessionKey,
-        (state.backgroundTaskRevisions.get(sessionKey) ?? 0) + 1,
-      );
+      revisions.set(sessionKey, (state.backgroundTaskRevisions.get(sessionKey) ?? 0) + 1);
       return {
         backgroundTasks: next,
         backgroundTaskRevisions: revisions,
@@ -542,18 +494,14 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
 
   setCompletionBlockedByBackgroundTasks: (sessionKey, blocked) =>
     set((state) => {
-      const wasBlocked =
-        state.completionBlockedByBackgroundTasks.get(sessionKey) === true;
+      const wasBlocked = state.completionBlockedByBackgroundTasks.get(sessionKey) === true;
       if (wasBlocked === blocked) return state;
 
       const next = new Map(state.completionBlockedByBackgroundTasks);
       const revisions = new Map(state.completionHoldRevisions);
       if (blocked) next.set(sessionKey, true);
       else next.delete(sessionKey);
-      revisions.set(
-        sessionKey,
-        (state.completionHoldRevisions.get(sessionKey) ?? 0) + 1,
-      );
+      revisions.set(sessionKey, (state.completionHoldRevisions.get(sessionKey) ?? 0) + 1);
       return {
         completionBlockedByBackgroundTasks: next,
         completionHoldRevisions: revisions,
@@ -565,9 +513,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
     set((state) => {
       const previousSessionId = state.sessions.get(sessionKey)?.sessionId;
       const sessions = new Map(state.sessions);
-      const sessionLoadingRevisions = new Map(
-        state.sessionLoadingRevisions,
-      );
+      const sessionLoadingRevisions = new Map(state.sessionLoadingRevisions);
       sessions.set(sessionKey, session);
       sessionLoadingRevisions.set(
         sessionKey,
@@ -586,17 +532,13 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         for (const [requestId, question] of pendingQuestions) {
           if (question.sessionId === previousSessionId) {
             pendingQuestions.delete(requestId);
-            sweptDraftKeys.push(
-              claudeQuestionDraftKey(question.sessionId, requestId),
-            );
+            sweptDraftKeys.push(claudeQuestionDraftKey(question.sessionId, requestId));
           }
         }
         for (const [requestId, approval] of pendingPlanApprovals) {
           if (approval.sessionId === previousSessionId) {
             pendingPlanApprovals.delete(requestId);
-            sweptDraftKeys.push(
-              claudePlanApprovalDraftKey(approval.sessionId, requestId),
-            );
+            sweptDraftKeys.push(claudePlanApprovalDraftKey(approval.sessionId, requestId));
           }
         }
       }
@@ -607,19 +549,13 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
         contextUsage: withoutSessionKey(state.contextUsage),
         rateLimits: withoutSessionKey(state.rateLimits),
         promptSuggestions: withoutSessionKey(state.promptSuggestions),
-        dismissedPromptSuggestions: withoutSessionKey(
-          state.dismissedPromptSuggestions,
-        ),
+        dismissedPromptSuggestions: withoutSessionKey(state.dismissedPromptSuggestions),
         backgroundTasks: withoutSessionKey(state.backgroundTasks),
         completionBlockedByBackgroundTasks: withoutSessionKey(
           state.completionBlockedByBackgroundTasks,
         ),
-        backgroundTaskRevisions: withoutSessionKey(
-          state.backgroundTaskRevisions,
-        ),
-        completionHoldRevisions: withoutSessionKey(
-          state.completionHoldRevisions,
-        ),
+        backgroundTaskRevisions: withoutSessionKey(state.backgroundTaskRevisions),
+        completionHoldRevisions: withoutSessionKey(state.completionHoldRevisions),
         pendingQuestions,
         pendingPlanApprovals,
       };
@@ -693,11 +629,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
     const sweptDraftKeys: string[] = [];
     set((state) => {
       const session = state.sessions.get(sessionKey);
-      const patch = buildClearSessionPatch(
-        state,
-        sessionKey,
-        CLAUDE_SESSION_KEYED_MAPS,
-      );
+      const patch = buildClearSessionPatch(state, sessionKey, CLAUDE_SESSION_KEYED_MAPS);
       if (!session?.sessionId) return patch;
 
       // Pending requests are keyed by requestId, so they need a sweep by the
@@ -739,9 +671,9 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
     // in-progress answer draft must not survive to a future request that
     // happens to reuse this id.
     if (question) {
-      usePromptDraftStore.getState().clearDraft(
-        claudeQuestionDraftKey(question.sessionId, requestId),
-      );
+      usePromptDraftStore
+        .getState()
+        .clearDraft(claudeQuestionDraftKey(question.sessionId, requestId));
     }
   },
 
@@ -769,8 +701,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
 
   // Selectors
   getSelectedModel: (sessionKey) => get().selectedModel.get(sessionKey),
-  getModels: (environmentId) =>
-    get().modelCatalogs.get(environmentId)?.models ?? get().models,
+  getModels: (environmentId) => get().modelCatalogs.get(environmentId)?.models ?? get().models,
   getModelCatalog: (environmentId) => get().modelCatalogs.get(environmentId),
   isComposingFor: (sessionKey) => get().isComposing.get(sessionKey) ?? false,
   // Default to "high" effort if not explicitly set
@@ -779,15 +710,12 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
   isPlanMode: (sessionKey) => get().planMode.get(sessionKey) ?? false,
   // Default to false (fast mode disabled)
   isFastMode: (sessionKey) => get().fastMode.get(sessionKey) ?? false,
-  getSessionInitData: (environmentId) =>
-    get().sessionInitData.get(environmentId),
+  getSessionInitData: (environmentId) => get().sessionInitData.get(environmentId),
   getContextUsage: (sessionKey) => get().contextUsage.get(sessionKey),
   getRateLimits: (sessionKey) => get().rateLimits.get(sessionKey),
-  getDismissedPromptSuggestion: (sessionKey) =>
-    get().dismissedPromptSuggestions.get(sessionKey),
+  getDismissedPromptSuggestion: (sessionKey) => get().dismissedPromptSuggestions.get(sessionKey),
   getSelectedAgent: (sessionKey) => get().selectedAgent.get(sessionKey),
-  includesLocalSettings: (sessionKey) =>
-    get().includeLocalSettings.get(sessionKey) ?? false,
+  includesLocalSettings: (sessionKey) => get().includeLocalSettings.get(sessionKey) ?? false,
 
   getPendingQuestionsForSession: (sdkSessionId) => {
     const questions: ClaudeQuestionRequest[] = [];
@@ -811,8 +739,7 @@ export const useClaudeStore = create<ClaudeState>()((set, get, api) => ({
     return approvals;
   },
 
-  getPendingPlanApproval: (requestId) =>
-    get().pendingPlanApprovals.get(requestId),
+  getPendingPlanApproval: (requestId) => get().pendingPlanApprovals.get(requestId),
 
   getSessionKeyBySdkSessionId: (sdkSessionId) => {
     const sessions = get().sessions;

@@ -7,6 +7,8 @@ const ELECTRON_COMPACT_TIMESTAMP_ENVIRONMENT_NAME = /^\d{15}$/;
  * keep recognizing those to rename existing unnamed environments on first use.
  */
 export function isDefaultTimestampEnvironmentName(name: string): boolean {
-  return LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name)
-    || ELECTRON_COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name);
+  return (
+    LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name) ||
+    ELECTRON_COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name)
+  );
 }

@@ -5,10 +5,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { type AgentPlatform, isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { APP_SLUG } from "./core/constants.js";
-import {
-  parseGatewayCompressionMode,
-  type GatewayCompressionMode,
-} from "./gateway.js";
+import { parseGatewayCompressionMode, type GatewayCompressionMode } from "./gateway.js";
 
 export const MACOS_TAILSCALE_APP_CLI = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
@@ -92,7 +89,14 @@ function parseRuntimeFlavor(value: string | undefined): BackendOptions["runtimeF
 
 function parseCredentialSources(value: string | undefined): BackendOptions["credentialSources"] {
   if (!value?.trim()) return [];
-  const values = [...new Set(value.split(",").map((entry) => entry.trim()).filter(Boolean))];
+  const values = [
+    ...new Set(
+      value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean),
+    ),
+  ];
   for (const entry of values) {
     if (!isAgentPlatform(entry)) {
       throw new Error(`Invalid --credential-source value: ${entry}`);
@@ -107,8 +111,14 @@ export function parseOptions(
   sourceUrl: string = import.meta.url,
 ): BackendOptions {
   const sourceRoot = path.resolve(path.dirname(fileURLToPath(sourceUrl)), "../../..");
-  const appRoot = path.resolve(valueAfter(args, "--app-root") ?? env.ORKESTRATOR_APP_ROOT ?? sourceRoot);
-  const dataDir = path.resolve(valueAfter(args, "--data-dir") ?? env.ORKESTRATOR_DATA_DIR ?? defaultDataDir(process.platform, env));
+  const appRoot = path.resolve(
+    valueAfter(args, "--app-root") ?? env.ORKESTRATOR_APP_ROOT ?? sourceRoot,
+  );
+  const dataDir = path.resolve(
+    valueAfter(args, "--data-dir") ??
+      env.ORKESTRATOR_DATA_DIR ??
+      defaultDataDir(process.platform, env),
+  );
   const portValue = valueAfter(args, "--port") ?? env.ORKESTRATOR_GATEWAY_PORT;
   const port = parsePortOption(portValue, "--port");
   const controlPort = parsePortOption(valueAfter(args, "--control-port"), "--control-port");
@@ -117,10 +127,11 @@ export function parseOptions(
     cliCompression ?? env.ORKESTRATOR_GATEWAY_COMPRESSION,
     cliCompression !== undefined ? "--compression" : "ORKESTRATOR_GATEWAY_COMPRESSION",
   );
-  const tailscaleServePort = parsePortOption(
-    valueAfter(args, "--tailscale-serve-port") ?? env.ORKESTRATOR_TAILSCALE_SERVE_PORT,
-    "--tailscale-serve-port",
-  ) ?? 443;
+  const tailscaleServePort =
+    parsePortOption(
+      valueAfter(args, "--tailscale-serve-port") ?? env.ORKESTRATOR_TAILSCALE_SERVE_PORT,
+      "--tailscale-serve-port",
+    ) ?? 443;
   if (tailscaleServePort === 0) {
     throw new Error("Invalid --tailscale-serve-port value: 0");
   }
@@ -133,14 +144,21 @@ export function parseOptions(
   return {
     dataDir,
     toolchainBinDir: path.resolve(
-      valueAfter(args, "--toolchain-bin-dir")
-        ?? env.ORKESTRATOR_TOOLCHAIN_BIN
-        ?? path.join(dataDir, "toolchains", "bin"),
+      valueAfter(args, "--toolchain-bin-dir") ??
+        env.ORKESTRATOR_TOOLCHAIN_BIN ??
+        path.join(dataDir, "toolchains", "bin"),
     ),
     appRoot,
-    resourceRoot: path.resolve(valueAfter(args, "--resource-root") ?? env.ORKESTRATOR_RESOURCE_ROOT ?? appRoot),
-    rendererRoot: path.resolve(valueAfter(args, "--renderer-root") ?? env.ORKESTRATOR_RENDERER_ROOT ?? path.join(appRoot, "apps", "web", "dist")),
-    rendererDevServerUrl: valueAfter(args, "--renderer-dev-server-url") ?? env.ORKESTRATOR_RENDERER_DEV_SERVER_URL,
+    resourceRoot: path.resolve(
+      valueAfter(args, "--resource-root") ?? env.ORKESTRATOR_RESOURCE_ROOT ?? appRoot,
+    ),
+    rendererRoot: path.resolve(
+      valueAfter(args, "--renderer-root") ??
+        env.ORKESTRATOR_RENDERER_ROOT ??
+        path.join(appRoot, "apps", "web", "dist"),
+    ),
+    rendererDevServerUrl:
+      valueAfter(args, "--renderer-dev-server-url") ?? env.ORKESTRATOR_RENDERER_DEV_SERVER_URL,
     host: valueAfter(args, "--host"),
     fallbackHost: valueAfter(args, "--fallback-host"),
     port,
@@ -149,27 +167,32 @@ export function parseOptions(
     compression,
     // "--unsafe-allow-non-tailscale-bind" is the pre-rename spelling; unknown
     // flags are ignored, so dropping it would strand existing service units.
-    allowNonTailscaleBind: args.includes("--allow-non-tailscale-bind")
-      || args.includes("--unsafe-allow-non-tailscale-bind"),
-    allowedOrigins: (valueAfter(args, "--allowed-origins") ?? env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS)
+    allowNonTailscaleBind:
+      args.includes("--allow-non-tailscale-bind") ||
+      args.includes("--unsafe-allow-non-tailscale-bind"),
+    allowedOrigins: (
+      valueAfter(args, "--allowed-origins") ?? env.ORKESTRATOR_GATEWAY_ALLOWED_ORIGINS
+    )
       ?.split(",")
       .map((origin) => origin.trim())
       .filter(Boolean),
-    tailscaleServe: args.includes("--tailscale-serve")
-      || env.ORKESTRATOR_TAILSCALE_SERVE === "1",
+    tailscaleServe: args.includes("--tailscale-serve") || env.ORKESTRATOR_TAILSCALE_SERVE === "1",
     desktopWebClient: args.includes("--desktop-web-client"),
     tailscaleServePort,
-    tailscaleExecutable: valueAfter(args, "--tailscale-bin")
-      ?? env.ORKESTRATOR_TAILSCALE_BIN
-      ?? defaultTailscaleExecutable(),
+    tailscaleExecutable:
+      valueAfter(args, "--tailscale-bin") ??
+      env.ORKESTRATOR_TAILSCALE_BIN ??
+      defaultTailscaleExecutable(),
     runtimeFlavor,
-    runtimeProfileId: (valueAfter(args, "--runtime-profile-id") ?? env.ORKESTRATOR_RUNTIME_PROFILE_ID)?.trim() || undefined,
-    worktreeDir: (valueAfter(args, "--worktree-dir") ?? env.ORKESTRATOR_WORKTREE_DIR)
-      ? path.resolve(valueAfter(args, "--worktree-dir") ?? env.ORKESTRATOR_WORKTREE_DIR!)
-      : undefined,
-    dockerImage: valueAfter(args, "--docker-image")
-      ?? env.ORKESTRATOR_DOCKER_IMAGE
-      ?? "orkestrator-v2:latest",
+    runtimeProfileId:
+      (valueAfter(args, "--runtime-profile-id") ?? env.ORKESTRATOR_RUNTIME_PROFILE_ID)?.trim() ||
+      undefined,
+    worktreeDir:
+      (valueAfter(args, "--worktree-dir") ?? env.ORKESTRATOR_WORKTREE_DIR)
+        ? path.resolve(valueAfter(args, "--worktree-dir") ?? env.ORKESTRATOR_WORKTREE_DIR!)
+        : undefined,
+    dockerImage:
+      valueAfter(args, "--docker-image") ?? env.ORKESTRATOR_DOCKER_IMAGE ?? "orkestrator-v2:latest",
     strictDockerOwner: args.includes("--strict-docker-owner") || runtimeFlavor === "agent-test",
     strictGatewayPort: args.includes("--strict-gateway-port") || runtimeFlavor === "agent-test",
     credentialSources,

@@ -15,7 +15,12 @@ import {
   Boxes,
   SlidersHorizontal,
 } from "lucide-react";
-import { ClaudeIcon, CodexIcon, CursorAgentIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import {
+  ClaudeIcon,
+  CodexIcon,
+  CursorAgentIcon,
+  OpenCodeIcon,
+} from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
@@ -85,10 +90,7 @@ export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <GlobalSettings
-            activeSection={activeSection}
-            onSaveSuccess={() => onOpenChange(false)}
-          />
+          <GlobalSettings activeSection={activeSection} onSaveSuccess={() => onOpenChange(false)} />
         )
       }
     </FullscreenSettingsLayout>

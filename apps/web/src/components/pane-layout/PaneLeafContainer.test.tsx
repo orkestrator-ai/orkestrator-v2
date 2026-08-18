@@ -64,29 +64,29 @@ mock.module("./DraggableTabBar", () => ({
     // stands in for a render counter on the pane itself.
     paneRenderCount += 1;
     return (
-    <>
-      <button type="button" onClick={() => onTabSelect("tab-2")}>
-        Select tab 2
-      </button>
-      <button type="button" onClick={() => onTabRefresh?.("tab-claude")}>
-        Refresh Claude tab
-      </button>
-      <button type="button" onClick={() => onTabRefresh?.("tab-tmux")}>
-        Refresh tmux tab
-      </button>
-      <button type="button" onClick={() => onTabRefresh?.("tab-codex")}>
-        Refresh Codex tab
-      </button>
-      <button type="button" onClick={() => onTabRefresh?.("tab-opencode")}>
-        Refresh OpenCode tab
-      </button>
-      <button type="button" onClick={() => onTabRefresh?.("tab-browser")}>
-        Refresh Browser tab
-      </button>
-      <button type="button" onClick={() => onTabRefresh?.("tab-multi-review")}>
-        Refresh Multi Review tab
-      </button>
-    </>
+      <>
+        <button type="button" onClick={() => onTabSelect("tab-2")}>
+          Select tab 2
+        </button>
+        <button type="button" onClick={() => onTabRefresh?.("tab-claude")}>
+          Refresh Claude tab
+        </button>
+        <button type="button" onClick={() => onTabRefresh?.("tab-tmux")}>
+          Refresh tmux tab
+        </button>
+        <button type="button" onClick={() => onTabRefresh?.("tab-codex")}>
+          Refresh Codex tab
+        </button>
+        <button type="button" onClick={() => onTabRefresh?.("tab-opencode")}>
+          Refresh OpenCode tab
+        </button>
+        <button type="button" onClick={() => onTabRefresh?.("tab-browser")}>
+          Refresh Browser tab
+        </button>
+        <button type="button" onClick={() => onTabRefresh?.("tab-multi-review")}>
+          Refresh Multi Review tab
+        </button>
+      </>
     );
   },
 }));
@@ -277,24 +277,31 @@ mock.module("@/components/build-pipeline/BuildChatTab", () => ({
     data: { pipelineId: string; environmentId: string };
     isActive: boolean;
     ownsGlobalShortcuts?: boolean;
-  }) => buildChatTabFailure ? (() => { throw buildChatTabFailure; })() : (
-    <div
-      data-testid="build-chat-tab"
-      data-pipeline-id={data.pipelineId}
-      data-environment-id={data.environmentId}
-      data-active={String(isActive)}
-      data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
-    />
-  ),
+  }) =>
+    buildChatTabFailure ? (
+      (() => {
+        throw buildChatTabFailure;
+      })()
+    ) : (
+      <div
+        data-testid="build-chat-tab"
+        data-pipeline-id={data.pipelineId}
+        data-environment-id={data.environmentId}
+        data-active={String(isActive)}
+        data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
+      />
+    ),
 }));
 
 mock.module("@/stores/terminalPortalStore", () => ({
   createTerminalKey: (environmentId: string, tabId: string) => `${environmentId}::${tabId}`,
-  useTerminalPortalStore: <T,>(selector: (state: {
-    registerPaneHost: (environmentId: string, paneId: string, host: HTMLDivElement) => void;
-    unregisterPaneHost: (environmentId: string, paneId: string) => void;
-    terminals: Map<string, unknown>;
-  }) => T) =>
+  useTerminalPortalStore: <T,>(
+    selector: (state: {
+      registerPaneHost: (environmentId: string, paneId: string, host: HTMLDivElement) => void;
+      unregisterPaneHost: (environmentId: string, paneId: string) => void;
+      terminals: Map<string, unknown>;
+    }) => T,
+  ) =>
     selector({
       registerPaneHost: () => {},
       unregisterPaneHost: () => {},
@@ -306,31 +313,13 @@ const { PaneLeafContainer } = await import("./PaneLeafContainer");
 
 describe("PaneLeafContainer", () => {
   afterAll(() => {
-    mock.module(
-      "@/components/claude/ClaudeTmuxChatTab",
-      () => realClaudeTmuxChatTabSnapshot,
-    );
+    mock.module("@/components/claude/ClaudeTmuxChatTab", () => realClaudeTmuxChatTabSnapshot);
     mock.module("@/components/native-agent", () => realNativeAgentSnapshot);
-    mock.module(
-      "@/components/browser/BrowserTab",
-      () => realBrowserTabSnapshot,
-    );
-    mock.module(
-      "@/components/review/LoopedReviewTab",
-      () => realLoopedReviewTabSnapshot,
-    );
-    mock.module(
-      "@/components/review/MultiReviewTab",
-      () => realMultiReviewTabSnapshot,
-    );
-    mock.module(
-      "@/components/terminal/FileViewerTab",
-      () => realFileViewerTabSnapshot,
-    );
-    mock.module(
-      "@/components/build-pipeline/BuildChatTab",
-      () => realBuildChatTabSnapshot,
-    );
+    mock.module("@/components/browser/BrowserTab", () => realBrowserTabSnapshot);
+    mock.module("@/components/review/LoopedReviewTab", () => realLoopedReviewTabSnapshot);
+    mock.module("@/components/review/MultiReviewTab", () => realMultiReviewTabSnapshot);
+    mock.module("@/components/terminal/FileViewerTab", () => realFileViewerTabSnapshot);
+    mock.module("@/components/build-pipeline/BuildChatTab", () => realBuildChatTabSnapshot);
     mock.module("@/hooks", () => realHooksSnapshot);
   });
 
@@ -349,41 +338,49 @@ describe("PaneLeafContainer", () => {
 
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-visible", {
-          root: {
-            kind: "leaf",
-            id: "pane-visible",
-            tabs: [{ id: "visible-tab", type: "plain" }],
-            activeTabId: "visible-tab",
+        [
+          "env-visible",
+          {
+            root: {
+              kind: "leaf",
+              id: "pane-visible",
+              tabs: [{ id: "visible-tab", type: "plain" }],
+              activeTabId: "visible-tab",
+            },
+            activePaneId: "pane-visible",
+            containerId: "container-visible",
           },
-          activePaneId: "pane-visible",
-          containerId: "container-visible",
-        }],
-        ["env-hidden", {
-          root: hiddenPane,
-          activePaneId: "stale-pane",
-          containerId: "container-hidden",
-        }],
+        ],
+        [
+          "env-hidden",
+          {
+            root: hiddenPane,
+            activePaneId: "stale-pane",
+            containerId: "container-hidden",
+          },
+        ],
       ]),
       activeEnvironmentId: "env-visible",
     });
 
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-hidden",
-        projectId: "project-1",
-        name: "hidden",
-        branch: "main",
-        containerId: "container-hidden",
-        status: "running",
-        prUrl: null,
-        prState: null,
-        hasMergeConflicts: null,
-        createdAt: "2024-01-01T00:00:00.000Z",
-        networkAccessMode: "restricted",
-        order: 0,
-        environmentType: "containerized",
-      }],
+      environments: [
+        {
+          id: "env-hidden",
+          projectId: "project-1",
+          name: "hidden",
+          branch: "main",
+          containerId: "container-hidden",
+          status: "running",
+          prUrl: null,
+          prState: null,
+          hasMergeConflicts: null,
+          createdAt: "2024-01-01T00:00:00.000Z",
+          networkAccessMode: "restricted",
+          order: 0,
+          environmentType: "containerized",
+        },
+      ],
       isLoading: false,
       error: null,
       deletingEnvironments: new Set(),
@@ -410,12 +407,14 @@ describe("PaneLeafContainer", () => {
         containerId="container-hidden"
         environmentId="env-hidden"
         isActive
-      />
+      />,
     );
 
     fireEvent.click(container.firstElementChild as HTMLElement);
 
-    expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe("pane-hidden");
+    expect(usePaneLayoutStore.getState().environments.get("env-hidden")?.activePaneId).toBe(
+      "pane-hidden",
+    );
     expect(usePaneLayoutStore.getState().activeEnvironmentId).toBe("env-visible");
   });
 
@@ -426,7 +425,7 @@ describe("PaneLeafContainer", () => {
         containerId="container-hidden"
         environmentId="env-hidden"
         isActive
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Select tab 2" }));
@@ -482,25 +481,22 @@ describe("PaneLeafContainer", () => {
     const filePane = {
       kind: "leaf" as const,
       id: "pane-file",
-      tabs: [{
-        id: "tab-file",
-        type: "file" as const,
-        fileData: {
-          filePath: "src/index.ts",
-          isLocalEnvironment: true,
-          worktreePath: "/workspace",
+      tabs: [
+        {
+          id: "tab-file",
+          type: "file" as const,
+          fileData: {
+            filePath: "src/index.ts",
+            isLocalEnvironment: true,
+            worktreePath: "/workspace",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-file",
     };
 
     render(
-      <PaneLeafContainer
-        pane={filePane}
-        containerId={null}
-        environmentId="env-hidden"
-        isActive
-      />,
+      <PaneLeafContainer pane={filePane} containerId={null} environmentId="env-hidden" isActive />,
     );
 
     expect(await screen.findByTestId("file-viewer-tab")).toMatchObject({
@@ -695,14 +691,16 @@ describe("PaneLeafContainer", () => {
     const pane = {
       kind: "leaf" as const,
       id: "pane-looped",
-      tabs: [{
-        id: "tab-looped",
-        type: "looped-review" as const,
-        loopedReviewTabData: {
-          environmentId: "env-hidden",
-          workflowId: "workflow-1",
+      tabs: [
+        {
+          id: "tab-looped",
+          type: "looped-review" as const,
+          loopedReviewTabData: {
+            environmentId: "env-hidden",
+            workflowId: "workflow-1",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-looped",
     };
 
@@ -728,15 +726,17 @@ describe("PaneLeafContainer", () => {
     const pane = {
       kind: "leaf" as const,
       id: "pane-build",
-      tabs: [{
-        id: "tab-build",
-        type: "claude-build" as const,
-        buildTabData: {
-          pipelineId: "pipeline-1",
-          environmentId: "env-hidden",
-          taskId: "task-1",
+      tabs: [
+        {
+          id: "tab-build",
+          type: "claude-build" as const,
+          buildTabData: {
+            pipelineId: "pipeline-1",
+            environmentId: "env-hidden",
+            taskId: "task-1",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-build",
     };
 
@@ -763,15 +763,17 @@ describe("PaneLeafContainer", () => {
     const pane = {
       kind: "leaf" as const,
       id: "pane-build",
-      tabs: [{
-        id: "tab-build",
-        type: "claude-build" as const,
-        buildTabData: {
-          pipelineId: "pipeline-1",
-          environmentId: "env-visible",
-          taskId: "task-1",
+      tabs: [
+        {
+          id: "tab-build",
+          type: "claude-build" as const,
+          buildTabData: {
+            pipelineId: "pipeline-1",
+            environmentId: "env-visible",
+            taskId: "task-1",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-build",
     };
     usePaneLayoutStore.setState((state) => {
@@ -814,15 +816,17 @@ describe("PaneLeafContainer", () => {
     const pane = {
       kind: "leaf" as const,
       id: "pane-build",
-      tabs: [{
-        id: "tab-build",
-        type: "claude-build" as const,
-        buildTabData: {
-          pipelineId: "pipeline-1",
-          environmentId: "env-hidden",
-          taskId: "task-1",
+      tabs: [
+        {
+          id: "tab-build",
+          type: "claude-build" as const,
+          buildTabData: {
+            pipelineId: "pipeline-1",
+            environmentId: "env-hidden",
+            taskId: "task-1",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-build",
     };
 
@@ -859,15 +863,17 @@ describe("PaneLeafContainer", () => {
     const pane = {
       kind: "leaf" as const,
       id: "pane-build",
-      tabs: [{
-        id: "tab-build",
-        type: "claude-build" as const,
-        buildTabData: {
-          pipelineId: "pipeline-1",
-          environmentId: "env-hidden",
-          taskId: "task-1",
+      tabs: [
+        {
+          id: "tab-build",
+          type: "claude-build" as const,
+          buildTabData: {
+            pipelineId: "pipeline-1",
+            environmentId: "env-hidden",
+            taskId: "task-1",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-build",
     };
 
@@ -916,14 +922,16 @@ describe("PaneLeafContainer", () => {
     const pane: PaneLeaf = {
       kind: "leaf",
       id: "pane-multi-review",
-      tabs: [{
-        id: "tab-multi-review",
-        type: "multi-review",
-        multiReviewTabData: {
-          environmentId: "env-visible",
-          workflowId: "workflow-1",
+      tabs: [
+        {
+          id: "tab-multi-review",
+          type: "multi-review",
+          multiReviewTabData: {
+            environmentId: "env-visible",
+            workflowId: "workflow-1",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-multi-review",
     };
 
@@ -971,15 +979,17 @@ describe("PaneLeafContainer", () => {
     const pane: PaneLeaf = {
       kind: "leaf",
       id: "pane-multi-review",
-      tabs: [{
-        id: "tab-multi-review",
-        type: "multi-review",
-        multiReviewTabData: {
-          environmentId: "env-visible",
-          workflowId: "workflow-1",
-          reviewerId: "reviewer-1",
+      tabs: [
+        {
+          id: "tab-multi-review",
+          type: "multi-review",
+          multiReviewTabData: {
+            environmentId: "env-visible",
+            workflowId: "workflow-1",
+            reviewerId: "reviewer-1",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-multi-review",
     };
 
@@ -1015,14 +1025,16 @@ describe("PaneLeafContainer", () => {
     const pane: PaneLeaf = {
       kind: "leaf",
       id: "pane-multi-review",
-      tabs: [{
-        id: "tab-multi-review",
-        type: "multi-review",
-        multiReviewTabData: {
-          environmentId: "env-visible",
-          workflowId: "workflow-1",
+      tabs: [
+        {
+          id: "tab-multi-review",
+          type: "multi-review",
+          multiReviewTabData: {
+            environmentId: "env-visible",
+            workflowId: "workflow-1",
+          },
         },
-      }],
+      ],
       activeTabId: "tab-multi-review",
     };
 
@@ -1069,11 +1081,13 @@ describe("PaneLeafContainer", () => {
     const pane: PaneLeaf = {
       kind: "leaf",
       id: "pane-agents",
-      tabs: [{
-        id: "tab-claude",
-        type: "agent-native",
-        nativeAgentData: { platform: "claude", environmentId: "env-visible" },
-      }],
+      tabs: [
+        {
+          id: "tab-claude",
+          type: "agent-native",
+          nativeAgentData: { platform: "claude", environmentId: "env-visible" },
+        },
+      ],
       activeTabId: "tab-claude",
     };
 

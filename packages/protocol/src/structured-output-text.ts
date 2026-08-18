@@ -151,8 +151,8 @@ function pairThinkingWrappers(
     if (open.index < coveredThrough) continue;
     let cursor = cursors.get(open.tag) ?? 0;
     while (
-      cursor < closes.length
-      && (closes[cursor]!.index < open.end || closes[cursor]!.tag !== open.tag)
+      cursor < closes.length &&
+      (closes[cursor]!.index < open.end || closes[cursor]!.tag !== open.tag)
     ) {
       cursor += 1;
     }
@@ -172,10 +172,7 @@ function pairThinkingWrappers(
  * JSON strings and in prose — so callers use it only to retry a scan that the
  * candidate budget already aborted.
  */
-function unmatchedCloseEnd(
-  closes: readonly TagMatch[],
-  wrappers: readonly IndexRange[],
-): number {
+function unmatchedCloseEnd(closes: readonly TagMatch[], wrappers: readonly IndexRange[]): number {
   let end = 0;
   let cursor = 0;
   for (const close of closes) {

@@ -26,14 +26,10 @@ export interface AgentModelOption {
   resolvedModel?: string;
 }
 
-export type AgentModelCatalog =
-  Record<"claude" | "codex" | "opencode", AgentModelOption[]>
-  & Partial<Record<"cursor" | "grok", AgentModelOption[]>>;
+export type AgentModelCatalog = Record<"claude" | "codex" | "opencode", AgentModelOption[]> &
+  Partial<Record<"cursor" | "grok", AgentModelOption[]>>;
 
-export function modelsForAgent(
-  catalog: AgentModelCatalog,
-  agent: LaunchAgent,
-): AgentModelOption[] {
+export function modelsForAgent(catalog: AgentModelCatalog, agent: LaunchAgent): AgentModelOption[] {
   return catalog[agent] ?? [{ id: "default", name: "Default", reasoningEfforts: [] }];
 }
 
@@ -76,9 +72,7 @@ export function firstModelFor(
   preferredModels?: Partial<Record<LaunchAgent, string>>,
 ): string {
   const models = modelsForAgent(catalog, agent);
-  return catalogIdFor(models, preferredModels?.[agent])
-    ?? models[0]?.id
-    ?? "default";
+  return catalogIdFor(models, preferredModels?.[agent]) ?? models[0]?.id ?? "default";
 }
 
 export function defaultEffortFor(
@@ -92,14 +86,12 @@ export function defaultEffortFor(
   const preferred = preferredEfforts?.[agent];
   // Launch dialogs always offer Default as a selectable setting, so the shared
   // fallback prefers it over high unless a still-supported preference hits.
-  return resolveReasoningId(
-    options.length > 0 ? ["default", ...options] : ["default"],
-    preferred,
-  ) ?? "default";
+  return (
+    resolveReasoningId(options.length > 0 ? ["default", ...options] : ["default"], preferred) ??
+    "default"
+  );
 }
 
 export function effortLabel(effort: string): string {
-  return effort === "xhigh"
-    ? "Extra high"
-    : effort.charAt(0).toUpperCase() + effort.slice(1);
+  return effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1);
 }

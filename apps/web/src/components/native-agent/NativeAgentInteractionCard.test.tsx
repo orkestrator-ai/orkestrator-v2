@@ -27,15 +27,17 @@ function interaction(secret: boolean): AgentInteractionRequest {
     updatedAt: 1,
     presentation: {
       title: "Credentials required",
-      questions: [{
-        id: "token",
-        prompt: "Access token",
-        required: true,
-        multiple: false,
-        secret,
-        allowFreeText: true,
-        options: [],
-      }],
+      questions: [
+        {
+          id: "token",
+          prompt: "Access token",
+          required: true,
+          multiple: false,
+          secret,
+          allowFreeText: true,
+          options: [],
+        },
+      ],
     },
   };
 }
@@ -48,12 +50,7 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: "session-1",
       revision: 2,
     }));
-    render(
-      <NativeAgentInteractionCard
-        interaction={interaction(true)}
-        onResolve={onResolve}
-      />,
-    );
+    render(<NativeAgentInteractionCard interaction={interaction(true)} onResolve={onResolve} />);
 
     const input = screen.getByLabelText("Access token response") as HTMLInputElement;
     expect(input.type).toBe("password");
@@ -133,25 +130,27 @@ describe("NativeAgentInteractionCard", () => {
           kind: "mcp-form",
           presentation: {
             title: "MCP input requested",
-            questions: [{
-              id: "mcp-form-content",
-              prompt: "Form",
-              description: JSON.stringify({
-                type: "object",
-                required: ["count", "mode"],
-                properties: {
-                  count: { type: "integer", title: "Count" },
-                  mode: { type: "string", enum: ["safe", "fast"], title: "Mode" },
-                  enabled: { type: "boolean", title: "Enabled" },
-                  token: { type: "string", format: "password", title: "Token" },
-                },
-              }),
-              required: true,
-              multiple: false,
-              secret: false,
-              allowFreeText: true,
-              options: [],
-            }],
+            questions: [
+              {
+                id: "mcp-form-content",
+                prompt: "Form",
+                description: JSON.stringify({
+                  type: "object",
+                  required: ["count", "mode"],
+                  properties: {
+                    count: { type: "integer", title: "Count" },
+                    mode: { type: "string", enum: ["safe", "fast"], title: "Mode" },
+                    enabled: { type: "boolean", title: "Enabled" },
+                    token: { type: "string", format: "password", title: "Token" },
+                  },
+                }),
+                required: true,
+                multiple: false,
+                secret: false,
+                allowFreeText: true,
+                options: [],
+              },
+            ],
             confirmLabel: "Submit",
           },
         }}
@@ -166,8 +165,8 @@ describe("NativeAgentInteractionCard", () => {
     fireEvent.change(token, { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
-    const freeText = (onResolve.mock.calls[0]?.[0] as AgentInteractionResolution)
-      .answer?.answers[0]?.freeText;
+    const freeText = (onResolve.mock.calls[0]?.[0] as AgentInteractionResolution).answer?.answers[0]
+      ?.freeText;
     expect(JSON.parse(freeText ?? "{}")).toEqual({
       count: 3,
       mode: "safe",
@@ -196,18 +195,25 @@ describe("NativeAgentInteractionCard", () => {
       sessionId: resolution.sessionId,
       revision: 2,
     }));
-    const view = render(<NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />);
-    fireEvent.change(screen.getByLabelText("Access token response"), { target: { value: "remember me" } });
+    const view = render(
+      <NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />,
+    );
+    fireEvent.change(screen.getByLabelText("Access token response"), {
+      target: { value: "remember me" },
+    });
     view.unmount();
     render(<NativeAgentInteractionCard interaction={interaction(false)} onResolve={onResolve} />);
-    expect((screen.getByLabelText("Access token response") as HTMLTextAreaElement).value)
-      .toBe("remember me");
+    expect((screen.getByLabelText("Access token response") as HTMLTextAreaElement).value).toBe(
+      "remember me",
+    );
     cleanup();
     render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
     fireEvent.click(screen.getByRole("button", { name: "Approve for session" }));
-    await waitFor(() => expect(onResolve.mock.calls.at(-1)?.[0]).toMatchObject({
-      action: "approve-for-session",
-    }));
+    await waitFor(() =>
+      expect(onResolve.mock.calls.at(-1)?.[0]).toMatchObject({
+        action: "approve-for-session",
+      }),
+    );
     expect(screen.getByRole("button", { name: "Cancel turn" })).toBeTruthy();
   });
 
@@ -226,11 +232,16 @@ describe("NativeAgentInteractionCard", () => {
           },
         }}
         onResolve={async () => ({
-          result: "applied", interactionId: "interaction-1", sessionId: "session-1", revision: 2,
+          result: "applied",
+          interactionId: "interaction-1",
+          sessionId: "session-1",
+          revision: 2,
         })}
       />,
     );
-    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   test("keeps Claude plan feedback and submits it with a revision request", async () => {
@@ -263,8 +274,9 @@ describe("NativeAgentInteractionCard", () => {
     fireEvent.change(feedback, { target: { value: "Add rollback steps" } });
     view.unmount();
     render(<NativeAgentInteractionCard interaction={request} onResolve={onResolve} />);
-    expect((screen.getByLabelText("Plan revision feedback") as HTMLTextAreaElement).value)
-      .toBe("Add rollback steps");
+    expect((screen.getByLabelText("Plan revision feedback") as HTMLTextAreaElement).value).toBe(
+      "Add rollback steps",
+    );
     fireEvent.click(screen.getByRole("button", { name: "Request changes" }));
     await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
     expect(onResolve.mock.calls[0]?.[0]).toMatchObject({

@@ -20,11 +20,7 @@
  * It never falls back to the SDK engine on failure: running the same pending
  * turn through two mechanisms could execute it twice.
  */
-import {
-  execFile,
-  spawn,
-  type ChildProcessWithoutNullStreams,
-} from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   link,
@@ -43,23 +39,10 @@ import {
   AppServerProcessExitError,
   AppServerUnavailableError,
 } from "./errors.js";
-import {
-  JsonlRpcClient,
-  SerialQueue,
-  type RpcMetricsSnapshot,
-} from "./jsonl-rpc-client.js";
-import {
-  createRecorderFromEnv,
-  type NotificationRecorder,
-} from "./notification-recorder.js";
-import type {
-  InboundNotification,
-  InboundServerRequest,
-} from "./envelope-validation.js";
-import {
-  fingerprintRuntimeEnvironment,
-  refreshRuntimeEnvironment,
-} from "../runtime-env.js";
+import { JsonlRpcClient, SerialQueue, type RpcMetricsSnapshot } from "./jsonl-rpc-client.js";
+import { createRecorderFromEnv, type NotificationRecorder } from "./notification-recorder.js";
+import type { InboundNotification, InboundServerRequest } from "./envelope-validation.js";
+import { fingerprintRuntimeEnvironment, refreshRuntimeEnvironment } from "../runtime-env.js";
 import type { EngineGeneration, EngineState } from "../engine/types.js";
 
 /**
@@ -84,8 +67,7 @@ export class AppServerOwnershipUnavailableError extends AppServerUnavailableErro
 function isOwnershipContention(error: unknown): boolean {
   return (
     error instanceof AppServerOwnershipUnavailableError ||
-    (error as { ownershipContention?: boolean } | null)?.ownershipContention ===
-      true
+    (error as { ownershipContention?: boolean } | null)?.ownershipContention === true
   );
 }
 
@@ -111,16 +93,10 @@ export interface AppServerSupervisorOptions {
     threadId: string | null,
     generation: EngineGeneration,
   ) => void;
-  onServerRequest: (
-    request: InboundServerRequest,
-    generation: EngineGeneration,
-  ) => void;
+  onServerRequest: (request: InboundServerRequest, generation: EngineGeneration) => void;
   onStateChange?: (state: EngineState, detail?: string) => void;
   /** Called after a successful restart so callers can resume their threads. */
-  onGenerationReady?: (
-    generation: EngineGeneration,
-    previous: EngineGeneration,
-  ) => void;
+  onGenerationReady?: (generation: EngineGeneration, previous: EngineGeneration) => void;
   /** Injected in tests. */
   spawnProcess?: typeof spawn;
   refreshEnvironment?: () => Promise<void>;
@@ -135,9 +111,7 @@ export interface AppServerSupervisorOptions {
    * Builds a per-generation recorder for replay fixtures, or returns null when
    * recording is off. Injectable so tests do not touch the real filesystem.
    */
-  createRecorder?: (
-    generation: EngineGeneration,
-  ) => NotificationRecorder | null;
+  createRecorder?: (generation: EngineGeneration) => NotificationRecorder | null;
   now?: () => number;
   /** Backoff schedule; jitter is applied on top. */
   backoffScheduleMs?: number[];
@@ -284,12 +258,10 @@ export class AppServerSupervisor {
     this.options = options;
     this.now = options.now ?? Date.now;
     this.backoffSchedule = options.backoffScheduleMs ?? DEFAULT_BACKOFF_MS;
-    this.circuitThreshold =
-      options.circuitBreakerThreshold ?? DEFAULT_CIRCUIT_THRESHOLD;
+    this.circuitThreshold = options.circuitBreakerThreshold ?? DEFAULT_CIRCUIT_THRESHOLD;
     this.circuitWindowMs = options.circuitWindowMs ?? DEFAULT_CIRCUIT_WINDOW_MS;
     this.shutdownGraceMs = options.shutdownGraceMs ?? DEFAULT_SHUTDOWN_GRACE_MS;
-    this.fingerprintEnvironment =
-      options.fingerprintEnvironment ?? fingerprintRuntimeEnvironment;
+    this.fingerprintEnvironment = options.fingerprintEnvironment ?? fingerprintRuntimeEnvironment;
   }
 
   getState(): EngineState {
@@ -301,11 +273,7 @@ export class AppServerSupervisor {
   }
 
   isReady(): boolean {
-    return (
-      this.state === "ready" &&
-      this.current !== null &&
-      !this.current.client.isClosed()
-    );
+    return this.state === "ready" && this.current !== null && !this.current.client.isClosed();
   }
 
   getHealth(): AppServerHealth {
@@ -314,9 +282,7 @@ export class AppServerSupervisor {
       generation: this.getGeneration(),
       pid: this.current?.child.pid ?? null,
       codexHome: this.current?.initialize.codexHome,
-      codexVersion: parseVersionFromUserAgent(
-        this.current?.initialize.userAgent,
-      ),
+      codexVersion: parseVersionFromUserAgent(this.current?.initialize.userAgent),
       restartCount: this.restartCount,
       environmentFingerprint: this.current?.environmentFingerprint ?? null,
       lastError: this.lastError,
@@ -364,16 +330,9 @@ export class AppServerSupervisor {
   private async ensureStarted(): Promise<Generation> {
     if (this.stopping) throw new AppServerUnavailableError("stopped");
     if (this.circuitOpen) {
-      throw new AppServerCircuitOpenError(
-        this.restartFailures.length,
-        this.lastError,
-      );
+      throw new AppServerCircuitOpenError(this.restartFailures.length, this.lastError);
     }
-    if (
-      this.current &&
-      !this.current.client.isClosed() &&
-      this.state === "ready"
-    ) {
+    if (this.current && !this.current.client.isClosed() && this.state === "ready") {
       return this.current;
     }
     this.startPromise ??= this.startWithRetry().finally(() => {
@@ -446,10 +405,7 @@ export class AppServerSupervisor {
         this.recordFailure();
         if (this.circuitOpen) {
           this.setState("failed", this.lastError);
-          throw new AppServerCircuitOpenError(
-            this.restartFailures.length,
-            this.lastError,
-          );
+          throw new AppServerCircuitOpenError(this.restartFailures.length, this.lastError);
         }
         const delay = this.backoffDelay(attempt);
         attempt += 1;
@@ -462,9 +418,7 @@ export class AppServerSupervisor {
 
   private recordFailure(): void {
     const now = this.now();
-    this.restartFailures = this.restartFailures.filter(
-      (at) => now - at <= this.circuitWindowMs,
-    );
+    this.restartFailures = this.restartFailures.filter((at) => now - at <= this.circuitWindowMs);
     this.restartFailures.push(now);
     if (this.restartFailures.length >= this.circuitThreshold) {
       this.circuitOpen = true;
@@ -473,10 +427,7 @@ export class AppServerSupervisor {
 
   /** Full jitter, so several environments restarting together do not synchronise. */
   private backoffDelay(attempt: number): number {
-    const base =
-      this.backoffSchedule[
-        Math.min(attempt, this.backoffSchedule.length - 1)
-      ] ?? 1_000;
+    const base = this.backoffSchedule[Math.min(attempt, this.backoffSchedule.length - 1)] ?? 1_000;
     return Math.floor(base / 2 + Math.random() * (base / 2));
   }
 
@@ -507,9 +458,7 @@ export class AppServerSupervisor {
     const generationId = this.generationCounter;
 
     const args = ["app-server", "--stdio"];
-    for (const [key, value] of Object.entries(
-      this.options.configOverrides ?? {},
-    )) {
+    for (const [key, value] of Object.entries(this.options.configOverrides ?? {})) {
       args.push("-c", `${key}=${value}`);
     }
 
@@ -600,8 +549,7 @@ export class AppServerSupervisor {
     };
 
     const recorder = (
-      this.options.createRecorder ??
-      ((generation) => createRecorderFromEnv({ generation }))
+      this.options.createRecorder ?? ((generation) => createRecorderFromEnv({ generation }))
     )(generationId);
     if (recorder) {
       console.error(
@@ -615,17 +563,12 @@ export class AppServerSupervisor {
       stdout: child.stdout,
       onNotification: (notification, threadId) =>
         this.options.onNotification(notification, threadId, generationId),
-      onServerRequest: (request) =>
-        this.options.onServerRequest(request, generationId),
+      onServerRequest: (request) => this.options.onServerRequest(request, generationId),
       onProtocolViolation: (detail) => {
         this.unknownNotifications += 1;
-        console.error(
-          `[codex-bridge][app-server:${generationId}] protocol: ${detail}`,
-        );
+        console.error(`[codex-bridge][app-server:${generationId}] protocol: ${detail}`);
       },
-      ...(recorder
-        ? { recordInboundLine: (line: string) => recorder.record(line) }
-        : {}),
+      ...(recorder ? { recordInboundLine: (line: string) => recorder.record(line) } : {}),
     });
 
     let exited = false;
@@ -824,9 +767,7 @@ export class AppServerSupervisor {
     this.setState("stopped");
   }
 
-  private async terminateChild(
-    child: ChildProcessWithoutNullStreams,
-  ): Promise<void> {
+  private async terminateChild(child: ChildProcessWithoutNullStreams): Promise<void> {
     if (child.exitCode !== null || child.signalCode !== null) return;
 
     try {
@@ -836,8 +777,7 @@ export class AppServerSupervisor {
     }
 
     const exited = new Promise<void>((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null)
-        return resolve();
+      if (child.exitCode !== null || child.signalCode !== null) return resolve();
       child.once("exit", () => resolve());
     });
 
@@ -887,10 +827,7 @@ export class AppServerSupervisor {
   }
 
   private pidFilePath(): string {
-    return join(
-      this.pidFileDir(),
-      `app-server-${hashPath(this.options.cwd)}.pid`,
-    );
+    return join(this.pidFileDir(), `app-server-${hashPath(this.options.cwd)}.pid`);
   }
 
   /**
@@ -985,11 +922,7 @@ export class AppServerSupervisor {
   private async acquirePidFileOwnership(instanceId: string): Promise<boolean> {
     await mkdir(this.pidFileDir(), { recursive: true });
 
-    for (
-      let attempt = 0;
-      attempt < PID_ACQUISITION_MAX_ATTEMPTS;
-      attempt += 1
-    ) {
+    for (let attempt = 0; attempt < PID_ACQUISITION_MAX_ATTEMPTS; attempt += 1) {
       try {
         const handle = await open(this.pidFilePath(), "wx", 0o600);
         try {
@@ -1040,8 +973,7 @@ export class AppServerSupervisor {
       // The winner may still be publishing its owner record.
     }
 
-    const bridgePid =
-      typeof record?.bridgePid === "number" ? record.bridgePid : null;
+    const bridgePid = typeof record?.bridgePid === "number" ? record.bridgePid : null;
     const validCurrentOwner =
       record &&
       bridgePid !== null &&
@@ -1073,52 +1005,37 @@ export class AppServerSupervisor {
       // `isProcessAlive` also reports true on EPERM. Without an expiry a single
       // collision locked the workspace out permanently, because the resulting
       // start failures opened a circuit breaker nothing resets.
-      const abandoned =
-        Number.isFinite(claimedAt) &&
-        this.now() - claimedAt > PID_OWNERSHIP_TTL_MS;
+      const abandoned = Number.isFinite(claimedAt) && this.now() - claimedAt > PID_OWNERSHIP_TTL_MS;
       // This includes another supervisor in the same process. Ownership is per
       // supervisor token, not merely per bridge PID.
       if (processIsAlive(bridgePid) && !abandoned) return false;
     } else {
       try {
         const metadata = await stat(path);
-        if (Date.now() - metadata.mtimeMs < INCOMPLETE_PIDFILE_GRACE_MS)
-          return false;
+        if (Date.now() - metadata.mtimeMs < INCOMPLETE_PIDFILE_GRACE_MS) return false;
       } catch {
         return true;
       }
     }
 
     const pid = typeof record?.pid === "number" ? record.pid : null;
-    const instanceId =
-      typeof record?.instanceId === "string" ? record.instanceId : null;
+    const instanceId = typeof record?.instanceId === "string" ? record.instanceId : null;
     const startedAt =
-      typeof record?.startedAt === "string"
-        ? Date.parse(record.startedAt)
-        : Number.NaN;
+      typeof record?.startedAt === "string" ? Date.parse(record.startedAt) : Number.NaN;
     const processIsAlive = this.options.isProcessAlive ?? isProcessAlive;
     const identifiesInstance = async (): Promise<boolean> => {
       if (instanceId) {
         if (!Number.isFinite(startedAt)) return false;
         return this.options.matchesPidFileProcess
           ? this.options.matchesPidFileProcess(pid as number, instanceId)
-          : matchesAppServerInstance(
-              pid as number,
-              instanceId,
-              startedAt,
-              this.options.codexPath,
-            );
+          : matchesAppServerInstance(pid as number, instanceId, startedAt, this.options.codexPath);
       }
       // Pre-token record: the strict identity check is unavailable, so fall back
       // to the narrowest thing that is still verifiable — this PID really is a
       // `codex app-server --stdio` running in our workspace.
       return this.options.matchesLegacyAppServerProcess
         ? this.options.matchesLegacyAppServerProcess(pid as number)
-        : matchesLegacyAppServerProcess(
-            pid as number,
-            this.options.codexPath,
-            this.options.cwd,
-          );
+        : matchesLegacyAppServerProcess(pid as number, this.options.codexPath, this.options.cwd);
     };
     const matches =
       pid !== null &&
@@ -1151,9 +1068,7 @@ export class AppServerSupervisor {
    * `ownerToken` is untrusted input that would otherwise be interpolated
    * straight into a filesystem path.
    */
-  private async quarantineObservedPidFile(
-    observedRaw: string,
-  ): Promise<QuarantineOutcome> {
+  private async quarantineObservedPidFile(observedRaw: string): Promise<QuarantineOutcome> {
     const path = this.pidFilePath();
     const quarantinePath = `${path}.${this.pidOwnerToken}.stale`;
     try {
@@ -1162,9 +1077,7 @@ export class AppServerSupervisor {
       // Only a vanished record is safe to retry against. Every other rename
       // failure (an unwritable pidfile directory, EPERM) leaves the record
       // exactly where it was, so reporting "try again" spins the caller.
-      return (error as NodeJS.ErrnoException).code === "ENOENT"
-        ? "contended"
-        : "blocked";
+      return (error as NodeJS.ErrnoException).code === "ENOENT" ? "contended" : "blocked";
     }
 
     const movedRaw = await readFile(quarantinePath, "utf8").catch(() => null);
@@ -1172,9 +1085,7 @@ export class AppServerSupervisor {
       // A contender replaced the stale record after our read. Restore that
       // exact inode only when the public path is still empty; never overwrite
       // a still-newer owner.
-      return (await this.restoreQuarantinedPidFile(quarantinePath, path))
-        ? "contended"
-        : "blocked";
+      return (await this.restoreQuarantinedPidFile(quarantinePath, path)) ? "contended" : "blocked";
     }
     await rm(quarantinePath, { force: true }).catch(() => undefined);
     return "quarantined";
@@ -1190,10 +1101,7 @@ export class AppServerSupervisor {
    * so anything other than EEXIST falls back to renaming it back into place —
    * and if even that fails the file is left where it is rather than removed.
    */
-  private async restoreQuarantinedPidFile(
-    quarantinePath: string,
-    path: string,
-  ): Promise<boolean> {
+  private async restoreQuarantinedPidFile(quarantinePath: string, path: string): Promise<boolean> {
     const linkFile = this.options.linkFile ?? link;
     try {
       await linkFile(quarantinePath, path);
@@ -1219,9 +1127,7 @@ export class AppServerSupervisor {
     this.pidOwnershipHeld = false;
     const path = this.pidFilePath();
     try {
-      const record = JSON.parse(
-        await readFile(path, "utf8"),
-      ) as PidOwnershipRecord;
+      const record = JSON.parse(await readFile(path, "utf8")) as PidOwnershipRecord;
       if (record.ownerToken !== this.pidOwnerToken) return;
       await this.quarantineOwnedPidFile();
     } catch {
@@ -1240,9 +1146,7 @@ export class AppServerSupervisor {
 
     let moved: PidOwnershipRecord | null = null;
     try {
-      moved = JSON.parse(
-        await readFile(quarantinePath, "utf8"),
-      ) as PidOwnershipRecord;
+      moved = JSON.parse(await readFile(quarantinePath, "utf8")) as PidOwnershipRecord;
     } catch {
       moved = null;
     }
@@ -1277,11 +1181,7 @@ export class AppServerSupervisor {
     } catch {
       moved = null;
     }
-    if (
-      moved === null ||
-      moved.dev !== claimedIdentity.dev ||
-      moved.ino !== claimedIdentity.ino
-    ) {
+    if (moved === null || moved.dev !== claimedIdentity.dev || moved.ino !== claimedIdentity.ino) {
       // Ownership was replaced while our publication failed. Restore the
       // moved successor only if the public path is still unclaimed.
       await this.restoreQuarantinedPidFile(quarantinePath, path);
@@ -1338,10 +1238,9 @@ function runPs(args: string[]): Promise<string> {
  * mis-parse into `NaN` and comparing it.
  */
 export function parseProcessStartTime(text: string): number | null {
-  const match =
-    /^[A-Za-z]{3}\s+([A-Za-z]{3})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})\s+(\d{4})$/.exec(
-      text.trim(),
-    );
+  const match = /^[A-Za-z]{3}\s+([A-Za-z]{3})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})\s+(\d{4})$/.exec(
+    text.trim(),
+  );
   if (!match) return null;
   const parsed = Date.parse(`${match[1]} ${match[2]} ${match[4]} ${match[3]}`);
   return Number.isFinite(parsed) ? parsed : null;
@@ -1394,13 +1293,8 @@ async function matchesAppServerInstance(
       }
       // Start time stays as an additional constraint: a recycled PID cannot
       // match the recorded launch instant even if it inherited the token.
-      const actualStartedAt = parseProcessStartTime(
-        await ps(["-p", String(pid), "-o", "lstart="]),
-      );
-      return (
-        actualStartedAt !== null &&
-        Math.abs(actualStartedAt - expectedStartedAt) < 2_000
-      );
+      const actualStartedAt = parseProcessStartTime(await ps(["-p", String(pid), "-o", "lstart="]));
+      return actualStartedAt !== null && Math.abs(actualStartedAt - expectedStartedAt) < 2_000;
     } catch {
       return false;
     }
@@ -1428,9 +1322,7 @@ async function matchesLegacyAppServerProcess(
     try {
       const read: (path: string) => Promise<Buffer> =
         probe.readProcFile ?? ((target) => readFile(target));
-      const command = (await read(`/proc/${pid}/cmdline`))
-        .toString("utf8")
-        .split("\0");
+      const command = (await read(`/proc/${pid}/cmdline`)).toString("utf8").split("\0");
       if (
         !command.some((entry) => entry === codexPath) ||
         !command.some((entry) => entry === "app-server") ||
@@ -1442,9 +1334,7 @@ async function matchesLegacyAppServerProcess(
         probe.readProcLink ?? ((target) => readlink(target, "utf8"));
       // Unobtainable (permissions, a different mount namespace) is not a
       // mismatch; a *different* directory is.
-      const workingDirectory = await readLink(`/proc/${pid}/cwd`).catch(
-        () => null,
-      );
+      const workingDirectory = await readLink(`/proc/${pid}/cwd`).catch(() => null);
       return workingDirectory === null || workingDirectory === cwd;
     } catch {
       return false;
@@ -1545,9 +1435,7 @@ function hashPath(value: string): string {
 }
 
 /** `orkestrator/0.147.0 (Mac OS ...)` → `0.147.0`. */
-export function parseVersionFromUserAgent(
-  userAgent: string | undefined,
-): string | undefined {
+export function parseVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   if (!userAgent) return undefined;
   return userAgent.match(/\/(\d+\.\d+\.\d+)/)?.[1];
 }

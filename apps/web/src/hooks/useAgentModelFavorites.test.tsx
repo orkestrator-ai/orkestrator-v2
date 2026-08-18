@@ -93,7 +93,11 @@ describe("useAgentModelFavorites", () => {
     useConfigStore.setState((state) => ({
       config: {
         ...state.config,
-        global: { ...state.config.global, favoriteModels: undefined, enabledAgentPlatforms: undefined },
+        global: {
+          ...state.config.global,
+          favoriteModels: undefined,
+          enabledAgentPlatforms: undefined,
+        },
       },
     }));
 
@@ -109,9 +113,7 @@ describe("useAgentModelFavorites", () => {
       hook.current.toggleFavorite(CLAUDE_OPUS);
     });
 
-    expect(globalConfig().favoriteModels).toEqual([
-      { platform: "claude", modelId: "claude-opus" },
-    ]);
+    expect(globalConfig().favoriteModels).toEqual([{ platform: "claude", modelId: "claude-opus" }]);
     expect(invokeMock).toHaveBeenCalledWith("update_global_config", {
       global: expect.objectContaining({
         favoriteModels: [{ platform: "claude", modelId: "claude-opus" }],
@@ -189,9 +191,7 @@ describe("useAgentModelFavorites", () => {
 
     // A favourite the backend never stored must not linger in the picker, or
     // the next launch silently loses it with no explanation.
-    expect(globalConfig().favoriteModels).toEqual([
-      { platform: "codex", modelId: "gpt-codex" },
-    ]);
+    expect(globalConfig().favoriteModels).toEqual([{ platform: "codex", modelId: "gpt-codex" }]);
     expect(mockToastError).toHaveBeenCalledWith("Could not save model favorites");
   });
 

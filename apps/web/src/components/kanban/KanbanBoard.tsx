@@ -15,7 +15,11 @@ import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Plus } from "lucide-react";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
 import { useUIStore, type ProjectBoardTab } from "@/stores";
-import { useBuildPipelineStore, isActiveBuildPhase, type BuildPhase } from "@/stores/buildPipelineStore";
+import {
+  useBuildPipelineStore,
+  isActiveBuildPhase,
+  type BuildPhase,
+} from "@/stores/buildPipelineStore";
 import { useShallow } from "zustand/react/shallow";
 import { KanbanCard } from "./KanbanCard";
 import { KanbanTaskDialog } from "./KanbanTaskDialog";
@@ -41,7 +45,10 @@ interface KanbanBoardProps {
  * is not actively running — an active build owns a live agent session that must
  * be stopped (which aborts the session) before its status can be cleared.
  */
-export function canClearTaskBuildStatus(task: KanbanTask, buildPhase: BuildPhase | undefined): boolean {
+export function canClearTaskBuildStatus(
+  task: KanbanTask,
+  buildPhase: BuildPhase | undefined,
+): boolean {
   const hasClearableStatus = !!(task.environmentId || task.buildPipelineId || buildPhase);
   return hasClearableStatus && !(buildPhase ? isActiveBuildPhase(buildPhase) : false);
 }
@@ -72,9 +79,7 @@ function DroppableColumn({
       <div className="flex items-center gap-2 px-3 py-2 mb-2">
         <div className={`h-2.5 w-2.5 rounded-full ${column.color}`} />
         <h3 className="text-sm font-semibold text-foreground">{column.label}</h3>
-        <span className="text-xs text-muted-foreground ml-auto">
-          {tasks.length}
-        </span>
+        <span className="text-xs text-muted-foreground ml-auto">{tasks.length}</span>
         {onAddTask && (
           <Button
             variant="ghost"
@@ -137,12 +142,12 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
         }
       }
       return record;
-    })
+    }),
   );
 
   const buildPhaseByTaskId = useMemo(
     () => new Map(Object.entries(buildPhaseRecord)),
-    [buildPhaseRecord]
+    [buildPhaseRecord],
   );
 
   // Load tasks from backend when project changes
@@ -157,7 +162,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
 
   const projectTasks = useMemo(
     () => tasks.filter((t) => t.projectId === projectId),
-    [tasks, projectId]
+    [tasks, projectId],
   );
 
   const tasksByColumn = useMemo(() => {
@@ -178,8 +183,8 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
   }, [projectTasks]);
 
   const activeTask = useMemo(
-    () => (activeTaskId ? projectTasks.find((t) => t.id === activeTaskId) ?? null : null),
-    [activeTaskId, projectTasks]
+    () => (activeTaskId ? (projectTasks.find((t) => t.id === activeTaskId) ?? null) : null),
+    [activeTaskId, projectTasks],
   );
 
   // Refresh selectedTask from store when dialog is open
@@ -188,9 +193,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     return tasks.find((t) => t.id === selectedTask.id) ?? null;
   }, [selectedTask, tasks]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 5 } })
-  );
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveTaskId(event.active.id as string);
@@ -211,7 +214,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
         void moveTask(taskId, targetColumn.id);
       }
     },
-    [moveTask]
+    [moveTask],
   );
 
   const handleClickTask = useCallback((task: KanbanTask) => {
@@ -223,11 +226,13 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     (task: KanbanTask) => {
       void clearTaskBuildStatus(task.id);
     },
-    [clearTaskBuildStatus]
+    [clearTaskBuildStatus],
   );
 
   if (projectBoardNotesOpen) {
-    return <ProjectNotesView projectId={projectId} onBack={() => setProjectBoardNotesOpen(false)} />;
+    return (
+      <ProjectNotesView projectId={projectId} onBack={() => setProjectBoardNotesOpen(false)} />
+    );
   }
 
   return (
@@ -257,9 +262,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                     tasks={tasksByColumn[column.id]}
                     onClickTask={handleClickTask}
                     onAddTask={
-                      column.id === "backlog"
-                        ? () => setCreateDialogOpen(true)
-                        : undefined
+                      column.id === "backlog" ? () => setCreateDialogOpen(true) : undefined
                     }
                     onClearTaskStatus={handleClearTaskStatus}
                     buildPhaseByTaskId={buildPhaseByTaskId}
@@ -304,11 +307,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
       </Tabs>
 
       {/* Task Detail Dialog */}
-      <KanbanTaskDialog
-        task={currentSelectedTask}
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-      />
+      <KanbanTaskDialog task={currentSelectedTask} open={dialogOpen} onOpenChange={setDialogOpen} />
 
       {/* Create Task Dialog */}
       <KanbanTaskDialog

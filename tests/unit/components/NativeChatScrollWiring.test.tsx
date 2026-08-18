@@ -87,20 +87,24 @@ const buildPipeline: BuildPipeline = {
   environmentType: "local",
   agentType: "codex",
   phase: "building",
-  sessions: [{
-    phase: "build",
-    iteration: 0,
-    sessionKey: "build-key",
-    sdkSessionId: "build-session",
-    status: "idle",
-    startedAt: "2026-07-29T00:00:00.000Z",
-    label: "Build Session",
-    messages: [{
-      id: "answer-1",
-      role: "assistant",
-      parts: [{ type: "text", content: "Implementation complete" }],
-    }],
-  }],
+  sessions: [
+    {
+      phase: "build",
+      iteration: 0,
+      sessionKey: "build-key",
+      sdkSessionId: "build-session",
+      status: "idle",
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Build Session",
+      messages: [
+        {
+          id: "answer-1",
+          role: "assistant",
+          parts: [{ type: "text", content: "Implementation complete" }],
+        },
+      ],
+    },
+  ],
   currentSessionIndex: 0,
   iteration: 0,
   maxIterations: 3,
@@ -187,11 +191,7 @@ describe("native chat scroll wiring", () => {
 
   test("Claude tmux passes its environmentId to the Virtuoso scroll hook", () => {
     render(
-      <ClaudeTmuxChatTab
-        tabId="tab-tmux"
-        data={{ environmentId: "env-tmux" }}
-        isActive={false}
-      />,
+      <ClaudeTmuxChatTab tabId="tab-tmux" data={{ environmentId: "env-tmux" }} isActive={false} />,
     );
 
     expect(useVirtuosoScrollStateMock).toHaveBeenCalledWith({

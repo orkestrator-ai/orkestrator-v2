@@ -28,15 +28,17 @@ export type { KanbanTask, KanbanStatus, KanbanComment, KanbanImage, ProjectNotes
  * Checks the kanban store first, then falls back to the build pipeline store.
  * Returns the task (if found in kanban store) and the task ID.
  */
-export function findTaskForEnvironment(environmentId: string): { task: KanbanTask | undefined; taskId: string | undefined } {
+export function findTaskForEnvironment(environmentId: string): {
+  task: KanbanTask | undefined;
+  taskId: string | undefined;
+} {
   const kanbanState = useKanbanStore.getState();
   const task = kanbanState.tasks.find((t) => t.environmentId === environmentId);
   if (task) return { task, taskId: task.id };
-  const pipeline = Array.from(useBuildPipelineStore.getState().pipelines.values())
-    .find((p) =>
-      p.environmentId === environmentId
-      && (p.source === undefined || p.source.type === "kanban")
-    );
+  const pipeline = Array.from(useBuildPipelineStore.getState().pipelines.values()).find(
+    (p) =>
+      p.environmentId === environmentId && (p.source === undefined || p.source.type === "kanban"),
+  );
   return { task: undefined, taskId: pipeline?.taskId };
 }
 
@@ -53,7 +55,23 @@ interface KanbanState {
   // Task actions
   loadTasks: (projectId: string) => Promise<void>;
   addTask: (projectId: string, title: string, description: string) => Promise<string | undefined>;
-  updateTask: (taskId: string, updates: Partial<Pick<KanbanTask, "title" | "description" | "acceptanceCriteria" | "status" | "environmentId" | "buildPipelineId" | "prUrl" | "prState" | "prMergeCommented">>) => Promise<void>;
+  updateTask: (
+    taskId: string,
+    updates: Partial<
+      Pick<
+        KanbanTask,
+        | "title"
+        | "description"
+        | "acceptanceCriteria"
+        | "status"
+        | "environmentId"
+        | "buildPipelineId"
+        | "prUrl"
+        | "prState"
+        | "prMergeCommented"
+      >
+    >,
+  ) => Promise<void>;
   clearTaskBuildStatus: (taskId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
   moveTask: (taskId: string, newStatus: KanbanStatus) => Promise<void>;
@@ -156,9 +174,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
     // Optimistic update: immediately move the card in the UI
     const previousStatus = task.status;
     set((state) => ({
-      tasks: state.tasks.map((t) =>
-        t.id === taskId ? { ...t, status: newStatus } : t
-      ),
+      tasks: state.tasks.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t)),
     }));
 
     try {
@@ -170,9 +186,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
       console.error("[KanbanStore] Failed to move task:", error);
       // Rollback on failure
       set((state) => ({
-        tasks: state.tasks.map((t) =>
-          t.id === taskId ? { ...t, status: previousStatus } : t
-        ),
+        tasks: state.tasks.map((t) => (t.id === taskId ? { ...t, status: previousStatus } : t)),
       }));
     }
   },

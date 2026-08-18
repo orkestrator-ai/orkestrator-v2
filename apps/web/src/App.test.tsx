@@ -4,22 +4,16 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { listen } from "@/lib/native/events";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
-import {useClaudeStore} from "@/stores/claudeStore";
-import {
-  createClaudeTmuxStateKey,
-  useClaudeTmuxStore,
-} from "@/stores/claudeTmuxStore";
-import {useCodexStore} from "@/stores/codexStore";
-import {useOpenCodeStore} from "@/stores/openCodeStore";
+import { useClaudeStore } from "@/stores/claudeStore";
+import { createClaudeTmuxStateKey, useClaudeTmuxStore } from "@/stores/claudeTmuxStore";
+import { useCodexStore } from "@/stores/codexStore";
+import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
-import {
-  useLoopedReviewStore,
-  type LoopedReviewWorkflow,
-} from "@/stores/loopedReviewStore";
+import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
 import type { AppConfig, Environment } from "@/types";
 import { PANE_LAYOUT_VERSION } from "@/types/paneLayout";
@@ -103,7 +97,9 @@ const mockConfig: AppConfig = {
 };
 
 mock.module("@/components/layout", () => ({
-  AppShell: ({ children }: { children: React.ReactNode }) => <div data-testid="app-shell">{children}</div>,
+  AppShell: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="app-shell">{children}</div>
+  ),
 }));
 
 mock.module("@/components/ui/tooltip", () => ({
@@ -156,7 +152,9 @@ mock.module("@/components/terminal", () => ({
 }));
 
 mock.module("@/components/kanban", () => ({
-  KanbanBoard: ({ projectId }: { projectId: string }) => <div data-testid="kanban-board">{projectId}</div>,
+  KanbanBoard: ({ projectId }: { projectId: string }) => (
+    <div data-testid="kanban-board">{projectId}</div>
+  ),
 }));
 
 mock.module("@/components/projects", () => ({
@@ -183,7 +181,9 @@ mock.module("@/components/ui/alert-dialog", () => ({
   AlertDialog: ({ children, open }: { children: React.ReactNode; open?: boolean }) =>
     open ? <>{children}</> : null,
   AlertDialogAction: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button type="button" {...props}>{children}</button>
+    <button type="button" {...props}>
+      {children}
+    </button>
   ),
   AlertDialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   AlertDialogDescription: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -194,14 +194,15 @@ mock.module("@/components/ui/alert-dialog", () => ({
 
 mock.module("@/components/ui/button", () => ({
   Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
-    <button type="button" {...props}>{children}</button>
+    <button type="button" {...props}>
+      {children}
+    </button>
   ),
 }));
 
 mock.module("@/hooks/usePrMonitorService", () => ({
   usePrMonitorService: () => {},
 }));
-
 
 mock.module("@/hooks/useGlobalActivityMonitor", () => ({
   useGlobalActivityMonitor: () => {},
@@ -234,40 +235,48 @@ const mockGetEnvironment = mock(
   async (environmentId: string): Promise<Environment | null> =>
     useEnvironmentStore.getState().getEnvironmentById(environmentId) ?? null,
 );
-const mockSavePaneLayout = mock(async (
-  environmentId: string,
-  layout: Parameters<typeof realBackend.savePaneLayout>[1],
-  expectedRevision = 0,
-) => ({
-  ...layout,
-  environmentId,
-  updatedAt: "2026-07-16T00:00:00.000Z",
-  revision: expectedRevision + 1,
-}));
-const mockListLoopedReviewWorkflows = mock(
-  async (_environmentId: string): Promise<Array<{
-    id: string;
-    environmentId: string;
-    version: number;
-    snapshot: LoopedReviewWorkflow;
-    updatedAt: string;
-    revision: number;
-  }>> => [],
+const mockSavePaneLayout = mock(
+  async (
+    environmentId: string,
+    layout: Parameters<typeof realBackend.savePaneLayout>[1],
+    expectedRevision = 0,
+  ) => ({
+    ...layout,
+    environmentId,
+    updatedAt: "2026-07-16T00:00:00.000Z",
+    revision: expectedRevision + 1,
+  }),
 );
-const mockSaveLoopedReviewWorkflow = mock(async (
-  id: string,
-  environmentId: string,
-  version: number,
-  snapshot: unknown,
-  expectedRevision = 0,
-) => ({
-  id,
-  environmentId,
-  version,
-  snapshot,
-  updatedAt: "2026-07-26T00:00:00.000Z",
-  revision: expectedRevision + 1,
-}));
+const mockListLoopedReviewWorkflows = mock(
+  async (
+    _environmentId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      environmentId: string;
+      version: number;
+      snapshot: LoopedReviewWorkflow;
+      updatedAt: string;
+      revision: number;
+    }>
+  > => [],
+);
+const mockSaveLoopedReviewWorkflow = mock(
+  async (
+    id: string,
+    environmentId: string,
+    version: number,
+    snapshot: unknown,
+    expectedRevision = 0,
+  ) => ({
+    id,
+    environmentId,
+    version,
+    snapshot,
+    updatedAt: "2026-07-26T00:00:00.000Z",
+    revision: expectedRevision + 1,
+  }),
+);
 const mockListPromptQueues = mock(async (_environmentId: string) => []);
 const mockListBuildPipelines = mock(async (_projectId: string) => []);
 const appPersistenceLifecycle: string[] = [];
@@ -280,24 +289,24 @@ const mockStartBuildPipelinePersistence = mock(() => {
   appPersistenceLifecycle.push("start-build");
   return mockStopBuildPipelinePersistence;
 });
-const mockApplyPaneLayoutIntent = mock(async (
-  environmentId: string,
-  _base: Parameters<typeof realBackend.applyPaneLayoutIntent>[1],
-  desired: Parameters<typeof realBackend.applyPaneLayoutIntent>[2],
-) => mockSavePaneLayout(environmentId, desired, 0));
+const mockApplyPaneLayoutIntent = mock(
+  async (
+    environmentId: string,
+    _base: Parameters<typeof realBackend.applyPaneLayoutIntent>[1],
+    desired: Parameters<typeof realBackend.applyPaneLayoutIntent>[2],
+  ) => mockSavePaneLayout(environmentId, desired, 0),
+);
 
 mock.module("@/lib/build-pipeline-persistence", () => ({
   ...realBuildPipelinePersistenceSnapshot,
-  hydrateBuildPipelinesForProject: (projectId: string) =>
-    mockListBuildPipelines(projectId),
+  hydrateBuildPipelinesForProject: (projectId: string) => mockListBuildPipelines(projectId),
   migrateLegacyBuildPipelines: mockMigrateLegacyBuildPipelines,
   startBuildPipelinePersistence: mockStartBuildPipelinePersistence,
 }));
 
 mock.module("@/lib/prompt-queue-persistence", () => ({
   ...realPromptQueuePersistenceSnapshot,
-  hydratePromptQueuesForEnvironment: (environmentId: string) =>
-    mockListPromptQueues(environmentId),
+  hydratePromptQueuesForEnvironment: (environmentId: string) => mockListPromptQueues(environmentId),
 }));
 
 mock.module("@/lib/backend", () => ({
@@ -513,14 +522,8 @@ afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("lucide-react", () => realLucideReactSnapshot);
   mock.module("@/lib/native/process", () => realProcessSnapshot);
-  mock.module(
-    "@/lib/build-pipeline-persistence",
-    () => realBuildPipelinePersistenceSnapshot,
-  );
-  mock.module(
-    "@/lib/prompt-queue-persistence",
-    () => realPromptQueuePersistenceSnapshot,
-  );
+  mock.module("@/lib/build-pipeline-persistence", () => realBuildPipelinePersistenceSnapshot);
+  mock.module("@/lib/prompt-queue-persistence", () => realPromptQueuePersistenceSnapshot);
 });
 
 describe("App background processing mounts", () => {
@@ -554,16 +557,17 @@ describe("App background processing mounts", () => {
     });
 
     render(<App />);
-
   });
 
   test("keeps a live container available when its setup phase failed", async () => {
     resetStores({
-      environments: [{
-        ...makeEnvironment("env-failed-setup", "project-1"),
-        status: "error",
-        setupPhase: "failed",
-      }],
+      environments: [
+        {
+          ...makeEnvironment("env-failed-setup", "project-1"),
+          status: "error",
+          setupPhase: "failed",
+        },
+      ],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-failed-setup",
     });
@@ -576,11 +580,13 @@ describe("App background processing mounts", () => {
 
   test("does not treat a stopped container with failed setup as available", async () => {
     resetStores({
-      environments: [{
-        ...makeEnvironment("env-stopped-setup", "project-1"),
-        status: "stopped",
-        setupPhase: "failed",
-      }],
+      environments: [
+        {
+          ...makeEnvironment("env-stopped-setup", "project-1"),
+          status: "stopped",
+          setupPhase: "failed",
+        },
+      ],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-stopped-setup",
     });
@@ -618,10 +624,7 @@ describe("App background processing mounts", () => {
     // must not be conditional on already holding a workflow. It must also not
     // be duplicated — a second hydration path would double every list call.
     resetStores({
-      environments: [
-        makeEnvironment("env-a", "project-1"),
-        makeEnvironment("env-b", "project-1"),
-      ],
+      environments: [makeEnvironment("env-a", "project-1"), makeEnvironment("env-b", "project-1")],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-a",
     });
@@ -630,8 +633,10 @@ describe("App background processing mounts", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(mockListLoopedReviewWorkflows.mock.calls.map(([id]) => id).sort())
-        .toEqual(["env-a", "env-b"]);
+      expect(mockListLoopedReviewWorkflows.mock.calls.map(([id]) => id).sort()).toEqual([
+        "env-a",
+        "env-b",
+      ]);
     });
   });
 
@@ -699,12 +704,14 @@ describe("App background processing mounts", () => {
       render(<App />);
 
       await waitFor(() => {
-        expect(mockListPromptQueues.mock.calls.map(([id]) => id).sort()).toEqual(
-          ["env-one", "env-two"],
-        );
-        expect(mockListBuildPipelines.mock.calls.map(([id]) => id).sort()).toEqual(
-          ["project-one", "project-two"],
-        );
+        expect(mockListPromptQueues.mock.calls.map(([id]) => id).sort()).toEqual([
+          "env-one",
+          "env-two",
+        ]);
+        expect(mockListBuildPipelines.mock.calls.map(([id]) => id).sort()).toEqual([
+          "project-one",
+          "project-two",
+        ]);
       });
     } finally {
       console.warn = originalWarn;
@@ -776,10 +783,7 @@ describe("App background processing mounts", () => {
   test("hydrates looped reviews without retaining a background terminal host", async () => {
     const background = makeEnvironment("env-looped", "project-2");
     resetStores({
-      environments: [
-        makeEnvironment("env-visible", "project-1"),
-        background,
-      ],
+      environments: [makeEnvironment("env-visible", "project-1"), background],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
@@ -794,22 +798,26 @@ describe("App background processing mounts", () => {
     useLoopedReviewStore.setState({ workflows: new Map() });
     mockListLoopedReviewWorkflows.mockImplementation(async (environmentId: string) =>
       environmentId === background.id
-        ? [{
-            id: workflow.id,
-            environmentId: workflow.environmentId,
-            version: workflow.version,
-            snapshot: workflow,
-            updatedAt: workflow.updatedAt,
-            revision: 2,
-          }]
-        : []
+        ? [
+            {
+              id: workflow.id,
+              environmentId: workflow.environmentId,
+              version: workflow.version,
+              snapshot: workflow,
+              updatedAt: workflow.updatedAt,
+              revision: 2,
+            },
+          ]
+        : [],
     );
 
     render(<App />);
 
     await waitFor(() => {
-      expect(useLoopedReviewStore.getState().workflows.get(workflow.id))
-        .toMatchObject({ backendRevision: 2, phase: "preparing" });
+      expect(useLoopedReviewStore.getState().workflows.get(workflow.id)).toMatchObject({
+        backendRevision: 2,
+        phase: "preparing",
+      });
     });
     expect(mockListLoopedReviewWorkflows).toHaveBeenCalledWith("env-looped");
     expect(screen.queryByTestId("terminal-env-looped") === null).toBe(true);
@@ -1172,14 +1180,19 @@ describe("App background processing mounts", () => {
     const openCodeSessionKey = createSessionKey("env-queued-opencode", "tab-1");
     useClaudeStore.setState({
       messageQueue: new Map([
-        [claudeSessionKey, [{
-          id: "queue-claude",
-          text: "Run queued Claude work",
-          attachments: [],
-          effort: "medium",
-          planModeEnabled: false,
-          fastModeEnabled: false,
-        }]],
+        [
+          claudeSessionKey,
+          [
+            {
+              id: "queue-claude",
+              text: "Run queued Claude work",
+              attachments: [],
+              effort: "medium",
+              planModeEnabled: false,
+              fastModeEnabled: false,
+            },
+          ],
+        ],
       ]),
     });
     useClaudeTmuxStore.setState({
@@ -1189,26 +1202,36 @@ describe("App background processing mounts", () => {
     });
     useCodexStore.setState({
       messageQueue: new Map([
-        [codexSessionKey, [{
-          id: "queue-codex",
-          text: "Run queued Codex work",
-          attachments: [],
-          model: "gpt-5",
-          mode: "build",
-          reasoningEffort: "medium",
-          fastMode: false,
-        }]],
+        [
+          codexSessionKey,
+          [
+            {
+              id: "queue-codex",
+              text: "Run queued Codex work",
+              attachments: [],
+              model: "gpt-5",
+              mode: "build",
+              reasoningEffort: "medium",
+              fastMode: false,
+            },
+          ],
+        ],
       ]),
     });
     useOpenCodeStore.setState({
       messageQueue: new Map([
-        [openCodeSessionKey, [{
-          id: "queue-opencode",
-          text: "Run queued OpenCode work",
-          attachments: [],
-          model: "openai/gpt-5",
-          mode: "build",
-        }]],
+        [
+          openCodeSessionKey,
+          [
+            {
+              id: "queue-opencode",
+              text: "Run queued OpenCode work",
+              attachments: [],
+              model: "openai/gpt-5",
+              mode: "build",
+            },
+          ],
+        ],
       ]),
     });
 
@@ -1445,20 +1468,23 @@ describe("App Docker availability", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
-    const letDockerCheckSettle = () => act(async () => {
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-    });
-    const runPoll = () => act(async () => {
-      pollCallbacks.forEach((poll) => poll());
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-    });
+    const letDockerCheckSettle = () =>
+      act(async () => {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
+    const runPoll = () =>
+      act(async () => {
+        pollCallbacks.forEach((poll) => poll());
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+      });
 
     try {
       render(<App />);
       await waitFor(() => {
         expect(mockCheckDocker).toHaveBeenCalledTimes(1);
-        expect(screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"))
-          .toBe("true");
+        expect(
+          screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
+        ).toBe("true");
       });
       expect(pollCallbacks.length).toBeGreaterThan(0);
       await letDockerCheckSettle();
@@ -1471,8 +1497,9 @@ describe("App Docker availability", () => {
       // The daemon being down says nothing about whether this container is
       // still up, and answering "not running" here disposes the environment's
       // terminals. The outage must not reach that projection.
-      expect(screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"))
-        .toBe("true");
+      expect(
+        screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
+      ).toBe("true");
 
       act(() => screen.getByRole("button", { name: "Continue Without Docker" }).click());
       await runPoll();
@@ -1524,8 +1551,9 @@ describe("App Docker availability", () => {
       await waitFor(() => expect(mockCheckDocker).toHaveBeenCalledTimes(3));
 
       expect(screen.queryByText("Docker Is Not Running") === null).toBe(true);
-      expect(screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"))
-        .toBe("true");
+      expect(
+        screen.getByTestId("terminal-env-visible").getAttribute("data-container-running"),
+      ).toBe("true");
       // Docker never left the "available" state, so nothing needed re-syncing
       // beyond the startup reconcile.
       expect(mockSyncAllEnvironmentsWithDocker).toHaveBeenCalledTimes(1);
@@ -1553,9 +1581,10 @@ describe("App Docker availability", () => {
     const pollCallbacks: Array<() => void> = [];
     let resolveDocker!: (available: boolean) => void;
     mockCheckDocker.mockImplementationOnce(
-      () => new Promise<boolean>((resolve) => {
-        resolveDocker = resolve;
-      }),
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveDocker = resolve;
+        }),
     );
     window.setInterval = ((handler: TimerHandler, timeout?: number) => {
       if (timeout === DOCKER_AVAILABILITY_POLL_INTERVAL_MS) {
@@ -2003,12 +2032,11 @@ describe("App terminal overlay actions", () => {
         "env-visible",
         "Stand up the Codex session",
       );
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
-        .toMatchObject({
-          launchAgent: true,
-          agentType: "codex",
-          initialPrompt: "Stand up the Codex session",
-        });
+      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+        launchAgent: true,
+        agentType: "codex",
+        initialPrompt: "Stand up the Codex session",
+      });
     });
   });
 
@@ -2038,12 +2066,14 @@ describe("App terminal overlay actions", () => {
   test("still starts a local environment while Docker is unavailable", async () => {
     mockCheckDocker.mockImplementation(async () => false);
     resetStores({
-      environments: [{
-        ...makeEnvironment("env-local", "project-1"),
-        environmentType: "local",
-        containerId: null,
-        status: "stopped",
-      }],
+      environments: [
+        {
+          ...makeEnvironment("env-local", "project-1"),
+          environmentType: "local",
+          containerId: null,
+          status: "stopped",
+        },
+      ],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-local",
     });
@@ -2059,10 +2089,12 @@ describe("App terminal overlay actions", () => {
 
   test("an explicit overlay prompt takes precedence over the stored prompt", async () => {
     resetStores({
-      environments: [{
-        ...makeEnvironment("env-visible", "project-1"),
-        initialPrompt: "Stored prompt",
-      }],
+      environments: [
+        {
+          ...makeEnvironment("env-visible", "project-1"),
+          initialPrompt: "Stored prompt",
+        },
+      ],
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-visible",
     });
@@ -2071,13 +2103,11 @@ describe("App terminal overlay actions", () => {
     act(() => screen.getByTestId("start-prompt-env-visible").click());
 
     await waitFor(() => {
-      expect(mockStartEnvironment).toHaveBeenCalledWith(
-        "env-visible",
-        "Prompt from terminal",
-      );
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Prompt from terminal");
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
-      .toMatchObject({ initialPrompt: "Prompt from terminal" });
+    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      initialPrompt: "Prompt from terminal",
+    });
   });
 
   test("rehydrates saved attachments and reconstructs missing preview URLs", async () => {
@@ -2112,15 +2142,11 @@ describe("App terminal overlay actions", () => {
     act(() => screen.getByTestId("start-env-visible").click());
 
     await waitFor(() => {
-      expect(mockStartEnvironment).toHaveBeenCalledWith(
-        "env-visible",
-        "Resume with images",
-      );
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Resume with images");
     });
     expect(mockGetEnvironment).toHaveBeenCalledWith("env-visible");
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-visible")
-        ?.initialPromptAttachments,
+      useClaudeOptionsStore.getState().getOptions("env-visible")?.initialPromptAttachments,
     ).toEqual([
       {
         id: "saved-image",
@@ -2166,15 +2192,11 @@ describe("App terminal overlay actions", () => {
     act(() => screen.getByTestId("start-env-visible").click());
 
     await waitFor(() => {
-      expect(mockStartEnvironment).toHaveBeenCalledWith(
-        "env-visible",
-        "Use staged image",
-      );
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Use staged image");
     });
     expect(mockGetEnvironment).not.toHaveBeenCalled();
     expect(
-      useClaudeOptionsStore.getState().getOptions("env-visible")
-        ?.initialPromptAttachments,
+      useClaudeOptionsStore.getState().getOptions("env-visible")?.initialPromptAttachments,
     ).toEqual(stagedAttachments);
   });
 
@@ -2200,25 +2222,16 @@ describe("App terminal overlay actions", () => {
       act(() => screen.getByTestId("start-env-visible").click());
 
       await waitFor(() => {
-        expect(mockToastError).toHaveBeenCalledWith(
-          "Could not restore saved prompt attachments",
-          {
-            description:
-              "The environment was not started. Try again to reload its saved prompt.",
-          },
-        );
+        expect(mockToastError).toHaveBeenCalledWith("Could not restore saved prompt attachments", {
+          description: "The environment was not started. Try again to reload its saved prompt.",
+        });
       });
       expect(mockStartEnvironment).not.toHaveBeenCalled();
-      expect(
-        useClaudeOptionsStore.getState().getOptions("env-visible"),
-      ).toBeUndefined();
+      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
 
       act(() => screen.getByTestId("start-env-visible").click());
       await waitFor(() => {
-        expect(mockStartEnvironment).toHaveBeenCalledWith(
-          "env-visible",
-          "Resume safely",
-        );
+        expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Resume safely");
       });
       expect(mockGetEnvironment).toHaveBeenCalledTimes(2);
     } finally {
@@ -2247,10 +2260,7 @@ describe("App terminal overlay actions", () => {
     act(() => screen.getByTestId("start-env-visible").click());
 
     await waitFor(() => {
-      expect(mockStartEnvironment).toHaveBeenCalledWith(
-        "env-visible",
-        "Resume without images",
-      );
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Resume without images");
     });
     expect(mockGetEnvironment).not.toHaveBeenCalled();
     expect(mockToastError).not.toHaveBeenCalled();
@@ -2319,16 +2329,12 @@ describe("App terminal overlay actions", () => {
     });
 
     await waitFor(() => {
-      expect(mockStartEnvironment).toHaveBeenCalledWith(
-        "env-visible",
-        "Resume the prior task",
-      );
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
-        .toMatchObject({
-          launchAgent: true,
-          agentType: "opencode",
-          initialPrompt: "Resume the prior task",
-        });
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Resume the prior task");
+      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+        launchAgent: true,
+        agentType: "opencode",
+        initialPrompt: "Resume the prior task",
+      });
     });
   });
 
@@ -2351,18 +2357,14 @@ describe("App terminal overlay actions", () => {
     });
 
     await waitFor(() => {
-      expect(mockStartEnvironment).toHaveBeenCalledWith(
-        "env-visible",
-        "Boot the default agent",
-      );
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Boot the default agent");
       // No existing options and no environment defaultAgent, so the agentType
       // falls back to config.global.defaultAgent ("claude").
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
-        .toMatchObject({
-          launchAgent: true,
-          agentType: "claude",
-          initialPrompt: "Boot the default agent",
-        });
+      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+        launchAgent: true,
+        agentType: "claude",
+        initialPrompt: "Boot the default agent",
+      });
     });
   });
 
@@ -2389,8 +2391,7 @@ describe("App terminal overlay actions", () => {
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", undefined);
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
-      .toBeUndefined();
+    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
   });
 
   test("normal overlay starts clear stale Claude options before starting", async () => {
@@ -2413,8 +2414,7 @@ describe("App terminal overlay actions", () => {
 
     await waitFor(() => {
       expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", undefined);
-      expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
-        .toBeUndefined();
+      expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
     });
   });
 
@@ -2438,12 +2438,8 @@ describe("App terminal overlay actions", () => {
       });
 
       await waitFor(() => {
-        expect(mockStartEnvironment).toHaveBeenCalledWith(
-          "env-visible",
-          "Create setup script",
-        );
-        expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
-          .toBeUndefined();
+        expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
+        expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toBeUndefined();
       });
     } finally {
       console.error = originalConsoleError;
@@ -2461,15 +2457,11 @@ describe("App terminal overlay actions", () => {
     act(() => screen.getByTestId("create-script-env-visible").click());
 
     await waitFor(() => {
-      expect(mockStartEnvironment).toHaveBeenCalledWith(
-        "env-visible",
-        "Create setup script",
-      );
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
     });
-    expect(useClaudeOptionsStore.getState().getOptions("env-visible"))
-      .toMatchObject({
-        launchAgent: true,
-        initialPrompt: "Create setup script",
-      });
+    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      launchAgent: true,
+      initialPrompt: "Create setup script",
+    });
   });
 });

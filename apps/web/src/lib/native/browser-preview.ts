@@ -12,17 +12,25 @@ export function hasNativeBrowserPreview(): boolean {
   return Boolean(api());
 }
 
-export function attachBrowserPreview(input: BrowserPreviewAttachInput): Promise<BrowserPreviewState> {
+export function attachBrowserPreview(
+  input: BrowserPreviewAttachInput,
+): Promise<BrowserPreviewState> {
   const nativeApi = api();
   if (!nativeApi) return Promise.reject(new Error("Native browser previews are unavailable"));
   return nativeApi.attach(input);
 }
 
-export function setBrowserPreviewBounds(tabId: string, bounds: BrowserPreviewBounds): Promise<BrowserPreviewState | null> {
+export function setBrowserPreviewBounds(
+  tabId: string,
+  bounds: BrowserPreviewBounds,
+): Promise<BrowserPreviewState | null> {
   return api()?.setBounds(tabId, bounds) ?? Promise.resolve(null);
 }
 
-export function setBrowserPreviewVisible(tabId: string, visible: boolean): Promise<BrowserPreviewState | null> {
+export function setBrowserPreviewVisible(
+  tabId: string,
+  visible: boolean,
+): Promise<BrowserPreviewState | null> {
   return api()?.setVisible(tabId, visible) ?? Promise.resolve(null);
 }
 

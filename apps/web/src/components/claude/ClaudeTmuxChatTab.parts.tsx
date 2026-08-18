@@ -26,10 +26,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { SlashCommandMenu } from "@/components/chat/SlashCommandMenu";
-import {
-  parseSlashCommands,
-  type SlashCommand,
-} from "@/lib/chat/slash-commands";
+import { parseSlashCommands, type SlashCommand } from "@/lib/chat/slash-commands";
 import { FileMentionMenu } from "@/components/chat/FileMentionMenu";
 import { useFileMentions } from "@/hooks/useFileMentions";
 import { useFileSearch } from "@/hooks/useFileSearch";
@@ -94,8 +91,7 @@ export const TMUX_FALLBACK_MODELS: ClaudeModel[] = [
   {
     id: "claude-fable-5[1m]",
     name: "Fable",
-    description:
-      "Fable 5 · Most capable for your hardest and longest-running tasks",
+    description: "Fable 5 · Most capable for your hardest and longest-running tasks",
     supportsEffort: true,
     supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
   },
@@ -150,12 +146,8 @@ export function resolveTmuxModelPreference(
   modelId: string | undefined,
   models: ClaudeModel[],
 ): string {
-  const normalized = modelId
-    ? (LEGACY_TMUX_MODEL_ALIASES[modelId] ?? modelId)
-    : undefined;
-  return models.some((model) => model.id === normalized)
-    ? normalized!
-    : DEFAULT_MODEL;
+  const normalized = modelId ? (LEGACY_TMUX_MODEL_ALIASES[modelId] ?? modelId) : undefined;
+  return models.some((model) => model.id === normalized) ? normalized! : DEFAULT_MODEL;
 }
 
 /** Whether `modelId` is one this catalog can actually honour. */
@@ -265,8 +257,8 @@ export function StartScreen({
       <div className="space-y-1">
         <h2 className="text-base font-medium">Start a Claude session</h2>
         <p className="text-xs text-muted-foreground">
-          Each tab runs its own claude under tmux. Pick a previous session to
-          continue where you left off, or start a fresh conversation.
+          Each tab runs its own claude under tmux. Pick a previous session to continue where you
+          left off, or start a fresh conversation.
         </p>
         <p className="text-[11px] text-muted-foreground/70">
           Will launch with <span className="font-mono">{selectedModel}</span>
@@ -275,21 +267,11 @@ export function StartScreen({
         </p>
       </div>
       <div className="flex gap-2">
-        <Button
-          variant="default"
-          size="sm"
-          onClick={onStartFresh}
-          className="gap-1.5"
-        >
+        <Button variant="default" size="sm" onClick={onStartFresh} className="gap-1.5">
           <Sparkles className="w-3.5 h-3.5" />
           Start fresh
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onPickResume}
-          className="gap-1.5"
-        >
+        <Button variant="outline" size="sm" onClick={onPickResume} className="gap-1.5">
           <History className="w-3.5 h-3.5" />
           Resume previous session…
         </Button>
@@ -318,11 +300,7 @@ export function TmuxPlanCard({
     "showFeedback",
     () => false,
   );
-  const [feedback, setFeedback] = usePromptDraftField<string>(
-    draftKey,
-    "feedback",
-    () => "",
-  );
+  const [feedback, setFeedback] = usePromptDraftField<string>(draftKey, "feedback", () => "");
   const [submitting, setSubmitting] = useState(false);
   const respond = async (approved: boolean, nextFeedback?: string) => {
     if (submitting) return;
@@ -343,45 +321,43 @@ export function TmuxPlanCard({
       className="mb-3"
     >
       <div className="px-3 py-3">
-      {plan.planFilePath && (
-        <div className="text-xs font-mono text-muted-foreground mb-2 break-all">
-          {plan.planFilePath}
+        {plan.planFilePath && (
+          <div className="text-xs font-mono text-muted-foreground mb-2 break-all">
+            {plan.planFilePath}
+          </div>
+        )}
+        {plan.plan && (
+          <MessageMarkdown
+            content={plan.plan}
+            className="max-h-80 overflow-auto rounded border border-border/70 bg-background/60 p-3"
+          />
+        )}
+        {plan.allowedPrompts.length > 0 && (
+          <div className="mt-2 text-xs text-muted-foreground">
+            Requests {plan.allowedPrompts.length} plan-scoped permission prompt(s).
+          </div>
+        )}
+        {showFeedback && (
+          <textarea
+            value={feedback}
+            onChange={(e) => setFeedback(e.target.value)}
+            placeholder="What should Claude change?"
+            className="mt-3 w-full min-h-20 resize-none rounded border border-border bg-background px-2 py-1.5 text-sm focus:outline-none"
+          />
+        )}
+        <div className="flex justify-end gap-2 mt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => (showFeedback ? void respond(false, feedback) : setShowFeedback(true))}
+            disabled={submitting}
+          >
+            Request changes
+          </Button>
+          <Button size="sm" onClick={() => void respond(true)} disabled={submitting}>
+            Approve plan
+          </Button>
         </div>
-      )}
-      {plan.plan && (
-        <MessageMarkdown
-          content={plan.plan}
-          className="max-h-80 overflow-auto rounded border border-border/70 bg-background/60 p-3"
-        />
-      )}
-      {plan.allowedPrompts.length > 0 && (
-        <div className="mt-2 text-xs text-muted-foreground">
-          Requests {plan.allowedPrompts.length} plan-scoped permission prompt(s).
-        </div>
-      )}
-      {showFeedback && (
-        <textarea
-          value={feedback}
-          onChange={(e) => setFeedback(e.target.value)}
-          placeholder="What should Claude change?"
-          className="mt-3 w-full min-h-20 resize-none rounded border border-border bg-background px-2 py-1.5 text-sm focus:outline-none"
-        />
-      )}
-      <div className="flex justify-end gap-2 mt-3">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() =>
-            showFeedback ? void respond(false, feedback) : setShowFeedback(true)
-          }
-          disabled={submitting}
-        >
-          Request changes
-        </Button>
-        <Button size="sm" onClick={() => void respond(true)} disabled={submitting}>
-          Approve plan
-        </Button>
-      </div>
       </div>
     </BlockingPromptCard>
   );
@@ -414,32 +390,32 @@ export function TmuxPermissionCard({
       className="mb-3"
     >
       <div className="px-3 py-3">
-      <div className="text-sm font-mono text-amber-100 mb-2">
-        {permission.toolName}
-      </div>
-      <ApprovalToolInput
-        toolName={permission.toolName}
-        toolInput={permission.toolInput}
-      />
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => void respond(false)} disabled={submitting}>
-          Deny
-        </Button>
-        {permission.permissionSuggestions.map((suggestion, index) => (
+        <div className="text-sm font-mono text-amber-100 mb-2">{permission.toolName}</div>
+        <ApprovalToolInput toolName={permission.toolName} toolInput={permission.toolInput} />
+        <div className="flex flex-wrap justify-end gap-2">
           <Button
-            key={index}
             variant="outline"
             size="sm"
-            onClick={() => void respond(true, [suggestion])}
+            onClick={() => void respond(false)}
             disabled={submitting}
           >
-            Always allow
+            Deny
           </Button>
-        ))}
-        <Button size="sm" onClick={() => void respond(true)} disabled={submitting}>
-          Allow
-        </Button>
-      </div>
+          {permission.permissionSuggestions.map((suggestion, index) => (
+            <Button
+              key={index}
+              variant="outline"
+              size="sm"
+              onClick={() => void respond(true, [suggestion])}
+              disabled={submitting}
+            >
+              Always allow
+            </Button>
+          ))}
+          <Button size="sm" onClick={() => void respond(true)} disabled={submitting}>
+            Allow
+          </Button>
+        </div>
       </div>
     </BlockingPromptCard>
   );
@@ -474,9 +450,7 @@ export function TmuxElicitationCard({
   // marks it secret. Scrub that legacy copy as soon as the card mounts; current
   // secret edits never enter the draft store in the first place.
   useEffect(() => {
-    const sensitiveKeys = fields
-      .filter((field) => field.sensitive)
-      .map((field) => field.key);
+    const sensitiveKeys = fields.filter((field) => field.sensitive).map((field) => field.key);
     if (!sensitiveKeys.some((key) => Object.hasOwn(values, key))) return;
     setValues((previous) => {
       const next = { ...previous };
@@ -486,8 +460,9 @@ export function TmuxElicitationCard({
   }, [fields, setValues, values]);
   const resolvedValues = {
     ...Object.fromEntries(
-      Object.entries(values).filter(([key]) =>
-        !fields.some((field) => field.key === key && field.sensitive)),
+      Object.entries(values).filter(
+        ([key]) => !fields.some((field) => field.key === key && field.sensitive),
+      ),
     ),
     ...secretValues,
   };
@@ -516,46 +491,60 @@ export function TmuxElicitationCard({
       className="mb-3"
     >
       <div className="px-3 py-3">
-      <div className="text-sm font-medium mb-1">{elicitation.mcpServerName}</div>
-      {elicitation.url && (
-        <div className="mb-3 text-xs font-mono break-all rounded border border-border bg-background/60 px-2 py-1.5">
-          {elicitation.url}
+        <div className="text-sm font-medium mb-1">{elicitation.mcpServerName}</div>
+        {elicitation.url && (
+          <div className="mb-3 text-xs font-mono break-all rounded border border-border bg-background/60 px-2 py-1.5">
+            {elicitation.url}
+          </div>
+        )}
+        {fields.length > 0 && (
+          <div className="space-y-2 mb-3">
+            {fields.map((field) => (
+              <label key={field.key} className="block text-xs">
+                <span className="mb-1 block text-muted-foreground">{field.label}</span>
+                <input
+                  value={(field.sensitive ? secretValues : values)[field.key] ?? ""}
+                  onChange={(e) => {
+                    const setter = field.sensitive ? setSecretValues : setValues;
+                    setter((prev) => ({ ...prev, [field.key]: e.target.value }));
+                  }}
+                  className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm focus:outline-none"
+                  type={field.sensitive ? "password" : "text"}
+                />
+                {field.sensitive && (
+                  <span className="mt-1 block text-[11px] text-muted-foreground">
+                    Secret input stays only in this card and is lost if you leave it.
+                  </span>
+                )}
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void respond("cancel")}
+            disabled={submitting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void respond("decline")}
+            disabled={submitting}
+          >
+            Decline
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void respond("accept", resolvedValues)}
+            disabled={submitting}
+          >
+            Submit
+          </Button>
         </div>
-      )}
-      {fields.length > 0 && (
-        <div className="space-y-2 mb-3">
-          {fields.map((field) => (
-            <label key={field.key} className="block text-xs">
-              <span className="mb-1 block text-muted-foreground">{field.label}</span>
-              <input
-                value={(field.sensitive ? secretValues : values)[field.key] ?? ""}
-                onChange={(e) => {
-                  const setter = field.sensitive ? setSecretValues : setValues;
-                  setter((prev) => ({ ...prev, [field.key]: e.target.value }));
-                }}
-                className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm focus:outline-none"
-                type={field.sensitive ? "password" : "text"}
-              />
-              {field.sensitive && (
-                <span className="mt-1 block text-[11px] text-muted-foreground">
-                  Secret input stays only in this card and is lost if you leave it.
-                </span>
-              )}
-            </label>
-          ))}
-        </div>
-      )}
-      <div className="flex justify-end gap-2">
-        <Button variant="ghost" size="sm" onClick={() => void respond("cancel")} disabled={submitting}>
-          Cancel
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => void respond("decline")} disabled={submitting}>
-          Decline
-        </Button>
-        <Button size="sm" onClick={() => void respond("accept", resolvedValues)} disabled={submitting}>
-          Submit
-        </Button>
-      </div>
       </div>
     </BlockingPromptCard>
   );
@@ -563,10 +552,7 @@ export function TmuxElicitationCard({
 
 // ─── In-TUI selection prompt controls ───────────────────────────────────────
 
-export function pendingSnapshotFromHooks(
-  hooks: TmuxPendingHook[],
-  infoEvents?: TmuxInfoEvent[],
-) {
+export function pendingSnapshotFromHooks(hooks: TmuxPendingHook[], infoEvents?: TmuxInfoEvent[]) {
   const approvals: TmuxPendingApproval[] = [];
   const questions: TmuxPendingQuestion[] = [];
   const plans: TmuxPendingPlan[] = [];
@@ -628,10 +614,7 @@ export async function autoAllowPermissionHook(
   );
 }
 
-export function selectionPromptToQuestion(
-  prompt: TmuxSelectionPrompt,
-  tabId: string,
-) {
+export function selectionPromptToQuestion(prompt: TmuxSelectionPrompt, tabId: string) {
   return {
     id: selectionPromptKey(prompt),
     sessionId: tabId,
@@ -651,9 +634,8 @@ export function selectionPromptToQuestion(
 }
 
 export function selectionPromptInitialAnswer(prompt: TmuxSelectionPrompt): string[] {
-  const selected = prompt.selectedOptionIndex === null
-    ? undefined
-    : prompt.options[prompt.selectedOptionIndex];
+  const selected =
+    prompt.selectedOptionIndex === null ? undefined : prompt.options[prompt.selectedOptionIndex];
   return selected ? [selectionPromptOptionValue(selected)] : [];
 }
 
@@ -762,10 +744,11 @@ export function elicitationSchemaFields(schema: Record<string, unknown> | null):
       key,
       label: title,
       sensitive:
-        field.writeOnly === true
-        || field.sensitive === true
-        || /password|passphrase|secret|token|credential|api[\s_-]*key|private[\s_-]*key/i
-          .test(sensitiveMarker),
+        field.writeOnly === true ||
+        field.sensitive === true ||
+        /password|passphrase|secret|token|credential|api[\s_-]*key|private[\s_-]*key/i.test(
+          sensitiveMarker,
+        ),
     };
   });
 }
@@ -782,9 +765,7 @@ export function tmuxFileMentionPath(
   const normalizedPath = relativePath.replace(/^\/+/, "");
   if (!normalizedPath) return null;
 
-  const basePath = containerId
-    ? "/workspace"
-    : worktreePath?.replace(/\/+$/, "");
+  const basePath = containerId ? "/workspace" : worktreePath?.replace(/\/+$/, "");
   if (!basePath) return normalizedPath;
 
   return escapePathForTerminalInput(`${basePath}/${normalizedPath}`);
@@ -804,11 +785,7 @@ export function serializeTmuxFileMentions(
   );
 
   for (const mention of sortedMentions) {
-    const mentionPath = tmuxFileMentionPath(
-      mention.relativePath,
-      containerId,
-      worktreePath,
-    );
+    const mentionPath = tmuxFileMentionPath(mention.relativePath, containerId, worktreePath);
     if (!mentionPath) continue;
     result = result.replace(
       new RegExp(`@${escapeRegExp(mention.relativePath)}(?=\\s|$)`, "g"),
@@ -918,10 +895,7 @@ export function TmuxComposeBar({
     ),
   );
   const queuedMessages = useClaudeTmuxStore(
-    useCallback(
-      (state) => state.messageQueue.get(sessionKey) ?? EMPTY_TMUX_QUEUE,
-      [sessionKey],
-    ),
+    useCallback((state) => state.messageQueue.get(sessionKey) ?? EMPTY_TMUX_QUEUE, [sessionKey]),
   );
   const queueRecovery = usePromptQueueDispatchRecovery("claude-tmux", sessionKey);
   const setValue = useClaudeTmuxStore((state) => state.setDraftText);
@@ -929,23 +903,18 @@ export function TmuxComposeBar({
   const addAttachmentToStore = useClaudeTmuxStore((state) => state.addAttachment);
   const removeAttachmentFromStore = useClaudeTmuxStore((state) => state.removeAttachment);
   const clearAttachments = useClaudeTmuxStore((state) => state.clearAttachments);
-  useNativeComposeDraftPersistence(
-    "claude-tmux",
-    environmentId,
-    sessionKey,
-    useClaudeTmuxStore,
-  );
-  const modelObj = useMemo(
-    () => getTmuxModel(selectedModel, models),
-    [selectedModel, models],
-  );
+  useNativeComposeDraftPersistence("claude-tmux", environmentId, sessionKey, useClaudeTmuxStore);
+  const modelObj = useMemo(() => getTmuxModel(selectedModel, models), [selectedModel, models]);
 
   // Slash command menu state. The list is static (claude builtins) — see
   // TMUX_BUILTIN_SLASH_COMMANDS at the top of the file.
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
-  const { searchFiles, error: fileSearchError, refresh: refreshFileTree } =
-    useFileSearch(containerId, worktreePath, false);
+  const {
+    searchFiles,
+    error: fileSearchError,
+    refresh: refreshFileTree,
+  } = useFileSearch(containerId, worktreePath, false);
   const {
     isMenuOpen: fileMentionMenuOpen,
     selectedIndex: fileMentionSelectedIndex,
@@ -959,8 +928,7 @@ export function TmuxComposeBar({
     if (!value.startsWith("/")) return [];
     // Filter on everything between "/" and the first space (or end).
     const spaceIdx = value.indexOf(" ");
-    const filter = (spaceIdx === -1 ? value.slice(1) : value.slice(1, spaceIdx))
-      .toLowerCase();
+    const filter = (spaceIdx === -1 ? value.slice(1) : value.slice(1, spaceIdx)).toLowerCase();
     return TMUX_BUILTIN_SLASH_COMMANDS.filter((cmd) =>
       cmd.name.slice(1).toLowerCase().includes(filter),
     );
@@ -1010,9 +978,7 @@ export function TmuxComposeBar({
       return;
     }
     setSlashMenuOpen(true);
-    setSlashSelectedIndex((prev) =>
-      prev < filteredSlashCommands.length ? prev : 0,
-    );
+    setSlashSelectedIndex((prev) => (prev < filteredSlashCommands.length ? prev : 0));
   }, [value, filteredSlashCommands.length]);
 
   // Auto-grow textarea, bounded.
@@ -1042,8 +1008,7 @@ export function TmuxComposeBar({
     const atMatch = textBeforeCursor.match(/@([^\s@]*)$/);
     const atStart = atMatch ? textBeforeCursor.length - atMatch[0].length : cursorPosition;
     const insertedText = `@${file.relativePath} `;
-    const nextValue =
-      value.slice(0, atStart) + insertedText + value.slice(cursorPosition);
+    const nextValue = value.slice(0, atStart) + insertedText + value.slice(cursorPosition);
 
     pendingCursorPositionRef.current = atStart + insertedText.length;
     setValue(sessionKey, nextValue);
@@ -1065,13 +1030,19 @@ export function TmuxComposeBar({
     closeFileMentionMenu();
   };
 
-  const addAttachment = useCallback((attachment: PastedImageAttachment) => {
-    addAttachmentToStore(sessionKey, attachment);
-  }, [addAttachmentToStore, sessionKey]);
+  const addAttachment = useCallback(
+    (attachment: PastedImageAttachment) => {
+      addAttachmentToStore(sessionKey, attachment);
+    },
+    [addAttachmentToStore, sessionKey],
+  );
 
-  const removeAttachment = useCallback((id: string) => {
-    removeAttachmentFromStore(sessionKey, id);
-  }, [removeAttachmentFromStore, sessionKey]);
+  const removeAttachment = useCallback(
+    (id: string) => {
+      removeAttachmentFromStore(sessionKey, id);
+    },
+    [removeAttachmentFromStore, sessionKey],
+  );
 
   useNativeComposeBarPaste({
     inputContainerRef,
@@ -1254,14 +1225,10 @@ export function TmuxComposeBar({
           onChange={(e) => {
             const nextValue = e.target.value;
             setValue(sessionKey, nextValue);
-            const currentMentions = useClaudeTmuxStore
-              .getState()
-              .getDraftMentions(sessionKey);
+            const currentMentions = useClaudeTmuxStore.getState().getDraftMentions(sessionKey);
             setFileMentions(
               sessionKey,
-              currentMentions.filter((mention) =>
-                nextValue.includes(`@${mention.relativePath}`),
-              ),
+              currentMentions.filter((mention) => nextValue.includes(`@${mention.relativePath}`)),
             );
             updateFileMentionDetection(e.target.selectionStart, nextValue);
           }}
@@ -1328,20 +1295,13 @@ export function TmuxComposeBar({
 
             // Enter submits; Shift+Enter (and Cmd/Ctrl+Enter, for muscle
             // memory) inserts a newline.
-            if (
-              e.key === "Enter" &&
-              !e.shiftKey &&
-              !e.metaKey &&
-              !e.ctrlKey
-            ) {
+            if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
               e.preventDefault();
               void handleSubmit();
             }
           }}
           placeholder={
-            disabled
-              ? "Session not running"
-              : "Ask Claude anything… (@ to mention, / for commands)"
+            disabled ? "Session not running" : "Ask Claude anything… (@ to mention, / for commands)"
           }
           disabled={disabled || submitting || queueSubmitting}
           rows={2}
@@ -1384,7 +1344,9 @@ export function TmuxComposeBar({
             annotation: level === DEFAULT_EFFORT ? "default" : undefined,
           }))}
           selectedReasoningId={selectedEffort}
-          selectedReasoningLabel={effortOptions.length > 0 ? EFFORT_LABELS[selectedEffort] : undefined}
+          selectedReasoningLabel={
+            effortOptions.length > 0 ? EFFORT_LABELS[selectedEffort] : undefined
+          }
           onReasoningChange={(level) => onSelectEffort(level as ClaudeEffortLevel)}
           fastModeEnabled={fastModeEnabled}
           fastModeAvailable={fastModeAvailable}
@@ -1515,14 +1477,14 @@ export function TmuxComposeBar({
         onRemove={handleRemoveQueuedMessage}
         dispatchError={queueRecovery.dispatchError}
         onRetryDispatch={queueRecovery.retry}
-        renderMeta={(message) => (
+        renderMeta={(message) =>
           message.attachments.length > 0 ? (
             <span>
               {message.attachments.length} attachment
               {message.attachments.length === 1 ? "" : "s"}
             </span>
           ) : null
-        )}
+        }
       />
     </div>
   );
@@ -1564,31 +1526,26 @@ export function ApprovalCard({
       className="mb-3"
     >
       <div className="px-3 py-3">
-      <div className="text-sm font-mono text-amber-200 mb-2">
-        {approval.toolName}
-      </div>
-      <ApprovalToolInput
-        toolName={approval.toolName}
-        toolInput={approval.toolInput}
-      />
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => void respond(onApprove)}
-          disabled={submitting}
-          className="flex-1 px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium"
-        >
-          Allow
-        </button>
-        <button
-          type="button"
-          onClick={() => void respond(onDeny)}
-          disabled={submitting}
-          className="flex-1 px-3 py-1.5 rounded bg-red-800 hover:bg-red-700 text-white text-sm font-medium"
-        >
-          Deny
-        </button>
-      </div>
+        <div className="text-sm font-mono text-amber-200 mb-2">{approval.toolName}</div>
+        <ApprovalToolInput toolName={approval.toolName} toolInput={approval.toolInput} />
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => void respond(onApprove)}
+            disabled={submitting}
+            className="flex-1 px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium"
+          >
+            Allow
+          </button>
+          <button
+            type="button"
+            onClick={() => void respond(onDeny)}
+            disabled={submitting}
+            className="flex-1 px-3 py-1.5 rounded bg-red-800 hover:bg-red-700 text-white text-sm font-medium"
+          >
+            Deny
+          </button>
+        </div>
       </div>
     </BlockingPromptCard>
   );
@@ -1606,20 +1563,15 @@ export function ApprovalToolInput({
   toolName: string;
   toolInput: Record<string, unknown>;
 }) {
-  const command =
-    typeof toolInput.command === "string" ? toolInput.command : null;
-  const description =
-    typeof toolInput.description === "string" ? toolInput.description : null;
-  const filePath =
-    typeof toolInput.file_path === "string" ? toolInput.file_path : null;
+  const command = typeof toolInput.command === "string" ? toolInput.command : null;
+  const description = typeof toolInput.description === "string" ? toolInput.description : null;
+  const filePath = typeof toolInput.file_path === "string" ? toolInput.file_path : null;
 
   // Bash → command + optional description.
   if (toolName === "Bash" && command) {
     return (
       <div className="mb-3 space-y-2">
-        {description && (
-          <div className="text-xs text-amber-100/80">{description}</div>
-        )}
+        {description && <div className="text-xs text-amber-100/80">{description}</div>}
         <pre className="text-xs bg-zinc-950 border border-zinc-800 rounded px-2 py-1 whitespace-pre-wrap break-all font-mono">
           $ {command}
         </pre>
@@ -1635,9 +1587,7 @@ export function ApprovalToolInput({
       null;
     return (
       <div className="mb-3 space-y-2">
-        <div className="text-xs font-mono text-amber-100/90 break-all">
-          {filePath}
-        </div>
+        <div className="text-xs font-mono text-amber-100/90 break-all">{filePath}</div>
         {preview && (
           <pre className="text-xs bg-zinc-950 border border-zinc-800 rounded px-2 py-1 whitespace-pre-wrap break-all font-mono max-h-40 overflow-auto">
             {preview}
@@ -1665,5 +1615,3 @@ export function ApprovalToolInput({
     </div>
   );
 }
-
-

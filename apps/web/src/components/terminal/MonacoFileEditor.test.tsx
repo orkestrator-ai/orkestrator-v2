@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realMonacoReact from "@monaco-editor/react";
 import * as realMonacoLoader from "@/lib/monaco-loader";
@@ -214,9 +206,12 @@ describe("MonacoFileEditor component", () => {
   test("waits for browser Monaco configuration before mounting the editor", async () => {
     monacoConfigured = false;
     let resolveConfiguration!: () => void;
-    ensureMonacoConfiguredMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveConfiguration = resolve;
-    }));
+    ensureMonacoConfiguredMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfiguration = resolve;
+        }),
+    );
 
     render(
       <MonacoFileEditor
@@ -229,9 +224,7 @@ describe("MonacoFileEditor component", () => {
 
     expect(screen.queryByRole("textbox", { name: "Mock Monaco editor" }) === null).toBe(true);
     resolveConfiguration();
-    expect(
-      await screen.findByRole("textbox", { name: "Mock Monaco editor" }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("textbox", { name: "Mock Monaco editor" })).toBeTruthy();
   });
 
   test("shows a recoverable Monaco error and retries configuration", async () => {
@@ -241,21 +234,14 @@ describe("MonacoFileEditor component", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <MonacoFileEditor
-        language="typescript"
-        value=""
-        onChange={() => {}}
-        onSave={() => {}}
-      />,
+      <MonacoFileEditor language="typescript" value="" onChange={() => {}} onSave={() => {}} />,
     );
 
     expect(await screen.findByText("Failed to load editor")).toBeTruthy();
     expect(screen.queryByText("worker chunk unavailable") === null).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    expect(
-      await screen.findByRole("textbox", { name: "Mock Monaco editor" }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("textbox", { name: "Mock Monaco editor" })).toBeTruthy();
     expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(2);
   });
 
@@ -267,12 +253,7 @@ describe("MonacoFileEditor component", () => {
       .mockResolvedValueOnce(undefined);
 
     render(
-      <MonacoFileEditor
-        language="typescript"
-        value=""
-        onChange={() => {}}
-        onSave={() => {}}
-      />,
+      <MonacoFileEditor language="typescript" value="" onChange={() => {}} onSave={() => {}} />,
     );
 
     expect(await screen.findByText("Failed to load editor")).toBeTruthy();
@@ -284,25 +265,21 @@ describe("MonacoFileEditor component", () => {
     expect(await screen.findByText("Failed to load editor")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    expect(
-      await screen.findByRole("textbox", { name: "Mock Monaco editor" }),
-    ).toBeTruthy();
+    expect(await screen.findByRole("textbox", { name: "Mock Monaco editor" })).toBeTruthy();
     expect(ensureMonacoConfiguredMock).toHaveBeenCalledTimes(3);
   });
 
   test("ignores a configuration completion after unmount", async () => {
     monacoConfigured = false;
     let resolveConfiguration!: () => void;
-    ensureMonacoConfiguredMock.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveConfiguration = resolve;
-    }));
+    ensureMonacoConfiguredMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfiguration = resolve;
+        }),
+    );
     const view = render(
-      <MonacoFileEditor
-        language="typescript"
-        value=""
-        onChange={() => {}}
-        onSave={() => {}}
-      />,
+      <MonacoFileEditor language="typescript" value="" onChange={() => {}} onSave={() => {}} />,
     );
 
     view.unmount();

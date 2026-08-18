@@ -13,7 +13,9 @@ class MatchMediaController {
   asMediaQueryList(query: string): MediaQueryList {
     const controller = this;
     return {
-      get matches() { return controller.matches; },
+      get matches() {
+        return controller.matches;
+      },
       media: query,
       onchange: null,
       addEventListener: (_type: "change", listener: EventListenerOrEventListenerObject) =>
@@ -62,10 +64,9 @@ describe("useMediaQuery", () => {
     const first = new MatchMediaController(false);
     const second = new MatchMediaController(true);
     window.matchMedia = (query) => (query.includes("767") ? first : second).asMediaQueryList(query);
-    const { result, rerender, unmount } = renderHook(
-      ({ query }) => useMediaQuery(query),
-      { initialProps: { query: "(max-width: 767px)" } },
-    );
+    const { result, rerender, unmount } = renderHook(({ query }) => useMediaQuery(query), {
+      initialProps: { query: "(max-width: 767px)" },
+    });
 
     expect(first.listeners.size).toBe(1);
     rerender({ query: "(max-width: 1024px)" });

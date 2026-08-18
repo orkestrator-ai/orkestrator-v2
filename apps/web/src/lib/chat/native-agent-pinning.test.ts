@@ -5,16 +5,9 @@ import {
   normalizeNativeMessages,
   normalizeOpenCodeNativeMessage,
 } from "./native-message-adapters";
-import {
-  pinNativeAgentParts,
-  snapshotNativeAgentActivity,
-} from "./native-agent-pinning";
+import { pinNativeAgentParts, snapshotNativeAgentActivity } from "./native-agent-pinning";
 
-function assistantMessage(
-  id: string,
-  parts: NativeMessage["parts"],
-  content = "",
-): NativeMessage {
+function assistantMessage(id: string, parts: NativeMessage["parts"], content = ""): NativeMessage {
   return {
     id,
     role: "assistant",
@@ -28,33 +21,35 @@ describe("pinNativeAgentParts", () => {
   test.each([
     ["running", true],
     ["completed", false],
-  ] as const)(
-    "pins a %s background task card: %s",
-    (status, expectPinned) => {
-      const messages = normalizeNativeMessages(
-        applyClaudeBackgroundTaskStates([
-          assistantMessage("assistant-launch", [{
-            type: "tool-invocation",
-            content: "Bash",
-            toolName: "Bash",
-            toolUseId: "bash-1",
-            toolState: "success",
-            toolArgs: { command: "bun run dev", run_in_background: true },
-          }]),
+  ] as const)("pins a %s background task card: %s", (status, expectPinned) => {
+    const messages = normalizeNativeMessages(
+      applyClaudeBackgroundTaskStates(
+        [
+          assistantMessage("assistant-launch", [
+            {
+              type: "tool-invocation",
+              content: "Bash",
+              toolName: "Bash",
+              toolUseId: "bash-1",
+              toolState: "success",
+              toolArgs: { command: "bun run dev", run_in_background: true },
+            },
+          ]),
           assistantMessage("assistant-later", [{ type: "text", content: "Still working" }]),
-        ], {
+        ],
+        {
           "bg-dev": { id: "bg-dev", toolUseId: "bash-1", status },
-        }),
-      );
+        },
+      ),
+    );
 
-      const pinned = pinNativeAgentParts(messages);
-      const last = pinned.at(-1);
+    const pinned = pinNativeAgentParts(messages);
+    const last = pinned.at(-1);
 
-      // A task the user can still stop belongs beside the composer; a finished
-      // one belongs in the transcript where it happened.
-      expect(last?.id.endsWith(":active-agents")).toBe(expectPinned);
-    },
-  );
+    // A task the user can still stop belongs beside the composer; a finished
+    // one belongs in the transcript where it happened.
+    expect(last?.id.endsWith(":active-agents")).toBe(expectPinned);
+  });
 
   test("moves active subagents to the bottom as temporary message rows", () => {
     const messages: NativeMessage[] = [
@@ -107,11 +102,7 @@ describe("pinNativeAgentParts", () => {
 
     expect(pinned).toHaveLength(1);
     expect(pinned[0]?.id).toBe("assistant-1");
-    expect(pinned[0]?.parts.map((part) => part.type)).toEqual([
-      "text",
-      "subagent",
-      "text",
-    ]);
+    expect(pinned[0]?.parts.map((part) => part.type)).toEqual(["text", "subagent", "text"]);
   });
 
   test("leaves successful task groups in their source message", () => {
@@ -138,11 +129,7 @@ describe("pinNativeAgentParts", () => {
 
     expect(pinned).toHaveLength(1);
     expect(pinned[0]?.id).toBe("assistant-1");
-    expect(pinned[0]?.parts.map((part) => part.type)).toEqual([
-      "text",
-      "task-group",
-      "text",
-    ]);
+    expect(pinned[0]?.parts.map((part) => part.type)).toEqual(["text", "task-group", "text"]);
   });
 
   test("leaves terminal launches in place despite stale descendant tools", () => {
@@ -173,28 +160,27 @@ describe("pinNativeAgentParts", () => {
 
     const pinned = pinNativeAgentParts(messages);
 
-    expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1",
-      "assistant-2",
-    ]);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1", "assistant-2"]);
     expect(pinned[0]?.parts[0]?.type).toBe("task-group");
   });
 
   test("pins a successful background launch with authoritative active state", () => {
     const messages: NativeMessage[] = [
-      assistantMessage("assistant-1", [{
-        type: "task-group",
-        content: "Agent",
-        task: {
-          type: "tool-invocation",
+      assistantMessage("assistant-1", [
+        {
+          type: "task-group",
           content: "Agent",
-          toolName: "Agent",
-          toolUseId: "task-background",
-          toolState: "success",
-          agentState: "active",
+          task: {
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolUseId: "task-background",
+            toolState: "success",
+            agentState: "active",
+          },
+          childTools: [],
         },
-        childTools: [],
-      }]),
+      ]),
     ];
 
     expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual([
@@ -204,29 +190,31 @@ describe("pinNativeAgentParts", () => {
 
   test("releases an agent when authoritative lifecycle finishes despite stale child work", () => {
     const messages: NativeMessage[] = [
-      assistantMessage("assistant-1", [{
-        type: "task-group",
-        content: "Agent",
-        task: {
-          type: "tool-invocation",
+      assistantMessage("assistant-1", [
+        {
+          type: "task-group",
           content: "Agent",
-          toolName: "Agent",
-          toolUseId: "task-background",
-          toolState: "success",
-          agentState: "finished",
+          task: {
+            type: "tool-invocation",
+            content: "Agent",
+            toolName: "Agent",
+            toolUseId: "task-background",
+            toolState: "success",
+            agentState: "finished",
+          },
+          childTools: [
+            {
+              type: "tool-invocation",
+              content: "Stale child",
+              toolName: "Read",
+              toolState: "pending",
+            },
+          ],
         },
-        childTools: [{
-          type: "tool-invocation",
-          content: "Stale child",
-          toolName: "Read",
-          toolState: "pending",
-        }],
-      }]),
+      ]),
     ];
 
-    expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual([
-      "assistant-1",
-    ]);
+    expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual(["assistant-1"]);
   });
 
   test("leaves terminal subagents in place despite stale descendant tools", () => {
@@ -288,9 +276,7 @@ describe("pinNativeAgentParts", () => {
     ]);
     expect(pinned[0]?.parts[0]?.type).toBe("tool-group");
     if (pinned[0]?.parts[0]?.type === "tool-group") {
-      expect(pinned[0].parts[0].parts.map((part) => part.type)).toEqual([
-        "tool-invocation",
-      ]);
+      expect(pinned[0].parts[0].parts.map((part) => part.type)).toEqual(["tool-invocation"]);
     }
     expect(pinned[1]?.parts[0]?.type).toBe("task-group");
   });
@@ -352,10 +338,7 @@ describe("pinNativeAgentParts", () => {
     ]);
     expect(pinned[0]?.parts[0]?.type).toBe("agent-group");
     if (pinned[0]?.parts[0]?.type === "agent-group") {
-      expect(pinned[0].parts[0].parts.map((part) => part.type)).toEqual([
-        "subagent",
-        "task-group",
-      ]);
+      expect(pinned[0].parts[0].parts.map((part) => part.type)).toEqual(["subagent", "task-group"]);
     }
   });
 
@@ -378,9 +361,7 @@ describe("pinNativeAgentParts", () => {
 
     const pinned = pinNativeAgentParts([normalized]);
 
-    expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1:active-agents",
-    ]);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1:active-agents"]);
     expect(pinned[0]?.parts[0]?.type).toBe("agent-group");
     if (pinned[0]?.parts[0]?.type === "agent-group") {
       expect(pinned[0].parts[0].parts.map((part) => part.subagentId)).toEqual([
@@ -404,9 +385,7 @@ describe("pinNativeAgentParts", () => {
 
     const pinned = pinNativeAgentParts(messages);
 
-    expect(pinned.map((message) => message.id)).toEqual([
-      "assistant-1:active-agents",
-    ]);
+    expect(pinned.map((message) => message.id)).toEqual(["assistant-1:active-agents"]);
     expect(pinned[0]?.parts[0]?.type).toBe("subagent");
   });
 
@@ -427,9 +406,7 @@ describe("pinNativeAgentParts", () => {
     ]);
 
     const grouped = pinNativeAgentParts([activeMessage]);
-    expect(grouped.map((message) => message.id)).toEqual([
-      "assistant-1:active-agents",
-    ]);
+    expect(grouped.map((message) => message.id)).toEqual(["assistant-1:active-agents"]);
 
     const partiallyComplete = pinNativeAgentParts([
       {
@@ -437,7 +414,7 @@ describe("pinNativeAgentParts", () => {
         parts: activeMessage.parts.map((part) =>
           part.type === "subagent" && part.subagentId === "agent-2"
             ? { ...part, toolState: "success" as const }
-            : part
+            : part,
         ),
       },
     ]);
@@ -464,9 +441,7 @@ describe("pinNativeAgentParts", () => {
       {
         ...activeMessage,
         parts: activeMessage.parts.map((part) =>
-          part.type === "subagent"
-            ? { ...part, toolState: "success" as const }
-            : part
+          part.type === "subagent" ? { ...part, toolState: "success" as const } : part,
         ),
       },
     ]);
@@ -543,9 +518,7 @@ describe("pinNativeAgentParts", () => {
     if (pinned[1]?.parts[0]?.type === "agent-group") {
       expect(
         pinned[1].parts[0].parts.map((part) =>
-          part.type === "task-group"
-            ? part.task.toolUseId
-            : part.subagentId
+          part.type === "task-group" ? part.task.toolUseId : part.subagentId,
         ),
       ).toEqual(["agent-1", "task-2", "agent-3"]);
     }
@@ -578,12 +551,8 @@ describe("pinNativeAgentParts", () => {
         { type: "text", content: "Delegating" },
         settledWorker("2026-06-28T12:02:30.000Z"),
       ]),
-      at("assistant-2", "2026-06-28T12:01:00.000Z", [
-        { type: "text", content: "Meanwhile" },
-      ]),
-      at("assistant-3", "2026-06-28T12:05:00.000Z", [
-        { type: "text", content: "Afterwards" },
-      ]),
+      at("assistant-2", "2026-06-28T12:01:00.000Z", [{ type: "text", content: "Meanwhile" }]),
+      at("assistant-3", "2026-06-28T12:05:00.000Z", [{ type: "text", content: "Afterwards" }]),
     ];
 
     // It stopped after assistant-2 and before assistant-3, so that is where the
@@ -612,22 +581,23 @@ describe("pinNativeAgentParts", () => {
     // before whatever followed it — so the earliest stamp is when the row
     // first had something to show.
     const messages = [
-      at("assistant-1", "2026-06-28T12:00:00.000Z", [{
-        type: "subagent",
-        content: "second",
-        subagentId: "agent-2",
-        toolState: "success",
-        settledAt: "2026-06-28T12:04:30.000Z",
-      }, {
-        type: "subagent",
-        content: "first",
-        subagentId: "agent-1",
-        toolState: "success",
-        settledAt: "2026-06-28T12:04:00.000Z",
-      }]),
-      at("assistant-2", "2026-06-28T12:06:00.000Z", [
-        { type: "text", content: "Afterwards" },
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [
+        {
+          type: "subagent",
+          content: "second",
+          subagentId: "agent-2",
+          toolState: "success",
+          settledAt: "2026-06-28T12:04:30.000Z",
+        },
+        {
+          type: "subagent",
+          content: "first",
+          subagentId: "agent-1",
+          toolState: "success",
+          settledAt: "2026-06-28T12:04:00.000Z",
+        },
       ]),
+      at("assistant-2", "2026-06-28T12:06:00.000Z", [{ type: "text", content: "Afterwards" }]),
     ];
 
     const pinned = pinNativeAgentParts(messages);
@@ -693,22 +663,29 @@ describe("pinNativeAgentParts", () => {
     const messages: NativeMessage[] = [];
     for (let index = 0; index < size; index += 1) {
       const createdAt = new Date(Date.UTC(2026, 5, 28, 12, 0, index)).toISOString();
-      messages.push(at(`assistant-${index}`, createdAt, index % 10 === 0
-        ? [{
-            type: "subagent",
-            content: `worker-${index}`,
-            subagentId: `agent-${index}`,
-            toolState: "success",
-            // Settles one row later, so every card resolves to a distinct
-            // anchor rather than sharing one cheap answer.
-            settledAt: new Date(Date.UTC(2026, 5, 28, 12, 0, index + 1)).toISOString(),
-          }]
-        : [{ type: "text", content: `line ${index}` }]));
+      messages.push(
+        at(
+          `assistant-${index}`,
+          createdAt,
+          index % 10 === 0
+            ? [
+                {
+                  type: "subagent",
+                  content: `worker-${index}`,
+                  subagentId: `agent-${index}`,
+                  toolState: "success",
+                  // Settles one row later, so every card resolves to a distinct
+                  // anchor rather than sharing one cheap answer.
+                  settledAt: new Date(Date.UTC(2026, 5, 28, 12, 0, index + 1)).toISOString(),
+                },
+              ]
+            : [{ type: "text", content: `line ${index}` }],
+        ),
+      );
     }
 
     const pinned = pinNativeAgentParts(messages);
-    const settledRows = pinned.filter((message) =>
-      message.id.endsWith(":settled-agents"));
+    const settledRows = pinned.filter((message) => message.id.endsWith(":settled-agents"));
 
     expect(settledRows).toHaveLength(size / 10);
     // Each card lands under the row after its launch, and carries that card's
@@ -759,10 +736,14 @@ describe("pinNativeAgentParts", () => {
       at("assistant-2", "2026-06-28T12:01:00.000Z", [{ type: "text", content: "Meanwhile" }]),
     ];
 
-    expect(pinNativeAgentParts(messages).map((message) => message.id))
-      .toEqual(["assistant-1", "assistant-2"]);
-    expect(pinNativeAgentParts(messages)[0]?.parts.map((part) => part.type))
-      .toEqual(["text", "subagent"]);
+    expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual([
+      "assistant-1",
+      "assistant-2",
+    ]);
+    expect(pinNativeAgentParts(messages)[0]?.parts.map((part) => part.type)).toEqual([
+      "text",
+      "subagent",
+    ]);
   });
 
   test("leaves an agent that settled before the loaded transcript in place", () => {
@@ -775,26 +756,29 @@ describe("pinNativeAgentParts", () => {
       ]),
     ];
 
-    expect(pinNativeAgentParts(messages).map((message) => message.id))
-      .toEqual(["assistant-1"]);
+    expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual(["assistant-1"]);
   });
 
   test("groups agents that settled at the same position into one row", () => {
     const messages = [
-      at("assistant-1", "2026-06-28T12:00:00.000Z", [{
-        type: "subagent",
-        content: "first",
-        subagentId: "agent-1",
-        toolState: "success",
-        settledAt: "2026-06-28T12:04:00.000Z",
-      }]),
-      at("assistant-2", "2026-06-28T12:01:00.000Z", [{
-        type: "subagent",
-        content: "second",
-        subagentId: "agent-2",
-        toolState: "success",
-        settledAt: "2026-06-28T12:04:30.000Z",
-      }]),
+      at("assistant-1", "2026-06-28T12:00:00.000Z", [
+        {
+          type: "subagent",
+          content: "first",
+          subagentId: "agent-1",
+          toolState: "success",
+          settledAt: "2026-06-28T12:04:00.000Z",
+        },
+      ]),
+      at("assistant-2", "2026-06-28T12:01:00.000Z", [
+        {
+          type: "subagent",
+          content: "second",
+          subagentId: "agent-2",
+          toolState: "success",
+          settledAt: "2026-06-28T12:04:30.000Z",
+        },
+      ]),
       at("assistant-3", "2026-06-28T12:02:00.000Z", [{ type: "text", content: "Meanwhile" }]),
     ];
 
@@ -820,24 +804,27 @@ describe("pinNativeAgentParts", () => {
       at("assistant-2", "2026-06-28T12:05:00.000Z", [{ type: "text", content: "Afterwards" }]),
     ];
 
-    expect(pinNativeAgentParts(messages).map((message) => message.id))
-      .toEqual(["assistant-1:settled-agents", "assistant-2"]);
+    expect(pinNativeAgentParts(messages).map((message) => message.id)).toEqual([
+      "assistant-1:settled-agents",
+      "assistant-2",
+    ]);
 
     // Future rows belong below the position the card already holds; adding one
     // must not pull the settled card back to the transcript bottom.
     const withLaterMessage = [
       ...messages,
-      at("assistant-3", "2026-06-28T12:10:00.000Z", [{
-        type: "text",
-        content: "Much later",
-      }]),
+      at("assistant-3", "2026-06-28T12:10:00.000Z", [
+        {
+          type: "text",
+          content: "Much later",
+        },
+      ]),
     ];
-    expect(pinNativeAgentParts(withLaterMessage).map((message) => message.id))
-      .toEqual([
-        "assistant-1:settled-agents",
-        "assistant-2",
-        "assistant-3",
-      ]);
+    expect(pinNativeAgentParts(withLaterMessage).map((message) => message.id)).toEqual([
+      "assistant-1:settled-agents",
+      "assistant-2",
+      "assistant-3",
+    ]);
   });
 
   test("does not let a tab's own rowless card become a position", () => {
@@ -850,20 +837,24 @@ describe("pinNativeAgentParts", () => {
     const transcript = [
       at("assistant-1", "2026-06-28T12:00:00.000Z", [{ type: "text", content: "Working" }]),
     ];
-    const rowless = at("background-task:bg-2", "2026-06-28T12:09:00.000Z", [{
-      type: "subagent",
-      content: "second",
-      subagentId: "agent-2",
-      toolState: "success",
-      settledAt: "2026-06-28T12:09:00.000Z",
-    }]);
-    const earlier = at("background-task:bg-1", "2026-06-28T12:08:00.000Z", [{
-      type: "subagent",
-      content: "first",
-      subagentId: "agent-1",
-      toolState: "success",
-      settledAt: "2026-06-28T12:08:00.000Z",
-    }]);
+    const rowless = at("background-task:bg-2", "2026-06-28T12:09:00.000Z", [
+      {
+        type: "subagent",
+        content: "second",
+        subagentId: "agent-2",
+        toolState: "success",
+        settledAt: "2026-06-28T12:09:00.000Z",
+      },
+    ]);
+    const earlier = at("background-task:bg-1", "2026-06-28T12:08:00.000Z", [
+      {
+        type: "subagent",
+        content: "first",
+        subagentId: "agent-1",
+        toolState: "success",
+        settledAt: "2026-06-28T12:08:00.000Z",
+      },
+    ]);
 
     const pinned = pinNativeAgentParts([...transcript, earlier, rowless], transcript);
 
@@ -876,70 +867,86 @@ describe("pinNativeAgentParts", () => {
   });
 
   test("places a settled background task from the backend's terminal edge", () => {
-    const transcript = (
-      status: "running" | "completed",
-      endedAt?: number,
-    ) => normalizeNativeMessages(
-      applyClaudeBackgroundTaskStates([
-        at("assistant-launch", "2026-06-28T12:00:00.000Z", [{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolUseId: "bash-1",
-          toolState: "success",
-          toolArgs: { command: "bun run dev", run_in_background: true },
-        }]),
-        at("assistant-later", "2026-06-28T12:01:00.000Z", [
-          { type: "text", content: "Still working" },
-        ]),
-      ], {
-        "bg-dev": { id: "bg-dev", toolUseId: "bash-1", status, ...(endedAt ? { endedAt } : {}) },
-      }),
-    );
+    const transcript = (status: "running" | "completed", endedAt?: number) =>
+      normalizeNativeMessages(
+        applyClaudeBackgroundTaskStates(
+          [
+            at("assistant-launch", "2026-06-28T12:00:00.000Z", [
+              {
+                type: "tool-invocation",
+                content: "Bash",
+                toolName: "Bash",
+                toolUseId: "bash-1",
+                toolState: "success",
+                toolArgs: { command: "bun run dev", run_in_background: true },
+              },
+            ]),
+            at("assistant-later", "2026-06-28T12:01:00.000Z", [
+              { type: "text", content: "Still working" },
+            ]),
+          ],
+          {
+            "bg-dev": {
+              id: "bg-dev",
+              toolUseId: "bash-1",
+              status,
+              ...(endedAt ? { endedAt } : {}),
+            },
+          },
+        ),
+      );
 
     // Live: at the bottom, where its stop control cannot scroll away.
-    expect(pinNativeAgentParts(transcript("running")).at(-1)?.id)
-      .toBe("assistant-launch:active-agents");
+    expect(pinNativeAgentParts(transcript("running")).at(-1)?.id).toBe(
+      "assistant-launch:active-agents",
+    );
 
     // Settled: under the row the conversation had reached when the bridge
     // recorded it ending.
     expect(
-      pinNativeAgentParts(transcript("completed", Date.parse("2026-06-28T12:02:00.000Z")))
-        .map((message) => message.id),
+      pinNativeAgentParts(transcript("completed", Date.parse("2026-06-28T12:02:00.000Z"))).map(
+        (message) => message.id,
+      ),
     ).toEqual(["assistant-later", "assistant-later:settled-agents"]);
   });
 
   test("snapshots accessible labels and keeps the newest reusable-agent lifecycle", () => {
     const messages: NativeMessage[] = [
-      assistantMessage("assistant-1", [{
-        type: "task-group",
-        content: "Task: fallback",
-        task: {
-          type: "tool-invocation",
+      assistantMessage("assistant-1", [
+        {
+          type: "task-group",
           content: "Task: fallback",
-          toolUseId: "task-1",
-          toolState: "success",
-          agentState: "active",
-          toolArgs: { description: "Validate the implementation" },
+          task: {
+            type: "tool-invocation",
+            content: "Task: fallback",
+            toolUseId: "task-1",
+            toolState: "success",
+            agentState: "active",
+            toolArgs: { description: "Validate the implementation" },
+          },
+          childTools: [],
         },
-        childTools: [],
-      }]),
-      assistantMessage("assistant-2", [{
-        type: "subagent",
-        content: "generic",
-        subagentId: "agent-reusable",
-        subagentName: "Lovelace",
-        subagentRole: "correctness_review",
-        toolState: "pending",
-      }]),
-      assistantMessage("assistant-3", [{
-        type: "subagent",
-        content: "generic",
-        subagentId: "agent-reusable",
-        subagentName: "Lovelace",
-        subagentRole: "correctness_review",
-        toolState: "failure",
-      }]),
+      ]),
+      assistantMessage("assistant-2", [
+        {
+          type: "subagent",
+          content: "generic",
+          subagentId: "agent-reusable",
+          subagentName: "Lovelace",
+          subagentRole: "correctness_review",
+          toolState: "pending",
+        },
+      ]),
+      assistantMessage("assistant-3", [
+        {
+          type: "subagent",
+          content: "generic",
+          subagentId: "agent-reusable",
+          subagentName: "Lovelace",
+          subagentRole: "correctness_review",
+          toolState: "failure",
+        },
+      ]),
     ];
 
     expect(snapshotNativeAgentActivity(messages)).toEqual([
@@ -960,35 +967,42 @@ describe("pinNativeAgentParts", () => {
 
   test("snapshots a provider-owned task with its full lifecycle", () => {
     const messages = normalizeNativeMessages(
-      applyClaudeBackgroundTaskStates([
-        assistantMessage("assistant-task", [{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolUseId: "bash-task",
-          toolState: "success",
-          toolArgs: {
-            command: "bun test",
+      applyClaudeBackgroundTaskStates(
+        [
+          assistantMessage("assistant-task", [
+            {
+              type: "tool-invocation",
+              content: "Bash",
+              toolName: "Bash",
+              toolUseId: "bash-task",
+              toolState: "success",
+              toolArgs: {
+                command: "bun test",
+                description: "Run the full suite",
+                run_in_background: true,
+              },
+            },
+          ]),
+        ],
+        {
+          "bg-suite": {
+            id: "bg-suite",
+            toolUseId: "bash-task",
             description: "Run the full suite",
-            run_in_background: true,
+            status: "paused",
           },
-        }]),
-      ], {
-        "bg-suite": {
-          id: "bg-suite",
-          toolUseId: "bash-task",
-          description: "Run the full suite",
-          status: "paused",
         },
-      }),
+      ),
     );
 
-    expect(snapshotNativeAgentActivity(messages)).toEqual([{
-      id: "background-task:bg-suite",
-      label: "Run the full suite",
-      status: "active",
-      kind: "background-task",
-      backgroundTaskStatus: "paused",
-    }]);
+    expect(snapshotNativeAgentActivity(messages)).toEqual([
+      {
+        id: "background-task:bg-suite",
+        label: "Run the full suite",
+        status: "active",
+        kind: "background-task",
+        backgroundTaskStatus: "paused",
+      },
+    ]);
   });
 });

@@ -101,12 +101,14 @@ describe("runtime environment refresh", () => {
     delete process.env.BUN_INSTALL;
     delete process.env.BASH_ENV;
 
-    const updated = __testing.applyRuntimeEnvironmentOutput([
-      "PATH=/home/node/.bun/bin:/usr/bin:/bin",
-      "BUN_INSTALL=/home/node/.bun",
-      "BASH_ENV=/tmp/orkestrator-ai/bash-env.sh",
-      "CODEX_PATH=/tmp/should-not-change",
-    ].join("\n"));
+    const updated = __testing.applyRuntimeEnvironmentOutput(
+      [
+        "PATH=/home/node/.bun/bin:/usr/bin:/bin",
+        "BUN_INSTALL=/home/node/.bun",
+        "BASH_ENV=/tmp/orkestrator-ai/bash-env.sh",
+        "CODEX_PATH=/tmp/should-not-change",
+      ].join("\n"),
+    );
 
     expect(updated).toEqual(["PATH", "BUN_INSTALL", "BASH_ENV"]);
     expect(process.env.PATH).toBe("/home/node/.bun/bin:/usr/bin:/bin");
@@ -119,12 +121,9 @@ describe("runtime environment refresh", () => {
     process.env.PATH = "/usr/bin:/bin";
     process.env.BUN_INSTALL = "/home/node/.bun";
 
-    const updated = __testing.applyRuntimeEnvironmentOutput([
-      "not-an-env-line",
-      "=missing-name",
-      "PATH=",
-      "BUN_INSTALL=/home/node/.bun",
-    ].join("\n"));
+    const updated = __testing.applyRuntimeEnvironmentOutput(
+      ["not-an-env-line", "=missing-name", "PATH=", "BUN_INSTALL=/home/node/.bun"].join("\n"),
+    );
 
     expect(updated).toEqual([]);
     expect(process.env.PATH).toBe("/usr/bin:/bin");
@@ -132,11 +131,13 @@ describe("runtime environment refresh", () => {
   });
 
   test("applies only the managed GitHub credential variables", () => {
-    const updated = __testing.applyRuntimeEnvironmentOutput([
-      "GITHUB_TOKEN=github-token-one",
-      "GH_TOKEN=github-token-one",
-      "UNMANAGED_SECRET=must-not-enter-the-bridge",
-    ].join("\n"));
+    const updated = __testing.applyRuntimeEnvironmentOutput(
+      [
+        "GITHUB_TOKEN=github-token-one",
+        "GH_TOKEN=github-token-one",
+        "UNMANAGED_SECRET=must-not-enter-the-bridge",
+      ].join("\n"),
+    );
 
     expect(updated).toEqual(["GITHUB_TOKEN", "GH_TOKEN"]);
     expect(process.env.GITHUB_TOKEN).toBe("github-token-one");
@@ -233,12 +234,7 @@ describe("runtime environment refresh", () => {
 
       writeRuntimeHelper(
         helper,
-        [
-          "orkestrator_source_runtime_env() {",
-          "  unset GITHUB_TOKEN GH_TOKEN",
-          "}",
-          "",
-        ].join("\n"),
+        ["orkestrator_source_runtime_env() {", "  unset GITHUB_TOKEN GH_TOKEN", "}", ""].join("\n"),
       );
 
       await __testing.refreshRuntimeEnvironment();

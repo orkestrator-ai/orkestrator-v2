@@ -133,13 +133,13 @@ export function useAgentHandoff(
         : EMPTY_STATE
       : state.requestKey !== requestKey
         ? {
-          requestKey,
-          handoffId: handoffId ?? null,
-          handoff: null,
-          loading: true,
-          error: null,
-          errorAt: null,
-        }
+            requestKey,
+            handoffId: handoffId ?? null,
+            handoff: null,
+            loading: true,
+            error: null,
+            errorAt: null,
+          }
         : state;
   const ready = !handoffId || !currentState.loading;
 
@@ -149,46 +149,40 @@ export function useAgentHandoff(
    * objects each time, re-rendering the entire imported transcript per token.
    */
   const importedMessages = useMemo(
-    () => (currentState.handoff
-      ? buildAgentHandoffImportedMessages(currentState.handoff)
-      : null),
+    () => (currentState.handoff ? buildAgentHandoffImportedMessages(currentState.handoff) : null),
     [currentState.handoff],
   );
   const carrierIds = useMemo(
-    () => [currentState.handoff?.id, consumedHandoffId].filter(
-      (id): id is string => Boolean(id),
-    ),
+    () => [currentState.handoff?.id, consumedHandoffId].filter((id): id is string => Boolean(id)),
     [currentState.handoff, consumedHandoffId],
   );
 
-  const displayMessages = useMemo(
-    () => {
-      const visible = carrierIds.length > 0
+  const displayMessages = useMemo(() => {
+    const visible =
+      carrierIds.length > 0
         ? stripAgentHandoffCarriers(carrierIds, providerMessages)
         : providerMessages;
-      if (currentState.error && handoffId) {
-        return [
-          {
-            id: `handoff:${handoffId}:error`,
-            role: "system" as const,
-            content: currentState.error,
-            parts: [{ type: "text" as const, content: currentState.error }],
-            createdAt: currentState.errorAt ?? new Date(0).toISOString(),
-          },
-          ...visible,
-        ];
-      }
-      return importedMessages ? [...importedMessages, ...visible] : visible;
-    },
-    [
-      carrierIds,
-      currentState.error,
-      currentState.errorAt,
-      handoffId,
-      importedMessages,
-      providerMessages,
-    ],
-  );
+    if (currentState.error && handoffId) {
+      return [
+        {
+          id: `handoff:${handoffId}:error`,
+          role: "system" as const,
+          content: currentState.error,
+          parts: [{ type: "text" as const, content: currentState.error }],
+          createdAt: currentState.errorAt ?? new Date(0).toISOString(),
+        },
+        ...visible,
+      ];
+    }
+    return importedMessages ? [...importedMessages, ...visible] : visible;
+  }, [
+    carrierIds,
+    currentState.error,
+    currentState.errorAt,
+    handoffId,
+    importedMessages,
+    providerMessages,
+  ]);
   const destinationTranscriptStarted = providerMessages.some((message) => {
     /*
      * Optimistic sends and locally generated error/system rows are retained in
@@ -198,10 +192,7 @@ export function useAgentHandoff(
      * in the transcript it represents the dispatched handoff even if it still
      * has an optimistic id while waiting for its authoritative echo.
      */
-    if (
-      currentState.handoff
-      && isAgentHandoffBootstrapMessage(message, currentState.handoff.id)
-    ) {
+    if (currentState.handoff && isAgentHandoffBootstrapMessage(message, currentState.handoff.id)) {
       return true;
     }
     return !isClientOnlyNativeMessage(message);
@@ -214,9 +205,7 @@ export function useAgentHandoff(
     error: currentState.error,
     ready,
     pendingHistory:
-      ready && !destinationTranscriptStarted
-        ? currentState.handoff?.bootstrapPrompt
-        : undefined,
+      ready && !destinationTranscriptStarted ? currentState.handoff?.bootstrapPrompt : undefined,
     displayMessages,
   };
 }

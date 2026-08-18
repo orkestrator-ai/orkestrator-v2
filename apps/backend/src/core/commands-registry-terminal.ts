@@ -1,7 +1,93 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { path, randomUUID, pathExists, readFileBase64, readTextFile, spawnCommand, writeFileBase64, assertBase64PayloadWithinLimit, base64DecodedByteLength, MAX_BINARY_FILE_BYTES, removeConfinedDirectory, validateRelativeFilePath, workspaceFilePath, INITIAL_PROMPT_STAGING_DIRECTORY, MAX_TOTAL_ATTACHMENT_BYTES } from "./commands-dependencies.js";
+import {
+  path,
+  randomUUID,
+  pathExists,
+  readFileBase64,
+  readTextFile,
+  spawnCommand,
+  writeFileBase64,
+  assertBase64PayloadWithinLimit,
+  base64DecodedByteLength,
+  MAX_BINARY_FILE_BYTES,
+  removeConfinedDirectory,
+  validateRelativeFilePath,
+  workspaceFilePath,
+  INITIAL_PROMPT_STAGING_DIRECTORY,
+  MAX_TOTAL_ATTACHMENT_BYTES,
+} from "./commands-dependencies.js";
 import type { EnvironmentDiffStatsSnapshot } from "./commands-dependencies.js";
-import { terminalProcesses, terminalSessionConfigs, terminalOutputBuffers, terminalOutputRevisions, terminalOutputGenerations, terminalOutputDeltas, terminalOutputTruncated, CONTAINER_INTERACTIVE_SHELL_COMMAND, CONTAINER_SAFE_BASE64_READER, DIFF_CACHE_MAX_AGE_MS, diffStatsService, syncDiffStatsTracking, asString, asRecord, assertOnlyKeys, asOptionalString, asBoolean, asRequiredBoolean, asNumber, asTerminalDimension, asNonBlankString, quoteShell, validateGitRefName, envWithManagedBinaries, resolveBunBinary, createEnvironmentCommandRunner, parseGitPorcelainPaths, findEnvironmentByContainerId, conditionalSnapshot, readTerminalOutputBuffer, logSetupTerminal, resolveLocalShellPath, rememberTerminalSession, isTerminalBootstrapped, stableTerminalKey, rememberStableTerminalSession, existingStableTerminalSession, containerTerminalConfigMatches, localTerminalConfigMatches, recordTerminalInputActivity, trackedTerminalActivityHooks, explicitlyCloseTerminalSession, terminalStableKeyEnvironmentId, assertEnvironmentNotDeleting, assertEnvironmentDeletionNotRequested, spawnTerminalProcess, getWorktreeBaseDir, isSetupTerminalSessionId, isTerminalSessionAttachable, dockerExec, buildFileTree, buildContainerGitStatusScript, isMissingTargetRefResponse, parseContainerGitStatusResponse, getLocalGitStatus, getContainerGitStatusDetailed, validateWorkspaceMutationPath, pruneLocalInitialPromptBatches, containerPruneInitialPromptBatchesCommand, CONTAINER_PINNED_ATTACHMENT_WRITE, containerRemoveInitialPromptBatchCommand, writeConfinedLocalArtifact, revertLocalFile, deleteLocalFile, requireLocalMutationEnvironment, requireContainerMutationEnvironment, containerRevertFileCommand, containerDeleteFileCommand, readLocalFileAtBranch } from "./commands-helpers.js";
+import {
+  terminalProcesses,
+  terminalSessionConfigs,
+  terminalOutputBuffers,
+  terminalOutputRevisions,
+  terminalOutputGenerations,
+  terminalOutputDeltas,
+  terminalOutputTruncated,
+  CONTAINER_INTERACTIVE_SHELL_COMMAND,
+  CONTAINER_SAFE_BASE64_READER,
+  DIFF_CACHE_MAX_AGE_MS,
+  diffStatsService,
+  syncDiffStatsTracking,
+  asString,
+  asRecord,
+  assertOnlyKeys,
+  asOptionalString,
+  asBoolean,
+  asRequiredBoolean,
+  asNumber,
+  asTerminalDimension,
+  asNonBlankString,
+  quoteShell,
+  validateGitRefName,
+  envWithManagedBinaries,
+  resolveBunBinary,
+  createEnvironmentCommandRunner,
+  parseGitPorcelainPaths,
+  findEnvironmentByContainerId,
+  conditionalSnapshot,
+  readTerminalOutputBuffer,
+  logSetupTerminal,
+  resolveLocalShellPath,
+  rememberTerminalSession,
+  isTerminalBootstrapped,
+  stableTerminalKey,
+  rememberStableTerminalSession,
+  existingStableTerminalSession,
+  containerTerminalConfigMatches,
+  localTerminalConfigMatches,
+  recordTerminalInputActivity,
+  trackedTerminalActivityHooks,
+  explicitlyCloseTerminalSession,
+  terminalStableKeyEnvironmentId,
+  assertEnvironmentNotDeleting,
+  assertEnvironmentDeletionNotRequested,
+  spawnTerminalProcess,
+  getWorktreeBaseDir,
+  isSetupTerminalSessionId,
+  isTerminalSessionAttachable,
+  dockerExec,
+  buildFileTree,
+  buildContainerGitStatusScript,
+  isMissingTargetRefResponse,
+  parseContainerGitStatusResponse,
+  getLocalGitStatus,
+  getContainerGitStatusDetailed,
+  validateWorkspaceMutationPath,
+  pruneLocalInitialPromptBatches,
+  containerPruneInitialPromptBatchesCommand,
+  CONTAINER_PINNED_ATTACHMENT_WRITE,
+  containerRemoveInitialPromptBatchCommand,
+  writeConfinedLocalArtifact,
+  revertLocalFile,
+  deleteLocalFile,
+  requireLocalMutationEnvironment,
+  requireContainerMutationEnvironment,
+  containerRevertFileCommand,
+  containerDeleteFileCommand,
+  readLocalFileAtBranch,
+} from "./commands-helpers.js";
 import type { GitFileChange } from "./commands-helpers.js";
 import {
   parseReviewWorktreeFingerprint,
@@ -12,71 +98,65 @@ export function registerTerminalCommands(
   register: CommandRegistrar,
   _dependencies: RegistryDependencies,
 ): void {
-  register("create_terminal_session", async ({
-    containerId,
-    environmentId,
-    terminalKey,
-    cols,
-    rows,
-    user,
-    trackEnvironmentActivity,
-  }, { storage }) => {
-    const resolvedContainerId = asString(containerId, "containerId");
-    const requestedEnvironmentId = asOptionalString(environmentId);
-    assertEnvironmentNotDeleting(requestedEnvironmentId);
-    const requestedTerminalKey = asOptionalString(terminalKey);
-    const shouldTrackActivity = asBoolean(trackEnvironmentActivity);
-    const matchedEnvironment = shouldTrackActivity || requestedEnvironmentId
-      ? findEnvironmentByContainerId(
-          await storage.loadEnvironments(),
-          resolvedContainerId,
-        )
-      : undefined;
-    assertEnvironmentNotDeleting(requestedEnvironmentId ?? matchedEnvironment?.id);
-    if (requestedEnvironmentId && matchedEnvironment?.id !== requestedEnvironmentId) {
-      throw new Error("Terminal container is not associated with the requested environment");
-    }
-    const activityEnvironmentId = shouldTrackActivity
-      ? matchedEnvironment?.id
-      : undefined;
-    if (shouldTrackActivity && !activityEnvironmentId) {
-      throw new Error("Tracked terminal container is not associated with an environment");
-    }
-    if (requestedEnvironmentId) {
-      assertEnvironmentDeletionNotRequested(matchedEnvironment, requestedEnvironmentId);
-    } else if (matchedEnvironment) {
-      assertEnvironmentDeletionNotRequested(matchedEnvironment, matchedEnvironment.id);
-    }
+  register(
+    "create_terminal_session",
+    async (
+      { containerId, environmentId, terminalKey, cols, rows, user, trackEnvironmentActivity },
+      { storage },
+    ) => {
+      const resolvedContainerId = asString(containerId, "containerId");
+      const requestedEnvironmentId = asOptionalString(environmentId);
+      assertEnvironmentNotDeleting(requestedEnvironmentId);
+      const requestedTerminalKey = asOptionalString(terminalKey);
+      const shouldTrackActivity = asBoolean(trackEnvironmentActivity);
+      const matchedEnvironment =
+        shouldTrackActivity || requestedEnvironmentId
+          ? findEnvironmentByContainerId(await storage.loadEnvironments(), resolvedContainerId)
+          : undefined;
+      assertEnvironmentNotDeleting(requestedEnvironmentId ?? matchedEnvironment?.id);
+      if (requestedEnvironmentId && matchedEnvironment?.id !== requestedEnvironmentId) {
+        throw new Error("Terminal container is not associated with the requested environment");
+      }
+      const activityEnvironmentId = shouldTrackActivity ? matchedEnvironment?.id : undefined;
+      if (shouldTrackActivity && !activityEnvironmentId) {
+        throw new Error("Tracked terminal container is not associated with an environment");
+      }
+      if (requestedEnvironmentId) {
+        assertEnvironmentDeletionNotRequested(matchedEnvironment, requestedEnvironmentId);
+      } else if (matchedEnvironment) {
+        assertEnvironmentDeletionNotRequested(matchedEnvironment, matchedEnvironment.id);
+      }
 
-    const stableKey = stableTerminalKey(
-      "container",
-      requestedEnvironmentId,
-      requestedTerminalKey,
-    );
-    const config = {
-      kind: "container" as const,
-      containerId: resolvedContainerId,
-      cols: asTerminalDimension(cols, 80),
-      rows: asTerminalDimension(rows, 24),
-      user: asOptionalString(user),
-      environmentId: requestedEnvironmentId,
-      activityEnvironmentId,
-      trackEnvironmentActivity: shouldTrackActivity,
-    };
-    const existingId = existingStableTerminalSession(stableKey);
-    if (existingId && containerTerminalConfigMatches(existingId, config)) {
-      return {
-        sessionId: existingId,
-        created: false,
-        bootstrapped: isTerminalBootstrapped(existingId),
+      const stableKey = stableTerminalKey(
+        "container",
+        requestedEnvironmentId,
+        requestedTerminalKey,
+      );
+      const config = {
+        kind: "container" as const,
+        containerId: resolvedContainerId,
+        cols: asTerminalDimension(cols, 80),
+        rows: asTerminalDimension(rows, 24),
+        user: asOptionalString(user),
+        environmentId: requestedEnvironmentId,
+        activityEnvironmentId,
+        trackEnvironmentActivity: shouldTrackActivity,
       };
-    }
-    if (existingId) explicitlyCloseTerminalSession(existingId);
+      const existingId = existingStableTerminalSession(stableKey);
+      if (existingId && containerTerminalConfigMatches(existingId, config)) {
+        return {
+          sessionId: existingId,
+          created: false,
+          bootstrapped: isTerminalBootstrapped(existingId),
+        };
+      }
+      if (existingId) explicitlyCloseTerminalSession(existingId);
 
-    const id = `${resolvedContainerId}:${randomUUID()}`;
-    rememberStableTerminalSession(id, config, stableKey);
-    return { sessionId: id, created: true, bootstrapped: false };
-  });
+      const id = `${resolvedContainerId}:${randomUUID()}`;
+      rememberStableTerminalSession(id, config, stableKey);
+      return { sessionId: id, created: true, bootstrapped: false };
+    },
+  );
   register("attach_terminal", ({ containerId, cols, rows, user }, { emit }) => {
     const id = `${asString(containerId, "containerId")}:${randomUUID()}`;
     const config = {
@@ -89,12 +169,7 @@ export function registerTerminalCommands(
     rememberTerminalSession(id, config);
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
-    dockerArgs.push(
-      config.containerId,
-      "bash",
-      "-lc",
-      CONTAINER_INTERACTIVE_SHELL_COMMAND,
-    );
+    dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
     spawnTerminalProcess(id, "docker", dockerArgs, config, emit);
     return id;
   });
@@ -102,16 +177,20 @@ export function registerTerminalCommands(
     const { emit, storage } = context;
     const id = asString(sessionId, "sessionId");
     const storedConfig = terminalSessionConfigs.get(id);
-    const config = storedConfig?.kind === "container" ? storedConfig : {
-      kind: "container" as const,
-      containerId: id.split(":")[0] ?? id,
-      cols: 80,
-      rows: 24,
-    };
-    const environmentId = config.environmentId
-      ?? config.activityEnvironmentId
-      ?? terminalStableKeyEnvironmentId(id)
-      ?? undefined;
+    const config =
+      storedConfig?.kind === "container"
+        ? storedConfig
+        : {
+            kind: "container" as const,
+            containerId: id.split(":")[0] ?? id,
+            cols: 80,
+            rows: 24,
+          };
+    const environmentId =
+      config.environmentId ??
+      config.activityEnvironmentId ??
+      terminalStableKeyEnvironmentId(id) ??
+      undefined;
     assertEnvironmentNotDeleting(environmentId);
     if (environmentId) {
       const environment = await storage.getEnvironment(environmentId);
@@ -123,13 +202,15 @@ export function registerTerminalCommands(
     }
     const dockerArgs = ["exec", "-it"];
     if (config.user) dockerArgs.push("--user", config.user);
-    dockerArgs.push(
-      config.containerId,
-      "bash",
-      "-lc",
-      CONTAINER_INTERACTIVE_SHELL_COMMAND,
+    dockerArgs.push(config.containerId, "bash", "-lc", CONTAINER_INTERACTIVE_SHELL_COMMAND);
+    spawnTerminalProcess(
+      id,
+      "docker",
+      dockerArgs,
+      config,
+      emit,
+      trackedTerminalActivityHooks(id, context),
     );
-    spawnTerminalProcess(id, "docker", dockerArgs, config, emit, trackedTerminalActivityHooks(id, context));
   });
   // `delivered` is additive: HTTP callers ignore the result, while the terminal
   // WebSocket gateway needs it to avoid acknowledging input that never reached a
@@ -210,12 +291,12 @@ export function registerTerminalCommands(
       const deltas = terminalOutputDeltas.get(id) ?? [];
       const oldestRevision = deltas[0]?.revision ?? revision + 1;
       if (
-        Number.isSafeInteger(requestedRevision)
-        && requestedRevision >= 0
-        && Number.isSafeInteger(requestedGeneration)
-        && requestedGeneration === generation
-        && requestedRevision <= revision
-        && requestedRevision >= oldestRevision - 1
+        Number.isSafeInteger(requestedRevision) &&
+        requestedRevision >= 0 &&
+        Number.isSafeInteger(requestedGeneration) &&
+        requestedGeneration === generation &&
+        requestedRevision <= revision &&
+        requestedRevision >= oldestRevision - 1
       ) {
         const retainedDeltas = deltas
           .filter((entry) => entry.revision > requestedRevision)
@@ -248,61 +329,62 @@ export function registerTerminalCommands(
     };
   });
 
-  register("create_local_terminal_session", async ({
-    environmentId,
-    terminalKey,
-    cols,
-    rows,
-    trackEnvironmentActivity,
-  }, { storage }) => {
-    const resolvedEnvironmentId = asString(environmentId, "environmentId");
-    assertEnvironmentNotDeleting(resolvedEnvironmentId);
-    const environment = await storage.getEnvironment(resolvedEnvironmentId);
-    assertEnvironmentNotDeleting(resolvedEnvironmentId);
-    assertEnvironmentDeletionNotRequested(environment, resolvedEnvironmentId);
-    const stableKey = stableTerminalKey(
-      "local",
-      resolvedEnvironmentId,
-      asOptionalString(terminalKey),
-    );
-    const config = {
-      kind: "local" as const,
-      environmentId: resolvedEnvironmentId,
-      cols: asTerminalDimension(cols, 80),
-      rows: asTerminalDimension(rows, 24),
-      trackEnvironmentActivity: asBoolean(trackEnvironmentActivity),
-    };
-    const existingId = existingStableTerminalSession(stableKey);
-    if (existingId && localTerminalConfigMatches(existingId, config)) {
-      return {
-        sessionId: existingId,
-        created: false,
-        bootstrapped: isTerminalBootstrapped(existingId),
+  register(
+    "create_local_terminal_session",
+    async ({ environmentId, terminalKey, cols, rows, trackEnvironmentActivity }, { storage }) => {
+      const resolvedEnvironmentId = asString(environmentId, "environmentId");
+      assertEnvironmentNotDeleting(resolvedEnvironmentId);
+      const environment = await storage.getEnvironment(resolvedEnvironmentId);
+      assertEnvironmentNotDeleting(resolvedEnvironmentId);
+      assertEnvironmentDeletionNotRequested(environment, resolvedEnvironmentId);
+      const stableKey = stableTerminalKey(
+        "local",
+        resolvedEnvironmentId,
+        asOptionalString(terminalKey),
+      );
+      const config = {
+        kind: "local" as const,
+        environmentId: resolvedEnvironmentId,
+        cols: asTerminalDimension(cols, 80),
+        rows: asTerminalDimension(rows, 24),
+        trackEnvironmentActivity: asBoolean(trackEnvironmentActivity),
       };
-    }
-    if (existingId) explicitlyCloseTerminalSession(existingId);
+      const existingId = existingStableTerminalSession(stableKey);
+      if (existingId && localTerminalConfigMatches(existingId, config)) {
+        return {
+          sessionId: existingId,
+          created: false,
+          bootstrapped: isTerminalBootstrapped(existingId),
+        };
+      }
+      if (existingId) explicitlyCloseTerminalSession(existingId);
 
-    const id = `${resolvedEnvironmentId}:${randomUUID()}`;
-    rememberStableTerminalSession(id, config, stableKey);
-    return { sessionId: id, created: true, bootstrapped: false };
-  });
+      const id = `${resolvedEnvironmentId}:${randomUUID()}`;
+      rememberStableTerminalSession(id, config, stableKey);
+      return { sessionId: id, created: true, bootstrapped: false };
+    },
+  );
   register("start_local_terminal_session", async ({ sessionId }, context) => {
     const { storage, emit } = context;
     const id = asString(sessionId, "sessionId");
     const storedConfig = terminalSessionConfigs.get(id);
-    const config = storedConfig?.kind === "local" ? storedConfig : {
-      kind: "local" as const,
-      environmentId: id.split(":")[0] ?? id,
-      cols: 80,
-      rows: 24,
-    };
+    const config =
+      storedConfig?.kind === "local"
+        ? storedConfig
+        : {
+            kind: "local" as const,
+            environmentId: id.split(":")[0] ?? id,
+            cols: 80,
+            rows: 24,
+          };
     const environmentId = config.environmentId;
     assertEnvironmentNotDeleting(environmentId);
     const env = await storage.getEnvironment(environmentId);
     assertEnvironmentNotDeleting(environmentId);
     assertEnvironmentDeletionNotRequested(env, environmentId);
     if (!env?.worktreePath) throw new Error("Local environment worktree is not available");
-    if (!await pathExists(env.worktreePath)) throw new Error(`Local environment worktree does not exist: ${env.worktreePath}`);
+    if (!(await pathExists(env.worktreePath)))
+      throw new Error(`Local environment worktree does not exist: ${env.worktreePath}`);
     assertEnvironmentNotDeleting(environmentId);
     const currentEnvironment = await storage.getEnvironment(environmentId);
     assertEnvironmentNotDeleting(environmentId);
@@ -346,25 +428,32 @@ export function registerTerminalCommands(
     explicitlyCloseTerminalSession(asString(sessionId, "sessionId"));
   });
 
-  register("get_local_git_status", async ({ worktreePath, targetBranch, includeUncommitted, knownDigest }) => {
-    const resolvedWorktreePath = asString(worktreePath, "worktreePath");
-    const ref = asString(targetBranch, "targetBranch");
-    const includeWorkingTree = includeUncommitted !== false;
-    if (!includeWorkingTree) {
-      return conditionalSnapshot(
-        await getLocalGitStatus(resolvedWorktreePath, ref, false),
-        knownDigest,
-      );
-    }
+  register(
+    "get_local_git_status",
+    async ({ worktreePath, targetBranch, includeUncommitted, knownDigest }) => {
+      const resolvedWorktreePath = asString(worktreePath, "worktreePath");
+      const ref = asString(targetBranch, "targetBranch");
+      const includeWorkingTree = includeUncommitted !== false;
+      if (!includeWorkingTree) {
+        return conditionalSnapshot(
+          await getLocalGitStatus(resolvedWorktreePath, ref, false),
+          knownDigest,
+        );
+      }
 
-    // The sidebar badge and the Files panel look at the same environment and used
-    // to ask for it separately. Whichever arrives first pays for the scan.
-    const cached = diffStatsService.cachedChanges({ worktreePath: resolvedWorktreePath }, ref, DIFF_CACHE_MAX_AGE_MS);
-    if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
-    const changes = await getLocalGitStatus(resolvedWorktreePath, ref, true);
-    diffStatsService.adoptScan({ worktreePath: resolvedWorktreePath }, ref, changes);
-    return conditionalSnapshot(changes, knownDigest);
-  });
+      // The sidebar badge and the Files panel look at the same environment and used
+      // to ask for it separately. Whichever arrives first pays for the scan.
+      const cached = diffStatsService.cachedChanges(
+        { worktreePath: resolvedWorktreePath },
+        ref,
+        DIFF_CACHE_MAX_AGE_MS,
+      );
+      if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
+      const changes = await getLocalGitStatus(resolvedWorktreePath, ref, true);
+      diffStatsService.adoptScan({ worktreePath: resolvedWorktreePath }, ref, changes);
+      return conditionalSnapshot(changes, knownDigest);
+    },
+  );
   /**
    * Authoritative diff-stat snapshot.
    *
@@ -383,22 +472,28 @@ export function registerTerminalCommands(
   });
 
   register("get_local_file_tree", async ({ worktreePath, knownDigest }) =>
-    conditionalSnapshot(
-      await buildFileTree(asString(worktreePath, "worktreePath")),
-      knownDigest,
-    )
+    conditionalSnapshot(await buildFileTree(asString(worktreePath, "worktreePath")), knownDigest),
   );
-  register("read_local_file", ({ worktreePath, filePath }) => readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")));
+  register("read_local_file", ({ worktreePath, filePath }) =>
+    readTextFile(asString(worktreePath, "worktreePath"), asString(filePath, "filePath")),
+  );
   register("read_local_file_at_branch", ({ worktreePath, filePath, branch }) =>
-    readLocalFileAtBranch(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(branch, "branch")),
+    readLocalFileAtBranch(
+      asString(worktreePath, "worktreePath"),
+      asString(filePath, "filePath"),
+      asString(branch, "branch"),
+    ),
   );
   register("read_file_base64", ({ filePath }, context) =>
-    readFileBase64(
-      asString(filePath, "filePath"),
-      [getWorktreeBaseDir(context)],
-    )
+    readFileBase64(asString(filePath, "filePath"), [getWorktreeBaseDir(context)]),
   );
-  register("write_local_file", ({ worktreePath, filePath, base64Data }) => writeFileBase64(asString(worktreePath, "worktreePath"), asString(filePath, "filePath"), asString(base64Data, "base64Data")));
+  register("write_local_file", ({ worktreePath, filePath, base64Data }) =>
+    writeFileBase64(
+      asString(worktreePath, "worktreePath"),
+      asString(filePath, "filePath"),
+      asString(base64Data, "base64Data"),
+    ),
+  );
   register("revert_local_file", async ({ environmentId, filePath, targetBranch }, context) => {
     const id = asString(environmentId, "environmentId");
     const environment = await requireLocalMutationEnvironment(context.storage, id);
@@ -420,34 +515,42 @@ export function registerTerminalCommands(
     return result;
   });
 
-  register("get_git_status", async ({ containerId, targetBranch, includeUncommitted, knownDigest }) => {
-    const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
-    const includeWorkingTree = includeUncommitted !== false;
-    const resolvedContainerId = asString(containerId, "containerId");
+  register(
+    "get_git_status",
+    async ({ containerId, targetBranch, includeUncommitted, knownDigest }) => {
+      const ref = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
+      const includeWorkingTree = includeUncommitted !== false;
+      const resolvedContainerId = asString(containerId, "containerId");
 
-    if (includeWorkingTree) {
-      const cached = diffStatsService.cachedChanges({ containerId: resolvedContainerId }, ref, DIFF_CACHE_MAX_AGE_MS);
-      if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
-      const changes = (await getContainerGitStatusDetailed(resolvedContainerId, ref, true)).changes;
-      diffStatsService.adoptScan({ containerId: resolvedContainerId }, ref, changes);
-      return conditionalSnapshot(changes, knownDigest);
-    }
+      if (includeWorkingTree) {
+        const cached = diffStatsService.cachedChanges(
+          { containerId: resolvedContainerId },
+          ref,
+          DIFF_CACHE_MAX_AGE_MS,
+        );
+        if (cached) return conditionalSnapshot(cached as GitFileChange[], knownDigest);
+        const changes = (await getContainerGitStatusDetailed(resolvedContainerId, ref, true))
+          .changes;
+        diffStatsService.adoptScan({ containerId: resolvedContainerId }, ref, changes);
+        return conditionalSnapshot(changes, knownDigest);
+      }
 
-    const output = await dockerExec(
-      resolvedContainerId,
-      buildContainerGitStatusScript(ref, includeWorkingTree),
-    );
-    // Distinguishes "the requested baseline is not in this container" - which
-    // happens when a container is recreated from a different clone - from a
-    // corrupt response, so callers do not see both as one opaque exec failure.
-    if (isMissingTargetRefResponse(output)) {
-      throw new Error(`Target ref is not present in the container: ${ref}`);
-    }
-    return conditionalSnapshot(
-      parseContainerGitStatusResponse(output, includeWorkingTree),
-      knownDigest,
-    );
-  });
+      const output = await dockerExec(
+        resolvedContainerId,
+        buildContainerGitStatusScript(ref, includeWorkingTree),
+      );
+      // Distinguishes "the requested baseline is not in this container" - which
+      // happens when a container is recreated from a different clone - from a
+      // corrupt response, so callers do not see both as one opaque exec failure.
+      if (isMissingTargetRefResponse(output)) {
+        throw new Error(`Target ref is not present in the container: ${ref}`);
+      }
+      return conditionalSnapshot(
+        parseContainerGitStatusResponse(output, includeWorkingTree),
+        knownDigest,
+      );
+    },
+  );
   /**
    * Authoritative uncommitted-path list for one environment, for callers that
    * need the fact itself rather than a diff to render.
@@ -479,21 +582,22 @@ export function registerTerminalCommands(
       asString(environmentId, "environmentId"),
     );
     if (!environment) throw new Error("Environment not found");
-    const wantFingerprint = fingerprint === undefined
-      ? false
-      : asRequiredBoolean(fingerprint, "fingerprint");
+    const wantFingerprint =
+      fingerprint === undefined ? false : asRequiredBoolean(fingerprint, "fingerprint");
     const runner = createEnvironmentCommandRunner(environment);
     // The container image ships Node; a local worktree runs on the user's own
     // machine, where the backend's inherited PATH is whatever the OS handed
     // Electron and need not contain any Node at all. Use the same managed Bun
     // the rest of the local command surface relies on.
     const local = environment.environmentType === "local";
-    const captured = parseReviewWorktreeFingerprint(await runner(
-      local ? resolveBunBinary(context) : "node",
-      ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, ...(wantFingerprint ? ["fingerprint"] : [])],
-      wantFingerprint ? 120_000 : 30_000,
-      local ? envWithManagedBinaries(context) : undefined,
-    ));
+    const captured = parseReviewWorktreeFingerprint(
+      await runner(
+        local ? resolveBunBinary(context) : "node",
+        ["-e", REVIEW_WORKTREE_FINGERPRINT_SCRIPT, ...(wantFingerprint ? ["fingerprint"] : [])],
+        wantFingerprint ? 120_000 : 30_000,
+        local ? envWithManagedBinaries(context) : undefined,
+      ),
+    );
     return {
       head: captured.head,
       paths: parseGitPorcelainPaths(captured.status),
@@ -501,28 +605,47 @@ export function registerTerminalCommands(
     };
   });
   register("get_file_tree", async ({ containerId, knownDigest }) => {
-    const output = await dockerExec(asString(containerId, "containerId"), "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000");
+    const output = await dockerExec(
+      asString(containerId, "containerId"),
+      "find /workspace -path /workspace/.git -prune -o -path /workspace/node_modules -prune -o -type l -prune -o -type f -printf '%P\\n' | head -5000",
+    );
     return conditionalSnapshot(
-      output.split("\n").filter(Boolean).map((filePath) => ({ name: path.basename(filePath), path: filePath, isDirectory: false, extension: path.extname(filePath) })),
+      output
+        .split("\n")
+        .filter(Boolean)
+        .map((filePath) => ({
+          name: path.basename(filePath),
+          path: filePath,
+          isDirectory: false,
+          extension: path.extname(filePath),
+        })),
       knownDigest,
     );
   });
   register("read_container_file", async ({ containerId, filePath }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
-    const content = await dockerExec(asString(containerId, "containerId"), `cat ${quoteShell(workspaceFilePath(target))}`);
+    const content = await dockerExec(
+      asString(containerId, "containerId"),
+      `cat ${quoteShell(workspaceFilePath(target))}`,
+    );
     return { path: target, content, language: path.extname(target).slice(1) };
   });
   register("read_file_at_branch", async ({ containerId, filePath, branch }) => {
     const target = validateRelativeFilePath(asString(filePath, "filePath"));
-    const content = await dockerExec(asString(containerId, "containerId"), `git show ${quoteShell(asString(branch, "branch"))}:${quoteShell(target)} 2>/dev/null || true`);
+    const content = await dockerExec(
+      asString(containerId, "containerId"),
+      `git show ${quoteShell(asString(branch, "branch"))}:${quoteShell(target)} 2>/dev/null || true`,
+    );
     return content ? { path: target, content, language: path.extname(target).slice(1) } : null;
   });
   register("read_container_file_base64", async ({ containerId, filePath }) => {
     const fullPath = workspaceFilePath(asString(filePath, "filePath"));
-    return (await dockerExec(
-      asString(containerId, "containerId"),
-      `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(fullPath)} ${MAX_BINARY_FILE_BYTES}`,
-    )).trim();
+    return (
+      await dockerExec(
+        asString(containerId, "containerId"),
+        `node -e ${quoteShell(CONTAINER_SAFE_BASE64_READER)} -- /workspace ${quoteShell(fullPath)} ${MAX_BINARY_FILE_BYTES}`,
+      )
+    ).trim();
   });
   register("write_container_file", async ({ containerId, filePath, base64Data }) => {
     const id = asString(containerId, "containerId");
@@ -532,18 +655,30 @@ export function registerTerminalCommands(
     const data = asString(base64Data, "base64Data");
     assertBase64PayloadWithinLimit(data);
     await dockerExec(id, `mkdir -p ${quoteShell(directory)}`);
-    const child = spawnCommand("docker", ["exec", "-i", id, "bash", "-lc", `base64 -d > ${quoteShell(fullPath)}`]);
+    const child = spawnCommand("docker", [
+      "exec",
+      "-i",
+      id,
+      "bash",
+      "-lc",
+      `base64 -d > ${quoteShell(fullPath)}`,
+    ]);
     child.stdin.write(data);
     child.stdin.end();
     await new Promise<void>((resolve, reject) => {
-      child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)));
+      child.once("exit", (code) =>
+        code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)),
+      );
       child.once("error", reject);
     });
     return fullPath;
   });
   register("revert_container_file", async ({ environmentId, filePath, targetBranch }, context) => {
     const environmentIdString = asString(environmentId, "environmentId");
-    const environment = await requireContainerMutationEnvironment(context.storage, environmentIdString);
+    const environment = await requireContainerMutationEnvironment(
+      context.storage,
+      environmentIdString,
+    );
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     const branch = validateGitRefName(asString(targetBranch, "targetBranch"), "target branch");
@@ -554,7 +689,10 @@ export function registerTerminalCommands(
   });
   register("delete_container_file", async ({ environmentId, filePath }, context) => {
     const environmentIdString = asString(environmentId, "environmentId");
-    const environment = await requireContainerMutationEnvironment(context.storage, environmentIdString);
+    const environment = await requireContainerMutationEnvironment(
+      context.storage,
+      environmentIdString,
+    );
     const id = environment.containerId!;
     const target = validateWorkspaceMutationPath(asString(filePath, "filePath"));
     await dockerExec(id, containerDeleteFileCommand(target));
@@ -588,9 +726,10 @@ export function registerTerminalCommands(
       // below NAME_MAX leaves room for collision suffixes on every supported
       // filesystem rather than turning a valid batch into ENAMETOOLONG.
       const boundedName = sanitizedName.slice(0, 128);
-      const sanitized = boundedName === "." || boundedName === ".." || boundedName.length === 0
-        ? "clipboard.png"
-        : boundedName;
+      const sanitized =
+        boundedName === "." || boundedName === ".." || boundedName.length === 0
+          ? "clipboard.png"
+          : boundedName;
       const dot = sanitized.lastIndexOf(".");
       const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
       const extension = dot > 0 ? sanitized.slice(dot) : "";
@@ -610,36 +749,37 @@ export function registerTerminalCommands(
     // once here; the per-item write reuses the normalized payload.
     let totalDecodedBytes = 0;
     const parsedAttachments = attachments.map((rawAttachment) => {
-        const attachment = asRecord(rawAttachment, "attachment");
-        assertOnlyKeys(attachment, ["id", "name", "base64Data"], "attachment");
-        asNonBlankString(attachment.id, "attachment.id");
-        const name = allocateName(attachment.name);
-        const data = assertBase64PayloadWithinLimit(
-          asString(attachment.base64Data, "attachment.base64Data"),
-          { rejectEmpty: true },
+      const attachment = asRecord(rawAttachment, "attachment");
+      assertOnlyKeys(attachment, ["id", "name", "base64Data"], "attachment");
+      asNonBlankString(attachment.id, "attachment.id");
+      const name = allocateName(attachment.name);
+      const data = assertBase64PayloadWithinLimit(
+        asString(attachment.base64Data, "attachment.base64Data"),
+        { rejectEmpty: true },
+      );
+      // The per-item cap alone lets 20 attachments carry ~160MB of decoded
+      // payload, all of it retained by this array before the first write.
+      totalDecodedBytes += base64DecodedByteLength(data);
+      if (totalDecodedBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
+        throw new Error(
+          `Initial prompt attachments exceed the ${MAX_TOTAL_ATTACHMENT_BYTES} byte total limit`,
         );
-        // The per-item cap alone lets 20 attachments carry ~160MB of decoded
-        // payload, all of it retained by this array before the first write.
-        totalDecodedBytes += base64DecodedByteLength(data);
-        if (totalDecodedBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
-          throw new Error(
-            `Initial prompt attachments exceed the ${MAX_TOTAL_ATTACHMENT_BYTES} byte total limit`,
-          );
-        }
-        return {
-          name,
-          data,
-          relativePath: `${batchRelativeDirectory}/${name}`,
-        };
-      });
+      }
+      return {
+        name,
+        data,
+        relativePath: `${batchRelativeDirectory}/${name}`,
+      };
+    });
 
     // Best effort: a prune failure must never fail the write the user asked for.
-    await (environment.environmentType === "local"
-      ? pruneLocalInitialPromptBatches(environment.worktreePath!)
-      : dockerExec(
-          environment.containerId!,
-          containerPruneInitialPromptBatchesCommand(),
-        ).then(() => undefined)).catch(() => undefined);
+    await (
+      environment.environmentType === "local"
+        ? pruneLocalInitialPromptBatches(environment.worktreePath!)
+        : dockerExec(environment.containerId!, containerPruneInitialPromptBatchesCommand()).then(
+            () => undefined,
+          )
+    ).catch(() => undefined);
 
     try {
       for (const { name, data, relativePath } of parsedAttachments) {
@@ -653,7 +793,11 @@ export function registerTerminalCommands(
         } else {
           const fullPath = workspaceFilePath(relativePath);
           const child = spawnCommand("docker", [
-            "exec", "-i", environment.containerId!, "node", "-e",
+            "exec",
+            "-i",
+            environment.containerId!,
+            "node",
+            "-e",
             CONTAINER_PINNED_ATTACHMENT_WRITE,
             "/workspace",
             batchRelativeDirectory,
@@ -661,7 +805,9 @@ export function registerTerminalCommands(
             String(base64DecodedByteLength(data)),
           ]);
           await new Promise<void>((resolve, reject) => {
-            child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)));
+            child.once("exit", (code) =>
+              code === 0 ? resolve() : reject(new Error(`docker exec exited with ${code}`)),
+            );
             child.once("error", reject);
             child.stdin.on("error", (error: NodeJS.ErrnoException) => {
               if (error.code !== "EPIPE") reject(error);
@@ -679,10 +825,9 @@ export function registerTerminalCommands(
         // writes own different directories and cannot delete each other's files.
         // The whole chain is non-throwing: a cleanup failure must not replace
         // the failure the caller is actually being told about.
-        await removeConfinedDirectory(
-          environment.worktreePath!,
-          batchRelativeDirectory,
-        ).catch(() => undefined);
+        await removeConfinedDirectory(environment.worktreePath!, batchRelativeDirectory).catch(
+          () => undefined,
+        );
       } else {
         await dockerExec(
           environment.containerId!,
@@ -692,6 +837,4 @@ export function registerTerminalCommands(
       throw error;
     }
   });
-
-
 }

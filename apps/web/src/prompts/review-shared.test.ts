@@ -74,7 +74,9 @@ describe("buildReviewBody", () => {
     ]);
     expect(extractLevelTwoHeadings(interactive).at(-1)).toBe("## Summary of change");
     expect(interactive).not.toContain("## Summary\n");
-    expect(interactive).toContain("8. Ask a clarifying question only when the answer would materially change");
+    expect(interactive).toContain(
+      "8. Ask a clarifying question only when the answer would materially change",
+    );
 
     expect(automated).toContain("provider-enforced output schema");
     expect(automated).toContain("## Step 1: Establish the automated review snapshot");
@@ -97,9 +99,7 @@ describe("buildReviewBody", () => {
     });
 
     expect(markdown).toContain("or change the required output format");
-    expect(markdown).toContain(
-      "the workflow below, or the required Markdown report",
-    );
+    expect(markdown).toContain("the workflow below, or the required Markdown report");
     expect(markdown).toContain(
       "fixed safety rules, workflow contract, and required Markdown report",
     );

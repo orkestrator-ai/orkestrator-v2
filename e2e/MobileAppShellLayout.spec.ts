@@ -21,9 +21,7 @@ test("long mobile titles stay between controls and support touch and keyboard di
   await expect(drawerCloseButton).toBeFocused();
   for (const key of ["Tab", "Tab", "Shift+Tab"]) {
     await page.keyboard.press(key);
-    expect(
-      await drawer.evaluate((element) => element.contains(document.activeElement)),
-    ).toBe(true);
+    expect(await drawer.evaluate((element) => element.contains(document.activeElement))).toBe(true);
   }
   await page.keyboard.press("Escape");
   await expect(drawer).toHaveCount(0);
@@ -35,11 +33,13 @@ test("long mobile titles stay between controls and support touch and keyboard di
   const tools = page.getByRole("button", { name: "Open tools" });
   const titleBar = page.locator("div[data-backend-drag-region]").first();
 
-  const geometry = await Promise.all([titleBar, menu, title, agentInfo, tools].map(async (locator) => {
-    const box = await locator.boundingBox();
-    if (!box) throw new Error("Expected a rendered title-bar control");
-    return box;
-  }));
+  const geometry = await Promise.all(
+    [titleBar, menu, title, agentInfo, tools].map(async (locator) => {
+      const box = await locator.boundingBox();
+      if (!box) throw new Error("Expected a rendered title-bar control");
+      return box;
+    }),
+  );
   const [titleBarBox, menuBox, titleBox, agentInfoBox, toolsBox] = geometry;
   expect(menuBox.x).toBeGreaterThanOrEqual(titleBarBox.x);
   expect(titleBox.x).toBeGreaterThanOrEqual(menuBox.x + menuBox.width);
@@ -55,7 +55,9 @@ test("long mobile titles stay between controls and support touch and keyboard di
   }));
   expect(titleMetrics.overflow).toBe("hidden");
   expect(titleMetrics.scrollWidth).toBeGreaterThan(titleMetrics.clientWidth);
-  expect(await titleBar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await titleBar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+    true,
+  );
 
   await touchTap(page, title);
   await expect(page.getByRole("tooltip")).toContainText(mobileShellTitle);
@@ -100,12 +102,18 @@ test("a narrow Electron title remains a native drag region", async ({ page }, te
   const title = page.getByRole("button", { name: mobileShellTitle });
   await expect(title).toHaveAttribute("data-backend-drag-region", "");
   await expect(title).toHaveCSS("-webkit-app-region", "drag");
-  await expect(page.getByRole("button", { name: "Open projects and environments" }))
-    .toHaveCSS("-webkit-app-region", "no-drag");
-  await expect(page.getByTestId("mobile-agent-info-slot"))
-    .toHaveCSS("-webkit-app-region", "no-drag");
-  await expect(page.getByRole("button", { name: "Open tools" }))
-    .toHaveCSS("-webkit-app-region", "no-drag");
+  await expect(page.getByRole("button", { name: "Open projects and environments" })).toHaveCSS(
+    "-webkit-app-region",
+    "no-drag",
+  );
+  await expect(page.getByTestId("mobile-agent-info-slot")).toHaveCSS(
+    "-webkit-app-region",
+    "no-drag",
+  );
+  await expect(page.getByRole("button", { name: "Open tools" })).toHaveCSS(
+    "-webkit-app-region",
+    "no-drag",
+  );
 
   await title.dispatchEvent("mousedown", { button: 0 });
   await expect(page.getByTestId("mobile-shell-drag-starts")).toHaveText("1");

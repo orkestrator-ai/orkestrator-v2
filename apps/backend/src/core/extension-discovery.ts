@@ -1,11 +1,6 @@
 export type AgentExtensionId = "claude" | "codex" | "cursor" | "grok" | "opencode";
 
-export type ExtensionStatus =
-  | "connected"
-  | "configured"
-  | "disabled"
-  | "failed"
-  | "pending";
+export type ExtensionStatus = "connected" | "configured" | "disabled" | "failed" | "pending";
 
 export type ExtensionItem = {
   name: string;
@@ -21,19 +16,14 @@ export type AgentExtensionCatalog = {
   pluginError?: string;
 };
 
-export type ExtensionCommandRunner = (
-  command: AgentExtensionId,
-  args: string[],
-) => Promise<string>;
+export type ExtensionCommandRunner = (command: AgentExtensionId, args: string[]) => Promise<string>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function nonBlankString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : undefined;
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function parseJsonOutput(output: string): unknown {
@@ -63,8 +53,7 @@ function sortAndDedupeKeyed(entries: KeyedItem[]): ExtensionItem[] {
   return [...byKey.values()]
     .sort(
       (left, right) =>
-        left.item.name.localeCompare(right.item.name) ||
-        left.key.localeCompare(right.key),
+        left.item.name.localeCompare(right.item.name) || left.key.localeCompare(right.key),
     )
     .map((entry) => entry.item);
 }
@@ -104,7 +93,10 @@ export function parseClaudeMcpList(output: string): ExtensionItem[] {
     if (statusSeparator <= separator) continue;
 
     const name = line.slice(0, separator).trim();
-    const statusText = line.slice(statusSeparator + 3).trim().toLowerCase();
+    const statusText = line
+      .slice(statusSeparator + 3)
+      .trim()
+      .toLowerCase();
     let status: ExtensionStatus = "configured";
     if (statusText.includes("connected")) status = "connected";
     else if (statusText.includes("failed") || statusText.includes("error")) status = "failed";
@@ -126,35 +118,43 @@ export function parseClaudePlugins(output: string): ExtensionItem[] {
   const parsed = parseJsonOutput(output);
   if (!Array.isArray(parsed)) return [];
 
-  return sortAndDedupeKeyed(parsed.flatMap((value): KeyedItem[] => {
-    if (!isRecord(value)) return [];
-    const id = nonBlankString(value.id);
-    const name = nonBlankString(value.name) ?? (id ? pluginShortName(id) : undefined);
-    if (!name) return [];
-    return [{
-      key: id ?? name,
-      item: {
-        name,
-        status: value.enabled === false ? "disabled" : "configured",
-        source: nonBlankString(value.scope),
-      },
-    }];
-  }));
+  return sortAndDedupeKeyed(
+    parsed.flatMap((value): KeyedItem[] => {
+      if (!isRecord(value)) return [];
+      const id = nonBlankString(value.id);
+      const name = nonBlankString(value.name) ?? (id ? pluginShortName(id) : undefined);
+      if (!name) return [];
+      return [
+        {
+          key: id ?? name,
+          item: {
+            name,
+            status: value.enabled === false ? "disabled" : "configured",
+            source: nonBlankString(value.scope),
+          },
+        },
+      ];
+    }),
+  );
 }
 
 export function parseCodexMcpList(output: string): ExtensionItem[] {
   const parsed = parseJsonOutput(output);
   if (!Array.isArray(parsed)) return [];
 
-  return sortAndDedupe(parsed.flatMap((value): ExtensionItem[] => {
-    if (!isRecord(value)) return [];
-    const name = nonBlankString(value.name);
-    if (!name) return [];
-    return [{
-      name,
-      status: value.enabled === false ? "disabled" : "configured",
-    }];
-  }));
+  return sortAndDedupe(
+    parsed.flatMap((value): ExtensionItem[] => {
+      if (!isRecord(value)) return [];
+      const name = nonBlankString(value.name);
+      if (!name) return [];
+      return [
+        {
+          name,
+          status: value.enabled === false ? "disabled" : "configured",
+        },
+      ];
+    }),
+  );
 }
 
 function collectCodexPluginRecords(value: unknown, result: KeyedItem[]): void {
@@ -219,13 +219,12 @@ export function parseOpenCodeMcpServers(output: string): ExtensionItem[] {
         Array.isArray(value.command) ||
         typeof value.command === "string";
       if (!isServer) return [];
-      return [{
-        name,
-        status:
-          value.disabled === true || value.enabled === false
-            ? "disabled"
-            : "configured",
-      }];
+      return [
+        {
+          name,
+          status: value.disabled === true || value.enabled === false ? "disabled" : "configured",
+        },
+      ];
     },
   );
 
@@ -247,16 +246,13 @@ export function parseOpenCodePlugins(output: string): ExtensionItem[] {
   const plugins: ExtensionItem[] = [];
   const configuredPlugins = Array.isArray(parsed.plugin) ? parsed.plugin : [];
   for (const value of configuredPlugins) {
-    const name = nonBlankString(value) ??
-      (isRecord(value)
-        ? nonBlankString(value.name) ?? nonBlankString(value.spec)
-        : undefined);
+    const name =
+      nonBlankString(value) ??
+      (isRecord(value) ? (nonBlankString(value.name) ?? nonBlankString(value.spec)) : undefined);
     if (name) plugins.push({ name, status: "configured" });
   }
 
-  const pluginOrigins = Array.isArray(parsed.plugin_origins)
-    ? parsed.plugin_origins
-    : [];
+  const pluginOrigins = Array.isArray(parsed.plugin_origins) ? parsed.plugin_origins : [];
   for (const value of pluginOrigins) {
     if (!isRecord(value)) continue;
     const name = nonBlankString(value.spec) ?? nonBlankString(value.name);
@@ -288,11 +284,7 @@ function recordStatus(value: Record<string, unknown>): ExtensionStatus {
   if (status?.includes("failed") || status?.includes("error") || status?.includes("disconnected")) {
     return "failed";
   }
-  if (
-    status?.includes("pending")
-    || status?.includes("approval")
-    || status?.includes("auth")
-  ) {
+  if (status?.includes("pending") || status?.includes("approval") || status?.includes("auth")) {
     return "pending";
   }
   return "configured";
@@ -306,13 +298,15 @@ function namedRecordItem(value: unknown, allowString = false): KeyedItem | undef
   }
   if (!isRecord(value)) return undefined;
   const id = nonBlankString(value.id) ?? nonBlankString(value.pluginId);
-  const name = nonBlankString(value.name)
-    ?? (id ? pluginShortName(id) : undefined)
-    ?? nonBlankString(value.spec);
+  const name =
+    nonBlankString(value.name) ??
+    (id ? pluginShortName(id) : undefined) ??
+    nonBlankString(value.spec);
   if (!name) return undefined;
-  const source = nonBlankString(value.source)
-    ?? nonBlankString(value.scope)
-    ?? nonBlankString(value.marketplaceName);
+  const source =
+    nonBlankString(value.source) ??
+    nonBlankString(value.scope) ??
+    nonBlankString(value.marketplaceName);
   return {
     key: id ?? name,
     item: {
@@ -352,20 +346,24 @@ const MCP_MAP_KEYS = ["mcpServers", "servers", "mcp"] as const;
  */
 function isServerConfig(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  return typeof value.type === "string"
-    || typeof value.url === "string"
-    || typeof value.command === "string"
-    || Array.isArray(value.command);
+  return (
+    typeof value.type === "string" ||
+    typeof value.url === "string" ||
+    typeof value.command === "string" ||
+    Array.isArray(value.command)
+  );
 }
 
 function mapEntryItems(map: Record<string, unknown>): KeyedItem[] {
   return Object.entries(map).flatMap(([name, value]): KeyedItem[] => {
     if (!nonBlankString(name) || (value != null && !isRecord(value))) return [];
     const record = isRecord(value) ? value : {};
-    return [{
-      key: name,
-      item: { name, status: recordStatus(record) },
-    }];
+    return [
+      {
+        key: name,
+        item: { name, status: recordStatus(record) },
+      },
+    ];
   });
 }
 
@@ -375,8 +373,7 @@ function mapEntryItems(map: Record<string, unknown>): KeyedItem[] {
  * recursive walk, where the array it wraps is still found.
  */
 function isNamedConfigMap(value: unknown): value is Record<string, unknown> {
-  return isRecord(value)
-    && Object.values(value).every((entry) => entry == null || isRecord(entry));
+  return isRecord(value) && Object.values(value).every((entry) => entry == null || isRecord(entry));
 }
 
 /**
@@ -399,9 +396,11 @@ function parseNamedJsonCollection(
     // Some builds print the map with no wrapper at all. Accept that only when an
     // entry actually resembles a server, so an unrelated object is still walked
     // for named records below rather than read as a server list.
-    if (mapKeys.length > 0
-      && isNamedConfigMap(parsed)
-      && Object.values(parsed).some(isServerConfig)) {
+    if (
+      mapKeys.length > 0 &&
+      isNamedConfigMap(parsed) &&
+      Object.values(parsed).some(isServerConfig)
+    ) {
       return sortAndDedupeKeyed(mapEntryItems(parsed));
     }
   }
@@ -440,9 +439,7 @@ function parseCommandResult(
   }
 }
 
-async function discoverClaude(
-  run: ExtensionCommandRunner,
-): Promise<AgentExtensionCatalog> {
+async function discoverClaude(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [mcp, plugins] = await Promise.allSettled([
     run("claude", ["mcp", "list"]),
     run("claude", ["plugin", "list", "--json"]),
@@ -466,18 +463,12 @@ async function discoverClaude(
   };
 }
 
-async function discoverCodex(
-  run: ExtensionCommandRunner,
-): Promise<AgentExtensionCatalog> {
+async function discoverCodex(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [mcp, plugins] = await Promise.allSettled([
     run("codex", ["mcp", "list", "--json"]),
     run("codex", ["plugin", "list", "--json"]),
   ]);
-  const mcpResult = parseCommandResult(
-    mcp,
-    parseCodexMcpList,
-    "Could not read Codex MCP servers.",
-  );
+  const mcpResult = parseCommandResult(mcp, parseCodexMcpList, "Could not read Codex MCP servers.");
   const pluginResult = parseCommandResult(
     plugins,
     parseCodexPlugins,
@@ -492,9 +483,7 @@ async function discoverCodex(
   };
 }
 
-async function discoverCursor(
-  run: ExtensionCommandRunner,
-): Promise<AgentExtensionCatalog> {
+async function discoverCursor(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [mcp, plugins] = await Promise.allSettled([
     run("cursor", ["mcp", "list", "--format", "json"]),
     run("cursor", ["plugin", "list", "--format", "json"]),
@@ -518,18 +507,12 @@ async function discoverCursor(
   };
 }
 
-async function discoverGrok(
-  run: ExtensionCommandRunner,
-): Promise<AgentExtensionCatalog> {
+async function discoverGrok(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [mcp, plugins] = await Promise.allSettled([
     run("grok", ["mcp", "list", "--json"]),
     run("grok", ["plugin", "list", "--json"]),
   ]);
-  const mcpResult = parseCommandResult(
-    mcp,
-    parseGrokMcpList,
-    "Could not read Grok MCP servers.",
-  );
+  const mcpResult = parseCommandResult(mcp, parseGrokMcpList, "Could not read Grok MCP servers.");
   const pluginResult = parseCommandResult(
     plugins,
     parseGrokPlugins,
@@ -544,18 +527,14 @@ async function discoverGrok(
   };
 }
 
-async function discoverOpenCode(
-  run: ExtensionCommandRunner,
-): Promise<AgentExtensionCatalog> {
+async function discoverOpenCode(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   // OpenCode reports both surfaces from a single `debug config` dump, so there
   // is one command to settle rather than two — but the two surfaces are still
   // parsed independently, exactly as for Claude and Codex. A single try/catch
   // around both parses reported a partial success as a total failure: a config
   // whose `mcp` block had drifted into a shape the MCP parser rejects blanked
   // the plugin list too, and vice versa.
-  const [config] = await Promise.allSettled([
-    run("opencode", ["debug", "config"]),
-  ]);
+  const [config] = await Promise.allSettled([run("opencode", ["debug", "config"])]);
   const mcpResult = parseCommandResult(
     config,
     parseOpenCodeMcpServers,

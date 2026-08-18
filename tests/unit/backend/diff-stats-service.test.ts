@@ -28,11 +28,13 @@ function stats(overrides: Partial<DiffScanResult["stats"]> = {}) {
   return { additions: 1, deletions: 0, filesChanged: 1, truncated: false, ...overrides };
 }
 
-function createHarness(options: {
-  watchable?: boolean;
-  watcherStartError?: Error;
-  emit?: (event: string, payload: unknown) => void;
-} = {}): Harness {
+function createHarness(
+  options: {
+    watchable?: boolean;
+    watcherStartError?: Error;
+    emit?: (event: string, payload: unknown) => void;
+  } = {},
+): Harness {
   const watchable = options.watchable ?? true;
   const emitted: Array<{ event: string; payload: any }> = [];
   const warnings: Array<{ message: string; error: unknown }> = [];
@@ -40,12 +42,15 @@ function createHarness(options: {
   const clock = { value: 1_000 };
 
   const timers = new Map<unknown, { callback: () => void; intervalMs: number }>();
-  const watchers = new Map<string, {
-    onChange: () => void;
-    onError?: (error: unknown) => void;
-    closed: boolean;
-    watching: boolean;
-  }>();
+  const watchers = new Map<
+    string,
+    {
+      onChange: () => void;
+      onError?: (error: unknown) => void;
+      closed: boolean;
+      watching: boolean;
+    }
+  >();
   let nextTimerId = 1;
   // Recording happens in the service's `scan` option, so this only produces a
   // result - pushing here too would count every scan twice.
@@ -240,9 +245,12 @@ describe("DiffStatsService", () => {
   test("collapses a burst of change signals into one rescan", async () => {
     const harness = createHarness();
     let release: (() => void) | undefined;
-    harness.setScan(() => new Promise((resolve) => {
-      release = () => resolve({ stats: stats(), changes: [] });
-    }));
+    harness.setScan(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ stats: stats(), changes: [] });
+        }),
+    );
 
     harness.service.track(localTarget());
     await settle();
@@ -322,10 +330,12 @@ describe("DiffStatsService", () => {
     harness.service.track(localTarget({ worktreePath: originalPath }));
     await settle();
 
-    harness.service.track(localTarget({
-      worktreePath: replacementPath,
-      comparisonRef: "develop",
-    }));
+    harness.service.track(
+      localTarget({
+        worktreePath: replacementPath,
+        comparisonRef: "develop",
+      }),
+    );
     await settle();
     expect(harness.watcherClosedAtPath(originalPath)).toBe(true);
     expect(harness.service.isWatching("env-local")).toBe(true);
@@ -412,10 +422,11 @@ describe("DiffStatsService", () => {
     harness.setScan((target) => {
       if (target.comparisonRef === "main") {
         return new Promise((resolve) => {
-          releaseInitial = () => resolve({
-            stats: stats({ additions: 99 }),
-            changes: [{ path: "stale.ts" }],
-          });
+          releaseInitial = () =>
+            resolve({
+              stats: stats({ additions: 99 }),
+              changes: [{ path: "stale.ts" }],
+            });
         });
       }
       return Promise.resolve({
@@ -437,11 +448,9 @@ describe("DiffStatsService", () => {
         stats: stats({ additions: 7 }),
       }),
     ]);
-    expect(harness.service.cachedChanges(
-      { worktreePath: "/tmp/env-local-worktree" },
-      "develop",
-      3_000,
-    )).toEqual([{ path: "replacement.ts" }]);
+    expect(
+      harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "develop", 3_000),
+    ).toEqual([{ path: "replacement.ts" }]);
   });
 
   test("tracking an unchanged target is a no-op", async () => {
@@ -470,9 +479,12 @@ describe("DiffStatsService", () => {
   test("refresh during an in-flight scan queues exactly one replacement scan", async () => {
     const harness = createHarness();
     let release: (() => void) | undefined;
-    harness.setScan(() => new Promise((resolve) => {
-      release = () => resolve({ stats: stats(), changes: [] });
-    }));
+    harness.setScan(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ stats: stats(), changes: [] });
+        }),
+    );
     harness.service.track(containerTarget());
     await settle();
 
@@ -554,9 +566,12 @@ describe("DiffStatsService", () => {
   test("a scan that lands after untrack does not announce", async () => {
     const harness = createHarness();
     let release: (() => void) | undefined;
-    harness.setScan(() => new Promise((resolve) => {
-      release = () => resolve({ stats: stats({ additions: 99 }), changes: [] });
-    }));
+    harness.setScan(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ stats: stats({ additions: 99 }), changes: [] });
+        }),
+    );
 
     harness.service.track(localTarget());
     await settle();
@@ -571,9 +586,12 @@ describe("DiffStatsService", () => {
   test("a scan that lands after a retarget does not announce against the new ref", async () => {
     const harness = createHarness();
     let release: (() => void) | undefined;
-    harness.setScan(() => new Promise((resolve) => {
-      release = () => resolve({ stats: stats({ additions: 99 }), changes: [] });
-    }));
+    harness.setScan(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve({ stats: stats({ additions: 99 }), changes: [] });
+        }),
+    );
 
     harness.service.track(localTarget());
     await settle();
@@ -633,9 +651,9 @@ describe("DiffStatsService", () => {
 
   test("the default interval is unrefed so tracking cannot hold the process open", async () => {
     const unref = mock(() => undefined);
-    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
-      (() => ({ unref })) as typeof setInterval,
-    );
+    const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation((() => ({
+      unref,
+    })) as typeof setInterval);
     const service = new DiffStatsService({
       emit: () => undefined,
       scan: async () => ({ stats: stats(), changes: [] }),
@@ -660,11 +678,9 @@ describe("DiffStatsService", () => {
       harness.service.track(localTarget());
       await settle();
 
-      expect(harness.service.cachedChanges(
-        { worktreePath: "/tmp/env-local-worktree" },
-        "main",
-        3_000,
-      )).toEqual([{ path: "a.ts" }]);
+      expect(
+        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
+      ).toEqual([{ path: "a.ts" }]);
     });
 
     test("withholds a file list older than the caller accepts", async () => {
@@ -675,11 +691,9 @@ describe("DiffStatsService", () => {
 
       harness.clock.value += 5_000;
 
-      expect(harness.service.cachedChanges(
-        { worktreePath: "/tmp/env-local-worktree" },
-        "main",
-        3_000,
-      )).toBeUndefined();
+      expect(
+        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
+      ).toBeUndefined();
     });
 
     test("serves a file list at the exact maximum-age boundary", async () => {
@@ -689,11 +703,9 @@ describe("DiffStatsService", () => {
       await settle();
       harness.clock.value += 3_000;
 
-      expect(harness.service.cachedChanges(
-        { worktreePath: "/tmp/env-local-worktree" },
-        "main",
-        3_000,
-      )).toEqual([{ path: "boundary.ts" }]);
+      expect(
+        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
+      ).toEqual([{ path: "boundary.ts" }]);
     });
 
     test("withholds a file list measured against a different ref", async () => {
@@ -702,11 +714,13 @@ describe("DiffStatsService", () => {
       harness.service.track(localTarget());
       await settle();
 
-      expect(harness.service.cachedChanges(
-        { worktreePath: "/tmp/env-local-worktree" },
-        "develop",
-        3_000,
-      )).toBeUndefined();
+      expect(
+        harness.service.cachedChanges(
+          { worktreePath: "/tmp/env-local-worktree" },
+          "develop",
+          3_000,
+        ),
+      ).toBeUndefined();
     });
 
     test("adopts a scan performed elsewhere so the next reader shares it", async () => {
@@ -717,8 +731,9 @@ describe("DiffStatsService", () => {
 
       harness.service.adoptScan({ containerId: "container-1" }, "main", [{ path: "b.ts" }]);
 
-      expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000))
-        .toEqual([{ path: "b.ts" }]);
+      expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000)).toEqual([
+        { path: "b.ts" },
+      ]);
     });
 
     test("does not adopt a scan measured against the wrong ref", async () => {
@@ -729,10 +744,12 @@ describe("DiffStatsService", () => {
 
       harness.service.adoptScan({ containerId: "container-1" }, "develop", [{ path: "wrong.ts" }]);
 
-      expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000))
-        .toEqual([{ path: "original.ts" }]);
-      expect(harness.service.cachedChanges({ containerId: "container-1" }, "develop", 3_000))
-        .toBeUndefined();
+      expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000)).toEqual([
+        { path: "original.ts" },
+      ]);
+      expect(
+        harness.service.cachedChanges({ containerId: "container-1" }, "develop", 3_000),
+      ).toBeUndefined();
     });
 
     test("invalidates a matching cached file list after a mutation", async () => {
@@ -743,11 +760,9 @@ describe("DiffStatsService", () => {
 
       harness.service.invalidateChanges({ worktreePath: "/tmp/env-local-worktree" });
 
-      expect(harness.service.cachedChanges(
-        { worktreePath: "/tmp/env-local-worktree" },
-        "main",
-        3_000,
-      )).toBeUndefined();
+      expect(
+        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
+      ).toBeUndefined();
       expect(harness.service.snapshot()).toHaveLength(1);
     });
 
@@ -759,10 +774,11 @@ describe("DiffStatsService", () => {
         scanNumber += 1;
         if (scanNumber === 1) {
           return new Promise((resolve) => {
-            releaseStale = () => resolve({
-              stats: stats({ additions: 99 }),
-              changes: [{ path: "stale.ts" }],
-            });
+            releaseStale = () =>
+              resolve({
+                stats: stats({ additions: 99 }),
+                changes: [{ path: "stale.ts" }],
+              });
           });
         }
         return Promise.resolve({
@@ -780,11 +796,9 @@ describe("DiffStatsService", () => {
       expect(harness.scans).toHaveLength(2);
       expect(harness.emitted).toHaveLength(1);
       expect(harness.emitted[0]?.payload.stats.additions).toBe(2);
-      expect(harness.service.cachedChanges(
-        { worktreePath: "/tmp/env-local-worktree" },
-        "main",
-        3_000,
-      )).toEqual([{ path: "fresh.ts" }]);
+      expect(
+        harness.service.cachedChanges({ worktreePath: "/tmp/env-local-worktree" }, "main", 3_000),
+      ).toEqual([{ path: "fresh.ts" }]);
     });
 
     test("invalidating an unknown target is safe", () => {
@@ -806,8 +820,9 @@ describe("DiffStatsService", () => {
 
       harness.service.pause("env-container");
 
-      expect(harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000))
-        .toBeUndefined();
+      expect(
+        harness.service.cachedChanges({ containerId: "container-1" }, "main", 3_000),
+      ).toBeUndefined();
     });
   });
 });

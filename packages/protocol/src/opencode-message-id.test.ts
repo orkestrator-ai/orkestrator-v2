@@ -40,10 +40,7 @@ describe("OpenCode caller-owned message IDs", () => {
   });
 
   test("never treats a descending session ID as an ascending message anchor", () => {
-    for (const sessionId of [
-      "ses_ffffffffefffabcdefghijklmn",
-      "ses_000000001000abcdefghijklmn",
-    ]) {
+    for (const sessionId of ["ses_ffffffffefffabcdefghijklmn", "ses_000000001000abcdefghijklmn"]) {
       const coordinator = new OpenCodeMessageIdCoordinator();
       const user = coordinator.resolve(sessionId, [], "request", 1);
       expect(timePrefix(user)).toBe("000000001000");
@@ -52,10 +49,14 @@ describe("OpenCode caller-owned message IDs", () => {
   });
 
   test("orders message prefixes across the 48-bit OpenCode clock wrap", () => {
-    const id = resolveOpenCodeMessageId([
-      entry({ id: "msg_fffffffff000AAAAAAAAAAAAAA", role: "assistant" }),
-      entry({ id: "msg_000000001000BBBBBBBBBBBBBB", role: "assistant" }),
-    ], "after-wrap", 1);
+    const id = resolveOpenCodeMessageId(
+      [
+        entry({ id: "msg_fffffffff000AAAAAAAAAAAAAA", role: "assistant" }),
+        entry({ id: "msg_000000001000BBBBBBBBBBBBBB", role: "assistant" }),
+      ],
+      "after-wrap",
+      1,
+    );
 
     expect(timePrefix(id)).toBe("000000001000");
   });
@@ -72,51 +73,52 @@ describe("OpenCode caller-owned message IDs", () => {
 
   test("recovers the exact ID from either side of the parent relationship", () => {
     const id = resolveOpenCodeMessageId([], "request-1", 1);
-    expect(resolveOpenCodeMessageId(
-      [entry({ id, role: "user" })],
-      "request-1",
-      999,
-    )).toBe(id);
-    expect(findOpenCodeMessageId(
-      [entry({ id: "assistant", role: "assistant", parentID: id })],
-      "request-1",
-    )).toBe(id);
+    expect(resolveOpenCodeMessageId([entry({ id, role: "user" })], "request-1", 999)).toBe(id);
+    expect(
+      findOpenCodeMessageId(
+        [entry({ id: "assistant", role: "assistant", parentID: id })],
+        "request-1",
+      ),
+    ).toBe(id);
   });
 
   test("keeps aliased and Unicode request IDs distinct and recoverable", () => {
     const plain = resolveOpenCodeMessageId([null, 1, {}], "foo", 1);
-    const prefixed = resolveOpenCodeMessageId(
-      [entry({ id: plain, role: "user" })],
-      "msg_foo",
-      1,
-    );
+    const prefixed = resolveOpenCodeMessageId([entry({ id: plain, role: "user" })], "msg_foo", 1);
     const emoji = resolveOpenCodeMessageId([], "😀", 1);
 
     expect(plain).not.toBe(prefixed);
     expect(openCodeRequestMarker("😀")).toBe("_ork_d83dde00");
     expect(openCodeRequestMarker("é")).not.toBe(openCodeRequestMarker("e\u0301"));
     expect(openCodeRequestMarker("😀")).not.toBe(openCodeRequestMarker("\ud83d"));
-    expect(findOpenCodeMessageId([entry({ id: emoji, role: "user" })], "😀"))
-      .toBe(emoji);
+    expect(findOpenCodeMessageId([entry({ id: emoji, role: "user" })], "😀")).toBe(emoji);
     expect(findOpenCodeMessageId([null, { info: null }], "foo")).toBeUndefined();
   });
 
   test("ignores malformed secondary sequences and increments the greatest valid one", () => {
     const prefix = `msg_000000001000${"z".repeat(14)}`;
-    const next = resolveOpenCodeMessageId([
-      entry({ id: `${prefix}00000000000a${openCodeRequestMarker("old")}`, role: "user" }),
-      entry({ id: `${prefix}0000000000fg${openCodeRequestMarker("bad-hex")}`, role: "user" }),
-      entry({ id: `${prefix}0000000000b${openCodeRequestMarker("short")}`, role: "user" }),
-    ], "next", 1);
+    const next = resolveOpenCodeMessageId(
+      [
+        entry({ id: `${prefix}00000000000a${openCodeRequestMarker("old")}`, role: "user" }),
+        entry({ id: `${prefix}0000000000fg${openCodeRequestMarker("bad-hex")}`, role: "user" }),
+        entry({ id: `${prefix}0000000000b${openCodeRequestMarker("short")}`, role: "user" }),
+      ],
+      "next",
+      1,
+    );
 
     expect(next.startsWith(`${prefix}00000000000b`)).toBe(true);
   });
 
   test("fails closed when the secondary sequence is exhausted", () => {
     const prefix = `msg_000000001000${"z".repeat(14)}`;
-    expect(() => resolveOpenCodeMessageId([
-      entry({ id: `${prefix}ffffffffffff${openCodeRequestMarker("old")}`, role: "user" }),
-    ], "next", 1)).toThrow(/sequence is exhausted/i);
+    expect(() =>
+      resolveOpenCodeMessageId(
+        [entry({ id: `${prefix}ffffffffffff${openCodeRequestMarker("old")}`, role: "user" })],
+        "next",
+        1,
+      ),
+    ).toThrow(/sequence is exhausted/i);
   });
 
   test.each([
@@ -139,18 +141,20 @@ describe("OpenCode caller-owned message IDs", () => {
 
 describe("boundedOpenCodeMessageHistory", () => {
   test("accepts bounded parsed JSON and rejects count, byte, shape, and bound violations", () => {
-    expect(boundedOpenCodeMessageHistory([entry({ role: "user" })], {
-      count: 1,
-      bytes: 128,
-    })).toHaveLength(1);
-    expect(() => boundedOpenCodeMessageHistory({}, { count: 1, bytes: 128 }))
-      .toThrow(/malformed/i);
-    expect(() => boundedOpenCodeMessageHistory([null, null], { count: 1, bytes: 128 }))
-      .toThrow(/too many/i);
-    expect(() => boundedOpenCodeMessageHistory(["oversized"], { count: 1, bytes: 4 }))
-      .toThrow(/oversized/i);
-    expect(() => boundedOpenCodeMessageHistory([], { count: -1, bytes: 1 }))
-      .toThrow(/bounds/i);
+    expect(
+      boundedOpenCodeMessageHistory([entry({ role: "user" })], {
+        count: 1,
+        bytes: 128,
+      }),
+    ).toHaveLength(1);
+    expect(() => boundedOpenCodeMessageHistory({}, { count: 1, bytes: 128 })).toThrow(/malformed/i);
+    expect(() => boundedOpenCodeMessageHistory([null, null], { count: 1, bytes: 128 })).toThrow(
+      /too many/i,
+    );
+    expect(() => boundedOpenCodeMessageHistory(["oversized"], { count: 1, bytes: 4 })).toThrow(
+      /oversized/i,
+    );
+    expect(() => boundedOpenCodeMessageHistory([], { count: -1, bytes: 1 })).toThrow(/bounds/i);
   });
 
   test("fails closed for circular, unsupported, and excessively deep values", () => {
@@ -159,12 +163,15 @@ describe("boundedOpenCodeMessageHistory", () => {
     let deep: unknown = null;
     for (let index = 0; index < 66; index += 1) deep = [deep];
 
-    expect(() => boundedOpenCodeMessageHistory(circular, { count: 1, bytes: 1_000 }))
-      .toThrow(/oversized/i);
-    expect(() => boundedOpenCodeMessageHistory([1n], { count: 1, bytes: 1_000 }))
-      .toThrow(/oversized/i);
-    expect(() => boundedOpenCodeMessageHistory([deep], { count: 1, bytes: 1_000 }))
-      .toThrow(/oversized/i);
+    expect(() => boundedOpenCodeMessageHistory(circular, { count: 1, bytes: 1_000 })).toThrow(
+      /oversized/i,
+    );
+    expect(() => boundedOpenCodeMessageHistory([1n], { count: 1, bytes: 1_000 })).toThrow(
+      /oversized/i,
+    );
+    expect(() => boundedOpenCodeMessageHistory([deep], { count: 1, bytes: 1_000 })).toThrow(
+      /oversized/i,
+    );
   });
 });
 
@@ -197,17 +204,16 @@ describe("OpenCodeMessageIdCoordinator", () => {
   test("fails closed instead of evicting unresolved reservations", () => {
     const coordinator = new OpenCodeMessageIdCoordinator(1, 1);
     coordinator.resolve("session", [], "first", 1);
-    expect(() => coordinator.resolve("session", [], "second", 1))
-      .toThrow(/reservation capacity/i);
-    expect(() => coordinator.resolve("another", [], "request", 1))
-      .toThrow(/session capacity/i);
+    expect(() => coordinator.resolve("session", [], "second", 1)).toThrow(/reservation capacity/i);
+    expect(() => coordinator.resolve("another", [], "request", 1)).toThrow(/session capacity/i);
   });
 
   test("evicts idle accepted sessions without losing active reservations", () => {
     const coordinator = new OpenCodeMessageIdCoordinator(1, 1);
     coordinator.resolve("first-session", [], "first", 1);
-    expect(() => coordinator.resolve("second-session", [], "second", 1))
-      .toThrow(/session capacity/i);
+    expect(() => coordinator.resolve("second-session", [], "second", 1)).toThrow(
+      /session capacity/i,
+    );
 
     coordinator.markAccepted("first-session", "first");
     expect(coordinator.resolve("second-session", [], "second", 1)).toBeString();

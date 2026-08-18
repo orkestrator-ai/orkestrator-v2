@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { usePromptDraftStore } from "@/stores/promptDraftStore";
 import { mockToastError } from "../../../../../tests/mocks/sonner";
 import { QuestionCard, type QuestionCardQuestion } from "./QuestionCard";
@@ -93,10 +86,12 @@ describe("QuestionCard multi-question submit", () => {
 
 describe("QuestionCard deadlines", () => {
   test("shows a countdown without trusting browser clock drift to remove actions", () => {
-    const question = [{
-      question: "Proceed?",
-      options: [{ label: "Yes" }, { label: "No" }],
-    }];
+    const question = [
+      {
+        question: "Proceed?",
+        options: [{ label: "Yes" }, { label: "No" }],
+      },
+    ];
 
     const live = renderCard(question, { expiresAt: Date.now() + 65_000 });
     expect(screen.getByText("1:05")).toBeTruthy();
@@ -106,13 +101,10 @@ describe("QuestionCard deadlines", () => {
     renderCard(question, { expiresAt: Date.now() - 1 });
     expect(screen.queryByText("This request expired and was declined.") === null).toBe(true);
     expect(screen.getByRole("button", { name: "Submit" })).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Yes" }) as HTMLButtonElement).disabled).toBe(false);
     expect(
-      (screen.getByRole("button", { name: "Yes" }) as HTMLButtonElement).disabled,
-    ).toBe(false);
-    expect(
-      (screen.getByPlaceholderText(
-        "Type your own answer (press Enter to add)",
-      ) as HTMLInputElement).disabled,
+      (screen.getByPlaceholderText("Type your own answer (press Enter to add)") as HTMLInputElement)
+        .disabled,
     ).toBe(false);
     expect(live.onSubmit).not.toHaveBeenCalled();
   });
@@ -245,21 +237,23 @@ describe("QuestionCard option values", () => {
 
   test("tokenizes duplicate initial option values once each and preserves custom values", async () => {
     const { onSubmit } = renderCard(
-      [{
-        question: "Restore answers?",
-        multiSelect: true,
-        options: [
-          { id: "first", label: "First", value: "same" },
-          { id: "second", label: "Second", value: "same" },
-        ],
-      }],
+      [
+        {
+          question: "Restore answers?",
+          multiSelect: true,
+          options: [
+            { id: "first", label: "First", value: "same" },
+            { id: "second", label: "Second", value: "same" },
+          ],
+        },
+      ],
       { initialAnswers: [["same", "same", "custom"]] },
     );
 
-    expect(screen.getByRole("button", { name: "First" }).getAttribute("aria-pressed"))
-      .toBe("true");
-    expect(screen.getByRole("button", { name: "Second" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "First" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Second" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
     expect(screen.getByLabelText("Remove custom")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
@@ -270,12 +264,9 @@ describe("QuestionCard option values", () => {
 describe("QuestionCard custom-answer overrides", () => {
   test("honours a per-question allowCustomAnswer override", () => {
     // OpenCode sets this from `info.custom !== false`, per question.
-    renderCard(
-      [
-        { question: "No custom?", options: [{ label: "A" }], allowCustomAnswer: false },
-      ],
-      { allowCustomAnswer: true },
-    );
+    renderCard([{ question: "No custom?", options: [{ label: "A" }], allowCustomAnswer: false }], {
+      allowCustomAnswer: true,
+    });
 
     expect(screen.queryByPlaceholderText(/type your own/i) === null).toBe(true);
   });
@@ -304,9 +295,7 @@ describe("QuestionCard custom-answer overrides", () => {
   });
 
   test("does not add a duplicate custom-answer chip", async () => {
-    const { onSubmit } = renderCard([
-      { question: "Answer?", options: [], multiSelect: true },
-    ]);
+    const { onSubmit } = renderCard([{ question: "Answer?", options: [], multiSelect: true }]);
     const input = screen.getByPlaceholderText("Type your answer");
 
     fireEvent.change(input, { target: { value: "same answer" } });
@@ -402,9 +391,7 @@ describe("QuestionCard exclusive draft supersedes the committed answer", () => {
 });
 
 describe("QuestionCard submit contract", () => {
-  const QUESTION: QuestionCardQuestion[] = [
-    { question: "Continue?", options: [{ label: "Yes" }] },
-  ];
+  const QUESTION: QuestionCardQuestion[] = [{ question: "Continue?", options: [{ label: "Yes" }] }];
 
   test("shows a failure toast and stays open for a retry when submit returns false", async () => {
     /**
@@ -418,12 +405,9 @@ describe("QuestionCard submit contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to send your answer",
-      {
-        description: "Test is still waiting for a response. Please try again.",
-      },
-    );
+    expect(mockToastError).toHaveBeenCalledWith("Failed to send your answer", {
+      description: "Test is still waiting for a response. Please try again.",
+    });
 
     const submit = await screen.findByRole("button", { name: "Submit" });
     expect(submit.hasAttribute("disabled")).toBe(false);
@@ -441,14 +425,10 @@ describe("QuestionCard submit contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
     await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(1));
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to dismiss this question",
-      {
-        description: "Test is still waiting for a response. Please try again.",
-      },
-    );
-    expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled"))
-      .toBe(false);
+    expect(mockToastError).toHaveBeenCalledWith("Failed to dismiss this question", {
+      description: "Test is still waiting for a response. Please try again.",
+    });
+    expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(false);
   });
 
   test("blocks retry after an unreconciled submit exception", async () => {
@@ -471,13 +451,10 @@ describe("QuestionCard submit contract", () => {
         "The response outcome is unknown. Reconnect or refresh Test to verify whether it was received.",
       );
       expect(alert.textContent).not.toMatch(/try again/i);
-      expect(mockToastError).toHaveBeenCalledWith(
-        "Failed to send your answer",
-        {
-          description:
-            "The response outcome is unknown. Reconnect or refresh Test to verify whether it was received.",
-        },
-      );
+      expect(mockToastError).toHaveBeenCalledWith("Failed to send your answer", {
+        description:
+          "The response outcome is unknown. Reconnect or refresh Test to verify whether it was received.",
+      });
       expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
       fireEvent.click(screen.getByRole("button", { name: "Submit" }));
       expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -495,9 +472,7 @@ describe("QuestionCard submit contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() =>
-      expect(
-        screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled"),
-      ).toBe(true),
+      expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true),
     );
     expect(screen.getByRole("button", { name: "Yes" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByPlaceholderText(/type your own/i).hasAttribute("disabled")).toBe(true);
@@ -522,12 +497,14 @@ describe("QuestionCard submit contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
-    await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("The outcome could not be reconciled."));
-    expect(mockToastError).toHaveBeenCalledWith(
-      "Failed to send your answer",
-      { description: "The outcome could not be reconciled." },
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "The outcome could not be reconciled.",
+      ),
     );
+    expect(mockToastError).toHaveBeenCalledWith("Failed to send your answer", {
+      description: "The outcome could not be reconciled.",
+    });
     expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
     expect(onSubmit).toHaveBeenCalledWith([["Yes"]]);
   });
@@ -543,8 +520,9 @@ describe("QuestionCard submit contract", () => {
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
-    await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("Try this response again."));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("Try this response again."),
+    );
     expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(false);
   });
 
@@ -566,10 +544,10 @@ describe("QuestionCard submit contract", () => {
 describe("QuestionCard option-select submission", () => {
   test("submits a single option immediately with its provider value", async () => {
     const onSubmit = mock(() => true);
-    renderCard(
-      [{ question: "Continue?", options: [{ label: "Yes", value: "accept" }] }],
-      { onSubmit, submitOnOptionSelect: true },
-    );
+    renderCard([{ question: "Continue?", options: [{ label: "Yes", value: "accept" }] }], {
+      onSubmit,
+      submitOnOptionSelect: true,
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["accept"]]));
@@ -604,9 +582,7 @@ describe("QuestionCard multi-select", () => {
   });
 
   test("labels the question as multi-select", () => {
-    renderCard([
-      { question: "Pick many?", multiSelect: true, options: [{ label: "A" }] },
-    ]);
+    renderCard([{ question: "Pick many?", multiSelect: true, options: [{ label: "A" }] }]);
     expect(screen.getByText("(select all that apply)")).toBeTruthy();
   });
 });
@@ -638,9 +614,7 @@ describe("QuestionCard custom input keyboard handling", () => {
     fireEvent.click(screen.getByLabelText("Remove chip text"));
 
     expect(screen.queryByLabelText("Remove chip text") === null).toBe(true);
-    expect(
-      screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled"),
-    ).toBe(true);
+    expect(screen.getByRole("button", { name: "Submit" }).hasAttribute("disabled")).toBe(true);
   });
 });
 
@@ -740,8 +714,7 @@ describe("QuestionCard multi-question navigation", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /One/ }));
 
-    expect(screen.getByRole("button", { name: "1a" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(screen.getByRole("button", { name: "1a" }).getAttribute("aria-pressed")).toBe("true");
   });
 });
 
@@ -781,8 +754,9 @@ describe("QuestionCard dismiss affordance", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
-    await waitFor(() => expect(screen.getByRole("alert").textContent)
-      .toContain("Dismissal outcome is unknown."));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("Dismissal outcome is unknown."),
+    );
     expect(screen.getByRole("button", { name: "Dismiss" }).hasAttribute("disabled")).toBe(true);
   });
 });
@@ -828,9 +802,9 @@ describe("QuestionCard draft persistence", () => {
     // Remounted on the question the user was answering, with the typed draft
     // and the earlier selection intact.
     expect(screen.getByText("Two?")).toBeTruthy();
-    expect(
-      (screen.getByPlaceholderText(/type your own/i) as HTMLInputElement).value,
-    ).toBe("half-typed answer");
+    expect((screen.getByPlaceholderText(/type your own/i) as HTMLInputElement).value).toBe(
+      "half-typed answer",
+    );
     expect(screen.getByText("2/2 answered")).toBeTruthy();
   });
 
@@ -898,8 +872,7 @@ describe("QuestionCard secret handling", () => {
     const input = screen.getByPlaceholderText("Type your answer") as HTMLInputElement;
     expect(input.type).toBe("password");
     fireEvent.change(input, { target: { value: "not-for-the-store" } });
-    expect(usePromptDraftStore.getState().drafts.has("provider:session:request:token"))
-      .toBe(false);
+    expect(usePromptDraftStore.getState().drafts.has("provider:session:request:token")).toBe(false);
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([["not-for-the-store"]]));
 
@@ -953,23 +926,23 @@ describe("QuestionCard secret handling", () => {
     const onSubmit = mock(() => true);
     renderCard(questions, { draftKey, initialAnswers: [["secret-one"], []], onSubmit });
 
-    expect(screen.getByRole("button", { name: "Secret option one" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Secret option one" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Secret option two" }));
-    expect(usePromptDraftStore.getState().drafts.get(draftKey)?.answersByQuestion)
-      .toBeUndefined();
+    expect(usePromptDraftStore.getState().drafts.get(draftKey)?.answersByQuestion).toBeUndefined();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Yes" }));
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(screen.getByRole("button", { name: "Secret option two" }).getAttribute("aria-pressed"))
-      .toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Secret option two" }).getAttribute("aria-pressed"),
+    ).toBe("true");
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith([
-      ["secret-one", "secret-two"],
-      ["Yes"],
-    ]));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith([["secret-one", "secret-two"], ["Yes"]]),
+    );
   });
 });
 

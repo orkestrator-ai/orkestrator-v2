@@ -225,7 +225,10 @@ export async function getStatus(tabId: string, environmentId: string): Promise<T
   return invoke<TmuxStatus | null>("claude_tmux_status", { tabId, environmentId });
 }
 
-export async function getTranscript(tabId: string, environmentId: string): Promise<TranscriptLine[]> {
+export async function getTranscript(
+  tabId: string,
+  environmentId: string,
+): Promise<TranscriptLine[]> {
   return invoke<TranscriptLine[]>("claude_tmux_transcript", { tabId, environmentId });
 }
 
@@ -234,14 +237,14 @@ export async function getTranscript(tabId: string, environmentId: string): Promi
  * transcript. The authoritative rehydration path for a tab that was not mounted
  * while tasks changed.
  */
-export async function getTaskList(
-  tabId: string,
-  environmentId: string,
-): Promise<TaskListSnapshot> {
+export async function getTaskList(tabId: string, environmentId: string): Promise<TaskListSnapshot> {
   return invoke<TaskListSnapshot>("claude_tmux_tasks", { tabId, environmentId });
 }
 
-export async function getPendingHooks(tabId: string, environmentId: string): Promise<TmuxPendingHook[]> {
+export async function getPendingHooks(
+  tabId: string,
+  environmentId: string,
+): Promise<TmuxPendingHook[]> {
   return invoke<TmuxPendingHook[]>("claude_tmux_pending_hooks", { tabId, environmentId });
 }
 
@@ -289,7 +292,11 @@ export async function sendText(tabId: string, text: string, environmentId: strin
   await invoke("claude_tmux_send_text", { tabId, environmentId, text });
 }
 
-export async function sendKeys(tabId: string, keys: string[], environmentId: string): Promise<void> {
+export async function sendKeys(
+  tabId: string,
+  keys: string[],
+  environmentId: string,
+): Promise<void> {
   await invoke("claude_tmux_send_keys", { tabId, environmentId, keys });
 }
 
@@ -333,9 +340,7 @@ export async function createInteractiveTerminal(
   });
 }
 
-export async function startInteractiveTerminal(
-  terminalSessionId: string,
-): Promise<void> {
+export async function startInteractiveTerminal(terminalSessionId: string): Promise<void> {
   await invoke("claude_tmux_start_interactive_terminal", { terminalSessionId });
 }
 
@@ -361,9 +366,7 @@ export async function resizeInteractiveTerminal(
   });
 }
 
-export async function detachInteractiveTerminal(
-  terminalSessionId: string,
-): Promise<void> {
+export async function detachInteractiveTerminal(terminalSessionId: string): Promise<void> {
   await invoke("claude_tmux_detach_interactive_terminal", { terminalSessionId });
 }
 
@@ -410,9 +413,7 @@ export async function replyHook(
  * project dir. Newest first. Use to populate a resume-session picker before
  * the user has sent any prompt.
  */
-export async function listPreviousSessions(
-  environmentId: string,
-): Promise<PreviousSession[]> {
+export async function listPreviousSessions(environmentId: string): Promise<PreviousSession[]> {
   return invoke<PreviousSession[]>("claude_tmux_list_previous_sessions", {
     environmentId,
   });
@@ -424,9 +425,7 @@ export async function listPreviousSessions(
  * Subscribe to all tmux events. Filter by `tab_id` (or `environment_id`) in
  * the handler. Returns an unlisten function — call it on unmount.
  */
-export async function subscribe(
-  onEvent: (event: TmuxEvent) => void,
-): Promise<UnlistenFn> {
+export async function subscribe(onEvent: (event: TmuxEvent) => void): Promise<UnlistenFn> {
   return listen<TmuxEvent>(CLAUDE_TMUX_EVENT, (event) => {
     onEvent(event.payload);
   });

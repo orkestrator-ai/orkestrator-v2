@@ -11,21 +11,25 @@ import { EnvironmentLifecycleTaskTracker } from "./environment-lifecycle-tasks.j
 import { createEnvironment, StorageService } from "./storage.js";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
-function fakeAgentTools(overrides: {
-  start?: () => Promise<void>;
-  stop?: () => Promise<void>;
-} = {}) {
+function fakeAgentTools(
+  overrides: {
+    start?: () => Promise<void>;
+    stop?: () => Promise<void>;
+  } = {},
+) {
   return {
     start: mock(overrides.start ?? (async () => undefined)),
     stop: mock(overrides.stop ?? (async () => undefined)),
-    connection: mock((
-      _environmentId: string,
-      _projectId: string,
-      _target: "host" | "container",
-    ): AgentToolConnection => ({
-      url: "http://127.0.0.1:43210/mcp",
-      token: "test-token",
-    })),
+    connection: mock(
+      (
+        _environmentId: string,
+        _projectId: string,
+        _target: "host" | "container",
+      ): AgentToolConnection => ({
+        url: "http://127.0.0.1:43210/mcp",
+        token: "test-token",
+      }),
+    ),
     revokeEnvironment: mock(() => undefined),
   };
 }
@@ -40,13 +44,15 @@ test("activity transition events omit backend-only provider session identifiers"
     emit: (event, payload) => events.push({ event, payload }),
     agentTools: fakeAgentTools(),
   });
-  const transition = (backend as unknown as {
-    nativeAgents: {
-      options: {
-        onActivityTransition?: (event: Record<string, unknown>) => void;
+  const transition = (
+    backend as unknown as {
+      nativeAgents: {
+        options: {
+          onActivityTransition?: (event: Record<string, unknown>) => void;
+        };
       };
-    };
-  }).nativeAgents.options.onActivityTransition;
+    }
+  ).nativeAgents.options.onActivityTransition;
 
   transition?.({
     environmentId: "env-1",
@@ -56,14 +62,16 @@ test("activity transition events omit backend-only provider session identifiers"
     state: "idle",
   });
 
-  expect(events).toEqual([{
-    event: "native-agent-session-activity",
-    payload: {
-      environment_id: "env-1",
-      previous_state: "working",
-      state: "idle",
+  expect(events).toEqual([
+    {
+      event: "native-agent-session-activity",
+      payload: {
+        environment_id: "env-1",
+        previous_state: "working",
+        state: "idle",
+      },
     },
-  }]);
+  ]);
   await backend.shutdown();
 });
 
@@ -159,15 +167,17 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
     },
   };
   const monitorOptions = (backend: OrkestratorBackend) => {
-    const nativeAgents = (backend as unknown as {
-      nativeAgents: {
-        options: {
-          interactionMonitorMode?: "disabled" | "observe-only";
-          interactionMonitorAdoptionEnabled?: boolean;
+    const nativeAgents = (
+      backend as unknown as {
+        nativeAgents: {
+          options: {
+            interactionMonitorMode?: "disabled" | "observe-only";
+            interactionMonitorAdoptionEnabled?: boolean;
+          };
+          interactionMonitorAdoptionEnabled: boolean;
         };
-        interactionMonitorAdoptionEnabled: boolean;
-      };
-    }).nativeAgents;
+      }
+    ).nativeAgents;
     return {
       ...nativeAgents.options,
       effectiveAdoption: nativeAgents.interactionMonitorAdoptionEnabled,
@@ -303,9 +313,7 @@ test("wires observe-only monitoring and its adoption kill switch from the enviro
     else process.env[observeKey] = previousObserve;
     if (previousKillSwitch === undefined) delete process.env[killSwitchKey];
     else process.env[killSwitchKey] = previousKillSwitch;
-    await Promise.all(backends.map((backend) =>
-      backend.shutdown().catch(() => undefined)
-    ));
+    await Promise.all(backends.map((backend) => backend.shutdown().catch(() => undefined)));
   }
 });
 
@@ -638,17 +646,14 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   console.warn = () => undefined;
   try {
     await expect(backend.init()).resolves.toBeUndefined();
-    expect(calls).toEqual([
-      "tools:start",
-      "pipelines:init",
-      "reviews:init",
-      "native:init",
-    ]);
-    await expect(backend.invoke("ensure_native_agent_session", {
-      environmentId: "env-1",
-      agent: "codex",
-      logicalSessionKey: "env-env-1:tab-1",
-    })).resolves.toMatchObject({ providerSessionId: "provider-1" });
+    expect(calls).toEqual(["tools:start", "pipelines:init", "reviews:init", "native:init"]);
+    await expect(
+      backend.invoke("ensure_native_agent_session", {
+        environmentId: "env-1",
+        agent: "codex",
+        logicalSessionKey: "env-env-1:tab-1",
+      }),
+    ).resolves.toMatchObject({ providerSessionId: "provider-1" });
     expect(internals.nativeAgents.ensureSession).toHaveBeenCalledWith({
       environmentId: "env-1",
       agent: "codex",
@@ -690,20 +695,21 @@ type ControlledInterval = {
  */
 function controlledIntervals() {
   const intervals: ControlledInterval[] = [];
-  const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(
-    ((callback: () => void, delay = 0) => {
-      const unref = mock(() => undefined);
-      const handle = { unref } as unknown as ReturnType<typeof setInterval>;
-      intervals.push({ active: true, callback, delay, handle, unref });
-      return handle;
-    }) as typeof setInterval,
-  );
-  const clearIntervalSpy = spyOn(globalThis, "clearInterval").mockImplementation(
-    ((handle: ReturnType<typeof setInterval>) => {
-      const interval = intervals.find((candidate) => candidate.handle === handle);
-      if (interval) interval.active = false;
-    }) as typeof clearInterval,
-  );
+  const setIntervalSpy = spyOn(globalThis, "setInterval").mockImplementation(((
+    callback: () => void,
+    delay = 0,
+  ) => {
+    const unref = mock(() => undefined);
+    const handle = { unref } as unknown as ReturnType<typeof setInterval>;
+    intervals.push({ active: true, callback, delay, handle, unref });
+    return handle;
+  }) as typeof setInterval);
+  const clearIntervalSpy = spyOn(globalThis, "clearInterval").mockImplementation(((
+    handle: ReturnType<typeof setInterval>,
+  ) => {
+    const interval = intervals.find((candidate) => candidate.handle === handle);
+    if (interval) interval.active = false;
+  }) as typeof clearInterval);
   return {
     intervals,
     clearIntervalSpy,
@@ -721,9 +727,7 @@ function controlledIntervals() {
 
 describe("native-agent activity reconciliation lifecycle", () => {
   test("fences interrupted setup and adopts pending setup exactly once", async () => {
-    const dataDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "ork-backend-interrupted-setup-"),
-    );
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-interrupted-setup-"));
     const backend = new OrkestratorBackend({
       dataDir,
       toolchainBinDir: "",
@@ -782,28 +786,25 @@ describe("native-agent activity reconciliation lifecycle", () => {
         { environmentId: pending.id },
         expect.any(Object),
       );
-      expect(await internals.context.storage.getEnvironment(interrupted.id))
-        .toMatchObject({
-          status: "running",
-          setupPhase: "failed",
-          setupScriptsComplete: false,
-          setupSessionId: interrupted.setupSessionId,
-          setupStartedAt: interrupted.setupStartedAt,
-          setupCompletedAt: expect.any(String),
-          lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
-          pendingAgentLaunch: true,
-        });
-      expect(await internals.context.storage.getEnvironment(pending.id))
-        .toMatchObject({
-          setupPhase: "pending",
-          setupScriptsComplete: false,
-          pendingAgentLaunch: true,
-        });
-      expect(await internals.context.storage.getEnvironment(failed.id))
-        .toMatchObject({
-          setupPhase: "failed",
-          lifecycleError: "Keep this failure",
-        });
+      expect(await internals.context.storage.getEnvironment(interrupted.id)).toMatchObject({
+        status: "running",
+        setupPhase: "failed",
+        setupScriptsComplete: false,
+        setupSessionId: interrupted.setupSessionId,
+        setupStartedAt: interrupted.setupStartedAt,
+        setupCompletedAt: expect.any(String),
+        lifecycleError: "Environment setup was interrupted. Retry setup to continue.",
+        pendingAgentLaunch: true,
+      });
+      expect(await internals.context.storage.getEnvironment(pending.id)).toMatchObject({
+        setupPhase: "pending",
+        setupScriptsComplete: false,
+        pendingAgentLaunch: true,
+      });
+      expect(await internals.context.storage.getEnvironment(failed.id)).toMatchObject({
+        setupPhase: "failed",
+        lifecycleError: "Keep this failure",
+      });
     } finally {
       await backend.shutdown().catch(() => undefined);
       await fs.rm(dataDir, { recursive: true, force: true });
@@ -811,9 +812,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
   });
 
   test("coalesces tab-resource sweeps on a one-minute cadence", async () => {
-    const dataDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "ork-backend-tab-resource-sweep-"),
-    );
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-tab-resource-sweep-"));
     const backend = new OrkestratorBackend({
       dataDir,
       toolchainBinDir: "",
@@ -831,12 +830,12 @@ describe("native-agent activity reconciliation lifecycle", () => {
     const reconcileTabTeardowns = mock(() =>
       reconcileTabTeardowns.mock.calls.length === 1
         ? Promise.resolve({ completed: 0 })
-        : teardownGate.promise
+        : teardownGate.promise,
     );
     const reconcileOrphans = mock(() =>
       reconcileOrphans.mock.calls.length === 1
         ? Promise.resolve({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 })
-        : orphanGate.promise
+        : orphanGate.promise,
     );
     const internals = backend as unknown as {
       commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
@@ -869,8 +868,9 @@ describe("native-agent activity reconciliation lifecycle", () => {
       orphanGate.resolve({ terminals: 0, nativeSessions: 0, tmuxSessions: 0 });
       await waitForCondition(() => {
         tick(60_000);
-        return reconcileTabTeardowns.mock.calls.length === 3
-          && reconcileOrphans.mock.calls.length === 3;
+        return (
+          reconcileTabTeardowns.mock.calls.length === 3 && reconcileOrphans.mock.calls.length === 3
+        );
       }, "completed tab-resource sweep to release its coalescing guard");
       expect(reconcileTabTeardowns).toHaveBeenCalledTimes(3);
       expect(reconcileOrphans).toHaveBeenCalledTimes(3);
@@ -888,9 +888,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
   });
 
   test("awaits initial activity hydration before startup completes", async () => {
-    const dataDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "ork-backend-native-activity-init-"),
-    );
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-native-activity-init-"));
     const hydration = deferred<void>();
     const calls: string[] = [];
     const backend = new OrkestratorBackend({
@@ -977,12 +975,13 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
     try {
       await expect(backend.init()).resolves.toBeUndefined();
-      await expect(backend.invoke("get_environment_snapshots", {
-        projectId: "project-1",
-      })).resolves.toEqual([]);
+      await expect(
+        backend.invoke("get_environment_snapshots", {
+          projectId: "project-1",
+        }),
+      ).resolves.toEqual([]);
       expect(tools.start).toHaveBeenCalledTimes(1);
-      expect(internals.nativeAgents.reconcileAgentActivity)
-        .toHaveBeenCalledTimes(1);
+      expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(
         "[backend] Failed to restore native agent activity:",
         expect.objectContaining({ message: "activity snapshot unavailable" }),
@@ -995,9 +994,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
   });
 
   test("runs activity reconciliation periodically and clears its interval on shutdown", async () => {
-    const dataDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "ork-backend-native-activity-sweep-"),
-    );
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-native-activity-sweep-"));
     const backend = new OrkestratorBackend({
       dataDir,
       toolchainBinDir: "",
@@ -1031,8 +1028,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
     try {
       await backend.init();
-      expect(internals.nativeAgents.reconcileAgentActivity)
-        .toHaveBeenCalledTimes(1);
+      expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(1);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(1);
       const nativeSweep = intervals.find((interval) => interval.delay === 2_000);
       expect(nativeSweep).toBeDefined();
@@ -1040,8 +1036,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
       tick(2_000);
       await Promise.resolve();
-      expect(internals.nativeAgents.reconcileAgentActivity)
-        .toHaveBeenCalledTimes(2);
+      expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(2);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(2);
 
       await backend.shutdown();
@@ -1051,8 +1046,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
       tick(2_000);
       await Promise.resolve();
-      expect(internals.nativeAgents.reconcileAgentActivity)
-        .toHaveBeenCalledTimes(2);
+      expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(2);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(2);
     } finally {
       await backend.shutdown().catch(() => undefined);
@@ -1106,9 +1100,10 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
       tick(2_000);
       await waitForCondition(
-        () => warn.mock.calls.some(([message]) =>
-          message === "[backend] Failed to reconcile native agent activity:"
-        ),
+        () =>
+          warn.mock.calls.some(
+            ([message]) => message === "[backend] Failed to reconcile native agent activity:",
+          ),
         "the failed sweep to be reported",
       );
       expect(warn).toHaveBeenCalledWith(
@@ -1118,14 +1113,13 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
       // The backend is still serving commands, and the interval survived its
       // own callback throwing.
-      await expect(backend.invoke("get_environment_snapshots", {
-        projectId: "project-1",
-      })).resolves.toEqual([]);
+      await expect(
+        backend.invoke("get_environment_snapshots", {
+          projectId: "project-1",
+        }),
+      ).resolves.toEqual([]);
       tick(2_000);
-      await waitForCondition(
-        () => sweeps === 3,
-        "a later sweep after the failed one",
-      );
+      await waitForCondition(() => sweeps === 3, "a later sweep after the failed one");
     } finally {
       await backend.shutdown().catch(() => undefined);
       restore();
@@ -1169,13 +1163,11 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await backend.init();
       await backend.init();
 
-      expect(intervals.filter((interval) => interval.delay === 2_000))
-        .toHaveLength(1);
+      expect(intervals.filter((interval) => interval.delay === 2_000)).toHaveLength(1);
       tick(2_000);
       await Promise.resolve();
       // Two init calls, one interval: three reconciles, not four.
-      expect(internals.nativeAgents.reconcileAgentActivity)
-        .toHaveBeenCalledTimes(3);
+      expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(3);
     } finally {
       await backend.shutdown().catch(() => undefined);
       restore();
@@ -1186,9 +1178,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
   test("hydrates activity only after native agent launches are restored", async () => {
     // Reconciling first would read an empty launch registry and publish `idle`
     // for every environment whose agent is about to be restored.
-    const dataDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "ork-backend-native-activity-order-"),
-    );
+    const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-native-activity-order-"));
     const calls: string[] = [];
     const backend = new OrkestratorBackend({
       dataDir,
@@ -1221,11 +1211,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
 
     try {
       await backend.init();
-      expect(calls).toEqual([
-        "pipelines:init",
-        "native:init",
-        "native:reconcile",
-      ]);
+      expect(calls).toEqual(["pipelines:init", "native:init", "native:reconcile"]);
     } finally {
       await backend.shutdown().catch(() => undefined);
       await fs.rm(dataDir, { recursive: true, force: true });
@@ -1264,14 +1250,16 @@ test("shutdown clears backend-owned PR watch state before a new backend starts",
       environmentId: environment.id,
       mode: "create-pending",
     });
-    await expect(first.invoke<{ entries: unknown[] }>("get_pr_monitor_state"))
-      .resolves.toMatchObject({ entries: [expect.objectContaining({ mode: "create-pending" })] });
+    await expect(
+      first.invoke<{ entries: unknown[] }>("get_pr_monitor_state"),
+    ).resolves.toMatchObject({ entries: [expect.objectContaining({ mode: "create-pending" })] });
 
     await first.shutdown();
     second = new OrkestratorBackend(options);
     await second.init();
-    await expect(second.invoke<{ entries: unknown[] }>("get_pr_monitor_state"))
-      .resolves.toEqual({ entries: [] });
+    await expect(second.invoke<{ entries: unknown[] }>("get_pr_monitor_state")).resolves.toEqual({
+      entries: [],
+    });
   } finally {
     await first.shutdown().catch(() => undefined);
     await second?.shutdown().catch(() => undefined);
@@ -1357,10 +1345,11 @@ test("startup reconciles a persisted creating environment before accepting comma
   });
   try {
     await backend.init();
-    await expect(backend.invoke<{ status: string; lifecycleError?: string }[]>(
-      "get_environments",
-      { projectId: "project" },
-    )).resolves.toEqual([
+    await expect(
+      backend.invoke<{ status: string; lifecycleError?: string }[]>("get_environments", {
+        projectId: "project",
+      }),
+    ).resolves.toEqual([
       expect.objectContaining({
         id: "interrupted",
         status: "error",
@@ -1401,10 +1390,7 @@ test("startup re-admits interrupted deletion while its tombstone continues block
     lifecycleOperation: "deleting",
     lifecycleOperationStartedAt: new Date(1).toISOString(),
   });
-  commandTesting.setLocalServerProcess(
-    `codex:${environmentId}`,
-    createFakeChild(96001),
-  );
+  commandTesting.setLocalServerProcess(`codex:${environmentId}`, createFakeChild(96001));
   commandTesting.setTerminateProcessTree(async () => {
     terminationStarted.resolve();
     await releaseTermination.promise;
@@ -1429,11 +1415,9 @@ test("startup re-admits interrupted deletion while its tombstone continues block
     await backend.init();
     await terminationStarted.promise;
 
-    await expect(storage.savePromptQueue(
-      `codex env-${environmentId}:tab-1`,
-      environmentId,
-      [{ id: "late" }],
-    )).rejects.toThrow("being deleted");
+    await expect(
+      storage.savePromptQueue(`codex env-${environmentId}:tab-1`, environmentId, [{ id: "late" }]),
+    ).rejects.toThrow("being deleted");
     await expect(storage.getEnvironment(environmentId)).resolves.toMatchObject({
       deletionRequestedAt: expect.any(String),
       lifecycleOperation: "deleting",
@@ -1441,7 +1425,7 @@ test("startup re-admits interrupted deletion while its tombstone continues block
 
     releaseTermination.resolve();
     await waitForCondition(
-      async () => await storage.getEnvironment(environmentId) === null,
+      async () => (await storage.getEnvironment(environmentId)) === null,
       "re-admitted deletion to remove the environment",
     );
     expect(commandTesting.getLocalServerProcess(`codex:${environmentId}`)).toBeUndefined();
@@ -1480,10 +1464,7 @@ test("shutdown applies one deadline across lifecycle and local-operation drains"
     environmentType: "local",
     worktreePath: path.join(dataDir, "blocked-delete-worktree"),
   });
-  commandTesting.setLocalServerProcess(
-    `codex:${environmentId}`,
-    createFakeChild(96002),
-  );
+  commandTesting.setLocalServerProcess(`codex:${environmentId}`, createFakeChild(96002));
   commandTesting.setTerminateProcessTree(async () => {
     terminationAttempts += 1;
     if (terminationAttempts === 1) {
@@ -1561,9 +1542,11 @@ test("startup fails closed when reconciliation cannot persist its result", async
       claudeTmuxRuntimes: async () => [],
     },
   });
-  const storage = (backend as unknown as {
-    context: { storage: StorageService };
-  }).context.storage;
+  const storage = (
+    backend as unknown as {
+      context: { storage: StorageService };
+    }
+  ).context.storage;
   const realUpdate = storage.updateEnvironment.bind(storage);
   storage.updateEnvironment = (async () => {
     throw new Error("environments.json is read-only");

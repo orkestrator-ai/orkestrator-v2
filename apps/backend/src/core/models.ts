@@ -225,17 +225,12 @@ export interface Environment {
   /** Last-write-wins timestamp for the aggregate activity snapshot. */
   agentActivityUpdatedAt?: string;
   /** Backend-internal observations used to derive the aggregate state. */
-  agentActivitySources?: Partial<
-    Record<AgentActivitySource, AgentActivitySourceSnapshot>
-  >;
+  agentActivitySources?: Partial<Record<AgentActivitySource, AgentActivitySourceSnapshot>>;
   /**
    * Renderer observations keyed by a hash of the renderer's opaque token.
    * Entries are leased so a crashed renderer cannot pin the aggregate forever.
    */
-  frontendAgentActivityObservers?: Record<
-    string,
-    FrontendAgentActivityObserverSnapshot
-  >;
+  frontendAgentActivityObservers?: Record<string, FrontendAgentActivityObserverSnapshot>;
   createdFromCommit?: string;
   networkAccessMode: NetworkAccessMode;
   allowedDomains?: string[];
@@ -271,13 +266,16 @@ export interface Environment {
   setupStartedAt?: string;
   setupCompletedAt?: string;
   /** Durable cleanup work written before a tab's external resources are closed. */
-  tabTeardownIntents?: Record<string, {
-    tabId: string;
-    kind: TabTeardownKind;
-    sessionId?: string;
-    persistentSessionId?: string;
-    createdAt: string;
-  }>;
+  tabTeardownIntents?: Record<
+    string,
+    {
+      tabId: string;
+      kind: TabTeardownKind;
+      sessionId?: string;
+      persistentSessionId?: string;
+      createdAt: string;
+    }
+  >;
   /**
    * Agent work finished here and no client has opened it since.
    *
@@ -482,10 +480,8 @@ export interface PersistedNativeAgentSession {
 }
 
 /** Content-free exact-once interaction records owned by backend workflows. */
-export type PersistedAgentInteractionResolutionJournal =
-  AgentInteractionResolutionJournal;
-export type PersistedAgentInteractionWorkflowSummary =
-  AgentInteractionWorkflowSummary;
+export type PersistedAgentInteractionResolutionJournal = AgentInteractionResolutionJournal;
+export type PersistedAgentInteractionWorkflowSummary = AgentInteractionWorkflowSummary;
 
 /**
  * Prompts a user has committed to sending but which have not been dispatched
@@ -649,14 +645,7 @@ export interface AppConfig {
     opencodeModel: string;
     claudeModel?: string;
     codexModel: string;
-    codexReasoningEffort:
-      | "minimal"
-      | "low"
-      | "medium"
-      | "high"
-      | "xhigh"
-      | "max"
-      | "ultra";
+    codexReasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
     opencodeMode: OpenCodeMode;
     /**
      * OpenCode provider catalogues offered in model pickers. Filtering happens

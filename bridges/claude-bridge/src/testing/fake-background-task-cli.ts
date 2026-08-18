@@ -50,14 +50,14 @@ lines.on("line", (line) => {
 
   if (message.type !== "user" || launched) return;
   launched = true;
-  const sessionId = typeof message.session_id === "string"
-    ? message.session_id
-    : "contract-background-session";
-  const childScript = childMode === "fail"
-    ? "process.exit(17)"
-    : childMode === "signal"
-      ? `process.kill(process.pid, "SIGKILL")`
-      : `await Bun.sleep(150); await Bun.write(process.env.CLAUDE_SDK_BACKGROUND_MARKER_FILE, "completed")`;
+  const sessionId =
+    typeof message.session_id === "string" ? message.session_id : "contract-background-session";
+  const childScript =
+    childMode === "fail"
+      ? "process.exit(17)"
+      : childMode === "signal"
+        ? `process.kill(process.pid, "SIGKILL")`
+        : `await Bun.sleep(150); await Bun.write(process.env.CLAUDE_SDK_BACKGROUND_MARKER_FILE, "completed")`;
   const child = spawn(process.execPath, ["-e", childScript], {
     env: { ...process.env, CLAUDE_SDK_BACKGROUND_MARKER_FILE: markerFile },
     stdio: "ignore",
@@ -80,12 +80,14 @@ lines.on("line", (line) => {
       stop_reason: "tool_use",
       stop_sequence: null,
       usage: { input_tokens: 0, output_tokens: 0 },
-      content: [{
-        type: "tool_use",
-        id: toolUseId,
-        name: "Bash",
-        input: { command: "contract delay", run_in_background: true },
-      }],
+      content: [
+        {
+          type: "tool_use",
+          id: toolUseId,
+          name: "Bash",
+          input: { command: "contract delay", run_in_background: true },
+        },
+      ],
     },
     parent_tool_use_id: null,
     session_id: sessionId,
@@ -95,11 +97,13 @@ lines.on("line", (line) => {
     type: "user",
     message: {
       role: "user",
-      content: [{
-        type: "tool_result",
-        tool_use_id: toolUseId,
-        content: `Command running in background with ID: ${taskId}`,
-      }],
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: toolUseId,
+          content: `Command running in background with ID: ${taskId}`,
+        },
+      ],
     },
     parent_tool_use_id: null,
     session_id: sessionId,
@@ -151,11 +155,12 @@ lines.on("line", (line) => {
       status: code === 0 ? "completed" : "failed",
       // A child killed by a signal reports a null code, so the exit code is not
       // the whole story and reporting it as "unknown" would lose the cause.
-      summary: code === 0
-        ? "Contract task completed"
-        : code === null
-          ? `Contract task failed with signal ${signal ?? "unknown"}`
-          : `Contract task failed with exit code ${code}`,
+      summary:
+        code === 0
+          ? "Contract task completed"
+          : code === null
+            ? `Contract task failed with signal ${signal ?? "unknown"}`
+            : `Contract task failed with exit code ${code}`,
       session_id: sessionId,
       uuid: "00000000-0000-4000-8000-000000000014",
     });

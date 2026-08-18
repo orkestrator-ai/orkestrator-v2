@@ -68,7 +68,6 @@ import {
 } from "./session-manager-test-harness.js";
 import type { SdkSessionInfo, SdkSessionMessage } from "./session-manager-test-harness.js";
 
-
 describe("reconcilePersistedSessions", () => {
   test("does nothing when the installed SDK has no listSessions API", async () => {
     installSdkModuleMock({ listSessions: undefined });
@@ -174,9 +173,7 @@ describe("reconcilePersistedSessions", () => {
       await updateSessionPreferences(PERSISTED_SDK_ID, {
         clientSessionBridgeId: foreignAlias,
       });
-      mockSdkListSessions.mockImplementation(async () => [
-        sdkSessionInfo({ cwd: "/repo/env-a" }),
-      ]);
+      mockSdkListSessions.mockImplementation(async () => [sdkSessionInfo({ cwd: "/repo/env-a" })]);
 
       await withWorkspaceCwd("/repo/env-a", async () => {
         await reconcilePersistedSessions();
@@ -255,11 +252,9 @@ describe("reconcilePersistedSessions", () => {
       mockSdkGetSessionInfo.mockImplementation(async (id) =>
         id === sdkSessionId
           ? sdkSessionInfo({ sessionId: sdkSessionId, customTitle: "Recovered" })
-          : undefined);
-      const recovered = await createOrRecoverSession(
-        "Ignored retry title",
-        clientSessionKey,
+          : undefined,
       );
+      const recovered = await createOrRecoverSession("Ignored retry title", clientSessionKey);
       expect(recovered.id).toBe(alias);
       expect(await readSessionPreferences(sdkSessionId)).toMatchObject({
         clientSessionBridgeId: alias,
@@ -277,9 +272,7 @@ describe("reconcilePersistedSessions", () => {
 
       expect(getSession(alias)).toBe(recovered);
       expect(getSession(`session-${sdkSessionId}`)).toBeUndefined();
-      expect(
-        listSessions().filter((entry) => entry.sdkSessionId === sdkSessionId),
-      ).toHaveLength(1);
+      expect(listSessions().filter((entry) => entry.sdkSessionId === sdkSessionId)).toHaveLength(1);
     });
   });
 
@@ -291,9 +284,7 @@ describe("reconcilePersistedSessions", () => {
         planMode: true,
         dispatchedRequestIds: ["initial-prompt:after-restart"],
       });
-      mockSdkListSessions.mockImplementation(async () => [
-        sdkSessionInfo({ cwd: "/repo/env-a" }),
-      ]);
+      mockSdkListSessions.mockImplementation(async () => [sdkSessionInfo({ cwd: "/repo/env-a" })]);
 
       await withWorkspaceCwd("/repo/env-a", async () => {
         await reconcilePersistedSessions();
@@ -301,14 +292,12 @@ describe("reconcilePersistedSessions", () => {
       const id = track(`session-${PERSISTED_SDK_ID}`);
       const adopted = getSession(id);
       expect(adopted?.planMode).toBe(true);
-      expect(adopted?.dispatchedRequestIds).toEqual(
-        new Set(["initial-prompt:after-restart"]),
-      );
+      expect(adopted?.dispatchedRequestIds).toEqual(new Set(["initial-prompt:after-restart"]));
 
       const dispatch = mock(async () => {});
-      await expect(
-        claimPromptDispatch(id, "initial-prompt:after-restart", dispatch),
-      ).resolves.toBe("duplicate");
+      await expect(claimPromptDispatch(id, "initial-prompt:after-restart", dispatch)).resolves.toBe(
+        "duplicate",
+      );
       expect(dispatch).not.toHaveBeenCalled();
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
@@ -320,21 +309,10 @@ describe("reconcilePersistedSessions", () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-reconcile-corrupt-journal-"));
     setClaudeHomeForTesting(directory);
     try {
-      const preferencesDirectory = join(
-        directory,
-        ".claude",
-        "orkestrator",
-        "session-preferences",
-      );
+      const preferencesDirectory = join(directory, ".claude", "orkestrator", "session-preferences");
       await mkdir(preferencesDirectory, { recursive: true });
-      await writeFile(
-        join(preferencesDirectory, `${PERSISTED_SDK_ID}.json`),
-        "{",
-        "utf-8",
-      );
-      mockSdkListSessions.mockImplementation(async () => [
-        sdkSessionInfo({ cwd: "/repo/env-a" }),
-      ]);
+      await writeFile(join(preferencesDirectory, `${PERSISTED_SDK_ID}.json`), "{", "utf-8");
+      mockSdkListSessions.mockImplementation(async () => [sdkSessionInfo({ cwd: "/repo/env-a" })]);
 
       await withWorkspaceCwd("/repo/env-a", async () => {
         await reconcilePersistedSessions();
@@ -481,9 +459,10 @@ describe("reconcilePersistedSessions", () => {
     const state = await materializePersistedSession({ cwd: "/repo/env-a" });
     let releaseList: ((infos: SdkSessionInfo[]) => void) | undefined;
     mockSdkListSessions.mockImplementation(
-      async () => new Promise<SdkSessionInfo[]>((resolve) => {
-        releaseList = resolve;
-      }),
+      async () =>
+        new Promise<SdkSessionInfo[]>((resolve) => {
+          releaseList = resolve;
+        }),
     );
 
     const reconcile = withWorkspaceCwd("/repo/env-a", async () => {
@@ -517,27 +496,24 @@ describe("reconcilePersistedSessions", () => {
           sessionId: `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`,
           summary: `Persisted session ${index}`,
           cwd: "/repo/env-a",
-        }));
+        }),
+      );
       mockSdkListSessions.mockImplementation(async () => infos);
       await withWorkspaceCwd("/repo/env-a", reconcilePersistedSessions);
       for (const info of infos) track(`session-${info.sessionId}`);
 
       let releaseStaleList: ((value: SdkSessionInfo[]) => void) | undefined;
       mockSdkListSessions.mockImplementation(
-        async () => new Promise<SdkSessionInfo[]>((resolve) => {
-          releaseStaleList = resolve;
-        }),
+        async () =>
+          new Promise<SdkSessionInfo[]>((resolve) => {
+            releaseStaleList = resolve;
+          }),
       );
-      const staleReconcile = withWorkspaceCwd(
-        "/repo/env-a",
-        reconcilePersistedSessions,
-      );
+      const staleReconcile = withWorkspaceCwd("/repo/env-a", reconcilePersistedSessions);
       await waitFor(() => releaseStaleList !== undefined);
 
       for (const info of infos) {
-        await expect(
-          deleteSessionDurably(`session-${info.sessionId}`),
-        ).resolves.toBe(true);
+        await expect(deleteSessionDurably(`session-${info.sessionId}`)).resolves.toBe(true);
       }
       releaseStaleList!(infos);
       await staleReconcile;
@@ -560,8 +536,6 @@ describe("reconcilePersistedSessions", () => {
     await expect(reconcilePersistedSessions()).rejects.toThrow("claude home unreadable");
   });
 });
-
-
 
 describe("ensurePersistedSession", () => {
   test("returns an in-memory session without consulting the SDK", async () => {
@@ -624,9 +598,7 @@ describe("ensurePersistedSession", () => {
       });
       const state = await materializePersistedSession();
       expect(state.planMode).toBe(false);
-      expect(state.dispatchedRequestIds).toEqual(
-        new Set(["request-from-disk"]),
-      );
+      expect(state.dispatchedRequestIds).toEqual(new Set(["request-from-disk"]));
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
@@ -637,9 +609,10 @@ describe("ensurePersistedSession", () => {
     const bridgeId = track(`session-${PERSISTED_SDK_ID}`);
     let releaseInfo: ((info: SdkSessionInfo) => void) | undefined;
     mockSdkGetSessionInfo.mockImplementation(
-      async () => new Promise<SdkSessionInfo>((resolve) => {
-        releaseInfo = resolve;
-      }),
+      async () =>
+        new Promise<SdkSessionInfo>((resolve) => {
+          releaseInfo = resolve;
+        }),
     );
 
     // A mounting tab fires GET /:id, /messages and /tasks together; each one
@@ -660,9 +633,10 @@ describe("ensurePersistedSession", () => {
     const bridgeId = track(`session-${PERSISTED_SDK_ID}`);
     let releaseInfo: ((info: SdkSessionInfo) => void) | undefined;
     mockSdkGetSessionInfo.mockImplementation(
-      async () => new Promise<SdkSessionInfo>((resolve) => {
-        releaseInfo = resolve;
-      }),
+      async () =>
+        new Promise<SdkSessionInfo>((resolve) => {
+          releaseInfo = resolve;
+        }),
     );
 
     const pending = ensurePersistedSession(bridgeId);
@@ -690,8 +664,6 @@ describe("ensurePersistedSession", () => {
     await promptPromise;
   });
 });
-
-
 
 describe("hydratePersistedSessionMessages", () => {
   test("normalizes the transcript, dropping system and empty user records", async () => {
@@ -1054,8 +1026,9 @@ describe("hydratePersistedSessionMessages", () => {
     expect(snapshot?.description).toBe(snapshot?.error);
     expect(snapshot?.error).not.toContain("\u0000");
     expect(snapshot?.error?.length).toBeLessThanOrEqual(4_096);
-    expect(snapshot?.error?.charCodeAt((snapshot.error?.length ?? 0) - 1))
-      .not.toBeGreaterThanOrEqual(0xd800);
+    expect(
+      snapshot?.error?.charCodeAt((snapshot.error?.length ?? 0) - 1),
+    ).not.toBeGreaterThanOrEqual(0xd800);
     expect(snapshot?.startedAt).toBeGreaterThanOrEqual(beforeHydration);
     expect(snapshot?.startedAt).toBeLessThanOrEqual(Date.now());
     expect(snapshot?.endedAt).toBeGreaterThanOrEqual(beforeHydration);
@@ -1130,9 +1103,10 @@ describe("hydratePersistedSessionMessages", () => {
   test("shares an in-flight hydration with a prompt without overwriting the live turn", async () => {
     let resolveTranscript: ((messages: SdkSessionMessage[]) => void) | undefined;
     mockSdkGetSessionMessages.mockImplementation(
-      async () => new Promise<SdkSessionMessage[]>((resolve) => {
-        resolveTranscript = resolve;
-      }),
+      async () =>
+        new Promise<SdkSessionMessage[]>((resolve) => {
+          resolveTranscript = resolve;
+        }),
     );
     const state = await materializePersistedSession();
 
@@ -1144,9 +1118,9 @@ describe("hydratePersistedSessionMessages", () => {
     const call = await nextQueryCall();
     expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(1);
     await mountHydration;
-    expect(getSessionMessages(state.id).some(
-      (message) => message.content === "live prompt",
-    )).toBe(true);
+    expect(getSessionMessages(state.id).some((message) => message.content === "live prompt")).toBe(
+      true,
+    );
 
     call.finish();
     await promptPromise;
@@ -1164,9 +1138,7 @@ describe("hydratePersistedSessionMessages", () => {
     call.finish();
     await promptPromise;
 
-    expect(getSessionMessages(state.id).map((message) => message.content)).toEqual([
-      "still works",
-    ]);
+    expect(getSessionMessages(state.id).map((message) => message.content)).toEqual(["still works"]);
 
     // The turn claimed the transcript for a hydration that never happened.
     // Leaving the claim set hid the whole on-disk history behind a transient
@@ -1179,8 +1151,6 @@ describe("hydratePersistedSessionMessages", () => {
     expect(getSession(state.id)?.persistedMessagesLoaded).toBe(true);
   });
 });
-
-
 
 describe("evictIdleHydratedTranscripts", () => {
   let hydratedSessionSequence = 0;
@@ -1267,9 +1237,7 @@ describe("evictIdleHydratedTranscripts", () => {
   test("keeps sessions with live background task state or controls", async () => {
     const controlled = await hydratedIdleSession();
     markStale(controlled);
-    controlled.backgroundTaskControls = new Map([
-      ["task-controlled", { close: () => undefined }],
-    ]);
+    controlled.backgroundTaskControls = new Map([["task-controlled", { close: () => undefined }]]);
 
     const running = await hydratedIdleSession();
     markStale(running);
@@ -1283,9 +1251,7 @@ describe("evictIdleHydratedTranscripts", () => {
 
     const candidate = await hydratedIdleSession();
     markStale(candidate);
-    candidate.backgroundTaskCandidates = new Map([
-      ["bash-candidate", { close: () => undefined }],
-    ]);
+    candidate.backgroundTaskCandidates = new Map([["bash-candidate", { close: () => undefined }]]);
 
     expect(evictIdleHydratedTranscripts()).toEqual([]);
     expect(controlled.messages.length).toBeGreaterThan(0);
@@ -1433,13 +1399,15 @@ describe("evictIdleHydratedTranscripts", () => {
 
     expect(evictIdleHydratedTranscripts()).toContain(stale.id);
     expect(recent.messages.length).toBeGreaterThan(0);
-    expect(getLastIdleTranscriptSweep()).toEqual(expect.objectContaining({
-      scanned: expect.any(Number),
-      evicted: 1,
-      skipped: expect.objectContaining({
-        "recently-read": expect.any(Number),
+    expect(getLastIdleTranscriptSweep()).toEqual(
+      expect.objectContaining({
+        scanned: expect.any(Number),
+        evicted: 1,
+        skipped: expect.objectContaining({
+          "recently-read": expect.any(Number),
+        }),
       }),
-    }));
+    );
   });
 
   test("periodic sweep timer evicts stale hydrated transcripts", async () => {
@@ -1456,8 +1424,6 @@ describe("evictIdleHydratedTranscripts", () => {
     }
   });
 });
-
-
 
 // ---------------------------------------------------------------------------
 // Transcript id resolution (fork boundaries and file rewind)
@@ -1504,9 +1470,9 @@ describe("persisted message id resolution", () => {
 
   test("refuses a uuid that is not present in the transcript", async () => {
     const state = await hydratedSession();
-    await expect(
-      forkPersistedSession(state.id, { upToMessageId: U3 }),
-    ).rejects.toThrow("not a persisted fork boundary");
+    await expect(forkPersistedSession(state.id, { upToMessageId: U3 })).rejects.toThrow(
+      "not a persisted fork boundary",
+    );
   });
 
   test("resolves a live message through the uuid the SDK reported for it", async () => {
@@ -1557,13 +1523,11 @@ describe("persisted message id resolution", () => {
 
     const live = getSessionMessages(state.id).at(-1)!;
     expect(live.sdkUuid).toBeUndefined();
-    await expect(
-      forkPersistedSession(state.id, { upToMessageId: live.id }),
-    ).rejects.toThrow("not a persisted fork boundary");
+    await expect(forkPersistedSession(state.id, { upToMessageId: live.id })).rejects.toThrow(
+      "not a persisted fork boundary",
+    );
   });
 });
-
-
 
 describe("forkPersistedSession", () => {
   test("throws not_found when the session was never materialized", async () => {
@@ -1601,9 +1565,9 @@ describe("forkPersistedSession", () => {
   test("throws invalid for a boundary that is not in the transcript", async () => {
     mockSdkGetSessionMessages.mockImplementation(async () => transcriptWithToolResult());
     const state = await materializePersistedSession();
-    await expect(
-      forkPersistedSession(state.id, { upToMessageId: U3 }),
-    ).rejects.toMatchObject({ code: "invalid" });
+    await expect(forkPersistedSession(state.id, { upToMessageId: U3 })).rejects.toMatchObject({
+      code: "invalid",
+    });
   });
 
   test("registers the fork and derives a title when none is given", async () => {
@@ -1638,8 +1602,6 @@ describe("forkPersistedSession", () => {
   });
 });
 
-
-
 describe("renameSessionDurably and deleteSessionDurably", () => {
   test("renames on disk, in memory, and announces the new title", async () => {
     const state = await materializePersistedSession();
@@ -1671,18 +1633,18 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
     mockSdkRenameSession.mockRejectedValueOnce(new Error("rename denied"));
     const { events, stop } = captureEvents();
     try {
-      await expect(renameSessionDurably(state.id, "Rejected")).rejects.toThrow(
-        "rename denied",
-      );
+      await expect(renameSessionDurably(state.id, "Rejected")).rejects.toThrow("rename denied");
     } finally {
       stop();
     }
 
     expect(state.title).toBe("Original");
-    expect(events).not.toContainEqual(expect.objectContaining({
-      type: "session.title-updated",
-      sessionId: state.id,
-    }));
+    expect(events).not.toContainEqual(
+      expect.objectContaining({
+        type: "session.title-updated",
+        sessionId: state.id,
+      }),
+    );
   });
 
   test("deletes the rollout and the registry entry together", async () => {
@@ -1742,9 +1704,10 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
     state.queryControl = { close };
     let finishDelete: (() => void) | undefined;
     mockSdkDeleteSession.mockImplementation(
-      async () => new Promise<void>((resolve) => {
-        finishDelete = resolve;
-      }),
+      async () =>
+        new Promise<void>((resolve) => {
+          finishDelete = resolve;
+        }),
     );
 
     const deletion = deleteSessionDurably(state.id);
@@ -1796,10 +1759,7 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
 
   test("keeps a deleted rollout absent when preference cleanup fails and lets retry finish cleanup", async () => {
     const state = await materializePersistedSession();
-    const preferencePath = join(
-      claudeSessionPreferencesDir(),
-      `${PERSISTED_SDK_ID}.json`,
-    );
+    const preferencePath = join(claudeSessionPreferencesDir(), `${PERSISTED_SDK_ID}.json`);
     await rm(preferencePath, { recursive: true, force: true });
     await mkdir(preferencePath, { recursive: true });
 
@@ -1815,8 +1775,6 @@ describe("renameSessionDurably and deleteSessionDurably", () => {
   });
 });
 
-
-
 // ---------------------------------------------------------------------------
 // Destructive file rewind
 // ---------------------------------------------------------------------------
@@ -1830,9 +1788,9 @@ describe("rewindSessionFiles", () => {
   }
 
   test("throws not_found when the session was never materialized", async () => {
-    await expect(
-      rewindSessionFiles(`session-${OTHER_SDK_ID}`, U1),
-    ).rejects.toMatchObject({ code: "not_found" });
+    await expect(rewindSessionFiles(`session-${OTHER_SDK_ID}`, U1)).rejects.toMatchObject({
+      code: "not_found",
+    });
   });
 
   test("throws conflict while a turn is running", async () => {

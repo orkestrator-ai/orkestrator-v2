@@ -18,10 +18,7 @@ export function AllFilesView({ onReveal, onRevert, onDelete }: AllFilesViewProps
   const closePanel = useFilesPanelStore((state) => state.closePanel);
   const { createFileTab } = useTerminalContext();
   const isMobile = useMediaQuery("(max-width: 767px)");
-  const changedPaths = useMemo(
-    () => new Set(changes.map((change) => change.path)),
-    [changes],
-  );
+  const changedPaths = useMemo(() => new Set(changes.map((change) => change.path)), [changes]);
 
   const handleFileClick = (path: string) => {
     if (!createFileTab) return;

@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  formatRelativeTime,
-  formatRelativeTimeFromUnixSeconds,
-} from "./format-relative-time";
+import { formatRelativeTime, formatRelativeTimeFromUnixSeconds } from "./format-relative-time";
 
 const NOW = new Date("2026-07-27T12:00:00.000Z");
 
@@ -28,9 +25,7 @@ describe("formatRelativeTime", () => {
 
   test("falls back to a locale date once the age passes a week", () => {
     const weekOld = new Date(NOW.getTime() - 7 * 24 * 60 * 60 * 1000);
-    expect(formatRelativeTime(weekOld.toISOString(), NOW)).toBe(
-      weekOld.toLocaleDateString(),
-    );
+    expect(formatRelativeTime(weekOld.toISOString(), NOW)).toBe(weekOld.toLocaleDateString());
   });
 
   test("clamps a future timestamp instead of rendering a negative age", () => {
@@ -58,9 +53,7 @@ describe("formatRelativeTime", () => {
 describe("formatRelativeTimeFromUnixSeconds", () => {
   test("converts seconds to milliseconds before formatting", () => {
     const secondsSinceEpoch = Math.floor(NOW.getTime() / 1000) - 2 * 60 * 60;
-    expect(formatRelativeTimeFromUnixSeconds(secondsSinceEpoch, NOW)).toBe(
-      "2h ago",
-    );
+    expect(formatRelativeTimeFromUnixSeconds(secondsSinceEpoch, NOW)).toBe("2h ago");
   });
 
   test("treats a missing or zero timestamp as unknown", () => {

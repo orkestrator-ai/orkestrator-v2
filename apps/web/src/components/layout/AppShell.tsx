@@ -1,9 +1,5 @@
 import { useEffect, useMemo } from "react";
-import {
-  ResizablePanelGroup,
-  ResizablePanel,
-  ResizableHandle,
-} from "@/components/ui/resizable";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { Sidebar } from "./Sidebar";
 import { ActionBar } from "./ActionBar";
 import { OpenFileDialog } from "./OpenFileDialog";
@@ -18,10 +14,7 @@ import {
   getAllLeaves,
 } from "@/stores";
 import { useMediaQuery } from "@/hooks";
-import {
-  DEFAULT_TERMINAL_APPEARANCE,
-  resolveTerminalBackgroundColor,
-} from "@/constants/terminal";
+import { DEFAULT_TERMINAL_APPEARANCE, resolveTerminalBackgroundColor } from "@/constants/terminal";
 import { getCurrentWindow } from "@/lib/native/window";
 import { cn } from "@/lib/utils";
 import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShellLayout";
@@ -40,21 +33,20 @@ export function AppShell({ children }: AppShellProps) {
   const paneEnvironments = usePaneLayoutStore((state) => state.environments);
   const activeProjectName = useProjectStore((state) =>
     selectedProjectId
-      ? state.projects.find((project) => project.id === selectedProjectId)?.name ?? null
+      ? (state.projects.find((project) => project.id === selectedProjectId)?.name ?? null)
       : null,
   );
   const activeEnvironmentName = useEnvironmentStore((state) =>
     selectedEnvironmentId
-      ? state.environments.find((environment) => environment.id === selectedEnvironmentId)?.name ?? null
+      ? (state.environments.find((environment) => environment.id === selectedEnvironmentId)?.name ??
+        null)
       : null,
   );
   const terminalAppearance =
     useConfigStore((state) => state.config.global.terminalAppearance) ??
     DEFAULT_TERMINAL_APPEARANCE;
 
-  const panelBackgroundColor = resolveTerminalBackgroundColor(
-    terminalAppearance.backgroundColor,
-  );
+  const panelBackgroundColor = resolveTerminalBackgroundColor(terminalAppearance.backgroundColor);
 
   const centralPanelThemeVars = useMemo(
     () =>
@@ -87,8 +79,7 @@ export function AppShell({ children }: AppShellProps) {
     const environment = paneEnvironments.get(selectedEnvironmentId);
     if (!environment) return null;
     const leaves = getAllLeaves(environment.root);
-    const activePane =
-      leaves.find((leaf) => leaf.id === environment.activePaneId) ?? null;
+    const activePane = leaves.find((leaf) => leaf.id === environment.activePaneId) ?? null;
     if (!activePane?.activeTabId) return null;
     return activePane.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
   }, [paneEnvironments, selectedEnvironmentId]);
@@ -143,33 +134,31 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           </div>
           <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        {/* Sidebar Panel */}
-        <ResizablePanel defaultSize={28} minSize="280px" maxSize="400px">
-          <Sidebar />
-        </ResizablePanel>
-
-        {/* Resize Handle */}
-        <ResizableHandle />
-
-        {/* Main Content Panel */}
-        <ResizablePanel defaultSize={filesPanelOpen ? 50 : 78} minSize={30}>
-          <div className="flex h-full flex-col" style={centralPanelThemeVars}>
-            <ActionBar />
-            <main className={cn("flex-1 overflow-hidden bg-background")}>
-              {children}
-            </main>
-          </div>
-        </ResizablePanel>
-
-        {/* Files Panel (conditional) */}
-        {filesPanelOpen && (
-          <>
-            <ResizableHandle />
-            <ResizablePanel defaultSize={22} minSize="240px" maxSize="500px">
-              <FilesPanel />
+            {/* Sidebar Panel */}
+            <ResizablePanel defaultSize={28} minSize="280px" maxSize="400px">
+              <Sidebar />
             </ResizablePanel>
-          </>
-        )}
+
+            {/* Resize Handle */}
+            <ResizableHandle />
+
+            {/* Main Content Panel */}
+            <ResizablePanel defaultSize={filesPanelOpen ? 50 : 78} minSize={30}>
+              <div className="flex h-full flex-col" style={centralPanelThemeVars}>
+                <ActionBar />
+                <main className={cn("flex-1 overflow-hidden bg-background")}>{children}</main>
+              </div>
+            </ResizablePanel>
+
+            {/* Files Panel (conditional) */}
+            {filesPanelOpen && (
+              <>
+                <ResizableHandle />
+                <ResizablePanel defaultSize={22} minSize="240px" maxSize="500px">
+                  <FilesPanel />
+                </ResizablePanel>
+              </>
+            )}
           </ResizablePanelGroup>
         </>
       )}

@@ -29,22 +29,24 @@ describe("prompt queue action errors", () => {
   });
 
   test("does not mistake an ordinary failure for actionable guidance", () => {
-    expect(isPromptQueueActionError(new Error("Queue storage is unavailable")))
-      .toBe(false);
+    expect(isPromptQueueActionError(new Error("Queue storage is unavailable"))).toBe(false);
     expect(isPromptQueueActionError("Compose draft already exists")).toBe(false);
     expect(isPromptQueueActionError(null)).toBe(false);
     expect(isPromptQueueActionError(undefined)).toBe(false);
   });
 
   test("detects the backend's occupied-draft refusal regardless of wrapping text", () => {
-    expect(isComposeDraftOccupiedBackendError(new Error("Compose draft already exists")))
-      .toBe(true);
-    expect(isComposeDraftOccupiedBackendError(
-      new Error("Backend command failed: compose draft already exists"),
-    )).toBe(true);
-    expect(isComposeDraftOccupiedBackendError(new Error("Compose draft revision conflict")))
-      .toBe(false);
-    expect(isComposeDraftOccupiedBackendError("Compose draft already exists"))
-      .toBe(false);
+    expect(isComposeDraftOccupiedBackendError(new Error("Compose draft already exists"))).toBe(
+      true,
+    );
+    expect(
+      isComposeDraftOccupiedBackendError(
+        new Error("Backend command failed: compose draft already exists"),
+      ),
+    ).toBe(true);
+    expect(isComposeDraftOccupiedBackendError(new Error("Compose draft revision conflict"))).toBe(
+      false,
+    );
+    expect(isComposeDraftOccupiedBackendError("Compose draft already exists")).toBe(false);
   });
 });

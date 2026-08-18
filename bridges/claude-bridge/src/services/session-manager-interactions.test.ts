@@ -25,7 +25,6 @@ import {
   waitFor,
 } from "./session-manager-test-harness.js";
 
-
 // ---------------------------------------------------------------------------
 // AskUserQuestion flow via canUseTool
 // ---------------------------------------------------------------------------
@@ -64,7 +63,10 @@ describe("AskUserQuestion flow", () => {
 
     expect(answerQuestion(pending!.id, { "Pick a color": "blue" })).toBe(true);
 
-    const result = (await canUseToolPromise) as { behavior: string; updatedInput?: { answers?: Record<string, string> } };
+    const result = (await canUseToolPromise) as {
+      behavior: string;
+      updatedInput?: { answers?: Record<string, string> };
+    };
     expect(result.behavior).toBe("allow");
     expect(result.updatedInput?.answers).toEqual({ "Pick a color": "blue" });
 
@@ -118,12 +120,14 @@ describe("AskUserQuestion flow", () => {
     const promptPromise = sendPrompt(session.id, "ask twice");
     const call = await nextQueryCall();
 
-    await expect(call.options.canUseTool!("AskUserQuestion", {
-      questions: [
-        { question: "Same question?", header: "First", options: [] },
-        { question: "Same question?", header: "Second", options: [] },
-      ],
-    })).resolves.toEqual({
+    await expect(
+      call.options.canUseTool!("AskUserQuestion", {
+        questions: [
+          { question: "Same question?", header: "First", options: [] },
+          { question: "Same question?", header: "Second", options: [] },
+        ],
+      }),
+    ).resolves.toEqual({
       behavior: "deny",
       message:
         "AskUserQuestion contains duplicate question text. Ask the questions again with distinct wording.",
@@ -235,16 +239,16 @@ describe("AskUserQuestion flow", () => {
 
     call.finish();
     await promptPromise;
-    expect(events).toContainEqual(expect.objectContaining({
-      type: "question.answered",
-      sessionId: session.id,
-      data: expect.objectContaining({ cancelled: true }),
-    }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "question.answered",
+        sessionId: session.id,
+        data: expect.objectContaining({ cancelled: true }),
+      }),
+    );
     stop();
   });
 });
-
-
 
 // ---------------------------------------------------------------------------
 // ExitPlanMode (plan approval) flow via canUseTool
@@ -274,9 +278,9 @@ describe("plan approval flow", () => {
       const result = (await canUseToolPromise) as { behavior: string };
       expect(result.behavior).toBe("allow");
       expect(session.planMode).toBe(false);
-      expect(await readSessionPreferences(
-        session.id.slice("session-".length),
-      )).toMatchObject({ planMode: false });
+      expect(await readSessionPreferences(session.id.slice("session-".length))).toMatchObject({
+        planMode: false,
+      });
 
       const exitEvent = events.find(
         (e) => e.type === "plan.exit-requested" && e.sessionId === session.id,
@@ -341,7 +345,12 @@ describe("plan approval flow", () => {
 
     const repromptCall = await nextQueryCall();
     expect(session.turnStartedAt).toBe(originalTurnStartedAt);
-    repromptCall.push({ type: "system", subtype: "init", session_id: "sdk-reprompt", mcp_servers: [] });
+    repromptCall.push({
+      type: "system",
+      subtype: "init",
+      session_id: "sdk-reprompt",
+      mcp_servers: [],
+    });
     repromptCall.push({ type: "result", subtype: "success" });
     repromptCall.finish();
 
@@ -364,7 +373,8 @@ describe("plan approval flow", () => {
     expect(respondToPlanApproval(approval!.id, false)).toBe(true);
     await expect(toolPromise).resolves.toEqual({
       behavior: "deny",
-      message: "User rejected the plan. No specific feedback was provided. Please revise your approach based on this feedback.",
+      message:
+        "User rejected the plan. No specific feedback was provided. Please revise your approach based on this feedback.",
     });
     call.finish();
 
@@ -374,7 +384,7 @@ describe("plan approval flow", () => {
     repromptCall.finish();
     await promptPromise;
 
-    const sdkMessages = await readSdkPrompt(repromptCall) as Array<{
+    const sdkMessages = (await readSdkPrompt(repromptCall)) as Array<{
       message: { role: string; content: Array<{ type: string; text: string }> };
     }>;
     expect(sdkMessages).toHaveLength(1);
@@ -529,9 +539,8 @@ describe("plan approval flow", () => {
     // The original assistant message's ExitPlanMode tool should now show success,
     // not the SDK's reported failure.
     const messages = getSession(session.id)?.messages ?? [];
-    const assistantWithTool = messages.find((m) =>
-      m.role === "assistant" &&
-      m.parts.some((p) => p.toolName === "ExitPlanMode")
+    const assistantWithTool = messages.find(
+      (m) => m.role === "assistant" && m.parts.some((p) => p.toolName === "ExitPlanMode"),
     );
     expect(assistantWithTool).toBeDefined();
     const exitPart = assistantWithTool?.parts.find((p) => p.toolName === "ExitPlanMode");
@@ -601,9 +610,9 @@ describe("plan approval flow", () => {
         updatedInput: { file_path: "a.ts" },
       });
       expect(session.planMode).toBe(true);
-      expect(await readSessionPreferences(
-        session.id.slice("session-".length),
-      )).toMatchObject({ planMode: true });
+      expect(await readSessionPreferences(session.id.slice("session-".length))).toMatchObject({
+        planMode: true,
+      });
       call.finish();
       await promptPromise;
       expect(events.some((event) => event.type === "plan.enter-requested")).toBe(true);
@@ -626,10 +635,7 @@ describe("plan approval flow", () => {
         const call = await nextQueryCall();
         await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
 
-        const result = await call.options.canUseTool!(
-          "EnterPlanMode",
-          { reason: "plan" },
-        );
+        const result = await call.options.canUseTool!("EnterPlanMode", { reason: "plan" });
         expect(result.behavior).toBe("deny");
         expect(result.message).toContain("could not be persisted safely");
         expect(session.planMode).toBeUndefined();
@@ -707,11 +713,13 @@ describe("plan approval flow", () => {
 
     call.finish();
     await promptPromise;
-    expect(events).toContainEqual(expect.objectContaining({
-      type: "plan.approval-responded",
-      sessionId: session.id,
-      data: expect.objectContaining({ cancelled: true }),
-    }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "plan.approval-responded",
+        sessionId: session.id,
+        data: expect.objectContaining({ cancelled: true }),
+      }),
+    );
     stop();
   });
 });

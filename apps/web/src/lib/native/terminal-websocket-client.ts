@@ -100,7 +100,9 @@ export class TerminalWebSocketClient {
     let channel = this.desired.get(sessionId);
     if (!channel) {
       let resolveReady = () => {};
-      const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+      const ready = new Promise<void>((resolve) => {
+        resolveReady = resolve;
+      });
       channel = {
         sessionId,
         callbacks: new Map(),
@@ -169,20 +171,24 @@ export class TerminalWebSocketClient {
         const operationId = this.nextOperationId();
         const completion = this.registerOperation(operationId, channel, "input", chunk.byteLength);
         completions.push(completion);
-        socket.send(encodeTerminalBinaryFrame({
-          type: TERMINAL_BINARY_FRAME_TYPE.input,
-          channelId: channel.channelId!,
-          generation: channel.generation,
-          revision: operationId,
-          bytes: chunk,
-        }));
+        socket.send(
+          encodeTerminalBinaryFrame({
+            type: TERMINAL_BINARY_FRAME_TYPE.input,
+            channelId: channel.channelId!,
+            generation: channel.generation,
+            revision: operationId,
+            bytes: chunk,
+          }),
+        );
       }
     } catch (error) {
       const sendError = this.asError(error, "Terminal input could not be sent");
       this.rejectChannelOperations(channel, sendError);
       this.markUnavailable(channel);
       socket.close(1011, "Terminal input send failed");
-      return Promise.allSettled(completions).then(() => { throw sendError; });
+      return Promise.allSettled(completions).then(() => {
+        throw sendError;
+      });
     }
     return Promise.all(completions).then(() => undefined);
   }
@@ -222,15 +228,16 @@ export class TerminalWebSocketClient {
     // A snapshot computed before output this channel has already applied must
     // not rewind the cursor. Adopting it would make the next live frame look
     // non-contiguous and desynchronize a perfectly healthy channel.
-    const stale = channel.generation === snapshot.generation
-      && channel.revision !== null
-      && snapshot.revision < channel.revision;
+    const stale =
+      channel.generation === snapshot.generation &&
+      channel.revision !== null &&
+      snapshot.revision < channel.revision;
     // The server pins a channel's generation at subscribe time and never
     // advances it. A snapshot carrying a new one is therefore the first this
     // client has heard of the restart: adopting it without resubscribing would
     // make the next input frame disagree with the server about the generation.
-    const generationChanged = channel.generation !== null
-      && channel.generation !== snapshot.generation;
+    const generationChanged =
+      channel.generation !== null && channel.generation !== snapshot.generation;
     if (!stale) {
       channel.generation = snapshot.generation;
       channel.revision = snapshot.revision;
@@ -302,7 +309,8 @@ export class TerminalWebSocketClient {
 
   private ensureSocket(): void {
     if (this.disposed || this.desired.size === 0 || this.socket || this.reconnectTimer) return;
-    const createSocket = this.options.createSocket ?? ((url, protocols) => new WebSocket(url, protocols));
+    const createSocket =
+      this.options.createSocket ?? ((url, protocols) => new WebSocket(url, protocols));
     let socket: WebSocket;
     try {
       socket = createSocket(this.options.url, TERMINAL_WEBSOCKET_SUBPROTOCOL);
@@ -316,7 +324,11 @@ export class TerminalWebSocketClient {
     socket.onopen = () => {
       if (this.socket !== socket) return;
       if (this.token) {
-        this.send({ type: "authenticate", version: TERMINAL_WEBSOCKET_PROTOCOL_VERSION, token: this.token });
+        this.send({
+          type: "authenticate",
+          version: TERMINAL_WEBSOCKET_PROTOCOL_VERSION,
+          token: this.token,
+        });
       }
     };
     socket.onmessage = (message) => this.onMessage(socket, message);
@@ -325,7 +337,9 @@ export class TerminalWebSocketClient {
       if (this.socket !== socket) return;
       this.socket = null;
       this.serverReady = false;
-      this.resetChannelsForReconnect(new Error("Terminal WebSocket closed before the operation completed"));
+      this.resetChannelsForReconnect(
+        new Error("Terminal WebSocket closed before the operation completed"),
+      );
       this.fallbackAndReconnect();
     };
   }
@@ -354,7 +368,10 @@ export class TerminalWebSocketClient {
             this.send({ type: "unsubscribe", channelId: frame.channelId });
             return;
           }
-          if (channel.pendingRequestId !== frame.requestId || frame.sessionId !== channel.sessionId) {
+          if (
+            channel.pendingRequestId !== frame.requestId ||
+            frame.sessionId !== channel.sessionId
+          ) {
             socket.close(4004, "Mismatched subscription response");
             return;
           }
@@ -392,7 +409,11 @@ export class TerminalWebSocketClient {
           channel.revision = null;
           this.clearBuffered(channel);
           this.markUnavailable(channel);
-          this.emit(channel, { desynced: true, generation: frame.generation, revision: frame.revision });
+          this.emit(channel, {
+            desynced: true,
+            generation: frame.generation,
+            revision: frame.revision,
+          });
           break;
         }
         case "unsubscribed":
@@ -401,12 +422,19 @@ export class TerminalWebSocketClient {
         case "operation-result": {
           const pending = this.pendingOperations.get(frame.operationId);
           if (!pending) return;
-          if (pending.channel.channelId !== frame.channelId || pending.operation !== frame.operation) {
+          if (
+            pending.channel.channelId !== frame.channelId ||
+            pending.operation !== frame.operation
+          ) {
             socket.close(4004, "Mismatched operation response");
             return;
           }
           if (frame.ok) this.resolveOperation(frame.operationId);
-          else this.rejectOperation(frame.operationId, new Error(frame.message || `Terminal ${frame.operation} failed`));
+          else
+            this.rejectOperation(
+              frame.operationId,
+              new Error(frame.message || `Terminal ${frame.operation} failed`),
+            );
           break;
         }
         case "error":
@@ -436,34 +464,36 @@ export class TerminalWebSocketClient {
       }
       return;
     }
-    void this.readBinaryData(message.data).then((data) => {
-      if (socket !== this.socket) return;
-      let frame;
-      try {
-        frame = decodeTerminalBinaryFrame(data);
-      } catch {
-        socket.close(4004, "Malformed server binary frame");
-        return;
-      }
-      if (frame.type !== TERMINAL_BINARY_FRAME_TYPE.output) {
-        socket.close(4004, "Server sent an input frame");
-        return;
-      }
-      const channel = this.channels.get(frame.channelId);
-      if (!channel) return;
-      const payload: TerminalSocketPayload = {
-        bytes: frame.bytes,
-        generation: frame.generation,
-        revision: frame.revision,
-      };
-      if (channel.awaitingSnapshot) {
-        this.bufferAwaitingSnapshot(channel, payload);
-        return;
-      }
-      this.applyOutput(channel, payload);
-    }).catch(() => {
-      if (socket === this.socket) socket.close(4004, "Unsupported server binary payload");
-    });
+    void this.readBinaryData(message.data)
+      .then((data) => {
+        if (socket !== this.socket) return;
+        let frame;
+        try {
+          frame = decodeTerminalBinaryFrame(data);
+        } catch {
+          socket.close(4004, "Malformed server binary frame");
+          return;
+        }
+        if (frame.type !== TERMINAL_BINARY_FRAME_TYPE.output) {
+          socket.close(4004, "Server sent an input frame");
+          return;
+        }
+        const channel = this.channels.get(frame.channelId);
+        if (!channel) return;
+        const payload: TerminalSocketPayload = {
+          bytes: frame.bytes,
+          generation: frame.generation,
+          revision: frame.revision,
+        };
+        if (channel.awaitingSnapshot) {
+          this.bufferAwaitingSnapshot(channel, payload);
+          return;
+        }
+        this.applyOutput(channel, payload);
+      })
+      .catch(() => {
+        if (socket === this.socket) socket.close(4004, "Unsupported server binary payload");
+      });
   }
 
   private applyOutput(channel: DesiredChannel, payload: TerminalSocketPayload): void {
@@ -475,7 +505,11 @@ export class TerminalWebSocketClient {
       this.clearBuffered(channel);
       this.bufferAwaitingSnapshot(channel, payload);
       this.markUnavailable(channel);
-      this.emit(channel, { desynced: true, generation: payload.generation, revision: payload.revision });
+      this.emit(channel, {
+        desynced: true,
+        generation: payload.generation,
+        revision: payload.revision,
+      });
       return;
     }
     const revision = channel.revision ?? 0;
@@ -487,17 +521,22 @@ export class TerminalWebSocketClient {
       this.clearBuffered(channel);
       this.bufferAwaitingSnapshot(channel, payload);
       this.markUnavailable(channel);
-      this.emit(channel, { desynced: true, generation: payload.generation, revision: payload.revision });
+      this.emit(channel, {
+        desynced: true,
+        generation: payload.generation,
+        revision: payload.revision,
+      });
       return;
     }
     channel.revision = payload.revision;
     this.emit(channel, payload);
-    if (channel.channelId !== null) this.send({
-      type: "ack",
-      channelId: channel.channelId,
-      generation: payload.generation,
-      revision: payload.revision,
-    });
+    if (channel.channelId !== null)
+      this.send({
+        type: "ack",
+        channelId: channel.channelId,
+        generation: payload.generation,
+        revision: payload.revision,
+      });
   }
 
   private flushBuffered(channel: DesiredChannel): void {
@@ -511,8 +550,10 @@ export class TerminalWebSocketClient {
 
   private bufferAwaitingSnapshot(channel: DesiredChannel, payload: TerminalSocketPayload): void {
     const payloadBytes = payload.bytes?.byteLength ?? 0;
-    const maxFrames = this.options.maxAwaitingSnapshotFrames ?? DEFAULT_MAX_AWAITING_SNAPSHOT_FRAMES;
-    const maxBytes = this.options.maxAwaitingSnapshotBytes ?? TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES;
+    const maxFrames =
+      this.options.maxAwaitingSnapshotFrames ?? DEFAULT_MAX_AWAITING_SNAPSHOT_FRAMES;
+    const maxBytes =
+      this.options.maxAwaitingSnapshotBytes ?? TERMINAL_WEBSOCKET_CHANNEL_SOFT_BUFFER_BYTES;
     if (channel.buffered.length >= maxFrames || channel.bufferedBytes + payloadBytes > maxBytes) {
       this.clearBuffered(channel);
       channel.requiresResubscribe = true;
@@ -525,12 +566,13 @@ export class TerminalWebSocketClient {
 
   private sendSubscribe(channel: DesiredChannel): void {
     if (
-      channel.channelId !== null
-      || channel.pendingRequestId !== null
-      || this.socket?.readyState !== WebSocket.OPEN
-      || !this.serverReady
-      || this.desired.get(channel.sessionId) !== channel
-    ) return;
+      channel.channelId !== null ||
+      channel.pendingRequestId !== null ||
+      this.socket?.readyState !== WebSocket.OPEN ||
+      !this.serverReady ||
+      this.desired.get(channel.sessionId) !== channel
+    )
+      return;
     if (channel.retryTimer) {
       clearTimeout(channel.retryTimer);
       channel.retryTimer = null;
@@ -539,17 +581,21 @@ export class TerminalWebSocketClient {
     const requestId = this.requestId;
     channel.pendingRequestId = requestId;
     this.pendingRequests.set(requestId, channel);
-    this.send(channel.generation === null || channel.revision === null ? {
-      type: "subscribe",
-      requestId,
-      sessionId: channel.sessionId,
-    } : {
-      type: "subscribe",
-      requestId,
-      sessionId: channel.sessionId,
-      knownGeneration: channel.generation,
-      knownRevision: channel.revision,
-    });
+    this.send(
+      channel.generation === null || channel.revision === null
+        ? {
+            type: "subscribe",
+            requestId,
+            sessionId: channel.sessionId,
+          }
+        : {
+            type: "subscribe",
+            requestId,
+            sessionId: channel.sessionId,
+            knownGeneration: channel.generation,
+            knownRevision: channel.revision,
+          },
+    );
   }
 
   private send(frame: TerminalWebSocketClientControlFrame): void {
@@ -579,10 +625,11 @@ export class TerminalWebSocketClient {
    */
   private markReady(channel: DesiredChannel): void {
     if (
-      channel.usable
-      || channel.channelId === null
-      || this.desired.get(channel.sessionId) !== channel
-    ) return;
+      channel.usable ||
+      channel.channelId === null ||
+      this.desired.get(channel.sessionId) !== channel
+    )
+      return;
     channel.usable = true;
     channel.unavailableNotified = false;
     this.options.onChannelReady?.(channel.sessionId);
@@ -600,7 +647,7 @@ export class TerminalWebSocketClient {
     if (this.disposed || this.desired.size === 0 || this.reconnectTimer) return;
     const base = this.options.reconnectDelayMs ?? 500;
     const cap = this.options.maxReconnectDelayMs ?? 10_000;
-    const delay = Math.min(cap, base * (2 ** Math.min(this.reconnectAttempts, 5)));
+    const delay = Math.min(cap, base * 2 ** Math.min(this.reconnectAttempts, 5));
     this.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -615,12 +662,13 @@ export class TerminalWebSocketClient {
    * the client itself initiated, which is not a failed attempt.
    */
   private scheduleSubscribe(channel: DesiredChannel, delay?: number): void {
-    if (this.disposed || this.desired.get(channel.sessionId) !== channel || channel.retryTimer) return;
+    if (this.disposed || this.desired.get(channel.sessionId) !== channel || channel.retryTimer)
+      return;
     let wait = delay;
     if (wait === undefined) {
       const base = this.options.subscriptionRetryDelayMs ?? 500;
       const cap = this.options.maxSubscriptionRetryDelayMs ?? 10_000;
-      wait = Math.min(cap, base * (2 ** Math.min(channel.subscribeAttempts, 5)));
+      wait = Math.min(cap, base * 2 ** Math.min(channel.subscribeAttempts, 5));
       channel.subscribeAttempts += 1;
     }
     channel.retryTimer = setTimeout(() => {
@@ -716,8 +764,10 @@ export class TerminalWebSocketClient {
   private hasOperationCapacity(count: number, bytes: number): boolean {
     const maxCount = this.options.maxPendingOperations ?? DEFAULT_MAX_PENDING_OPERATIONS;
     const maxBytes = this.options.maxPendingOperationBytes ?? DEFAULT_MAX_PENDING_OPERATION_BYTES;
-    return this.pendingOperations.size + count <= maxCount
-      && this.pendingOperationBytes + bytes <= maxBytes;
+    return (
+      this.pendingOperations.size + count <= maxCount &&
+      this.pendingOperationBytes + bytes <= maxBytes
+    );
   }
 
   private nextOperationId(): number {
@@ -742,7 +792,14 @@ export class TerminalWebSocketClient {
         this.markUnavailable(channel);
         this.socket?.close(4008, "Terminal operation acknowledgement timed out");
       }, this.options.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS);
-      this.pendingOperations.set(operationId, { channel, operation, bytes, timeout, resolve, reject });
+      this.pendingOperations.set(operationId, {
+        channel,
+        operation,
+        bytes,
+        timeout,
+        resolve,
+        reject,
+      });
       this.pendingOperationBytes += bytes;
     });
   }
@@ -773,7 +830,8 @@ export class TerminalWebSocketClient {
   }
 
   private rejectAllOperations(error: Error): void {
-    for (const operationId of [...this.pendingOperations.keys()]) this.rejectOperation(operationId, error);
+    for (const operationId of [...this.pendingOperations.keys()])
+      this.rejectOperation(operationId, error);
   }
 
   private asError(error: unknown, fallback: string): Error {

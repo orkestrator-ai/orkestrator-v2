@@ -1,11 +1,30 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { isTabTeardownKind, nativeAgentSessionStorageKey, registerTmuxBackendCommands } from "./commands-dependencies.js";
+import {
+  isTabTeardownKind,
+  nativeAgentSessionStorageKey,
+  registerTmuxBackendCommands,
+} from "./commands-dependencies.js";
 import type { Environment } from "./commands-dependencies.js";
-import { terminalSessionIdsByStableKey, terminalStableKeysBySessionId, orphanedTerminalMissingSince, assertOnlyKeys, asNonBlankString, stableTerminalKey, explicitlyCloseTerminalSession, openCodeHealthHeaders, peekLocalAgentBridge, peekContainerAgentBridge, conciseError } from "./commands-helpers.js";
+import {
+  terminalSessionIdsByStableKey,
+  terminalStableKeysBySessionId,
+  orphanedTerminalMissingSince,
+  assertOnlyKeys,
+  asNonBlankString,
+  stableTerminalKey,
+  explicitlyCloseTerminalSession,
+  openCodeHealthHeaders,
+  peekLocalAgentBridge,
+  peekContainerAgentBridge,
+  conciseError,
+} from "./commands-helpers.js";
 import type { LocalServerKind } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
 
-export function registerTeardownCommands(register: CommandRegistrar, dependencies: RegistryDependencies): void {
+export function registerTeardownCommands(
+  register: CommandRegistrar,
+  dependencies: RegistryDependencies,
+): void {
   const { commands, options } = dependencies;
   registerTmuxBackendCommands(register, {
     claudeStatePolls: options.claudeStatePolls,
@@ -13,22 +32,21 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
 
   type TabTeardownIntent = NonNullable<Environment["tabTeardownIntents"]>[string];
   const tabTeardownFetch = options.tabTeardown?.fetch ?? fetch;
-  const tabTeardownDeleteTimeoutMs = Math.max(
-    1,
-    options.tabTeardown?.deleteTimeoutMs ?? 5_000,
-  );
+  const tabTeardownDeleteTimeoutMs = Math.max(1, options.tabTeardown?.deleteTimeoutMs ?? 5_000);
   const tabTeardownReconciliationConcurrency = 4;
-  const peekTabTeardownBridge = options.tabTeardown?.peekBridge
-    ?? (async (
+  const peekTabTeardownBridge =
+    options.tabTeardown?.peekBridge ??
+    (async (
       environment: Environment,
       agent: LocalServerKind,
       context: CommandContext,
     ): Promise<{ port: number; authToken: string } | null> => {
-      const bridge = environment.environmentType === "local"
-        ? await peekLocalAgentBridge(environment.id, context, agent)
-        : environment.containerId
-          ? await peekContainerAgentBridge(environment.containerId, agent)
-          : null;
+      const bridge =
+        environment.environmentType === "local"
+          ? await peekLocalAgentBridge(environment.id, context, agent)
+          : environment.containerId
+            ? await peekContainerAgentBridge(environment.containerId, agent)
+            : null;
       if (!bridge) return null;
       return {
         port: "port" in bridge ? bridge.port : bridge.hostPort,
@@ -46,9 +64,9 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
       rejectTimeout = reject;
     });
     const timeout = setTimeout(() => {
-      rejectTimeout(new Error(
-        `Tab teardown request timed out after ${tabTeardownDeleteTimeoutMs}ms`,
-      ));
+      rejectTimeout(
+        new Error(`Tab teardown request timed out after ${tabTeardownDeleteTimeoutMs}ms`),
+      );
       controller.abort();
     }, tabTeardownDeleteTimeoutMs);
     timeout.unref?.();
@@ -76,7 +94,7 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
       if (intent.sessionId) {
         const expectedStableKeys = new Set(
           ["container", "local"].map((kind) =>
-            stableTerminalKey(kind as "container" | "local", environment.id, intent.tabId)
+            stableTerminalKey(kind as "container" | "local", environment.id, intent.tabId),
           ),
         );
         const actualStableKey = terminalStableKeysBySessionId.get(intent.sessionId);
@@ -96,10 +114,7 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
       if (intent.persistentSessionId) {
         const session = await context.storage.getSession(intent.persistentSessionId);
         if (session) {
-          if (
-            session.environmentId !== environment.id
-            || session.tabId !== intent.tabId
-          ) {
+          if (session.environmentId !== environment.id || session.tabId !== intent.tabId) {
             throw new Error(
               "Persistent terminal session is not owned by the requested environment and tab",
             );
@@ -124,36 +139,34 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
       }
       return;
     }
-    const agent = intent.kind === "claude-native"
-      ? "claude"
-      : intent.kind === "codex-native"
-        ? "codex"
-        : intent.kind === "opencode-native"
-          ? "opencode"
-          : intent.kind === "cursor-native"
-            ? "cursor"
-            : intent.kind === "grok-native"
-              ? "grok"
-          : null;
+    const agent =
+      intent.kind === "claude-native"
+        ? "claude"
+        : intent.kind === "codex-native"
+          ? "codex"
+          : intent.kind === "opencode-native"
+            ? "opencode"
+            : intent.kind === "cursor-native"
+              ? "cursor"
+              : intent.kind === "grok-native"
+                ? "grok"
+                : null;
     if (!agent) return;
     const logicalSessionKey = `env-${environment.id}:${intent.tabId}`;
-    const storageKey = nativeAgentSessionStorageKey(
-      environment.id,
-      agent,
-      logicalSessionKey,
-    );
+    const storageKey = nativeAgentSessionStorageKey(environment.id, agent, logicalSessionKey);
     const persistedSession = await context.storage.getNativeAgentSession(storageKey);
-    if (persistedSession && (
-      persistedSession.environmentId !== environment.id
-      || persistedSession.agent !== agent
-      || persistedSession.logicalSessionKey !== logicalSessionKey
-    )) {
+    if (
+      persistedSession &&
+      (persistedSession.environmentId !== environment.id ||
+        persistedSession.agent !== agent ||
+        persistedSession.logicalSessionKey !== logicalSessionKey)
+    ) {
       throw new Error("Native session mapping is not owned by the requested environment and tab");
     }
     if (
-      persistedSession
-      && intent.sessionId
-      && intent.sessionId !== persistedSession.providerSessionId
+      persistedSession &&
+      intent.sessionId &&
+      intent.sessionId !== persistedSession.providerSessionId
     ) {
       throw new Error("Native session id does not match the requested environment and tab");
     }
@@ -174,13 +187,13 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
     if (!bridge) {
       throw new Error("Tab teardown bridge is unavailable or unhealthy");
     }
-    const url = new URL(`http://127.0.0.1:${bridge.port}/session/${encodeURIComponent(providerSessionId)}`);
+    const url = new URL(
+      `http://127.0.0.1:${bridge.port}/session/${encodeURIComponent(providerSessionId)}`,
+    );
     if (agent === "opencode") {
       url.searchParams.set(
         "directory",
-        environment.environmentType === "local"
-          ? environment.worktreePath ?? ""
-          : "/workspace",
+        environment.environmentType === "local" ? (environment.worktreePath ?? "") : "/workspace",
       );
     }
     const response = await deleteProviderTabSession(
@@ -194,10 +207,7 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
     }
     // The provider transcript may already be gone, but the durable logical-tab
     // mapping must be retired as part of the same idempotent intent.
-    await context.storage.invalidateNativeAgentSession(
-      storageKey,
-      providerSessionId,
-    );
+    await context.storage.invalidateNativeAgentSession(storageKey, providerSessionId);
   };
 
   const finishTabTeardown = async (
@@ -205,11 +215,7 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
     intent: TabTeardownIntent,
     context: CommandContext,
   ): Promise<void> => {
-    await context.storage.clearTabTeardownIntent(
-      environmentId,
-      intent.tabId,
-      intent.createdAt,
-    );
+    await context.storage.clearTabTeardownIntent(environmentId, intent.tabId, intent.createdAt);
   };
 
   register("teardown_tab", async (args, context) => {
@@ -231,7 +237,9 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
         : { sessionId: asNonBlankString(args.sessionId, "sessionId") }),
       ...(args.persistentSessionId === undefined
         ? {}
-        : { persistentSessionId: asNonBlankString(args.persistentSessionId, "persistentSessionId") }),
+        : {
+            persistentSessionId: asNonBlankString(args.persistentSessionId, "persistentSessionId"),
+          }),
       createdAt: new Date().toISOString(),
     };
     await context.storage.setTabTeardownIntent(environmentId, intent);
@@ -246,7 +254,7 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
       Object.values(environment.tabTeardownIntents ?? {}).map((intent) => ({
         environment,
         intent,
-      }))
+      })),
     );
     let nextPendingIndex = 0;
     let completed = 0;
@@ -261,14 +269,16 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
           await finishTabTeardown(environment.id, intent, context);
           completed += 1;
         } catch (error) {
-          console.warn(`[backend] Tab teardown remains pending for ${environment.id}/${intent.tabId}:`, conciseError(error));
+          console.warn(
+            `[backend] Tab teardown remains pending for ${environment.id}/${intent.tabId}:`,
+            conciseError(error),
+          );
         }
       }
     };
     await Promise.all(
-      Array.from(
-        { length: Math.min(tabTeardownReconciliationConcurrency, pending.length) },
-        () => reconcileNext(),
+      Array.from({ length: Math.min(tabTeardownReconciliationConcurrency, pending.length) }, () =>
+        reconcileNext(),
       ),
     );
     return { completed };
@@ -280,19 +290,23 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
     const environments = await context.storage.loadEnvironments();
     const paneLayouts = await context.storage.loadPaneLayoutsForReconciliation();
     if (!paneLayouts.available) {
-      console.warn("[backend] Skipping orphaned tab reconciliation because pane layouts are unreadable");
+      console.warn(
+        "[backend] Skipping orphaned tab reconciliation because pane layouts are unreadable",
+      );
       return { terminals: 0, nativeSessions: 0, tmuxSessions: 0, skipped: true };
     }
     const referencedTerminalTabs = new Map<string, Set<string>>();
     const referencedNativeTabs = new Map<string, Set<string>>();
     const terminalTabTypes = new Set([
-      "plain", "root", "claude", "opencode", "codex", "cursor", "grok",
+      "plain",
+      "root",
+      "claude",
+      "opencode",
+      "codex",
+      "cursor",
+      "grok",
     ]);
-    const collectTabs = (
-      node: unknown,
-      terminals: Set<string>,
-      native: Set<string>,
-    ): void => {
+    const collectTabs = (node: unknown, terminals: Set<string>, native: Set<string>): void => {
       if (!node || typeof node !== "object" || Array.isArray(node)) return;
       const record = node as Record<string, unknown>;
       if (record.kind === "leaf" && Array.isArray(record.tabs)) {
@@ -351,27 +365,32 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
       for (const environment of environments) {
         const startup = environment.startupAgentSession;
         if (
-          startup?.status !== "running"
-          || !startup.providerSessionId
-          || referencedNativeTabs.get(environment.id)?.has(startup.tabId)
-        ) continue;
+          startup?.status !== "running" ||
+          !startup.providerSessionId ||
+          referencedNativeTabs.get(environment.id)?.has(startup.tabId)
+        )
+          continue;
         const startedAt = Date.parse(startup.startedAt ?? "");
         if (!Number.isFinite(startedAt) || now - startedAt < graceMs) continue;
-        const kind = startup.agent === "claude"
-          ? "claude-native"
-          : startup.agent === "codex"
-            ? "codex-native"
-            : startup.agent === "cursor"
-              ? "cursor-native"
-              : startup.agent === "grok"
-                ? "grok-native"
-                : "opencode-native";
-        await teardownTab({
-          environmentId: environment.id,
-          tabId: startup.tabId,
-          kind,
-          sessionId: startup.providerSessionId,
-        }, context);
+        const kind =
+          startup.agent === "claude"
+            ? "claude-native"
+            : startup.agent === "codex"
+              ? "codex-native"
+              : startup.agent === "cursor"
+                ? "cursor-native"
+                : startup.agent === "grok"
+                  ? "grok-native"
+                  : "opencode-native";
+        await teardownTab(
+          {
+            environmentId: environment.id,
+            tabId: startup.tabId,
+            kind,
+            sessionId: startup.providerSessionId,
+          },
+          context,
+        );
         await context.storage.updateEnvironment(environment.id, {
           startupAgentSession: undefined,
         });
@@ -383,32 +402,38 @@ export function registerTeardownCommands(register: CommandRegistrar, dependencie
         if (!session.logicalSessionKey.startsWith(prefix)) continue;
         const tabId = session.logicalSessionKey.slice(prefix.length);
         if (!tabId || referencedNativeTabs.get(session.environmentId)?.has(tabId)) continue;
-        const environment = environments.find((candidate) => candidate.id === session.environmentId);
+        const environment = environments.find(
+          (candidate) => candidate.id === session.environmentId,
+        );
         if (!environment || environment.tabTeardownIntents?.[tabId]) continue;
         const updatedAt = Date.parse(session.updatedAt);
         if (!Number.isFinite(updatedAt) || now - updatedAt < graceMs) continue;
-        const kind = session.agent === "claude"
-          ? "claude-native"
-          : session.agent === "codex"
-            ? "codex-native"
-            : session.agent === "cursor"
-              ? "cursor-native"
-              : session.agent === "grok"
-                ? "grok-native"
-                : "opencode-native";
+        const kind =
+          session.agent === "claude"
+            ? "claude-native"
+            : session.agent === "codex"
+              ? "codex-native"
+              : session.agent === "cursor"
+                ? "cursor-native"
+                : session.agent === "grok"
+                  ? "grok-native"
+                  : "opencode-native";
         console.warn(`[backend] Reaping orphaned native session ${session.environmentId}/${tabId}`);
-        await teardownTab({
-          environmentId: session.environmentId,
-          tabId,
-          kind,
-          sessionId: session.providerSessionId,
-        }, context);
+        await teardownTab(
+          {
+            environmentId: session.environmentId,
+            tabId,
+            kind,
+            sessionId: session.providerSessionId,
+          },
+          context,
+        );
         nativeSessions += 1;
       }
     }
     const reconcileTmux = commands.get("claude_tmux_reconcile_orphans");
     const tmux = reconcileTmux
-      ? await reconcileTmux({}, context) as { reaped?: number }
+      ? ((await reconcileTmux({}, context)) as { reaped?: number })
       : undefined;
     return { terminals, nativeSessions, tmuxSessions: tmux?.reaped ?? 0 };
   });

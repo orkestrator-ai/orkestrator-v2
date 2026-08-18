@@ -1,14 +1,5 @@
-import {
-  createPortal,
-} from "react-dom";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FileText, Image as ImageIcon, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
@@ -22,10 +13,7 @@ import {
   readImagePreviewCache,
   writeImagePreviewCache,
 } from "@/lib/chat/image-preview-cache";
-import {
-  markdownComponents,
-  USER_PROMPT_COLLAPSED_LINE_COUNT,
-} from "./NativeMessage.shared";
+import { markdownComponents, USER_PROMPT_COLLAPSED_LINE_COUNT } from "./NativeMessage.shared";
 
 function ImagePreviewOverlay({
   imageSrc,
@@ -56,10 +44,7 @@ function ImagePreviewOverlay({
       aria-modal="true"
       aria-label={`Image preview: ${filename}`}
     >
-      <div
-        className="relative max-w-full max-h-full"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="relative max-w-full max-h-full" onClick={(e) => e.stopPropagation()}>
         <button
           onClick={onClose}
           className="absolute -top-10 right-0 p-2 text-white/70 hover:text-white transition-colors"
@@ -81,12 +66,7 @@ function ImagePreviewOverlay({
 }
 
 function getMimeType(path: string): string {
-  const ext = path
-    .split("?")[0]
-    ?.split("#")[0]
-    ?.split(".")
-    .pop()
-    ?.toLowerCase();
+  const ext = path.split("?")[0]?.split("#")[0]?.split(".").pop()?.toLowerCase();
   const mimeTypes: Record<string, string> = {
     png: "image/png",
     jpg: "image/jpeg",
@@ -106,18 +86,9 @@ function isImageReference(pathOrUrl?: string): boolean {
   if (!pathOrUrl) return false;
   if (pathOrUrl.startsWith("data:image/")) return true;
   const lower = pathOrUrl.toLowerCase();
-  return [
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-    ".svg",
-    ".bmp",
-    ".ico",
-    ".tif",
-    ".tiff",
-  ].some((ext) => lower.includes(ext));
+  return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".tif", ".tiff"].some(
+    (ext) => lower.includes(ext),
+  );
 }
 
 function isRemoteImageUrl(fileUrl?: string): boolean {
@@ -167,9 +138,7 @@ export function FilePart({
 }) {
   const cacheKey = imagePreviewCacheKey(containerId, path, fileUrl);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [imageSrc, setImageSrc] = useState<string | null>(
-    () => readImagePreviewCache(cacheKey),
-  );
+  const [imageSrc, setImageSrc] = useState<string | null>(() => readImagePreviewCache(cacheKey));
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const imageLoadRef = useRef<Promise<string | null> | null>(null);
@@ -287,11 +256,12 @@ export function FilePart({
           showThumbnailTile
             ? "group relative block w-40 max-w-full shrink-0 overflow-hidden bg-muted/50 border-border hover:border-foreground/25 cursor-zoom-in"
             : "inline-flex items-center gap-1.5 py-1.5 px-2.5",
-          !showThumbnailTile && (isImage
-            ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in"
-            : "bg-muted/30 border-border/50 cursor-default"),
-          isImage
-            && "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+          !showThumbnailTile &&
+            (isImage
+              ? "bg-muted/50 border-border hover:bg-muted hover:border-border/80 cursor-zoom-in"
+              : "bg-muted/30 border-border/50 cursor-default"),
+          isImage &&
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
           loading && "opacity-50",
         )}
       >
@@ -310,31 +280,32 @@ export function FilePart({
         ) : (
           <FileText className="w-3.5 h-3.5 text-muted-foreground" />
         )}
-        <span className={cn(
-          "font-mono truncate text-muted-foreground",
-          showThumbnailTile
-            ? "block border-t border-border/60 px-2 py-1.5 text-left"
-            : "max-w-[240px]",
-        )}>
+        <span
+          className={cn(
+            "font-mono truncate text-muted-foreground",
+            showThumbnailTile
+              ? "block border-t border-border/60 px-2 py-1.5 text-left"
+              : "max-w-[240px]",
+          )}
+        >
           {displayName}
         </span>
         {loading && !isImage && <span className="text-muted-foreground">(loading...)</span>}
         {loadError && (
-          <span className={cn(
-            "text-destructive text-[10px]",
-            showThumbnailTile && "absolute right-1.5 top-1.5 rounded bg-background/90 px-1.5 py-0.5",
-          )}>
+          <span
+            className={cn(
+              "text-destructive text-[10px]",
+              showThumbnailTile &&
+                "absolute right-1.5 top-1.5 rounded bg-background/90 px-1.5 py-0.5",
+            )}
+          >
             preview unavailable
           </span>
         )}
       </button>
 
       {previewOpen && imageSrc && (
-        <ImagePreviewOverlay
-          imageSrc={imageSrc}
-          filename={displayName}
-          onClose={closePreview}
-        />
+        <ImagePreviewOverlay imageSrc={imageSrc} filename={displayName} onClose={closePreview} />
       )}
     </>
   );
@@ -360,12 +331,8 @@ export function TextPart({
   expansionKey: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const lineCount = useMemo(
-    () => content.split(/\r\n|\r|\n/).length,
-    [content],
-  );
-  const shouldTruncate =
-    truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
+  const lineCount = useMemo(() => content.split(/\r\n|\r|\n/).length, [content]);
+  const shouldTruncate = truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
   const jsonPayload = useMemo(
     () => (renderJsonPayload ? parseJsonPayload(content) : null),
     [content, renderJsonPayload],
@@ -432,5 +399,3 @@ export function TextPart({
     </div>
   );
 }
-
-

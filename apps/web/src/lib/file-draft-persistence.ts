@@ -13,10 +13,7 @@ const clientRevisionStates = new Map<string, DraftRevisionState>();
 export { createDraftRevisionState };
 export type { DraftRevisionState };
 
-function revisionStateFor(
-  draftKey: string,
-  state?: DraftRevisionState,
-): DraftRevisionState {
+function revisionStateFor(draftKey: string, state?: DraftRevisionState): DraftRevisionState {
   if (state) return state;
   const existing = defaultRevisionStates.get(draftKey);
   if (existing) return existing;
@@ -45,11 +42,7 @@ async function recordFileConflict(
   if (!isDraftRevisionConflict(error)) throw error;
   const current = await backend.getFileDraft(draftKey);
   state.conflictRevision = current?.revision ?? 0;
-  throw new DraftRevisionConflictError(
-    draftKey,
-    state.conflictRevision,
-    { cause: error },
-  );
+  throw new DraftRevisionConflictError(draftKey, state.conflictRevision, { cause: error });
 }
 
 export function fileDraftKey(environmentId: string, filePath: string): string {
@@ -98,32 +91,26 @@ export function persistFileDraft(
 ): Promise<void> {
   const draftKey = fileDraftKey(environmentId, filePath);
   const state = revisionStateFor(draftKey, revisionState);
-  return enqueue(
-    draftKey,
-    async () => {
-      if (state.conflictRevision !== null) {
-        throw new DraftRevisionConflictError(
-          draftKey,
-          state.conflictRevision,
-        );
+  return enqueue(draftKey, async () => {
+    if (state.conflictRevision !== null) {
+      throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
+    }
+    try {
+      const saved = await backend.saveFileDraft(
+        draftKey,
+        environmentId,
+        filePath,
+        content,
+        originalContent,
+        state.revision,
+      );
+      if (saved && typeof saved.revision === "number") {
+        state.revision = saved.revision;
       }
-      try {
-        const saved = await backend.saveFileDraft(
-          draftKey,
-          environmentId,
-          filePath,
-          content,
-          originalContent,
-          state.revision,
-        );
-        if (saved && typeof saved.revision === "number") {
-          state.revision = saved.revision;
-        }
-      } catch (error) {
-        await recordFileConflict(draftKey, state, error);
-      }
-    },
-  );
+    } catch (error) {
+      await recordFileConflict(draftKey, state, error);
+    }
+  });
 }
 
 export function discardFileDraft(
@@ -135,10 +122,7 @@ export function discardFileDraft(
   const state = revisionStateFor(draftKey, revisionState);
   return enqueue(draftKey, async () => {
     if (state.conflictRevision !== null) {
-      throw new DraftRevisionConflictError(
-        draftKey,
-        state.conflictRevision,
-      );
+      throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
     try {
       await backend.deleteFileDraft(draftKey, state.revision);
@@ -162,13 +146,7 @@ export function resolveFileDraftSaveConflict(
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }
-  return persistFileDraft(
-    environmentId,
-    filePath,
-    content,
-    originalContent,
-    state,
-  );
+  return persistFileDraft(environmentId, filePath, content, originalContent, state);
 }
 
 export function resolveFileDraftDiscardConflict(

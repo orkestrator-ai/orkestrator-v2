@@ -45,8 +45,9 @@ describe("agent skill helpers", () => {
 
 describe("parseSkillFrontmatter", () => {
   test("reads plain scalars", () => {
-    expect(parseSkillFrontmatter("---\nname: alpha\ndescription: Does a thing\n---\n# Alpha"))
-      .toEqual({ name: "alpha", description: "Does a thing" });
+    expect(
+      parseSkillFrontmatter("---\nname: alpha\ndescription: Does a thing\n---\n# Alpha"),
+    ).toEqual({ name: "alpha", description: "Does a thing" });
   });
 
   test("joins block scalars, which real skills use for multi-line trigger lists", () => {
@@ -73,12 +74,13 @@ describe("parseSkillFrontmatter", () => {
   });
 
   test("strips surrounding quotes", () => {
-    expect(parseSkillFrontmatter('---\nname: "a: b"\ndescription: \'x\'\n---\n').name).toBe("a: b");
+    expect(parseSkillFrontmatter("---\nname: \"a: b\"\ndescription: 'x'\n---\n").name).toBe("a: b");
   });
 
   test("stops at the closing delimiter so the body cannot spoof a key", () => {
-    expect(parseSkillFrontmatter("---\nname: real\n---\ndescription: from the body\n"))
-      .toEqual({ name: "real" });
+    expect(parseSkillFrontmatter("---\nname: real\n---\ndescription: from the body\n")).toEqual({
+      name: "real",
+    });
   });
 
   test("returns nothing when there is no frontmatter", () => {
@@ -88,13 +90,15 @@ describe("parseSkillFrontmatter", () => {
   test("stops at a closing delimiter carrying trailing whitespace", () => {
     // Editors emit a trailing space and YAML allows it; an exact `=== "---"`
     // check walked past it and let the body overwrite the real keys.
-    expect(parseSkillFrontmatter("---\nname: real\n--- \ndescription: from the body\n"))
-      .toEqual({ name: "real" });
+    expect(parseSkillFrontmatter("---\nname: real\n--- \ndescription: from the body\n")).toEqual({
+      name: "real",
+    });
   });
 
   test("accepts a closing delimiter of ...", () => {
-    expect(parseSkillFrontmatter("---\nname: real\n...\ndescription: from the body\n"))
-      .toEqual({ name: "real" });
+    expect(parseSkillFrontmatter("---\nname: real\n...\ndescription: from the body\n")).toEqual({
+      name: "real",
+    });
   });
 
   test("accepts an opening delimiter carrying trailing whitespace", () => {
@@ -112,8 +116,9 @@ describe("parseSkillFrontmatter", () => {
   });
 
   test("reads CRLF files", () => {
-    expect(parseSkillFrontmatter("---\r\nname: alpha\r\ndescription: d\r\n---\r\n# A\r\n"))
-      .toEqual({ name: "alpha", description: "d" });
+    expect(parseSkillFrontmatter("---\r\nname: alpha\r\ndescription: d\r\n---\r\n# A\r\n")).toEqual(
+      { name: "alpha", description: "d" },
+    );
   });
 
   test("skips a byte-order mark", () => {
@@ -122,13 +127,16 @@ describe("parseSkillFrontmatter", () => {
 
   test("handles every block scalar indicator", () => {
     for (const indicator of ["|", "|-", "|+", ">", ">-", "|2"]) {
-      expect(parseSkillFrontmatter(`---\nname: a\ndescription: ${indicator}\n  one\n  two\n---\n`))
-        .toEqual({ name: "a", description: "one two" });
+      expect(
+        parseSkillFrontmatter(`---\nname: a\ndescription: ${indicator}\n  one\n  two\n---\n`),
+      ).toEqual({ name: "a", description: "one two" });
     }
   });
 
   test("ignores a key with no value", () => {
-    expect(parseSkillFrontmatter("---\nname:\ndescription: d\n---\n")).toEqual({ description: "d" });
+    expect(parseSkillFrontmatter("---\nname:\ndescription: d\n---\n")).toEqual({
+      description: "d",
+    });
   });
 
   test("ignores keys it does not care about", () => {
@@ -278,8 +286,9 @@ describe("scanAgentSkills", () => {
 
     const scan = await scanAgentSkills("codex");
 
-    expect(scan.skills.map((skill) => [skill.name, skill.location]))
-      .toEqual([["review", "~/.agents/skills/team/review"]]);
+    expect(scan.skills.map((skill) => [skill.name, skill.location])).toEqual([
+      ["review", "~/.agents/skills/team/review"],
+    ]);
   });
 
   test("does not descend beneath a Claude root, which Claude reads flat", async () => {
@@ -362,10 +371,12 @@ describe("scanAgentSkills", () => {
       await writeSkill(join(home, ".codex", "skills"), "isolated-codex");
       await writeSkill(join(home, ".config", "opencode", "skills"), "isolated-opencode");
 
-      expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-        .toEqual(["isolated-codex"]);
-      expect((await scanAgentSkills("opencode")).skills.map((skill) => skill.name))
-        .toEqual(["isolated-opencode"]);
+      expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+        "isolated-codex",
+      ]);
+      expect((await scanAgentSkills("opencode")).skills.map((skill) => skill.name)).toEqual([
+        "isolated-opencode",
+      ]);
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
@@ -467,13 +478,11 @@ describe("scanAgentSkills", () => {
     await writeSkill(join(plugin, "2.0.0", "skills"), "newest-release");
     await writeSkill(join(plugin, "local", "skills"), "local-cache");
     await writeSkill(join(plugin, "unknown", "skills"), "unknown-cache");
-    await writeFile(
-      join(codex, "config.toml"),
-      '[plugins."plugin@market"]\nenabled = true\n',
-    );
+    await writeFile(join(codex, "config.toml"), '[plugins."plugin@market"]\nenabled = true\n');
 
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["newest-release"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+      "newest-release",
+    ]);
   });
 
   test("uses a prerelease when no release exists", async () => {
@@ -482,13 +491,11 @@ describe("scanAgentSkills", () => {
     await writeSkill(join(plugin, "1.9.0-beta.1", "skills"), "older-prerelease");
     await writeSkill(join(plugin, "2.0.0-beta.1", "skills"), "newer-prerelease");
     await writeSkill(join(plugin, "unknown", "skills"), "unknown-cache");
-    await writeFile(
-      join(codex, "config.toml"),
-      '[plugins."plugin@market"]\nenabled = true\n',
-    );
+    await writeFile(join(codex, "config.toml"), '[plugins."plugin@market"]\nenabled = true\n');
 
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["newer-prerelease"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+      "newer-prerelease",
+    ]);
   });
 
   test("ignores malformed Codex plugin config and enabled plugins missing cache versions", async () => {
@@ -521,20 +528,23 @@ describe("scanAgentSkills", () => {
     for (let rootIndex = 0; rootIndex < roots.length; rootIndex += 1) {
       const root = roots[rootIndex]!;
       await mkdir(root, { recursive: true });
-      await Promise.all(Array.from({ length: 501 }, async (_, skillIndex) => {
-        const dir = join(root, `r${rootIndex}-skill-${String(skillIndex).padStart(3, "0")}`);
-        await mkdir(dir);
-        await writeFile(join(dir, "SKILL.md"), `# Skill ${rootIndex}-${skillIndex}\n`);
-      }));
+      await Promise.all(
+        Array.from({ length: 501 }, async (_, skillIndex) => {
+          const dir = join(root, `r${rootIndex}-skill-${String(skillIndex).padStart(3, "0")}`);
+          await mkdir(dir);
+          await writeFile(join(dir, "SKILL.md"), `# Skill ${rootIndex}-${skillIndex}\n`);
+        }),
+      );
     }
     await mkdir(join(home, ".claude", "plugins"), { recursive: true });
     await writeFile(
       join(home, ".claude", "plugins", "installed_plugins.json"),
       JSON.stringify({
-        plugins: Object.fromEntries(roots.slice(1).map((root, index) => [
-          `plugin-${index}@market`,
-          [{ installPath: join(root, "..") }],
-        ])),
+        plugins: Object.fromEntries(
+          roots
+            .slice(1)
+            .map((root, index) => [`plugin-${index}@market`, [{ installPath: join(root, "..") }]]),
+        ),
       }),
     );
 
@@ -573,8 +583,7 @@ describe("scanAgentSkills", () => {
 
     // The symlinked copy is deduped away, so the shared root must not still
     // claim it — a count that disagrees with the list beside it is a lie.
-    expect(scan.roots.reduce((total, root) => total + root.skillCount, 0))
-      .toBe(scan.skills.length);
+    expect(scan.roots.reduce((total, root) => total + root.skillCount, 0)).toBe(scan.skills.length);
   });
 
   test("caps a runaway description rather than returning the whole frontmatter", async () => {
@@ -673,23 +682,27 @@ describe("Codex plugin discovery", () => {
 
   test("an enabled plugin is found despite TOML comments", async () => {
     await writeSkill(cachedPlugin("market", "noted"), "noted-skill");
-    await writeConfig([
-      "# plugins the user has turned on",
-      '[plugins."noted@market"] # from the marketplace',
-      "enabled = true # keep this on",
-      "",
-    ].join("\n"));
+    await writeConfig(
+      [
+        "# plugins the user has turned on",
+        '[plugins."noted@market"] # from the marketplace',
+        "enabled = true # keep this on",
+        "",
+      ].join("\n"),
+    );
 
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["noted-skill"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+      "noted-skill",
+    ]);
   });
 
   test("reads the inline-table form of an enabled plugin", async () => {
     await writeSkill(cachedPlugin("market", "inline"), "inline-skill");
     await writeConfig('[plugins]\n"inline@market" = { enabled = true }\n');
 
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["inline-skill"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+      "inline-skill",
+    ]);
   });
 
   test("an inline table that is not enabled stays off", async () => {
@@ -702,24 +715,29 @@ describe("Codex plugin discovery", () => {
   test("lists every enabled plugin, not just the first", async () => {
     await writeSkill(cachedPlugin("market", "one"), "one-skill");
     await writeSkill(cachedPlugin("market", "two"), "two-skill");
-    await writeConfig([
-      '[plugins."one@market"]',
-      "enabled = true",
-      '[plugins."two@market"]',
-      "enabled = true",
-      "",
-    ].join("\n"));
+    await writeConfig(
+      [
+        '[plugins."one@market"]',
+        "enabled = true",
+        '[plugins."two@market"]',
+        "enabled = true",
+        "",
+      ].join("\n"),
+    );
 
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["one-skill", "two-skill"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+      "one-skill",
+      "two-skill",
+    ]);
   });
 
   test("enabled survives other keys between it and its table header", async () => {
     await writeSkill(cachedPlugin("market", "late"), "late-skill");
     await writeConfig('[plugins."late@market"]\nversion = "1.2.3"\nenabled = true\n');
 
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["late-skill"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+      "late-skill",
+    ]);
   });
 
   test("a nested subtable does not enable its parent plugin", async () => {
@@ -741,8 +759,9 @@ describe("Codex plugin discovery", () => {
 
     expect(scan.skills).toEqual([]);
     expect(scan.roots.every((root) => root.scope !== "plugin")).toBe(true);
-    await expect(readAgentSkillFile("codex", join(outside, "loot", "SKILL.md")))
-      .rejects.toThrow(/outside the agent skill directories/);
+    await expect(readAgentSkillFile("codex", join(outside, "loot", "SKILL.md"))).rejects.toThrow(
+      /outside the agent skill directories/,
+    );
   });
 
   test("a plugin id containing a separator is refused", async () => {
@@ -759,8 +778,9 @@ describe("Codex plugin discovery", () => {
     await writeSkill(join(plugin, "2.0.0-beta.10", "skills"), "newer-beta");
     await writeConfig('[plugins."plugin@market"]\nenabled = true\n');
 
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["newer-beta"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+      "newer-beta",
+    ]);
   });
 
   test("understands v-prefixed and build-metadata cache directories", async () => {
@@ -769,8 +789,7 @@ describe("Codex plugin discovery", () => {
     await writeSkill(join(plugin, "v1.9.0", "skills"), "older");
     await writeConfig('[plugins."plugin@market"]\nenabled = true\n');
 
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["newest"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual(["newest"]);
   });
 
   test("picks deterministically between non-version cache markers", async () => {
@@ -781,8 +800,9 @@ describe("Codex plugin discovery", () => {
 
     // Neither marker is a version, so the order is arbitrary — but it must be
     // stable, or the listed skill would change between scans.
-    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name))
-      .toEqual(["unknown-cache"]);
+    expect((await scanAgentSkills("codex")).skills.map((skill) => skill.name)).toEqual([
+      "unknown-cache",
+    ]);
   });
 
   test("an enabled plugin whose cache holds no directories is skipped", async () => {
@@ -833,8 +853,9 @@ describe("Claude plugin discovery", () => {
     });
 
     // Later entries are other scopes of the same plugin, not other plugins.
-    expect((await scanAgentSkills("claude")).skills.map((skill) => skill.name))
-      .toEqual(["dup:from-first"]);
+    expect((await scanAgentSkills("claude")).skills.map((skill) => skill.name)).toEqual([
+      "dup:from-first",
+    ]);
   });
 
   test("falls back to the whole key when it carries no marketplace", async () => {
@@ -869,8 +890,12 @@ describe("Claude plugin discovery", () => {
 
     // Claude addresses these as `review` and `quality:review`; both load, so
     // neither may be reported as shadowed by the other.
-    expect((await scanAgentSkills("claude")).skills.map((skill) => [skill.name, skill.shadowed]))
-      .toEqual([["quality:review", false], ["review", false]]);
+    expect(
+      (await scanAgentSkills("claude")).skills.map((skill) => [skill.name, skill.shadowed]),
+    ).toEqual([
+      ["quality:review", false],
+      ["review", false],
+    ]);
   });
 
   test("refuses a relative installPath rather than resolving it against the cwd", async () => {
@@ -884,8 +909,9 @@ describe("Claude plugin discovery", () => {
   test("ignores a manifest whose shape is wrong", async () => {
     await writeManifest([{ installPath: join(home, "nope") }]);
 
-    expect((await scanAgentSkills("claude")).roots.every((root) => root.scope !== "plugin"))
-      .toBe(true);
+    expect((await scanAgentSkills("claude")).roots.every((root) => root.scope !== "plugin")).toBe(
+      true,
+    );
   });
 
   test("ignores invalid JSON without listing a plugin root", async () => {
@@ -956,8 +982,9 @@ describe("readAgentSkillFile", () => {
   test("refuses a path outside the agent's skill roots", async () => {
     await writeFile(join(home, "SKILL.md"), "secret");
 
-    await expect(readAgentSkillFile("claude", join(home, "SKILL.md")))
-      .rejects.toThrow(/outside the agent skill directories/);
+    await expect(readAgentSkillFile("claude", join(home, "SKILL.md"))).rejects.toThrow(
+      /outside the agent skill directories/,
+    );
   });
 
   test("refuses to escape a skill root with ..", async () => {
@@ -973,13 +1000,13 @@ describe("readAgentSkillFile", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "notes.md"), "hi");
 
-    await expect(readAgentSkillFile("claude", join(dir, "notes.md")))
-      .rejects.toThrow(/SKILL\.md/);
+    await expect(readAgentSkillFile("claude", join(dir, "notes.md"))).rejects.toThrow(/SKILL\.md/);
   });
 
   test("refuses a relative path", async () => {
-    await expect(readAgentSkillFile("claude", ".claude/skills/a/SKILL.md"))
-      .rejects.toThrow(/absolute/);
+    await expect(readAgentSkillFile("claude", ".claude/skills/a/SKILL.md")).rejects.toThrow(
+      /absolute/,
+    );
   });
 
   test("a Codex-only root is not readable through the Claude provider", async () => {
@@ -987,10 +1014,12 @@ describe("readAgentSkillFile", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), "# Codex only\n");
 
-    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md")))
-      .rejects.toThrow(/outside the agent skill directories/);
-    await expect(readAgentSkillFile("codex", join(dir, "SKILL.md")))
-      .resolves.toMatchObject({ content: "# Codex only\n" });
+    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md"))).rejects.toThrow(
+      /outside the agent skill directories/,
+    );
+    await expect(readAgentSkillFile("codex", join(dir, "SKILL.md"))).resolves.toMatchObject({
+      content: "# Codex only\n",
+    });
   });
 
   test("honours explicit CODEX_HOME outside the synthetic-home test mode", async () => {
@@ -1002,8 +1031,9 @@ describe("readAgentSkillFile", () => {
     try {
       setAgentSkillsHomeForTesting(undefined);
       process.env.CODEX_HOME = codex;
-      await expect(readAgentSkillFile("codex", filePath))
-        .resolves.toMatchObject({ content: "# Custom Codex home\n" });
+      await expect(readAgentSkillFile("codex", filePath)).resolves.toMatchObject({
+        content: "# Custom Codex home\n",
+      });
     } finally {
       if (previous === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previous;
@@ -1020,8 +1050,9 @@ describe("readAgentSkillFile", () => {
     try {
       setAgentSkillsHomeForTesting(undefined);
       process.env.XDG_CONFIG_HOME = xdg;
-      await expect(readAgentSkillFile("opencode", filePath))
-        .resolves.toMatchObject({ content: "# Custom XDG home\n" });
+      await expect(readAgentSkillFile("opencode", filePath)).resolves.toMatchObject({
+        content: "# Custom XDG home\n",
+      });
     } finally {
       if (previous === undefined) delete process.env.XDG_CONFIG_HOME;
       else process.env.XDG_CONFIG_HOME = previous;
@@ -1042,8 +1073,9 @@ describe("readAgentSkillFile", () => {
 
     // `~/.claude/skills-evil` starts with `~/.claude/skills`; only the trailing
     // separator in the prefix test keeps it out.
-    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md")))
-      .rejects.toThrow(/outside the agent skill directories/);
+    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md"))).rejects.toThrow(
+      /outside the agent skill directories/,
+    );
   });
 
   test("refuses a FIFO rather than blocking on it", async () => {
@@ -1051,8 +1083,9 @@ describe("readAgentSkillFile", () => {
     await mkdir(dir, { recursive: true });
     if (spawnSync("mkfifo", [join(dir, "SKILL.md")]).status !== 0) return;
 
-    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md")))
-      .rejects.toThrow(/regular file/);
+    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md"))).rejects.toThrow(
+      /regular file/,
+    );
   });
 
   test("refuses a directory named SKILL.md", async () => {
@@ -1077,7 +1110,9 @@ describe("readAgentSkillFile", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(join(dir, "SKILL.md"), "");
 
-    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md")))
-      .resolves.toMatchObject({ content: "", truncated: false });
+    await expect(readAgentSkillFile("claude", join(dir, "SKILL.md"))).resolves.toMatchObject({
+      content: "",
+      truncated: false,
+    });
   });
 });

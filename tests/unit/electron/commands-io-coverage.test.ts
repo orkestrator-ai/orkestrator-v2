@@ -32,7 +32,8 @@ const spawnPty = mock((command: string, args: string[], options: Record<string, 
     resize: mock(() => undefined),
     kill: mock(() => undefined),
     emitData: (data: string) => dataListeners.forEach((listener) => listener(data)),
-    emitExit: (event: ExitEvent = { exitCode: 0 }) => exitListeners.forEach((listener) => listener(event)),
+    emitExit: (event: ExitEvent = { exitCode: 0 }) =>
+      exitListeners.forEach((listener) => listener(event)),
   };
   spawnedPtys.push(process);
   return {
@@ -125,7 +126,9 @@ async function withFakeDocker(
 afterEach(async () => {
   spawnedPtys.length = 0;
   spawnPty.mockClear();
-  await Promise.all(tempDirs.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })));
+  await Promise.all(
+    tempDirs.splice(0).map((directory) => fs.rm(directory, { recursive: true, force: true })),
+  );
 });
 
 afterAll(() => {
@@ -164,7 +167,10 @@ describe("backend command I/O coverage", () => {
       ],
       expect.objectContaining({ cols: 80, rows: 24 }),
     );
-    expect(commands.get("list_terminal_sessions")?.({}, context)).toEqual([...sessionsBeforeAttach, sessionId]);
+    expect(commands.get("list_terminal_sessions")?.({}, context)).toEqual([
+      ...sessionsBeforeAttach,
+      sessionId,
+    ]);
 
     commands.get("terminal_write")?.({ sessionId, data: "pwd\r" }, context);
     commands.get("terminal_resize")?.({ sessionId, cols: 121.9, rows: 40 }, context);
@@ -205,19 +211,28 @@ describe("backend command I/O coverage", () => {
     const commands = createCommandRegistry();
     const context = createContext();
 
-    await expect(commands.get("get_local_file_tree")?.({ worktreePath: root }, context)).resolves.toEqual([
+    await expect(
+      commands.get("get_local_file_tree")?.({ worktreePath: root }, context),
+    ).resolves.toEqual([
       {
         name: "src",
         path: "src",
         isDirectory: true,
-        children: [{ name: "app.ts", path: path.join("src", "app.ts"), isDirectory: false, extension: ".ts" }],
+        children: [
+          {
+            name: "app.ts",
+            path: path.join("src", "app.ts"),
+            isDirectory: false,
+            extension: ".ts",
+          },
+        ],
       },
       { name: "README.md", path: "README.md", isDirectory: false, extension: ".md" },
     ]);
-    const changedTree = await commands.get("get_local_file_tree")?.(
+    const changedTree = (await commands.get("get_local_file_tree")?.(
       { worktreePath: root, knownDigest: "stale" },
       context,
-    ) as {
+    )) as {
       unchanged: boolean;
       digest: string;
       value?: unknown;
@@ -226,17 +241,22 @@ describe("backend command I/O coverage", () => {
       unchanged: false,
       value: expect.any(Array),
     });
-    await expect(commands.get("get_local_file_tree")?.(
-      { worktreePath: root, knownDigest: changedTree.digest },
-      context,
-    )).resolves.toEqual({
+    await expect(
+      commands.get("get_local_file_tree")?.(
+        { worktreePath: root, knownDigest: changedTree.digest },
+        context,
+      ),
+    ).resolves.toEqual({
       unchanged: true,
       digest: changedTree.digest,
     });
-    await expect(commands.get("read_local_file")?.(
-      { worktreePath: root, filePath: "src/app.ts" },
-      context,
-    )).resolves.toEqual({ path: "src/app.ts", content: "export const value = 1;\n", language: "typescript" });
+    await expect(
+      commands.get("read_local_file")?.({ worktreePath: root, filePath: "src/app.ts" }, context),
+    ).resolves.toEqual({
+      path: "src/app.ts",
+      content: "export const value = 1;\n",
+      language: "typescript",
+    });
 
     const data = Buffer.from([0, 1, 2, 255]).toString("base64");
     const writtenPath = await commands.get("write_local_file")?.(
@@ -246,34 +266,34 @@ describe("backend command I/O coverage", () => {
     expect(writtenPath).toBe(path.join(root, "generated", "data.bin"));
     expect(await fs.readFile(writtenPath as string)).toEqual(Buffer.from([0, 1, 2, 255]));
 
-    await expect(commands.get("write_local_file")?.(
-      { worktreePath: root, filePath: "../escape.bin", base64Data: data },
-      context,
-    )).rejects.toThrow("parent directory traversal is not allowed");
-    await expect(commands.get("write_local_file")?.(
-      { worktreePath: root, filePath: "bad.bin", base64Data: "%%%" },
-      context,
-    )).rejects.toThrow("File payload is not valid base64");
+    await expect(
+      commands.get("write_local_file")?.(
+        { worktreePath: root, filePath: "../escape.bin", base64Data: data },
+        context,
+      ),
+    ).rejects.toThrow("parent directory traversal is not allowed");
+    await expect(
+      commands.get("write_local_file")?.(
+        { worktreePath: root, filePath: "bad.bin", base64Data: "%%%" },
+        context,
+      ),
+    ).rejects.toThrow("File payload is not valid base64");
   });
 
   test("caps a local file tree at exactly 5000 nodes", async () => {
     const root = await createTempDir("ork-commands-io-local-cap-");
     for (let offset = 0; offset < 5_001; offset += 250) {
       await Promise.all(
-        Array.from(
-          { length: Math.min(250, 5_001 - offset) },
-          (_, index) => fs.writeFile(
-            path.join(root, `file-${String(offset + index).padStart(4, "0")}.txt`),
-            "",
-          ),
+        Array.from({ length: Math.min(250, 5_001 - offset) }, (_, index) =>
+          fs.writeFile(path.join(root, `file-${String(offset + index).padStart(4, "0")}.txt`), ""),
         ),
       );
     }
     const commands = createCommandRegistry();
-    const tree = await commands.get("get_local_file_tree")?.(
+    const tree = (await commands.get("get_local_file_tree")?.(
       { worktreePath: root },
       createContext(),
-    ) as Array<{ children?: unknown[] }>;
+    )) as Array<{ children?: unknown[] }>;
     const countNodes = (nodes: Array<{ children?: unknown[] }>): number =>
       nodes.reduce(
         (total, node) =>
@@ -297,14 +317,20 @@ describe("backend command I/O coverage", () => {
     const outsideRoot = await createTempDir("ork-commands-io-outside-");
     const outsideFile = path.join(outsideRoot, "private.bin");
     await fs.writeFile(outsideFile, "private");
-    await expect(commands.get("read_file_base64")?.({ filePath: outsideFile }, context)).rejects.toThrow(
-      "file is outside Orkestrator workspace storage",
-    );
+    await expect(
+      commands.get("read_file_base64")?.({ filePath: outsideFile }, context),
+    ).rejects.toThrow("file is outside Orkestrator workspace storage");
   });
 
   test("reads base64 from the active profile's configured worktree directory", async () => {
     const profileWorktrees = await createTempDir("ork-profile-worktrees-");
-    const filePath = path.join(profileWorktrees, "environment", ".orkestrator", "initial-prompt", "image.png");
+    const filePath = path.join(
+      profileWorktrees,
+      "environment",
+      ".orkestrator",
+      "initial-prompt",
+      "image.png",
+    );
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, Buffer.from("profile-image"));
     const commands = createCommandRegistry();
@@ -319,9 +345,9 @@ describe("backend command I/O coverage", () => {
 
     const outsideFile = path.join(path.dirname(profileWorktrees), "outside-profile.png");
     await fs.writeFile(outsideFile, "private");
-    await expect(commands.get("read_file_base64")?.({ filePath: outsideFile }, context)).rejects.toThrow(
-      "file is outside Orkestrator workspace storage",
-    );
+    await expect(
+      commands.get("read_file_base64")?.({ filePath: outsideFile }, context),
+    ).rejects.toThrow("file is outside Orkestrator workspace storage");
   });
 
   test("container base64 reader uses one bounded no-follow file snapshot", async () => {
@@ -333,94 +359,82 @@ describe("backend command I/O coverage", () => {
 
     const regularFile = path.join(workspace, "image.bin");
     await fs.writeFile(regularFile, Buffer.from([0, 1, 2]));
-    await expect(runCommand("node", [
-      "-e",
-      CONTAINER_SAFE_BASE64_READER,
-      "--",
-      workspace,
-      regularFile,
-      "3",
-    ])).resolves.toMatchObject({ stdout: "AAEC" });
+    await expect(
+      runCommand("node", ["-e", CONTAINER_SAFE_BASE64_READER, "--", workspace, regularFile, "3"]),
+    ).resolves.toMatchObject({ stdout: "AAEC" });
 
     const oversizedFile = path.join(workspace, "oversized.bin");
     await fs.writeFile(oversizedFile, Buffer.from([0, 1, 2, 3]));
-    await expect(runCommand("node", [
-      "-e",
-      CONTAINER_SAFE_BASE64_READER,
-      "--",
-      workspace,
-      oversizedFile,
-      "3",
-    ])).rejects.toThrow("File exceeds the attachment size limit");
+    await expect(
+      runCommand("node", ["-e", CONTAINER_SAFE_BASE64_READER, "--", workspace, oversizedFile, "3"]),
+    ).rejects.toThrow("File exceeds the attachment size limit");
 
     const changedFile = path.join(workspace, "changed.bin");
     await fs.writeFile(changedFile, "abc");
-    await expect(runCommand("node", [
-      "-e",
-      buildContainerSafeBase64Reader("append"),
-      "--",
-      workspace,
-      changedFile,
-      "10",
-    ])).rejects.toThrow("File changed while it was being read");
+    await expect(
+      runCommand("node", [
+        "-e",
+        buildContainerSafeBase64Reader("append"),
+        "--",
+        workspace,
+        changedFile,
+        "10",
+      ]),
+    ).rejects.toThrow("File changed while it was being read");
 
     const replacedFile = path.join(workspace, "replaced.bin");
     await fs.writeFile(replacedFile, "original");
-    await expect(runCommand("node", [
-      "-e",
-      buildContainerSafeBase64Reader("replace"),
-      "--",
-      workspace,
-      replacedFile,
-      "20",
-    ])).rejects.toThrow("Attachment is not a stable regular file");
+    await expect(
+      runCommand("node", [
+        "-e",
+        buildContainerSafeBase64Reader("replace"),
+        "--",
+        workspace,
+        replacedFile,
+        "20",
+      ]),
+    ).rejects.toThrow("Attachment is not a stable regular file");
 
     const directLink = path.join(workspace, "direct.bin");
     const chainLink = path.join(workspace, "chain.bin");
     await fs.symlink(regularFile, directLink);
     await fs.symlink(directLink, chainLink);
     for (const linkedPath of [directLink, chainLink]) {
-      await expect(runCommand("node", [
-        "-e",
-        CONTAINER_SAFE_BASE64_READER,
-        "--",
-        workspace,
-        linkedPath,
-        "3",
-      ])).rejects.toThrow("Symbolic-link attachments are not allowed");
+      await expect(
+        runCommand("node", ["-e", CONTAINER_SAFE_BASE64_READER, "--", workspace, linkedPath, "3"]),
+      ).rejects.toThrow("Symbolic-link attachments are not allowed");
     }
 
     const outsideFile = path.join(outside, "private.bin");
     await fs.writeFile(outsideFile, "private");
     const linkedDirectory = path.join(workspace, "linked-directory");
     await fs.symlink(outside, linkedDirectory);
-    await expect(runCommand("node", [
-      "-e",
-      CONTAINER_SAFE_BASE64_READER,
-      "--",
-      workspace,
-      path.join(linkedDirectory, "private.bin"),
-      "10",
-    ])).rejects.toThrow("Symbolic-link attachments are not allowed");
-    await expect(runCommand("node", [
-      "-e",
-      CONTAINER_SAFE_BASE64_READER,
-      "--",
-      workspace,
-      outsideFile,
-      "10",
-    ])).rejects.toThrow("File is outside the container workspace");
+    await expect(
+      runCommand("node", [
+        "-e",
+        CONTAINER_SAFE_BASE64_READER,
+        "--",
+        workspace,
+        path.join(linkedDirectory, "private.bin"),
+        "10",
+      ]),
+    ).rejects.toThrow("Symbolic-link attachments are not allowed");
+    await expect(
+      runCommand("node", ["-e", CONTAINER_SAFE_BASE64_READER, "--", workspace, outsideFile, "10"]),
+    ).rejects.toThrow("File is outside the container workspace");
 
     const directoryTarget = path.join(workspace, "folder.bin");
     await fs.mkdir(directoryTarget);
-    await expect(runCommand("node", [
-      "-e",
-      CONTAINER_SAFE_BASE64_READER,
-      "--",
-      workspace,
-      directoryTarget,
-      "10",
-    ])).rejects.toThrow("Attachment is not a stable regular file");
+    await expect(
+      runCommand("node", [
+        "-e",
+        CONTAINER_SAFE_BASE64_READER,
+        "--",
+        workspace,
+        directoryTarget,
+        "10",
+      ]),
+    ).rejects.toThrow("Attachment is not a stable regular file");
   });
 
   test("executes container file reads and writes through docker without a live daemon", async () => {
@@ -442,14 +456,16 @@ esac
       const commands = createCommandRegistry();
       const context = createContext();
 
-      await expect(commands.get("get_file_tree")?.({ containerId: "container-1" }, context)).resolves.toEqual([
+      await expect(
+        commands.get("get_file_tree")?.({ containerId: "container-1" }, context),
+      ).resolves.toEqual([
         { name: "app.ts", path: "src/app.ts", isDirectory: false, extension: ".ts" },
         { name: "README.md", path: "README.md", isDirectory: false, extension: ".md" },
       ]);
-      const changedTree = await commands.get("get_file_tree")?.(
+      const changedTree = (await commands.get("get_file_tree")?.(
         { containerId: "container-1", knownDigest: "stale" },
         context,
-      ) as {
+      )) as {
         unchanged: boolean;
         digest: string;
         value?: unknown;
@@ -458,75 +474,104 @@ esac
         unchanged: false,
         value: expect.any(Array),
       });
-      await expect(commands.get("get_file_tree")?.(
-        { containerId: "container-1", knownDigest: changedTree.digest },
-        context,
-      )).resolves.toEqual({
+      await expect(
+        commands.get("get_file_tree")?.(
+          { containerId: "container-1", knownDigest: changedTree.digest },
+          context,
+        ),
+      ).resolves.toEqual({
         unchanged: true,
         digest: changedTree.digest,
       });
-      await expect(commands.get("read_container_file")?.(
-        { containerId: "container-1", filePath: "src/app.ts" },
-        context,
-      )).resolves.toEqual({ path: "src/app.ts", content: "export const value = 2;\n", language: "ts" });
-      await expect(commands.get("read_file_at_branch")?.(
-        { containerId: "container-1", filePath: "src/app.ts", branch: "main" },
-        context,
-      )).resolves.toEqual({ path: "src/app.ts", content: "export const value = 1;\n", language: "ts" });
-      await expect(commands.get("read_file_at_branch")?.(
-        { containerId: "container-1", filePath: "src/app.ts", branch: "missing" },
-        context,
-      )).resolves.toBeNull();
-      await expect(commands.get("read_container_file_base64")?.(
-        { containerId: "container-1", filePath: "assets/blob.bin" },
-        context,
-      )).resolves.toBe("AAEC");
-      await expect(commands.get("write_container_file")?.(
-        { containerId: "container-1", filePath: "generated/out.bin", base64Data: "AAEC" },
-        context,
-      )).resolves.toBe("/workspace/generated/out.bin");
+      await expect(
+        commands.get("read_container_file")?.(
+          { containerId: "container-1", filePath: "src/app.ts" },
+          context,
+        ),
+      ).resolves.toEqual({
+        path: "src/app.ts",
+        content: "export const value = 2;\n",
+        language: "ts",
+      });
+      await expect(
+        commands.get("read_file_at_branch")?.(
+          { containerId: "container-1", filePath: "src/app.ts", branch: "main" },
+          context,
+        ),
+      ).resolves.toEqual({
+        path: "src/app.ts",
+        content: "export const value = 1;\n",
+        language: "ts",
+      });
+      await expect(
+        commands.get("read_file_at_branch")?.(
+          { containerId: "container-1", filePath: "src/app.ts", branch: "missing" },
+          context,
+        ),
+      ).resolves.toBeNull();
+      await expect(
+        commands.get("read_container_file_base64")?.(
+          { containerId: "container-1", filePath: "assets/blob.bin" },
+          context,
+        ),
+      ).resolves.toBe("AAEC");
+      await expect(
+        commands.get("write_container_file")?.(
+          { containerId: "container-1", filePath: "generated/out.bin", base64Data: "AAEC" },
+          context,
+        ),
+      ).resolves.toBe("/workspace/generated/out.bin");
 
       expect(await fs.readFile(stdinPath, "utf8")).toBe("AAEC");
       const dockerLog = await fs.readFile(logPath, "utf8");
       expect(dockerLog).toContain("-type l -prune");
-      expect(dockerLog).toContain("exec -i container-1 bash -lc base64 -d > '/workspace/generated/out.bin'");
+      expect(dockerLog).toContain(
+        "exec -i container-1 bash -lc base64 -d > '/workspace/generated/out.bin'",
+      );
     });
   });
 
   test("returns exactly the configured 5000-file container tree boundary", async () => {
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 i=1
 while [ "$i" -le 5000 ]; do
   printf 'generated/file-%s.ts\\n' "$i"
   i=$((i + 1))
 done
-`, async ({ logPath }) => {
-      const commands = createCommandRegistry();
-      const files = await commands.get("get_file_tree")?.(
-        { containerId: "container-tree-cap" },
-        createContext(),
-      ) as Array<{ path: string }>;
+`,
+      async ({ logPath }) => {
+        const commands = createCommandRegistry();
+        const files = (await commands.get("get_file_tree")?.(
+          { containerId: "container-tree-cap" },
+          createContext(),
+        )) as Array<{ path: string }>;
 
-      expect(files).toHaveLength(5_000);
-      expect(files[0]?.path).toBe("generated/file-1.ts");
-      expect(files.at(-1)?.path).toBe("generated/file-5000.ts");
-      expect(await fs.readFile(logPath, "utf8")).toContain("head -5000");
-    });
+        expect(files).toHaveLength(5_000);
+        expect(files[0]?.path).toBe("generated/file-1.ts");
+        expect(files.at(-1)?.path).toBe("generated/file-5000.ts");
+        expect(await fs.readFile(logPath, "utf8")).toContain("head -5000");
+      },
+    );
   });
 
   test("rejects unsafe container file paths and malformed writes before invoking docker", async () => {
     const commands = createCommandRegistry();
     const context = createContext();
 
-    await expect(commands.get("read_container_file")?.(
-      { containerId: "container-1", filePath: "../secret" },
-      context,
-    )).rejects.toThrow("parent directory traversal is not allowed");
-    await expect(commands.get("write_container_file")?.(
-      { containerId: "container-1", filePath: "result.bin", base64Data: "not-base64!" },
-      context,
-    )).rejects.toThrow("File payload is not valid base64");
+    await expect(
+      commands.get("read_container_file")?.(
+        { containerId: "container-1", filePath: "../secret" },
+        context,
+      ),
+    ).rejects.toThrow("parent directory traversal is not allowed");
+    await expect(
+      commands.get("write_container_file")?.(
+        { containerId: "container-1", filePath: "result.bin", base64Data: "not-base64!" },
+        context,
+      ),
+    ).rejects.toThrow("File payload is not valid base64");
   });
 
   test("reports persisted status for every local server kind and accepts stale cleanup", async () => {
@@ -542,24 +587,20 @@ done
     const context = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("get_local_opencode_server_status")?.(
-      { environmentId: "env-1" },
-      context,
-    )).resolves.toEqual({ running: false, port: 4101, pid: 5101 });
-    await expect(commands.get("get_local_claude_server_status")?.(
-      { environmentId: "env-1" },
-      context,
-    )).resolves.toEqual({ running: false, port: 4102, pid: 5102 });
-    await expect(commands.get("get_local_codex_server_status")?.(
-      { environmentId: "env-1" },
-      context,
-    )).resolves.toEqual({ running: false, port: 4103, pid: 5103 });
+    await expect(
+      commands.get("get_local_opencode_server_status")?.({ environmentId: "env-1" }, context),
+    ).resolves.toEqual({ running: false, port: 4101, pid: 5101 });
+    await expect(
+      commands.get("get_local_claude_server_status")?.({ environmentId: "env-1" }, context),
+    ).resolves.toEqual({ running: false, port: 4102, pid: 5102 });
+    await expect(
+      commands.get("get_local_codex_server_status")?.({ environmentId: "env-1" }, context),
+    ).resolves.toEqual({ running: false, port: 4103, pid: 5103 });
     expect(commands.get("cleanup_stale_local_servers_cmd")?.({}, context)).toBeUndefined();
 
-    expect(() => commands.get("get_local_codex_server_status")?.(
-      { environmentId: 1 },
-      context,
-    )).toThrow("Expected environmentId to be a string");
+    expect(() =>
+      commands.get("get_local_codex_server_status")?.({ environmentId: 1 }, context),
+    ).toThrow("Expected environmentId to be a string");
   });
 
   test("reports OpenCode agent-tool readiness only for a live server with agent tools", async () => {
@@ -577,10 +618,12 @@ done
     } as unknown as CommandContext;
 
     // A stopped server has no MCP state worth reporting.
-    await expect(commands.get("get_local_opencode_server_status")?.(
-      { environmentId: "env-tools" },
-      withAgentTools,
-    )).resolves.toEqual({ running: false, port: 4201, pid: 5201 });
+    await expect(
+      commands.get("get_local_opencode_server_status")?.(
+        { environmentId: "env-tools" },
+        withAgentTools,
+      ),
+    ).resolves.toEqual({ running: false, port: 4201, pid: 5201 });
 
     commandTesting.setLocalServerProcess("opencode:env-tools", {
       pid: 5201,
@@ -591,10 +634,12 @@ done
     try {
       // Live, but nothing has been reconciled yet: readiness is unknown rather
       // than an unqualified claim that the ticket tools are wired up.
-      await expect(commands.get("get_local_opencode_server_status")?.(
-        { environmentId: "env-tools" },
-        withAgentTools,
-      )).resolves.toEqual({
+      await expect(
+        commands.get("get_local_opencode_server_status")?.(
+          { environmentId: "env-tools" },
+          withAgentTools,
+        ),
+      ).resolves.toEqual({
         running: true,
         port: 4201,
         pid: 5201,
@@ -609,14 +654,18 @@ done
         signalCode: null,
         kill: mock(() => true),
       } as unknown as ChildProcessWithoutNullStreams);
-      await expect(commands.get("get_local_claude_server_status")?.(
-        { environmentId: "env-tools" },
-        withAgentTools,
-      )).resolves.toEqual({ running: true, port: null, pid: 5202 });
-      await expect(commands.get("get_local_opencode_server_status")?.(
-        { environmentId: "env-tools" },
-        createContext(environment),
-      )).resolves.toEqual({ running: true, port: 4201, pid: 5201 });
+      await expect(
+        commands.get("get_local_claude_server_status")?.(
+          { environmentId: "env-tools" },
+          withAgentTools,
+        ),
+      ).resolves.toEqual({ running: true, port: null, pid: 5202 });
+      await expect(
+        commands.get("get_local_opencode_server_status")?.(
+          { environmentId: "env-tools" },
+          createContext(environment),
+        ),
+      ).resolves.toEqual({ running: true, port: 4201, pid: 5201 });
       expect(agentTools.connection).not.toHaveBeenCalled();
     } finally {
       commandTesting.resetLocalServerLifecycle();
@@ -643,16 +692,18 @@ done
       worktreePath: root,
     });
     const commands = createCommandRegistry();
-    const read = (fingerprint = true) => commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: "env-1", ...(fingerprint ? { fingerprint: true } : {}) },
-      context,
-    ) as Promise<{ head: string; paths: string[]; fingerprint?: string }>;
+    const read = (fingerprint = true) =>
+      commands.get("get_environment_uncommitted_paths")?.(
+        { environmentId: "env-1", ...(fingerprint ? { fingerprint: true } : {}) },
+        context,
+      ) as Promise<{ head: string; paths: string[]; fingerprint?: string }>;
 
-    const initialHead = (await runCommand(
-      "git",
-      ["rev-parse", "--verify", "HEAD^{commit}"],
-      { cwd: root, timeoutMs: 30_000 },
-    )).stdout.trim();
+    const initialHead = (
+      await runCommand("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
+        cwd: root,
+        timeoutMs: 30_000,
+      })
+    ).stdout.trim();
 
     const clean = await read();
     expect(clean).toMatchObject({ head: initialHead, paths: [] });
@@ -711,25 +762,30 @@ done
 
     // Only git on PATH, exactly as a GUI-launched macOS app sees it.
     const bareBin = await createTempDir("ork-commands-io-barebin-");
-    const gitPath = (await runCommand("sh", ["-c", "command -v git"], { timeoutMs: 30_000 }))
-      .stdout.trim();
+    const gitPath = (
+      await runCommand("sh", ["-c", "command -v git"], { timeoutMs: 30_000 })
+    ).stdout.trim();
     await fs.symlink(gitPath, path.join(bareBin, "git"));
 
     // The packaged layout resolveBunBinary looks for: resources/bin/bun.
     const resourceRoot = await createTempDir("ork-commands-io-resources-");
     await fs.mkdir(path.join(resourceRoot, "bin"), { recursive: true });
-    const bunPath = (await runCommand("sh", ["-c", "command -v bun"], { timeoutMs: 30_000 }))
-      .stdout.trim();
+    const bunPath = (
+      await runCommand("sh", ["-c", "command -v bun"], { timeoutMs: 30_000 })
+    ).stdout.trim();
     await fs.symlink(bunPath, path.join(resourceRoot, "bin", "bun"));
 
     const previousPath = process.env.PATH;
     process.env.PATH = bareBin;
     try {
-      const context = createContext({
-        id: "env-1",
-        environmentType: "local",
-        worktreePath: root,
-      }, { resourceRoot });
+      const context = createContext(
+        {
+          id: "env-1",
+          environmentType: "local",
+          worktreePath: root,
+        },
+        { resourceRoot },
+      );
       const commands = createCommandRegistry();
       const probed = await (commands.get("get_environment_uncommitted_paths")?.(
         { environmentId: "env-1", fingerprint: true },
@@ -753,14 +809,18 @@ done
       worktreePath: root,
     });
     const commands = createCommandRegistry();
-    await expect(commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: "env-1", contents: true },
-      context,
-    )).rejects.toThrow("Unexpected get_environment_uncommitted_paths field: contents");
-    await expect(commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: "env-1", fingerprint: "yes" },
-      context,
-    )).rejects.toThrow("Expected fingerprint to be a boolean");
+    await expect(
+      commands.get("get_environment_uncommitted_paths")?.(
+        { environmentId: "env-1", contents: true },
+        context,
+      ),
+    ).rejects.toThrow("Unexpected get_environment_uncommitted_paths field: contents");
+    await expect(
+      commands.get("get_environment_uncommitted_paths")?.(
+        { environmentId: "env-1", fingerprint: "yes" },
+        context,
+      ),
+    ).rejects.toThrow("Expected fingerprint to be a boolean");
   });
 
   // The whole reason review and verify may run writable is that validation
@@ -784,10 +844,11 @@ done
       worktreePath: root,
     });
     const commands = createCommandRegistry();
-    const read = () => commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: "env-1", fingerprint: true },
-      context,
-    ) as Promise<{ head: string; paths: string[]; fingerprint: string }>;
+    const read = () =>
+      commands.get("get_environment_uncommitted_paths")?.(
+        { environmentId: "env-1", fingerprint: true },
+        context,
+      ) as Promise<{ head: string; paths: string[]; fingerprint: string }>;
 
     const before = await read();
     expect(before.paths).toEqual([]);
@@ -818,27 +879,33 @@ done
 
     const commands = createCommandRegistry();
 
-    await expect(commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: "env-1" },
-      createContext({
-        id: "env-1",
-        environmentType: "local",
-        worktreePath: root,
-      }),
-    )).rejects.toThrow();
+    await expect(
+      commands.get("get_environment_uncommitted_paths")?.(
+        { environmentId: "env-1" },
+        createContext({
+          id: "env-1",
+          environmentType: "local",
+          worktreePath: root,
+        }),
+      ),
+    ).rejects.toThrow();
   });
 
   test("rejects an unknown environment rather than reporting a clean worktree", async () => {
     const commands = createCommandRegistry();
 
-    await expect(commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: "missing" },
-      createContext(null),
-    )).rejects.toThrow("Environment not found");
+    await expect(
+      commands.get("get_environment_uncommitted_paths")?.(
+        { environmentId: "missing" },
+        createContext(null),
+      ),
+    ).rejects.toThrow("Environment not found");
     // The handler is async, so a bad argument surfaces as a rejection.
-    await expect(commands.get("get_environment_uncommitted_paths")?.(
-      { environmentId: 1 },
-      createContext(null),
-    )).rejects.toThrow("Expected environmentId to be a string");
+    await expect(
+      commands.get("get_environment_uncommitted_paths")?.(
+        { environmentId: 1 },
+        createContext(null),
+      ),
+    ).rejects.toThrow("Expected environmentId to be a string");
   });
 });

@@ -94,45 +94,54 @@ export function MessageShell({
     [cancelLongPress, onUserLongPress],
   );
 
-  const handleUserPointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (event.pointerId !== longPressPointerIdRef.current) return;
+  const handleUserPointerMove = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (event.pointerId !== longPressPointerIdRef.current) return;
 
-    const start = longPressStartRef.current;
-    if (!start) return;
+      const start = longPressStartRef.current;
+      if (!start) return;
 
-    if (
-      Math.abs(event.clientX - start.x) > LONG_PRESS_MOVE_TOLERANCE_PX ||
-      Math.abs(event.clientY - start.y) > LONG_PRESS_MOVE_TOLERANCE_PX
-    ) {
-      cancelLongPress();
-    }
-  }, [cancelLongPress]);
-
-  const handleUserPointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (event.pointerId !== longPressPointerIdRef.current) return;
-
-    const shouldCopy = longPressReadyRef.current;
-    cancelLongPress();
-    if (shouldCopy) {
-      suppressNextClickRef.current = true;
-      try {
-        const result = onUserLongPress?.();
-        if (result) {
-          void result.catch(() => {
-            console.error("[MessageShell] User long-press action failed");
-          });
-        }
-      } catch {
-        console.error("[MessageShell] User long-press action failed");
+      if (
+        Math.abs(event.clientX - start.x) > LONG_PRESS_MOVE_TOLERANCE_PX ||
+        Math.abs(event.clientY - start.y) > LONG_PRESS_MOVE_TOLERANCE_PX
+      ) {
+        cancelLongPress();
       }
-    }
-  }, [cancelLongPress, onUserLongPress]);
+    },
+    [cancelLongPress],
+  );
 
-  const handleUserPointerCancel = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (event.pointerId === longPressPointerIdRef.current) {
+  const handleUserPointerUp = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (event.pointerId !== longPressPointerIdRef.current) return;
+
+      const shouldCopy = longPressReadyRef.current;
       cancelLongPress();
-    }
-  }, [cancelLongPress]);
+      if (shouldCopy) {
+        suppressNextClickRef.current = true;
+        try {
+          const result = onUserLongPress?.();
+          if (result) {
+            void result.catch(() => {
+              console.error("[MessageShell] User long-press action failed");
+            });
+          }
+        } catch {
+          console.error("[MessageShell] User long-press action failed");
+        }
+      }
+    },
+    [cancelLongPress, onUserLongPress],
+  );
+
+  const handleUserPointerCancel = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      if (event.pointerId === longPressPointerIdRef.current) {
+        cancelLongPress();
+      }
+    },
+    [cancelLongPress],
+  );
 
   const handleUserClickCapture = useCallback((event: MouseEvent<HTMLDivElement>) => {
     if (!suppressNextClickRef.current) return;
@@ -142,12 +151,7 @@ export function MessageShell({
   }, []);
 
   return (
-    <div
-      className={cn(
-        "px-3 @sm:px-6 py-3",
-        className,
-      )}
-    >
+    <div className={cn("px-3 @sm:px-6 py-3", className)}>
       <div
         className={cn(
           "mx-auto flex max-w-3xl min-w-0",
@@ -168,17 +172,9 @@ export function MessageShell({
             onPointerUp={isUser ? handleUserPointerUp : undefined}
             onPointerCancel={isUser ? handleUserPointerCancel : undefined}
             onClickCapture={isUser ? handleUserClickCapture : undefined}
-            style={
-              isUser && onUserLongPress
-                ? { WebkitTouchCallout: "none" }
-                : undefined
-            }
+            style={isUser && onUserLongPress ? { WebkitTouchCallout: "none" } : undefined}
           >
-            {showHeader && isUser ? (
-              <div className="sr-only">
-                {authorLabel}
-              </div>
-            ) : null}
+            {showHeader && isUser ? <div className="sr-only">{authorLabel}</div> : null}
 
             <div className="flex flex-col gap-3 break-words">{children}</div>
 
@@ -199,7 +195,9 @@ export function MessageShell({
                     ) : null}
                     <span className="shrink-0 whitespace-nowrap">{metadata}</span>
                   </div>
-                ) : <span />}
+                ) : (
+                  <span />
+                )}
                 {actions ? (
                   <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity duration-150 md:hover-fine:opacity-0 md:hover-fine:group-hover:opacity-100 md:hover-fine:focus-within:opacity-100">
                     {actions}
@@ -217,11 +215,7 @@ export function MessageShell({
               )}
             >
               {metadata ? <span>{metadata}</span> : null}
-              {actions ? (
-                <div className="flex items-center gap-1">
-                  {actions}
-                </div>
-              ) : null}
+              {actions ? <div className="flex items-center gap-1">{actions}</div> : null}
             </div>
           ) : null}
         </div>
@@ -261,9 +255,7 @@ export function MessageErrorAlert({
               </div>
             ) : null}
             {action ? <div className="mt-3">{action}</div> : null}
-            <div className="text-[10px] text-destructive/60 mt-1">
-              {timestampLabel}
-            </div>
+            <div className="text-[10px] text-destructive/60 mt-1">{timestampLabel}</div>
           </div>
         </div>
       </div>

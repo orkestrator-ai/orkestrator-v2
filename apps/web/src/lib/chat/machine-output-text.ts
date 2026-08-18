@@ -74,9 +74,7 @@ export function jsonDocumentState(text: string): JsonDocumentState {
       if (depth === 0) {
         // Anything but trailing whitespace means prose wrapped around a JSON
         // snippet — Markdown renders that correctly and it stays visible.
-        return candidate.slice(index + 1).trim().length === 0
-          ? "complete"
-          : "not-json";
+        return candidate.slice(index + 1).trim().length === 0 ? "complete" : "not-json";
       }
     }
   }

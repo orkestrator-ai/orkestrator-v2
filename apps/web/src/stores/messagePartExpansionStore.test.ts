@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import {
-  retainExpansionKey,
-  useMessagePartExpansionStore,
-} from "./messagePartExpansionStore";
+import { retainExpansionKey, useMessagePartExpansionStore } from "./messagePartExpansionStore";
 
 function keys(): ReadonlySet<string> {
   return useMessagePartExpansionStore.getState().expandedKeys;

@@ -72,11 +72,7 @@ interface GitHubIssuesState {
     updates: { title: string; body: string },
   ) => Promise<GitHubIssue>;
   closeIssue: (projectId: string, issueNumber: number) => Promise<void>;
-  addComment: (
-    projectId: string,
-    issueNumber: number,
-    body: string,
-  ) => Promise<GitHubIssueComment>;
+  addComment: (projectId: string, issueNumber: number, body: string) => Promise<GitHubIssueComment>;
   editComment: (
     projectId: string,
     issueNumber: number,
@@ -117,10 +113,7 @@ const activeProjectRequests = new Map<string, number>();
 
 function invalidateIssueReads(projectId: string, issueNumber: number): string {
   const key = detailKey(projectId, issueNumber);
-  activeProjectRequests.set(
-    projectId,
-    (activeProjectRequests.get(projectId) ?? 0) + 1,
-  );
+  activeProjectRequests.set(projectId, (activeProjectRequests.get(projectId) ?? 0) + 1);
   activeIssueRequests.set(key, (activeIssueRequests.get(key) ?? 0) + 1);
   return key;
 }
@@ -224,10 +217,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
       mutationErrors.delete(mutationKey);
       const snapshots = new Map(state.snapshots);
       if (previousSnapshot && previousIssue) {
-        snapshots.set(
-          projectId,
-          replaceIssue(previousSnapshot, { ...previousIssue, status })!,
-        );
+        snapshots.set(projectId, replaceIssue(previousSnapshot, { ...previousIssue, status })!);
       }
       return { mutations, mutationErrors, snapshots, loadingProjects, loadingDetails };
     });
@@ -237,10 +227,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
       // A refresh can begin after the mutation starts and still contain the
       // pre-mutation labels. Invalidate those overlapping reads once GitHub
       // confirms the write so they cannot replace this authoritative response.
-      const completedDetailRequestKey = invalidateIssueReads(
-        projectId,
-        issueNumber,
-      );
+      const completedDetailRequestKey = invalidateIssueReads(projectId, issueNumber);
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
@@ -303,10 +290,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     });
     try {
       const issue = await updateGitHubIssue(projectId, issueNumber, updates);
-      const completedDetailRequestKey = invalidateIssueReads(
-        projectId,
-        issueNumber,
-      );
+      const completedDetailRequestKey = invalidateIssueReads(projectId, issueNumber);
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
@@ -364,10 +348,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     });
     try {
       const issue = await closeGitHubIssue(projectId, issueNumber);
-      const completedDetailRequestKey = invalidateIssueReads(
-        projectId,
-        issueNumber,
-      );
+      const completedDetailRequestKey = invalidateIssueReads(projectId, issueNumber);
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
@@ -424,10 +405,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
     });
     try {
       const comment = await addGitHubIssueComment(projectId, issueNumber, body);
-      const completedDetailRequestKey = invalidateIssueReads(
-        projectId,
-        issueNumber,
-      );
+      const completedDetailRequestKey = invalidateIssueReads(projectId, issueNumber);
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
@@ -447,9 +425,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
         }
         const snapshots = new Map(state.snapshots);
         const snapshot = snapshots.get(projectId);
-        const listIssue = snapshot?.issues.find(
-          (candidate) => candidate.number === issueNumber,
-        );
+        const listIssue = snapshot?.issues.find((candidate) => candidate.number === issueNumber);
         if (snapshot && listIssue) {
           snapshots.set(
             projectId,
@@ -503,16 +479,8 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
       };
     });
     try {
-      const comment = await updateGitHubIssueComment(
-        projectId,
-        issueNumber,
-        commentId,
-        body,
-      );
-      const completedDetailRequestKey = invalidateIssueReads(
-        projectId,
-        issueNumber,
-      );
+      const comment = await updateGitHubIssueComment(projectId, issueNumber, commentId, body);
+      const completedDetailRequestKey = invalidateIssueReads(projectId, issueNumber);
       set((state) => {
         const mutations = new Set(state.mutations);
         mutations.delete(mutationKey);
@@ -557,10 +525,7 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
 
   clearProject: (projectId) =>
     set((state) => {
-      activeProjectRequests.set(
-        projectId,
-        (activeProjectRequests.get(projectId) ?? 0) + 1,
-      );
+      activeProjectRequests.set(projectId, (activeProjectRequests.get(projectId) ?? 0) + 1);
       for (const key of activeIssueRequests.keys()) {
         if (key.startsWith(`${projectId}:`)) {
           activeIssueRequests.set(key, (activeIssueRequests.get(key) ?? 0) + 1);
@@ -574,26 +539,18 @@ export const useGitHubIssuesStore = create<GitHubIssuesState>()((set, get) => ({
       const loadingProjects = new Set(state.loadingProjects);
       loadingProjects.delete(projectId);
       const loadingDetails = new Set(
-        Array.from(state.loadingDetails).filter(
-          (key) => !key.startsWith(`${projectId}:`),
-        ),
+        Array.from(state.loadingDetails).filter((key) => !key.startsWith(`${projectId}:`)),
       );
       const projectErrors = new Map(state.projectErrors);
       projectErrors.delete(projectId);
       const detailErrors = new Map(
-        Array.from(state.detailErrors).filter(
-          ([key]) => !key.startsWith(`${projectId}:`),
-        ),
+        Array.from(state.detailErrors).filter(([key]) => !key.startsWith(`${projectId}:`)),
       );
       const mutations = new Set(
-        Array.from(state.mutations).filter(
-          (key) => !key.includes(`:${projectId}:`),
-        ),
+        Array.from(state.mutations).filter((key) => !key.includes(`:${projectId}:`)),
       );
       const mutationErrors = new Map(
-        Array.from(state.mutationErrors).filter(
-          ([key]) => !key.includes(`:${projectId}:`),
-        ),
+        Array.from(state.mutationErrors).filter(([key]) => !key.includes(`:${projectId}:`)),
       );
       return {
         snapshots,

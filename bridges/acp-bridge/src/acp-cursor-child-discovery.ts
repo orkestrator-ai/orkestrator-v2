@@ -118,8 +118,9 @@ export function discoverCursorChildTranscriptDirectories(
     createdAt.set(entry.name, createdAtMs);
     children.push({ agentId: entry.name, createdAtMs });
   }
-  children.sort((left, right) =>
-    left.createdAtMs - right.createdAtMs || left.agentId.localeCompare(right.agentId)
+  children.sort(
+    (left, right) =>
+      left.createdAtMs - right.createdAtMs || left.agentId.localeCompare(right.agentId),
   );
   discoveryCache = { root, mtimeMs: rootStats.mtimeMs, limit, createdAt, children };
   return children;
@@ -239,8 +240,9 @@ function unboundActiveLaunches(states: Iterable<SessionState>): UnboundCursorLau
       launches.push({ owner, toolUseId, startedAtMs });
     }
   }
-  launches.sort((left, right) =>
-    left.startedAtMs - right.startedAtMs || left.toolUseId.localeCompare(right.toolUseId)
+  launches.sort(
+    (left, right) =>
+      left.startedAtMs - right.startedAtMs || left.toolUseId.localeCompare(right.toolUseId),
   );
   return launches;
 }

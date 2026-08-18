@@ -41,9 +41,7 @@ function timestampOf(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function isAgentPart(
-  part: NativeMessagePart,
-): part is NativeAgentActivityPart {
+function isAgentPart(part: NativeMessagePart): part is NativeAgentActivityPart {
   return part.type === "subagent" || part.type === "task-group";
 }
 
@@ -64,25 +62,29 @@ function trimTaskPrefix(value: string): string {
 
 export function nativeAgentActivityLabel(part: NativeAgentActivityPart): string {
   if (part.type === "subagent") {
-    return part.subagentName?.trim()
-      || part.subagentRole?.trim()
-      || part.subagentPrompt?.trim()
-      || trimTaskPrefix(part.toolTitle?.trim() || part.content.trim())
-      || "Sub-agent";
+    return (
+      part.subagentName?.trim() ||
+      part.subagentRole?.trim() ||
+      part.subagentPrompt?.trim() ||
+      trimTaskPrefix(part.toolTitle?.trim() || part.content.trim()) ||
+      "Sub-agent"
+    );
   }
 
   const task = part.task;
-  return stringArgument(
-    task.toolArgs,
-    "name",
-    "agentName",
-    "agent_name",
-    "description",
-    "task",
-    "prompt",
-  )
-    || trimTaskPrefix(task.toolTitle?.trim() || task.content.trim())
-    || "Sub-agent";
+  return (
+    stringArgument(
+      task.toolArgs,
+      "name",
+      "agentName",
+      "agent_name",
+      "description",
+      "task",
+      "prompt",
+    ) ||
+    trimTaskPrefix(task.toolTitle?.trim() || task.content.trim()) ||
+    "Sub-agent"
+  );
 }
 
 /**
@@ -101,12 +103,13 @@ export function nativeAgentActivityKey(
   messageId: string,
   partPath: string,
 ): string {
-  const backgroundTask = part.type === "task-group"
-    ? part.task.backgroundTask
-    : part.backgroundTask;
-  const durableId = backgroundTask?.id ?? (part.type === "task-group"
-    ? part.task.toolUseId?.trim() || part.task.subagentId?.trim()
-    : part.subagentId?.trim() || part.toolUseId?.trim());
+  const backgroundTask =
+    part.type === "task-group" ? part.task.backgroundTask : part.backgroundTask;
+  const durableId =
+    backgroundTask?.id ??
+    (part.type === "task-group"
+      ? part.task.toolUseId?.trim() || part.task.subagentId?.trim()
+      : part.subagentId?.trim() || part.toolUseId?.trim());
   return durableId
     ? `${backgroundTask ? "background-task" : part.type}:${durableId}`
     : `${part.type}:${messageId}:${partPath}`;
@@ -144,17 +147,14 @@ export function snapshotNativeAgentActivity(
   const snapshots = new Map<string, NativeAgentActivitySnapshot>();
   for (const message of messages) {
     forEachAgentPart(message.parts, message.id, "part", (part, id) => {
-      const backgroundTask = part.type === "task-group"
-        ? part.task.backgroundTask
-        : part.backgroundTask;
+      const backgroundTask =
+        part.type === "task-group" ? part.task.backgroundTask : part.backgroundTask;
       snapshots.set(id, {
         id,
         label: nativeAgentActivityLabel(part),
         status: getNativeAgentStatus(part),
         kind: backgroundTask ? "background-task" : "subagent",
-        ...(backgroundTask?.status
-          ? { backgroundTaskStatus: backgroundTask.status }
-          : {}),
+        ...(backgroundTask?.status ? { backgroundTaskStatus: backgroundTask.status } : {}),
       });
     });
   }
@@ -353,11 +353,13 @@ function createPinnedAgentMessage(
     ...(createdAt ? { createdAt } : {}),
     content: "",
     parts: isGroup
-      ? [{
-          type: "agent-group",
-          content: "",
-          parts,
-        }]
+      ? [
+          {
+            type: "agent-group",
+            content: "",
+            parts,
+          },
+        ]
       : [parts[0]!],
   };
 }
@@ -441,11 +443,9 @@ export function pinNativeAgentParts(
     }
 
     if (activeParts.length > 0) {
-      activeMessages.push(createPinnedAgentMessage(
-        message,
-        `${message.id}:active-agents`,
-        activeParts,
-      ));
+      activeMessages.push(
+        createPinnedAgentMessage(message, `${message.id}:active-agents`, activeParts),
+      );
     }
 
     for (const { part, anchorMessageId, settledAt } of settledParts) {
@@ -471,24 +471,28 @@ export function pinNativeAgentParts(
     const row = settledRows.get(slot.originalMessageId);
     if (!row) continue;
     settledRows.delete(slot.originalMessageId);
-    pinnedMessages.push(createPinnedAgentMessage(
-      row.source,
-      `${slot.originalMessageId}:settled-agents`,
-      row.parts,
-      row.settledAt,
-    ));
+    pinnedMessages.push(
+      createPinnedAgentMessage(
+        row.source,
+        `${slot.originalMessageId}:settled-agents`,
+        row.parts,
+        row.settledAt,
+      ),
+    );
   }
 
   // An anchor whose message is genuinely absent from this message set (rather
   // than merely consumed by extraction). The card was last seen at the bottom,
   // so that is where it stays, still above anything still running.
   for (const [anchorMessageId, row] of settledRows) {
-    pinnedMessages.push(createPinnedAgentMessage(
-      row.source,
-      `${anchorMessageId}:settled-agents`,
-      row.parts,
-      row.settledAt,
-    ));
+    pinnedMessages.push(
+      createPinnedAgentMessage(
+        row.source,
+        `${anchorMessageId}:settled-agents`,
+        row.parts,
+        row.settledAt,
+      ),
+    );
   }
 
   return [...pinnedMessages, ...activeMessages];

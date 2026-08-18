@@ -18,11 +18,7 @@ interface UseEscapeToStopOptions {
  * - modifier keys — Cmd/Ctrl/Alt+Escape belong to the OS or other bindings.
  * - `isComposing` — Escape cancels an IME composition, it is not a stop.
  */
-export function useEscapeToStop({
-  isActive,
-  isLoading,
-  onStop,
-}: UseEscapeToStopOptions): void {
+export function useEscapeToStop({ isActive, isLoading, onStop }: UseEscapeToStopOptions): void {
   useEffect(() => {
     if (!isActive || !isLoading) {
       return;
@@ -30,13 +26,13 @@ export function useEscapeToStop({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
-        event.key !== "Escape"
-        || event.defaultPrevented
-        || event.repeat
-        || event.metaKey
-        || event.ctrlKey
-        || event.altKey
-        || event.isComposing
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        event.repeat ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.isComposing
       ) {
         return;
       }

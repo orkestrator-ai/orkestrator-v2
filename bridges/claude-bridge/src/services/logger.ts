@@ -70,10 +70,7 @@ export function createRequestLogger(
 ): MiddlewareHandler | null {
   return enabled
     ? honoLogger((message, ...rest) => {
-        write(
-          redactRequestLogMessage(message),
-          ...rest.map(redactRequestLogMessage),
-        );
+        write(redactRequestLogMessage(message), ...rest.map(redactRequestLogMessage));
       })
     : null;
 }

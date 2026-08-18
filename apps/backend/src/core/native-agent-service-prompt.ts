@@ -131,12 +131,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     persistAmbiguousDispatch = false,
   ): Promise<PersistedNativeAgentSession> {
     this.assertAcceptingWork();
-    const hasAttachments = (input.images?.length ?? 0) > 0
-      || (input.attachments?.length ?? 0) > 0;
+    const hasAttachments = (input.images?.length ?? 0) > 0 || (input.attachments?.length ?? 0) > 0;
     if ((!nonBlank(input.prompt) && !hasAttachments) || !nonBlank(input.requestId)) {
-      throw new Error(
-        "Native agent prompt or attachment and request ID must not be blank",
-      );
+      throw new Error("Native agent prompt or attachment and request ID must not be blank");
     }
     const session = await this.ensureSession(input);
     const provider = await this.provider(input);
@@ -183,10 +180,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
      * and leave a confirmed turn unattributed.
      */
     await this.assertEnvironmentLive(input.environmentId);
-    this.providerDispatchCounts.set(
-      provider,
-      (this.providerDispatchCounts.get(provider) ?? 0) + 1,
-    );
+    this.providerDispatchCounts.set(provider, (this.providerDispatchCounts.get(provider) ?? 0) + 1);
     try {
       const result = await this.storage.dispatchNativeAgentPromptOnce(
         session.key,
@@ -198,9 +192,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
           if (!preparation.dispatch) {
             return {
               dispatched: false as const,
-              ...(preparation.notice
-                ? { openCodeIncompleteTurnNotice: preparation.notice }
-                : {}),
+              ...(preparation.notice ? { openCodeIncompleteTurnNotice: preparation.notice } : {}),
             };
           }
           await provider.send(durable.providerSessionId, input.prompt, {
@@ -214,8 +206,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
             mode: input.mode,
             fastMode: input.fastMode,
             subAgent: input.subAgent,
-            executionAgent:
-              preparation.executionAgent ?? input.executionAgent,
+            executionAgent: preparation.executionAgent ?? input.executionAgent,
             includeLocalSettings: input.includeLocalSettings,
             promptSuggestions: input.promptSuggestions,
             model: preparation.model ?? input.model,
@@ -271,10 +262,10 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   }): Promise<void> {
     this.assertAcceptingWork();
     if (
-      !nonBlank(input.environmentId)
-      || !nonBlank(input.logicalSessionKey)
-      || !nonBlank(input.providerSessionId)
-      || !nonBlank(input.requestId)
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !nonBlank(input.providerSessionId) ||
+      !nonBlank(input.requestId)
     ) {
       throw new Error("OpenCode manual prompt claim is invalid");
     }
@@ -287,11 +278,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     if (this.openCodeRecoveryDispatches.has(key)) {
       throw new Error("OpenCode automatic recovery is already being sent");
     }
-    if (
-      existing
-      && existing.expiresAt > this.now()
-      && existing.requestId !== input.requestId
-    ) {
+    if (existing && existing.expiresAt > this.now() && existing.requestId !== input.requestId) {
       throw new Error("Another OpenCode prompt is already being sent");
     }
     if (!existing && this.openCodeManualPromptClaims.size >= OPENCODE_RECOVERY_MAX_CANDIDATES) {
@@ -343,8 +330,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     );
     const claim = this.openCodeManualPromptClaims.get(key);
     if (
-      claim?.providerSessionId === input.providerSessionId
-      && claim.requestId === input.requestId
+      claim?.providerSessionId === input.providerSessionId &&
+      claim.requestId === input.requestId
     ) {
       this.openCodeManualPromptClaims.delete(key);
     }
@@ -375,9 +362,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     ]);
     await Promise.allSettled([...this.scanTasks]);
     while (
-      this.launchTasks.size > 0
-      || this.queueTasks.size > 0
-      || this.openCodeRecoveryTasks.size > 0
+      this.launchTasks.size > 0 ||
+      this.queueTasks.size > 0 ||
+      this.openCodeRecoveryTasks.size > 0
     ) {
       await Promise.allSettled([
         ...this.launchTasks.values(),
@@ -385,9 +372,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         ...this.openCodeRecoveryTasks.values(),
       ]);
     }
-    await Promise.allSettled(
-      [...this.providers.values()].map((provider) => provider.dispose?.()),
-    );
+    await Promise.allSettled([...this.providers.values()].map((provider) => provider.dispose?.()));
     this.openCodeRecoveryCandidates.clear();
     this.openCodeManualPromptClaims.clear();
     this.openCodeRecoveryDispatches.clear();
@@ -427,15 +412,13 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     },
   ): void {
     if (this.stopped || this.options.interactionMonitorMode !== "observe-only") return;
-    const phase = event.registration.origin === "build-pipeline"
-      ? "pipeline"
-      : event.registration.phase?.slice(0, 256) ?? "native-session";
-    const observationKey = [
-      event.provider,
-      event.kind,
-      event.registration.origin,
-      phase,
-    ].join("\0");
+    const phase =
+      event.registration.origin === "build-pipeline"
+        ? "pipeline"
+        : (event.registration.phase?.slice(0, 256) ?? "native-session");
+    const observationKey = [event.provider, event.kind, event.registration.origin, phase].join(
+      "\0",
+    );
     const providerSessionKey = JSON.stringify([
       event.environmentId,
       event.provider,
@@ -454,11 +437,13 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       this.providerReportedInteractions.delete(trackedKey);
       const observation = this.interactionObservations.get(tracked.observationKey);
       if (!observation) return;
-      const remainsBlocked = [...this.trackedInteractions.values()].some(
-        (entry) => entry.observationKey === tracked.observationKey,
-      ) || [...this.providerReportedInteractions.values()].some(
-        (entry) => entry.observationKey === tracked.observationKey,
-      );
+      const remainsBlocked =
+        [...this.trackedInteractions.values()].some(
+          (entry) => entry.observationKey === tracked.observationKey,
+        ) ||
+        [...this.providerReportedInteractions.values()].some(
+          (entry) => entry.observationKey === tracked.observationKey,
+        );
       if (!remainsBlocked) {
         observation.providerState = event.providerState ?? "running";
         observation.eventualOutcome = "withdrawn";
@@ -480,9 +465,10 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       this.providerReportedInteractions.delete(trackedKey);
     }
     if (
-      this.trackedInteractions.size + this.providerReportedInteractions.size
-        >= INTERACTION_MONITOR_MAX_TRACKED_REQUESTS
-    ) return;
+      this.trackedInteractions.size + this.providerReportedInteractions.size >=
+      INTERACTION_MONITOR_MAX_TRACKED_REQUESTS
+    )
+      return;
     const observation = this.ensureInteractionObservation(
       observationKey,
       event.provider,
@@ -511,15 +497,12 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
    * anything that arrives after one snapshot is recovered by the next.
    */
   reconcileAgentInteractions(): Promise<void> {
-    if (
-      this.stopped
-      || this.options.interactionMonitorMode !== "observe-only"
-    ) return Promise.resolve();
+    if (this.stopped || this.options.interactionMonitorMode !== "observe-only")
+      return Promise.resolve();
     if (this.interactionScan) return this.interactionScan;
-    const scan = this.trackScan(this.reconcileAgentInteractionsOnce())
-      .finally(() => {
-        if (this.interactionScan === scan) this.interactionScan = null;
-      });
+    const scan = this.trackScan(this.reconcileAgentInteractionsOnce()).finally(() => {
+      if (this.interactionScan === scan) this.interactionScan = null;
+    });
     this.interactionScan = scan;
     return scan;
   }
@@ -583,8 +566,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   protected emitInteractionObservation(observation: AgentInteractionObservation): void {
     // A diagnostic consumer must never delay or fail provider reconciliation.
     try {
-      void Promise.resolve(this.options.onInteractionObservation?.({ ...observation }))
-        .catch(() => undefined);
+      void Promise.resolve(this.options.onInteractionObservation?.({ ...observation })).catch(
+        () => undefined,
+      );
     } catch {
       // Synchronous telemetry failures are isolated too.
     }
@@ -613,8 +597,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       this.trackedInteractions.delete(trackedKey);
     }
     if (
-      this.trackedInteractions.size + this.providerReportedInteractions.size
-        >= INTERACTION_MONITOR_MAX_TRACKED_REQUESTS
+      this.trackedInteractions.size + this.providerReportedInteractions.size >=
+      INTERACTION_MONITOR_MAX_TRACKED_REQUESTS
     ) {
       return;
     }
@@ -662,10 +646,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
   ): void {
     if (removed.size === 0) return;
     const stillBlocked = new Set(
-      [
-        ...this.trackedInteractions.values(),
-        ...this.providerReportedInteractions.values(),
-      ].map((tracked) => tracked.observationKey),
+      [...this.trackedInteractions.values(), ...this.providerReportedInteractions.values()].map(
+        (tracked) => tracked.observationKey,
+      ),
     );
     const now = this.now();
     for (const [observationKey, tracked] of removed) {
@@ -678,8 +661,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         continue;
       }
       observation.providerState = providerState;
-      observation.eventualOutcome = tracked.expiresAt !== undefined
-        && tracked.expiresAt <= now ? "expired" : "withdrawn";
+      observation.eventualOutcome =
+        tracked.expiresAt !== undefined && tracked.expiresAt <= now ? "expired" : "withdrawn";
       observation.eventualAt = now;
     }
   }
@@ -711,9 +694,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     if (this.stopped) return;
     const environmentIds = new Set(
       environments
-        .filter((environment) =>
-          isEnvironmentReadyForAgents(environment)
-          && !environment.deletionRequestedAt
+        .filter(
+          (environment) =>
+            isEnvironmentReadyForAgents(environment) && !environment.deletionRequestedAt,
         )
         .map((environment) => environment.id),
     );
@@ -732,34 +715,35 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         logicalSessionKey: current.phase,
         providerSessionId: current.sdkSessionId,
         origin: current.origin ?? "build-pipeline",
-        interactionPolicy: current.interactionPolicy
-          ?? UNATTENDED_AGENT_INTERACTION_POLICY,
+        interactionPolicy: current.interactionPolicy ?? UNATTENDED_AGENT_INTERACTION_POLICY,
         createdAt: current.startedAt,
         updatedAt: current.startedAt,
       });
     }
     const allSessions = [...nativeSessions, ...pipelineSessions];
-    const eligibleSessions = allSessions.filter((session) =>
-      session.interactionPolicy.mode === "unattended"
-      && environmentIds.has(session.environmentId)
+    const eligibleSessions = allSessions.filter(
+      (session) =>
+        session.interactionPolicy.mode === "unattended" &&
+        environmentIds.has(session.environmentId),
     );
-    const liveProviderSessions = new Set(eligibleSessions.map((session) =>
-      JSON.stringify([session.environmentId, session.agent, session.providerSessionId])
-    ));
+    const liveProviderSessions = new Set(
+      eligibleSessions.map((session) =>
+        JSON.stringify([session.environmentId, session.agent, session.providerSessionId]),
+      ),
+    );
     const providerReportSweepAt = this.now();
     for (const [trackedKey, tracked] of this.providerReportedInteractions) {
-      if (
-        providerReportSweepAt - tracked.detectedAt
-          >= PROVIDER_REPORTED_INTERACTION_GRACE_MS
-      ) {
+      if (providerReportSweepAt - tracked.detectedAt >= PROVIDER_REPORTED_INTERACTION_GRACE_MS) {
         this.providerReportedInteractions.delete(trackedKey);
         const observation = this.interactionObservations.get(tracked.observationKey);
         if (!observation) continue;
-        const remainsBlocked = [...this.trackedInteractions.values()].some(
-          (entry) => entry.observationKey === tracked.observationKey,
-        ) || [...this.providerReportedInteractions.values()].some(
-          (entry) => entry.observationKey === tracked.observationKey,
-        );
+        const remainsBlocked =
+          [...this.trackedInteractions.values()].some(
+            (entry) => entry.observationKey === tracked.observationKey,
+          ) ||
+          [...this.providerReportedInteractions.values()].some(
+            (entry) => entry.observationKey === tracked.observationKey,
+          );
         if (!remainsBlocked) {
           observation.providerState = "missing";
           observation.eventualOutcome = "withdrawn";
@@ -778,18 +762,18 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       // Without the grace period, a concurrent scan stamps `missing` and makes
       // the provider's authoritative `withdrawn/error` event a no-op.
       tracked.missingSince ??= providerReportSweepAt;
-      if (
-        providerReportSweepAt - tracked.missingSince
-          < PROVIDER_REPORTED_INTERACTION_GRACE_MS
-      ) continue;
+      if (providerReportSweepAt - tracked.missingSince < PROVIDER_REPORTED_INTERACTION_GRACE_MS)
+        continue;
       this.providerReportedInteractions.delete(trackedKey);
       const observation = this.interactionObservations.get(tracked.observationKey);
       if (!observation) continue;
-      const remainsBlocked = [...this.trackedInteractions.values()].some(
-        (entry) => entry.observationKey === tracked.observationKey,
-      ) || [...this.providerReportedInteractions.values()].some(
-        (entry) => entry.observationKey === tracked.observationKey,
-      );
+      const remainsBlocked =
+        [...this.trackedInteractions.values()].some(
+          (entry) => entry.observationKey === tracked.observationKey,
+        ) ||
+        [...this.providerReportedInteractions.values()].some(
+          (entry) => entry.observationKey === tracked.observationKey,
+        );
       if (!remainsBlocked) {
         observation.providerState = "missing";
         observation.eventualOutcome = "withdrawn";
@@ -825,16 +809,17 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     }
     const maxPerEnvironment = Math.max(
       1,
-      this.options.interactionMonitorMaxSessionsPerEnvironment
-        ?? INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT,
+      this.options.interactionMonitorMaxSessionsPerEnvironment ??
+        INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT,
     );
     const byEnvironment = new Map<string, PersistedNativeAgentSession[]>();
     const candidatesByEnvironment = new Map<string, PersistedNativeAgentSession[]>();
     for (const session of eligibleSessions) {
       if (
-        !this.interactionMonitorAdoptionEnabled
-        && !this.monitoredInteractionSessionKeys.has(session.key)
-      ) continue;
+        !this.interactionMonitorAdoptionEnabled &&
+        !this.monitoredInteractionSessionKeys.has(session.key)
+      )
+        continue;
       const candidates = candidatesByEnvironment.get(session.environmentId) ?? [];
       candidates.push(session);
       candidatesByEnvironment.set(session.environmentId, candidates);
@@ -843,7 +828,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
     for (const [environmentId, candidates] of candidatesByEnvironment) {
       const selected: PersistedNativeAgentSession[] = [];
       const pipelineCandidates = candidates.filter((session) =>
-        session.key.startsWith("build-pipeline:")
+        session.key.startsWith("build-pipeline:"),
       );
       // With more than one slot, an active pipeline receives one reserved slot.
       // A one-slot configuration rotates across both classes so native work is
@@ -859,22 +844,17 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         }
         this.interactionSelectionCursors.set(
           environmentId,
-          singleSlotCandidates.length > 0
-            ? (cursor + 1) % singleSlotCandidates.length
-            : 0,
+          singleSlotCandidates.length > 0 ? (cursor + 1) % singleSlotCandidates.length : 0,
         );
       } else if (pipelineCandidates.length > 0) {
         const cursorKey = `${environmentId}\0pipeline`;
         const cursor = this.interactionSelectionCursors.get(cursorKey) ?? 0;
         selected.push(pipelineCandidates[cursor % pipelineCandidates.length]!);
-        this.interactionSelectionCursors.set(
-          cursorKey,
-          (cursor + 1) % pipelineCandidates.length,
-        );
+        this.interactionSelectionCursors.set(cursorKey, (cursor + 1) % pipelineCandidates.length);
       }
       if (maxPerEnvironment > 1) {
-        const remaining = candidates.filter((candidate) =>
-          !selected.some((session) => session.key === candidate.key)
+        const remaining = candidates.filter(
+          (candidate) => !selected.some((session) => session.key === candidate.key),
         );
         const cursor = this.interactionSelectionCursors.get(environmentId) ?? 0;
         for (
@@ -964,9 +944,9 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
             );
             const previousRevision = this.observedInteractionRevisions.get(session.key);
             if (
-              previousRevision !== undefined
-              && snapshot.revision !== previousRevision
-              && snapshot.revision !== previousRevision + 1
+              previousRevision !== undefined &&
+              snapshot.revision !== previousRevision &&
+              snapshot.revision !== previousRevision + 1
             ) {
               // A gap, reset, or bridge-generation change is already reconciled:
               // this is the full authoritative snapshot, never a live-event delta.
@@ -992,8 +972,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
                 // A terminal turn error is an observation, not a read fault:
                 // it settles the withdrawn cards as `error` without putting the
                 // whole interaction scan into retry backoff.
-                providerState =
-                  (await readProviderStatus(provider, session.providerSessionId)).status;
+                providerState = (await readProviderStatus(provider, session.providerSessionId))
+                  .status;
               } catch (error) {
                 // The empty authoritative snapshot already proves withdrawal;
                 // a failed auxiliary status read must not preserve stale cards.
@@ -1008,16 +988,16 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
             const attempts = Math.min(
               Math.max(
                 1,
-                this.options.interactionMonitorMaxRetries
-                  ?? INTERACTION_MONITOR_DEFAULT_MAX_RETRIES,
+                this.options.interactionMonitorMaxRetries ??
+                  INTERACTION_MONITOR_DEFAULT_MAX_RETRIES,
               ),
               (this.interactionAttempts.get(retryKey) ?? 0) + 1,
             );
             this.interactionAttempts.set(retryKey, attempts);
             const base = Math.max(
               1,
-              this.options.interactionMonitorRetryBaseMs
-                ?? INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS,
+              this.options.interactionMonitorRetryBaseMs ??
+                INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS,
             );
             this.interactionRetryAt.set(
               retryKey,
@@ -1032,21 +1012,25 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         }
       }
     };
-    await Promise.all(Array.from({
-      length: Math.min(
-        Math.max(
-          1,
-          this.options.interactionMonitorMaxConcurrency
-            ?? INTERACTION_MONITOR_DEFAULT_CONCURRENCY,
-        ),
-        groups.length,
+    await Promise.all(
+      Array.from(
+        {
+          length: Math.min(
+            Math.max(
+              1,
+              this.options.interactionMonitorMaxConcurrency ??
+                INTERACTION_MONITOR_DEFAULT_CONCURRENCY,
+            ),
+            groups.length,
+          ),
+        },
+        () => worker(),
       ),
-    }, () => worker()));
+    );
   }
 
   /**
    * Rebuild the durable environment activity projection from provider-owned
    * session state. This does not depend on a mounted tab or a renderer event.
    */
-
 }

@@ -1,9 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { AppServerRuntime, DEFAULT_THREAD_IDLE_MS, MAX_RECOVERED_CONTEXT_CHARS } from "./app-server-runtime.js";
+import {
+  AppServerRuntime,
+  DEFAULT_THREAD_IDLE_MS,
+  MAX_RECOVERED_CONTEXT_CHARS,
+} from "./app-server-runtime.js";
 import type { EngineEvent } from "./engine/types.js";
 import { getTranscriptCatalogInvalidationCountForTesting } from "./history/rollout.js";
 import { DispatchJournal } from "./sessions/dispatch-journal.js";
-import { BRIDGE_SESSION_REGISTRY_VERSION, BridgeSessionStore, hashCwd } from "./sessions/persistence.js";
+import {
+  BRIDGE_SESSION_REGISTRY_VERSION,
+  BridgeSessionStore,
+  hashCwd,
+} from "./sessions/persistence.js";
 import { phaseToExternalStatus } from "./sessions/thread-registry.js";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -17,7 +25,6 @@ import {
   waitUntil,
 } from "./app-server-runtime-test-harness.js";
 import type { Harness } from "./app-server-runtime-test-harness.js";
-
 
 describe("session lifecycle", () => {
   test("concurrent start callers share initialization and wait for it to finish", async () => {
@@ -134,7 +141,9 @@ describe("session lifecycle", () => {
             content: [{ type: "output_text", text: "I will preserve it." }],
           },
         },
-      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n")}\n`,
       "utf8",
     );
     const h = await harness({
@@ -155,8 +164,9 @@ describe("session lifecycle", () => {
     ]);
     expect(h.runtime.getStatus(resumed!.sessionId)?.messageRevision).toBe(1);
     expect(h.runtime.getRegistry().getSession(resumed!.sessionId)?.threadId).toBeNull();
-    expect((await h.runtime.getMessages(resumed!.sessionId))!.map((message) => message.content))
-      .toEqual(["Remember the parser constraint", "I will preserve it."]);
+    expect(
+      (await h.runtime.getMessages(resumed!.sessionId))!.map((message) => message.content),
+    ).toEqual(["Remember the parser constraint", "I will preserve it."]);
 
     await h.runtime.prompt(resumed!.sessionId, {
       prompt: "Continue now",
@@ -190,7 +200,9 @@ describe("session lifecycle", () => {
             content: [{ type: "input_text", text: "Earlier recovered turn" }],
           },
         },
-      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n")}\n`,
       "utf8",
     );
 
@@ -216,14 +228,12 @@ describe("session lifecycle", () => {
       }),
     });
 
-    const invalidationsBeforeResume =
-      getTranscriptCatalogInvalidationCountForTesting();
+    const invalidationsBeforeResume = getTranscriptCatalogInvalidationCountForTesting();
     const resumed = await h.runtime.resumeSession({
       threadId: "thread-ambiguous",
       mode: "build",
     });
-    expect(getTranscriptCatalogInvalidationCountForTesting())
-      .toBe(invalidationsBeforeResume + 1);
+    expect(getTranscriptCatalogInvalidationCountForTesting()).toBe(invalidationsBeforeResume + 1);
     hangNextTurn = true;
     const pending = h.runtime.prompt(resumed!.sessionId, {
       prompt: "first after recovery",
@@ -303,7 +313,9 @@ describe("session lifecycle", () => {
             content: [{ type: "output_text", text: "The cache key was stale." }],
           },
         },
-      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n")}\n`,
       "utf8",
     );
 
@@ -351,7 +363,9 @@ describe("session lifecycle", () => {
             content: [{ type: "output_text", text: huge }],
           },
         },
-      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n")}\n`,
       "utf8",
     );
 
@@ -422,11 +436,13 @@ describe("session lifecycle", () => {
       requestId: "req-live",
       turnId: "turn-live",
     });
-    expect(await h.runtime.prompt("session-recovering", {
-      prompt: "must wait",
-      requestId: "req-new",
-      attachments: [],
-    })).toMatchObject({ ok: false, status: 409 });
+    expect(
+      await h.runtime.prompt("session-recovering", {
+        prompt: "must wait",
+        requestId: "req-new",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: false, status: 409 });
   });
 
   test("a restored dispatch announces its assistant row before patching it", async () => {
@@ -461,11 +477,13 @@ describe("session lifecycle", () => {
       "thread/resume": () => ({ thread: threadPayload("thread-announce") }),
       "thread/read": () => ({
         thread: threadPayload("thread-announce", {
-          turns: [{
-            id: "turn-restored",
-            status: "inProgress",
-            items: [{ type: "userMessage", clientId: "req-restored" }],
-          }],
+          turns: [
+            {
+              id: "turn-restored",
+              status: "inProgress",
+              items: [{ type: "userMessage", clientId: "req-restored" }],
+            },
+          ],
         }),
       }),
     });
@@ -473,9 +491,10 @@ describe("session lifecycle", () => {
 
     const restored = (await h.runtime.getMessages("session-announce"))!.at(-1)!;
     expect(restored.role).toBe("assistant");
-    const announced = h.events.filter((event) =>
-      event.type === "message.updated"
-      && (event.data?.message as { id?: string } | undefined)?.id === restored.id
+    const announced = h.events.filter(
+      (event) =>
+        event.type === "message.updated" &&
+        (event.data?.message as { id?: string } | undefined)?.id === restored.id,
     );
     expect(announced.length).toBeGreaterThan(0);
 
@@ -488,8 +507,10 @@ describe("session lifecycle", () => {
 
     // Every later frame for this row may be a patch, now that the client has a
     // snapshot to apply one to.
-    expect((await h.runtime.getMessages("session-announce"))?.at(-1))
-      .toMatchObject({ id: restored.id, content: "recovered answer" });
+    expect((await h.runtime.getMessages("session-announce"))?.at(-1)).toMatchObject({
+      id: restored.id,
+      content: "recovered answer",
+    });
   });
 
   test("an unresolved record with no thread is spent, not replayed", async () => {
@@ -506,11 +527,9 @@ describe("session lifecycle", () => {
     const recovered = new DispatchJournal({ codexHome, cwd: "/tmp/ws" });
     await recovered.load();
 
-    expect(recovered.unresolved().some((record) => record.requestId === "req-orphan"))
-      .toBe(false);
+    expect(recovered.unresolved().some((record) => record.requestId === "req-orphan")).toBe(false);
     expect(recovered.classify("req-orphan").action).toBe("already-done");
-    expect(h.child().requests.some((request) => request.method === "turn/start"))
-      .toBe(false);
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
   });
 
   test("the highest sequence per thread is recovered when timestamps tie", async () => {
@@ -659,11 +678,11 @@ describe("session lifecycle", () => {
       status: "running",
       phase: "recovering",
     });
-    expect(h.events.some(
-      (event) =>
-        event.type === "session.error"
-        && event.data?.error === "circuit breaker open",
-    )).toBe(true);
+    expect(
+      h.events.some(
+        (event) => event.type === "session.error" && event.data?.error === "circuit breaker open",
+      ),
+    ).toBe(true);
 
     supervisor.restartNow = realRestart;
   });
@@ -699,8 +718,9 @@ describe("session lifecycle", () => {
     );
     const started = h.runtime.start();
     await waitUntil(
-      () => h.children.length === 1
-        && h.child().requests.some((request) => request.method === "thread/resume"),
+      () =>
+        h.children.length === 1 &&
+        h.child().requests.some((request) => request.method === "thread/resume"),
       "startup recovery did not reach thread/resume",
     );
 
@@ -724,9 +744,9 @@ describe("session lifecycle", () => {
 
     // Falling back here would rebuild the conversation in a *new* thread while the
     // original is merely unreachable.
-    await expect(
-      h.runtime.resumeSession({ threadId: "thread-1", mode: "build" }),
-    ).rejects.toThrow("temporary transport failure");
+    await expect(h.runtime.resumeSession({ threadId: "thread-1", mode: "build" })).rejects.toThrow(
+      "temporary transport failure",
+    );
   });
 
   test("re-attaching hydrates the transcript and adopts the Codex thread name", async () => {
@@ -768,7 +788,9 @@ describe("session lifecycle", () => {
             content: [{ type: "output_text", text: "Persisted answer" }],
           },
         },
-      ].map((line) => JSON.stringify(line)).join("\n")}\n`,
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n")}\n`,
       "utf8",
     );
     const store = new BridgeSessionStore({ codexHome, cwd: "/tmp/ws" });
@@ -880,23 +902,17 @@ describe("session lifecycle", () => {
       mode: "build",
       clientSessionKey: accepted512,
     });
-    expect(h.runtime.createSession({
-      mode: "plan",
-      clientSessionKey: accepted512,
-    }).sessionId).toBe(stable.sessionId);
+    expect(
+      h.runtime.createSession({
+        mode: "plan",
+        clientSessionKey: accepted512,
+      }).sessionId,
+    ).toBe(stable.sessionId);
     expect(stable.sessionId).toMatch(/^session-client-[a-f0-9]{32}$/);
 
-    const invalidKeys: unknown[] = [
-      undefined,
-      null,
-      42,
-      {},
-      "",
-      " \t\n ",
-      "k".repeat(513),
-    ];
-    const fallbackIds = invalidKeys.map((clientSessionKey) =>
-      h.runtime.createSession({ mode: "build", clientSessionKey }).sessionId
+    const invalidKeys: unknown[] = [undefined, null, 42, {}, "", " \t\n ", "k".repeat(513)];
+    const fallbackIds = invalidKeys.map(
+      (clientSessionKey) => h.runtime.createSession({ mode: "build", clientSessionKey }).sessionId,
     );
     expect(new Set(fallbackIds).size).toBe(invalidKeys.length);
     for (const id of fallbackIds) {
@@ -994,8 +1010,7 @@ describe("session lifecycle", () => {
         turnStartedAt: "2026-08-01T12:34:56.000Z",
       },
     });
-    expect(h.runtime.getStatus(sessionId)?.turnStartedAt)
-      .toBe("2026-08-01T12:34:56.000Z");
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt).toBe("2026-08-01T12:34:56.000Z");
     expect(h.events).toContainEqual({
       type: "session.updated",
       sessionId,
@@ -1008,8 +1023,7 @@ describe("session lifecycle", () => {
     const methods = h.child().requests.map((r) => r.method);
     expect(methods).toContain("thread/start");
     expect(methods).toContain("turn/start");
-    expect(getTranscriptCatalogInvalidationCountForTesting())
-      .toBe(invalidationsBefore + 1);
+    expect(getTranscriptCatalogInvalidationCountForTesting()).toBe(invalidationsBefore + 1);
     // The request id must reach app-server as the at-most-once key.
     expect(
       h.child().requests.find((r) => r.method === "turn/start")!.params.clientUserMessageId,
@@ -1053,8 +1067,10 @@ describe("session lifecycle", () => {
     release();
     await pendingDrain;
     expect(h.runtime.getStatus(sessionId)?.status).toBe("idle");
-    expect(journal.allRecords().find((record) => record.requestId === "req-drain"))
-      .toMatchObject({ state: "terminal", terminalStatus: "completed" });
+    expect(journal.allRecords().find((record) => record.requestId === "req-drain")).toMatchObject({
+      state: "terminal",
+      terminalStatus: "completed",
+    });
   });
 
   test("graceful stop does not release render state before finalization settles", async () => {
@@ -1091,8 +1107,9 @@ describe("session lifecycle", () => {
 
     release();
     await pendingStop;
-    expect(journal.allRecords().find((record) => record.requestId === "req-stop-drain"))
-      .toMatchObject({ state: "terminal", terminalStatus: "completed" });
+    expect(
+      journal.allRecords().find((record) => record.requestId === "req-stop-drain"),
+    ).toMatchObject({ state: "terminal", terminalStatus: "completed" });
   });
 
   test("stores a schema-constrained final response and rehydrates it by request id", async () => {
@@ -1143,10 +1160,12 @@ describe("session lifecycle", () => {
       structuredOutputRequestId: "structured-1",
       structuredOutput: { ok: true, value: { summary: "Looks good" } },
     });
-    const persisted = (await new BridgeSessionStore({
-      codexHome,
-      cwd: "/tmp/ws",
-    }).load())[0];
+    const persisted = (
+      await new BridgeSessionStore({
+        codexHome,
+        cwd: "/tmp/ws",
+      }).load()
+    )[0];
     expect(persisted?.structuredOutput).toMatchObject({
       ok: true,
       requestId: "structured-1",
@@ -1168,7 +1187,7 @@ describe("session lifecycle", () => {
       item: {
         id: "answer-1",
         type: "agentMessage",
-        text: "The schema requires JSON.\n```json\n{\"summary\":\"Looks good\"}\n```",
+        text: 'The schema requires JSON.\n```json\n{"summary":"Looks good"}\n```',
       },
     });
     h.child().notify("turn/completed", {
@@ -1467,13 +1486,16 @@ describe("session lifecycle", () => {
       throw new Error("configure rejected");
     };
 
-    expect(await h.runtime.updateConfig(sessionId, {
-      mode: "build",
-      model: "gpt-rejected-request",
-    })).toBe("unavailable");
+    expect(
+      await h.runtime.updateConfig(sessionId, {
+        mode: "build",
+        model: "gpt-rejected-request",
+      }),
+    ).toBe("unavailable");
     expect(context.modelId).toBe("gpt-accepted-confirmation");
-    expect(h.runtime.getRegistry().getSession(sessionId)?.config.model)
-      .toBe("gpt-accepted-request");
+    expect(h.runtime.getRegistry().getSession(sessionId)?.config.model).toBe(
+      "gpt-accepted-request",
+    );
   });
 
   test("a running session found only after re-attaching is still refused", async () => {
@@ -1558,18 +1580,21 @@ describe("session lifecycle", () => {
     await h.runtime.prompt(sessionId, {
       prompt: "Inspect the diagram",
       requestId: "req-1",
-      attachments: [{
-        type: "image",
-        path: "/workspace/.orkestrator/initial-prompt/shot.png",
-        filename: "diagram.png",
-        dataUrl: "data:image/png;base64,iVBORw0KGgo=",
-      }],
+      attachments: [
+        {
+          type: "image",
+          path: "/workspace/.orkestrator/initial-prompt/shot.png",
+          filename: "diagram.png",
+          dataUrl: "data:image/png;base64,iVBORw0KGgo=",
+        },
+      ],
     });
 
     // The live row renders from the inline data, so no workspace read is needed.
     const userMessage = h.events.find(
-      (event) => event.type === "message.updated"
-        && (event.data?.message as { role?: unknown } | undefined)?.role === "user",
+      (event) =>
+        event.type === "message.updated" &&
+        (event.data?.message as { role?: unknown } | undefined)?.role === "user",
     )!.data!.message as { content: string; parts: unknown[] };
     expect(userMessage.content).toBe("Inspect the diagram");
     expect(userMessage.parts).toEqual([
@@ -1584,12 +1609,12 @@ describe("session lifecycle", () => {
 
     // Codex keeps only an opaque data URL for the image itself, so the path has
     // to travel in the text or a rehydrated transcript loses the attachment.
-    const input = h.child().requests.find((request) => request.method === "turn/start")!
-      .params.input as Array<Record<string, unknown>>;
+    const input = h.child().requests.find((request) => request.method === "turn/start")!.params
+      .input as Array<Record<string, unknown>>;
     expect(input[0]!.text).toBe(
-      "Inspect the diagram\n\n<attached-files source=\"orkestrator\">\n"
-      + '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png"'
-      + ' filename="diagram.png" />\n</attached-files>',
+      'Inspect the diagram\n\n<attached-files source="orkestrator">\n' +
+        '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png"' +
+        ' filename="diagram.png" />\n</attached-files>',
     );
     expect(input[1]).toEqual({
       type: "localImage",
@@ -1606,8 +1631,8 @@ describe("session lifecycle", () => {
       attachments: [{ type: "image", path: "/workspace/a.png" }],
     });
 
-    const input = h.child().requests.find((request) => request.method === "turn/start")!
-      .params.input as Array<Record<string, unknown>>;
+    const input = h.child().requests.find((request) => request.method === "turn/start")!.params
+      .input as Array<Record<string, unknown>>;
     expect(input[0]!.text).toBe(
       '<attached-files source="orkestrator">\n<attachment type="image" path="/workspace/a.png" filename="" />\n</attached-files>',
     );
@@ -1619,8 +1644,8 @@ describe("session lifecycle", () => {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "hello", requestId: "req-1", attachments: [] });
 
-    const input = h.child().requests.find((request) => request.method === "turn/start")!
-      .params.input as Array<Record<string, unknown>>;
+    const input = h.child().requests.find((request) => request.method === "turn/start")!.params
+      .input as Array<Record<string, unknown>>;
     expect(input).toHaveLength(1);
     expect(input[0]!.text).toBe("hello");
   });
@@ -1633,20 +1658,21 @@ describe("session lifecycle", () => {
     const promptRevision = h.runtime.getStatus(sessionId)!.messageRevision;
     expect(promptRevision).toBe(1);
     const initialAssistantUpdates = h.events.filter(
-      (event) => event.type === "message.updated"
-        && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
+      (event) =>
+        event.type === "message.updated" &&
+        (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
     );
     const initialUserUpdates = h.events.filter(
-      (event) => event.type === "message.updated"
-        && (event.data?.message as { role?: unknown } | undefined)?.role === "user",
+      (event) =>
+        event.type === "message.updated" &&
+        (event.data?.message as { role?: unknown } | undefined)?.role === "user",
     );
     expect(initialUserUpdates).toHaveLength(1);
     expect(initialAssistantUpdates).toHaveLength(1);
-    expect(h.events.indexOf(initialUserUpdates[0]!))
-      .toBeLessThan(h.events.indexOf(initialAssistantUpdates[0]!));
-    expect(
-      (initialAssistantUpdates[0]!.data?.message as { revision?: number }).revision,
-    ).toBe(1);
+    expect(h.events.indexOf(initialUserUpdates[0]!)).toBeLessThan(
+      h.events.indexOf(initialAssistantUpdates[0]!),
+    );
+    expect((initialAssistantUpdates[0]!.data?.message as { revision?: number }).revision).toBe(1);
 
     const child = h.child();
     child.notify("turn/started", { threadId: "thread-1", turn: { id: "turn-1" } });
@@ -1670,10 +1696,13 @@ describe("session lifecycle", () => {
     // Streaming text is visible before completion.
     expect(messages[1]!.content).toBe("Hi there");
     expect(h.events.some((event) => event.type === "message.patched")).toBe(true);
-    expect(h.events.filter(
-      (event) => event.type === "message.updated"
-        && (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
-    )).toHaveLength(1);
+    expect(
+      h.events.filter(
+        (event) =>
+          event.type === "message.updated" &&
+          (event.data?.message as { role?: unknown } | undefined)?.role === "assistant",
+      ),
+    ).toHaveLength(1);
 
     const streamingRevision = h.runtime.getStatus(sessionId)!.messageRevision;
     expect(streamingRevision).toBeGreaterThan(promptRevision);
@@ -1683,9 +1712,9 @@ describe("session lifecycle", () => {
     ).length;
     await h.runtime.getMessages(sessionId);
     expect(h.runtime.getStatus(sessionId)!.messageRevision).toBe(revisionBeforeRead);
-    expect(
-      h.events.filter((event) => event.type === "message.updated").length,
-    ).toBe(messageEventsBeforeRead);
+    expect(h.events.filter((event) => event.type === "message.updated").length).toBe(
+      messageEventsBeforeRead,
+    );
 
     child.notify("item/completed", {
       threadId: "thread-1",
@@ -1705,8 +1734,9 @@ describe("session lifecycle", () => {
     expect(h.runtime.getStatus(sessionId)).toMatchObject({ status: "idle", phase: "idle" });
     expect(h.runtime.getStatus(sessionId)?.turnStartedAt).toBeUndefined();
     expect(h.events.some((event) => event.type === "session.idle")).toBe(true);
-    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
-      .toBeLessThan(h.events.findLastIndex((event) => event.type === "session.idle"));
+    expect(h.events.findLastIndex((event) => event.type === "message.patched")).toBeLessThan(
+      h.events.findLastIndex((event) => event.type === "session.idle"),
+    );
   });
 
   test("command output streams while the command is in progress", async () => {
@@ -1745,7 +1775,11 @@ describe("session lifecycle", () => {
   test("carries the app-server item start clock into rendered parts", async () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
-    await h.runtime.prompt(sessionId, { prompt: "answer", requestId: "req-clock", attachments: [] });
+    await h.runtime.prompt(sessionId, {
+      prompt: "answer",
+      requestId: "req-clock",
+      attachments: [],
+    });
 
     h.child().notify("item/started", {
       threadId: "thread-1",
@@ -2126,12 +2160,14 @@ describe("session lifecycle", () => {
       await h.drain();
     });
 
-    expect(errors.some(
-      ([message, error]) =>
-        message === "[codex-bridge] Failed to publish message update:"
-        && error instanceof Error
-        && error.message === "render rejected",
-    )).toBe(true);
+    expect(
+      errors.some(
+        ([message, error]) =>
+          message === "[codex-bridge] Failed to publish message update:" &&
+          error instanceof Error &&
+          error.message === "render rejected",
+      ),
+    ).toBe(true);
   });
 
   test("a terminal finalization rejection is contained and removed from pending work", async () => {
@@ -2158,11 +2194,13 @@ describe("session lifecycle", () => {
       await h.drain();
     });
 
-    expect(errors.some(
-      ([message, error]) =>
-        message === "[codex-bridge] Failed to finalize turn turn-1:"
-        && error === "journal unavailable",
-    )).toBe(true);
+    expect(
+      errors.some(
+        ([message, error]) =>
+          message === "[codex-bridge] Failed to finalize turn turn-1:" &&
+          error === "journal unavailable",
+      ),
+    ).toBe(true);
     expect(runtime.pendingFinalizations.size).toBe(0);
   });
 
@@ -2190,10 +2228,13 @@ describe("session lifecycle", () => {
     await h.drain();
 
     const runtimeState = h.runtime as unknown as {
-      threadState: Map<string, {
-        lastPublishedSnapshotChars: number;
-        coalescer: { intervalMs: () => number };
-      }>;
+      threadState: Map<
+        string,
+        {
+          lastPublishedSnapshotChars: number;
+          coalescer: { intervalMs: () => number };
+        }
+      >;
     };
     const state = runtimeState.threadState.get("thread-1")!;
     expect(state.lastPublishedSnapshotChars).toBeGreaterThanOrEqual(256 * 1024);
@@ -2234,9 +2275,11 @@ describe("session lifecycle", () => {
     expect(laterPatches).not.toHaveLength(0);
     for (const patch of laterPatches) {
       expect(
-        (patch.data as {
-          changedParts?: Array<{ index: number }>;
-        }).changedParts?.some(({ index }) => index === 0),
+        (
+          patch.data as {
+            changedParts?: Array<{ index: number }>;
+          }
+        ).changedParts?.some(({ index }) => index === 0),
       ).toBe(false);
     }
 
@@ -2262,8 +2305,6 @@ describe("session lifecycle", () => {
     );
   });
 });
-
-
 
 describe("interrupt lifecycle", () => {
   test("abort reports cancelling, not idle", async () => {
@@ -2350,16 +2391,16 @@ describe("interrupt lifecycle", () => {
       status: "idle",
       phase: "idle",
     });
-    expect(h.events.some(
-      (event) =>
-        event.type === "session.error"
-        && event.sessionId === sessionId
-        && event.data?.error === "replacement failed",
-    )).toBe(true);
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "session.error" &&
+          event.sessionId === sessionId &&
+          event.data?.error === "replacement failed",
+      ),
+    ).toBe(true);
   });
 });
-
-
 
 describe("crash recovery", () => {
   test("an unexpected generation recovery rejection is contained and reported", async () => {
@@ -2382,12 +2423,14 @@ describe("crash recovery", () => {
       await h.runtime.drainPendingWork();
     });
 
-    expect(errors.some(
-      ([message, error]) =>
-        message === "[codex-bridge] Generation recovery failed:"
-        && error instanceof Error
-        && error.message === "recovery invariant failed",
-    )).toBe(true);
+    expect(
+      errors.some(
+        ([message, error]) =>
+          message === "[codex-bridge] Generation recovery failed:" &&
+          error instanceof Error &&
+          error.message === "recovery invariant failed",
+      ),
+    ).toBe(true);
   });
 
   test("generation recovery durably clears an unmaterialized thread binding", async () => {
@@ -2458,9 +2501,7 @@ describe("crash recovery", () => {
     expect(outcome.ok).toBe(true);
     expect(resumeAttempts).toBe(2);
     const methods = h.child().requests.map((request) => request.method);
-    expect(methods.lastIndexOf("thread/resume")).toBeLessThan(
-      methods.indexOf("turn/start"),
-    );
+    expect(methods.lastIndexOf("thread/resume")).toBeLessThan(methods.indexOf("turn/start"));
   });
 
   test("a prompt waits for generation recovery before dispatching on the refreshed handle", async () => {
@@ -2492,13 +2533,15 @@ describe("crash recovery", () => {
     expect(order).toEqual(["recovery:start"]);
 
     let settled = false;
-    const pending = h.runtime.prompt(sessionId, {
-      prompt: "second",
-      requestId: "req-2",
-      attachments: [],
-    }).finally(() => {
-      settled = true;
-    });
+    const pending = h.runtime
+      .prompt(sessionId, {
+        prompt: "second",
+        requestId: "req-2",
+        attachments: [],
+      })
+      .finally(() => {
+        settled = true;
+      });
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(settled).toBe(false);
     expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
@@ -2511,9 +2554,12 @@ describe("crash recovery", () => {
   });
 
   test("an active turn becomes recovering, not idle or error", async () => {
-    const h = await harness({}, {
-      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
-    });
+    const h = await harness(
+      {},
+      {
+        now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+      },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
 
@@ -2577,21 +2623,24 @@ describe("crash recovery", () => {
   });
 
   test("a turn still running on the replacement child stays running", async () => {
-    const h = await harness({
-      "thread/read": () => ({
-        thread: threadPayload("thread-1", {
-          turns: [
-            {
-              id: "turn-1",
-              status: "inProgress",
-              items: [{ type: "userMessage", clientId: "req-1" }],
-            },
-          ],
+    const h = await harness(
+      {
+        "thread/read": () => ({
+          thread: threadPayload("thread-1", {
+            turns: [
+              {
+                id: "turn-1",
+                status: "inProgress",
+                items: [{ type: "userMessage", clientId: "req-1" }],
+              },
+            ],
+          }),
         }),
-      }),
-    }, {
-      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
-    });
+      },
+      {
+        now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+      },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
 
@@ -2746,8 +2795,6 @@ describe("crash recovery", () => {
   });
 });
 
-
-
 describe("idle detach and transparent re-attach", () => {
   /**
    * Detaching is the whole storage story: it frees the bridge's transcript, its
@@ -2795,15 +2842,13 @@ describe("idle detach and transparent re-attach", () => {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "hello", requestId: "req-1", attachments: [] });
     expect(
-      await h.runtime.steerSession(
-        sessionId,
-        "also inspect the bridge",
-        "turn-1",
-        "req-steer",
-      ),
+      await h.runtime.steerSession(sessionId, "also inspect the bridge", "turn-1", "req-steer"),
     ).toBe("accepted");
-    expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user")
-      .map((message) => message.content)).toEqual(["hello", "also inspect the bridge"]);
+    expect(
+      (await h.runtime.getMessages(sessionId))
+        ?.filter((message) => message.role === "user")
+        .map((message) => message.content),
+    ).toEqual(["hello", "also inspect the bridge"]);
     h.child().notify("turn/completed", {
       threadId: "thread-1",
       turn: { id: "turn-1", status: "completed" },
@@ -2895,7 +2940,9 @@ describe("idle detach and transparent re-attach", () => {
             content: [{ type: "output_text", text: "done" }],
           },
         },
-      ].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n")}\n`,
       "utf8",
     );
 
@@ -2912,10 +2959,14 @@ describe("idle detach and transparent re-attach", () => {
       ["user", "also inspect the bridge"],
       ["assistant", "done"],
     ]);
-    expect(messages!.filter((message) => message.role === "user").map((message) => ({
-      content: message.content,
-      turnId: message.turnId,
-    }))).toEqual([
+    expect(
+      messages!
+        .filter((message) => message.role === "user")
+        .map((message) => ({
+          content: message.content,
+          turnId: message.turnId,
+        })),
+    ).toEqual([
       { content: "hello", turnId: "turn-1" },
       { content: "also inspect the bridge", turnId: "turn-1" },
     ]);
@@ -3008,11 +3059,14 @@ describe("idle detach and transparent re-attach", () => {
     // A bridge restart must not resurrect the rollout-less thread id that was
     // cleared in memory by the sweep.
     await h.runtime.stop();
-    const restarted = await harness({}, {
-      now: () => clock,
-      threadIdleMs: 1_000,
-      sweepIntervalMs: 0,
-    });
+    const restarted = await harness(
+      {},
+      {
+        now: () => clock,
+        threadIdleMs: 1_000,
+        sweepIntervalMs: 0,
+      },
+    );
     expect(restarted.runtime.getStatus(sessionId)).toBeNull();
   });
 
@@ -3132,19 +3186,25 @@ describe("idle detach and transparent re-attach", () => {
     await h.runtime.sweepIdle();
     h.child().requests.length = 0;
 
-    expect(await h.runtime.prompt(sessionId, {
-      prompt: "retry later",
-      requestId: "req-2",
-      attachments: [],
-    })).toMatchObject({ ok: false, status: 503 });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "retry later",
+        requestId: "req-2",
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: false, status: 503 });
     expect(h.runtime.getRegistry().getSession(sessionId)?.threadId).toBe("thread-1");
     expect(h.child().requests.map((request) => request.method)).toEqual(["thread/resume"]);
 
-    expect((await h.runtime.prompt(sessionId, {
-      prompt: "retry now",
-      requestId: "req-3",
-      attachments: [],
-    })).ok).toBe(true);
+    expect(
+      (
+        await h.runtime.prompt(sessionId, {
+          prompt: "retry now",
+          requestId: "req-3",
+          attachments: [],
+        })
+      ).ok,
+    ).toBe(true);
     const methods = h.child().requests.map((request) => request.method);
     expect(methods).toContain("thread/resume");
     expect(methods).not.toContain("thread/start");
@@ -3157,25 +3217,24 @@ describe("idle detach and transparent re-attach", () => {
       { now: () => clock, threadIdleMs: 1_000 },
     );
     const resumed = await h.runtime.resumeSession({ threadId: "thread-history", mode: "build" });
-    expect(
-      h.runtime.getRegistry().getThread("thread-history")?.materialized,
-    ).toBe(true);
+    expect(h.runtime.getRegistry().getThread("thread-history")?.materialized).toBe(true);
 
     clock += 60_000;
     await h.runtime.sweepIdle();
-    expect(h.runtime.getRegistry().getSession(resumed!.sessionId)?.threadId).toBe(
-      "thread-history",
-    );
+    expect(h.runtime.getRegistry().getSession(resumed!.sessionId)?.threadId).toBe("thread-history");
   });
 
   test("a long-dead session id is eventually forgotten", async () => {
     let clock = 1_000_000;
-    const h = await harness({}, {
-      now: () => clock,
-      threadIdleMs: 1_000,
-      sessionRetentionMs: 10_000,
-      sweepIntervalMs: 0,
-    });
+    const h = await harness(
+      {},
+      {
+        now: () => clock,
+        threadIdleMs: 1_000,
+        sessionRetentionMs: 10_000,
+        sweepIntervalMs: 0,
+      },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
 
     clock += 60_000;
@@ -3188,12 +3247,15 @@ describe("idle detach and transparent re-attach", () => {
 
   test("an active session is not forgotten", async () => {
     let clock = 1_000_000;
-    const h = await harness({}, {
-      now: () => clock,
-      threadIdleMs: 1_000,
-      sessionRetentionMs: 10_000,
-      sweepIntervalMs: 0,
-    });
+    const h = await harness(
+      {},
+      {
+        now: () => clock,
+        threadIdleMs: 1_000,
+        sessionRetentionMs: 10_000,
+        sweepIntervalMs: 0,
+      },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     clock += 60_000;
     h.runtime.getRegistry().touch(sessionId);
@@ -3285,12 +3347,15 @@ describe("idle detach and transparent re-attach", () => {
 
   test("disabled retention still heartbeats on the hourly interval", async () => {
     let clock = 1_000_000;
-    const h = await harness({}, {
-      now: () => clock,
-      threadIdleMs: 0,
-      sessionRetentionMs: 0,
-      sweepIntervalMs: 0,
-    });
+    const h = await harness(
+      {},
+      {
+        now: () => clock,
+        threadIdleMs: 0,
+        sessionRetentionMs: 0,
+        sweepIntervalMs: 0,
+      },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "materialize",
@@ -3323,12 +3388,15 @@ describe("idle detach and transparent re-attach", () => {
 
   test("shutdown waits for an in-flight registry write", async () => {
     let clock = 1_000_000;
-    const h = await harness({}, {
-      now: () => clock,
-      threadIdleMs: 0,
-      sessionRetentionMs: 10_000,
-      sweepIntervalMs: 0,
-    });
+    const h = await harness(
+      {},
+      {
+        now: () => clock,
+        threadIdleMs: 0,
+        sessionRetentionMs: 10_000,
+        sweepIntervalMs: 0,
+      },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "materialize",
@@ -3409,8 +3477,6 @@ describe("idle detach and transparent re-attach", () => {
   });
 });
 
-
-
 describe("activity polling", () => {
   /** A session mid-turn: its thread is materialized and running. */
   async function workingSession() {
@@ -3486,12 +3552,14 @@ describe("activity polling", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "item-1",
-        questions: [{
-          id: "language",
-          header: "Language",
-          question: "Which language?",
-          options: [{ label: "TypeScript" }],
-        }],
+        questions: [
+          {
+            id: "language",
+            header: "Language",
+            question: "Which language?",
+            options: [{ label: "TypeScript" }],
+          },
+        ],
       },
     });
     await h.drain();
@@ -3535,8 +3603,9 @@ describe("activity polling", () => {
     const h = await harness();
     // Startup clears the claim once recovery has run; re-arm it to model the
     // window where a restored thread's last turn may still be executing.
-    (h.runtime as unknown as { threadsAwaitingDispatchRecovery: Set<string> })
-      .threadsAwaitingDispatchRecovery.add("thread-awaiting");
+    (
+      h.runtime as unknown as { threadsAwaitingDispatchRecovery: Set<string> }
+    ).threadsAwaitingDispatchRecovery.add("thread-awaiting");
 
     // Restored lazily, so there is no thread context — the recovery claim is the
     // only thing standing between this session and a misleading `idle`.
@@ -3590,8 +3659,6 @@ describe("activity polling", () => {
   });
 });
 
-
-
 describe("health", () => {
   test("reports engine state, generation and counters", async () => {
     const h = await harness();
@@ -3611,8 +3678,6 @@ describe("health", () => {
   });
 });
 
-
-
 describe("runtime health", () => {
   test("scopes the snapshot to the session's thread when there is one", async () => {
     const h = await harness({
@@ -3624,10 +3689,11 @@ describe("runtime health", () => {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
 
-    const health = await h.runtime.getRuntimeHealth(sessionId) as Record<string, unknown>;
+    const health = (await h.runtime.getRuntimeHealth(sessionId)) as Record<string, unknown>;
     expect(health.engine).toBeDefined();
-    expect(h.child().requests.find((request) => request.method === "mcpServerStatus/list")?.params)
-      .toMatchObject({ threadId: "thread-1" });
+    expect(
+      h.child().requests.find((request) => request.method === "mcpServerStatus/list")?.params,
+    ).toMatchObject({ threadId: "thread-1" });
   });
 
   test("an unknown session is rejected instead of returning environment-wide data", async () => {
@@ -3639,9 +3705,9 @@ describe("runtime health", () => {
     });
 
     expect(await h.runtime.getRuntimeHealth("session-nope")).toBeNull();
-    expect(
-      h.child().requests.some((request) => request.method === "mcpServerStatus/list"),
-    ).toBe(false);
+    expect(h.child().requests.some((request) => request.method === "mcpServerStatus/list")).toBe(
+      false,
+    );
   });
 
   /**
@@ -3661,7 +3727,7 @@ describe("runtime health", () => {
     h.child().notify("codex/invented/method", { threadId: "thread-1" });
     await h.drain();
 
-    const health = await h.runtime.getRuntimeHealth(sessionId) as {
+    const health = (await h.runtime.getRuntimeHealth(sessionId)) as {
       protocol: {
         unknownNotifications: number;
         unsupportedItems: number;

@@ -83,7 +83,7 @@ export function useTerminalClipboard({
       },
       (error) => {
         console.error("[useTerminalClipboard] Clipboard paste error:", error);
-      }
+      },
     );
   }, [containerId, terminal, writeRef]);
 
@@ -101,8 +101,7 @@ export function useTerminalClipboard({
 
       // Copy: Cmd+C (Mac) or Ctrl+Shift+C (Linux/Windows)
       // Only intercept when there's a selection to preserve Ctrl+C for SIGINT
-      const isCopyShortcut =
-        (isMeta && key === "c") || (isCtrl && isShift && key === "c");
+      const isCopyShortcut = (isMeta && key === "c") || (isCtrl && isShift && key === "c");
       if (isCopyShortcut && terminal.hasSelection() && !isAlt) {
         void handleCopySelection();
         return false;

@@ -5,11 +5,7 @@
  */
 
 import { ChevronRight } from "lucide-react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   describeJsonValue,
   humanizeJsonKey,
@@ -30,27 +26,19 @@ function ScalarValue({ value }: { value: unknown }) {
     return <span className="text-muted-foreground/70">—</span>;
   }
   if (typeof value === "boolean" || typeof value === "number") {
-    return (
-      <span className="font-mono text-xs text-cyan-300/90">{String(value)}</span>
-    );
+    return <span className="font-mono text-xs text-cyan-300/90">{String(value)}</span>;
   }
   const text = String(value);
   if (text.length === 0) {
     return <span className="text-muted-foreground/70">empty</span>;
   }
-  return (
-    <span className="whitespace-pre-wrap break-words text-foreground/90">
-      {text}
-    </span>
-  );
+  return <span className="whitespace-pre-wrap break-words text-foreground/90">{text}</span>;
 }
 
 /** An empty container is stated in place; there is nothing to fold out. */
 function EmptyValue({ value }: { value: unknown }) {
   return (
-    <span className="text-muted-foreground/70">
-      {Array.isArray(value) ? "None" : "No fields"}
-    </span>
+    <span className="text-muted-foreground/70">{Array.isArray(value) ? "None" : "No fields"}</span>
   );
 }
 
@@ -90,17 +78,10 @@ function Branch({
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-1.5 rounded-md py-1 text-left text-xs text-muted-foreground transition-colors hover:text-foreground">
         <ChevronRight
-          className={cn(
-            "size-3 shrink-0 transition-transform",
-            isOpen && "rotate-90",
-          )}
+          className={cn("size-3 shrink-0 transition-transform", isOpen && "rotate-90")}
         />
-        <span className="min-w-0 truncate font-medium text-foreground/85">
-          {label}
-        </span>
-        <span className="shrink-0 text-muted-foreground/70">
-          {describeJsonValue(value)}
-        </span>
+        <span className="min-w-0 truncate font-medium text-foreground/85">{label}</span>
+        <span className="shrink-0 text-muted-foreground/70">{describeJsonValue(value)}</span>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="ml-1.5 border-l border-border/40 pl-3">
@@ -150,21 +131,15 @@ function ObjectFields({
           }
           return (
             <div key={key} className="flex flex-wrap gap-x-2 gap-y-0.5 py-0.5">
-              <span className="shrink-0 text-xs font-medium text-muted-foreground">
-                {label}
-              </span>
+              <span className="shrink-0 text-xs font-medium text-muted-foreground">{label}</span>
               <span className="min-w-0 flex-1 text-sm">
-                {isContainer(child)
-                  ? <EmptyValue value={child} />
-                  : <ScalarValue value={child} />}
+                {isContainer(child) ? <EmptyValue value={child} /> : <ScalarValue value={child} />}
               </span>
             </div>
           );
         })}
       </div>
-      {entries.length > shown.length && (
-        <TruncationNote hidden={entries.length - shown.length} />
-      )}
+      {entries.length > shown.length && <TruncationNote hidden={entries.length - shown.length} />}
     </>
   );
 }
@@ -224,9 +199,7 @@ function ArrayItems({
           })}
         </div>
       )}
-      {value.length > shown.length && (
-        <TruncationNote hidden={value.length - shown.length} />
-      )}
+      {value.length > shown.length && <TruncationNote hidden={value.length - shown.length} />}
     </>
   );
 }
@@ -253,9 +226,7 @@ export function JsonTree({
     );
   }
   if (Array.isArray(value)) {
-    return (
-      <ArrayItems value={value} depth={depth + 1} expansionKey={expansionKey} />
-    );
+    return <ArrayItems value={value} depth={depth + 1} expansionKey={expansionKey} />;
   }
   if (isContainer(value)) {
     return (

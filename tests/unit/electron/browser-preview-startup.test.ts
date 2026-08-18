@@ -108,23 +108,15 @@ describe("browser preview startup wiring", () => {
           details: { isMainFrame: boolean; requestingUrl: string },
         ) => void)
       | null = null;
-    let beforeHeaders:
-      | ((details: any, callback: (response: any) => void) => void)
-      | null = null;
-    let receivedHeaders:
-      | ((details: any, callback: (response: any) => void) => void)
-      | null = null;
+    let beforeHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
+    let receivedHeaders: ((details: any, callback: (response: any) => void) => void) | null = null;
     const webRequest = {
-      onBeforeSendHeaders: mock(
-        (_filter: unknown, listener: typeof beforeHeaders) => {
-          beforeHeaders = listener;
-        },
-      ),
-      onHeadersReceived: mock(
-        (_filter: unknown, listener: typeof receivedHeaders) => {
-          receivedHeaders = listener;
-        },
-      ),
+      onBeforeSendHeaders: mock((_filter: unknown, listener: typeof beforeHeaders) => {
+        beforeHeaders = listener;
+      }),
+      onHeadersReceived: mock((_filter: unknown, listener: typeof receivedHeaders) => {
+        receivedHeaders = listener;
+      }),
     };
     const browserSession = {
       webRequest,
@@ -146,9 +138,7 @@ describe("browser preview startup wiring", () => {
     const openExternal = mock(() => undefined);
     const writeClipboardText = mock(() => undefined);
     const focusAddressBar = mock(() => undefined);
-    const menuTemplates: Array<
-      Array<{ label?: string; click?: (...args: never[]) => void }>
-    > = [];
+    const menuTemplates: Array<Array<{ label?: string; click?: (...args: never[]) => void }>> = [];
     const buildFromTemplate = mock(
       (template: Array<{ label?: string; click?: (...args: never[]) => void }>) => {
         menuTemplates.push(template);
@@ -167,21 +157,16 @@ describe("browser preview startup wiring", () => {
       writeClipboardText,
       focusAddressBar,
       getAuthorization: (url) =>
-        url.startsWith("https://desk.example/__orkestrator/")
-          ? "Bearer test"
-          : null,
+        url.startsWith("https://desk.example/__orkestrator/") ? "Bearer test" : null,
     });
 
     expect(fromPartition).toHaveBeenCalledWith("persist:orkestrator-browser-previews");
     expect(runtime.browserSession).toBe(browserSession as never);
     expect(runtime.manager).toBeInstanceOf(BrowserPreviewManager);
     expect(
-      permissionCheck?.(
-        {},
-        "clipboard-sanitized-write",
-        "http://localhost:3000",
-        { isMainFrame: true },
-      ),
+      permissionCheck?.({}, "clipboard-sanitized-write", "http://localhost:3000", {
+        isMainFrame: true,
+      }),
     ).toBe(false);
     expect(
       permissionCheck?.({}, "clipboard-read", "http://localhost:3000", {
@@ -189,12 +174,9 @@ describe("browser preview startup wiring", () => {
       }),
     ).toBe(false);
     expect(
-      permissionCheck?.(
-        {},
-        "clipboard-sanitized-write",
-        "https://embedded.example",
-        { isMainFrame: false },
-      ),
+      permissionCheck?.({}, "clipboard-sanitized-write", "https://embedded.example", {
+        isMainFrame: false,
+      }),
     ).toBe(false);
 
     await runtime.manager.attach({
@@ -207,69 +189,43 @@ describe("browser preview startup wiring", () => {
     const previewContents = previewView.webContents;
 
     const ambientWriteResult = mock(() => undefined);
-    permissionRequest?.(
-      previewContents,
-      "clipboard-sanitized-write",
-      ambientWriteResult,
-      {
-        isMainFrame: true,
-        requestingUrl: "http://localhost:3000/",
-      },
-    );
+    permissionRequest?.(previewContents, "clipboard-sanitized-write", ambientWriteResult, {
+      isMainFrame: true,
+      requestingUrl: "http://localhost:3000/",
+    });
     expect(ambientWriteResult).toHaveBeenCalledWith(false);
 
     previewContents.emit("input-event", {}, { type: "mouseDown" });
     const activatedWriteResult = mock(() => undefined);
-    permissionRequest?.(
-      previewContents,
-      "clipboard-sanitized-write",
-      activatedWriteResult,
-      {
-        isMainFrame: true,
-        requestingUrl: "http://localhost:3000/copy",
-      },
-    );
+    permissionRequest?.(previewContents, "clipboard-sanitized-write", activatedWriteResult, {
+      isMainFrame: true,
+      requestingUrl: "http://localhost:3000/copy",
+    });
     expect(activatedWriteResult).toHaveBeenCalledWith(true);
 
     const reusedActivationResult = mock(() => undefined);
-    permissionRequest?.(
-      previewContents,
-      "clipboard-sanitized-write",
-      reusedActivationResult,
-      {
-        isMainFrame: true,
-        requestingUrl: "http://localhost:3000/copy-again",
-      },
-    );
+    permissionRequest?.(previewContents, "clipboard-sanitized-write", reusedActivationResult, {
+      isMainFrame: true,
+      requestingUrl: "http://localhost:3000/copy-again",
+    });
     expect(reusedActivationResult).toHaveBeenCalledWith(false);
 
     previewContents.emit("input-event", {}, { type: "keyDown" });
     runtime.manager.setVisible("browser-1", false);
     const hiddenWriteResult = mock(() => undefined);
-    permissionRequest?.(
-      previewContents,
-      "clipboard-sanitized-write",
-      hiddenWriteResult,
-      {
-        isMainFrame: true,
-        requestingUrl: "http://localhost:3000/hidden",
-      },
-    );
+    permissionRequest?.(previewContents, "clipboard-sanitized-write", hiddenWriteResult, {
+      isMainFrame: true,
+      requestingUrl: "http://localhost:3000/hidden",
+    });
     expect(hiddenWriteResult).toHaveBeenCalledWith(false);
 
     runtime.manager.setVisible("browser-1", true);
     previewContents.emit("input-event", {}, { type: "mouseDown" });
     const wrongScopeResult = mock(() => undefined);
-    permissionRequest?.(
-      previewContents,
-      "clipboard-sanitized-write",
-      wrongScopeResult,
-      {
-        isMainFrame: true,
-        requestingUrl:
-          "https://desk.example/__orkestrator/browser/loopback/3000/",
-      },
-    );
+    permissionRequest?.(previewContents, "clipboard-sanitized-write", wrongScopeResult, {
+      isMainFrame: true,
+      requestingUrl: "https://desk.example/__orkestrator/browser/loopback/3000/",
+    });
     expect(wrongScopeResult).toHaveBeenCalledWith(false);
 
     await runtime.manager.navigate(
@@ -278,16 +234,10 @@ describe("browser preview startup wiring", () => {
     );
     previewContents.emit("input-event", {}, { type: "pointerDown" });
     const gatewayWriteResult = mock(() => undefined);
-    permissionRequest?.(
-      previewContents,
-      "clipboard-sanitized-write",
-      gatewayWriteResult,
-      {
-        isMainFrame: true,
-        requestingUrl:
-          "https://desk.example/__orkestrator/browser/loopback/3000/copy",
-      },
-    );
+    permissionRequest?.(previewContents, "clipboard-sanitized-write", gatewayWriteResult, {
+      isMainFrame: true,
+      requestingUrl: "https://desk.example/__orkestrator/browser/loopback/3000/copy",
+    });
     expect(gatewayWriteResult).toHaveBeenCalledWith(true);
 
     const unrelatedPermissionResult = mock(() => undefined);
@@ -368,15 +318,9 @@ describe("browser preview startup wiring", () => {
       },
     );
     const menuTemplate = menuTemplates[0];
-    menuTemplate
-      ?.find((item) => item.label === "Open Link in New Tab")
-      ?.click?.();
-    menuTemplate
-      ?.find((item) => item.label === "Open in External Browser")
-      ?.click?.();
-    menuTemplate
-      ?.find((item) => item.label === "Copy Link Address")
-      ?.click?.();
+    menuTemplate?.find((item) => item.label === "Open Link in New Tab")?.click?.();
+    menuTemplate?.find((item) => item.label === "Open in External Browser")?.click?.();
+    menuTemplate?.find((item) => item.label === "Copy Link Address")?.click?.();
     expect(emitOpenLink).toHaveBeenCalledWith({
       tabId: "browser-1",
       url: "http://localhost:3000/docs",

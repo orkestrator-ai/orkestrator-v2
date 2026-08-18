@@ -75,7 +75,8 @@ function readPngDimensions(bytes: Uint8Array, view: DataView) {
     bytes.length < 24 ||
     !isBytes(bytes, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) ||
     !isBytes(bytes, 12, [0x49, 0x48, 0x44, 0x52])
-  ) return null;
+  )
+    return null;
   return { width: view.getUint32(16), height: view.getUint32(20) };
 }
 
@@ -84,7 +85,8 @@ function readGifDimensions(bytes: Uint8Array, view: DataView) {
     bytes.length < 10 ||
     (!isBytes(bytes, 0, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) &&
       !isBytes(bytes, 0, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]))
-  ) return null;
+  )
+    return null;
   return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
 }
 
@@ -122,7 +124,8 @@ function readWebpDimensions(bytes: Uint8Array, view: DataView) {
     bytes.length < 30 ||
     !isBytes(bytes, 0, [0x52, 0x49, 0x46, 0x46]) ||
     !isBytes(bytes, 8, [0x57, 0x45, 0x42, 0x50])
-  ) return null;
+  )
+    return null;
   if (isBytes(bytes, 12, [0x56, 0x50, 0x38, 0x58])) {
     const width = 1 + view.getUint8(24) + (view.getUint8(25) << 8) + (view.getUint8(26) << 16);
     const height = 1 + view.getUint8(27) + (view.getUint8(28) << 8) + (view.getUint8(29) << 16);
@@ -138,10 +141,7 @@ function readWebpDimensions(bytes: Uint8Array, view: DataView) {
       height: 1 + ((byte22 & 0xc0) >> 6) + (byte23 << 2) + ((byte24 & 0x0f) << 10),
     };
   }
-  if (
-    isBytes(bytes, 12, [0x56, 0x50, 0x38, 0x20]) &&
-    isBytes(bytes, 23, [0x9d, 0x01, 0x2a])
-  ) {
+  if (isBytes(bytes, 12, [0x56, 0x50, 0x38, 0x20]) && isBytes(bytes, 23, [0x9d, 0x01, 0x2a])) {
     return {
       width: view.getUint16(26, true) & 0x3fff,
       height: view.getUint16(28, true) & 0x3fff,

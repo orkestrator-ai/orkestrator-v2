@@ -18,8 +18,7 @@ test("recognizes unsupported-version errors through transport prefixes", () => {
   const message = paneLayoutUnsupportedVersionMessage(3);
   expect(message).toBe("Unsupported pane layout version: 3");
   expect(isPaneLayoutUnsupportedVersion(new Error(message))).toBe(true);
-  expect(isPaneLayoutUnsupportedVersion(new Error(`IPC failed: ${message}`)))
-    .toBe(true);
+  expect(isPaneLayoutUnsupportedVersion(new Error(`IPC failed: ${message}`))).toBe(true);
   expect(isPaneLayoutUnsupportedVersion(message)).toBe(false);
 });
 
@@ -42,26 +41,29 @@ describe("isPaneLayoutRevisionConflict", () => {
     expect(isPaneLayoutRevisionConflict(new Error(raw))).toBe(true);
     // Electron path: ipcRenderer.invoke re-wraps a rejected handler error, so
     // the marker is no longer at the start of the message.
-    expect(isPaneLayoutRevisionConflict(new Error(
-      `Error invoking remote method 'orkestrator:invoke': Error: ${raw}`,
-    ))).toBe(true);
+    expect(
+      isPaneLayoutRevisionConflict(
+        new Error(`Error invoking remote method 'orkestrator:invoke': Error: ${raw}`),
+      ),
+    ).toBe(true);
   });
 
   test("does not fire for other failures or non-errors", () => {
-    expect(isPaneLayoutRevisionConflict(new Error("Environment not found: env-1")))
-      .toBe(false);
-    expect(isPaneLayoutRevisionConflict(new Error("Pane layout root exceeds the 256 KB limit")))
-      .toBe(false);
+    expect(isPaneLayoutRevisionConflict(new Error("Environment not found: env-1"))).toBe(false);
+    expect(
+      isPaneLayoutRevisionConflict(new Error("Pane layout root exceeds the 256 KB limit")),
+    ).toBe(false);
     // A bare marker with no revisions still counts: the retry path only needs
     // to know the save lost a race, not by how much.
-    expect(isPaneLayoutRevisionConflict(new Error(PANE_LAYOUT_REVISION_CONFLICT_MARKER)))
-      .toBe(true);
+    expect(isPaneLayoutRevisionConflict(new Error(PANE_LAYOUT_REVISION_CONFLICT_MARKER))).toBe(
+      true,
+    );
     // Anything that is not an Error carries no message to match against.
-    expect(isPaneLayoutRevisionConflict(paneLayoutRevisionConflictMessage(1, 2)))
-      .toBe(false);
+    expect(isPaneLayoutRevisionConflict(paneLayoutRevisionConflictMessage(1, 2))).toBe(false);
     expect(isPaneLayoutRevisionConflict(null)).toBe(false);
     expect(isPaneLayoutRevisionConflict(undefined)).toBe(false);
-    expect(isPaneLayoutRevisionConflict({ message: paneLayoutRevisionConflictMessage(1, 2) }))
-      .toBe(false);
+    expect(isPaneLayoutRevisionConflict({ message: paneLayoutRevisionConflictMessage(1, 2) })).toBe(
+      false,
+    );
   });
 });

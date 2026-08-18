@@ -1,7 +1,4 @@
-import {
-  isStructuredReviewReport,
-  type StructuredReviewReport,
-} from "./structured-review.js";
+import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import {
   AGENT_INTERACTION_KINDS,
   AGENT_INTERACTION_LIMITS,
@@ -19,8 +16,13 @@ export const BUILD_PIPELINE_VERSION = 2;
 export type BuildPipelineAgent = "claude" | "opencode" | "codex" | "cursor" | "grok";
 
 /** The one list every agent check is built from. */
-export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] =
-  Object.freeze(["claude", "opencode", "codex", "cursor", "grok"]);
+export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] = Object.freeze([
+  "claude",
+  "opencode",
+  "codex",
+  "cursor",
+  "grok",
+]);
 
 export type BuildPipelineEnvironmentType = "containerized" | "local";
 
@@ -52,10 +54,7 @@ export type BuildPhase =
   | "complete"
   | "failed";
 
-export type ResumableBuildPhase = Exclude<
-  BuildPhase,
-  "paused" | "complete" | "failed"
->;
+export type ResumableBuildPhase = Exclude<BuildPhase, "paused" | "complete" | "failed">;
 export type PipelineSessionPhase =
   | "build"
   | "review"
@@ -66,13 +65,7 @@ export type PipelineSessionPhase =
   | "resolve-conflicts";
 
 /** The steps a launcher can configure independently. */
-export type BuildStepKey =
-  | "build"
-  | "review"
-  | "address"
-  | "verify"
-  | "pr"
-  | "resolve-conflicts";
+export type BuildStepKey = "build" | "review" | "address" | "verify" | "pr" | "resolve-conflicts";
 
 export const BUILD_STEP_KEYS: readonly BuildStepKey[] = Object.freeze([
   "build",
@@ -106,9 +99,7 @@ export type BuildStepConfigs = Partial<Record<BuildStepKey, BuildStepConfig>>;
  * its own. Falling back to a repository default there would ignore the harness
  * the user just chose for the build.
  */
-export function stepKeyForSessionPhase(
-  phase: PipelineSessionPhase,
-): BuildStepKey {
+export function stepKeyForSessionPhase(phase: PipelineSessionPhase): BuildStepKey {
   if (phase === "fix") return "build";
   return phase;
 }
@@ -145,8 +136,9 @@ const VERIFICATION_VERDICT_FIELDS = {
 } as const satisfies Record<string, "boolean" | "string">;
 
 type VerificationVerdictField = keyof typeof VERIFICATION_VERDICT_FIELDS;
-type VerificationVerdictFieldType<T extends "boolean" | "string"> =
-  T extends "boolean" ? boolean : string;
+type VerificationVerdictFieldType<T extends "boolean" | "string"> = T extends "boolean"
+  ? boolean
+  : string;
 
 /**
  * The verification turn's answer: did the committed branch meet the ticket?
@@ -157,13 +149,15 @@ type VerificationVerdictFieldType<T extends "boolean" | "string"> =
  * the day a field is added.
  */
 export type VerificationVerdict = {
-  -readonly [Field in VerificationVerdictField]:
-    VerificationVerdictFieldType<(typeof VERIFICATION_VERDICT_FIELDS)[Field]>;
+  -readonly [Field in VerificationVerdictField]: VerificationVerdictFieldType<
+    (typeof VERIFICATION_VERDICT_FIELDS)[Field]
+  >;
 };
 
-const VERIFICATION_VERDICT_FIELD_ENTRIES = Object.entries(
-  VERIFICATION_VERDICT_FIELDS,
-) as [VerificationVerdictField, "boolean" | "string"][];
+const VERIFICATION_VERDICT_FIELD_ENTRIES = Object.entries(VERIFICATION_VERDICT_FIELDS) as [
+  VerificationVerdictField,
+  "boolean" | "string",
+][];
 
 /**
  * Frozen because the supervisor hands this exact object to the provider that
@@ -175,10 +169,7 @@ const VERIFICATION_VERDICT_REQUIRED = Object.freeze(
 );
 const VERIFICATION_VERDICT_PROPERTIES = Object.freeze(
   Object.fromEntries(
-    VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field, type]) => [
-      field,
-      Object.freeze({ type }),
-    ]),
+    VERIFICATION_VERDICT_FIELD_ENTRIES.map(([field, type]) => [field, Object.freeze({ type })]),
   ),
 );
 
@@ -194,9 +185,7 @@ export const VERIFICATION_VERDICT_SCHEMA: Record<string, unknown> = Object.freez
  * happens to carry a `complete` flag is not mistaken for a verification
  * verdict. The key count mirrors the schema's `additionalProperties: false`.
  */
-export function isVerificationVerdict(
-  value: unknown,
-): value is VerificationVerdict {
+export function isVerificationVerdict(value: unknown): value is VerificationVerdict {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
@@ -204,9 +193,7 @@ export function isVerificationVerdict(
   if (Object.keys(record).length !== VERIFICATION_VERDICT_FIELD_ENTRIES.length) {
     return false;
   }
-  return VERIFICATION_VERDICT_FIELD_ENTRIES.every(
-    ([field, type]) => typeof record[field] === type,
-  );
+  return VERIFICATION_VERDICT_FIELD_ENTRIES.every(([field, type]) => typeof record[field] === type);
 }
 
 export interface PipelineSession {
@@ -364,10 +351,7 @@ export type BuildPipelineSource =
     };
 
 export type CompletionCommentStatus = "posting" | "posted" | "failed";
-export type PipelineFailureKind =
-  | "prompt-dispatch"
-  | "stage-transition"
-  | "interactive-request";
+export type PipelineFailureKind = "prompt-dispatch" | "stage-transition" | "interactive-request";
 
 export interface PipelineFailureContext {
   phase: ResumableBuildPhase;
@@ -508,10 +492,7 @@ const BUILD_PHASES = new Set<BuildPhase>([
   "failed",
 ]);
 const AGENTS = new Set<BuildPipelineAgent>(BUILD_PIPELINE_AGENTS);
-const ENVIRONMENT_TYPES = new Set<BuildPipelineEnvironmentType>([
-  "containerized",
-  "local",
-]);
+const ENVIRONMENT_TYPES = new Set<BuildPipelineEnvironmentType>(["containerized", "local"]);
 const SESSION_PHASES = new Set<PipelineSessionPhase>([
   "build",
   "review",
@@ -561,9 +542,7 @@ const INTERACTION_PAYLOAD_ENCODER = new TextEncoder();
 const INTERACTION_PROVIDERS: ReadonlySet<AgentInteractionProvider> = new Set(
   AGENT_INTERACTION_PROVIDERS,
 );
-const INTERACTION_KINDS: ReadonlySet<AgentInteractionKind> = new Set(
-  AGENT_INTERACTION_KINDS,
-);
+const INTERACTION_KINDS: ReadonlySet<AgentInteractionKind> = new Set(AGENT_INTERACTION_KINDS);
 
 /**
  * UTF-16 code units are never more numerous than UTF-8 bytes, so summing the
@@ -576,9 +555,7 @@ const INTERACTION_KINDS: ReadonlySet<AgentInteractionKind> = new Set(
  * that would have passed: anything within the byte limit is within the lower
  * bound too.
  */
-function interactionPresentationTextLength(
-  value: Record<string, unknown>,
-): number {
+function interactionPresentationTextLength(value: Record<string, unknown>): number {
   let total = (value.title as string | undefined)?.length ?? 0;
   total += (value.body as string | undefined)?.length ?? 0;
   const questions = value.questions;
@@ -597,8 +574,10 @@ function interactionPresentationTextLength(
 
 function isWithinInteractionPayloadLimit(value: unknown): boolean {
   try {
-    return INTERACTION_PAYLOAD_ENCODER.encode(JSON.stringify(value)).byteLength
-      <= AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes;
+    return (
+      INTERACTION_PAYLOAD_ENCODER.encode(JSON.stringify(value)).byteLength <=
+      AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
+    );
   } catch {
     return false;
   }
@@ -609,8 +588,7 @@ function isOptionalString(value: unknown): value is string | undefined {
 }
 
 function isOptionalNonBlankString(value: unknown): value is string | undefined {
-  return value === undefined
-    || (typeof value === "string" && value.length > 0);
+  return value === undefined || (typeof value === "string" && value.length > 0);
 }
 
 /**
@@ -620,20 +598,21 @@ function isOptionalNonBlankString(value: unknown): value is string | undefined {
  * a hand-edited or legacy record through and then compare wrongly against the
  * deadlines the supervisor derives from these fields.
  */
-const ISO_DATE_PATTERN =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function isIsoDate(value: unknown): value is string {
-  return typeof value === "string"
-    && ISO_DATE_PATTERN.test(value)
-    && Number.isFinite(Date.parse(value));
+  return (
+    typeof value === "string" && ISO_DATE_PATTERN.test(value) && Number.isFinite(Date.parse(value))
+  );
 }
 
 function isBuildStepConfig(value: unknown): value is BuildStepConfig {
   if (!isRecord(value)) return false;
-  return AGENTS.has(value.agent as BuildPipelineAgent)
-    && isOptionalNonBlankString(value.model)
-    && isOptionalNonBlankString(value.reasoningEffort);
+  return (
+    AGENTS.has(value.agent as BuildPipelineAgent) &&
+    isOptionalNonBlankString(value.model) &&
+    isOptionalNonBlankString(value.reasoningEffort)
+  );
 }
 
 /**
@@ -649,17 +628,19 @@ function hasValidValidationWorktreeBaseline(value: Record<string, unknown>): boo
   const status = value.validationWorktreeStatusAtStart;
   const paths = value.validationUncommittedPathsAtStart;
   if (
-    paths !== undefined
-    && (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string"))
+    paths !== undefined &&
+    (!Array.isArray(paths) || paths.some((entry) => typeof entry !== "string"))
   ) {
     return false;
   }
   if (head === undefined) {
     return (status === undefined || status === "unknown") && paths === undefined;
   }
-  return typeof head === "string"
-    && /^[0-9a-f]{40,64}$/i.test(head)
-    && (status === "clean" || status === "dirty");
+  return (
+    typeof head === "string" &&
+    /^[0-9a-f]{40,64}$/i.test(head) &&
+    (status === "clean" || status === "dirty")
+  );
 }
 
 /**
@@ -669,208 +650,239 @@ function hasValidValidationWorktreeBaseline(value: Record<string, unknown>): boo
  */
 export function isBuildStepConfigs(value: unknown): value is BuildStepConfigs {
   if (!isRecord(value)) return false;
-  return Object.entries(value).every(([key, config]) =>
-    BUILD_STEP_KEYS.includes(key as BuildStepKey)
-    && (config === undefined || isBuildStepConfig(config)));
+  return Object.entries(value).every(
+    ([key, config]) =>
+      BUILD_STEP_KEYS.includes(key as BuildStepKey) &&
+      (config === undefined || isBuildStepConfig(config)),
+  );
 }
 
 function isPipelineSession(value: unknown): value is PipelineSession {
   if (!isRecord(value)) return false;
-  return SESSION_PHASES.has(value.phase as PipelineSessionPhase)
-    && (value.agent === undefined
-      || AGENTS.has(value.agent as BuildPipelineAgent))
-    && (
-      (value.origin === undefined && value.interactionPolicy === undefined)
-      || (
-        value.origin === "build-pipeline"
-        && isAgentInteractionPolicy(value.interactionPolicy)
-        && value.interactionPolicy.mode === "unattended"
-      )
-    )
-    && isNonNegativeInteger(value.iteration)
-    && typeof value.sessionKey === "string"
-    && value.sessionKey.length > 0
-    && typeof value.sdkSessionId === "string"
-    && value.sdkSessionId.length > 0
-    && (value.status === "running"
-      || value.status === "idle"
-      || value.status === "error")
-    && isIsoDate(value.startedAt)
-    && typeof value.label === "string"
-    && (value.messages === undefined || Array.isArray(value.messages))
-    && (value.messageRevision === undefined
-      || isNonNegativeInteger(value.messageRevision))
-    && isOptionalNonBlankString(value.messagesFingerprint)
-    && (value.messagesPersistedAt === undefined
-      || isIsoDate(value.messagesPersistedAt))
-    && (value.turnStartedAt === undefined
-      || isIsoDate(value.turnStartedAt))
-    && isOptionalNonBlankString(value.structuredRequestId)
-    && (value.structuredResultStatus === undefined
-      || value.structuredResultStatus === "pending"
-      || value.structuredResultStatus === "accepted")
-    && hasValidValidationWorktreeBaseline(value)
-    && (value.structuredWaitStartedAt === undefined
-      || isIsoDate(value.structuredWaitStartedAt))
-    && (value.structuredReportRepairAttempts === undefined
-      || isNonNegativeInteger(value.structuredReportRepairAttempts))
-    && (value.interactionSummary === undefined
-      || isAgentInteractionWorkflowSummary(value.interactionSummary))
-    && (value.autoDeclineCount === undefined
-      || isNonNegativeInteger(value.autoDeclineCount))
-    && (value.interactionTranscript === undefined
-      || (Array.isArray(value.interactionTranscript)
-        && value.interactionTranscript.length <= AGENT_INTERACTION_LIMITS.maxWorkflowSummaries
-        && value.interactionTranscript.every(isPipelineInteractionTranscriptEntry)
+  return (
+    SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
+    (value.agent === undefined || AGENTS.has(value.agent as BuildPipelineAgent)) &&
+    ((value.origin === undefined && value.interactionPolicy === undefined) ||
+      (value.origin === "build-pipeline" &&
+        isAgentInteractionPolicy(value.interactionPolicy) &&
+        value.interactionPolicy.mode === "unattended")) &&
+    isNonNegativeInteger(value.iteration) &&
+    typeof value.sessionKey === "string" &&
+    value.sessionKey.length > 0 &&
+    typeof value.sdkSessionId === "string" &&
+    value.sdkSessionId.length > 0 &&
+    (value.status === "running" || value.status === "idle" || value.status === "error") &&
+    isIsoDate(value.startedAt) &&
+    typeof value.label === "string" &&
+    (value.messages === undefined || Array.isArray(value.messages)) &&
+    (value.messageRevision === undefined || isNonNegativeInteger(value.messageRevision)) &&
+    isOptionalNonBlankString(value.messagesFingerprint) &&
+    (value.messagesPersistedAt === undefined || isIsoDate(value.messagesPersistedAt)) &&
+    (value.turnStartedAt === undefined || isIsoDate(value.turnStartedAt)) &&
+    isOptionalNonBlankString(value.structuredRequestId) &&
+    (value.structuredResultStatus === undefined ||
+      value.structuredResultStatus === "pending" ||
+      value.structuredResultStatus === "accepted") &&
+    hasValidValidationWorktreeBaseline(value) &&
+    (value.structuredWaitStartedAt === undefined || isIsoDate(value.structuredWaitStartedAt)) &&
+    (value.structuredReportRepairAttempts === undefined ||
+      isNonNegativeInteger(value.structuredReportRepairAttempts)) &&
+    (value.interactionSummary === undefined ||
+      isAgentInteractionWorkflowSummary(value.interactionSummary)) &&
+    (value.autoDeclineCount === undefined || isNonNegativeInteger(value.autoDeclineCount)) &&
+    (value.interactionTranscript === undefined ||
+      (Array.isArray(value.interactionTranscript) &&
+        value.interactionTranscript.length <= AGENT_INTERACTION_LIMITS.maxWorkflowSummaries &&
+        value.interactionTranscript.every(isPipelineInteractionTranscriptEntry) &&
         // Cheap lower bound first: the per-field maximums permit a structurally
         // valid transcript far larger than the byte budget, and serializing one
         // to find that out is the amplification this guard exists to prevent.
-        && isWithinTextLowerBound(value.interactionTranscript.reduce(
-          (total: number, entry: unknown) => total + (isRecord(entry)
-            ? interactionPresentationTextLength(entry)
-            : 0),
-          0,
-        ))
-        && isWithinInteractionPayloadLimit(value.interactionTranscript)));
+        isWithinTextLowerBound(
+          value.interactionTranscript.reduce(
+            (total: number, entry: unknown) =>
+              total + (isRecord(entry) ? interactionPresentationTextLength(entry) : 0),
+            0,
+          ),
+        ) &&
+        isWithinInteractionPayloadLimit(value.interactionTranscript)))
+  );
 }
 
 function isPipelineInteractionQuestion(value: unknown): boolean {
-  return isRecord(value)
-    && Object.keys(value).every((key) => key === "prompt" || key === "options")
-    && typeof value.prompt === "string"
-    && value.prompt.length > 0
-    && value.prompt.length <= AGENT_INTERACTION_LIMITS.maxTextLength
-    && Array.isArray(value.options)
-    && value.options.length <= AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
-    && value.options.every((option) =>
-      typeof option === "string"
-      && option.length > 0
-      && option.length <= AGENT_INTERACTION_LIMITS.maxTextLength);
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) => key === "prompt" || key === "options") &&
+    typeof value.prompt === "string" &&
+    value.prompt.length > 0 &&
+    value.prompt.length <= AGENT_INTERACTION_LIMITS.maxTextLength &&
+    Array.isArray(value.options) &&
+    value.options.length <= AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion &&
+    value.options.every(
+      (option) =>
+        typeof option === "string" &&
+        option.length > 0 &&
+        option.length <= AGENT_INTERACTION_LIMITS.maxTextLength,
+    )
+  );
 }
 
 function isPipelineInteractionPresentation(value: Record<string, unknown>): boolean {
-  return typeof value.interactionId === "string"
-    && value.interactionId.length > 0
-    && value.interactionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
-    && INTERACTION_PROVIDERS.has(value.provider as AgentInteractionProvider)
-    && INTERACTION_KINDS.has(value.kind as AgentInteractionKind)
-    && SESSION_PHASES.has(value.phase as PipelineSessionPhase)
-    && isRenderableEpoch(value.requestedAt)
-    && typeof value.title === "string"
-    && value.title.length > 0
-    && value.title.length <= AGENT_INTERACTION_LIMITS.maxTextLength
-    && (value.body === undefined
-      || (typeof value.body === "string"
-        && value.body.length > 0
-        && value.body.length <= AGENT_INTERACTION_LIMITS.maxTextLength))
-    && Array.isArray(value.questions)
-    && value.questions.length <= AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
-    && value.questions.every(isPipelineInteractionQuestion);
+  return (
+    typeof value.interactionId === "string" &&
+    value.interactionId.length > 0 &&
+    value.interactionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength &&
+    INTERACTION_PROVIDERS.has(value.provider as AgentInteractionProvider) &&
+    INTERACTION_KINDS.has(value.kind as AgentInteractionKind) &&
+    SESSION_PHASES.has(value.phase as PipelineSessionPhase) &&
+    isRenderableEpoch(value.requestedAt) &&
+    typeof value.title === "string" &&
+    value.title.length > 0 &&
+    value.title.length <= AGENT_INTERACTION_LIMITS.maxTextLength &&
+    (value.body === undefined ||
+      (typeof value.body === "string" &&
+        value.body.length > 0 &&
+        value.body.length <= AGENT_INTERACTION_LIMITS.maxTextLength)) &&
+    Array.isArray(value.questions) &&
+    value.questions.length <= AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest &&
+    value.questions.every(isPipelineInteractionQuestion)
+  );
 }
 
 function isPipelineInteractionTranscriptEntry(
   value: unknown,
 ): value is PipelineInteractionTranscriptEntry {
-  return isRecord(value)
-    && Object.keys(value).every((key) => [
-      "id", "provider", "kind", "phase", "requestedAt", "resolvedAt",
-      "outcome", "title", "body", "questions",
-    ].includes(key))
-    && isNonBlankString(value.id)
-    && value.id.length <= AGENT_INTERACTION_LIMITS.maxIdLength
-    && isPipelineInteractionPresentation({ ...value, interactionId: value.id })
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) =>
+      [
+        "id",
+        "provider",
+        "kind",
+        "phase",
+        "requestedAt",
+        "resolvedAt",
+        "outcome",
+        "title",
+        "body",
+        "questions",
+      ].includes(key),
+    ) &&
+    isNonBlankString(value.id) &&
+    value.id.length <= AGENT_INTERACTION_LIMITS.maxIdLength &&
+    isPipelineInteractionPresentation({ ...value, interactionId: value.id }) &&
     // Deliberately *not* cross-checked against the live unattended policy. This
     // is an immutable record of something that already happened; reclassifying
     // a kind (say, making `mcp-url` an authorization) would otherwise make every
     // snapshot that recorded it unparseable, which the supervisor reads as a
     // pipeline to skip and the renderer as a pipeline to delete. The recorded
     // `outcome` below is what pins the entry's meaning.
-    && isRenderableEpoch(value.resolvedAt)
-    && (value.resolvedAt as number) >= (value.requestedAt as number)
-    && value.outcome === "auto-declined-headless";
+    isRenderableEpoch(value.resolvedAt) &&
+    (value.resolvedAt as number) >= (value.requestedAt as number) &&
+    value.outcome === "auto-declined-headless"
+  );
 }
 
 function isPendingPipelineInteractionResolution(
   value: unknown,
 ): value is PendingPipelineInteractionResolution {
-  return isRecord(value)
-    && Object.keys(value).every((key) => [
-      "journalId", "sessionKey", "interactionId", "provider", "kind", "phase",
-      "sessionId", "requestedAt", "claimedAt", "action", "title", "body", "questions",
-    ].includes(key))
-    && isPipelineInteractionPresentation(value)
-    && isNonBlankString(value.journalId)
-    && value.journalId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
-    && isNonBlankString(value.sessionKey)
-    && value.sessionKey.length <= AGENT_INTERACTION_LIMITS.maxIdLength
-    && isNonBlankString(value.sessionId)
-    && value.sessionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength
-    && isRenderableEpoch(value.claimedAt)
-    && (value.claimedAt as number) >= (value.requestedAt as number)
+  return (
+    isRecord(value) &&
+    Object.keys(value).every((key) =>
+      [
+        "journalId",
+        "sessionKey",
+        "interactionId",
+        "provider",
+        "kind",
+        "phase",
+        "sessionId",
+        "requestedAt",
+        "claimedAt",
+        "action",
+        "title",
+        "body",
+        "questions",
+      ].includes(key),
+    ) &&
+    isPipelineInteractionPresentation(value) &&
+    isNonBlankString(value.journalId) &&
+    value.journalId.length <= AGENT_INTERACTION_LIMITS.maxIdLength &&
+    isNonBlankString(value.sessionKey) &&
+    value.sessionKey.length <= AGENT_INTERACTION_LIMITS.maxIdLength &&
+    isNonBlankString(value.sessionId) &&
+    value.sessionId.length <= AGENT_INTERACTION_LIMITS.maxIdLength &&
+    isRenderableEpoch(value.claimedAt) &&
+    (value.claimedAt as number) >= (value.requestedAt as number) &&
     // Same reasoning as the transcript entry: an in-flight envelope written
     // before a policy change must still parse after the upgrade, or the
     // pipeline it belongs to disappears instead of finishing its interaction.
-    && (value.action === "decline-and-continue" || value.action === "deny-and-fail")
-    && isWithinTextLowerBound(interactionPresentationTextLength(value))
-    && isWithinInteractionPayloadLimit(value);
+    (value.action === "decline-and-continue" || value.action === "deny-and-fail") &&
+    isWithinTextLowerBound(interactionPresentationTextLength(value)) &&
+    isWithinInteractionPayloadLimit(value)
+  );
 }
 
 function isUserMessage(value: unknown): value is PipelineUserMessage {
   if (!isRecord(value)) return false;
-  return isNonBlankString(value.id)
-    && typeof value.text === "string"
-    && value.text.length > 0
-    && value.text.length <= MAX_PIPELINE_USER_MESSAGE_LENGTH
-    && isIsoDate(value.createdAt);
+  return (
+    isNonBlankString(value.id) &&
+    typeof value.text === "string" &&
+    value.text.length > 0 &&
+    value.text.length <= MAX_PIPELINE_USER_MESSAGE_LENGTH &&
+    isIsoDate(value.createdAt)
+  );
 }
 
 function isTaskSnapshot(value: unknown): value is TaskSnapshot {
   if (!isRecord(value)) return false;
-  return typeof value.title === "string"
-    && typeof value.description === "string"
-    && typeof value.acceptanceCriteria === "string"
-    && Array.isArray(value.comments)
-    && value.comments.every((comment) =>
-      isRecord(comment) && typeof comment.text === "string")
-    && Array.isArray(value.images)
-    && value.images.every((image) =>
-      isRecord(image)
-      && typeof image.filename === "string"
-      && typeof image.data === "string");
+  return (
+    typeof value.title === "string" &&
+    typeof value.description === "string" &&
+    typeof value.acceptanceCriteria === "string" &&
+    Array.isArray(value.comments) &&
+    value.comments.every((comment) => isRecord(comment) && typeof comment.text === "string") &&
+    Array.isArray(value.images) &&
+    value.images.every(
+      (image) =>
+        isRecord(image) && typeof image.filename === "string" && typeof image.data === "string",
+    )
+  );
 }
 
 function isFailureContext(value: unknown): value is PipelineFailureContext {
   if (!isRecord(value)) return false;
-  return RESUMABLE_PHASES.has(value.phase as ResumableBuildPhase)
-    && FAILURE_KINDS.has(value.kind as PipelineFailureKind)
-    && isOptionalNonBlankString(value.sessionId)
-    && isOptionalString(value.prompt)
-    && (value.useTaskImages === undefined
-      || typeof value.useTaskImages === "boolean")
-    && isOptionalNonBlankString(value.requestId)
-    && (value.structuredReview === undefined
-      || typeof value.structuredReview === "boolean");
+  return (
+    RESUMABLE_PHASES.has(value.phase as ResumableBuildPhase) &&
+    FAILURE_KINDS.has(value.kind as PipelineFailureKind) &&
+    isOptionalNonBlankString(value.sessionId) &&
+    isOptionalString(value.prompt) &&
+    (value.useTaskImages === undefined || typeof value.useTaskImages === "boolean") &&
+    isOptionalNonBlankString(value.requestId) &&
+    (value.structuredReview === undefined || typeof value.structuredReview === "boolean")
+  );
 }
 
 function isReconnectAttempt(value: unknown): value is PipelineReconnectAttempt {
   if (!isRecord(value) || !isFailureContext(value)) return false;
-  return isNonBlankString(value.id)
-    && isIsoDate(value.startedAt)
-    && (value.agent === undefined
-      || AGENTS.has(value.agent as BuildPipelineAgent));
+  return (
+    isNonBlankString(value.id) &&
+    isIsoDate(value.startedAt) &&
+    (value.agent === undefined || AGENTS.has(value.agent as BuildPipelineAgent))
+  );
 }
 
 function isPromptAttempt(value: unknown): value is PipelinePromptAttempt {
   if (!isRecord(value)) return false;
-  return isNonBlankString(value.id)
-    && isNonBlankString(value.sessionId)
-    && isNonBlankString(value.requestId)
-    && RESUMABLE_PHASES.has(value.phase as ResumableBuildPhase)
-    && typeof value.prompt === "string"
-    && typeof value.useTaskImages === "boolean"
-    && (value.structuredReview === undefined
-      || typeof value.structuredReview === "boolean")
-    && isIsoDate(value.startedAt);
+  return (
+    isNonBlankString(value.id) &&
+    isNonBlankString(value.sessionId) &&
+    isNonBlankString(value.requestId) &&
+    RESUMABLE_PHASES.has(value.phase as ResumableBuildPhase) &&
+    typeof value.prompt === "string" &&
+    typeof value.useTaskImages === "boolean" &&
+    (value.structuredReview === undefined || typeof value.structuredReview === "boolean") &&
+    isIsoDate(value.startedAt)
+  );
 }
 
 function isNonBlankString(value: unknown): value is string {
@@ -886,90 +898,81 @@ function isNonBlankString(value: unknown): value is string {
 export function isBuildPipeline(value: unknown): value is BuildPipeline {
   if (!isRecord(value)) return false;
   if (
-    value.controller !== "backend"
-    || typeof value.id !== "string"
-    || value.id.length === 0
-    || typeof value.taskId !== "string"
-    || value.taskId.length === 0
-    || typeof value.projectId !== "string"
-    || value.projectId.length === 0
-    || typeof value.environmentId !== "string"
-    || !ENVIRONMENT_TYPES.has(value.environmentType as BuildPipelineEnvironmentType)
-    || !AGENTS.has(value.agentType as BuildPipelineAgent)
-    || (value.steps !== undefined && !isBuildStepConfigs(value.steps))
-    || !BUILD_PHASES.has(value.phase as BuildPhase)
-    || !Array.isArray(value.sessions)
-    || !value.sessions.every(isPipelineSession)
-    || !isNonNegativeInteger(value.iteration)
-    || !Number.isSafeInteger(value.maxIterations)
-    || (value.maxIterations as number) < 1
+    value.controller !== "backend" ||
+    typeof value.id !== "string" ||
+    value.id.length === 0 ||
+    typeof value.taskId !== "string" ||
+    value.taskId.length === 0 ||
+    typeof value.projectId !== "string" ||
+    value.projectId.length === 0 ||
+    typeof value.environmentId !== "string" ||
+    !ENVIRONMENT_TYPES.has(value.environmentType as BuildPipelineEnvironmentType) ||
+    !AGENTS.has(value.agentType as BuildPipelineAgent) ||
+    (value.steps !== undefined && !isBuildStepConfigs(value.steps)) ||
+    !BUILD_PHASES.has(value.phase as BuildPhase) ||
+    !Array.isArray(value.sessions) ||
+    !value.sessions.every(isPipelineSession) ||
+    !isNonNegativeInteger(value.iteration) ||
+    !Number.isSafeInteger(value.maxIterations) ||
+    (value.maxIterations as number) < 1 ||
     // Kept in step with isStartBuildPipelineInput: no legitimate record can
     // exceed the bound the gateway enforces on the way in.
-    || (value.maxIterations as number) > MAX_BUILD_PIPELINE_ITERATIONS
-    || !isNonNegativeInteger(value.backendRevision)
-    || !isIsoDate(value.createdAt)
-    || typeof value.taskTitle !== "string"
-    || !isTaskSnapshot(value.taskSnapshot)
-    || (value.verificationResult !== undefined
-      && value.verificationResult !== "pass"
-      && value.verificationResult !== "fail")
-    || !isOptionalString(value.verificationFeedback)
-    || (value.structuredReview !== undefined
-      && !isStructuredReviewReport(value.structuredReview))
-    || !isOptionalNonBlankString(value.structuredReviewRequestId)
-    || (value.pausedFromPhase !== undefined
-      && !RESUMABLE_PHASES.has(value.pausedFromPhase as ResumableBuildPhase))
-    || !isOptionalString(value.error)
-    || (value.failureContext !== undefined
-      && !isFailureContext(value.failureContext))
-    || (value.reconnectAttempt !== undefined
-      && !isReconnectAttempt(value.reconnectAttempt))
-    || (value.pendingPromptAttempt !== undefined
-      && !isPromptAttempt(value.pendingPromptAttempt))
-    || (value.activePromptContext !== undefined
-      && !isFailureContext(value.activePromptContext))
-    || (value.pendingInteractionResolution !== undefined
-      && !isPendingPipelineInteractionResolution(value.pendingInteractionResolution))
-    || (value.interactionSummary !== undefined
-      && !isAgentInteractionWorkflowSummary(value.interactionSummary))
-    || (value.autoDeclineCount !== undefined
-      && !isNonNegativeInteger(value.autoDeclineCount))
-    || (value.stallWarning !== undefined
-      && (!isRecord(value.stallWarning)
-        || !isNonBlankString(value.stallWarning.sessionId)
-        || !isIsoDate(value.stallWarning.detectedAt)))
-    || (value.interactionRetryRequested !== undefined
-      && typeof value.interactionRetryRequested !== "boolean")
-    || (value.stageRetryRequested !== undefined
-      && typeof value.stageRetryRequested !== "boolean")
-    || (value.pendingUserMessages !== undefined
-      && (
-        !Array.isArray(value.pendingUserMessages)
-        || value.pendingUserMessages.length > MAX_PIPELINE_USER_MESSAGES
-        || !value.pendingUserMessages.every(isUserMessage)
-      ))
-    || (value.reviewRetryRequested !== undefined
-      && typeof value.reviewRetryRequested !== "boolean")
-    || (value.source !== undefined && !isPipelineSource(value.source))
-    || !isOptionalNonBlankString(value.featurePlanId)
-    || !isOptionalNonBlankString(value.admissionKey)
-    || (value.sourceLinkedAt !== undefined && !isIsoDate(value.sourceLinkedAt))
-    || (value.completionCommentStatus !== undefined
-      && value.completionCommentStatus !== "posting"
-      && value.completionCommentStatus !== "posted"
-      && value.completionCommentStatus !== "failed")
-    || !isOptionalString(value.completionCommentError)
-    || !isOptionalNonBlankString(value.completionCommentId)
-    || (value.completionCommentPostedAt !== undefined
-      && !isIsoDate(value.completionCommentPostedAt))
+    (value.maxIterations as number) > MAX_BUILD_PIPELINE_ITERATIONS ||
+    !isNonNegativeInteger(value.backendRevision) ||
+    !isIsoDate(value.createdAt) ||
+    typeof value.taskTitle !== "string" ||
+    !isTaskSnapshot(value.taskSnapshot) ||
+    (value.verificationResult !== undefined &&
+      value.verificationResult !== "pass" &&
+      value.verificationResult !== "fail") ||
+    !isOptionalString(value.verificationFeedback) ||
+    (value.structuredReview !== undefined && !isStructuredReviewReport(value.structuredReview)) ||
+    !isOptionalNonBlankString(value.structuredReviewRequestId) ||
+    (value.pausedFromPhase !== undefined &&
+      !RESUMABLE_PHASES.has(value.pausedFromPhase as ResumableBuildPhase)) ||
+    !isOptionalString(value.error) ||
+    (value.failureContext !== undefined && !isFailureContext(value.failureContext)) ||
+    (value.reconnectAttempt !== undefined && !isReconnectAttempt(value.reconnectAttempt)) ||
+    (value.pendingPromptAttempt !== undefined && !isPromptAttempt(value.pendingPromptAttempt)) ||
+    (value.activePromptContext !== undefined && !isFailureContext(value.activePromptContext)) ||
+    (value.pendingInteractionResolution !== undefined &&
+      !isPendingPipelineInteractionResolution(value.pendingInteractionResolution)) ||
+    (value.interactionSummary !== undefined &&
+      !isAgentInteractionWorkflowSummary(value.interactionSummary)) ||
+    (value.autoDeclineCount !== undefined && !isNonNegativeInteger(value.autoDeclineCount)) ||
+    (value.stallWarning !== undefined &&
+      (!isRecord(value.stallWarning) ||
+        !isNonBlankString(value.stallWarning.sessionId) ||
+        !isIsoDate(value.stallWarning.detectedAt))) ||
+    (value.interactionRetryRequested !== undefined &&
+      typeof value.interactionRetryRequested !== "boolean") ||
+    (value.stageRetryRequested !== undefined && typeof value.stageRetryRequested !== "boolean") ||
+    (value.pendingUserMessages !== undefined &&
+      (!Array.isArray(value.pendingUserMessages) ||
+        value.pendingUserMessages.length > MAX_PIPELINE_USER_MESSAGES ||
+        !value.pendingUserMessages.every(isUserMessage))) ||
+    (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
+    (value.source !== undefined && !isPipelineSource(value.source)) ||
+    !isOptionalNonBlankString(value.featurePlanId) ||
+    !isOptionalNonBlankString(value.admissionKey) ||
+    (value.sourceLinkedAt !== undefined && !isIsoDate(value.sourceLinkedAt)) ||
+    (value.completionCommentStatus !== undefined &&
+      value.completionCommentStatus !== "posting" &&
+      value.completionCommentStatus !== "posted" &&
+      value.completionCommentStatus !== "failed") ||
+    !isOptionalString(value.completionCommentError) ||
+    !isOptionalNonBlankString(value.completionCommentId) ||
+    (value.completionCommentPostedAt !== undefined && !isIsoDate(value.completionCommentPostedAt))
   ) {
     return false;
   }
   const index = value.currentSessionIndex;
-  return Number.isSafeInteger(index)
-    && (value.sessions.length === 0
+  return (
+    Number.isSafeInteger(index) &&
+    (value.sessions.length === 0
       ? index === -1
-      : (index as number) >= 0 && (index as number) < value.sessions.length);
+      : (index as number) >= 0 && (index as number) < value.sessions.length)
+  );
 }
 
 function isPipelineSource(value: unknown): value is BuildPipelineSource {
@@ -978,61 +981,55 @@ function isPipelineSource(value: unknown): value is BuildPipelineSource {
     return typeof value.taskId === "string" && value.taskId.length > 0;
   }
   if (value.type === "linear") {
-    return typeof value.issueId === "string"
-      && value.issueId.length > 0
-      && typeof value.issueIdentifier === "string"
-      && value.issueIdentifier.length > 0
-      && isOptionalString(value.issueUrl)
-      && isOptionalString(value.status)
-      && isOptionalString(value.teamKey)
-      && (value.updatedAt === undefined || isIsoDate(value.updatedAt));
+    return (
+      typeof value.issueId === "string" &&
+      value.issueId.length > 0 &&
+      typeof value.issueIdentifier === "string" &&
+      value.issueIdentifier.length > 0 &&
+      isOptionalString(value.issueUrl) &&
+      isOptionalString(value.status) &&
+      isOptionalString(value.teamKey) &&
+      (value.updatedAt === undefined || isIsoDate(value.updatedAt))
+    );
   }
-  return value.type === "github"
-    && typeof value.repositoryOwner === "string"
-    && value.repositoryOwner.length > 0
-    && typeof value.repositoryName === "string"
-    && value.repositoryName.length > 0
-    && Number.isSafeInteger(value.issueNumber)
-    && (value.issueNumber as number) > 0
-    && typeof value.issueUrl === "string"
-    && typeof value.status === "string"
-    && (value.updatedAt === undefined || isIsoDate(value.updatedAt));
+  return (
+    value.type === "github" &&
+    typeof value.repositoryOwner === "string" &&
+    value.repositoryOwner.length > 0 &&
+    typeof value.repositoryName === "string" &&
+    value.repositoryName.length > 0 &&
+    Number.isSafeInteger(value.issueNumber) &&
+    (value.issueNumber as number) > 0 &&
+    typeof value.issueUrl === "string" &&
+    typeof value.status === "string" &&
+    (value.updatedAt === undefined || isIsoDate(value.updatedAt))
+  );
 }
 
 /** Strict gateway guard for starting backend-owned work. */
-export function isStartBuildPipelineInput(
-  value: unknown,
-): value is StartBuildPipelineInput {
+export function isStartBuildPipelineInput(value: unknown): value is StartBuildPipelineInput {
   if (!isRecord(value)) return false;
-  return typeof value.taskId === "string"
-    && value.taskId.length > 0
-    && typeof value.projectId === "string"
-    && value.projectId.length > 0
-    && typeof value.taskTitle === "string"
-    && value.taskTitle.length > 0
-    && ENVIRONMENT_TYPES.has(
-      value.environmentType as BuildPipelineEnvironmentType,
-    )
-    && AGENTS.has(value.agentType as BuildPipelineAgent)
-    && (value.steps === undefined || isBuildStepConfigs(value.steps))
-    && isTaskSnapshot(value.taskSnapshot)
-    && (value.source === undefined || isPipelineSource(value.source))
-    && (value.namingPrompt === undefined
-      || typeof value.namingPrompt === "string")
-    && (value.existingEnvironmentId === undefined
-      || (
-        typeof value.existingEnvironmentId === "string"
-        && value.existingEnvironmentId.length > 0
-      ))
-    && (value.featurePlanId === undefined
-      || (
-        typeof value.featurePlanId === "string"
-        && value.featurePlanId.length > 0
-      ))
-    && (value.maxIterations === undefined
-      || (
-        Number.isSafeInteger(value.maxIterations)
-        && (value.maxIterations as number) >= 1
-        && (value.maxIterations as number) <= MAX_BUILD_PIPELINE_ITERATIONS
-      ));
+  return (
+    typeof value.taskId === "string" &&
+    value.taskId.length > 0 &&
+    typeof value.projectId === "string" &&
+    value.projectId.length > 0 &&
+    typeof value.taskTitle === "string" &&
+    value.taskTitle.length > 0 &&
+    ENVIRONMENT_TYPES.has(value.environmentType as BuildPipelineEnvironmentType) &&
+    AGENTS.has(value.agentType as BuildPipelineAgent) &&
+    (value.steps === undefined || isBuildStepConfigs(value.steps)) &&
+    isTaskSnapshot(value.taskSnapshot) &&
+    (value.source === undefined || isPipelineSource(value.source)) &&
+    (value.namingPrompt === undefined || typeof value.namingPrompt === "string") &&
+    (value.existingEnvironmentId === undefined ||
+      (typeof value.existingEnvironmentId === "string" &&
+        value.existingEnvironmentId.length > 0)) &&
+    (value.featurePlanId === undefined ||
+      (typeof value.featurePlanId === "string" && value.featurePlanId.length > 0)) &&
+    (value.maxIterations === undefined ||
+      (Number.isSafeInteger(value.maxIterations) &&
+        (value.maxIterations as number) >= 1 &&
+        (value.maxIterations as number) <= MAX_BUILD_PIPELINE_ITERATIONS))
+  );
 }

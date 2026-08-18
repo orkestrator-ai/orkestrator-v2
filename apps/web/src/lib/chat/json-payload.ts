@@ -74,8 +74,7 @@ export function jsonPayloadSource(content: string): JsonPayloadSource | null {
   }
   const first = candidate[0];
   const last = candidate.at(-1);
-  const balanced = (first === "{" && last === "}")
-    || (first === "[" && last === "]");
+  const balanced = (first === "{" && last === "}") || (first === "[" && last === "]");
   if (!balanced) return null;
   return { source: candidate, fenced: fencedBody !== undefined };
 }
@@ -179,9 +178,7 @@ export function jsonPayloadTitle(payload: JsonPayload): string {
     case "verification":
       // The outcome is the title: a verdict the reader has to open to learn is
       // no better than the raw JSON it replaced.
-      return payload.verdict.complete
-        ? "Verification passed"
-        : "Verification failed";
+      return payload.verdict.complete ? "Verification passed" : "Verification failed";
     default:
       return Array.isArray(payload.value) ? "JSON list" : "JSON payload";
   }

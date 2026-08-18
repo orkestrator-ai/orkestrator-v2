@@ -1,8 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("compose controls stay reachable in a narrow viewport", async ({
-  page,
-}, testInfo) => {
+test("compose controls stay reachable in a narrow viewport", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
   await page.goto("/native-compose");
 
@@ -24,15 +22,15 @@ test("compose controls stay reachable in a narrow viewport", async ({
       .getBoundingClientRect();
     return {
       fullyInsidePrimary:
-        rect.left >= primaryRect.left
-        && rect.right <= primaryRect.right
-        && rect.top >= primaryRect.top
-        && rect.bottom <= primaryRect.bottom,
+        rect.left >= primaryRect.left &&
+        rect.right <= primaryRect.right &&
+        rect.top >= primaryRect.top &&
+        rect.bottom <= primaryRect.bottom,
       fullyInsideViewport:
-        rect.left >= 0
-        && rect.right <= window.innerWidth
-        && rect.top >= 0
-        && rect.bottom <= window.innerHeight,
+        rect.left >= 0 &&
+        rect.right <= window.innerWidth &&
+        rect.top >= 0 &&
+        rect.bottom <= window.innerHeight,
     };
   });
   expect(geometry).toEqual({

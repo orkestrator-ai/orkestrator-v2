@@ -13,10 +13,13 @@ export function useTimedCopyFeedback(
     return () => window.clearTimeout(timeoutId);
   }, [copied, durationMs]);
 
-  const copy = useCallback(async (value: string) => {
-    await copyText(value);
-    setCopied(true);
-  }, [copyText]);
+  const copy = useCallback(
+    async (value: string) => {
+      await copyText(value);
+      setCopied(true);
+    },
+    [copyText],
+  );
 
   return { copied, copy };
 }

@@ -6,7 +6,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
-import type { NativeAgentSessionProjection, NativeAgentTabData } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentSessionProjection,
+  NativeAgentTabData,
+} from "@orkestrator/protocol/native-agent";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
 import * as realPaneLayoutPersistence from "@/lib/pane-layout-persistence";
@@ -47,7 +50,9 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
               message,
               props.resolvePreviousMessage
                 ? props.resolvePreviousMessage(props.messages, index)
-                : index > 0 ? props.messages[index - 1] : null,
+                : index > 0
+                  ? props.messages[index - 1]
+                  : null,
             )}
           </div>
         ))}
@@ -56,10 +61,7 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
     );
   },
 }));
-const flushPaneLayoutNowMock = mock(async (
-  _environmentId: string,
-  _layout: unknown,
-) => {});
+const flushPaneLayoutNowMock = mock(async (_environmentId: string, _layout: unknown) => {});
 const getNativeAgentModelCatalogMock = mock(
   async (_environmentId: string): ReturnType<typeof realBackend.getNativeAgentModelCatalog> => [],
 );
@@ -92,22 +94,20 @@ const defaultEnsureNativeAgentSession = async (input: {
 });
 const ensureNativeAgentSessionMock = mock(defaultEnsureNativeAgentSession);
 const listNativeAgentResumableSessionsMock = mock(async () => []);
-const getAgentHandoffMock = mock(
-  async (_handoffId: string): Promise<unknown> => null,
+const getAgentHandoffMock = mock(async (_handoffId: string): Promise<unknown> => null);
+const performNativeAgentSessionActionMock = mock(
+  async (_input: { agent: string; action: { kind: string; text?: string } }) => ({
+    outcome: "applied" as const,
+  }),
 );
-const performNativeAgentSessionActionMock = mock(async (_input: {
-  agent: string;
-  action: { kind: string; text?: string };
-}) => ({ outcome: "applied" as const }));
 const enqueuePromptQueueMessageMock = mock(async () => {});
 const removePromptQueueMessageMock = mock(async () => {});
 const movePromptQueueMessageMock = mock(async () => {});
-const dismissNativeAgentSuggestedPromptMock = mock(
-  async () => getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
+const dismissNativeAgentSuggestedPromptMock = mock(async () =>
+  getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
-const updateNativeAgentControlsMock = mock(
-  async (_input: { update: Record<string, unknown> }) =>
-    getNativeAgentProjectionMock({ agent: "codex", environmentId: "env-1" }),
+const updateNativeAgentControlsMock = mock(async (_input: { update: Record<string, unknown> }) =>
+  getNativeAgentProjectionMock({ agent: "codex", environmentId: "env-1" }),
 );
 const dispatchNativeAgentIntentMock = mock(async (input: { requestId: string }) => ({
   outcome: "accepted" as const,
@@ -119,22 +119,26 @@ const retryNativeAgentDispatchMock = mock(async () => ({
 }));
 const discardNativeAgentDispatchMock = mock(async () => ({ discarded: true }));
 const renameEnvironmentFromPromptMock = mock(async () => {});
-const resumeNativeAgentSessionMock = mock(async (input: {
-  agent: NativeAgentTabData["platform"];
-  environmentId: string;
-  providerSessionId: string;
-}) => ({
-  ...(await defaultProjection({
-    agent: input.agent!,
-    environmentId: input.environmentId,
-  })),
-  sessionId: input.providerSessionId,
-  generation: `resumed:${input.providerSessionId}`,
-}));
-const stopNativeAgentSessionMock = mock(async () => getNativeAgentProjectionMock({
-  agent: "claude",
-  environmentId: "env-1",
-}));
+const resumeNativeAgentSessionMock = mock(
+  async (input: {
+    agent: NativeAgentTabData["platform"];
+    environmentId: string;
+    providerSessionId: string;
+  }) => ({
+    ...(await defaultProjection({
+      agent: input.agent!,
+      environmentId: input.environmentId,
+    })),
+    sessionId: input.providerSessionId,
+    generation: `resumed:${input.providerSessionId}`,
+  }),
+);
+const stopNativeAgentSessionMock = mock(async () =>
+  getNativeAgentProjectionMock({
+    agent: "claude",
+    environmentId: "env-1",
+  }),
+);
 const defaultProjection = async (input: {
   agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
   environmentId: string;
@@ -175,7 +179,7 @@ const defaultProjection = async (input: {
 });
 const getNativeAgentProjectionMock = mock(defaultProjection);
 const stopNativeAgentBackgroundTaskMock = mock(async () =>
-  getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" })
+  getNativeAgentProjectionMock({ agent: "claude", environmentId: "env-1" }),
 );
 
 mock.module("@/lib/backend", () => ({
@@ -220,13 +224,15 @@ beforeEach(() => {
   configSnapshot = useConfigStore.getState().config;
   useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
   useEnvironmentStore.setState({
-    environments: [{
-      id: "env-1",
-      projectId: "project-1",
-      name: "Native agent test",
-      order: 0,
-      setupPhase: "ready",
-    } as never],
+    environments: [
+      {
+        id: "env-1",
+        projectId: "project-1",
+        name: "Native agent test",
+        order: 0,
+        setupPhase: "ready",
+      } as never,
+    ],
   });
 });
 
@@ -288,8 +294,7 @@ afterEach(() => {
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/lib/pane-layout-persistence", () => realPaneLayoutPersistenceSnapshot);
-  mock.module("@/components/chat/VirtualizedMessageList", () =>
-    realVirtualizedMessageListSnapshot);
+  mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
 });
 
 function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData {
@@ -354,8 +359,22 @@ function NativeSessionHarness({ isActive = true }: { isActive?: boolean } = {}) 
       <output data-testid="hook-message">
         {(session.projection?.messages[0] as NativeMessage | undefined)?.content}
       </output>
-      <button type="button" onClick={() => { void session.refresh(); }}>Refresh</button>
-      <button type="button" onClick={() => { void session.resume("session-b"); }}>Resume B</button>
+      <button
+        type="button"
+        onClick={() => {
+          void session.refresh();
+        }}
+      >
+        Refresh
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          void session.resume("session-b");
+        }}
+      >
+        Resume B
+      </button>
     </div>
   );
 }
@@ -385,20 +404,25 @@ function NativeSessionIdentityHarness({
 function seedUnassignedPane(tabId: string) {
   usePaneLayoutStore.setState({
     environments: new Map([
-      ["env-1", {
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{
-            id: tabId,
-            type: "agent-native",
-            nativeAgentData: { environmentId: "env-1" },
-          }],
-          activeTabId: tabId,
+      [
+        "env-1",
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: tabId,
+                type: "agent-native",
+                nativeAgentData: { environmentId: "env-1" },
+              },
+            ],
+            activeTabId: tabId,
+          },
+          activePaneId: "default",
+          containerId: null,
         },
-        activePaneId: "default",
-        containerId: null,
-      }],
+      ],
     ]),
     hydration: new Map([["env-1", "done"]]),
     activeEnvironmentId: "env-1",
@@ -414,21 +438,26 @@ function seedAssignedPane(
 ) {
   usePaneLayoutStore.setState({
     environments: new Map([
-      ["env-1", {
-        root: {
-          kind: "leaf",
-          id: "default",
-          tabs: [{
-            id: tabId,
-            type: "agent-native",
-            nativeAgentData: identity("claude"),
-            ...initial,
-          }],
-          activeTabId: tabId,
+      [
+        "env-1",
+        {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: tabId,
+                type: "agent-native",
+                nativeAgentData: identity("claude"),
+                ...initial,
+              },
+            ],
+            activeTabId: tabId,
+          },
+          activePaneId: "default",
+          containerId: "container-1",
         },
-        activePaneId: "default",
-        containerId: "container-1",
-      }],
+      ],
     ]),
     hydration: new Map([["env-1", "done"]]),
     activeEnvironmentId: "env-1",
@@ -440,11 +469,7 @@ describe("AgentNativeTab", () => {
     "does not render a context-window control in the %s compose bar before usage arrives",
     async (platform) => {
       render(
-        <AgentNativeTab
-          tabId={`tab-context-${platform}`}
-          data={identity(platform)}
-          isActive
-        />,
+        <AgentNativeTab tabId={`tab-context-${platform}`} data={identity(platform)} isActive />,
       );
 
       await screen.findByTestId("shared-native-compose-bar");
@@ -482,11 +507,7 @@ describe("AgentNativeTab", () => {
 
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {
     const { container } = render(
-      <AgentNativeTab
-        tabId="tab-unassigned"
-        data={{ environmentId: "env-1" }}
-        isActive
-      />,
+      <AgentNativeTab tabId="tab-unassigned" data={{ environmentId: "env-1" }} isActive />,
     );
 
     const input = container.querySelector<HTMLElement>(".native-compose-input")!;
@@ -501,30 +522,35 @@ describe("AgentNativeTab", () => {
   });
 
   test("uses an execution profile for OpenCode's first prompt without carrying a stale mode", async () => {
-    getNativeAgentModelCatalogMock.mockImplementation(async () => [
-      {
-        platform: "opencode",
-        id: "opencode/sonnet",
-        label: "OpenCode Sonnet",
-        supportsSpeed: false,
-        supportsMode: false,
-      },
-      {
-        platform: "codex",
-        id: "codex-m",
-        label: "Codex M",
-        supportsSpeed: true,
-        supportsMode: true,
-      },
-    ] as never);
+    getNativeAgentModelCatalogMock.mockImplementation(
+      async () =>
+        [
+          {
+            platform: "opencode",
+            id: "opencode/sonnet",
+            label: "OpenCode Sonnet",
+            supportsSpeed: false,
+            supportsMode: false,
+          },
+          {
+            platform: "codex",
+            id: "codex-m",
+            label: "Codex M",
+            supportsSpeed: true,
+            supportsMode: true,
+          },
+        ] as never,
+    );
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1",
-        projectId: "project-1",
-        name: "Mode gate",
-        order: 0,
-        setupPhase: "ready",
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Mode gate",
+          order: 0,
+          setupPhase: "ready",
+        } as never,
+      ],
     });
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["opencode", "codex"],
@@ -588,25 +614,30 @@ describe("AgentNativeTab", () => {
     fireEvent.input(input, { target: { textContent: "Plan the change" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: "opencode",
-        executionProfileId: "plan",
-        sessionMode: undefined,
-        // Not the stale `true` the Codex draft left behind.
-        fastMode: false,
-      }),
-    ));
-    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: "opencode",
-        prompt: "Plan the change",
-        executionAgent: "plan",
-        mode: undefined,
-      }),
-    ));
-    expect(JSON.stringify(flushPaneLayoutNowMock.mock.calls[0]?.[1]))
-      .toContain('"initialExecutionProfileId":"plan"');
+    await waitFor(() =>
+      expect(ensureNativeAgentSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "opencode",
+          executionProfileId: "plan",
+          sessionMode: undefined,
+          // Not the stale `true` the Codex draft left behind.
+          fastMode: false,
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(dispatchNativeAgentIntentMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "opencode",
+          prompt: "Plan the change",
+          executionAgent: "plan",
+          mode: undefined,
+        }),
+      ),
+    );
+    expect(JSON.stringify(flushPaneLayoutNowMock.mock.calls[0]?.[1])).toContain(
+      '"initialExecutionProfileId":"plan"',
+    );
   });
 
   test("cycles the launcher's execution profile with Shift+Tab", async () => {
@@ -614,23 +645,28 @@ describe("AgentNativeTab", () => {
     // A platform whose Plan/Build is an execution profile has to answer the same
     // keystroke, and the two handlers must stay mutually exclusive so one
     // keystroke never writes both fields.
-    getNativeAgentModelCatalogMock.mockImplementation(async () => [
-      {
-        platform: "opencode",
-        id: "opencode/sonnet",
-        label: "OpenCode Sonnet",
-        supportsSpeed: false,
-        supportsMode: false,
-      },
-    ] as never);
+    getNativeAgentModelCatalogMock.mockImplementation(
+      async () =>
+        [
+          {
+            platform: "opencode",
+            id: "opencode/sonnet",
+            label: "OpenCode Sonnet",
+            supportsSpeed: false,
+            supportsMode: false,
+          },
+        ] as never,
+    );
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1",
-        projectId: "project-1",
-        name: "Profile cycle",
-        order: 0,
-        setupPhase: "ready",
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Profile cycle",
+          order: 0,
+          setupPhase: "ready",
+        } as never,
+      ],
     });
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["opencode"],
@@ -651,25 +687,29 @@ describe("AgentNativeTab", () => {
     const input = screen.getByRole("textbox");
 
     fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId,
-    ).toBe("plan"));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId).toBe(
+        "plan",
+      ),
+    );
     // The conversation-mode field still holds its default: only one of the two
     // handlers may claim the keystroke, and the mode one would have flipped
     // this to "plan".
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.mode)
-      .toBe("build");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.mode).toBe("build");
 
     // Wraps back round rather than running off the end of the pair.
     fireEvent.keyDown(input, { key: "Tab", shiftKey: true });
-    await waitFor(() => expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId,
-    ).toBe("build"));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId).toBe(
+        "build",
+      ),
+    );
 
     // A plain Tab is still the browser's focus move, not a profile change.
     fireEvent.keyDown(input, { key: "Tab" });
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId)
-      .toBe("build");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId).toBe(
+      "build",
+    );
   });
 
   test("drops the previous platform's effort when one click also switches platform", async () => {
@@ -682,20 +722,34 @@ describe("AgentNativeTab", () => {
       { id: "medium", label: "Medium" },
       { id: "xhigh", label: "Extra high" },
     ];
-    getNativeAgentModelCatalogMock.mockImplementation(async () => [
-      {
-        platform: "claude", id: "claude-m", label: "Claude M",
-        reasoning, defaultReasoningId: "medium",
-      },
-      {
-        platform: "codex", id: "codex-m", label: "Codex M",
-        reasoning, defaultReasoningId: "medium",
-      },
-    ] as never);
+    getNativeAgentModelCatalogMock.mockImplementation(
+      async () =>
+        [
+          {
+            platform: "claude",
+            id: "claude-m",
+            label: "Claude M",
+            reasoning,
+            defaultReasoningId: "medium",
+          },
+          {
+            platform: "codex",
+            id: "codex-m",
+            label: "Codex M",
+            reasoning,
+            defaultReasoningId: "medium",
+          },
+        ] as never,
+    );
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1", projectId: "project-1", name: "Effort switch", order: 0,
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Effort switch",
+          order: 0,
+        } as never,
+      ],
     });
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["claude", "codex"],
@@ -722,13 +776,12 @@ describe("AgentNativeTab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Favorite models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Codex M/ }));
 
-    await waitFor(() => expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.modelId,
-    ).toBe("codex-m"));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.modelId).toBe("codex-m"),
+    );
     // "xhigh" is a supported effort on the new model, so only a stale read
     // could produce it here.
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId)
-      .toBe("medium");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId).toBe("medium");
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe("codex");
   });
 
@@ -738,20 +791,34 @@ describe("AgentNativeTab", () => {
       { id: "medium", label: "Medium" },
       { id: "xhigh", label: "Extra high" },
     ];
-    getNativeAgentModelCatalogMock.mockImplementation(async () => [
-      {
-        platform: "claude", id: "claude-m", label: "Claude M",
-        reasoning, defaultReasoningId: "medium",
-      },
-      {
-        platform: "claude", id: "claude-n", label: "Claude N",
-        reasoning, defaultReasoningId: "medium",
-      },
-    ] as never);
+    getNativeAgentModelCatalogMock.mockImplementation(
+      async () =>
+        [
+          {
+            platform: "claude",
+            id: "claude-m",
+            label: "Claude M",
+            reasoning,
+            defaultReasoningId: "medium",
+          },
+          {
+            platform: "claude",
+            id: "claude-n",
+            label: "Claude N",
+            reasoning,
+            defaultReasoningId: "medium",
+          },
+        ] as never,
+    );
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1", projectId: "project-1", name: "Effort same platform", order: 0,
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Effort same platform",
+          order: 0,
+        } as never,
+      ],
     });
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["claude"],
@@ -776,13 +843,12 @@ describe("AgentNativeTab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "claude models" }));
     fireEvent.click(await screen.findByRole("menuitemradio", { name: /Claude N/ }));
 
-    await waitFor(() => expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.modelId,
-    ).toBe("claude-n"));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.modelId).toBe("claude-n"),
+    );
     // No platform change, so an explicit choice the new model still supports
     // must survive rather than resetting to the advertised default.
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId)
-      .toBe("xhigh");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId).toBe("xhigh");
   });
 
   test("asks for a platform before opening that provider's normal resume flow", async () => {
@@ -791,20 +857,25 @@ describe("AgentNativeTab", () => {
     });
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-1", {
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [{
-              id: "tab-resume",
-              type: "agent-native",
-              nativeAgentData: { environmentId: "env-1" },
-            }],
-            activeTabId: "tab-resume",
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                {
+                  id: "tab-resume",
+                  type: "agent-native",
+                  nativeAgentData: { environmentId: "env-1" },
+                },
+              ],
+              activeTabId: "tab-resume",
+            },
+            activePaneId: "default",
+            containerId: null,
           },
-          activePaneId: "default",
-          containerId: null,
-        }],
+        ],
       ]),
       hydration: new Map([["env-1", "done"]]),
       activeEnvironmentId: "env-1",
@@ -821,10 +892,12 @@ describe("AgentNativeTab", () => {
     expect(within(dialog).getByRole("button", { name: /Grok Build/ })).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: /OpenCode/ })).toBeTruthy();
 
-    expect((within(dialog).getByRole("button", { name: /Cursor Agent/ }) as HTMLButtonElement).disabled)
-      .toBe(false);
-    expect((within(dialog).getByRole("button", { name: /Grok Build/ }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (within(dialog).getByRole("button", { name: /Cursor Agent/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(
+      (within(dialog).getByRole("button", { name: /Grok Build/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
 
     fireEvent.click(within(dialog).getByRole("button", { name: /Cursor Agent/ }));
 
@@ -834,17 +907,18 @@ describe("AgentNativeTab", () => {
 
   test("renders the backend-normalized OpenCode catalogue in a new tab", async () => {
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1",
-        projectId: "project-1",
-        name: "Cached models",
-        order: 0,
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Cached models",
+          order: 0,
+        } as never,
+      ],
     });
-    useNativeComposeStore.getState().updateDraft(
-      createSessionKey("env-1", "tab-cached-models"),
-      { platform: "opencode" },
-    );
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-cached-models"), { platform: "opencode" });
     getNativeAgentModelCatalogMock.mockImplementation(async () => [
       {
         id: "opencode/model-a",
@@ -860,13 +934,7 @@ describe("AgentNativeTab", () => {
       },
     ]);
 
-    render(
-      <AgentNativeTab
-        tabId="tab-cached-models"
-        data={{ environmentId: "env-1" }}
-        isActive
-      />,
-    );
+    render(<AgentNativeTab tabId="tab-cached-models" data={{ environmentId: "env-1" }} isActive />);
 
     await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
     const picker = await screen.findByTitle(/Choose model/);
@@ -875,10 +943,12 @@ describe("AgentNativeTab", () => {
 
     expect(screen.getByRole("menuitemradio", { name: /OpenCode A/ })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /OpenCode Go B/ })).toBeTruthy();
-    expect(within(screen.getByRole("menuitemradio", { name: /OpenCode A/ })).getByText("opencode"))
-      .toBeTruthy();
-    expect(within(screen.getByRole("menuitemradio", { name: /OpenCode Go B/ })).getByText("opencode-go"))
-      .toBeTruthy();
+    expect(
+      within(screen.getByRole("menuitemradio", { name: /OpenCode A/ })).getByText("opencode"),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByRole("menuitemradio", { name: /OpenCode Go B/ })).getByText("opencode-go"),
+    ).toBeTruthy();
   });
 
   test("renders the cached Cursor catalogue without starting its ACP bridge", async () => {
@@ -886,17 +956,18 @@ describe("AgentNativeTab", () => {
       enabledAgentPlatforms: ["cursor"],
     });
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1",
-        projectId: "project-1",
-        name: "Cursor models",
-        order: 0,
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Cursor models",
+          order: 0,
+        } as never,
+      ],
     });
-    useNativeComposeStore.getState().updateDraft(
-      createSessionKey("env-1", "tab-cursor-models"),
-      { platform: "cursor" },
-    );
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-cursor-models"), { platform: "cursor" });
     getNativeAgentModelCatalogMock.mockImplementation(async () => [
       {
         id: "composer-2.5",
@@ -910,13 +981,7 @@ describe("AgentNativeTab", () => {
       },
     ]);
 
-    render(
-      <AgentNativeTab
-        tabId="tab-cursor-models"
-        data={{ environmentId: "env-1" }}
-        isActive
-      />,
-    );
+    render(<AgentNativeTab tabId="tab-cursor-models" data={{ environmentId: "env-1" }} isActive />);
 
     await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
     expect(awaitBridgeReadyMock).not.toHaveBeenCalled();
@@ -924,8 +989,9 @@ describe("AgentNativeTab", () => {
     fireEvent.pointerDown(picker);
     fireEvent.click(screen.getByRole("button", { name: "cursor models" }));
     expect(screen.getByRole("menuitemradio", { name: /Composer 2.5/ })).toBeTruthy();
-    expect(useAgentModelCatalogStore.getState().cursorModels.map((model) => model.id))
-      .toEqual(["composer-2.5"]);
+    expect(useAgentModelCatalogStore.getState().cursorModels.map((model) => model.id)).toEqual([
+      "composer-2.5",
+    ]);
   });
 
   // The catalogue is environment-scoped and already holds every platform, so a
@@ -933,12 +999,14 @@ describe("AgentNativeTab", () => {
   // re-issuing a command that probes both ACP bridges.
   test("does not refetch the catalogue when the composer platform changes", async () => {
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1",
-        projectId: "project-1",
-        name: "Model catalogue",
-        order: 0,
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Model catalogue",
+          order: 0,
+        } as never,
+      ],
     });
     const sessionKey = createSessionKey("env-1", "tab-platform-switch");
     useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "cursor" });
@@ -962,35 +1030,35 @@ describe("AgentNativeTab", () => {
     ]);
 
     render(
-      <AgentNativeTab
-        tabId="tab-platform-switch"
-        data={{ environmentId: "env-1" }}
-        isActive
-      />,
+      <AgentNativeTab tabId="tab-platform-switch" data={{ environmentId: "env-1" }} isActive />,
     );
 
-    await waitFor(() => expect(screen.getByTitle(/Choose model/).textContent)
-      .toContain("Composer 2.5"));
+    await waitFor(() =>
+      expect(screen.getByTitle(/Choose model/).textContent).toContain("Composer 2.5"),
+    );
     expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
 
     useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "grok" });
 
     // The grok half of the same catalogue resolves immediately: no refetch, and
     // no transient "No models available".
-    await waitFor(() => expect(screen.getByTitle(/Choose model/).textContent)
-      .toContain("Grok Build"));
+    await waitFor(() =>
+      expect(screen.getByTitle(/Choose model/).textContent).toContain("Grok Build"),
+    );
     expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("No models available") === null).toBe(true);
   });
 
   test("drops attachments the newly selected platform cannot receive", async () => {
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1",
-        projectId: "project-1",
-        name: "Attachment reconcile",
-        order: 0,
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Attachment reconcile",
+          order: 0,
+        } as never,
+      ],
     });
     const sessionKey = createSessionKey("env-1", "tab-attachment-switch");
     const file = {
@@ -1013,16 +1081,15 @@ describe("AgentNativeTab", () => {
     });
 
     render(
-      <AgentNativeTab
-        tabId="tab-attachment-switch"
-        data={{ environmentId: "env-1" }}
-        isActive
-      />,
+      <AgentNativeTab tabId="tab-attachment-switch" data={{ environmentId: "env-1" }} isActive />,
     );
     // Claude takes both, so nothing is reconciled away.
-    await waitFor(() => expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
-    ).toEqual([file, image]));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments).toEqual([
+        file,
+        image,
+      ]),
+    );
 
     useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "codex" });
 
@@ -1032,11 +1099,10 @@ describe("AgentNativeTab", () => {
      * here would fail the next send with an error naming an attachment the
      * composer had stopped offering.
      */
-    await waitFor(() => expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
-    ).toEqual([image]));
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text)
-      .toBe("review these");
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments).toEqual([image]),
+    );
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("review these");
 
     // Cursor reads inline images over ACP but takes no files, so the same
     // reconcile applies: back to a provider that accepts both, then across.
@@ -1044,55 +1110,64 @@ describe("AgentNativeTab", () => {
       platform: "claude",
       attachments: [file, image],
     });
-    await waitFor(() => expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
-    ).toEqual([file, image]));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments).toEqual([
+        file,
+        image,
+      ]),
+    );
 
     useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "cursor" });
-    await waitFor(() => expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments,
-    ).toEqual([image]));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.attachments).toEqual([image]),
+    );
   });
 
   test("carries first-prompt mentions and pasted images through the provider lock", async () => {
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-1", {
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [{
-              id: "tab-first-prompt",
-              type: "agent-native",
-              nativeAgentData: { environmentId: "env-1" },
-            }],
-            activeTabId: "tab-first-prompt",
+        [
+          "env-1",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                {
+                  id: "tab-first-prompt",
+                  type: "agent-native",
+                  nativeAgentData: { environmentId: "env-1" },
+                },
+              ],
+              activeTabId: "tab-first-prompt",
+            },
+            activePaneId: "default",
+            containerId: null,
           },
-          activePaneId: "default",
-          containerId: null,
-        }],
+        ],
       ]),
       hydration: new Map([["env-1", "done"]]),
       activeEnvironmentId: "env-1",
     });
-    useNativeComposeStore.getState().updateDraft(
-      createSessionKey("env-1", "tab-first-prompt"),
-      {
-        text: "Review @widget.ts",
-        mentions: [{
+    useNativeComposeStore.getState().updateDraft(createSessionKey("env-1", "tab-first-prompt"), {
+      text: "Review @widget.ts",
+      mentions: [
+        {
           id: "mention-1",
           filename: "widget.ts",
           relativePath: "src/widget.ts",
-        }],
-        attachments: [{
+        },
+      ],
+      attachments: [
+        {
           id: "image-1",
           type: "image",
           name: "layout.png",
           path: "/workspace/.orkestrator/clipboard/layout.png",
           previewUrl: "data:image/png;base64,abc",
-        }],
-      },
-    );
+        },
+      ],
+    });
 
     render(<PaneBackedAgentNativeTab tabId="tab-first-prompt" />);
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
@@ -1105,12 +1180,16 @@ describe("AgentNativeTab", () => {
     expect(getNativeAgentData(tab!)?.platform).toBe("claude");
     await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
     expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
-      prompt: expect.stringMatching(/\[@widget\.ts\]\(src\/widget\.ts\)[\s\S]*layout\.png: \/workspace\/\.orkestrator\/clipboard\/layout\.png/),
-      attachments: [{
-        type: "image",
-        path: "/workspace/.orkestrator/clipboard/layout.png",
-        filename: "layout.png",
-      }],
+      prompt: expect.stringMatching(
+        /\[@widget\.ts\]\(src\/widget\.ts\)[\s\S]*layout\.png: \/workspace\/\.orkestrator\/clipboard\/layout\.png/,
+      ),
+      attachments: [
+        {
+          type: "image",
+          path: "/workspace/.orkestrator/clipboard/layout.png",
+          filename: "layout.png",
+        },
+      ],
     });
   });
 
@@ -1129,8 +1208,9 @@ describe("AgentNativeTab", () => {
     render(<PaneBackedAgentNativeTab tabId={tabId} />);
     fireEvent.click(screen.getByRole("button", { name: "Start agent" }));
 
-    expect(await screen.findByText("The agent choice is locked, but could not be saved."))
-      .toBeTruthy();
+    expect(
+      await screen.findByText("The agent choice is locked, but could not be saved."),
+    ).toBeTruthy();
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("Keep this prompt");
     fireEvent.click(screen.getByRole("button", { name: "Retry save" }));
 
@@ -1141,22 +1221,24 @@ describe("AgentNativeTab", () => {
 
   test("keeps a first prompt durable and non-reentrant while environment rename is pending", async () => {
     let releaseRename!: () => void;
-    const renameGate = new Promise<void>((resolve) => { releaseRename = resolve; });
+    const renameGate = new Promise<void>((resolve) => {
+      releaseRename = resolve;
+    });
     renameEnvironmentFromPromptMock.mockImplementationOnce(async () => renameGate);
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1",
-        projectId: "project-1",
-        name: "20260415-123456",
-        order: 0,
-        setupPhase: "ready",
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "20260415-123456",
+          order: 0,
+          setupPhase: "ready",
+        } as never,
+      ],
     });
     const tabId = "tab-rename-durable";
     const sessionKey = createSessionKey("env-1", tabId);
-    const view = render(
-      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
-    );
+    const view = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     const input = await screen.findByRole("textbox");
     fireEvent.input(input, { target: { textContent: "Keep this first prompt" } });
     const sendButton = await screen.findByTitle("Send");
@@ -1172,11 +1254,10 @@ describe("AgentNativeTab", () => {
     expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
 
     view.unmount();
-    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text)
-      .toBe("Keep this first prompt");
-    const remounted = render(
-      <AgentNativeTab tabId={tabId} data={identity("claude")} isActive />,
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "Keep this first prompt",
     );
+    const remounted = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
     expect((await screen.findByRole("textbox")).textContent).toBe("Keep this first prompt");
     remounted.unmount();
 
@@ -1187,8 +1268,9 @@ describe("AgentNativeTab", () => {
       prompt: "Keep this first prompt",
       requestId: stableRequestId,
     });
-    await waitFor(() => expect(useNativeComposeStore.getState().drafts.get(sessionKey))
-      .toBeUndefined());
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
   });
 
   test("retries a failed resume provider-lock save before opening the provider dialog", async () => {
@@ -1211,25 +1293,23 @@ describe("AgentNativeTab", () => {
 
   for (const platform of AGENT_PLATFORMS) {
     test(`routes ${platform} through the shared authoritative projection`, async () => {
-      render(
-        <AgentNativeTab
-          tabId={`tab-${platform}`}
-          data={identity(platform)}
-          isActive
-        />,
-      );
+      render(<AgentNativeTab tabId={`tab-${platform}`} data={identity(platform)} isActive />);
 
       expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(adoptNativeAgentSessionMock).toHaveBeenCalledWith(expect.objectContaining({
-        agent: platform,
-        environmentId: "env-1",
-        logicalSessionKey: `env-env-1:tab-${platform}`,
-        providerSessionId: `${platform}-session`,
-      }));
-      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
-        agent: platform,
-        environmentId: "env-1",
-      }));
+      expect(adoptNativeAgentSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: platform,
+          environmentId: "env-1",
+          logicalSessionKey: `env-env-1:tab-${platform}`,
+          providerSessionId: `${platform}-session`,
+        }),
+      );
+      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: platform,
+          environmentId: "env-1",
+        }),
+      );
     });
   }
 
@@ -1266,11 +1346,7 @@ describe("AgentNativeTab", () => {
     });
 
     render(
-      <AgentNativeTab
-        tabId="tab-resume-preserve-controls"
-        data={identity("claude")}
-        isActive
-      />,
+      <AgentNativeTab tabId="tab-resume-preserve-controls" data={identity("claude")} isActive />,
     );
 
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
@@ -1292,7 +1368,9 @@ describe("AgentNativeTab", () => {
     const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
-      const tab = usePaneLayoutStore.getState().getAllTabs("env-1")
+      const tab = usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-1")
         .find((candidate) => candidate.id === tabId);
       expect(tab?.initialConversationMode).toBeUndefined();
     });
@@ -1304,8 +1382,7 @@ describe("AgentNativeTab", () => {
     adoptNativeAgentSessionMock.mockClear();
     render(<PaneBackedAgentNativeTab tabId={tabId} />);
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
-    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0])
-      .not.toHaveProperty("sessionMode");
+    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0]).not.toHaveProperty("sessionMode");
   });
 
   test("consumes an execution-profile launch option before a resumed tab remounts", async () => {
@@ -1318,7 +1395,9 @@ describe("AgentNativeTab", () => {
     const first = render(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
-      const tab = usePaneLayoutStore.getState().getAllTabs("env-1")
+      const tab = usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-1")
         .find((candidate) => candidate.id === tabId);
       expect(tab?.initialExecutionProfileId).toBeUndefined();
     });
@@ -1330,8 +1409,9 @@ describe("AgentNativeTab", () => {
     adoptNativeAgentSessionMock.mockClear();
     render(<PaneBackedAgentNativeTab tabId={tabId} />);
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalled());
-    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0])
-      .not.toHaveProperty("executionProfileId");
+    expect(adoptNativeAgentSessionMock.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "executionProfileId",
+    );
   });
 
   test("consumes an explicit false fast-mode option", async () => {
@@ -1340,7 +1420,9 @@ describe("AgentNativeTab", () => {
     render(<PaneBackedAgentNativeTab tabId={tabId} />);
 
     await waitFor(() => {
-      const tab = usePaneLayoutStore.getState().getAllTabs("env-1")
+      const tab = usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-1")
         .find((candidate) => candidate.id === tabId);
       expect(tab?.initialFastMode).toBeUndefined();
     });
@@ -1390,21 +1472,17 @@ describe("AgentNativeTab", () => {
 
   test("waits for environment setup before starting the shared provider", async () => {
     useEnvironmentStore.setState({
-      environments: [{
-        id: "env-1",
-        projectId: "project-1",
-        name: "Setting up",
-        order: 0,
-        setupPhase: "running",
-      } as never],
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Setting up",
+          order: 0,
+          setupPhase: "running",
+        } as never,
+      ],
     });
-    render(
-      <AgentNativeTab
-        tabId="tab-setup"
-        data={identity("claude")}
-        isActive
-      />,
-    );
+    render(<AgentNativeTab tabId="tab-setup" data={identity("claude")} isActive />);
     expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
     expect(adoptNativeAgentSessionMock).not.toHaveBeenCalled();
 
@@ -1418,23 +1496,26 @@ describe("AgentNativeTab", () => {
     await waitFor(() => expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1));
   });
 
-  test.each([...AGENT_PLATFORMS])("loads a transferred conversation for a %s tab", async (platform) => {
-    // The destination side used to gate on the three legacy providers, so a
-    // Cursor or Grok tab silently dropped the transfer it was opened to carry
-    // and never even asked for it.
-    render(
-      <AgentNativeTab
-        tabId={`tab-handoff-${platform}`}
-        data={identity(platform)}
-        isActive
-        agentHandoffId={`handoff-into-${platform}`}
-      />,
-    );
+  test.each([...AGENT_PLATFORMS])(
+    "loads a transferred conversation for a %s tab",
+    async (platform) => {
+      // The destination side used to gate on the three legacy providers, so a
+      // Cursor or Grok tab silently dropped the transfer it was opened to carry
+      // and never even asked for it.
+      render(
+        <AgentNativeTab
+          tabId={`tab-handoff-${platform}`}
+          data={identity(platform)}
+          isActive
+          agentHandoffId={`handoff-into-${platform}`}
+        />,
+      );
 
-    await waitFor(() =>
-      expect(getAgentHandoffMock).toHaveBeenCalledWith(`handoff-into-${platform}`),
-    );
-  });
+      await waitFor(() =>
+        expect(getAgentHandoffMock).toHaveBeenCalledWith(`handoff-into-${platform}`),
+      );
+    },
+  );
 
   test("renders a mismatch notice instead of throwing on an unknown platform", async () => {
     // A persisted record can name a platform this build does not ship. Failing
@@ -1474,13 +1555,13 @@ describe("AgentNativeTab", () => {
     );
     expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
 
-    rerender(
-      <AgentNativeTab tabId="tab-swap" data={identity("opencode")} isActive />,
-    );
+    rerender(<AgentNativeTab tabId="tab-swap" data={identity("opencode")} isActive />);
 
-    await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: "opencode" }),
-    ));
+    await waitFor(() =>
+      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "opencode" }),
+      ),
+    );
   });
 
   test("does not read or touch a provider projection while its tab is inactive", async () => {
@@ -1528,14 +1609,18 @@ describe("AgentNativeTab", () => {
     // agent: the logical key has no provider session to resolve yet.
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
     let settleEnsure: (() => void) | undefined;
-    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
-      settleEnsure = () => resolve({
-        providerSessionId: "cursor-session",
-        logicalSessionKey: input.logicalSessionKey,
-        environmentId: input.environmentId,
-        agent: input.agent,
-      });
-    }));
+    ensureNativeAgentSessionMock.mockImplementation(
+      (input) =>
+        new Promise((resolve) => {
+          settleEnsure = () =>
+            resolve({
+              providerSessionId: "cursor-session",
+              logicalSessionKey: input.logicalSessionKey,
+              environmentId: input.environmentId,
+              agent: input.agent,
+            });
+        }),
+    );
 
     render(<AgentNativeTab tabId="tab-new-cursor" data={freshTab("cursor")} isActive />);
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
@@ -1551,7 +1636,9 @@ describe("AgentNativeTab", () => {
       });
       // The dispatcher coalesces for 50ms; wait past that so the invalidation
       // genuinely reaches the hook while creation is still in flight.
-      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
     });
 
     // Cursor is still being spawned. "No session" is not something the backend
@@ -1564,7 +1651,9 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);
     await act(async () => {
       settleEnsure!();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
     });
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
   });
@@ -1576,9 +1665,12 @@ describe("AgentNativeTab", () => {
     // does not exist, and installing that empty read used to clear the error.
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
     let failEnsure: (() => void) | undefined;
-    ensureNativeAgentSessionMock.mockImplementation(() => new Promise((_resolve, reject) => {
-      failEnsure = () => reject(new Error("cursor-agent is enabled but not installed yet"));
-    }));
+    ensureNativeAgentSessionMock.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          failEnsure = () => reject(new Error("cursor-agent is enabled but not installed yet"));
+        }),
+    );
 
     render(<AgentNativeTab tabId="tab-new-cursor-fail" data={freshTab("cursor")} isActive />);
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
@@ -1589,12 +1681,16 @@ describe("AgentNativeTab", () => {
         id: "env-1",
         revision: 1,
       });
-      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
     });
 
     await act(async () => {
       failEnsure!();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
     });
 
     await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
@@ -1604,7 +1700,9 @@ describe("AgentNativeTab", () => {
 
     // And it survives the poll loop, which reads the same absent session again.
     await act(async () => {
-      await new Promise<void>((resolve) => { setTimeout(resolve, 1_700); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1_700);
+      });
     });
     expect(screen.getByText("cursor-agent is enabled but not installed yet")).toBeTruthy();
   }, 10_000);
@@ -1616,37 +1714,39 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
 
     render(<NativeSessionIdentityHarness platform="cursor" />);
-    await waitFor(() => expect(
-      screen.getByTestId("runtime-error").textContent,
-    ).toBe("bridge refused the session"));
+    await waitFor(() =>
+      expect(screen.getByTestId("runtime-error").textContent).toBe("bridge refused the session"),
+    );
 
     // Suppression is scoped to "the session still is not there". A read that
     // does find one supersedes the failure — otherwise the message outlives what
     // it described, and the next genuine absence reports a stale cause.
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);
-    await waitFor(
-      () => expect(screen.getByTestId("runtime-error").textContent).toBe(""),
-      { timeout: 4_000 },
-    );
+    await waitFor(() => expect(screen.getByTestId("runtime-error").textContent).toBe(""), {
+      timeout: 4_000,
+    });
 
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
-    await waitFor(
-      () => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"),
-      { timeout: 4_000 },
-    );
+    await waitFor(() => expect(screen.getByTestId("has-completed-read").textContent).toBe("true"), {
+      timeout: 4_000,
+    });
     expect(screen.getByTestId("runtime-error").textContent).toBe("");
   }, 10_000);
 
   test("runs the reconcile an invalidation asked for once creation completes", async () => {
     let settleEnsure: (() => void) | undefined;
-    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
-      settleEnsure = () => resolve({
-        providerSessionId: "cursor-session",
-        logicalSessionKey: input.logicalSessionKey,
-        environmentId: input.environmentId,
-        agent: input.agent,
-      });
-    }));
+    ensureNativeAgentSessionMock.mockImplementation(
+      (input) =>
+        new Promise((resolve) => {
+          settleEnsure = () =>
+            resolve({
+              providerSessionId: "cursor-session",
+              logicalSessionKey: input.logicalSessionKey,
+              environmentId: input.environmentId,
+              agent: input.agent,
+            });
+        }),
+    );
 
     render(<AgentNativeTab tabId="tab-new-cursor-reconcile" data={freshTab("cursor")} isActive />);
     await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
@@ -1658,14 +1758,18 @@ describe("AgentNativeTab", () => {
         id: "env-1",
         revision: 1,
       });
-      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
     });
     // Deferred, not dropped: reading now could only answer "not created yet".
     expect(getNativeAgentProjectionMock).not.toHaveBeenCalled();
 
     await act(async () => {
       settleEnsure!();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
+      });
     });
 
     // Two reads: the one `connect` owns, and the deferred reconcile. Counting
@@ -1684,14 +1788,19 @@ describe("AgentNativeTab", () => {
     // prevent.
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
     const settles: Array<() => void> = [];
-    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
-      settles.push(() => resolve({
-        providerSessionId: `${input.agent}-session`,
-        logicalSessionKey: input.logicalSessionKey,
-        environmentId: input.environmentId,
-        agent: input.agent,
-      }));
-    }));
+    ensureNativeAgentSessionMock.mockImplementation(
+      (input) =>
+        new Promise((resolve) => {
+          settles.push(() =>
+            resolve({
+              providerSessionId: `${input.agent}-session`,
+              logicalSessionKey: input.logicalSessionKey,
+              environmentId: input.environmentId,
+              agent: input.agent,
+            }),
+          );
+        }),
+    );
 
     const { rerender } = render(
       <AgentNativeTab tabId="tab-overlap" data={freshTab("cursor")} isActive />,
@@ -1702,7 +1811,9 @@ describe("AgentNativeTab", () => {
 
     await act(async () => {
       settles[0]!();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
+      });
     });
 
     getNativeAgentProjectionMock.mockClear();
@@ -1712,7 +1823,9 @@ describe("AgentNativeTab", () => {
         id: "env-1",
         revision: 2,
       });
-      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
     });
 
     // The second connect has not returned, so there is still nothing to resolve.
@@ -1723,7 +1836,9 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementation(defaultProjection);
     await act(async () => {
       settles[1]!();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 30); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
+      });
     });
     // And the window does close — a stuck counter would mute this tab's
     // background refreshes for the rest of its life.
@@ -1735,21 +1850,27 @@ describe("AgentNativeTab", () => {
         id: "env-1",
         revision: 3,
       });
-      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
     });
     expect(getNativeAgentProjectionMock).toHaveBeenCalled();
   });
 
   test("rehydrates from an authoritative read after establishing while inactive", async () => {
     let settleEnsure: (() => void) | undefined;
-    ensureNativeAgentSessionMock.mockImplementation((input) => new Promise((resolve) => {
-      settleEnsure = () => resolve({
-        providerSessionId: "cursor-session",
-        logicalSessionKey: input.logicalSessionKey,
-        environmentId: input.environmentId,
-        agent: input.agent,
-      });
-    }));
+    ensureNativeAgentSessionMock.mockImplementation(
+      (input) =>
+        new Promise((resolve) => {
+          settleEnsure = () =>
+            resolve({
+              providerSessionId: "cursor-session",
+              logicalSessionKey: input.logicalSessionKey,
+              environmentId: input.environmentId,
+              agent: input.agent,
+            });
+        }),
+    );
 
     const { rerender } = render(
       <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive />,
@@ -1768,23 +1889,21 @@ describe("AgentNativeTab", () => {
         revision: 1,
       });
       settleEnsure!();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 120); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 120);
+      });
     });
 
     // Returning has to recover from a snapshot rather than from the event that
     // was dropped while the tab was not the visible one.
-    rerender(
-      <AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive />,
-    );
+    rerender(<AgentNativeTab tabId="tab-inactive-establish" data={freshTab("cursor")} isActive />);
     await waitFor(() => expect(screen.getByTestId("shared-native-compose-bar")).toBeTruthy());
   });
 
   test("reports a created session that still reads empty as a failed connection", async () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
 
-    render(
-      <AgentNativeTab tabId="tab-new-cursor-empty" data={freshTab("cursor")} isActive />,
-    );
+    render(<AgentNativeTab tabId="tab-new-cursor-empty" data={freshTab("cursor")} isActive />);
 
     // Holding the empty read back is scoped to session creation alone. Once
     // `ensure` has returned there is a session to resolve, so an empty read is
@@ -1812,14 +1931,18 @@ describe("AgentNativeTab", () => {
 
     let settleRetry: (() => void) | undefined;
     adoptNativeAgentSessionMock.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        settleRetry = () => resolve(defaultAdoptNativeAgentSession({
-          agent: "cursor",
-          providerSessionId: "cursor-session",
-          logicalSessionKey: createSessionKey("env-1", "tab-retry-empty"),
-          environmentId: "env-1",
-        }));
-      }),
+      () =>
+        new Promise((resolve) => {
+          settleRetry = () =>
+            resolve(
+              defaultAdoptNativeAgentSession({
+                agent: "cursor",
+                providerSessionId: "cursor-session",
+                logicalSessionKey: createSessionKey("env-1", "tab-retry-empty"),
+                environmentId: "env-1",
+              }),
+            );
+        }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
@@ -1842,14 +1965,18 @@ describe("AgentNativeTab", () => {
 
     let settleRetry: (() => void) | undefined;
     adoptNativeAgentSessionMock.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        settleRetry = () => resolve(defaultAdoptNativeAgentSession({
-          agent: "codex",
-          providerSessionId: "codex-session",
-          logicalSessionKey: createSessionKey("env-1", "tab-retry-connect"),
-          environmentId: "env-1",
-        }));
-      }),
+      () =>
+        new Promise((resolve) => {
+          settleRetry = () =>
+            resolve(
+              defaultAdoptNativeAgentSession({
+                agent: "codex",
+                providerSessionId: "codex-session",
+                logicalSessionKey: createSessionKey("env-1", "tab-retry-connect"),
+                environmentId: "env-1",
+              }),
+            );
+        }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
@@ -1878,9 +2005,7 @@ describe("AgentNativeTab", () => {
         settleOpenCode = () => resolve(defaultAdoptNativeAgentSession(input));
       });
     });
-    rerender(
-      <AgentNativeTab tabId="tab-identity-swap" data={identity("opencode")} isActive />,
-    );
+    rerender(<AgentNativeTab tabId="tab-identity-swap" data={identity("opencode")} isActive />);
 
     // The cursor read answered "no session". That must not keep vouching for
     // OpenCode, which has not been asked yet.
@@ -1894,9 +2019,7 @@ describe("AgentNativeTab", () => {
 
   test("does not let a completed empty read mark a later identity as failed", async () => {
     let settleOpenCode: (() => void) | undefined;
-    getNativeAgentProjectionMock.mockImplementation(async (input: {
-      agent: string;
-    }) => {
+    getNativeAgentProjectionMock.mockImplementation(async (input: { agent: string }) => {
       if (input.agent !== "opencode") return null as never;
       await new Promise<void>((resolve) => {
         settleOpenCode = resolve;
@@ -1927,22 +2050,24 @@ describe("AgentNativeTab", () => {
 
   test("does not let a stale projection refresh undo a resumed session", async () => {
     let resolveStale!: (projection: NativeAgentSessionProjection<NativeMessage>) => void;
-    const staleProjection = new Promise<NativeAgentSessionProjection<NativeMessage>>(
-      (resolve) => { resolveStale = resolve; },
-    );
+    const staleProjection = new Promise<NativeAgentSessionProjection<NativeMessage>>((resolve) => {
+      resolveStale = resolve;
+    });
     getNativeAgentProjectionMock
       .mockImplementationOnce(defaultProjection)
       .mockImplementationOnce(async () => staleProjection)
       .mockImplementation(defaultProjection);
 
     render(<NativeSessionHarness />);
-    await waitFor(() => expect(screen.getByTestId("hook-session-id").textContent)
-      .toBe("claude-session"));
+    await waitFor(() =>
+      expect(screen.getByTestId("hook-session-id").textContent).toBe("claude-session"),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalledTimes(2));
     fireEvent.click(screen.getByRole("button", { name: "Resume B" }));
-    await waitFor(() => expect(screen.getByTestId("hook-session-id").textContent)
-      .toBe("session-b"));
+    await waitFor(() =>
+      expect(screen.getByTestId("hook-session-id").textContent).toBe("session-b"),
+    );
 
     resolveStale({
       ...(await defaultProjection({ agent: "claude", environmentId: "env-1" })),
@@ -1960,17 +2085,21 @@ describe("AgentNativeTab", () => {
     useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
       ...(await defaultProjection({ agent: "claude", environmentId: "env-1" })),
       sessionId: "session-a",
-      messages: [{
-        id: "assistant-stale",
-        role: "assistant",
-        content: "stale transcript",
-        parts: [],
-        createdAt: "2026-08-14T10:00:00.000Z",
-      }],
+      messages: [
+        {
+          id: "assistant-stale",
+          role: "assistant",
+          content: "stale transcript",
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      ],
     });
     let releaseAdoption!: () => void;
     adoptNativeAgentSessionMock.mockImplementationOnce(async (input) => {
-      await new Promise<void>((resolve) => { releaseAdoption = resolve; });
+      await new Promise<void>((resolve) => {
+        releaseAdoption = resolve;
+      });
       return {
         providerSessionId: input.providerSessionId,
         logicalSessionKey: input.logicalSessionKey,
@@ -1981,20 +2110,23 @@ describe("AgentNativeTab", () => {
     getNativeAgentProjectionMock.mockImplementationOnce(async (input) => ({
       ...(await defaultProjection(input as never)),
       sessionId: "session-a",
-      messages: [{
-        id: "assistant-latest",
-        role: "assistant",
-        content: "latest transcript",
-        parts: [],
-        createdAt: "2026-08-14T10:00:01.000Z",
-      }],
+      messages: [
+        {
+          id: "assistant-latest",
+          role: "assistant",
+          content: "latest transcript",
+          parts: [],
+          createdAt: "2026-08-14T10:00:01.000Z",
+        },
+      ],
       revision: 2,
     }));
 
     render(<NativeSessionHarness />);
     expect(screen.getByTestId("hook-message").textContent).toBe("stale transcript");
-    await waitFor(() => expect(screen.getByTestId("hook-message").textContent)
-      .toBe("latest transcript"));
+    await waitFor(() =>
+      expect(screen.getByTestId("hook-message").textContent).toBe("latest transcript"),
+    );
     expect(adoptNativeAgentSessionMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -2012,29 +2144,35 @@ describe("AgentNativeTab", () => {
    */
   async function parkFirstProjectionRead(): Promise<() => void> {
     let releaseRefresh!: () => void;
-    const parked = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const parked = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
     getNativeAgentProjectionMock.mockImplementationOnce(async (input) => {
       await parked;
       return {
         ...(await defaultProjection(input as never)),
-        messages: [{
-          id: "assistant-stale",
-          role: "assistant",
-          content: "stale transcript",
-          parts: [],
-          createdAt: "2026-08-14T10:00:00.000Z",
-        }],
+        messages: [
+          {
+            id: "assistant-stale",
+            role: "assistant",
+            content: "stale transcript",
+            parts: [],
+            createdAt: "2026-08-14T10:00:00.000Z",
+          },
+        ],
       };
     });
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
-      messages: [{
-        id: "assistant-latest",
-        role: "assistant",
-        content: "latest transcript",
-        parts: [],
-        createdAt: "2026-08-14T10:00:01.000Z",
-      }],
+      messages: [
+        {
+          id: "assistant-latest",
+          role: "assistant",
+          content: "latest transcript",
+          parts: [],
+          createdAt: "2026-08-14T10:00:01.000Z",
+        },
+      ],
       revision: 2,
     }));
     return releaseRefresh;
@@ -2043,8 +2181,7 @@ describe("AgentNativeTab", () => {
   test("coalesces a resource invalidation into one trailing projection read", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
     render(<NativeSessionHarness />);
-    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
-      .toBeGreaterThan(0));
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
     await act(async () => {
@@ -2055,7 +2192,9 @@ describe("AgentNativeTab", () => {
       });
       // The dispatcher coalesces for 50ms, so the invalidation has to be given
       // time to actually reach the hook while the read above is still parked.
-      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 80);
+      });
     });
     // Coalesced, not executed: proof the read below is the trailing
     // reconciliation rather than the invalidation's own read.
@@ -2063,18 +2202,20 @@ describe("AgentNativeTab", () => {
 
     await act(async () => {
       releaseRefresh();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
     });
     expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked + 1);
-    await waitFor(() => expect(screen.getByTestId("hook-message").textContent)
-      .toBe("latest transcript"));
+    await waitFor(() =>
+      expect(screen.getByTestId("hook-message").textContent).toBe("latest transcript"),
+    );
   });
 
   test("drops the queued reconciliation read when the tab stops being active", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
     const { rerender } = render(<NativeSessionHarness />);
-    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
-      .toBeGreaterThan(0));
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
     await act(async () => {
@@ -2083,7 +2224,9 @@ describe("AgentNativeTab", () => {
         id: "env-1",
         revision: 1,
       });
-      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 80);
+      });
     });
     expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
     // The tab stops being visible before the in-flight read drains. A tab the
@@ -2095,7 +2238,9 @@ describe("AgentNativeTab", () => {
       releaseRefresh();
       // A full macrotask turn drains every queued microtask, so a trailing
       // read would already have been recorded by the time this resolves.
-      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
     });
     expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
   });
@@ -2103,8 +2248,7 @@ describe("AgentNativeTab", () => {
   test("drops the queued reconciliation read when the tab unmounts", async () => {
     const releaseRefresh = await parkFirstProjectionRead();
     const { unmount } = render(<NativeSessionHarness />);
-    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
-      .toBeGreaterThan(0));
+    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(0));
     const callsWhileParked = getNativeAgentProjectionMock.mock.calls.length;
 
     await act(async () => {
@@ -2113,14 +2257,18 @@ describe("AgentNativeTab", () => {
         id: "env-1",
         revision: 1,
       });
-      await new Promise<void>((resolve) => { setTimeout(resolve, 80); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 80);
+      });
     });
     expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
     unmount();
 
     await act(async () => {
       releaseRefresh();
-      await new Promise<void>((resolve) => { setTimeout(resolve, 20); });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
     });
     expect(getNativeAgentProjectionMock.mock.calls.length).toBe(callsWhileParked);
   });
@@ -2143,8 +2291,9 @@ describe("AgentNativeTab", () => {
     }) as typeof window.setInterval);
     try {
       const view = render(<NativeSessionHarness />);
-      await waitFor(() => expect(screen.getByTestId("hook-session-id").textContent)
-        .toBe("claude-session"));
+      await waitFor(() =>
+        expect(screen.getByTestId("hook-session-id").textContent).toBe("claude-session"),
+      );
       expect(registered).toContain(1_500);
       expect(registered).not.toContain(500);
 
@@ -2193,23 +2342,32 @@ describe("AgentNativeTab", () => {
           id: "assistant-1",
           role: "assistant" as const,
           content: "Done",
-          parts: [{
-            type: "text" as const,
-            content: "Done",
-            createdAt: "2026-08-14T10:00:45.000Z",
-          }],
+          parts: [
+            {
+              type: "text" as const,
+              content: "Done",
+              createdAt: "2026-08-14T10:00:45.000Z",
+            },
+          ],
           createdAt: "2026-08-14T10:00:05.000Z",
         },
       ],
       interactions: [],
       composerControls: [],
       composer: {
-        models: [], fastModeEnabled: false, fastModeAvailable: false,
-        selectedModeId: "build" as const, modes: [{ id: "build" as const, label: "Build" }],
+        models: [],
+        fastModeEnabled: false,
+        fastModeAvailable: false,
+        selectedModeId: "build" as const,
+        modes: [{ id: "build" as const, label: "Build" }],
       },
       capabilities: {
-        attachments: { files: false, images: false }, queue: false, resume: false,
-        fork: false, slashCommands: false, backgroundTasks: false,
+        attachments: { files: false, images: false },
+        queue: false,
+        resume: false,
+        fork: false,
+        slashCommands: false,
+        backgroundTasks: false,
         composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
       },
       revision: 1,
@@ -2217,12 +2375,7 @@ describe("AgentNativeTab", () => {
     }));
 
     render(
-      <AgentNativeTab
-        tabId="tab-elapsed"
-        data={identity("claude")}
-        isActive
-        ownsGlobalShortcuts
-      />,
+      <AgentNativeTab tabId="tab-elapsed" data={identity("claude")} isActive ownsGlobalShortcuts />,
     );
 
     // 10:00:00 prompt → 10:00:45 newest response section, both backend-stamped.
@@ -2236,22 +2389,31 @@ describe("AgentNativeTab", () => {
       sessionId: "claude-session",
       connection: "connected" as const,
       turn: { phase: "idle" as const },
-      messages: [{
-        id: "assistant-1",
-        role: "assistant" as const,
-        content: "Review",
-        parts: [],
-        createdAt: "2026-08-14T10:00:00.000Z",
-      }],
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: "Review",
+          parts: [],
+          createdAt: "2026-08-14T10:00:00.000Z",
+        },
+      ],
       interactions: [],
       composerControls: [],
       composer: {
-        models: [], fastModeEnabled: false, fastModeAvailable: false,
-        selectedModeId: "build" as const, modes: [{ id: "build" as const, label: "Build" }],
+        models: [],
+        fastModeEnabled: false,
+        fastModeAvailable: false,
+        selectedModeId: "build" as const,
+        modes: [{ id: "build" as const, label: "Build" }],
       },
       capabilities: {
-        attachments: { files: true, images: true }, queue: true, resume: true,
-        fork: true, slashCommands: true, backgroundTasks: true,
+        attachments: { files: true, images: true },
+        queue: true,
+        resume: true,
+        fork: true,
+        slashCommands: true,
+        backgroundTasks: true,
         composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
       },
       notices: [{ kind: "warning" as const, message: "Recovered provider notice" }],
@@ -2286,8 +2448,9 @@ describe("AgentNativeTab", () => {
         refreshRequestId={1}
       />,
     );
-    await waitFor(() => expect(getNativeAgentProjectionMock.mock.calls.length)
-      .toBeGreaterThan(readsBeforeRefresh));
+    await waitFor(() =>
+      expect(getNativeAgentProjectionMock.mock.calls.length).toBeGreaterThan(readsBeforeRefresh),
+    );
 
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       platform: input.agent,
@@ -2295,80 +2458,94 @@ describe("AgentNativeTab", () => {
       sessionId: "claude-session",
       connection: "connected" as const,
       turn: { phase: "running" as const },
-      messages: [], interactions: [], composerControls: [],
+      messages: [],
+      interactions: [],
+      composerControls: [],
       composer: { models: [], fastModeEnabled: false, fastModeAvailable: false, modes: [] },
       capabilities: {
-        attachments: { files: true, images: true }, queue: true, resume: true,
-        fork: true, slashCommands: true, backgroundTasks: true,
+        attachments: { files: true, images: true },
+        queue: true,
+        resume: true,
+        fork: true,
+        slashCommands: true,
+        backgroundTasks: true,
         composer: { provider: true, model: true, reasoning: true, speed: true, mode: true },
       },
-      revision: 2, generation: "test-generation",
+      revision: 2,
+      generation: "test-generation",
     }));
     view.rerender(
-      <AgentNativeTab tabId="tab-review-running" data={identity("claude")} isActive ownsGlobalShortcuts />,
+      <AgentNativeTab
+        tabId="tab-review-running"
+        data={identity("claude")}
+        isActive
+        ownsGlobalShortcuts
+      />,
     );
     await waitFor(() => expect(screen.getByTitle("Stop current query")).toBeTruthy());
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(stopNativeAgentSessionMock).toHaveBeenCalledTimes(1));
-    expect(useNativeAgentProjectionStore.getState().turnStopMarkers.get(
-      createSessionKey("env-1", "tab-review-running"),
-    )?.sessionId).toBe("claude-session");
+    expect(
+      useNativeAgentProjectionStore
+        .getState()
+        .turnStopMarkers.get(createSessionKey("env-1", "tab-review-running"))?.sessionId,
+    ).toBe("claude-session");
   });
 
   describe("capability-driven parity", () => {
     /** A running turn on a provider that reports the given capabilities. */
-    function seedProjection(overrides: {
-      phase?: NativeAgentSessionProjection["turn"]["phase"];
-      actions?: NativeAgentSessionProjection["capabilities"]["actions"];
-      messageWindow?: NativeAgentSessionProjection["messageWindow"];
-      queue?: NativeAgentSessionProjection["queue"];
-      suggestedPrompt?: string;
-      promptSuggestions?: boolean;
-      messages?: NativeMessage[];
-      recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
-      notices?: NativeAgentSessionProjection["notices"];
-      composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
-      composerCapabilities?: Partial<
-        NativeAgentSessionProjection["capabilities"]["composer"]
-      >;
-      contextUsage?: NativeAgentSessionProjection["contextUsage"];
-      backgroundTasks?: NativeAgentSessionProjection["backgroundTasks"];
-    } = {}) {
+    function seedProjection(
+      overrides: {
+        phase?: NativeAgentSessionProjection["turn"]["phase"];
+        actions?: NativeAgentSessionProjection["capabilities"]["actions"];
+        messageWindow?: NativeAgentSessionProjection["messageWindow"];
+        queue?: NativeAgentSessionProjection["queue"];
+        suggestedPrompt?: string;
+        promptSuggestions?: boolean;
+        messages?: NativeMessage[];
+        recoverableDispatch?: NativeAgentSessionProjection["recoverableDispatch"];
+        notices?: NativeAgentSessionProjection["notices"];
+        composer?: Partial<NonNullable<NativeAgentSessionProjection["composer"]>>;
+        composerCapabilities?: Partial<NativeAgentSessionProjection["capabilities"]["composer"]>;
+        contextUsage?: NativeAgentSessionProjection["contextUsage"];
+        backgroundTasks?: NativeAgentSessionProjection["backgroundTasks"];
+      } = {},
+    ) {
       getNativeAgentProjectionMock.mockImplementation(async (input) => ({
         platform: input.agent,
         environmentId: input.environmentId,
         sessionId: `${input.agent}-session`,
         connection: "connected" as const,
         turn: { phase: overrides.phase ?? "idle" },
-        messages: overrides.messages ?? [{
-          id: "assistant-1",
-          role: "assistant" as const,
-          content: "Working",
-          parts: [],
-          createdAt: "2026-08-14T10:00:00.000Z",
-        }],
+        messages: overrides.messages ?? [
+          {
+            id: "assistant-1",
+            role: "assistant" as const,
+            content: "Working",
+            parts: [],
+            createdAt: "2026-08-14T10:00:00.000Z",
+          },
+        ],
         ...(overrides.messageWindow ? { messageWindow: overrides.messageWindow } : {}),
         ...(overrides.queue ? { queue: overrides.queue } : {}),
         ...(overrides.recoverableDispatch
           ? { recoverableDispatch: overrides.recoverableDispatch }
           : {}),
-        ...(overrides.suggestedPrompt
-          ? { suggestedPrompt: overrides.suggestedPrompt }
-          : {}),
-        ...(overrides.backgroundTasks
-          ? { backgroundTasks: overrides.backgroundTasks }
-          : {}),
+        ...(overrides.suggestedPrompt ? { suggestedPrompt: overrides.suggestedPrompt } : {}),
+        ...(overrides.backgroundTasks ? { backgroundTasks: overrides.backgroundTasks } : {}),
         ...(overrides.contextUsage ? { contextUsage: overrides.contextUsage } : {}),
         ...(overrides.notices ? { notices: overrides.notices } : {}),
         interactions: [],
         composerControls: [],
         composer: {
-          models: [{
-            platform: input.agent,
-            id: "model-a",
-            label: "Model A",
-            reasoning: [{ id: "high", label: "High" }],
-          }],
+          models: [
+            {
+              platform: input.agent,
+              id: "model-a",
+              label: "Model A",
+              reasoning: [{ id: "high", label: "High" }],
+            },
+          ],
           selectedModelId: "model-a",
           fastModeEnabled: false,
           fastModeAvailable: false,
@@ -2395,9 +2572,7 @@ describe("AgentNativeTab", () => {
             reasoning: true,
             speed: true,
             mode: true,
-            ...(overrides.promptSuggestions === undefined
-              ? {}
-              : { promptSuggestions: true }),
+            ...(overrides.promptSuggestions === undefined ? {} : { promptSuggestions: true }),
             ...overrides.composerCapabilities,
           },
           ...(overrides.actions ? { actions: overrides.actions } : {}),
@@ -2409,29 +2584,35 @@ describe("AgentNativeTab", () => {
 
     test("deduplicates a projection-recovered background Agent and rehydrates it", async () => {
       seedProjection({
-        backgroundTasks: [{
-          id: "child-task",
-          description: "Review the bridge",
-          status: "running",
-        }],
-        messages: [{
-          id: "assistant-background-agent",
-          role: "assistant",
-          content: "",
-          createdAt: "2026-08-16T10:00:00.000Z",
-          parts: [{
-            type: "tool-invocation",
-            content: "Agent",
-            toolName: "Agent",
-            toolUseId: "agent-launch",
-            backgroundTaskId: "child-task",
-            toolState: "success",
-            toolArgs: {
-              description: "Review the bridge",
-              run_in_background: true,
-            },
-          }],
-        }],
+        backgroundTasks: [
+          {
+            id: "child-task",
+            description: "Review the bridge",
+            status: "running",
+          },
+        ],
+        messages: [
+          {
+            id: "assistant-background-agent",
+            role: "assistant",
+            content: "",
+            createdAt: "2026-08-16T10:00:00.000Z",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Agent",
+                toolName: "Agent",
+                toolUseId: "agent-launch",
+                backgroundTaskId: "child-task",
+                toolState: "success",
+                toolArgs: {
+                  description: "Review the bridge",
+                  run_in_background: true,
+                },
+              },
+            ],
+          },
+        ],
       });
 
       const view = render(
@@ -2444,37 +2625,30 @@ describe("AgentNativeTab", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       });
-      expect(screen.queryByRole("button", { name: /Review the bridge/ }) === null)
-        .toBe(true);
+      expect(screen.queryByRole("button", { name: /Review the bridge/ }) === null).toBe(true);
 
       view.rerender(
-        <AgentNativeTab
-          tabId="tab-claude-background-agent"
-          data={identity("claude")}
-          isActive
-        />,
+        <AgentNativeTab tabId="tab-claude-background-agent" data={identity("claude")} isActive />,
       );
-      expect(await screen.findByRole("status", {
-        name: "1 background task running: Review the bridge.",
-      })).toBeTruthy();
-      expect(screen.queryByRole("button", { name: /Task Review the bridge/ }) === null)
-        .toBe(true);
+      expect(
+        await screen.findByRole("status", {
+          name: "1 background task running: Review the bridge.",
+        }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Task Review the bridge/ }) === null).toBe(true);
 
       view.unmount();
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
       render(
-        <AgentNativeTab
-          tabId="tab-claude-background-agent"
-          data={identity("claude")}
-          isActive
-        />,
+        <AgentNativeTab tabId="tab-claude-background-agent" data={identity("claude")} isActive />,
       );
-      expect(await screen.findByRole("status", {
-        name: "1 background task running: Review the bridge.",
-      })).toBeTruthy();
-      expect(screen.queryByRole("button", { name: /Task Review the bridge/ }) === null)
-        .toBe(true);
+      expect(
+        await screen.findByRole("status", {
+          name: "1 background task running: Review the bridge.",
+        }),
+      ).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /Task Review the bridge/ }) === null).toBe(true);
     });
 
     test("renders a rowless live task as one stoppable transcript card", async () => {
@@ -2485,36 +2659,40 @@ describe("AgentNativeTab", () => {
        */
       renderVirtualizedMessages = true;
       seedProjection({
-        backgroundTasks: [{
-          id: "orphan-task",
-          description: "Watch the server",
-          status: "running",
-        }],
+        backgroundTasks: [
+          {
+            id: "orphan-task",
+            description: "Watch the server",
+            status: "running",
+          },
+        ],
         messages: [],
       });
 
-      render(
-        <AgentNativeTab
-          tabId="tab-claude-orphan-task"
-          data={identity("claude")}
-          isActive
-        />,
-      );
+      render(<AgentNativeTab tabId="tab-claude-orphan-task" data={identity("claude")} isActive />);
 
-      expect(await screen.findByRole("status", {
-        name: "1 background task running: Watch the server.",
-      })).toBeTruthy();
-      expect(screen.getAllByRole("button", {
-        name: /Task Watch the server Running/,
-      })).toHaveLength(1);
-      expect(screen.getAllByRole("button", {
-        name: "Stop Watch the server",
-      })).toHaveLength(1);
+      expect(
+        await screen.findByRole("status", {
+          name: "1 background task running: Watch the server.",
+        }),
+      ).toBeTruthy();
+      expect(
+        screen.getAllByRole("button", {
+          name: /Task Watch the server Running/,
+        }),
+      ).toHaveLength(1);
+      expect(
+        screen.getAllByRole("button", {
+          name: "Stop Watch the server",
+        }),
+      ).toHaveLength(1);
 
       fireEvent.click(screen.getByRole("button", { name: "Stop Watch the server" }));
-      await waitFor(() => expect(stopNativeAgentBackgroundTaskMock).toHaveBeenCalledWith(
-        expect.objectContaining({ taskId: "orphan-task" }),
-      ));
+      await waitFor(() =>
+        expect(stopNativeAgentBackgroundTaskMock).toHaveBeenCalledWith(
+          expect.objectContaining({ taskId: "orphan-task" }),
+        ),
+      );
     });
 
     test("places a rowless task that settled inside the loaded window", async () => {
@@ -2561,25 +2739,21 @@ describe("AgentNativeTab", () => {
         ],
       });
 
-      render(
-        <AgentNativeTab
-          tabId="tab-claude-settled-task"
-          data={identity("claude")}
-          isActive
-        />,
-      );
+      render(<AgentNativeTab tabId="tab-claude-settled-task" data={identity("claude")} isActive />);
 
-      expect(await screen.findByRole("button", {
-        name: /Task Build the image/,
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("button", {
+          name: /Task Build the image/,
+        }),
+      ).toBeTruthy();
       expect(screen.getByRole("button", { name: /Task Run the suite/ })).toBeTruthy();
       // It settled before anything the reader can see, so it has no position
       // here and no card — the transcript never mentioned it.
-      expect(screen.queryByRole("button", { name: /Task Ancient task/ }) === null)
-        .toBe(true);
+      expect(screen.queryByRole("button", { name: /Task Ancient task/ }) === null).toBe(true);
 
-      const rows = [...screen.getByTestId("native-agent-transcript-test-list").children]
-        .map((row) => row.textContent ?? "");
+      const rows = [...screen.getByTestId("native-agent-transcript-test-list").children].map(
+        (row) => row.textContent ?? "",
+      );
       const indexOf = (needle: string) => {
         const index = rows.findIndex((row) => row.includes(needle));
         // An ordering assertion against a missing row compares -1 and passes
@@ -2608,28 +2782,33 @@ describe("AgentNativeTab", () => {
         role: "assistant" as const,
         content: "",
         createdAt: "2026-08-16T10:00:00.000Z",
-        parts: [{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolUseId: "bash-launch",
-          toolState: "success",
-          toolArgs: {
-            command: "bun run dev",
-            description: "Run the dev server",
-            run_in_background: true,
+        parts: [
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolUseId: "bash-launch",
+            toolState: "success",
+            toolArgs: {
+              command: "bun run dev",
+              description: "Run the dev server",
+              run_in_background: true,
+            },
           },
-        }],
+        ],
       };
-      const seed = (messages: unknown[]) => seedProjection({
-        backgroundTasks: [{
-          id: "bg-dev",
-          toolUseId: "bash-launch",
-          description: "Run the dev server",
-          status: "running",
-        }],
-        messages: messages as never,
-      });
+      const seed = (messages: unknown[]) =>
+        seedProjection({
+          backgroundTasks: [
+            {
+              id: "bg-dev",
+              toolUseId: "bash-launch",
+              description: "Run the dev server",
+              status: "running",
+            },
+          ],
+          messages: messages as never,
+        });
 
       seed([]);
       const view = render(
@@ -2641,9 +2820,11 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      expect(await screen.findByRole("status", {
-        name: "1 background task running: Run the dev server.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "1 background task running: Run the dev server.",
+        }),
+      ).toBeTruthy();
 
       seed([launchRow]);
       view.rerender(
@@ -2657,40 +2838,47 @@ describe("AgentNativeTab", () => {
 
       // The task is still live, and the tab still says so — now on the strength
       // of the launch row the transcript finally supplied.
-      expect(await screen.findByRole("status", {
-        name: "1 background task running: Run the dev server.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "1 background task running: Run the dev server.",
+        }),
+      ).toBeTruthy();
     });
 
     test("announces background task pause and stop lifecycle accurately", async () => {
-      const seedBackgroundStatus = (
-        status: "running" | "paused" | "killed",
-      ) => seedProjection({
-        backgroundTasks: [{
-          id: "bg-suite",
-          toolUseId: "bash-launch",
-          description: "Run the full suite",
-          status,
-        }],
-        messages: [{
-          id: "assistant-background-command",
-          role: "assistant",
-          content: "",
-          createdAt: "2026-08-16T10:00:00.000Z",
-          parts: [{
-            type: "tool-invocation",
-            content: "Bash",
-            toolName: "Bash",
-            toolUseId: "bash-launch",
-            toolState: "success",
-            toolArgs: {
-              command: "bun test",
+      const seedBackgroundStatus = (status: "running" | "paused" | "killed") =>
+        seedProjection({
+          backgroundTasks: [
+            {
+              id: "bg-suite",
+              toolUseId: "bash-launch",
               description: "Run the full suite",
-              run_in_background: true,
+              status,
             },
-          }],
-        }],
-      });
+          ],
+          messages: [
+            {
+              id: "assistant-background-command",
+              role: "assistant",
+              content: "",
+              createdAt: "2026-08-16T10:00:00.000Z",
+              parts: [
+                {
+                  type: "tool-invocation",
+                  content: "Bash",
+                  toolName: "Bash",
+                  toolUseId: "bash-launch",
+                  toolState: "success",
+                  toolArgs: {
+                    command: "bun test",
+                    description: "Run the full suite",
+                    run_in_background: true,
+                  },
+                },
+              ],
+            },
+          ],
+        });
 
       seedBackgroundStatus("running");
       const view = render(
@@ -2701,9 +2889,11 @@ describe("AgentNativeTab", () => {
           refreshRequestId={0}
         />,
       );
-      expect(await screen.findByRole("status", {
-        name: "1 background task running: Run the full suite.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "1 background task running: Run the full suite.",
+        }),
+      ).toBeTruthy();
 
       seedBackgroundStatus("paused");
       view.rerender(
@@ -2714,9 +2904,11 @@ describe("AgentNativeTab", () => {
           refreshRequestId={1}
         />,
       );
-      expect(await screen.findByRole("status", {
-        name: "Run the full suite paused.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "Run the full suite paused.",
+        }),
+      ).toBeTruthy();
 
       seedBackgroundStatus("killed");
       view.rerender(
@@ -2727,64 +2919,76 @@ describe("AgentNativeTab", () => {
           refreshRequestId={2}
         />,
       );
-      expect(await screen.findByRole("status", {
-        name: "Run the full suite stopped.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "Run the full suite stopped.",
+        }),
+      ).toBeTruthy();
     });
 
     test("announces an active Cursor Task pinned to the transcript", async () => {
       seedProjection({
-        messages: [{
-          id: "assistant-cursor-subagent",
-          role: "assistant",
-          content: "Parent response complete",
-          createdAt: "2026-08-15T10:00:00.000Z",
-          parts: [{
-            type: "tool-invocation",
-            content: "Task: Validate the implementation",
-            toolName: "task",
-            toolTitle: "Task: Validate the implementation",
-            toolUseId: "cursor-subagent-1",
-            toolState: "success",
-            agentState: "active",
-            toolArgs: { description: "Validate the implementation" },
-          }],
-        }],
+        messages: [
+          {
+            id: "assistant-cursor-subagent",
+            role: "assistant",
+            content: "Parent response complete",
+            createdAt: "2026-08-15T10:00:00.000Z",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Task: Validate the implementation",
+                toolName: "task",
+                toolTitle: "Task: Validate the implementation",
+                toolUseId: "cursor-subagent-1",
+                toolState: "success",
+                agentState: "active",
+                toolArgs: { description: "Validate the implementation" },
+              },
+            ],
+          },
+        ],
       });
 
       render(<AgentNativeTab tabId="tab-cursor-subagent" data={identity("cursor")} isActive />);
 
       await screen.findByRole("textbox");
-      expect(await screen.findByRole("status", {
-        name: "1 sub-agent working: Validate the implementation.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "1 sub-agent working: Validate the implementation.",
+        }),
+      ).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
       expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
     });
 
     test("announces and rehydrates an active Grok Build sub-agent", async () => {
       seedProjection({
-        messages: [{
-          id: "assistant-grok-subagent",
-          role: "assistant",
-          content: "Parent response complete",
-          createdAt: "2026-08-15T10:00:00.000Z",
-          parts: [{
-            type: "tool-invocation",
-            content: "Launch validation agent",
-            toolName: "spawn_subagent",
-            toolTitle: "Launch validation agent",
-            toolUseId: "grok-subagent-1",
-            toolState: "success",
-            agentState: "active",
-            toolArgs: {
-              variant: "Task",
-              run_in_background: true,
-              description: "Validate the implementation",
-              subagent_type: "explore",
-            },
-          }],
-        }],
+        messages: [
+          {
+            id: "assistant-grok-subagent",
+            role: "assistant",
+            content: "Parent response complete",
+            createdAt: "2026-08-15T10:00:00.000Z",
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "Launch validation agent",
+                toolName: "spawn_subagent",
+                toolTitle: "Launch validation agent",
+                toolUseId: "grok-subagent-1",
+                toolState: "success",
+                agentState: "active",
+                toolArgs: {
+                  variant: "Task",
+                  run_in_background: true,
+                  description: "Validate the implementation",
+                  subagent_type: "explore",
+                },
+              },
+            ],
+          },
+        ],
       });
 
       const view = render(
@@ -2793,17 +2997,22 @@ describe("AgentNativeTab", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, 25));
       });
-      expect(screen.queryByRole("button", { name: /Validate the implementation/i }) === null)
-        .toBe(true);
+      expect(screen.queryByRole("button", { name: /Validate the implementation/i }) === null).toBe(
+        true,
+      );
 
       await act(async () => {
-        view.rerender(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
+        view.rerender(
+          <AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />,
+        );
       });
 
       await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
-      expect(await screen.findByRole("status", {
-        name: "1 sub-agent working: Validate the implementation.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "1 sub-agent working: Validate the implementation.",
+        }),
+      ).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
       expect(screen.getByTestId("transcript-bottom-spacer").className).toContain("h-32");
 
@@ -2816,93 +3025,101 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-grok-subagent" data={identity("grok")} isActive />);
 
       await waitFor(() => expect(getNativeAgentProjectionMock).toHaveBeenCalled());
-      expect(await screen.findByRole("status", {
-        name: "1 sub-agent working: Validate the implementation.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "1 sub-agent working: Validate the implementation.",
+        }),
+      ).toBeTruthy();
       expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
-      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(expect.objectContaining({
-        agent: "grok",
-        logicalSessionKey: createSessionKey("env-1", "tab-grok-subagent"),
-      }));
+      expect(getNativeAgentProjectionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "grok",
+          logicalSessionKey: createSessionKey("env-1", "tab-grok-subagent"),
+        }),
+      );
     });
 
     test.each([
       ["finished", "finished"],
       ["failed", "failed"],
-    ] as const)("announces a Cursor Task lifecycle that becomes %s", async (
-      agentState,
-      announcementState,
-    ) => {
-      const tabId = `tab-cursor-subagent-${agentState}`;
-      seedProjection({
-        messages: [{
-          id: "assistant-cursor-subagent-transition",
-          role: "assistant",
-          content: "",
-          createdAt: "2026-08-15T10:00:00.000Z",
-          parts: [{
-            type: "tool-invocation",
-            content: "Task: Validate the implementation",
-            toolName: "task",
-            toolUseId: "cursor-subagent-1",
-            toolState: "success",
-            agentState: "active",
-            toolArgs: { description: "Validate the implementation" },
-          }],
-        }],
-      });
+    ] as const)(
+      "announces a Cursor Task lifecycle that becomes %s",
+      async (agentState, announcementState) => {
+        const tabId = `tab-cursor-subagent-${agentState}`;
+        seedProjection({
+          messages: [
+            {
+              id: "assistant-cursor-subagent-transition",
+              role: "assistant",
+              content: "",
+              createdAt: "2026-08-15T10:00:00.000Z",
+              parts: [
+                {
+                  type: "tool-invocation",
+                  content: "Task: Validate the implementation",
+                  toolName: "task",
+                  toolUseId: "cursor-subagent-1",
+                  toolState: "success",
+                  agentState: "active",
+                  toolArgs: { description: "Validate the implementation" },
+                },
+              ],
+            },
+          ],
+        });
 
-      const view = render(
-        <AgentNativeTab
-          tabId={tabId}
-          data={identity("cursor")}
-          isActive
-          refreshRequestId={0}
-        />,
-      );
-      await screen.findByRole("textbox");
-      expect(await screen.findByRole("status", {
-        name: "1 sub-agent working: Validate the implementation.",
-      })).toBeTruthy();
+        const view = render(
+          <AgentNativeTab tabId={tabId} data={identity("cursor")} isActive refreshRequestId={0} />,
+        );
+        await screen.findByRole("textbox");
+        expect(
+          await screen.findByRole("status", {
+            name: "1 sub-agent working: Validate the implementation.",
+          }),
+        ).toBeTruthy();
 
-      seedProjection({
-        messages: [{
-          id: "assistant-cursor-subagent-transition",
-          role: "assistant",
-          content: "",
-          createdAt: "2026-08-15T10:00:00.000Z",
-          parts: [{
-            type: "tool-invocation",
-            content: "Task: Validate the implementation",
-            toolName: "task",
-            toolUseId: "cursor-subagent-1",
-            toolState: "success",
-            agentState,
-            toolArgs: { description: "Validate the implementation" },
-          }],
-        }],
-      });
-      view.rerender(
-        <AgentNativeTab
-          tabId={tabId}
-          data={identity("cursor")}
-          isActive
-          refreshRequestId={1}
-        />,
-      );
+        seedProjection({
+          messages: [
+            {
+              id: "assistant-cursor-subagent-transition",
+              role: "assistant",
+              content: "",
+              createdAt: "2026-08-15T10:00:00.000Z",
+              parts: [
+                {
+                  type: "tool-invocation",
+                  content: "Task: Validate the implementation",
+                  toolName: "task",
+                  toolUseId: "cursor-subagent-1",
+                  toolState: "success",
+                  agentState,
+                  toolArgs: { description: "Validate the implementation" },
+                },
+              ],
+            },
+          ],
+        });
+        view.rerender(
+          <AgentNativeTab tabId={tabId} data={identity("cursor")} isActive refreshRequestId={1} />,
+        );
 
-      await waitFor(() => expect(
-        useNativeAgentProjectionStore.getState().projections.get(
-          createSessionKey("env-1", tabId),
-        )?.messages[0],
-      ).toMatchObject({
-        parts: [expect.objectContaining({ agentState })],
-      }));
-      expect(await screen.findByRole("status", {
-        name: `Validate the implementation ${announcementState}.`,
-      })).toBeTruthy();
-      expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
-    });
+        await waitFor(() =>
+          expect(
+            useNativeAgentProjectionStore
+              .getState()
+              .projections.get(createSessionKey("env-1", tabId))?.messages[0],
+          ).toMatchObject({
+            parts: [expect.objectContaining({ agentState })],
+          }),
+        );
+        expect(
+          await screen.findByRole("status", {
+            name: `Validate the implementation ${announcementState}.`,
+          }),
+        ).toBeTruthy();
+        expect(screen.queryByTestId("active-subagent-rail") === null).toBe(true);
+      },
+    );
 
     /** One assistant row carrying `count` identically-labelled active children. */
     function subagentMessage(
@@ -2940,14 +3157,16 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      expect(await screen.findByRole("status", {
-        name: "2 sub-agents working: Sub-agent, Sub-agent.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "2 sub-agents working: Sub-agent, Sub-agent.",
+        }),
+      ).toBeTruthy();
 
       // The first child finishes in the same update that starts a third one, so
       // the lifecycle line and the refreshed summary must both be announced.
       seedProjection({
-        messages: [subagentMessage(3, (index) => index === 0 ? "finished" : "active")],
+        messages: [subagentMessage(3, (index) => (index === 0 ? "finished" : "active"))],
       });
       view.rerender(
         <AgentNativeTab
@@ -2958,9 +3177,11 @@ describe("AgentNativeTab", () => {
         />,
       );
 
-      expect(await screen.findByRole("status", {
-        name: "Sub-agent finished. 2 sub-agents working: Sub-agent, Sub-agent.",
-      })).toBeTruthy();
+      expect(
+        await screen.findByRole("status", {
+          name: "Sub-agent finished. 2 sub-agents working: Sub-agent, Sub-agent.",
+        }),
+      ).toBeTruthy();
     });
 
     test("re-announces an identical lifecycle message for a second child", async () => {
@@ -2980,12 +3201,11 @@ describe("AgentNativeTab", () => {
         name: "2 sub-agents working: Sub-agent, Sub-agent.",
       });
 
-      const liveRegionText = () => screen
-        .getByRole("status", { name: /Sub-agent/ })
-        .firstElementChild;
+      const liveRegionText = () =>
+        screen.getByRole("status", { name: /Sub-agent/ }).firstElementChild;
 
       seedProjection({
-        messages: [subagentMessage(2, (index) => index === 0 ? "finished" : "active")],
+        messages: [subagentMessage(2, (index) => (index === 0 ? "finished" : "active"))],
       });
       view.rerender(
         <AgentNativeTab
@@ -3033,8 +3253,7 @@ describe("AgentNativeTab", () => {
 
       const notice = await screen.findByText("Recovered provider notice");
       expect(screen.getByTestId("compose-dock").contains(notice)).toBe(true);
-      expect(screen.getByTestId("transcript-bottom-spacer").className)
-        .not.toContain("h-32");
+      expect(screen.getByTestId("transcript-bottom-spacer").className).not.toContain("h-32");
     });
 
     test("renders an unavailable context wheel when the provider reports no maximum", async () => {
@@ -3112,9 +3331,11 @@ describe("AgentNativeTab", () => {
 
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "/steer keep the diff small" } });
-      await waitFor(() => expect(
-        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-steer"))?.text,
-      ).toBe("/steer keep the diff small"));
+      await waitFor(() =>
+        expect(
+          useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-steer"))?.text,
+        ).toBe("/steer keep the diff small"),
+      );
 
       fireEvent.keyDown(input, { key: "Enter" });
       await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalled());
@@ -3137,10 +3358,13 @@ describe("AgentNativeTab", () => {
       const input = await screen.findByRole("textbox");
       const steer = async () => {
         fireEvent.input(input, { target: { textContent: "/steer narrow the scope" } });
-        await waitFor(() => expect(
-          useNativeComposeStore.getState().drafts
-            .get(createSessionKey("env-1", "tab-steer-retry"))?.text,
-        ).toBe("/steer narrow the scope"));
+        await waitFor(() =>
+          expect(
+            useNativeComposeStore
+              .getState()
+              .drafts.get(createSessionKey("env-1", "tab-steer-retry"))?.text,
+          ).toBe("/steer narrow the scope"),
+        );
         fireEvent.keyDown(input, { key: "Enter" });
       };
 
@@ -3153,11 +3377,12 @@ describe("AgentNativeTab", () => {
       const [first, second] = performNativeAgentSessionActionMock.mock.calls;
       // An unconfirmed action may already have reached the provider; resending
       // the same text must deduplicate rather than steer the turn twice.
-      expect((second?.[0].action as { requestId?: string }).requestId)
-        .toBe((first?.[0].action as { requestId?: string }).requestId);
-      performNativeAgentSessionActionMock.mockImplementation(
-        async () => ({ outcome: "applied" as const }),
+      expect((second?.[0].action as { requestId?: string }).requestId).toBe(
+        (first?.[0].action as { requestId?: string }).requestId,
       );
+      performNativeAgentSessionActionMock.mockImplementation(async () => ({
+        outcome: "applied" as const,
+      }));
     });
 
     test("keeps /steer an ordinary prompt for a provider that cannot steer", async () => {
@@ -3166,9 +3391,12 @@ describe("AgentNativeTab", () => {
 
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "/steer nope" } });
-      await waitFor(() => expect(
-        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-no-steer"))?.text,
-      ).toBe("/steer nope"));
+      await waitFor(() =>
+        expect(
+          useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-no-steer"))
+            ?.text,
+        ).toBe("/steer nope"),
+      );
       fireEvent.keyDown(input, { key: "Enter" });
 
       await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalled());
@@ -3195,17 +3423,19 @@ describe("AgentNativeTab", () => {
         fireEvent.input(input, { target: { textContent: "Follow up after this turn" } });
         fireEvent.keyDown(input, { key: "Enter" });
 
-        await waitFor(() => expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
-          `${platform}\u0000${createSessionKey("env-1", tabId)}`,
-          "env-1",
-          expect.objectContaining({
-            text: "Follow up after this turn",
-            model: "model-a",
-            reasoningEffort: "high",
-            mode: "plan",
-            fastMode: true,
-          }),
-        ));
+        await waitFor(() =>
+          expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
+            `${platform}\u0000${createSessionKey("env-1", tabId)}`,
+            "env-1",
+            expect.objectContaining({
+              text: "Follow up after this turn",
+              model: "model-a",
+              reasoningEffort: "high",
+              mode: "plan",
+              fastMode: true,
+            }),
+          ),
+        );
         expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
       },
     );
@@ -3215,10 +3445,10 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-attach" data={identity("claude")} isActive />);
 
       fireEvent.pointerDown(await screen.findByRole("button", { name: "Add attachment" }));
-      expect(await screen.findByRole("menuitem", { name: "Attach file from workspace" }))
-        .toBeTruthy();
-      expect(screen.getByRole("menuitem", { name: "Mention file from workspace" }))
-        .toBeTruthy();
+      expect(
+        await screen.findByRole("menuitem", { name: "Attach file from workspace" }),
+      ).toBeTruthy();
+      expect(screen.getByRole("menuitem", { name: "Mention file from workspace" })).toBeTruthy();
     });
 
     test("cycles conversation mode with Shift+Tab", async () => {
@@ -3268,7 +3498,9 @@ describe("AgentNativeTab", () => {
 
       fireEvent.pointerDown(trigger);
       fireEvent.click(await screen.findByRole("menuitemradio", { name: "Reviewer" }));
-      await waitFor(() => expect(updateNativeAgentControlsMock.mock.calls.length).toBeGreaterThan(1));
+      await waitFor(() =>
+        expect(updateNativeAgentControlsMock.mock.calls.length).toBeGreaterThan(1),
+      );
       expect(updateNativeAgentControlsMock.mock.calls.at(-1)?.[0]).toMatchObject({
         update: { executionProfileId: "reviewer" },
       });
@@ -3288,7 +3520,9 @@ describe("AgentNativeTab", () => {
           executionProfile: true,
         },
       });
-      render(<AgentNativeTab tabId="tab-opencode-fallback-mode" data={identity("opencode")} isActive />);
+      render(
+        <AgentNativeTab tabId="tab-opencode-fallback-mode" data={identity("opencode")} isActive />,
+      );
 
       const trigger = await screen.findByTitle("Choose mode");
       expect(trigger.textContent).toContain("Build");
@@ -3321,7 +3555,11 @@ describe("AgentNativeTab", () => {
         composerCapabilities: { speed: false, mode: false, executionProfile: true },
       });
       render(
-        <AgentNativeTab tabId="tab-opencode-default-profile" data={identity("opencode")} isActive />,
+        <AgentNativeTab
+          tabId="tab-opencode-default-profile"
+          data={identity("opencode")}
+          isActive
+        />,
       );
 
       const trigger = await screen.findByTitle("Choose mode");
@@ -3354,9 +3592,7 @@ describe("AgentNativeTab", () => {
         },
         composerCapabilities: { speed: false, mode: false, executionProfile: true },
       });
-      render(
-        <AgentNativeTab tabId="tab-opencode-no-build" data={identity("opencode")} isActive />,
-      );
+      render(<AgentNativeTab tabId="tab-opencode-no-build" data={identity("opencode")} isActive />);
 
       const trigger = await screen.findByTitle("Choose mode");
       expect(trigger.textContent).toContain("Reviewer");
@@ -3385,9 +3621,7 @@ describe("AgentNativeTab", () => {
         },
         composerCapabilities: { executionProfile: true },
       });
-      render(
-        <AgentNativeTab tabId="tab-claude-no-subagent" data={identity("claude")} isActive />,
-      );
+      render(<AgentNativeTab tabId="tab-claude-no-subagent" data={identity("claude")} isActive />);
 
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "Do the thing" } });
@@ -3490,11 +3724,11 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-window" data={identity("opencode")} isActive />);
 
       fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
-      await waitFor(() => expect(
-        getNativeAgentProjectionMock.mock.calls.some(
-          (call) => call[0].messageLimit === 1024,
-        ),
-      ).toBe(true));
+      await waitFor(() =>
+        expect(
+          getNativeAgentProjectionMock.mock.calls.some((call) => call[0].messageLimit === 1024),
+        ).toBe(true),
+      );
     });
 
     test("refuses to load a queued prompt over an occupied composer", async () => {
@@ -3505,9 +3739,11 @@ describe("AgentNativeTab", () => {
 
       const input = await screen.findByRole("textbox");
       fireEvent.input(input, { target: { textContent: "half-written message" } });
-      await waitFor(() => expect(
-        useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-queue"))?.text,
-      ).toBe("half-written message"));
+      await waitFor(() =>
+        expect(
+          useNativeComposeStore.getState().drafts.get(createSessionKey("env-1", "tab-queue"))?.text,
+        ).toBe("half-written message"),
+      );
 
       fireEvent.click(await screen.findByTitle("View queued prompts"));
       fireEvent.click(await screen.findByTitle("Click to edit this message"));
@@ -3522,15 +3758,18 @@ describe("AgentNativeTab", () => {
       // An empty transcript centers the composer, where the picker's entry
       // point is the visible one.
       seedProjection({ messages: [] });
-      listNativeAgentResumableSessionsMock.mockImplementation(async () => [
-        {
-          sessionId: "older-session",
-          title: "Earlier work",
-          updatedAt: "2026-08-01T00:00:00.000Z",
-          status: "running" as const,
-          detail: "12 messages",
-        },
-      ] as never);
+      listNativeAgentResumableSessionsMock.mockImplementation(
+        async () =>
+          [
+            {
+              sessionId: "older-session",
+              title: "Earlier work",
+              updatedAt: "2026-08-01T00:00:00.000Z",
+              status: "running" as const,
+              detail: "12 messages",
+            },
+          ] as never,
+      );
       render(<AgentNativeTab tabId="tab-resume-detail" data={identity("claude")} isActive />);
 
       fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
@@ -3553,30 +3792,37 @@ describe("AgentNativeTab", () => {
           promptSuggestionsEnabled: true,
         },
       });
-      listNativeAgentResumableSessionsMock.mockImplementation(async () => [{
-        sessionId: "older-session",
-        title: "Earlier work",
-        updatedAt: "2026-08-01T00:00:00.000Z",
-      }] as never);
+      listNativeAgentResumableSessionsMock.mockImplementation(
+        async () =>
+          [
+            {
+              sessionId: "older-session",
+              title: "Earlier work",
+              updatedAt: "2026-08-01T00:00:00.000Z",
+            },
+          ] as never,
+      );
       render(<AgentNativeTab tabId="tab-resume-controls" data={identity("claude")} isActive />);
 
       fireEvent.click((await screen.findAllByRole("button", { name: /Resume Session/ }))[0]!);
       const dialog = await screen.findByRole("dialog", { name: "Resume Session" });
       fireEvent.click(within(dialog).getByRole("button", { name: /Earlier work/ }));
-      await waitFor(() => expect(resumeNativeAgentSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          providerSessionId: "older-session",
-          controls: {
-            modelId: "model-a",
-            reasoningId: "high",
-            mode: "plan",
-            fastMode: true,
-            executionProfileId: "reviewer",
-            includeLocalSettings: true,
-            promptSuggestions: true,
-          },
-        }),
-      ));
+      await waitFor(() =>
+        expect(resumeNativeAgentSessionMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            providerSessionId: "older-session",
+            controls: {
+              modelId: "model-a",
+              reasoningId: "high",
+              mode: "plan",
+              fastMode: true,
+              executionProfileId: "reviewer",
+              includeLocalSettings: true,
+              promptSuggestions: true,
+            },
+          }),
+        ),
+      );
     });
 
     test("dismisses an accepted suggestion for any provider that tracks them", async () => {
@@ -3600,12 +3846,14 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-recoverable" data={identity("codex")} isActive />);
 
       fireEvent.click(await screen.findByRole("button", { name: "Retry send" }));
-      await waitFor(() => expect(retryNativeAgentDispatchMock).toHaveBeenCalledWith({
-        environmentId: "env-1",
-        agent: "codex",
-        logicalSessionKey: createSessionKey("env-1", "tab-recoverable"),
-        requestId: "recoverable-1",
-      }));
+      await waitFor(() =>
+        expect(retryNativeAgentDispatchMock).toHaveBeenCalledWith({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: createSessionKey("env-1", "tab-recoverable"),
+          requestId: "recoverable-1",
+        }),
+      );
     });
 
     test("rehydrates a parked dispatch after the environment unmounts and the renderer cache resets", async () => {
@@ -3627,9 +3875,7 @@ describe("AgentNativeTab", () => {
       first.unmount();
       useNativeAgentProjectionStore.getState().reset();
       getNativeAgentProjectionMock.mockClear();
-      render(
-        <AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />,
-      );
+      render(<AgentNativeTab tabId="tab-recoverable-remount" data={identity("codex")} isActive />);
 
       expect(await screen.findByRole("button", { name: "Retry send" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Discard" })).toBeTruthy();
@@ -3649,12 +3895,14 @@ describe("AgentNativeTab", () => {
       render(<AgentNativeTab tabId="tab-discard" data={identity("codex")} isActive />);
 
       fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
-      await waitFor(() => expect(discardNativeAgentDispatchMock).toHaveBeenCalledWith({
-        environmentId: "env-1",
-        agent: "codex",
-        logicalSessionKey: createSessionKey("env-1", "tab-discard"),
-        requestId: "recoverable-1",
-      }));
+      await waitFor(() =>
+        expect(discardNativeAgentDispatchMock).toHaveBeenCalledWith({
+          environmentId: "env-1",
+          agent: "codex",
+          logicalSessionKey: createSessionKey("env-1", "tab-discard"),
+          requestId: "recoverable-1",
+        }),
+      );
       expect(retryNativeAgentDispatchMock).not.toHaveBeenCalled();
     });
 
@@ -3674,9 +3922,7 @@ describe("AgentNativeTab", () => {
       // The backend refuses a second request id while one is parked, so sending
       // anyway would surface an internal message the user cannot act on. Say
       // which two controls clear it instead.
-      expect(await screen.findByText(
-        /Resolve the unconfirmed message above/,
-      )).toBeTruthy();
+      expect(await screen.findByText(/Resolve the unconfirmed message above/)).toBeTruthy();
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });
   });

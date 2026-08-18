@@ -38,8 +38,10 @@ mock.module("@/components/environments/EnvironmentItem", () => ({
   ),
 }));
 
-const { SortableEnvironmentItem } = await import("../../../apps/web/src/components/sidebar/SortableEnvironmentItem");
-const { SortableProjectGroup } = await import("../../../apps/web/src/components/sidebar/SortableProjectGroup");
+const { SortableEnvironmentItem } =
+  await import("../../../apps/web/src/components/sidebar/SortableEnvironmentItem");
+const { SortableProjectGroup } =
+  await import("../../../apps/web/src/components/sidebar/SortableProjectGroup");
 
 const project: Project = {
   id: "project-1",
@@ -241,7 +243,9 @@ describe("sortable sidebar items", () => {
     return node;
   }
 
-  function renderProjectGroup(overrides: Partial<React.ComponentProps<typeof SortableProjectGroup>> = {}) {
+  function renderProjectGroup(
+    overrides: Partial<React.ComponentProps<typeof SortableProjectGroup>> = {},
+  ) {
     return render(
       <SortableProjectGroup
         project={project}
@@ -377,8 +381,8 @@ describe("sortable sidebar items", () => {
     // may keep the hidden portal mounted while exit-presence settles.
     expect(dialog.getAttribute("data-state")).toBe("closed");
     expect(screen.queryByRole("alertdialog") === null).toBe(true);
-  // Radix transitions for a menu followed by a modal can exceed Bun's default
-  // ceiling when all root UI suites are sharing a saturated runner.
+    // Radix transitions for a menu followed by a modal can exceed Bun's default
+    // ceiling when all root UI suites are sharing a saturated runner.
   }, 15_000);
 
   test("SortableProjectGroup keeps the delete confirmation open after deletion fails", async () => {

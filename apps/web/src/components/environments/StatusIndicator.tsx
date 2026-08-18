@@ -9,10 +9,7 @@ interface StatusIndicatorProps {
   className?: string;
 }
 
-const statusConfig: Record<
-  EnvironmentStatus,
-  { color: string; label: string; bgColor: string }
-> = {
+const statusConfig: Record<EnvironmentStatus, { color: string; label: string; bgColor: string }> = {
   running: {
     color: "bg-green-500",
     bgColor: "bg-green-500/20",
@@ -40,11 +37,7 @@ const statusConfig: Record<
   },
 };
 
-export function StatusIndicator({
-  status,
-  showLabel = false,
-  className,
-}: StatusIndicatorProps) {
+export function StatusIndicator({ status, showLabel = false, className }: StatusIndicatorProps) {
   const config = statusConfig[status];
   const showSpinner = status === "creating" || status === "stopping";
 
@@ -57,7 +50,7 @@ export function StatusIndicator({
               className={cn(
                 "h-3 w-3 animate-spin",
                 status === "creating" && "text-blue-500",
-                status === "stopping" && "text-orange-500"
+                status === "stopping" && "text-orange-500",
               )}
             />
           ) : (
@@ -65,7 +58,7 @@ export function StatusIndicator({
               className={cn(
                 "h-2 w-2 rounded-full",
                 config.color,
-                status === "running" && "animate-pulse"
+                status === "running" && "animate-pulse",
               )}
             />
           )}
@@ -77,7 +70,7 @@ export function StatusIndicator({
                 status === "stopped" && "text-muted-foreground",
                 status === "error" && "text-red-500",
                 status === "creating" && "text-blue-500",
-                status === "stopping" && "text-orange-500"
+                status === "stopping" && "text-orange-500",
               )}
             >
               {config.label}

@@ -8,8 +8,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 // dozens of other suites rely on. The specifier is built at runtime because
 // TypeScript cannot resolve the suffixed path statically.
 const realEventsModulePath = "./events.ts?real";
-const { listen, NATIVE_EVENT_STREAM_READY_TIMEOUT_MS } =
-  (await import(realEventsModulePath)) as typeof import("./events");
+const { listen, NATIVE_EVENT_STREAM_READY_TIMEOUT_MS } = (await import(
+  realEventsModulePath
+)) as typeof import("./events");
 
 type NativeApi = NonNullable<Window["orkestrator"]>;
 
@@ -140,9 +141,10 @@ describe("listen", () => {
 
   test("waits for readiness rather than timing out when the stream connects", async () => {
     let resolveReady: () => void = () => {};
-    readyResult = () => new Promise<void>((resolve) => {
-      resolveReady = resolve;
-    });
+    readyResult = () =>
+      new Promise<void>((resolve) => {
+        resolveReady = resolve;
+      });
     let settled = false;
 
     const pending = listen("terminal-output-session-1", () => {}, {

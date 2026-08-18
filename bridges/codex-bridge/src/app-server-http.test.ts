@@ -79,7 +79,6 @@ function step(output: HarnessOutput, name: string): StepResult {
 }
 
 describe("app-server engine over HTTP", () => {
-
   test("serves the whole session lifecycle through the real routes", async () => {
     const output = await run({});
     expect(output.error).toBeUndefined();
@@ -142,7 +141,6 @@ describe("app-server engine over HTTP", () => {
 
     expect(step(output, "delete").body).toMatchObject({ status: "deleted" });
   }, 60_000);
-
 
   test("a version-mismatched binary still starts, and health reports what it found", async () => {
     // The bridge does not pin the binary version at runtime — the generated

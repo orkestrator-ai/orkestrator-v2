@@ -19,9 +19,7 @@ describe("resolveCodexMaxConcurrentThreads", () => {
     ["root-slot overflow", Number.MAX_SAFE_INTEGER],
     ["unsafe integer", Number.MAX_SAFE_INTEGER + 1],
   ])("falls back for %s values", (_label, value) => {
-    expect(resolveCodexMaxConcurrentThreads(value)).toBe(
-      DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
-    );
+    expect(resolveCodexMaxConcurrentThreads(value)).toBe(DEFAULT_CODEX_MAX_CONCURRENT_THREADS);
   });
 
   test.each([
@@ -46,10 +44,12 @@ describe("requiredAgentNetworkDomains", () => {
   });
 
   test("returns only the hosts belonging to each enabled platform", () => {
-    expect(requiredAgentNetworkDomains(["cursor"]))
-      .toEqual([...AGENT_NETWORK_DOMAINS_BY_PLATFORM.cursor]);
-    expect(requiredAgentNetworkDomains(["grok"]))
-      .toEqual([...AGENT_NETWORK_DOMAINS_BY_PLATFORM.grok]);
+    expect(requiredAgentNetworkDomains(["cursor"])).toEqual([
+      ...AGENT_NETWORK_DOMAINS_BY_PLATFORM.cursor,
+    ]);
+    expect(requiredAgentNetworkDomains(["grok"])).toEqual([
+      ...AGENT_NETWORK_DOMAINS_BY_PLATFORM.grok,
+    ]);
     expect(requiredAgentNetworkDomains(["cursor"])).not.toContain("auth.x.ai");
     expect(requiredAgentNetworkDomains(["grok"])).not.toContain("cursor.com");
   });

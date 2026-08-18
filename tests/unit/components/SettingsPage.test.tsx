@@ -13,7 +13,13 @@ import * as previousFullscreenSettingsLayout from "../../../apps/web/src/compone
 const previousFullscreenSettingsLayoutSnapshot = { ...previousFullscreenSettingsLayout };
 
 mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => ({
-  GlobalSettings: ({ activeSection, onSaveSuccess }: { activeSection: string; onSaveSuccess?: () => void }) => (
+  GlobalSettings: ({
+    activeSection,
+    onSaveSuccess,
+  }: {
+    activeSection: string;
+    onSaveSuccess?: () => void;
+  }) => (
     <div>
       <span data-testid="active-settings-section">{activeSection}</span>
       <button onClick={onSaveSuccess}>finish save</button>
@@ -38,7 +44,9 @@ mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout"
     return (
       <div>
         {menuItems.map((item) => (
-          <button key={item.id} onClick={() => setActiveSection(item.id)}>{item.label}</button>
+          <button key={item.id} onClick={() => setActiveSection(item.id)}>
+            {item.label}
+          </button>
         ))}
         {children(activeSection)}
       </div>
@@ -51,9 +59,18 @@ const invokeMock = invoke as ReturnType<typeof mock>;
 const originalConsoleError = console.error;
 
 afterAll(() => {
-  mock.module("../../../apps/web/src/components/settings/GlobalSettings", () => realGlobalSettingsSnapshot);
-  mock.module("../../../apps/web/src/components/settings/SkillsSettings", () => realSkillsSettingsSnapshot);
-  mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout", () => previousFullscreenSettingsLayoutSnapshot);
+  mock.module(
+    "../../../apps/web/src/components/settings/GlobalSettings",
+    () => realGlobalSettingsSnapshot,
+  );
+  mock.module(
+    "../../../apps/web/src/components/settings/SkillsSettings",
+    () => realSkillsSettingsSnapshot,
+  );
+  mock.module(
+    "../../../apps/web/src/components/settings/FullscreenSettingsLayout",
+    () => previousFullscreenSettingsLayoutSnapshot,
+  );
 });
 
 describe("SettingsPage", () => {
@@ -92,9 +109,12 @@ describe("SettingsPage", () => {
 
   test("shows the loading state until the first config request completes", async () => {
     let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
-    invokeMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveConfig = resolve as typeof resolveConfig;
-    }));
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveConfig = resolve as typeof resolveConfig;
+        }),
+    );
 
     const { container } = render(<SettingsPage open onOpenChange={() => undefined} />);
 
@@ -124,9 +144,12 @@ describe("SettingsPage", () => {
 
   test("returns to GlobalSettings after leaving Skills once config resolves", async () => {
     let resolveConfig!: (config: ReturnType<typeof defaultConfig>) => void;
-    invokeMock.mockImplementationOnce(() => new Promise((resolve) => {
-      resolveConfig = resolve as typeof resolveConfig;
-    }));
+    invokeMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveConfig = resolve as typeof resolveConfig;
+        }),
+    );
 
     render(<SettingsPage open onOpenChange={() => undefined} />);
     fireEvent.click(screen.getByRole("button", { name: "Skills" }));

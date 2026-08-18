@@ -58,9 +58,7 @@ export function ClaudeQuestionCard({
   hideDismiss = false,
   draftKey,
 }: ClaudeQuestionCardProps) {
-  const removePendingQuestion = useClaudeStore(
-    (state) => state.removePendingQuestion,
-  );
+  const removePendingQuestion = useClaudeStore((state) => state.removePendingQuestion);
 
   const questions = useMemo<QuestionCardQuestion[]>(
     () =>
@@ -82,12 +80,7 @@ export function ClaudeQuestionCard({
       if (onSubmitAnswers) {
         return onSubmitAnswers(answers);
       }
-      const result = await answerQuestion(
-        client!,
-        sessionId!,
-        question.id,
-        answers,
-      );
+      const result = await answerQuestion(client!, sessionId!, question.id, answers);
       // `stale` removes the card just like `applied`: the window closed while
       // the user was deciding, so there is nothing left to answer and nothing
       // useful a retry could do. Only a real failure leaves the card retryable.
@@ -99,7 +92,8 @@ export function ClaudeQuestionCard({
         return {
           applied: false,
           retryable: false,
-          message: "The response outcome is unknown. Reconnect or refresh Claude before trying again.",
+          message:
+            "The response outcome is unknown. Reconnect or refresh Claude before trying again.",
         };
       }
       return false;
@@ -121,7 +115,8 @@ export function ClaudeQuestionCard({
       return {
         applied: false,
         retryable: false,
-        message: "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.",
+        message:
+          "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.",
       };
     }
     return false;
@@ -139,9 +134,7 @@ export function ClaudeQuestionCard({
       allowOptionDeselect={allowOptionDeselect}
       submitOnOptionSelect={submitOnOptionSelect}
       hideDismiss={hideDismiss}
-      draftKey={
-        draftKey ?? (client ? claudeQuestionDraftKey(sessionId!, question.id) : undefined)
-      }
+      draftKey={draftKey ?? (client ? claudeQuestionDraftKey(sessionId!, question.id) : undefined)}
       expiresAt={question.expiresAt}
     />
   );

@@ -24,11 +24,13 @@ describe("raw apply_patch normalization", () => {
 *** End Patch`);
 
     expect(changes).toHaveLength(4);
-    expect(changes.map(({ path, targetPath, kind }) => ({
-      path,
-      targetPath,
-      kind,
-    }))).toEqual([
+    expect(
+      changes.map(({ path, targetPath, kind }) => ({
+        path,
+        targetPath,
+        kind,
+      })),
+    ).toEqual([
       { path: "src/added.ts", targetPath: "src/added.ts", kind: "add" },
       { path: "src/changed.ts", targetPath: "src/changed.ts", kind: "update" },
       { path: "src/old-name.ts", targetPath: "src/new-name.ts", kind: "move" },
@@ -77,9 +79,9 @@ describe("raw apply_patch normalization", () => {
       { length: MAX_RAW_APPLY_PATCH_CHANGES + 10 },
       (_value, index) => `*** Add File: file-${index}.txt\n+${index}`,
     ).join("\n");
-    expect(parseRawApplyPatchChanges(
-      `*** Begin Patch\n${manyChanges}\n*** End Patch`,
-    )).toHaveLength(MAX_RAW_APPLY_PATCH_CHANGES);
+    expect(
+      parseRawApplyPatchChanges(`*** Begin Patch\n${manyChanges}\n*** End Patch`),
+    ).toHaveLength(MAX_RAW_APPLY_PATCH_CHANGES);
 
     const beyondScan = `${"x".repeat(MAX_RAW_APPLY_PATCH_SCAN_CHARS)}
 *** Add File: unseen.txt
@@ -108,9 +110,7 @@ describe("raw apply_patch normalization", () => {
     const marker = "*** Add File: ";
     // Land the cap exactly at the end of the header keyword, so the slice keeps
     // `*** Add File: ` with no path at all.
-    const filler = "+".repeat(
-      MAX_RAW_APPLY_PATCH_SCAN_CHARS - head.length - 1 - marker.length,
-    );
+    const filler = "+".repeat(MAX_RAW_APPLY_PATCH_SCAN_CHARS - head.length - 1 - marker.length);
     const changes = parseRawApplyPatchChanges(
       `${head}${filler}\n${marker}truncated.txt\n+never\n*** End Patch`,
     );
@@ -140,8 +140,7 @@ describe("raw apply_patch input shapes", () => {
   test("accepts JSON-encoded function_call arguments", () => {
     // A `function_call`-shaped apply_patch escapes its newlines, so the patch is
     // invisible until the arguments are decoded.
-    expect(parseRawApplyPatchChanges(JSON.stringify({ input: PATCH })))
-      .toHaveLength(1);
+    expect(parseRawApplyPatchChanges(JSON.stringify({ input: PATCH }))).toHaveLength(1);
   });
 
   test("refuses oversized JSON arguments rather than decoding them", () => {

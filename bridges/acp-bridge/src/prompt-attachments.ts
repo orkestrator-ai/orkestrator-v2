@@ -50,7 +50,10 @@ export type PromptAttachmentErrorCode =
 export class PromptAttachmentError extends Error {
   override readonly name = "PromptAttachmentError";
 
-  constructor(readonly code: PromptAttachmentErrorCode, message: string) {
+  constructor(
+    readonly code: PromptAttachmentErrorCode,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -109,10 +112,12 @@ export function parsePromptAttachments(value: unknown): AcpPromptAttachment[] {
         "An attachment path must not contain null bytes",
       );
     }
-    const filename = typeof record.filename === "string" && record.filename.trim()
-      && Buffer.byteLength(record.filename) <= MAX_ATTACHMENT_FILENAME_BYTES
-      ? record.filename
-      : undefined;
+    const filename =
+      typeof record.filename === "string" &&
+      record.filename.trim() &&
+      Buffer.byteLength(record.filename) <= MAX_ATTACHMENT_FILENAME_BYTES
+        ? record.filename
+        : undefined;
     return { type: "image" as const, path, ...(filename ? { filename } : {}) };
   });
 }
@@ -160,19 +165,26 @@ export async function readPromptImages(
  * signature is refused rather than guessed at.
  */
 export function imageMimeType(bytes: Buffer): string {
-  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-  )) return "image/png";
+  if (
+    bytes.length >= 8 &&
+    bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  )
+    return "image/png";
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
     return "image/jpeg";
   }
-  if (bytes.length >= 6 && (
-    bytes.subarray(0, 6).toString("latin1") === "GIF87a"
-    || bytes.subarray(0, 6).toString("latin1") === "GIF89a"
-  )) return "image/gif";
-  if (bytes.length >= 12
-    && bytes.subarray(0, 4).toString("latin1") === "RIFF"
-    && bytes.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  if (
+    bytes.length >= 6 &&
+    (bytes.subarray(0, 6).toString("latin1") === "GIF87a" ||
+      bytes.subarray(0, 6).toString("latin1") === "GIF89a")
+  )
+    return "image/gif";
+  if (
+    bytes.length >= 12 &&
+    bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
+    bytes.subarray(8, 12).toString("latin1") === "WEBP"
+  )
+    return "image/webp";
   throw new PromptAttachmentError(
     "attachment_unsupported_format",
     "Image attachments must be PNG, JPEG, GIF, or WebP",
@@ -196,10 +208,12 @@ function attachmentErrorForFsFailure(error: unknown): PromptAttachmentError {
 function isPathWithin(root: string, candidate: string): boolean {
   if (candidate === root) return true;
   const childPath = relative(root, candidate);
-  return Boolean(childPath)
-    && childPath !== ".."
-    && !childPath.startsWith(`..${sep}`)
-    && !isAbsolute(childPath);
+  return (
+    Boolean(childPath) &&
+    childPath !== ".." &&
+    !childPath.startsWith(`..${sep}`) &&
+    !isAbsolute(childPath)
+  );
 }
 
 async function assertNoSymlinkComponents(root: string, targetPath: string): Promise<void> {
@@ -241,10 +255,10 @@ async function assertOpenedWorkspaceFile(
     );
   }
   if (
-    !pathStats.isFile()
-    || !openedStats.isFile()
-    || pathStats.dev !== openedStats.dev
-    || pathStats.ino !== openedStats.ino
+    !pathStats.isFile() ||
+    !openedStats.isFile() ||
+    pathStats.dev !== openedStats.dev ||
+    pathStats.ino !== openedStats.ino
   ) {
     throw new PromptAttachmentError(
       "attachment_not_regular_file",
@@ -289,12 +303,12 @@ export function assertStableRead(
   bytesRead: number,
 ): void {
   if (
-    final.dev !== initial.dev
-    || final.ino !== initial.ino
-    || final.size !== initial.size
-    || final.size !== bytesRead
-    || final.mtimeMs !== initial.mtimeMs
-    || final.ctimeMs !== initial.ctimeMs
+    final.dev !== initial.dev ||
+    final.ino !== initial.ino ||
+    final.size !== initial.size ||
+    final.size !== bytesRead ||
+    final.mtimeMs !== initial.mtimeMs ||
+    final.ctimeMs !== initial.ctimeMs
   ) {
     throw new PromptAttachmentError(
       "attachment_changed",
@@ -308,9 +322,7 @@ async function readWorkspaceImage(
   workspaceRoot: string,
 ): Promise<{ bytes: Buffer; absolutePath: string }> {
   const lexicalRoot = resolve(workspaceRoot);
-  const targetPath = isAbsolute(filePath)
-    ? resolve(filePath)
-    : resolve(lexicalRoot, filePath);
+  const targetPath = isAbsolute(filePath) ? resolve(filePath) : resolve(lexicalRoot, filePath);
   if (!isPathWithin(lexicalRoot, targetPath)) {
     throw new PromptAttachmentError(
       "attachment_outside_workspace",
@@ -333,11 +345,9 @@ async function readWorkspaceImage(
   }
 
   const noFollow = constants.O_NOFOLLOW ?? 0;
-  const handle = await open(targetPath, constants.O_RDONLY | noFollow).catch(
-    (error: unknown) => {
-      throw attachmentErrorForFsFailure(error);
-    },
-  );
+  const handle = await open(targetPath, constants.O_RDONLY | noFollow).catch((error: unknown) => {
+    throw attachmentErrorForFsFailure(error);
+  });
   try {
     const initialStats = await handle.stat();
     await assertOpenedWorkspaceFile(targetPath, canonicalRoot, initialStats);
@@ -351,7 +361,7 @@ async function readWorkspaceImage(
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     while (totalBytes <= MAX_IMAGE_ATTACHMENT_BYTES) {
-      const remaining = (MAX_IMAGE_ATTACHMENT_BYTES + 1) - totalBytes;
+      const remaining = MAX_IMAGE_ATTACHMENT_BYTES + 1 - totalBytes;
       const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, remaining));
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;

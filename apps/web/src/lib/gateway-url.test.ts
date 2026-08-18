@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { getGatewayBaseUrl, isGatewayBrowserPreviewSupported, resolveGatewayApiUrl, resolveGatewayBrowserPreviewUrl, resolveGatewayLoopbackBaseUrl } from "./gateway-url";
+import {
+  getGatewayBaseUrl,
+  isGatewayBrowserPreviewSupported,
+  resolveGatewayApiUrl,
+  resolveGatewayBrowserPreviewUrl,
+  resolveGatewayLoopbackBaseUrl,
+} from "./gateway-url";
 
 afterEach(() => {
   delete window.orkestratorGateway;
@@ -114,7 +120,9 @@ describe("resolveGatewayLoopbackBaseUrl", () => {
   test("does not rewrite non-loopback URLs", () => {
     window.orkestratorGateway = { enabled: true };
 
-    expect(resolveGatewayLoopbackBaseUrl("http://example.com:4000")).toBe("http://example.com:4000");
+    expect(resolveGatewayLoopbackBaseUrl("http://example.com:4000")).toBe(
+      "http://example.com:4000",
+    );
   });
 
   test("leaves invalid URLs unchanged and routes the default HTTP port", () => {

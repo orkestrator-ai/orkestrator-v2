@@ -76,10 +76,7 @@ export function findAgentChatMatches(
  * original UTF-16 string. Unlike indexing into a lowercased copy, these offsets
  * remain valid DOM Range boundaries when Unicode case folding changes length.
  */
-export function findAgentChatTextMatches(
-  searchText: string,
-  query: string,
-): AgentChatTextMatch[] {
+export function findAgentChatTextMatches(searchText: string, query: string): AgentChatTextMatch[] {
   if (!query.trim()) return [];
 
   const escapedQuery = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -111,11 +108,13 @@ export function useAgentChatFind<TItem>({
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const matches = useMemo(
-    () => (
+    () =>
       isActive && query.trim()
-        ? findAgentChatMatches(items.map((item) => getSearchText(item)), query)
-        : []
-    ),
+        ? findAgentChatMatches(
+            items.map((item) => getSearchText(item)),
+            query,
+          )
+        : [],
     [getSearchText, isActive, items, query],
   );
   const normalizedCurrentMatchIndex =
@@ -170,10 +169,10 @@ export function useAgentChatFind<TItem>({
     const ownerDocument = ownerRef.current?.ownerDocument ?? document;
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (
-        (event.key.toLocaleLowerCase() === "f" || event.code === "KeyF")
-        && (event.metaKey || event.ctrlKey)
-        && !event.altKey
-        && !event.shiftKey
+        (event.key.toLocaleLowerCase() === "f" || event.code === "KeyF") &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        !event.shiftKey
       ) {
         event.preventDefault();
         event.stopPropagation();

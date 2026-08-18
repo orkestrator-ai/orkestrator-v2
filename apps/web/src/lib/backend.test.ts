@@ -1,7 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AppConfig } from "@/types";
-import { UNATTENDED_AGENT_INTERACTION_POLICY } from
-  "@orkestrator/protocol/agent-interactions";
+import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 
 const invokeMock = mock<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
 
@@ -19,7 +18,7 @@ const wrapperModulePath = "./backend.ts?wrapper-test";
 const originalOrkestrator = window.orkestrator;
 const originalGateway = window.orkestratorGateway;
 const originalWindowOpen = window.open;
-const backendWrappers = await import(wrapperModulePath) as typeof import("./backend");
+const backendWrappers = (await import(wrapperModulePath)) as typeof import("./backend");
 const {
   connectLinear,
   createEnvironment,
@@ -132,20 +131,18 @@ describe("backend setup wrappers", () => {
   });
 
   test("passes explicit tri-state PR metadata to the backend", async () => {
-    await setEnvironmentPr(
-      "env-1",
-      "https://github.com/acme/repo/pull/7",
-      "open",
-      null,
-    );
+    await setEnvironmentPr("env-1", "https://github.com/acme/repo/pull/7", "open", null);
 
     expect(invokeMock.mock.calls).toEqual([
-      ["set_environment_pr", {
-        environmentId: "env-1",
-        prUrl: "https://github.com/acme/repo/pull/7",
-        prState: "open",
-        hasMergeConflicts: null,
-      }],
+      [
+        "set_environment_pr",
+        {
+          environmentId: "env-1",
+          prUrl: "https://github.com/acme/repo/pull/7",
+          prState: "open",
+          hasMergeConflicts: null,
+        },
+      ],
     ]);
   });
 
@@ -163,10 +160,13 @@ describe("backend setup wrappers", () => {
     await setEnvironmentPendingAgentLaunch("env-1", false);
 
     expect(invokeMock.mock.calls).toEqual([
-      ["set_environment_pending_agent_launch", {
-        environmentId: "env-1",
-        pending: false,
-      }],
+      [
+        "set_environment_pending_agent_launch",
+        {
+          environmentId: "env-1",
+          pending: false,
+        },
+      ],
     ]);
   });
 
@@ -184,17 +184,20 @@ describe("backend setup wrappers", () => {
     );
 
     expect(invokeMock.mock.calls).toEqual([
-      ["update_environment_agent_settings", {
-        environmentId: "env-1",
-        defaultAgent: "codex",
-        claudeMode: null,
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: "native",
-        pendingAgentLaunch: true,
-        initialAgentModel: "gpt-5.6-sol",
-        initialReasoningEffort: "high",
-      }],
+      [
+        "update_environment_agent_settings",
+        {
+          environmentId: "env-1",
+          defaultAgent: "codex",
+          claudeMode: null,
+          claudeNativeBackend: null,
+          opencodeMode: null,
+          codexMode: "native",
+          pendingAgentLaunch: true,
+          initialAgentModel: "gpt-5.6-sol",
+          initialReasoningEffort: "high",
+        },
+      ],
     ]);
   });
 
@@ -202,23 +205,22 @@ describe("backend setup wrappers", () => {
     const config = { version: "1.0" } as AppConfig;
     invokeMock.mockResolvedValueOnce(config);
 
-    await expect(rememberEnvironmentAgentSelection("project-1", {
-      platform: "codex",
-      mode: "terminal",
-      model: "gpt-5.4-mini",
-      reasoningEffort: "high",
-    })).resolves.toBe(config);
-
-    expect(invokeMock).toHaveBeenCalledWith(
-      "remember_environment_agent_selection",
-      {
-        projectId: "project-1",
+    await expect(
+      rememberEnvironmentAgentSelection("project-1", {
         platform: "codex",
         mode: "terminal",
         model: "gpt-5.4-mini",
         reasoningEffort: "high",
-      },
-    );
+      }),
+    ).resolves.toBe(config);
+
+    expect(invokeMock).toHaveBeenCalledWith("remember_environment_agent_selection", {
+      projectId: "project-1",
+      platform: "codex",
+      mode: "terminal",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "high",
+    });
   });
 
   test("omits the one-shot option keys when they are absent or blank", async () => {
@@ -258,15 +260,18 @@ describe("backend setup wrappers", () => {
     await updateEnvironmentAgentSettings("env-1", "claude", "terminal", null, null, null, false);
 
     expect(invokeMock.mock.calls).toEqual([
-      ["update_environment_agent_settings", {
-        environmentId: "env-1",
-        defaultAgent: "claude",
-        claudeMode: "terminal",
-        claudeNativeBackend: null,
-        opencodeMode: null,
-        codexMode: null,
-        pendingAgentLaunch: false,
-      }],
+      [
+        "update_environment_agent_settings",
+        {
+          environmentId: "env-1",
+          defaultAgent: "claude",
+          claudeMode: "terminal",
+          claudeNativeBackend: null,
+          opencodeMode: null,
+          codexMode: null,
+          pendingAgentLaunch: false,
+        },
+      ],
     ]);
   });
 
@@ -274,20 +279,25 @@ describe("backend setup wrappers", () => {
     await setEnvironmentInitialPrompt("env-1", "Fix it [img](/work/a.png)");
 
     expect(invokeMock.mock.calls).toEqual([
-      ["set_environment_initial_prompt", {
-        environmentId: "env-1",
-        initialPrompt: "Fix it [img](/work/a.png)",
-      }],
+      [
+        "set_environment_initial_prompt",
+        {
+          environmentId: "env-1",
+          initialPrompt: "Fix it [img](/work/a.png)",
+        },
+      ],
     ]);
   });
 
   test("forwards initial prompt attachments through durable launch settings", async () => {
-    const attachments = [{
-      id: "image-1",
-      name: "diagram.png",
-      previewUrl: "data:image/png;base64,cHJldmlldw==",
-      base64Data: "cGl4ZWxz",
-    }];
+    const attachments = [
+      {
+        id: "image-1",
+        name: "diagram.png",
+        previewUrl: "data:image/png;base64,cHJldmlldw==",
+        base64Data: "cGl4ZWxz",
+      },
+    ];
 
     await updateEnvironmentAgentSettings(
       "env-1",
@@ -304,24 +314,28 @@ describe("backend setup wrappers", () => {
     await setEnvironmentInitialPrompt("env-1", "Inspect the diagram", attachments);
 
     expect(invokeMock.mock.calls).toEqual([
-      ["update_environment_agent_settings", expect.objectContaining({
-        environmentId: "env-1",
-        initialPromptAttachments: attachments,
-      })],
-      ["set_environment_initial_prompt", {
-        environmentId: "env-1",
-        initialPrompt: "Inspect the diagram",
-        initialPromptAttachments: attachments,
-      }],
+      [
+        "update_environment_agent_settings",
+        expect.objectContaining({
+          environmentId: "env-1",
+          initialPromptAttachments: attachments,
+        }),
+      ],
+      [
+        "set_environment_initial_prompt",
+        {
+          environmentId: "env-1",
+          initialPrompt: "Inspect the diagram",
+          initialPromptAttachments: attachments,
+        },
+      ],
     ]);
   });
 
   test("calls the run-environment-setup Electron command with the environment id", async () => {
     await runEnvironmentSetup("env-1");
 
-    expect(invokeMock.mock.calls).toEqual([
-      ["run_environment_setup", { environmentId: "env-1" }],
-    ]);
+    expect(invokeMock.mock.calls).toEqual([["run_environment_setup", { environmentId: "env-1" }]]);
   });
 
   test("calls the ensure-environment-setup Electron command with the environment id", async () => {
@@ -367,12 +381,15 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["write_initial_prompt_attachments", { environmentId: "env-1", attachments }],
-      ["apply_pane_layout_intent", {
-        environmentId: "env-1",
-        baseLayout: layout,
-        desiredLayout: layout,
-        selectionIntent,
-      }],
+      [
+        "apply_pane_layout_intent",
+        {
+          environmentId: "env-1",
+          baseLayout: layout,
+          desiredLayout: layout,
+          selectionIntent,
+        },
+      ],
     ]);
   });
 
@@ -409,18 +426,13 @@ describe("backend setup wrappers", () => {
     };
     invokeMock.mockResolvedValue(snapshot);
 
-    await expect(getCachedOpenCodeModelCatalog("project-1")).resolves.toEqual(
+    await expect(getCachedOpenCodeModelCatalog("project-1")).resolves.toEqual(snapshot);
+    await expect(cacheOpenCodeModelCatalog("project-1", snapshot.models)).resolves.toEqual(
       snapshot,
     );
-    await expect(
-      cacheOpenCodeModelCatalog("project-1", snapshot.models),
-    ).resolves.toEqual(snapshot);
     expect(invokeMock.mock.calls).toEqual([
       ["get_opencode_model_catalog_cache", { projectId: "project-1" }],
-      [
-        "cache_opencode_model_catalog",
-        { projectId: "project-1", models: snapshot.models },
-      ],
+      ["cache_opencode_model_catalog", { projectId: "project-1", models: snapshot.models }],
     ]);
   });
 
@@ -435,16 +447,11 @@ describe("backend setup wrappers", () => {
     invokeMock.mockResolvedValue(cache);
 
     await expect(getAgentModelCatalogCache()).resolves.toEqual(cache);
-    await expect(
-      cacheAgentModelCatalog("claude", cache.claude.models),
-    ).resolves.toEqual(cache);
+    await expect(cacheAgentModelCatalog("claude", cache.claude.models)).resolves.toEqual(cache);
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_agent_model_catalog_cache"],
-      [
-        "cache_agent_model_catalog",
-        { agent: "claude", models: cache.claude.models },
-      ],
+      ["cache_agent_model_catalog", { agent: "claude", models: cache.claude.models }],
     ]);
   });
 
@@ -524,15 +531,18 @@ describe("backend setup wrappers", () => {
     );
 
     expect(invokeMock.mock.calls).toEqual([
-      ["create_environment", {
-        projectId: "project-1",
-        name: undefined,
-        networkAccessMode: "restricted",
-        initialPrompt: undefined,
-        portMappings: [{ hostPort: 5173, containerPort: 5173, protocol: "tcp" }],
-        environmentType: "containerized",
-        namingPrompt: "Build task\n\nShip the feature",
-      }],
+      [
+        "create_environment",
+        {
+          projectId: "project-1",
+          name: undefined,
+          networkAccessMode: "restricted",
+          initialPrompt: undefined,
+          portMappings: [{ hostPort: 5173, containerPort: 5173, protocol: "tcp" }],
+          environmentType: "containerized",
+          namingPrompt: "Build task\n\nShip the feature",
+        },
+      ],
     ]);
   });
 
@@ -549,16 +559,19 @@ describe("backend setup wrappers", () => {
     );
 
     expect(invokeMock.mock.calls).toEqual([
-      ["create_environment", {
-        projectId: "project-1",
-        name: undefined,
-        networkAccessMode: "full",
-        initialPrompt: undefined,
-        portMappings: undefined,
-        environmentType: "local",
-        namingPrompt: undefined,
-        buildPipelineId: "pipeline-42",
-      }],
+      [
+        "create_environment",
+        {
+          projectId: "project-1",
+          name: undefined,
+          networkAccessMode: "full",
+          initialPrompt: undefined,
+          portMappings: undefined,
+          environmentType: "local",
+          namingPrompt: undefined,
+          buildPipelineId: "pipeline-42",
+        },
+      ],
     ]);
   });
 
@@ -575,11 +588,14 @@ describe("backend setup wrappers", () => {
     await setEnvironmentUnread("env-1", false, "2026-07-23T11:12:14.000Z");
 
     expect(invokeMock.mock.calls).toEqual([
-      ["set_environment_unread", {
-        environmentId: "env-1",
-        unread: false,
-        expectedLastActivityAt: "2026-07-23T11:12:14.000Z",
-      }],
+      [
+        "set_environment_unread",
+        {
+          environmentId: "env-1",
+          unread: false,
+          expectedLastActivityAt: "2026-07-23T11:12:14.000Z",
+        },
+      ],
     ]);
 
     invokeMock.mockClear();
@@ -630,32 +646,41 @@ describe("backend setup wrappers", () => {
     await backendWrappers.retryBuildPipelineStage("pipeline-1");
     await backendWrappers.retryBuildPipelineInteractionFailure("pipeline-1");
     const legacySnapshots = [{ id: "legacy-pipeline" }];
-    await backendWrappers.importLegacyBuildPipelines(
-      "project-1",
-      legacySnapshots,
-    );
+    await backendWrappers.importLegacyBuildPipelines("project-1", legacySnapshots);
 
     expect(invokeMock.mock.calls).toEqual([
       ["start_build_pipeline", input],
       ["pause_build_pipeline", { pipelineId: "pipeline-1" }],
       ["resume_build_pipeline", { pipelineId: "pipeline-1" }],
       ["cancel_build_pipeline", { pipelineId: "pipeline-1" }],
-      ["retry_build_pipeline_completion_comment", {
-        pipelineId: "pipeline-1",
-      }],
-      ["send_build_pipeline_message", {
-        pipelineId: "pipeline-1",
-        text: "ship it",
-      }],
+      [
+        "retry_build_pipeline_completion_comment",
+        {
+          pipelineId: "pipeline-1",
+        },
+      ],
+      [
+        "send_build_pipeline_message",
+        {
+          pipelineId: "pipeline-1",
+          text: "ship it",
+        },
+      ],
       ["retry_build_pipeline_review", { pipelineId: "pipeline-1" }],
       ["retry_build_pipeline_stage", { pipelineId: "pipeline-1" }],
-      ["retry_build_pipeline_interaction_failure", {
-        pipelineId: "pipeline-1",
-      }],
-      ["import_legacy_build_pipelines", {
-        projectId: "project-1",
-        snapshots: legacySnapshots,
-      }],
+      [
+        "retry_build_pipeline_interaction_failure",
+        {
+          pipelineId: "pipeline-1",
+        },
+      ],
+      [
+        "import_legacy_build_pipelines",
+        {
+          projectId: "project-1",
+          snapshots: legacySnapshots,
+        },
+      ],
     ]);
   });
 
@@ -668,16 +693,22 @@ describe("backend setup wrappers", () => {
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_pr_monitor_state"],
-      ["pr_monitor_watch", {
-        environmentId: "env-1",
-        mode: "merge-pending",
-      }],
+      [
+        "pr_monitor_watch",
+        {
+          environmentId: "env-1",
+          mode: "merge-pending",
+        },
+      ],
       ["pr_monitor_refresh", { environmentId: "env-1" }],
       ["arm_pr_refresh_after_agent_completion", { environmentId: "env-1" }],
-      ["disarm_pr_refresh_after_agent_completion", {
-        environmentId: "env-1",
-        armedAt: "armed-at-1",
-      }],
+      [
+        "disarm_pr_refresh_after_agent_completion",
+        {
+          environmentId: "env-1",
+          armedAt: "armed-at-1",
+        },
+      ],
     ]);
   });
 
@@ -686,42 +717,18 @@ describe("backend setup wrappers", () => {
 
     await backendWrappers.getPromptQueue("codex\u0000env-1:tab-1");
     await backendWrappers.listPromptQueues("env-1");
-    await backendWrappers.enqueuePromptQueueMessage(
-      "codex\u0000env-1:tab-1",
-      "env-1",
-      message,
-    );
-    await backendWrappers.requeuePromptQueueMessage(
-      "codex\u0000env-1:tab-1",
-      "env-1",
-      message,
-    );
+    await backendWrappers.enqueuePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", message);
+    await backendWrappers.requeuePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", message);
     await backendWrappers.movePromptQueueMessage(
       "codex\u0000env-1:tab-1",
       "env-1",
       "message-1",
       "up",
     );
-    await backendWrappers.removePromptQueueMessage(
-      "codex\u0000env-1:tab-1",
-      "env-1",
-      "message-1",
-    );
-    await backendWrappers.claimPromptQueueHead(
-      "codex\u0000env-1:tab-1",
-      "env-1",
-      "message-1",
-    );
-    await backendWrappers.acknowledgePromptQueueClaim(
-      "codex\u0000env-1:tab-1",
-      "env-1",
-      "claim-1",
-    );
-    await backendWrappers.rejectPromptQueueClaim(
-      "codex\u0000env-1:tab-1",
-      "env-1",
-      "claim-2",
-    );
+    await backendWrappers.removePromptQueueMessage("codex\u0000env-1:tab-1", "env-1", "message-1");
+    await backendWrappers.claimPromptQueueHead("codex\u0000env-1:tab-1", "env-1", "message-1");
+    await backendWrappers.acknowledgePromptQueueClaim("codex\u0000env-1:tab-1", "env-1", "claim-1");
+    await backendWrappers.rejectPromptQueueClaim("codex\u0000env-1:tab-1", "env-1", "claim-2");
     await backendWrappers.transferPromptQueueMessageToComposeDraft(
       "codex\u0000env-1:tab-1",
       "env-1",
@@ -731,61 +738,86 @@ describe("backend setup wrappers", () => {
       "env-1",
       4,
     );
-    await backendWrappers.retryPromptQueueDispatch(
-      "codex\u0000env-1:tab-1",
-    );
+    await backendWrappers.retryPromptQueueDispatch("codex\u0000env-1:tab-1");
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_prompt_queue", { queueKey: "codex\u0000env-1:tab-1" }],
       ["list_prompt_queues", { environmentId: "env-1" }],
-      ["enqueue_prompt_queue_message", {
-        queueKey: "codex\u0000env-1:tab-1",
-        environmentId: "env-1",
-        message,
-      }],
-      ["requeue_prompt_queue_message", {
-        queueKey: "codex\u0000env-1:tab-1",
-        environmentId: "env-1",
-        message,
-      }],
-      ["move_prompt_queue_message", {
-        queueKey: "codex\u0000env-1:tab-1",
-        environmentId: "env-1",
-        messageId: "message-1",
-        direction: "up",
-      }],
-      ["remove_prompt_queue_message", {
-        queueKey: "codex\u0000env-1:tab-1",
-        environmentId: "env-1",
-        messageId: "message-1",
-      }],
-      ["claim_prompt_queue_head", {
-        queueKey: "codex\u0000env-1:tab-1",
-        environmentId: "env-1",
-        expectedMessageId: "message-1",
-      }],
-      ["acknowledge_prompt_queue_claim", {
-        queueKey: "codex\u0000env-1:tab-1",
-        environmentId: "env-1",
-        claimToken: "claim-1",
-      }],
-      ["reject_prompt_queue_claim", {
-        queueKey: "codex\u0000env-1:tab-1",
-        environmentId: "env-1",
-        claimToken: "claim-2",
-      }],
-      ["transfer_prompt_queue_message_to_compose_draft", {
-        queueKey: "codex\u0000env-1:tab-1",
-        environmentId: "env-1",
-        messageId: "message-1",
-        draftKey: "codex:env-1:env-1%3Atab-1",
-        ownerType: "environment",
-        ownerId: "env-1",
-        expectedDraftRevision: 4,
-      }],
-      ["retry_prompt_queue_dispatch", {
-        queueKey: "codex\u0000env-1:tab-1",
-      }],
+      [
+        "enqueue_prompt_queue_message",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+          environmentId: "env-1",
+          message,
+        },
+      ],
+      [
+        "requeue_prompt_queue_message",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+          environmentId: "env-1",
+          message,
+        },
+      ],
+      [
+        "move_prompt_queue_message",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+          environmentId: "env-1",
+          messageId: "message-1",
+          direction: "up",
+        },
+      ],
+      [
+        "remove_prompt_queue_message",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+          environmentId: "env-1",
+          messageId: "message-1",
+        },
+      ],
+      [
+        "claim_prompt_queue_head",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+          environmentId: "env-1",
+          expectedMessageId: "message-1",
+        },
+      ],
+      [
+        "acknowledge_prompt_queue_claim",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+          environmentId: "env-1",
+          claimToken: "claim-1",
+        },
+      ],
+      [
+        "reject_prompt_queue_claim",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+          environmentId: "env-1",
+          claimToken: "claim-2",
+        },
+      ],
+      [
+        "transfer_prompt_queue_message_to_compose_draft",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+          environmentId: "env-1",
+          messageId: "message-1",
+          draftKey: "codex:env-1:env-1%3Atab-1",
+          ownerType: "environment",
+          ownerId: "env-1",
+          expectedDraftRevision: 4,
+        },
+      ],
+      [
+        "retry_prompt_queue_dispatch",
+        {
+          queueKey: "codex\u0000env-1:tab-1",
+        },
+      ],
     ]);
   });
 
@@ -830,67 +862,88 @@ describe("backend setup wrappers", () => {
     await backendWrappers.deleteFileDraft("file:env-1:index", 8);
 
     expect(invokeMock.mock.calls).toEqual([
-      ["save_compose_draft", {
-        draftKey: "compose:env-1:tab",
-        ownerType: "environment",
-        ownerId: "env-1",
-        value: { text: "draft" },
-        expectedRevision: 3,
-      }],
-      ["delete_compose_draft", {
-        draftKey: "compose:env-1:tab",
-        expectedRevision: 4,
-      }],
-      ["save_file_draft", {
-        draftKey: "file:env-1:index",
-        environmentId: "env-1",
-        filePath: "src/index.ts",
-        content: "edited",
-        originalContent: "disk",
-        expectedRevision: 7,
-      }],
-      ["delete_file_draft", {
-        draftKey: "file:env-1:index",
-        expectedRevision: 8,
-      }],
+      [
+        "save_compose_draft",
+        {
+          draftKey: "compose:env-1:tab",
+          ownerType: "environment",
+          ownerId: "env-1",
+          value: { text: "draft" },
+          expectedRevision: 3,
+        },
+      ],
+      [
+        "delete_compose_draft",
+        {
+          draftKey: "compose:env-1:tab",
+          expectedRevision: 4,
+        },
+      ],
+      [
+        "save_file_draft",
+        {
+          draftKey: "file:env-1:index",
+          environmentId: "env-1",
+          filePath: "src/index.ts",
+          content: "edited",
+          originalContent: "disk",
+          expectedRevision: 7,
+        },
+      ],
+      [
+        "delete_file_draft",
+        {
+          draftKey: "file:env-1:index",
+          expectedRevision: 8,
+        },
+      ],
     ]);
   });
 
   test("creates environment-tracked local and container terminal sessions", async () => {
     const localResult = { sessionId: "local-session", created: true, bootstrapped: false };
     invokeMock.mockResolvedValueOnce(localResult);
-    await expect(createLocalTerminalSession("env-local", 100, 30, true, "tab-local"))
-      .resolves.toEqual(localResult);
+    await expect(
+      createLocalTerminalSession("env-local", 100, 30, true, "tab-local"),
+    ).resolves.toEqual(localResult);
 
     const containerResult = { sessionId: "container-session", created: false, bootstrapped: true };
     invokeMock.mockResolvedValueOnce(containerResult);
-    await expect(createTerminalSession(
-      "container-1",
-      120,
-      40,
-      undefined,
-      true,
-      "env-container",
-      "tab-container",
-    )).resolves.toEqual(containerResult);
+    await expect(
+      createTerminalSession(
+        "container-1",
+        120,
+        40,
+        undefined,
+        true,
+        "env-container",
+        "tab-container",
+      ),
+    ).resolves.toEqual(containerResult);
 
     expect(invokeMock.mock.calls).toEqual([
-      ["create_local_terminal_session", {
-        environmentId: "env-local",
-        cols: 100,
-        rows: 30,
-        trackEnvironmentActivity: true,
-        terminalKey: "tab-local",
-      }],
-      ["create_terminal_session", {
-        containerId: "container-1",
-        cols: 120,
-        rows: 40,
-        user: undefined,
-        trackEnvironmentActivity: true,
-        environmentId: "env-container",
-        terminalKey: "tab-container",
-      }],
+      [
+        "create_local_terminal_session",
+        {
+          environmentId: "env-local",
+          cols: 100,
+          rows: 30,
+          trackEnvironmentActivity: true,
+          terminalKey: "tab-local",
+        },
+      ],
+      [
+        "create_terminal_session",
+        {
+          containerId: "container-1",
+          cols: 120,
+          rows: 40,
+          user: undefined,
+          trackEnvironmentActivity: true,
+          environmentId: "env-container",
+          terminalKey: "tab-container",
+        },
+      ],
     ]);
   });
 
@@ -902,15 +955,15 @@ describe("backend setup wrappers", () => {
       { sessionId: "terminal-1", created: "yes" },
     ]) {
       invokeMock.mockResolvedValueOnce(malformed);
-      await expect(
-        createTerminalSession("container-1", 80, 24),
-      ).rejects.toThrow("invalid terminal session result");
+      await expect(createTerminalSession("container-1", 80, 24)).rejects.toThrow(
+        "invalid terminal session result",
+      );
     }
 
     invokeMock.mockResolvedValueOnce({ sessionId: 42, created: false });
-    await expect(
-      createLocalTerminalSession("env-1", 80, 24),
-    ).rejects.toThrow("invalid terminal session result");
+    await expect(createLocalTerminalSession("env-1", 80, 24)).rejects.toThrow(
+      "invalid terminal session result",
+    );
   });
 
   test("returns the revisioned terminal output snapshot with its generation", async () => {
@@ -950,9 +1003,9 @@ describe("backend setup wrappers", () => {
       { output: "", revision: 1, generation: 1, truncated: "yes" },
     ]) {
       invokeMock.mockResolvedValueOnce(malformed);
-      await expect(
-        getTerminalOutputSnapshot("terminal-1"),
-      ).rejects.toThrow("invalid terminal output snapshot");
+      await expect(getTerminalOutputSnapshot("terminal-1")).rejects.toThrow(
+        "invalid terminal output snapshot",
+      );
     }
   });
 
@@ -969,11 +1022,14 @@ describe("backend setup wrappers", () => {
       ["connect_linear", { apiKey: "lin_api_secret" }],
       ["get_linear_issues"],
       ["get_linear_issue", { issueId: "ENG-123" }],
-      ["post_linear_completion_comment", {
-        pipelineId: "pipeline-1",
-        issueId: "issue-1",
-        body: "Done",
-      }],
+      [
+        "post_linear_completion_comment",
+        {
+          pipelineId: "pipeline-1",
+          issueId: "issue-1",
+          body: "Done",
+        },
+      ],
       ["disconnect_linear"],
     ]);
   });
@@ -998,37 +1054,52 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["get_github_issues", { projectId: "project-1" }],
       ["get_github_issue", { projectId: "project-1", issueNumber: 42 }],
-      ["update_github_issue", {
-        projectId: "project-1",
-        issueNumber: 42,
-        title: "Title",
-        body: "Body",
-      }],
-      ["update_github_issue_status", {
-        projectId: "project-1",
-        issueNumber: 42,
-        status: "inprogress",
-      }],
-      ["add_github_issue_comment", {
-        projectId: "project-1",
-        issueNumber: 42,
-        body: "Comment",
-      }],
-      ["update_github_issue_comment", {
-        projectId: "project-1",
-        issueNumber: 42,
-        commentId: 9001,
-        body: "Edited",
-      }],
+      [
+        "update_github_issue",
+        {
+          projectId: "project-1",
+          issueNumber: 42,
+          title: "Title",
+          body: "Body",
+        },
+      ],
+      [
+        "update_github_issue_status",
+        {
+          projectId: "project-1",
+          issueNumber: 42,
+          status: "inprogress",
+        },
+      ],
+      [
+        "add_github_issue_comment",
+        {
+          projectId: "project-1",
+          issueNumber: 42,
+          body: "Comment",
+        },
+      ],
+      [
+        "update_github_issue_comment",
+        {
+          projectId: "project-1",
+          issueNumber: 42,
+          commentId: 9001,
+          body: "Edited",
+        },
+      ],
       ["close_github_issue", { projectId: "project-1", issueNumber: 42 }],
-      ["post_github_completion_comment", {
-        pipelineId: "pipeline-1",
-        projectId: "project-1",
-        repositoryOwner: "acme",
-        repositoryName: "widget",
-        issueNumber: 42,
-        body: "Build completed",
-      }],
+      [
+        "post_github_completion_comment",
+        {
+          pipelineId: "pipeline-1",
+          projectId: "project-1",
+          repositoryOwner: "acme",
+          repositoryName: "widget",
+          issueNumber: 42,
+          body: "Build completed",
+        },
+      ],
     ]);
   });
 
@@ -1103,9 +1174,7 @@ describe("backend setup wrappers", () => {
     invokeMock.mockResolvedValueOnce(result);
 
     await expect(propagateGithubCredentialsToContainers()).resolves.toBe(result);
-    expect(invokeMock.mock.calls).toEqual([
-      ["propagate_github_token_to_containers"],
-    ]);
+    expect(invokeMock.mock.calls).toEqual([["propagate_github_token_to_containers"]]);
   });
 
   test("reports the backend-selected GitHub credential source and availability", async () => {
@@ -1113,9 +1182,7 @@ describe("backend setup wrappers", () => {
     invokeMock.mockResolvedValueOnce(status);
 
     await expect(getContainerGitHubCredentialStatus()).resolves.toBe(status);
-    expect(invokeMock.mock.calls).toEqual([
-      ["get_container_github_credential_status"],
-    ]);
+    expect(invokeMock.mock.calls).toEqual([["get_container_github_credential_status"]]);
   });
 
   test("forwards each agent model default under the single-key command", async () => {
@@ -1162,27 +1229,36 @@ describe("backend pane layout wrappers", () => {
     await expect(getPaneLayout("env-1")).resolves.toEqual(layout);
 
     invokeMock.mockResolvedValueOnce(layout);
-    await expect(savePaneLayout("env-1", {
-      version: layout.version,
-      containerId: layout.containerId,
-      activePaneId: layout.activePaneId,
-      root: layout.root,
-    }, 1)).resolves.toEqual(layout);
+    await expect(
+      savePaneLayout(
+        "env-1",
+        {
+          version: layout.version,
+          containerId: layout.containerId,
+          activePaneId: layout.activePaneId,
+          root: layout.root,
+        },
+        1,
+      ),
+    ).resolves.toEqual(layout);
     await expect(deletePaneLayout("env-1")).resolves.toBeUndefined();
     await expect(deletePaneLayout("env-1", 2)).resolves.toBeUndefined();
 
     expect(invokeMock.mock.calls).toEqual([
       ["get_pane_layout", { environmentId: "env-1" }],
-      ["save_pane_layout", {
-        environmentId: "env-1",
-        layout: {
-          version: 1,
-          containerId: "container-1",
-          activePaneId: "pane-1",
-          root: layout.root,
+      [
+        "save_pane_layout",
+        {
+          environmentId: "env-1",
+          layout: {
+            version: 1,
+            containerId: "container-1",
+            activePaneId: "pane-1",
+            root: layout.root,
+          },
+          expectedRevision: 1,
         },
-        expectedRevision: 1,
-      }],
+      ],
       ["delete_pane_layout", { environmentId: "env-1" }],
       ["delete_pane_layout", { environmentId: "env-1", expectedRevision: 2 }],
     ]);
@@ -1209,7 +1285,10 @@ describe("backend web client wrappers", () => {
     };
 
     await expect(getWebClientStatus()).resolves.toEqual(status);
-    await expect(setWebClientEnabled(false)).resolves.toMatchObject({ enabled: false, running: false });
+    await expect(setWebClientEnabled(false)).resolves.toMatchObject({
+      enabled: false,
+      running: false,
+    });
     await expect(resetWebClientServe()).resolves.toEqual(status);
     await expect(getGatewayTokenSettings()).resolves.toEqual(tokenSettings);
     await expect(setGatewayToken("replacement-token-123456")).resolves.toMatchObject({
@@ -1269,9 +1348,7 @@ describe("backend native agent and looped review wrappers", () => {
   test("acknowledges a startup session with its durable identity", async () => {
     const environment = {
       id: "env-1",
-    } as Awaited<
-      ReturnType<typeof backendWrappers.acknowledgeStartupAgentSession>
-    >;
+    } as Awaited<ReturnType<typeof backendWrappers.acknowledgeStartupAgentSession>>;
     invokeMock.mockResolvedValueOnce(environment);
 
     await expect(
@@ -1281,14 +1358,11 @@ describe("backend native agent and looped review wrappers", () => {
       }),
     ).resolves.toBe(environment);
 
-    expect(invokeMock).toHaveBeenCalledWith(
-      "acknowledge_startup_agent_session",
-      {
-        environmentId: "env-1",
-        providerSessionId: "provider-1",
-        startedAt: "2026-07-29T12:00:00.000Z",
-      },
-    );
+    expect(invokeMock).toHaveBeenCalledWith("acknowledge_startup_agent_session", {
+      environmentId: "env-1",
+      providerSessionId: "provider-1",
+      startedAt: "2026-07-29T12:00:00.000Z",
+    });
   });
 
   test("omits absent startup session identity fields", async () => {
@@ -1297,10 +1371,7 @@ describe("backend native agent and looped review wrappers", () => {
       startedAt: undefined,
     });
 
-    const [[command, payload]] = invokeMock.mock.calls as [[
-      string,
-      Record<string, unknown>,
-    ]];
+    const [[command, payload]] = invokeMock.mock.calls as [[string, Record<string, unknown>]];
     expect(command).toBe("acknowledge_startup_agent_session");
     expect(payload).toEqual({ environmentId: "env-1" });
     expect(payload).not.toHaveProperty("providerSessionId");
@@ -1339,13 +1410,8 @@ describe("backend native agent and looped review wrappers", () => {
       reasoningEffort: "high",
       phase: "review" as const,
     };
-    await expect(
-      backendWrappers.ensureNativeAgentSession(fullInput),
-    ).resolves.toBe(session);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "ensure_native_agent_session",
-      fullInput,
-    );
+    await expect(backendWrappers.ensureNativeAgentSession(fullInput)).resolves.toBe(session);
+    expect(invokeMock).toHaveBeenLastCalledWith("ensure_native_agent_session", fullInput);
 
     const minimalInput = {
       environmentId: "env-2",
@@ -1353,10 +1419,7 @@ describe("backend native agent and looped review wrappers", () => {
       logicalSessionKey: "build-1",
     };
     await backendWrappers.ensureNativeAgentSession(minimalInput);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "ensure_native_agent_session",
-      minimalInput,
-    );
+    expect(invokeMock).toHaveBeenLastCalledWith("ensure_native_agent_session", minimalInput);
     const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(minimalPayload).not.toHaveProperty("title");
     expect(minimalPayload).not.toHaveProperty("origin");
@@ -1400,13 +1463,8 @@ describe("backend native agent and looped review wrappers", () => {
       sessionMode: "build" as const,
       fastMode: true,
     };
-    await expect(
-      backendWrappers.adoptNativeAgentSession(fullInput),
-    ).resolves.toBe(adopted);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "adopt_native_agent_session",
-      fullInput,
-    );
+    await expect(backendWrappers.adoptNativeAgentSession(fullInput)).resolves.toBe(adopted);
+    expect(invokeMock).toHaveBeenLastCalledWith("adopt_native_agent_session", fullInput);
 
     const minimalInput = {
       environmentId: "env-2",
@@ -1415,10 +1473,7 @@ describe("backend native agent and looped review wrappers", () => {
       providerSessionId: "provider-2",
     };
     await backendWrappers.adoptNativeAgentSession(minimalInput);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "adopt_native_agent_session",
-      minimalInput,
-    );
+    expect(invokeMock).toHaveBeenLastCalledWith("adopt_native_agent_session", minimalInput);
     const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(minimalPayload).not.toHaveProperty("expectedProviderSessionId");
     expect(minimalPayload).not.toHaveProperty("origin");
@@ -1437,11 +1492,7 @@ describe("backend native agent and looped review wrappers", () => {
       logicalSessionKey: "tab-1",
     };
     await expect(backendWrappers.getNativeAgentSession(identity)).resolves.toBeNull();
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "get_native_agent_session",
-      identity,
-    );
-
+    expect(invokeMock).toHaveBeenLastCalledWith("get_native_agent_session", identity);
   });
 
   test("dispatches native prompts with full and minimal payloads", async () => {
@@ -1481,13 +1532,8 @@ describe("backend native agent and looped review wrappers", () => {
       images: [{ filename: "failure.png", data: "cGl4ZWxz" }],
       schema: { type: "object" },
     };
-    await expect(
-      backendWrappers.dispatchNativeAgentPrompt(fullInput),
-    ).resolves.toBe(dispatched);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "dispatch_native_agent_prompt",
-      fullInput,
-    );
+    await expect(backendWrappers.dispatchNativeAgentPrompt(fullInput)).resolves.toBe(dispatched);
+    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_prompt", fullInput);
 
     const minimalInput = {
       environmentId: "env-2",
@@ -1497,10 +1543,7 @@ describe("backend native agent and looped review wrappers", () => {
       requestId: "request-2",
     };
     await backendWrappers.dispatchNativeAgentPrompt(minimalInput);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "dispatch_native_agent_prompt",
-      minimalInput,
-    );
+    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_prompt", minimalInput);
     const minimalPayload = invokeMock.mock.calls.at(-1)?.[1] as Record<string, unknown>;
     expect(minimalPayload).not.toHaveProperty("title");
     expect(minimalPayload).not.toHaveProperty("origin");
@@ -1528,17 +1571,12 @@ describe("backend native agent and looped review wrappers", () => {
       fastMode: true,
     };
 
-    await expect(
-      backendWrappers.dispatchNativeAgentIntent(input),
-    ).resolves.toEqual({
+    await expect(backendWrappers.dispatchNativeAgentIntent(input)).resolves.toEqual({
       outcome: "unknown",
       requestId: "request-stable",
       error: "response was lost",
     });
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "dispatch_native_agent_intent",
-      input,
-    );
+    expect(invokeMock).toHaveBeenLastCalledWith("dispatch_native_agent_intent", input);
   });
 
   test("carries an optional controller fence on workflow saves", async () => {
@@ -1548,42 +1586,27 @@ describe("backend native agent and looped review wrappers", () => {
       phase: "fixing",
     };
 
-    await backendWrappers.saveLoopedReviewWorkflow(
-      "workflow-1",
-      "env-1",
-      1,
+    await backendWrappers.saveLoopedReviewWorkflow("workflow-1", "env-1", 1, snapshot, 7, {
+      ownerId: "owner-1",
+      token: "lease-token",
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("save_looped_review_workflow", {
+      workflowId: "workflow-1",
+      environmentId: "env-1",
+      version: 1,
       snapshot,
-      7,
-      { ownerId: "owner-1", token: "lease-token" },
-    );
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "save_looped_review_workflow",
-      {
-        workflowId: "workflow-1",
-        environmentId: "env-1",
-        version: 1,
-        snapshot,
-        expectedRevision: 7,
-        controllerOwnerId: "owner-1",
-        controllerToken: "lease-token",
-      },
-    );
+      expectedRevision: 7,
+      controllerOwnerId: "owner-1",
+      controllerToken: "lease-token",
+    });
 
-    await backendWrappers.saveLoopedReviewWorkflow(
-      "workflow-1",
-      "env-1",
-      1,
+    await backendWrappers.saveLoopedReviewWorkflow("workflow-1", "env-1", 1, snapshot);
+    expect(invokeMock).toHaveBeenLastCalledWith("save_looped_review_workflow", {
+      workflowId: "workflow-1",
+      environmentId: "env-1",
+      version: 1,
       snapshot,
-    );
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "save_looped_review_workflow",
-      {
-        workflowId: "workflow-1",
-        environmentId: "env-1",
-        version: 1,
-        snapshot,
-      },
-    );
+    });
   });
 
   test("maps looped-review lifecycle commands and exact payloads", async () => {
@@ -1646,18 +1669,26 @@ describe("backend native agent and looped review wrappers", () => {
     }
 
     // Stopping is reviewer-scoped: the workflow keeps running without it.
-    await expect(backendWrappers.stopMultiReviewReviewer("multi-1", "reviewer-1"))
-      .resolves.toBe(workflow);
+    await expect(backendWrappers.stopMultiReviewReviewer("multi-1", "reviewer-1")).resolves.toBe(
+      workflow,
+    );
     expect(invokeMock).toHaveBeenLastCalledWith("stop_multi_review_reviewer", {
-      workflowId: "multi-1", reviewerId: "reviewer-1",
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
     });
 
     await backendWrappers.getMultiReviewWorkflow("multi-1");
-    expect(invokeMock).toHaveBeenLastCalledWith("get_multi_review_workflow", { workflowId: "multi-1" });
+    expect(invokeMock).toHaveBeenLastCalledWith("get_multi_review_workflow", {
+      workflowId: "multi-1",
+    });
     await backendWrappers.listMultiReviewWorkflows("env-1");
-    expect(invokeMock).toHaveBeenLastCalledWith("list_multi_review_workflows", { environmentId: "env-1" });
+    expect(invokeMock).toHaveBeenLastCalledWith("list_multi_review_workflows", {
+      environmentId: "env-1",
+    });
     await backendWrappers.deleteMultiReviewWorkflow("multi-1");
-    expect(invokeMock).toHaveBeenLastCalledWith("delete_multi_review_workflow", { workflowId: "multi-1" });
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_multi_review_workflow", {
+      workflowId: "multi-1",
+    });
   });
 
   test("omits an absent provider session id and maps workflow reads and deletion", async () => {
@@ -1674,11 +1705,17 @@ describe("backend native agent and looped review wrappers", () => {
     });
 
     await backendWrappers.getLoopedReviewWorkflow("workflow-1");
-    expect(invokeMock).toHaveBeenLastCalledWith("get_looped_review_workflow", { workflowId: "workflow-1" });
+    expect(invokeMock).toHaveBeenLastCalledWith("get_looped_review_workflow", {
+      workflowId: "workflow-1",
+    });
     await backendWrappers.listLoopedReviewWorkflows("env-1");
-    expect(invokeMock).toHaveBeenLastCalledWith("list_looped_review_workflows", { environmentId: "env-1" });
+    expect(invokeMock).toHaveBeenLastCalledWith("list_looped_review_workflows", {
+      environmentId: "env-1",
+    });
     await backendWrappers.deleteLoopedReviewWorkflow("workflow-1");
-    expect(invokeMock).toHaveBeenLastCalledWith("delete_looped_review_workflow", { workflowId: "workflow-1" });
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_looped_review_workflow", {
+      workflowId: "workflow-1",
+    });
   });
 
   test("forwards a blank provider session id instead of falling back to the active one", async () => {
@@ -1694,8 +1731,7 @@ describe("backend native agent and looped review wrappers", () => {
 
   test("propagates a null provider session and a null workflow read", async () => {
     invokeMock.mockResolvedValueOnce(null);
-    await expect(backendWrappers.getLoopedReviewProviderSession("workflow-1"))
-      .resolves.toBeNull();
+    await expect(backendWrappers.getLoopedReviewProviderSession("workflow-1")).resolves.toBeNull();
     invokeMock.mockResolvedValueOnce(null);
     await expect(backendWrappers.getLoopedReviewWorkflow("workflow-1")).resolves.toBeNull();
   });
@@ -1725,11 +1761,11 @@ describe("backend command wrapper coverage", () => {
       }
       if (command === "get_build_pipeline") return null;
       if (
-        command === "list_build_pipelines"
-        || command === "get_git_status"
-        || command === "get_file_tree"
-        || command === "get_local_git_status"
-        || command === "get_local_file_tree"
+        command === "list_build_pipelines" ||
+        command === "get_git_status" ||
+        command === "get_file_tree" ||
+        command === "get_local_git_status" ||
+        command === "get_local_file_tree"
       ) {
         return [];
       }
@@ -1756,15 +1792,17 @@ describe("backend command wrapper coverage", () => {
   test("submits backend-owned environment starts with the expected command payload", async () => {
     await backendWrappers.startEnvironmentInBackground("env-background");
 
-    expect(invokeMock).toHaveBeenCalledWith(
-      "start_environment_background",
-      { environmentId: "env-background" },
-    );
+    expect(invokeMock).toHaveBeenCalledWith("start_environment_background", {
+      environmentId: "env-background",
+    });
   });
 
   test("validates and returns backend bridge readiness snapshots", async () => {
-    await expect(backendWrappers.awaitBridgeReady("env-ready", "codex", 12_345))
-      .resolves.toEqual({ status: "ready", port: 4321, authToken: "token" });
+    await expect(backendWrappers.awaitBridgeReady("env-ready", "codex", 12_345)).resolves.toEqual({
+      status: "ready",
+      port: 4321,
+      authToken: "token",
+    });
     expect(invokeMock).toHaveBeenLastCalledWith("await_bridge_ready", {
       environmentId: "env-ready",
       agent: "codex",
@@ -1776,16 +1814,16 @@ describe("backend command wrapper coverage", () => {
       error: { message: "bridge failed", retryable: false },
     } as const;
     invokeMock.mockResolvedValueOnce(failed);
-    await expect(backendWrappers.awaitBridgeReady("env-ready", "claude"))
-      .resolves.toEqual(failed);
+    await expect(backendWrappers.awaitBridgeReady("env-ready", "claude")).resolves.toEqual(failed);
 
     const timedOut = {
       status: "timed-out",
       error: { message: "bridge timed out", retryable: true, retryAfterMs: 500 },
     } as const;
     invokeMock.mockResolvedValueOnce(timedOut);
-    await expect(backendWrappers.awaitBridgeReady("env-ready", "opencode"))
-      .resolves.toEqual(timedOut);
+    await expect(backendWrappers.awaitBridgeReady("env-ready", "opencode")).resolves.toEqual(
+      timedOut,
+    );
   });
 
   test("rejects empty and malformed readiness payloads", async () => {
@@ -1798,8 +1836,9 @@ describe("backend command wrapper coverage", () => {
       { status: "unknown" },
     ]) {
       invokeMock.mockResolvedValueOnce(malformed);
-      await expect(backendWrappers.awaitBridgeReady("env-invalid", "codex"))
-        .rejects.toThrow("invalid bridge readiness result");
+      await expect(backendWrappers.awaitBridgeReady("env-invalid", "codex")).rejects.toThrow(
+        "invalid bridge readiness result",
+      );
     }
   });
 
@@ -1840,15 +1879,17 @@ describe("backend command wrapper coverage", () => {
     });
 
     const preparation = {
-      validation: [{
-        command: "bun test",
-        status: "passed" as const,
-        exitCode: 0,
-        stdoutPath: ".orkestrator/review-artifacts/package-1/validation-01.stdout.txt",
-        stderrPath: ".orkestrator/review-artifacts/package-1/validation-01.stderr.txt",
-        durationMs: 42,
-        limitation: null,
-      }],
+      validation: [
+        {
+          command: "bun test",
+          status: "passed" as const,
+          exitCode: 0,
+          stdoutPath: ".orkestrator/review-artifacts/package-1/validation-01.stdout.txt",
+          stderrPath: ".orkestrator/review-artifacts/package-1/validation-01.stderr.txt",
+          durationMs: 42,
+          limitation: null,
+        },
+      ],
       uncommittedFiles: [],
       limitations: [],
     };
@@ -1864,12 +1905,9 @@ describe("backend command wrapper coverage", () => {
     };
     invokeMock.mockResolvedValueOnce(result);
 
-    await expect(backendWrappers.mergeEnvironmentPr(
-      "env-1",
-      "rebase",
-      true,
-      true,
-    )).resolves.toEqual(result);
+    await expect(
+      backendWrappers.mergeEnvironmentPr("env-1", "rebase", true, true),
+    ).resolves.toEqual(result);
 
     expect(invokeMock).toHaveBeenLastCalledWith("merge_environment_pr", {
       environmentId: "env-1",
@@ -1927,7 +1965,7 @@ describe("backend command wrapper coverage", () => {
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)
         ? [[name, value as (...args: unknown[]) => Promise<unknown>] as const]
-        : []
+        : [],
     );
 
     expect(commandWrappers.length).toBeGreaterThan(150);
@@ -1947,22 +1985,18 @@ describe("backend command wrapper coverage", () => {
     };
     invokeMock.mockResolvedValueOnce(response);
 
-    await expect(backendWrappers.getResourceRevisionManifest(
-      "a".repeat(32),
-      { config: "c".repeat(32) },
-    )).resolves.toEqual(response);
-    expect(invokeMock).toHaveBeenLastCalledWith(
-      "get_resource_revision_manifest",
-      {
-        knownGeneration: "a".repeat(32),
-        knownRevisions: { config: "c".repeat(32) },
-      },
-    );
+    await expect(
+      backendWrappers.getResourceRevisionManifest("a".repeat(32), { config: "c".repeat(32) }),
+    ).resolves.toEqual(response);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_resource_revision_manifest", {
+      knownGeneration: "a".repeat(32),
+      knownRevisions: { config: "c".repeat(32) },
+    });
 
     invokeMock.mockResolvedValueOnce({ generation: "invalid" });
-    await expect(
-      backendWrappers.getResourceRevisionManifest(),
-    ).rejects.toThrow("Invalid resource revision manifest response");
+    await expect(backendWrappers.getResourceRevisionManifest()).rejects.toThrow(
+      "Invalid resource revision manifest response",
+    );
   });
 
   test("getEnvironmentExtensions defaults to the cached backend result", async () => {
@@ -2021,9 +2055,7 @@ describe("backend command wrapper coverage", () => {
   test("deletes an agent handoff through its environment-scoped command", async () => {
     invokeMock.mockResolvedValueOnce(true);
 
-    await expect(
-      backendWrappers.deleteAgentHandoff("handoff-1", "env-1"),
-    ).resolves.toBe(true);
+    await expect(backendWrappers.deleteAgentHandoff("handoff-1", "env-1")).resolves.toBe(true);
     expect(invokeMock).toHaveBeenCalledWith("delete_agent_handoff", {
       handoffId: "handoff-1",
       environmentId: "env-1",
@@ -2061,9 +2093,9 @@ describe("backend command wrapper coverage", () => {
   test("prunes agent handoffs against the layout's reference set", async () => {
     invokeMock.mockResolvedValueOnce(["orphan"]);
 
-    await expect(
-      backendWrappers.pruneAgentHandoffs("env-1", ["kept"]),
-    ).resolves.toEqual(["orphan"]);
+    await expect(backendWrappers.pruneAgentHandoffs("env-1", ["kept"])).resolves.toEqual([
+      "orphan",
+    ]);
     expect(invokeMock).toHaveBeenCalledWith("prune_agent_handoffs", {
       environmentId: "env-1",
       referencedHandoffIds: ["kept"],
@@ -2129,13 +2161,7 @@ describe("backend command wrapper coverage", () => {
       updates,
     });
 
-    await appendFeaturePlanMessage(
-      "feature-1",
-      "assistant",
-      "Ready",
-      "applied",
-      "gpt-5.3-codex",
-    );
+    await appendFeaturePlanMessage("feature-1", "assistant", "Ready", "applied", "gpt-5.3-codex");
     expect(invokeMock).toHaveBeenLastCalledWith("append_feature_plan_message", {
       featureId: "feature-1",
       role: "assistant",

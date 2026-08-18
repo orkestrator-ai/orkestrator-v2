@@ -1,39 +1,14 @@
-import {
-  Fragment,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-import {
-  ChevronRight,
-  Layers,
-  Loader2,
-  Square,
-} from "lucide-react";
+import { Fragment, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { ChevronRight, Layers, Loader2, Square } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { useElapsedTimer } from "@/hooks/useElapsedTimer";
 import { parseBackendTurnStartedAt } from "@/lib/session-timer";
-import {
-  formatAgentDurationMs,
-  formatNativeAgentElapsed,
-} from "@/lib/chat/native-agent-duration";
-import {
-  getToolDisplayName,
-  getToolTitleDisplayName,
-} from "@/lib/tool-names";
-import {
-  getNativeAgentStatus,
-  type NativeAgentStatus,
-} from "@/lib/chat/native-agent-status";
+import { formatAgentDurationMs, formatNativeAgentElapsed } from "@/lib/chat/native-agent-duration";
+import { getToolDisplayName, getToolTitleDisplayName } from "@/lib/tool-names";
+import { getNativeAgentStatus, type NativeAgentStatus } from "@/lib/chat/native-agent-status";
 import { nativeAgentLatestActivity } from "@/lib/chat/native-agent-preview";
 import { isTaskTool } from "@/lib/chat/native-message-adapters";
 import {
@@ -106,9 +81,7 @@ function getSubagentPreview(
   const latestActivity = nativeAgentLatestActivity(part);
   if (!latestActivity) {
     return {
-      text: isTerminalAgentStatus(status)
-        ? "No activity captured."
-        : "Waiting for activity.",
+      text: isTerminalAgentStatus(status) ? "No activity captured." : "Waiting for activity.",
       isTask: false,
     };
   }
@@ -168,7 +141,9 @@ function useAgentRuntimeLabel(
   return formatNativeAgentElapsed({
     status,
     elapsedMs: isActive
-      ? (elapsedSeconds === null ? undefined : elapsedSeconds * 1000)
+      ? elapsedSeconds === null
+        ? undefined
+        : elapsedSeconds * 1000
       : settledDurationMs,
   });
 }
@@ -181,9 +156,10 @@ function usefulAgentOutput(output?: string): string | undefined {
     const parsed = JSON.parse(trimmed) as unknown;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const keys = Object.keys(parsed);
-      if (keys.length > 0 && keys.every((key) => (
-        key === "durationMs" || key === "isBackground" || key === "status"
-      ))) {
+      if (
+        keys.length > 0 &&
+        keys.every((key) => key === "durationMs" || key === "isBackground" || key === "status")
+      ) {
         return undefined;
       }
     }
@@ -211,9 +187,8 @@ function agentMetaEntries(
 ): Array<{ label: string; value: string }> {
   const role = stringToolArg(toolArgs, "subagent_type", "subagentType", "role");
   const model = stringToolArg(toolArgs, "model");
-  const durationMs = options.includeDuration === false
-    ? undefined
-    : numberToolArg(toolArgs, "durationMs");
+  const durationMs =
+    options.includeDuration === false ? undefined : numberToolArg(toolArgs, "durationMs");
   const agentId = stringToolArg(toolArgs, "agentId", "agent_id");
   return [
     ...(role && role !== displayName ? [{ label: "Type", value: role }] : []),
@@ -225,11 +200,7 @@ function agentMetaEntries(
   ];
 }
 
-function AgentMetaRows({
-  entries,
-}: {
-  entries: Array<{ label: string; value: string }>;
-}) {
+function AgentMetaRows({ entries }: { entries: Array<{ label: string; value: string }> }) {
   if (entries.length === 0) return null;
   return (
     <dl className="mb-3 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
@@ -315,10 +286,7 @@ function AgentUsageStats({
     <div className="shrink-0 text-right text-[11px] text-muted-foreground/70">
       {showTools ? <div>{toolCountLabel}</div> : null}
       {showUpdates ? (
-        <div>
-          {tokenCountText ??
-            `${updateCount} ${updateCount === 1 ? "update" : "updates"}`}
-        </div>
+        <div>{tokenCountText ?? `${updateCount} ${updateCount === 1 ? "update" : "updates"}`}</div>
       ) : null}
     </div>
   );
@@ -363,60 +331,57 @@ interface BackgroundTaskPresentation {
   pillClassName: string;
 }
 
-const NEUTRAL_STATUS_PILL =
-  "border-border/60 bg-muted/40 text-muted-foreground";
+const NEUTRAL_STATUS_PILL = "border-border/60 bg-muted/40 text-muted-foreground";
 
-const BACKGROUND_TASK_PRESENTATION: Record<
-  NativeBackgroundTaskStatus,
-  BackgroundTaskPresentation
-> = {
-  pending: {
-    label: "Starting",
-    live: true,
-    spinning: true,
-    status: "active",
-    pillClassName: getSubagentStatusClasses("active"),
-  },
-  running: {
-    label: "Running",
-    live: true,
-    spinning: true,
-    status: "active",
-    pillClassName: getSubagentStatusClasses("active"),
-  },
-  paused: {
-    label: "Paused",
-    live: true,
-    spinning: false,
-    status: "active",
-    pillClassName: getSubagentStatusClasses("active"),
-  },
-  completed: {
-    label: "Completed",
-    live: false,
-    spinning: false,
-    status: "finished",
-    pillClassName: getSubagentStatusClasses("finished"),
-  },
-  failed: {
-    label: "Failed",
-    live: false,
-    spinning: false,
-    status: "failed",
-    pillClassName: getSubagentStatusClasses("failed"),
-  },
-  /*
-   * A task the user stopped did what they asked, so it is not painted as a
-   * failure. It is still terminal, which is what removes the stop control.
-   */
-  killed: {
-    label: "Stopped",
-    live: false,
-    spinning: false,
-    status: "finished",
-    pillClassName: NEUTRAL_STATUS_PILL,
-  },
-};
+const BACKGROUND_TASK_PRESENTATION: Record<NativeBackgroundTaskStatus, BackgroundTaskPresentation> =
+  {
+    pending: {
+      label: "Starting",
+      live: true,
+      spinning: true,
+      status: "active",
+      pillClassName: getSubagentStatusClasses("active"),
+    },
+    running: {
+      label: "Running",
+      live: true,
+      spinning: true,
+      status: "active",
+      pillClassName: getSubagentStatusClasses("active"),
+    },
+    paused: {
+      label: "Paused",
+      live: true,
+      spinning: false,
+      status: "active",
+      pillClassName: getSubagentStatusClasses("active"),
+    },
+    completed: {
+      label: "Completed",
+      live: false,
+      spinning: false,
+      status: "finished",
+      pillClassName: getSubagentStatusClasses("finished"),
+    },
+    failed: {
+      label: "Failed",
+      live: false,
+      spinning: false,
+      status: "failed",
+      pillClassName: getSubagentStatusClasses("failed"),
+    },
+    /*
+     * A task the user stopped did what they asked, so it is not painted as a
+     * failure. It is still terminal, which is what removes the stop control.
+     */
+    killed: {
+      label: "Stopped",
+      live: false,
+      spinning: false,
+      status: "finished",
+      pillClassName: NEUTRAL_STATUS_PILL,
+    },
+  };
 
 /**
  * A launch this transcript recovered without a live snapshot behind it.
@@ -433,12 +398,8 @@ const UNKNOWN_BACKGROUND_TASK: BackgroundTaskPresentation = {
   pillClassName: NEUTRAL_STATUS_PILL,
 };
 
-function backgroundTaskPresentation(
-  task: NativeBackgroundTask,
-): BackgroundTaskPresentation {
-  return task.status
-    ? BACKGROUND_TASK_PRESENTATION[task.status]
-    : UNKNOWN_BACKGROUND_TASK;
+function backgroundTaskPresentation(task: NativeBackgroundTask): BackgroundTaskPresentation {
+  return task.status ? BACKGROUND_TASK_PRESENTATION[task.status] : UNKNOWN_BACKGROUND_TASK;
 }
 
 function backgroundTaskLabel(task: NativeBackgroundTask): string {
@@ -469,7 +430,9 @@ function StopBackgroundTaskButton({
    * provider accepted but did not honour from disabling the only way to ask
    * again. A tab remounted mid-stop starts from the snapshot, never this flag.
    */
-  useEffect(() => { setStopping(false); }, [status, taskId]);
+  useEffect(() => {
+    setStopping(false);
+  }, [status, taskId]);
 
   const label = backgroundTaskLabel(task);
   const stop = useCallback(async () => {
@@ -486,9 +449,7 @@ function StopBackgroundTaskButton({
       return;
     }
     setStopping(false);
-    onFailed(
-      `Could not stop “${label}”. Try again or use the main Stop control.`,
-    );
+    onFailed(`Could not stop “${label}”. Try again or use the main Stop control.`);
   }, [label, onFailed, onStopped, stopBackgroundTask, stopping, taskId]);
 
   if (!stopBackgroundTask) return null;
@@ -557,7 +518,9 @@ export function BackgroundTaskCard({
 
   // The failure belongs to the attempt, not the task: a later status change
   // means the question the message answered is no longer being asked.
-  useEffect(() => { setStopError(null); }, [task.status]);
+  useEffect(() => {
+    setStopError(null);
+  }, [task.status]);
 
   return (
     <Collapsible
@@ -573,10 +536,7 @@ export function BackgroundTaskCard({
           )}
           disabled={!hasBody}
         >
-          <AgentActivityIcon
-            status={presentation.status}
-            spinning={presentation.spinning}
-          />
+          <AgentActivityIcon status={presentation.status} spinning={presentation.spinning} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs">
               <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
@@ -690,9 +650,7 @@ export function SubagentPart({
       onOpenChange={setIsOpen}
       className={cn(!embedded && agentCardClassName)}
     >
-      <CollapsibleTrigger
-        className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer"
-      >
+      <CollapsibleTrigger className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
         <div className="flex items-start gap-3">
           <AgentActivityIcon status={status} />
           <div className="min-w-0 flex-1">
@@ -799,10 +757,7 @@ export function AgentGroupPart({
   }).length;
 
   return (
-    <section
-      aria-label={`${part.parts.length} agents`}
-      className="relative my-1"
-    >
+    <section aria-label={`${part.parts.length} agents`} className="relative my-1">
       <div className="flex h-6 items-center gap-1.5 px-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
         <Layers className="h-3 w-3" />
         <span>Agents</span>
@@ -872,38 +827,24 @@ export function TaskGroupPart({
   const [isOpen, setIsOpen] = useAgentExpansion(part, partKey);
   const [stopError, setStopError] = useState<string | null>(null);
   const backgroundTask = part.task.backgroundTask;
-  const backgroundAgentTask = backgroundTask && isTaskTool(part.task.toolName)
-    ? backgroundTask
-    : undefined;
-  const standaloneBackgroundTask = backgroundTask && !backgroundAgentTask
-    ? backgroundTask
-    : undefined;
-  useEffect(() => { setStopError(null); }, [backgroundTask?.status]);
+  const backgroundAgentTask =
+    backgroundTask && isTaskTool(part.task.toolName) ? backgroundTask : undefined;
+  const standaloneBackgroundTask =
+    backgroundTask && !backgroundAgentTask ? backgroundTask : undefined;
+  useEffect(() => {
+    setStopError(null);
+  }, [backgroundTask?.status]);
   const toolLabel =
-    getToolTitleDisplayName(
-      part.task.toolTitle,
-      part.task.toolName,
-      part.task.content,
-    ) || getToolDisplayName(part.task.toolName, "Agent");
+    getToolTitleDisplayName(part.task.toolTitle, part.task.toolName, part.task.content) ||
+    getToolDisplayName(part.task.toolName, "Agent");
   const description = stringToolArg(part.task.toolArgs, "description");
   const prompt = stringToolArg(part.task.toolArgs, "prompt");
-  const role = stringToolArg(
-    part.task.toolArgs,
-    "subagent_type",
-    "subagentType",
-    "role",
-  );
-  const explicitName = stringToolArg(
-    part.task.toolArgs,
-    "agent_name",
-    "agentName",
-    "name",
-  );
+  const role = stringToolArg(part.task.toolArgs, "subagent_type", "subagentType", "role");
+  const explicitName = stringToolArg(part.task.toolArgs, "agent_name", "agentName", "name");
   const hasExternalUsage = typeof part.task.toolUseCount === "number";
   const tokenOnlyUsage = shouldShowTokenOnlyAgentUsage(part.task);
   const genericToolLabel = /^(agent|task)$/i.test(toolLabel);
-  const displayName =
-    explicitName ?? description ?? (genericToolLabel ? "Subagent" : toolLabel);
+  const displayName = explicitName ?? description ?? (genericToolLabel ? "Subagent" : toolLabel);
   const headerDescription = explicitName ? description : undefined;
   const displayLabel = buildAgentDisplayLabel(displayName, role);
   const backgroundPresentation = backgroundAgentTask
@@ -939,10 +880,11 @@ export function TaskGroupPart({
       if (description && description !== displayName) return description;
       return isTerminalAgentStatus(status) ? undefined : "Waiting for activity.";
     }
-    return description ?? (
-      isTerminalAgentStatus(status)
-        ? prompt ?? "No activity captured."
-        : "Waiting for activity."
+    return (
+      description ??
+      (isTerminalAgentStatus(status)
+        ? (prompt ?? "No activity captured.")
+        : "Waiting for activity.")
     );
   }, [description, displayName, hideCounts, part, prompt, status]);
   const metaEntries = agentMetaEntries(part.task.toolArgs, displayName, {
@@ -972,10 +914,7 @@ export function TaskGroupPart({
       <div className="flex items-start gap-2 px-3 py-2.5">
         <CollapsibleTrigger className="min-w-0 flex-1 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
           <div className="flex items-start gap-3">
-            <AgentActivityIcon
-              status={status}
-              spinning={backgroundPresentation?.spinning}
-            />
+            <AgentActivityIcon status={status} spinning={backgroundPresentation?.spinning} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs">
                 <span className="shrink-0 font-medium uppercase tracking-wide text-muted-foreground/80">
@@ -992,8 +931,7 @@ export function TaskGroupPart({
                 <span
                   className={cn(
                     "shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium",
-                    backgroundPresentation?.pillClassName
-                      ?? getSubagentStatusClasses(status),
+                    backgroundPresentation?.pillClassName ?? getSubagentStatusClasses(status),
                   )}
                 >
                   {statusLabel}

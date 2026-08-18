@@ -1,13 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import * as realBackend from "@/lib/backend";
@@ -62,12 +53,14 @@ describe("useFileSave", () => {
   test("writes current container content and marks it saved", async () => {
     useFileDirtyStore.getState().setOriginalContent("tab", "original");
     useFileDirtyStore.getState().setContent("tab", "updated");
-    const { result } = renderHook(() => useFileSave({
-      tabId: "tab",
-      filePath: "README.md",
-      containerId: "container-1",
-      isLocalEnvironment: false,
-    }));
+    const { result } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
 
     let saved = false;
     await act(async () => {
@@ -85,12 +78,14 @@ describe("useFileSave", () => {
 
   test("flushes a Unicode override through the local save path", async () => {
     useFileDirtyStore.getState().setOriginalContent("tab", "original");
-    const { result } = renderHook(() => useFileSave({
-      tabId: "tab",
-      filePath: "notes.md",
-      worktreePath: "/repo",
-      isLocalEnvironment: true,
-    }));
+    const { result } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "notes.md",
+        worktreePath: "/repo",
+        isLocalEnvironment: true,
+      }),
+    );
 
     await act(async () => {
       await result.current.saveFile("# Updated 🌍");
@@ -106,46 +101,50 @@ describe("useFileSave", () => {
 
   test("encodes empty and chunk-spanning UTF-8 content", async () => {
     useFileDirtyStore.getState().setOriginalContent("tab", "original");
-    const { result } = renderHook(() => useFileSave({
-      tabId: "tab",
-      filePath: "large.md",
-      containerId: "container-1",
-      isLocalEnvironment: false,
-    }));
+    const { result } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "large.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
     const largeContent = `${"a".repeat(8_191)}🌍${"b".repeat(9_000)}`;
 
     await act(async () => {
       await result.current.saveFile(largeContent);
     });
-    expect(
-      decodeBase64Utf8(writeContainerFileMock.mock.calls[0]?.[2] ?? ""),
-    ).toBe(largeContent);
+    expect(decodeBase64Utf8(writeContainerFileMock.mock.calls[0]?.[2] ?? "")).toBe(largeContent);
 
     await act(async () => {
       await result.current.saveFile("");
     });
-    expect(
-      decodeBase64Utf8(writeContainerFileMock.mock.calls[1]?.[2] ?? "missing"),
-    ).toBe("");
+    expect(decodeBase64Utf8(writeContainerFileMock.mock.calls[1]?.[2] ?? "missing")).toBe("");
   });
 
   test("rejects saves with missing environment identifiers or content", async () => {
-    const local = renderHook(() => useFileSave({
-      tabId: "local",
-      filePath: "README.md",
-      isLocalEnvironment: true,
-    }));
-    const container = renderHook(() => useFileSave({
-      tabId: "container",
-      filePath: "README.md",
-      isLocalEnvironment: false,
-    }));
-    const noContent = renderHook(() => useFileSave({
-      tabId: "empty",
-      filePath: "README.md",
-      containerId: "container-1",
-      isLocalEnvironment: false,
-    }));
+    const local = renderHook(() =>
+      useFileSave({
+        tabId: "local",
+        filePath: "README.md",
+        isLocalEnvironment: true,
+      }),
+    );
+    const container = renderHook(() =>
+      useFileSave({
+        tabId: "container",
+        filePath: "README.md",
+        isLocalEnvironment: false,
+      }),
+    );
+    const noContent = renderHook(() =>
+      useFileSave({
+        tabId: "empty",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
 
     await expect(local.result.current.saveFile()).resolves.toBe(false);
     await expect(container.result.current.saveFile()).resolves.toBe(false);
@@ -159,12 +158,14 @@ describe("useFileSave", () => {
     writeContainerFileMock.mockRejectedValueOnce(new Error("disk unavailable"));
     useFileDirtyStore.getState().setOriginalContent("tab", "original");
     useFileDirtyStore.getState().setContent("tab", "updated");
-    const { result } = renderHook(() => useFileSave({
-      tabId: "tab",
-      filePath: "README.md",
-      containerId: "container-1",
-      isLocalEnvironment: false,
-    }));
+    const { result } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
 
     await expect(result.current.saveFile()).resolves.toBe(false);
 
@@ -178,12 +179,14 @@ describe("useFileSave", () => {
     writeContainerFileMock.mockImplementationOnce(() => write.promise);
     useFileDirtyStore.getState().setOriginalContent("tab", "original");
     useFileDirtyStore.getState().setContent("tab", "captured-for-save");
-    const { result } = renderHook(() => useFileSave({
-      tabId: "tab",
-      filePath: "README.md",
-      containerId: "container-1",
-      isLocalEnvironment: false,
-    }));
+    const { result } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
 
     let firstSave!: Promise<boolean>;
     await act(async () => {
@@ -202,9 +205,7 @@ describe("useFileSave", () => {
     });
 
     expect(writeContainerFileMock).toHaveBeenCalledTimes(1);
-    expect(useFileDirtyStore.getState().getContent("tab")).toBe(
-      "typed-during-save",
-    );
+    expect(useFileDirtyStore.getState().getContent("tab")).toBe("typed-during-save");
     expect(useFileDirtyStore.getState().isDirty("tab")).toBe(true);
     expect(result.current.isSaving).toBe(false);
   });
@@ -214,12 +215,14 @@ describe("useFileSave", () => {
     writeContainerFileMock.mockImplementationOnce(() => write.promise);
     useFileDirtyStore.getState().setOriginalContent("tab", "original");
     useFileDirtyStore.getState().setContent("tab", "saving");
-    const { result, unmount } = renderHook(() => useFileSave({
-      tabId: "tab",
-      filePath: "README.md",
-      containerId: "container-1",
-      isLocalEnvironment: false,
-    }));
+    const { result, unmount } = renderHook(() =>
+      useFileSave({
+        tabId: "tab",
+        filePath: "README.md",
+        containerId: "container-1",
+        isLocalEnvironment: false,
+      }),
+    );
 
     let save!: Promise<boolean>;
     act(() => {

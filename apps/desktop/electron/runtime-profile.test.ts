@@ -24,7 +24,11 @@ describe("runtime profiles", () => {
   test("derives distinct mutable state and Docker identities per profile and workspace", () => {
     const first = resolveRuntimeProfile({ repositoryRoot: "/repo/a", requestedId: "one", roots });
     const second = resolveRuntimeProfile({ repositoryRoot: "/repo/a", requestedId: "two", roots });
-    const otherWorkspace = resolveRuntimeProfile({ repositoryRoot: "/repo/b", requestedId: "one", roots });
+    const otherWorkspace = resolveRuntimeProfile({
+      repositoryRoot: "/repo/b",
+      requestedId: "one",
+      roots,
+    });
 
     expect(first.dataDir).not.toBe(second.dataDir);
     expect(first.worktreeDir).not.toBe(second.worktreeDir);
@@ -35,23 +39,31 @@ describe("runtime profiles", () => {
   });
 
   test("refuses production nesting and unsafe reset targets", () => {
-    expect(() => assertProfileIsolatedFromProduction(
-      path.join(roots.productionDataDir, "agent"),
-      roots.productionDataDir,
-    )).toThrow("production data directory");
+    expect(() =>
+      assertProfileIsolatedFromProduction(
+        path.join(roots.productionDataDir, "agent"),
+        roots.productionDataDir,
+      ),
+    ).toThrow("production data directory");
 
     const profile = resolveRuntimeProfile({ repositoryRoot: "/repo/a", requestedId: "one", roots });
-    expect(() => assertSafeProfileResetTarget({ profile, roots, sentinel: null })).toThrow("sentinel");
-    expect(() => assertSafeProfileResetTarget({
-      profile,
-      roots,
-      sentinel: { version: 1, profile: "two" },
-    })).toThrow("sentinel");
-    expect(() => assertSafeProfileResetTarget({
-      profile,
-      roots,
-      sentinel: { version: 1, profile: "one" },
-    })).not.toThrow();
+    expect(() => assertSafeProfileResetTarget({ profile, roots, sentinel: null })).toThrow(
+      "sentinel",
+    );
+    expect(() =>
+      assertSafeProfileResetTarget({
+        profile,
+        roots,
+        sentinel: { version: 1, profile: "two" },
+      }),
+    ).toThrow("sentinel");
+    expect(() =>
+      assertSafeProfileResetTarget({
+        profile,
+        roots,
+        sentinel: { version: 1, profile: "one" },
+      }),
+    ).not.toThrow();
   });
 
   test("validates a stored platform selection at the file boundary", () => {
@@ -65,10 +77,12 @@ describe("runtime profiles", () => {
     expect(parseRuntimeProfile({ ...safe }).agentPlatforms).toEqual(["grok", "cursor"]);
     // The selection decides which executables get provisioned, so a profile file
     // must not be able to name something that is not an agent platform.
-    expect(() => parseRuntimeProfile({ ...safe, agentPlatforms: ["cursor", "sh"] }))
-      .toThrow("agentPlatforms is invalid");
-    expect(() => parseRuntimeProfile({ ...safe, agentPlatforms: "cursor" as never }))
-      .toThrow("agentPlatforms is invalid");
+    expect(() => parseRuntimeProfile({ ...safe, agentPlatforms: ["cursor", "sh"] })).toThrow(
+      "agentPlatforms is invalid",
+    );
+    expect(() => parseRuntimeProfile({ ...safe, agentPlatforms: "cursor" as never })).toThrow(
+      "agentPlatforms is invalid",
+    );
   });
 
   test("reads a profile written before platform selection existed", () => {
@@ -84,14 +98,16 @@ describe("runtime profiles", () => {
     const roots = defaultRuntimeProfileRoots();
     const safe = resolveRuntimeProfile({ repositoryRoot: "/repo/a", requestedId: "safe" });
     const profileRoot = path.join(roots.productionDataDir, "injected-profile");
-    expect(() => parseRuntimeProfile({
-      ...safe,
-      profileRoot,
-      dataDir: path.join(profileRoot, "data"),
-      runtimeDir: path.join(profileRoot, "runtime"),
-      worktreeDir: path.join(profileRoot, "worktrees"),
-      logDir: path.join(profileRoot, "logs"),
-      fixtureDir: path.join(profileRoot, "fixtures"),
-    })).toThrow("production data directory");
+    expect(() =>
+      parseRuntimeProfile({
+        ...safe,
+        profileRoot,
+        dataDir: path.join(profileRoot, "data"),
+        runtimeDir: path.join(profileRoot, "runtime"),
+        worktreeDir: path.join(profileRoot, "worktrees"),
+        logDir: path.join(profileRoot, "logs"),
+        fixtureDir: path.join(profileRoot, "fixtures"),
+      }),
+    ).toThrow("production data directory");
   });
 });

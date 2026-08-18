@@ -1,6 +1,18 @@
 import { describe, expect, test } from "bun:test";
-import { AmbiguousPromptDispatchError, PromptRejectedError, ProviderUnavailableError, ProviderUnreachableError, readProviderStatus } from "./native-agent-provider.js";
-import { claudeConnection, codexConnection, cursorConnection, grokConnection, httpProvider } from "./agent-provider-test-support.js";
+import {
+  AmbiguousPromptDispatchError,
+  PromptRejectedError,
+  ProviderUnavailableError,
+  ProviderUnreachableError,
+  readProviderStatus,
+} from "./native-agent-provider.js";
+import {
+  claudeConnection,
+  codexConnection,
+  cursorConnection,
+  grokConnection,
+  httpProvider,
+} from "./agent-provider-test-support.js";
 
 describe("HTTP bridge provider", () => {
   const operations = {
@@ -8,28 +20,21 @@ describe("HTTP bridge provider", () => {
       provider.createSession("build", "Build task"),
     send: (provider: ReturnType<typeof httpProvider>["provider"]) =>
       provider.send("session-1", "Build it", { requestId: "request-1" }),
-    status: (provider: ReturnType<typeof httpProvider>["provider"]) =>
-      provider.status("session-1"),
+    status: (provider: ReturnType<typeof httpProvider>["provider"]) => provider.status("session-1"),
     messages: (provider: ReturnType<typeof httpProvider>["provider"]) =>
       provider.messages("session-1"),
     structured: (provider: ReturnType<typeof httpProvider>["provider"]) =>
       provider.structured("session-1", "request-1"),
-    abort: (provider: ReturnType<typeof httpProvider>["provider"]) =>
-      provider.abort("session-1"),
+    abort: (provider: ReturnType<typeof httpProvider>["provider"]) => provider.abort("session-1"),
   };
 
   test("creates sessions with authenticated, agent-specific payloads", async () => {
-    const { provider, requests } = httpProvider(() =>
-      Response.json({ sessionId: "session-1" }));
+    const { provider, requests } = httpProvider(() => Response.json({ sessionId: "session-1" }));
 
-    await expect(provider.createSession("build", "Build task")).resolves.toBe(
-      "session-1",
-    );
+    await expect(provider.createSession("build", "Build task")).resolves.toBe("session-1");
     const request = requests[0]!;
     expect(request.url).toBe("http://claude.test/session/create");
-    expect(new Headers(request.init.headers).get(
-      "X-Orkestrator-Claude-Token",
-    )).toBe("test-token");
+    expect(new Headers(request.init.headers).get("X-Orkestrator-Claude-Token")).toBe("test-token");
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
@@ -39,12 +44,16 @@ describe("HTTP bridge provider", () => {
   ])("lists and resumes %s ACP sessions through the bridge", async (_agent, connection) => {
     const { provider, requests } = httpProvider((url) => {
       if (url.endsWith("/session/list")) {
-        return Response.json({ sessions: [{
-          id: "opaque-session",
-          title: "Previous work",
-          updatedAt: "2026-08-14T20:00:00.000Z",
-          messageCount: 7,
-        }] });
+        return Response.json({
+          sessions: [
+            {
+              id: "opaque-session",
+              title: "Previous work",
+              updatedAt: "2026-08-14T20:00:00.000Z",
+              messageCount: 7,
+            },
+          ],
+        });
       }
       if (url.endsWith("/session/resume")) {
         return Response.json({ sessionId: "bridge-session" }, { status: 201 });
@@ -52,24 +61,27 @@ describe("HTTP bridge provider", () => {
       return new Response(null, { status: 404 });
     }, connection);
 
-    await expect(provider.listResumableSessions?.()).resolves.toEqual([{
-      sessionId: "opaque-session",
-      title: "Previous work",
-      updatedAt: "2026-08-14T20:00:00.000Z",
-      detail: "7 messages",
-    }]);
-    await expect(provider.resumeSession?.("opaque-session", {
-      modelId: "model-a",
-      reasoningId: "high",
-      mode: "plan",
-      fastMode: true,
-    })).resolves.toBe("bridge-session");
+    await expect(provider.listResumableSessions?.()).resolves.toEqual([
+      {
+        sessionId: "opaque-session",
+        title: "Previous work",
+        updatedAt: "2026-08-14T20:00:00.000Z",
+        detail: "7 messages",
+      },
+    ]);
+    await expect(
+      provider.resumeSession?.("opaque-session", {
+        modelId: "model-a",
+        reasoningId: "high",
+        mode: "plan",
+        fastMode: true,
+      }),
+    ).resolves.toBe("bridge-session");
 
-    expect(requests.map((request) => [request.url, request.init.method ?? "GET"]))
-      .toEqual([
-        [`${connection.baseUrl}/session/list`, "GET"],
-        [`${connection.baseUrl}/session/resume`, "POST"],
-      ]);
+    expect(requests.map((request) => [request.url, request.init.method ?? "GET"])).toEqual([
+      [`${connection.baseUrl}/session/list`, "GET"],
+      [`${connection.baseUrl}/session/resume`, "POST"],
+    ]);
     expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
       sessionId: "opaque-session",
       modelId: "model-a",
@@ -85,45 +97,50 @@ describe("HTTP bridge provider", () => {
   ] as const) {
     test(`rejects malformed ${agent} ACP session responses`, async () => {
       const malformedList = httpProvider(
-        (url) => url.endsWith("/session/list")
-          ? Response.json({ sessions: "not-an-array" })
-          : new Response(null, { status: 404 }),
+        (url) =>
+          url.endsWith("/session/list")
+            ? Response.json({ sessions: "not-an-array" })
+            : new Response(null, { status: 404 }),
         connection,
       );
-      await expect(malformedList.provider.listResumableSessions?.())
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(malformedList.provider.listResumableSessions?.()).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
 
       const malformedResume = httpProvider(
-        (url) => url.endsWith("/session/resume")
-          ? Response.json({ status: "idle" }, { status: 201 })
-          : new Response(null, { status: 404 }),
+        (url) =>
+          url.endsWith("/session/resume")
+            ? Response.json({ status: "idle" }, { status: 201 })
+            : new Response(null, { status: 404 }),
         connection,
       );
-      await expect(malformedResume.provider.resumeSession?.("opaque-session"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(
+        malformedResume.provider.resumeSession?.("opaque-session"),
+      ).rejects.toBeInstanceOf(ProviderUnavailableError);
     });
 
     test(`surfaces why ${agent} cannot list its own ACP sessions`, async () => {
       const { provider } = httpProvider(
-        (url) => url.endsWith("/session/list")
-          ? Response.json(
-            { error: `${agent} cannot list resumable ACP sessions` },
-            { status: 410 },
-          )
-          : new Response(null, { status: 404 }),
+        (url) =>
+          url.endsWith("/session/list")
+            ? Response.json(
+                { error: `${agent} cannot list resumable ACP sessions` },
+                { status: 410 },
+              )
+            : new Response(null, { status: 404 }),
         connection,
       );
 
       // A bare "HTTP 410" tells the user nothing actionable; the bridge's own
       // explanation has to survive the hop.
-      await expect(provider.listResumableSessions?.())
-        .rejects.toThrow(`${agent} cannot list resumable ACP sessions`);
+      await expect(provider.listResumableSessions?.()).rejects.toThrow(
+        `${agent} cannot list resumable ACP sessions`,
+      );
     });
   }
 
   test("treats a successful empty structured result as pending", async () => {
-    const { provider } = httpProvider(() =>
-      Response.json({ structuredOutput: null }));
+    const { provider } = httpProvider(() => Response.json({ structuredOutput: null }));
 
     await expect(provider.structured("session-1", "request-1")).resolves.toBeNull();
   });
@@ -144,8 +161,7 @@ describe("HTTP bridge provider", () => {
     test(`classifies HTTP ${status} as transient for every operation`, async () => {
       for (const operation of Object.values(operations)) {
         const { provider } = httpProvider(() => new Response(null, { status }));
-        await expect(operation(provider))
-          .rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(operation(provider)).rejects.toBeInstanceOf(ProviderUnavailableError);
       }
     });
   }
@@ -155,9 +171,11 @@ describe("HTTP bridge provider", () => {
     await expect(missing.provider.status("session-1")).resolves.toBe("missing");
 
     const rejected = httpProvider(() => new Response(null, { status: 400 }));
-    await expect(rejected.provider.send("session-1", "Build it", {
-      requestId: "request-1",
-    })).rejects.toBeInstanceOf(PromptRejectedError);
+    await expect(
+      rejected.provider.send("session-1", "Build it", {
+        requestId: "request-1",
+      }),
+    ).rejects.toBeInstanceOf(PromptRejectedError);
 
     for (const operation of [
       operations.create,
@@ -179,24 +197,28 @@ describe("HTTP bridge provider", () => {
 
   test("maps prompt rejection separately from a transient dispatch failure", async () => {
     const rejected = httpProvider(() => new Response(null, { status: 400 }));
-    await expect(rejected.provider.send("s", "prompt", { requestId: "r" }))
-      .rejects.toBeInstanceOf(PromptRejectedError);
+    await expect(rejected.provider.send("s", "prompt", { requestId: "r" })).rejects.toBeInstanceOf(
+      PromptRejectedError,
+    );
 
     const unavailable = httpProvider(() => new Response(null, { status: 503 }));
-    await expect(unavailable.provider.send("s", "prompt", { requestId: "r" }))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    await expect(
+      unavailable.provider.send("s", "prompt", { requestId: "r" }),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
     for (const status of [404, 409]) {
       const raced = httpProvider(() => new Response(null, { status }));
-      await expect(raced.provider.send("s", "prompt", { requestId: "r" }))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(raced.provider.send("s", "prompt", { requestId: "r" })).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
     }
 
     const ambiguous = httpProvider(() => {
       throw new Error("socket closed");
     });
-    await expect(ambiguous.provider.send("s", "prompt", { requestId: "r" }))
-      .rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+    await expect(ambiguous.provider.send("s", "prompt", { requestId: "r" })).rejects.toBeInstanceOf(
+      AmbiguousPromptDispatchError,
+    );
   });
 
   test("keeps a bridge that was never reached out of the ambiguous bucket", async () => {
@@ -228,35 +250,32 @@ describe("HTTP bridge provider", () => {
         name: "TimeoutError",
       });
     });
-    await expect(timedOut.provider.send("s", "prompt", { requestId: "r" }))
-      .rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+    await expect(timedOut.provider.send("s", "prompt", { requestId: "r" })).rejects.toBeInstanceOf(
+      AmbiguousPromptDispatchError,
+    );
   });
 
   test.each([
     ["cursor" as const, cursorConnection],
     ["grok" as const, grokConnection],
-  ])("attaches a %s session before dispatch and tolerates older bridges", async (
-    _agent,
-    connection,
-  ) => {
-    const attached = httpProvider(
-      () => Response.json({ attached: true }),
-      connection,
-    );
-    await attached.provider.prepareDispatch?.("session-1");
-    expect(attached.requests.map((request) => [
-      request.url,
-      request.init.method,
-    ])).toEqual([[`${connection.baseUrl}/session/session-1/attach`, "POST"]]);
+  ])(
+    "attaches a %s session before dispatch and tolerates older bridges",
+    async (_agent, connection) => {
+      const attached = httpProvider(() => Response.json({ attached: true }), connection);
+      await attached.provider.prepareDispatch?.("session-1");
+      expect(attached.requests.map((request) => [request.url, request.init.method])).toEqual([
+        [`${connection.baseUrl}/session/session-1/attach`, "POST"],
+      ]);
 
-    // A bridge that predates the route must not fail the dispatch that follows:
-    // the prompt request performs the same work and answers authoritatively.
-    const older = httpProvider(() => new Response(null, { status: 404 }), connection);
-    await expect(older.provider.prepareDispatch?.("session-1")).resolves.toBeUndefined();
+      // A bridge that predates the route must not fail the dispatch that follows:
+      // the prompt request performs the same work and answers authoritatively.
+      const older = httpProvider(() => new Response(null, { status: 404 }), connection);
+      await expect(older.provider.prepareDispatch?.("session-1")).resolves.toBeUndefined();
 
-    const broken = httpProvider(() => new Response(null, { status: 500 }), connection);
-    await expect(broken.provider.prepareDispatch?.("session-1")).rejects.toThrow();
-  });
+      const broken = httpProvider(() => new Response(null, { status: 500 }), connection);
+      await expect(broken.provider.prepareDispatch?.("session-1")).rejects.toThrow();
+    },
+  );
 
   test("does not attach agents whose prompt route has no cold start", async () => {
     for (const connection of [claudeConnection, codexConnection]) {
@@ -268,8 +287,7 @@ describe("HTTP bridge provider", () => {
 
   test("reads dispatch status and treats every non-positive answer as unknown", async () => {
     const dispatched = httpProvider(() => Response.json({ dispatch: "dispatched" }));
-    await expect(dispatched.provider.dispatchStatus?.("s/1", "r/1"))
-      .resolves.toBe("dispatched");
+    await expect(dispatched.provider.dispatchStatus?.("s/1", "r/1")).resolves.toBe("dispatched");
     expect(dispatched.requests[0]!.url).toBe(
       "http://claude.test/session/s%2F1/dispatch?requestId=r%2F1",
     );
@@ -303,13 +321,21 @@ describe("HTTP bridge provider", () => {
     await expect(provider.messages("session-1", { limit: 1 })).resolves.toEqual([{ id: "c" }]);
     expect(requests[0]!.url).toBe("http://claude.test/session/session-1/messages");
     expect(requests[0]!.url.includes("limit")).toBe(false);
-    await expect(provider.messages("session-1", { limit: 2 }))
-      .resolves.toEqual([{ id: "b" }, { id: "c" }]);
+    await expect(provider.messages("session-1", { limit: 2 })).resolves.toEqual([
+      { id: "b" },
+      { id: "c" },
+    ]);
     // A limit above the transcript length is satisfied by the whole transcript.
-    await expect(provider.messages("session-1", { limit: 10 }))
-      .resolves.toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
-    await expect(provider.messages("session-1", {}))
-      .resolves.toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    await expect(provider.messages("session-1", { limit: 10 })).resolves.toEqual([
+      { id: "a" },
+      { id: "b" },
+      { id: "c" },
+    ]);
+    await expect(provider.messages("session-1", {})).resolves.toEqual([
+      { id: "a" },
+      { id: "b" },
+      { id: "c" },
+    ]);
     // A nonsensical bound fails loudly rather than silently reading everything.
     await expect(provider.messages("session-1", { limit: 0 })).rejects.toThrow(RangeError);
     await expect(provider.messages("session-1", { limit: -1 })).rejects.toThrow(RangeError);
@@ -319,20 +345,24 @@ describe("HTTP bridge provider", () => {
   test("a bounded messages read still fails when the full wire body is oversized", async () => {
     const oversized = new Uint8Array(1);
     Object.defineProperty(oversized, "byteLength", { value: 16 * 1024 * 1024 + 1 });
-    const { provider } = httpProvider(() => new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(oversized);
-          controller.close();
-        },
-      }),
-      { headers: { "Content-Type": "application/json" } },
-    ));
+    const { provider } = httpProvider(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(oversized);
+              controller.close();
+            },
+          }),
+          { headers: { "Content-Type": "application/json" } },
+        ),
+    );
 
     // limit trims after the transport bound, so an oversized /messages body
     // cannot be hidden by asking for the newest entry only.
-    await expect(provider.messages("session-1", { limit: 1 }))
-      .rejects.toThrow("transcript read is oversized");
+    await expect(provider.messages("session-1", { limit: 1 })).rejects.toThrow(
+      "transcript read is oversized",
+    );
   });
 
   test("reads status and messages, dispatches prompts, and aborts sessions", async () => {
@@ -347,9 +377,7 @@ describe("HTTP bridge provider", () => {
     });
 
     await expect(provider.status("session/1")).resolves.toBe("running");
-    await expect(provider.messages("session/1")).resolves.toEqual([
-      { role: "assistant" },
-    ]);
+    await expect(provider.messages("session/1")).resolves.toEqual([{ role: "assistant" }]);
     await provider.send("session/1", "Build it", {
       requestId: "request-1",
       fastMode: true,
@@ -371,12 +399,14 @@ describe("HTTP bridge provider", () => {
       requestId: "request-1",
       fastMode: true,
       permissionMode: "bypassPermissions",
-      attachments: [{
-        type: "image",
-        path: "/workspace/.orkestrator/initial-prompt/screen.webp",
-        filename: "screen.webp",
-        dataUrl: "data:image/webp;base64,AA==",
-      }],
+      attachments: [
+        {
+          type: "image",
+          path: "/workspace/.orkestrator/initial-prompt/screen.webp",
+          filename: "screen.webp",
+          dataUrl: "data:image/webp;base64,AA==",
+        },
+      ],
     });
   });
 
@@ -643,18 +673,23 @@ describe("HTTP bridge provider", () => {
 
     const snapshot = await provider.interactiveSnapshot!("cursor-1");
 
-    expect(snapshot.notices).toEqual([{
-      kind: "warning",
-      message:
-        "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
-    }]);
+    expect(snapshot.notices).toEqual([
+      {
+        kind: "warning",
+        message:
+          "Earlier transcript content was omitted to stay within the 16 MiB transport limit.",
+      },
+    ]);
   });
 
   test("reports a missing ACP session without reading its transcript as content", async () => {
-    const { provider } = httpProvider((url) =>
-      url.endsWith("/messages")
-        ? Response.json({ error: "Session not found" }, { status: 404 })
-        : Response.json({ error: "Session not found" }, { status: 404 }), cursorConnection);
+    const { provider } = httpProvider(
+      (url) =>
+        url.endsWith("/messages")
+          ? Response.json({ error: "Session not found" }, { status: 404 })
+          : Response.json({ error: "Session not found" }, { status: 404 }),
+      cursorConnection,
+    );
 
     const snapshot = await provider.interactiveSnapshot!("cursor-1");
 
@@ -676,10 +711,7 @@ describe("HTTP bridge provider", () => {
   test.each([
     ["claude" as const, claudeConnection],
     ["codex" as const, codexConnection],
-  ])("reads %s activity from one dedicated observation request", async (
-    _agent,
-    connection,
-  ) => {
+  ])("reads %s activity from one dedicated observation request", async (_agent, connection) => {
     for (const state of ["idle", "working", "waiting", "missing"] as const) {
       const { provider, requests } = httpProvider(
         () => Response.json({ activity: state }),
@@ -704,8 +736,9 @@ describe("HTTP bridge provider", () => {
       const { provider } = httpProvider(() => Response.json(body), connection);
       // Coercing an unrecognized token to `idle` would retire the indicator on
       // a turn that is still running.
-      await expect(provider.activity?.("session-1"))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.activity?.("session-1")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
     }
   });
 
@@ -716,29 +749,24 @@ describe("HTTP bridge provider", () => {
     ["codex" as const, 404, false, codexConnection],
     ["codex" as const, 400, false, codexConnection],
     ["codex" as const, 503, true, codexConnection],
-  ])("surfaces a non-success %s activity read (HTTP %i)", async (
-    _agent,
-    status,
-    isUnavailable,
-    connection,
-  ) => {
-    const { provider } = httpProvider(
-      () => new Response(null, { status }),
-      connection,
-    );
+  ])(
+    "surfaces a non-success %s activity read (HTTP %i)",
+    async (_agent, status, isUnavailable, connection) => {
+      const { provider } = httpProvider(() => new Response(null, { status }), connection);
 
-    let caught: unknown;
-    try {
-      await provider.activity?.("session-1");
-    } catch (error) {
-      caught = error;
-    }
-    // 404 must throw rather than resolve to `missing`. The route reports an
-    // unknown session in-band, so a 404 means the route is absent — an older
-    // bridge — and resolving it as `missing` would delete a live mapping.
-    expect(caught).toBeInstanceOf(Error);
-    expect(caught instanceof ProviderUnavailableError).toBe(isUnavailable);
-  });
+      let caught: unknown;
+      try {
+        await provider.activity?.("session-1");
+      } catch (error) {
+        caught = error;
+      }
+      // 404 must throw rather than resolve to `missing`. The route reports an
+      // unknown session in-band, so a 404 means the route is absent — an older
+      // bridge — and resolving it as `missing` would delete a live mapping.
+      expect(caught).toBeInstanceOf(Error);
+      expect(caught instanceof ProviderUnavailableError).toBe(isUnavailable);
+    },
+  );
 
   test("defaults sessions to build mode and accepts an explicit override", async () => {
     const { provider, requests } = httpProvider(
@@ -750,8 +778,11 @@ describe("HTTP bridge provider", () => {
     await provider.createSession("review", "Discover", { mode: "plan" });
     await provider.createSession("review", "Unspecified");
 
-    expect(requests.map((request) => JSON.parse(String(request.init.body)).mode))
-      .toEqual(["build", "plan", "build"]);
+    expect(requests.map((request) => JSON.parse(String(request.init.body)).mode)).toEqual([
+      "build",
+      "plan",
+      "build",
+    ]);
   });
 
   test("refuses base64 images when nothing can stage them", async () => {
@@ -763,18 +794,21 @@ describe("HTTP bridge provider", () => {
 
     // Silently dropping the image would leave a prompt that references a picture
     // the agent was never given.
-    await expect(provider.send("session-1", "Look", {
-      requestId: "request-1",
-      images: [{ filename: "screen.png", data: "AA==" }],
-    })).rejects.toBeInstanceOf(PromptRejectedError);
+    await expect(
+      provider.send("session-1", "Look", {
+        requestId: "request-1",
+        images: [{ filename: "screen.png", data: "AA==" }],
+      }),
+    ).rejects.toBeInstanceOf(PromptRejectedError);
     expect(requests).toHaveLength(0);
   });
 
   test("forwards per-prompt Claude options ahead of the connection defaults", async () => {
-    const { provider, requests } = httpProvider(
-      () => new Response(null, { status: 204 }),
-      { ...claudeConnection, model: "connection-model", effort: "low" },
-    );
+    const { provider, requests } = httpProvider(() => new Response(null, { status: 204 }), {
+      ...claudeConnection,
+      model: "connection-model",
+      effort: "low",
+    });
 
     await provider.send("session-1", "Ship it", {
       requestId: "request-1",
@@ -797,32 +831,33 @@ describe("HTTP bridge provider", () => {
   });
 
   test("attaches already-staged attachments without restaging them", async () => {
-    const { provider, requests, staged } = httpProvider(
-      () => new Response(null, { status: 204 }),
-    );
+    const { provider, requests, staged } = httpProvider(() => new Response(null, { status: 204 }));
 
     await provider.send("session-1", "Review this", {
       requestId: "request-1",
-      attachments: [{
+      attachments: [
+        {
+          type: "image",
+          path: "/workspace/shot.png",
+          filename: "shot.png",
+          dataUrl: "data:image/png;base64,AA==",
+        },
+      ],
+    });
+
+    expect(staged).toEqual([]);
+    expect(JSON.parse(String(requests[0]!.init.body)).attachments).toEqual([
+      {
         type: "image",
         path: "/workspace/shot.png",
         filename: "shot.png",
         dataUrl: "data:image/png;base64,AA==",
-      }],
-    });
-
-    expect(staged).toEqual([]);
-    expect(JSON.parse(String(requests[0]!.init.body)).attachments).toEqual([{
-      type: "image",
-      path: "/workspace/shot.png",
-      filename: "shot.png",
-      dataUrl: "data:image/png;base64,AA==",
-    }]);
+      },
+    ]);
   });
 
   test("keeps queued Claude plan turns in plan permission mode", async () => {
-    const { provider, requests } = httpProvider(() =>
-      new Response(null, { status: 204 }));
+    const { provider, requests } = httpProvider(() => new Response(null, { status: 204 }));
 
     await provider.send("session-1", "Inspect only", {
       requestId: "request-plan",
@@ -834,8 +869,9 @@ describe("HTTP bridge provider", () => {
 
   test("rejects malformed session creation responses", async () => {
     const { provider } = httpProvider(() => Response.json({}));
-    await expect(provider.createSession("build", "Build task"))
-      .rejects.toThrow("malformed session");
+    await expect(provider.createSession("build", "Build task")).rejects.toThrow(
+      "malformed session",
+    );
   });
 
   test("forwards session idempotency and per-session codex model settings", async () => {
@@ -860,9 +896,7 @@ describe("HTTP bridge provider", () => {
   });
 
   test("forwards an HTTP structured schema and omits an empty attachment list", async () => {
-    const { provider, requests } = httpProvider(
-      () => new Response(null, { status: 204 }),
-    );
+    const { provider, requests } = httpProvider(() => new Response(null, { status: 204 }));
     const schema = { type: "object", properties: {} } as const;
 
     await provider.send("session-1", "Review it", {
@@ -889,10 +923,14 @@ describe("HTTP bridge provider", () => {
   });
 
   test("preserves the bridge failure detail from an errored session", async () => {
-    const { provider } = httpProvider(() => Response.json({
-      status: "error",
-      error: "stream disconnected before completion",
-    }), codexConnection);
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          status: "error",
+          error: "stream disconnected before completion",
+        }),
+      codexConnection,
+    );
 
     await expect(provider.status("session-1")).rejects.toThrow(
       "The codex session failed: stream disconnected before completion",
@@ -900,10 +938,12 @@ describe("HTTP bridge provider", () => {
   });
 
   test("preserves the session failure detail from the claude session route", async () => {
-    const { provider } = httpProvider(() => Response.json({
-      status: "error",
-      error: "claude declined mid-turn",
-    }));
+    const { provider } = httpProvider(() =>
+      Response.json({
+        status: "error",
+        error: "claude declined mid-turn",
+      }),
+    );
 
     await expect(provider.status("session-1")).rejects.toThrow(
       "The claude session failed: claude declined mid-turn",
@@ -911,10 +951,14 @@ describe("HTTP bridge provider", () => {
   });
 
   test("readProviderStatus reports a failed turn as data instead of a throw", async () => {
-    const { provider } = httpProvider(() => Response.json({
-      status: "error",
-      error: "Selected model is at capacity. Please try a different model.",
-    }), codexConnection);
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          status: "error",
+          error: "Selected model is at capacity. Please try a different model.",
+        }),
+      codexConnection,
+    );
 
     await expect(readProviderStatus(provider, "session-1")).resolves.toEqual({
       status: "error",
@@ -923,19 +967,20 @@ describe("HTTP bridge provider", () => {
   });
 
   test("readProviderStatus still rejects a transport fault", async () => {
-    const { provider } = httpProvider(
-      () => new Response("boom", { status: 500 }),
-      codexConnection,
-    );
+    const { provider } = httpProvider(() => new Response("boom", { status: 500 }), codexConnection);
 
     await expect(readProviderStatus(provider, "session-1")).rejects.toThrow();
   });
 
   test("falls back to a plain error status when the session failure detail is empty", async () => {
-    const { provider } = httpProvider(() => Response.json({
-      status: "error",
-      error: "   ",
-    }), codexConnection);
+    const { provider } = httpProvider(
+      () =>
+        Response.json({
+          status: "error",
+          error: "   ",
+        }),
+      codexConnection,
+    );
 
     await expect(provider.status("session-1")).resolves.toBe("error");
   });
@@ -955,26 +1000,28 @@ describe("HTTP bridge provider", () => {
       requestId: "request/1",
       value: { complete: true },
     } as const;
-    const { provider, requests } = httpProvider(() =>
-      Response.json({ structuredOutput: result }));
+    const { provider, requests } = httpProvider(() => Response.json({ structuredOutput: result }));
 
-    await expect(provider.structured("session/1", "request/1")).resolves.toEqual(
-      result,
-    );
+    await expect(provider.structured("session/1", "request/1")).resolves.toEqual(result);
     expect(requests[0]!.url).toBe(
       "http://claude.test/session/session%2F1/structured-output?requestId=request%2F1",
     );
   });
 
   test("aborts a bridge request after the configured deadline", async () => {
-    const { provider } = httpProvider((_url, init) =>
-      new Promise<Response>((_resolve, reject) => {
-        init.signal?.addEventListener("abort", () => {
-          reject(init.signal?.reason ?? new Error("aborted"));
-        }, { once: true });
-      }));
+    const { provider } = httpProvider(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(init.signal?.reason ?? new Error("aborted"));
+            },
+            { once: true },
+          );
+        }),
+    );
 
-    await expect(provider.status("session-1"))
-      .rejects.toBeInstanceOf(ProviderUnavailableError);
+    await expect(provider.status("session-1")).rejects.toBeInstanceOf(ProviderUnavailableError);
   });
 });

@@ -21,10 +21,7 @@ interface UseFileMentionsReturn {
   /** Update cursor position and detect @ trigger */
   handleCursorChange: (position: number, text: string) => void;
   /** Handle keyboard navigation */
-  handleKeyDown: (
-    event: React.KeyboardEvent,
-    onSelect: (file: FileCandidate) => void
-  ) => boolean;
+  handleKeyDown: (event: React.KeyboardEvent, onSelect: (file: FileCandidate) => void) => boolean;
   /** Close the menu */
   closeMenu: (options?: CloseMenuOptions) => void;
   /** Set selected index */
@@ -97,11 +94,9 @@ export function useFileMentions({
         const textAfterCursor = text.slice(position).toLowerCase();
         const normalizedSuppressedFilename = suppressedFilename?.toLowerCase() ?? "";
         if (
-          suppressedFilename
-          && (
-            (query.length > 0 && normalizedSuppressedFilename.startsWith(query.toLowerCase()))
-            || (query.length === 0 && textAfterCursor.startsWith(normalizedSuppressedFilename))
-          )
+          suppressedFilename &&
+          ((query.length > 0 && normalizedSuppressedFilename.startsWith(query.toLowerCase())) ||
+            (query.length === 0 && textAfterCursor.startsWith(normalizedSuppressedFilename)))
         ) {
           setIsMenuOpen(false);
           setSearchQuery("");
@@ -123,7 +118,7 @@ export function useFileMentions({
         setSearchQuery("");
       }
     },
-    [searchQuery]
+    [searchQuery],
   );
 
   /**
@@ -131,10 +126,7 @@ export function useFileMentions({
    * Returns true if the event was handled (should prevent default).
    */
   const handleKeyDown = useCallback(
-    (
-      event: React.KeyboardEvent,
-      onSelect: (file: FileCandidate) => void
-    ): boolean => {
+    (event: React.KeyboardEvent, onSelect: (file: FileCandidate) => void): boolean => {
       if (!isMenuOpen) {
         return false;
       }
@@ -149,9 +141,7 @@ export function useFileMentions({
         case "ArrowUp":
           handleMenuKey(event);
           if (filteredFiles.length === 0) return true;
-          setSelectedIndex((prev) =>
-            prev === 0 ? filteredFiles.length - 1 : prev - 1
-          );
+          setSelectedIndex((prev) => (prev === 0 ? filteredFiles.length - 1 : prev - 1));
           return true;
 
         case "Tab":
@@ -185,7 +175,7 @@ export function useFileMentions({
 
       return false;
     },
-    [closeMenu, filteredFiles, handleMenuKey, isMenuOpen, safeSelectedIndex]
+    [closeMenu, filteredFiles, handleMenuKey, isMenuOpen, safeSelectedIndex],
   );
 
   /**
@@ -193,31 +183,26 @@ export function useFileMentions({
    * Format: [@filename](path/to/file.txt)
    * This allows the mention to be rendered as a clickable link in messages.
    */
-  const serializeForLLM = useCallback(
-    (text: string, mentions: FileMention[]): string => {
-      if (mentions.length === 0) {
-        return text;
-      }
+  const serializeForLLM = useCallback((text: string, mentions: FileMention[]): string => {
+    if (mentions.length === 0) {
+      return text;
+    }
 
-      let result = text;
+    let result = text;
 
-      // Sort by filename length descending to avoid partial replacements
-      const sorted = [...mentions].sort(
-        (a, b) => b.filename.length - a.filename.length
+    // Sort by filename length descending to avoid partial replacements
+    const sorted = [...mentions].sort((a, b) => b.filename.length - a.filename.length);
+
+    for (const mention of sorted) {
+      // Replace @filename with markdown link: [@filename](relativePath)
+      result = result.replace(
+        new RegExp(`@${escapeRegExp(mention.filename)}`, "g"),
+        `[@${mention.filename}](${mention.relativePath})`,
       );
+    }
 
-      for (const mention of sorted) {
-        // Replace @filename with markdown link: [@filename](relativePath)
-        result = result.replace(
-          new RegExp(`@${escapeRegExp(mention.filename)}`, "g"),
-          `[@${mention.filename}](${mention.relativePath})`
-        );
-      }
-
-      return result;
-    },
-    []
-  );
+    return result;
+  }, []);
 
   /**
    * Create a FileMention from a FileCandidate.

@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -147,7 +142,6 @@ exit 1
     return created;
   }
 
-
   test("loads, validates, and saves desktop connection records", async () => {
     const commands = createCommandRegistry();
     const { context } = createContext([]);
@@ -157,25 +151,31 @@ exit 1
     });
     const remote = {
       activeConnectionId: "remote-1",
-      connections: [{
-        id: "remote-1",
-        name: "desk.example",
-        address: "https://desk.example",
-        encryptedToken: "encrypted",
-        lastConnectedAt: "2026-07-14T00:00:00.000Z",
-      }],
+      connections: [
+        {
+          id: "remote-1",
+          name: "desk.example",
+          address: "https://desk.example",
+          encryptedToken: "encrypted",
+          lastConnectedAt: "2026-07-14T00:00:00.000Z",
+        },
+      ],
     };
     await commands.get("save_desktop_connections")?.({ desktopConnections: remote }, context);
     await expect(commands.get("get_desktop_connections")?.({}, context)).resolves.toEqual(remote);
-    expect(() => commands.get("save_desktop_connections")?.({ desktopConnections: { activeConnectionId: "local" } }, context)).toThrow("connections");
+    expect(() =>
+      commands.get("save_desktop_connections")?.(
+        { desktopConnections: { activeConnectionId: "local" } },
+        context,
+      ),
+    ).toThrow("connections");
   });
-
-
 
   test("leaves directory picking to the connected client", async () => {
     const commands = createCommandRegistry();
-    await expect(commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context)).resolves.toBeNull();
+    await expect(
+      commands.get("browse_for_directory")?.({}, createContext(createEnvironment()).context),
+    ).resolves.toBeNull();
     expect(showOpenDialog).not.toHaveBeenCalled();
   });
-
 });

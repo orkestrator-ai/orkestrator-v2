@@ -22,40 +22,28 @@
  */
 import { afterEach, describe, expect, jest, test } from "bun:test";
 
-
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-
 
 import { createServer } from "node:net";
 
-
 import { promises as fs } from "node:fs";
-
 
 import os from "node:os";
 
-
 import { dirname, resolve } from "node:path";
-
 
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-
-
 export const here = dirname(fileURLToPath(import.meta.url));
-
 
 // The repository-wide test preload installs a browser-like fetch for UI tests.
 // Use Bun's native client for loopback bridge integration requests so browser
 // CORS rules cannot turn these GETs into preflight requests.
 export const nativeFetch = Bun.fetch;
 
-
 export const children = new Set<ChildProcessWithoutNullStreams>();
 
-
 export const temporaryDirectories = new Set<string>();
-
 
 /**
  * Bun's 5 s default per-test budget is smaller than what these tests actually
@@ -69,9 +57,7 @@ export const temporaryDirectories = new Set<string>();
  */
 export const BRIDGE_TEST_TIMEOUT_MS = 30_000;
 
-
 jest.setTimeout(BRIDGE_TEST_TIMEOUT_MS);
-
 
 /** Smallest valid PNG, so attachment tests exercise real image bytes. */
 export const ONE_PIXEL_PNG = Buffer.from(
@@ -79,16 +65,16 @@ export const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 
-
-
 afterEach(async () => {
   for (const child of children) child.kill("SIGTERM");
   children.clear();
-  await Promise.all([...temporaryDirectories].map((directory) => fs.rm(directory, { recursive: true, force: true })));
+  await Promise.all(
+    [...temporaryDirectories].map((directory) =>
+      fs.rm(directory, { recursive: true, force: true }),
+    ),
+  );
   temporaryDirectories.clear();
 });
-
-
 
 export async function temporaryDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(resolve(os.tmpdir(), "acp-bridge-test-"));
@@ -96,22 +82,18 @@ export async function temporaryDirectory(): Promise<string> {
   return directory;
 }
 
-
-
 export async function unusedPort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Failed to reserve test port");
-  await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));
+  await new Promise<void>((resolvePromise, reject) =>
+    server.close((error) => (error ? reject(error) : resolvePromise())),
+  );
   return address.port;
 }
 
-
-
 export const MAX_WAIT_DIAGNOSTIC_BYTES = 4 * 1024;
-
-
 
 /**
  * Bounds the timeout diagnostic. Several suites deliberately drive a transcript
@@ -131,14 +113,10 @@ export function describeWaitValue(value: unknown): string {
     : `${serialized.slice(0, MAX_WAIT_DIAGNOSTIC_BYTES)}… (${serialized.length} chars, truncated)`;
 }
 
-
-
 export function isRetryableWaitError(error: unknown): boolean {
   if (!error || typeof error !== "object" || !("code" in error)) return false;
   return error.code === "ConnectionRefused" || error.code === "ECONNREFUSED";
 }
-
-
 
 /**
  * Deliberately below {@link BRIDGE_TEST_TIMEOUT_MS}. A wait that could outlast
@@ -153,8 +131,6 @@ export const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
  * contention budget separate from the tighter product-state diagnostic above.
  */
 export const BRIDGE_STARTUP_TIMEOUT_MS = 15_000;
-
-
 
 export async function waitFor<T>(
   read: () => Promise<T>,
@@ -184,27 +160,29 @@ export async function waitFor<T>(
   throw new Error(`Timed out waiting for ACP state: ${describeWaitValue(latest)}${cause}`);
 }
 
-
-
 export function codedError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
 }
 
-
-
-export async function spawnBridge(options: {
-  port?: number;
-  token?: string;
-  stateDirectory?: string;
-  env?: NodeJS.ProcessEnv;
-} = {}): Promise<{ child: ChildProcessWithoutNullStreams; base: string; headers: Record<string, string> }> {
-  const port = options.port ?? await unusedPort();
+export async function spawnBridge(
+  options: {
+    port?: number;
+    token?: string;
+    stateDirectory?: string;
+    env?: NodeJS.ProcessEnv;
+  } = {},
+): Promise<{
+  child: ChildProcessWithoutNullStreams;
+  base: string;
+  headers: Record<string, string>;
+}> {
+  const port = options.port ?? (await unusedPort());
   const token = options.token ?? "integration-test-token";
   // A live Orkestrator process exports ACP_STATE_DIR. Inheriting it would
   // restore that environment's sessions into this test bridge, so a
   // MAX_SESSIONS=1 rollback test 429s before it can fail closed, and
   // /global/models merges the fixture catalogue with whatever was persisted.
-  const stateDirectory = options.stateDirectory ?? await temporaryDirectory();
+  const stateDirectory = options.stateDirectory ?? (await temporaryDirectory());
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ACP_PROVIDER: "cursor",
@@ -232,7 +210,10 @@ export async function spawnBridge(options: {
   children.add(child);
   const base = `http://127.0.0.1:${port}`;
   await waitFor(
-    async () => nativeFetch(`${base}/global/health`).then((response) => response.ok).catch(() => false),
+    async () =>
+      nativeFetch(`${base}/global/health`)
+        .then((response) => response.ok)
+        .catch(() => false),
     Boolean,
     BRIDGE_STARTUP_TIMEOUT_MS,
   );
@@ -243,8 +224,6 @@ export async function spawnBridge(options: {
   };
 }
 
-
-
 export async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise<void>((resolvePromise) => child.once("exit", () => resolvePromise()));
@@ -252,8 +231,6 @@ export async function stopChild(child: ChildProcessWithoutNullStreams): Promise<
   await exited;
   children.delete(child);
 }
-
-
 
 export async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;

@@ -3,7 +3,13 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ClaudeIcon, CodexIcon, CursorAgentIcon, GrokBuildIcon, OpenCodeIcon } from "@/components/icons/AgentIcons";
+import {
+  ClaudeIcon,
+  CodexIcon,
+  CursorAgentIcon,
+  GrokBuildIcon,
+  OpenCodeIcon,
+} from "@/components/icons/AgentIcons";
 import {
   Select,
   SelectContent,
@@ -20,10 +26,29 @@ import { cn } from "@/lib/utils";
 import type { ClaudeModel, ClaudeEffortLevel } from "@/lib/claude-client";
 import type { CodexReasoningEffort } from "@/lib/codex-client";
 import { CODEX_MODELS } from "@/lib/codex-client";
-import { Loader2, Network, Plus, Trash2, FolderOpen, ExternalLink, FileText, Bot, Settings2, GitBranch } from "lucide-react";
+import {
+  Loader2,
+  Network,
+  Plus,
+  Trash2,
+  FolderOpen,
+  ExternalLink,
+  FileText,
+  Bot,
+  Settings2,
+  GitBranch,
+} from "lucide-react";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { open as openDialog } from "@/lib/native/dialog";
-import type { Project, RepositoryConfig, PortMapping, PortProtocol, DefaultAgent, AgentStyle, ClaudeNativeBackend } from "@/types";
+import type {
+  Project,
+  RepositoryConfig,
+  PortMapping,
+  PortProtocol,
+  DefaultAgent,
+  AgentStyle,
+  ClaudeNativeBackend,
+} from "@/types";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 
 interface RepositorySettingsProps {
@@ -40,10 +65,36 @@ const DEFAULT_CONFIG: RepositoryConfig = {
 
 /** Fallback Claude models when no bridge server is running */
 export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
-  { id: "default", name: "Default (recommended)", description: "Opus 5 with 1M context · Best for everyday, complex tasks", supportsFastMode: true, supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
-  { id: "opus[1m]", name: "Opus (1M context)", description: "Opus 5 with 1M context · Best for everyday, complex tasks", supportsFastMode: true, supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
-  { id: "claude-fable-5[1m]", name: "Fable", description: "Fable 5 · Most capable for your hardest and longest-running tasks", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
-  { id: "sonnet", name: "Sonnet", description: "Sonnet 5 · Efficient for routine tasks", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"] },
+  {
+    id: "default",
+    name: "Default (recommended)",
+    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+    supportsFastMode: true,
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    id: "opus[1m]",
+    name: "Opus (1M context)",
+    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+    supportsFastMode: true,
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    id: "claude-fable-5[1m]",
+    name: "Fable",
+    description: "Fable 5 · Most capable for your hardest and longest-running tasks",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  },
+  {
+    id: "sonnet",
+    name: "Sonnet",
+    description: "Sonnet 5 · Efficient for routine tasks",
+    supportsEffort: true,
+    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+  },
   { id: "haiku", name: "Haiku", description: "Haiku 4.5 · Fastest for quick answers" },
 ];
 
@@ -98,18 +149,20 @@ export function RepositorySettings({
   const [defaultBranch, setDefaultBranch] = useState(initialConfig.defaultBranch);
   const [prBaseBranch, setPrBaseBranch] = useState(initialConfig.prBaseBranch);
   const [portMappings, setPortMappings] = useState<PortMapping[]>(
-    initialConfig.defaultPortMappings ?? []
+    initialConfig.defaultPortMappings ?? [],
   );
-  const [filesToCopy, setFilesToCopy] = useState<string[]>(
-    initialConfig.filesToCopy ?? []
-  );
+  const [filesToCopy, setFilesToCopy] = useState<string[]>(initialConfig.filesToCopy ?? []);
   const [defaultModel, setDefaultModel] = useState(initialConfig.defaultModel ?? "");
   const [defaultEffort, setDefaultEffort] = useState(initialConfig.defaultEffort ?? "");
   const [entryPort, setEntryPort] = useState<string>(
-    initialConfig.entryPort != null ? String(initialConfig.entryPort) : ""
+    initialConfig.entryPort != null ? String(initialConfig.entryPort) : "",
   );
-  const [projectDefaultAgent, setProjectDefaultAgent] = useState<string>(initialConfig.defaultAgent ?? APP_DEFAULT);
-  const [projectAgentStyle, setProjectAgentStyle] = useState<string>(initialConfig.agentStyle ?? APP_DEFAULT);
+  const [projectDefaultAgent, setProjectDefaultAgent] = useState<string>(
+    initialConfig.defaultAgent ?? APP_DEFAULT,
+  );
+  const [projectAgentStyle, setProjectAgentStyle] = useState<string>(
+    initialConfig.agentStyle ?? APP_DEFAULT,
+  );
   // "__app_default__" = inherit from global. "sdk"/"tmux" = override.
   const [projectClaudeNativeBackend, setProjectClaudeNativeBackend] = useState<string>(
     initialConfig.claudeNativeBackend ?? APP_DEFAULT,
@@ -190,14 +243,9 @@ export function RepositorySettings({
     setPortMappings((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  const updatePortMapping = useCallback(
-    (index: number, updates: Partial<PortMapping>) => {
-      setPortMappings((prev) =>
-        prev.map((m, i) => (i === index ? { ...m, ...updates } : m))
-      );
-    },
-    []
-  );
+  const updatePortMapping = useCallback((index: number, updates: Partial<PortMapping>) => {
+    setPortMappings((prev) => prev.map((m, i) => (i === index ? { ...m, ...updates } : m)));
+  }, []);
 
   // File to copy management
   const addFileToCopy = useCallback(() => {
@@ -340,9 +388,14 @@ export function RepositorySettings({
         filesToCopy: cleanedFilesToCopy.length > 0 ? cleanedFilesToCopy : undefined,
         defaultModel: defaultModel || undefined,
         defaultEffort: defaultEffort || undefined,
-        entryPort: parsedEntryPort && parsedEntryPort >= 1 && parsedEntryPort <= 65535 ? parsedEntryPort : undefined,
-        defaultAgent: projectDefaultAgent !== APP_DEFAULT ? projectDefaultAgent as DefaultAgent : undefined,
-        agentStyle: projectAgentStyle !== APP_DEFAULT ? projectAgentStyle as AgentStyle : undefined,
+        entryPort:
+          parsedEntryPort && parsedEntryPort >= 1 && parsedEntryPort <= 65535
+            ? parsedEntryPort
+            : undefined,
+        defaultAgent:
+          projectDefaultAgent !== APP_DEFAULT ? (projectDefaultAgent as DefaultAgent) : undefined,
+        agentStyle:
+          projectAgentStyle !== APP_DEFAULT ? (projectAgentStyle as AgentStyle) : undefined,
         claudeNativeBackend:
           projectClaudeNativeBackend !== APP_DEFAULT
             ? (projectClaudeNativeBackend as ClaudeNativeBackend)
@@ -390,7 +443,10 @@ export function RepositorySettings({
   const filesValidationResult = useMemo(() => validateFilesToCopy(), [validateFilesToCopy]);
 
   // The effective agent for model/effort selection: project override > global default
-  const effectiveAgent = projectDefaultAgent !== APP_DEFAULT ? projectDefaultAgent as DefaultAgent : globalDefaultAgent;
+  const effectiveAgent =
+    projectDefaultAgent !== APP_DEFAULT
+      ? (projectDefaultAgent as DefaultAgent)
+      : globalDefaultAgent;
 
   // Compute available models and effort levels based on the effective agent
   const availableModels = useMemo((): { id: string; name: string }[] => {
@@ -430,9 +486,7 @@ export function RepositorySettings({
 
   const selectedAcpModel = useMemo(() => {
     if (effectiveAgent !== "cursor" && effectiveAgent !== "grok") return undefined;
-    return (projectModelCatalog[effectiveAgent] ?? []).find(
-      (model) => model.id === defaultModel,
-    );
+    return (projectModelCatalog[effectiveAgent] ?? []).find((model) => model.id === defaultModel);
   }, [defaultModel, effectiveAgent, projectModelCatalog]);
 
   const availableEffortLevels = useMemo((): { value: string; label: string }[] => {
@@ -443,7 +497,7 @@ export function RepositorySettings({
         const selectedClaudeModel = allModels.find((m) => m.id === defaultModel);
         if (selectedClaudeModel?.supportedEffortLevels) {
           return CLAUDE_EFFORT_LEVELS.filter((e) =>
-            selectedClaudeModel.supportedEffortLevels!.includes(e.value)
+            selectedClaudeModel.supportedEffortLevels!.includes(e.value),
           );
         }
         return CLAUDE_EFFORT_LEVELS;
@@ -458,7 +512,10 @@ export function RepositorySettings({
             label: variant.charAt(0).toUpperCase() + variant.slice(1),
           }));
         }
-        return OPENCODE_DEFAULT_VARIANTS.map((v) => ({ value: v, label: v.charAt(0).toUpperCase() + v.slice(1) }));
+        return OPENCODE_DEFAULT_VARIANTS.map((v) => ({
+          value: v,
+          label: v.charAt(0).toUpperCase() + v.slice(1),
+        }));
       }
       case "codex": {
         const supportedEfforts = selectedCodexModel?.reasoningEfforts;
@@ -486,20 +543,20 @@ export function RepositorySettings({
 
   useEffect(() => {
     if (
-      effectiveAgent === "codex"
-      && selectedCodexModel
-      && defaultEffort
-      && selectedCodexModel.reasoningEfforts?.length
-      && !selectedCodexModel.reasoningEfforts.includes(defaultEffort as CodexReasoningEffort)
+      effectiveAgent === "codex" &&
+      selectedCodexModel &&
+      defaultEffort &&
+      selectedCodexModel.reasoningEfforts?.length &&
+      !selectedCodexModel.reasoningEfforts.includes(defaultEffort as CodexReasoningEffort)
     ) {
       setDefaultEffort("");
       return;
     }
     if (
-      (effectiveAgent === "cursor" || effectiveAgent === "grok")
-      && selectedAcpModel
-      && defaultEffort
-      && !selectedAcpModel.reasoningEfforts.includes(defaultEffort)
+      (effectiveAgent === "cursor" || effectiveAgent === "grok") &&
+      selectedAcpModel &&
+      defaultEffort &&
+      !selectedAcpModel.reasoningEfforts.includes(defaultEffort)
     ) {
       setDefaultEffort("");
     }
@@ -538,12 +595,16 @@ export function RepositorySettings({
       label: "OpenCode",
       icon: <OpenCodeIcon className="h-4 w-4 shrink-0" />,
     },
-  ].filter((option) =>
-    option.value === APP_DEFAULT
-    || (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(option.value as DefaultAgent)
+  ].filter(
+    (option) =>
+      option.value === APP_DEFAULT ||
+      (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(
+        option.value as DefaultAgent,
+      ),
   );
 
-  const hasErrors = projectNameError !== null || !portValidationResult.valid || !filesValidationResult.valid;
+  const hasErrors =
+    projectNameError !== null || !portValidationResult.valid || !filesValidationResult.valid;
 
   const repoMenuItems: SettingsMenuItem[] = [
     { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
@@ -560,24 +621,61 @@ export function RepositorySettings({
           <div className="max-w-2xl space-y-6">
             <div className="grid gap-2">
               <Label htmlFor="projectName">Name</Label>
-              <Input id="projectName" value={projectName} onChange={handleProjectNameChange} placeholder="Project name" disabled={isSaving} />
+              <Input
+                id="projectName"
+                value={projectName}
+                onChange={handleProjectNameChange}
+                placeholder="Project name"
+                disabled={isSaving}
+              />
               {projectNameError && <p className="text-sm text-destructive">{projectNameError}</p>}
             </div>
             <div className="grid gap-2">
               <Label>Git URL</Label>
               <div className="flex items-center gap-2">
-                <Input value={project.gitUrl} readOnly className="bg-zinc-800 cursor-default flex-1" />
-                <Button type="button" variant="ghost" size="icon" onClick={() => window.open(project.gitUrl, "_blank")} title="Open in browser"><ExternalLink className="h-4 w-4" /></Button>
+                <Input
+                  value={project.gitUrl}
+                  readOnly
+                  className="bg-zinc-800 cursor-default flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => window.open(project.gitUrl, "_blank")}
+                  title="Open in browser"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                </Button>
               </div>
-              <p className="text-xs text-muted-foreground">The Git URL cannot be changed after adding the project.</p>
+              <p className="text-xs text-muted-foreground">
+                The Git URL cannot be changed after adding the project.
+              </p>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="localPath">Local Path</Label>
               <div className="flex gap-2">
-                <Input id="localPath" value={localPath} onChange={(e) => setLocalPath(e.target.value)} placeholder="/path/to/repository" className="flex-1" disabled={isSaving} />
-                <Button type="button" variant="outline" size="icon" onClick={handleBrowse} disabled={isSaving}><FolderOpen className="h-4 w-4" /></Button>
+                <Input
+                  id="localPath"
+                  value={localPath}
+                  onChange={(e) => setLocalPath(e.target.value)}
+                  placeholder="/path/to/repository"
+                  className="flex-1"
+                  disabled={isSaving}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={handleBrowse}
+                  disabled={isSaving}
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
               </div>
-              <p className="text-xs text-muted-foreground">If you have a local clone, select it to copy .env files to environments.</p>
+              <p className="text-xs text-muted-foreground">
+                If you have a local clone, select it to copy .env files to environments.
+              </p>
             </div>
           </div>
         );
@@ -586,12 +684,24 @@ export function RepositorySettings({
           <div className="max-w-2xl space-y-6">
             <div className="grid gap-2">
               <Label htmlFor="defaultBranch">Default Branch</Label>
-              <Input id="defaultBranch" value={defaultBranch} onChange={(e) => setDefaultBranch(e.target.value)} placeholder="main" />
-              <p className="text-xs text-muted-foreground">The branch to clone when creating new environments</p>
+              <Input
+                id="defaultBranch"
+                value={defaultBranch}
+                onChange={(e) => setDefaultBranch(e.target.value)}
+                placeholder="main"
+              />
+              <p className="text-xs text-muted-foreground">
+                The branch to clone when creating new environments
+              </p>
             </div>
             <div className="grid gap-2">
               <Label htmlFor="prBaseBranch">PR Base Branch</Label>
-              <Input id="prBaseBranch" value={prBaseBranch} onChange={(e) => setPrBaseBranch(e.target.value)} placeholder="main" />
+              <Input
+                id="prBaseBranch"
+                value={prBaseBranch}
+                onChange={(e) => setPrBaseBranch(e.target.value)}
+                placeholder="main"
+              />
               <p className="text-xs text-muted-foreground">The target branch for pull requests</p>
             </div>
           </div>
@@ -602,14 +712,23 @@ export function RepositorySettings({
             <div className="grid gap-2">
               <div className="flex items-center gap-2">
                 <Label className="text-sm font-medium">Default Agent Settings</Label>
-                <span className="text-xs text-muted-foreground bg-zinc-800 px-1.5 py-0.5 rounded">{agentLabel}</span>
+                <span className="text-xs text-muted-foreground bg-zinc-800 px-1.5 py-0.5 rounded">
+                  {agentLabel}
+                </span>
               </div>
-              <p className="text-xs text-muted-foreground">Override the app-level default agent and style for this project. Leave as "Use App Default" to inherit from global settings.</p>
+              <p className="text-xs text-muted-foreground">
+                Override the app-level default agent and style for this project. Leave as "Use App
+                Default" to inherit from global settings.
+              </p>
             </div>
             <div className="grid gap-6">
               <div className="grid gap-2">
                 <Label>Default Agent</Label>
-                <div role="radiogroup" aria-label="Default Agent" className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                <div
+                  role="radiogroup"
+                  aria-label="Default Agent"
+                  className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4"
+                >
                   {projectAgentOptions.map((option) => (
                     <button
                       key={option.value}
@@ -627,7 +746,7 @@ export function RepositorySettings({
                         projectDefaultAgent === option.value
                           ? "border-primary bg-primary/5"
                           : "border-transparent bg-zinc-900 hover:border-zinc-600",
-                        isSaving && "opacity-50 cursor-not-allowed"
+                        isSaving && "opacity-50 cursor-not-allowed",
                       )}
                     >
                       <div className="flex items-center gap-2 text-sm font-medium">
@@ -640,8 +759,14 @@ export function RepositorySettings({
               </div>
               <div className="grid gap-2 max-w-sm">
                 <Label htmlFor="projectAgentStyle">Agent Style</Label>
-                <Select value={projectAgentStyle} onValueChange={setProjectAgentStyle} disabled={isSaving}>
-                  <SelectTrigger id="projectAgentStyle"><SelectValue /></SelectTrigger>
+                <Select
+                  value={projectAgentStyle}
+                  onValueChange={setProjectAgentStyle}
+                  disabled={isSaving}
+                >
+                  <SelectTrigger id="projectAgentStyle">
+                    <SelectValue />
+                  </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={APP_DEFAULT}>Use App Default</SelectItem>
                     <SelectItem value="terminal">Terminal</SelectItem>
@@ -656,20 +781,20 @@ export function RepositorySettings({
                   onValueChange={setProjectClaudeNativeBackend}
                   disabled={isSaving}
                 >
-                  <SelectTrigger id="projectClaudeNativeBackend"><SelectValue /></SelectTrigger>
+                  <SelectTrigger id="projectClaudeNativeBackend">
+                    <SelectValue />
+                  </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={APP_DEFAULT}>
                       Use App Default (
-                      {config.global.claudeNativeBackend === "tmux" ? "Tmux" : "Agent SDK"}
-                      )
+                      {config.global.claudeNativeBackend === "tmux" ? "Tmux" : "Agent SDK"})
                     </SelectItem>
                     <SelectItem value="sdk">Agent SDK</SelectItem>
                     <SelectItem value="tmux">Tmux</SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  Only applies when Claude Mode is Native. Environment settings
-                  can override this.
+                  Only applies when Claude Mode is Native. Environment settings can override this.
                 </p>
               </div>
             </div>
@@ -689,13 +814,23 @@ export function RepositorySettings({
                     }}
                     disabled={isSaving}
                   >
-                    <SelectTrigger id="defaultModel"><SelectValue placeholder="Use agent default" /></SelectTrigger>
+                    <SelectTrigger id="defaultModel">
+                      <SelectValue placeholder="Use agent default" />
+                    </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={APP_DEFAULT}>Use agent default</SelectItem>
-                      {availableModels.map((model) => (<SelectItem key={model.id} value={model.id}>{model.name}</SelectItem>))}
+                      {availableModels.map((model) => (
+                        <SelectItem key={model.id} value={model.id}>
+                          {model.name}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
-                ) : (<p className="text-xs text-muted-foreground italic">Start an environment to load available models</p>)}
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">
+                    Start an environment to load available models
+                  </p>
+                )}
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="defaultEffort">Default Effort Level</Label>
@@ -705,13 +840,23 @@ export function RepositorySettings({
                     onValueChange={(value) => setDefaultEffort(value === APP_DEFAULT ? "" : value)}
                     disabled={isSaving}
                   >
-                    <SelectTrigger id="defaultEffort"><SelectValue placeholder="Use agent default" /></SelectTrigger>
+                    <SelectTrigger id="defaultEffort">
+                      <SelectValue placeholder="Use agent default" />
+                    </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={APP_DEFAULT}>Use agent default</SelectItem>
-                      {availableEffortLevels.map((level) => (<SelectItem key={level.value} value={level.value}>{level.label}</SelectItem>))}
+                      {availableEffortLevels.map((level) => (
+                        <SelectItem key={level.value} value={level.value}>
+                          {level.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
-                ) : (<p className="text-xs text-muted-foreground italic">No effort levels available for this agent</p>)}
+                ) : (
+                  <p className="text-xs text-muted-foreground italic">
+                    No effort levels available for this agent
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -733,45 +878,138 @@ export function RepositorySettings({
                 disabled={isSaving}
               />
               <p className="text-xs text-muted-foreground">
-                If your application runs a server inside the container (e.g. on port 3000), set it here.
-                New containers will automatically find an available host port and map it to this port,
-                so you can access the service from your machine.
+                If your application runs a server inside the container (e.g. on port 3000), set it
+                here. New containers will automatically find an available host port and map it to
+                this port, so you can access the service from your machine.
               </p>
             </div>
 
             <div className="border-t border-border pt-4 space-y-4">
               <Label>Additional Port Mappings</Label>
-              <p className="text-xs text-muted-foreground">These port mappings will be pre-filled when creating new environments for this repository.</p>
+              <p className="text-xs text-muted-foreground">
+                These port mappings will be pre-filled when creating new environments for this
+                repository.
+              </p>
               {portMappings.map((mapping, index) => (
                 <div key={index} className="flex items-center gap-2">
                   <div className="flex-1 grid grid-cols-[1fr_auto_1fr_auto_auto] items-center gap-2">
-                    <Input type="number" placeholder="Container" value={mapping.containerPort} onChange={(e) => updatePortMapping(index, { containerPort: parseInt(e.target.value) || 0 })} className="text-sm" min={1} max={65535} disabled={isSaving} />
+                    <Input
+                      type="number"
+                      placeholder="Container"
+                      value={mapping.containerPort}
+                      onChange={(e) =>
+                        updatePortMapping(index, { containerPort: parseInt(e.target.value) || 0 })
+                      }
+                      className="text-sm"
+                      min={1}
+                      max={65535}
+                      disabled={isSaving}
+                    />
                     <span className="text-muted-foreground">:</span>
-                    <Input type="number" placeholder="Host" value={mapping.hostPort} onChange={(e) => updatePortMapping(index, { hostPort: parseInt(e.target.value) || 0 })} className="text-sm" min={1} max={65535} disabled={isSaving} />
-                    <Select value={mapping.protocol} onValueChange={(value: PortProtocol) => updatePortMapping(index, { protocol: value })} disabled={isSaving}>
-                      <SelectTrigger className="w-20"><SelectValue /></SelectTrigger>
-                      <SelectContent><SelectItem value="tcp">TCP</SelectItem><SelectItem value="udp">UDP</SelectItem></SelectContent>
+                    <Input
+                      type="number"
+                      placeholder="Host"
+                      value={mapping.hostPort}
+                      onChange={(e) =>
+                        updatePortMapping(index, { hostPort: parseInt(e.target.value) || 0 })
+                      }
+                      className="text-sm"
+                      min={1}
+                      max={65535}
+                      disabled={isSaving}
+                    />
+                    <Select
+                      value={mapping.protocol}
+                      onValueChange={(value: PortProtocol) =>
+                        updatePortMapping(index, { protocol: value })
+                      }
+                      disabled={isSaving}
+                    >
+                      <SelectTrigger className="w-20">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="tcp">TCP</SelectItem>
+                        <SelectItem value="udp">UDP</SelectItem>
+                      </SelectContent>
                     </Select>
-                    <Button type="button" variant="ghost" size="icon" onClick={() => removePortMapping(index)} disabled={isSaving} className="h-8 w-8"><Trash2 className="h-4 w-4" /></Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => removePortMapping(index)}
+                      disabled={isSaving}
+                      className="h-8 w-8"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
                 </div>
               ))}
-              <Button type="button" variant="outline" size="sm" onClick={addPortMapping} disabled={isSaving} className="w-full"><Plus className="h-4 w-4 mr-2" />Add Port Mapping</Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={addPortMapping}
+                disabled={isSaving}
+                className="w-full"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Port Mapping
+              </Button>
             </div>
           </div>
         );
       case "files":
         return (
           <div className="max-w-2xl space-y-4">
-            <p className="text-xs text-muted-foreground">Specify files from your local repository to copy into environments. Use relative paths from the project root.</p>
+            <p className="text-xs text-muted-foreground">
+              Specify files from your local repository to copy into environments. Use relative paths
+              from the project root.
+            </p>
             {filesToCopy.map((filePath, index) => (
               <div key={index} className="flex items-center gap-2">
-                <Input value={filePath} onChange={(e) => updateFileToCopy(index, e.target.value)} placeholder="config/settings.json" className="flex-1 text-sm" disabled={isSaving} />
-                <Button type="button" variant="outline" size="icon" onClick={() => handleBrowseFile(index)} disabled={isSaving || !localPath} title={localPath ? "Browse for file" : "Set local path first"} className="h-8 w-8"><FolderOpen className="h-4 w-4" /></Button>
-                <Button type="button" variant="ghost" size="icon" onClick={() => removeFileToCopy(index)} disabled={isSaving} className="h-8 w-8"><Trash2 className="h-4 w-4" /></Button>
+                <Input
+                  value={filePath}
+                  onChange={(e) => updateFileToCopy(index, e.target.value)}
+                  placeholder="config/settings.json"
+                  className="flex-1 text-sm"
+                  disabled={isSaving}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => handleBrowseFile(index)}
+                  disabled={isSaving || !localPath}
+                  title={localPath ? "Browse for file" : "Set local path first"}
+                  className="h-8 w-8"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => removeFileToCopy(index)}
+                  disabled={isSaving}
+                  className="h-8 w-8"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
               </div>
             ))}
-            <Button type="button" variant="outline" size="sm" onClick={addFileToCopy} disabled={isSaving} className="w-full"><Plus className="h-4 w-4 mr-2" />Add File</Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={addFileToCopy}
+              disabled={isSaving}
+              className="w-full"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Add File
+            </Button>
           </div>
         );
       default:
@@ -787,9 +1025,18 @@ export function RepositorySettings({
       menuItems={repoMenuItems}
       footer={
         <>
-          <Button variant="outline" onClick={handleCancel}>Cancel</Button>
+          <Button variant="outline" onClick={handleCancel}>
+            Cancel
+          </Button>
           <Button onClick={handleSave} disabled={isSaving || hasErrors}>
-            {isSaving ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving...</>) : "Save"}
+            {isSaving ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              "Save"
+            )}
           </Button>
         </>
       }

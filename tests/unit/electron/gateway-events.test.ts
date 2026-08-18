@@ -1,9 +1,40 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import { canStartDynamicCompression, compressBody, COMPRESSION_MIN_BYTES, compressStaticFileWithinLimits, DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY, DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES, eventMatchesSubscription, isCompressibleContentType, isTailscaleAddress, MAX_CONCURRENT_DYNAMIC_COMPRESSIONS, MAX_STATIC_FALLBACK_SOURCE_BYTES, negotiateEncoding, OrkestratorGateway, rewriteBrowserPreviewBody, selectTailscaleBindAddress } from "../../../apps/backend/src/gateway";
-import { DEFAULT_GATEWAY_REPLAY_MAX_BYTES, GatewayEventReplay, parseGatewayCursor } from "../../../apps/backend/src/gateway-event-replay";
+import {
+  canStartDynamicCompression,
+  compressBody,
+  COMPRESSION_MIN_BYTES,
+  compressStaticFileWithinLimits,
+  DEFAULT_GATEWAY_REPLAY_HANDSHAKE_FRAME_CAPACITY,
+  DEFAULT_GATEWAY_REPLAY_HANDSHAKE_MAX_BYTES,
+  eventMatchesSubscription,
+  isCompressibleContentType,
+  isTailscaleAddress,
+  MAX_CONCURRENT_DYNAMIC_COMPRESSIONS,
+  MAX_STATIC_FALLBACK_SOURCE_BYTES,
+  negotiateEncoding,
+  OrkestratorGateway,
+  rewriteBrowserPreviewBody,
+  selectTailscaleBindAddress,
+} from "../../../apps/backend/src/gateway";
+import {
+  DEFAULT_GATEWAY_REPLAY_MAX_BYTES,
+  GatewayEventReplay,
+  parseGatewayCursor,
+} from "../../../apps/backend/src/gateway-event-replay";
 import { TerminalWebSocketGateway } from "../../../apps/backend/src/terminal-websocket-server";
-import { decodeTerminalBinaryFrame, encodeTerminalBinaryFrame, parseTerminalWebSocketServerControlFrame, TERMINAL_BINARY_FRAME_TYPE, TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES, TERMINAL_WEBSOCKET_CLOSE, TERMINAL_WEBSOCKET_MAX_BINARY_BYTES, TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES, TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES, TERMINAL_WEBSOCKET_SUBPROTOCOL } from "@orkestrator/protocol/terminal-websocket";
+import {
+  decodeTerminalBinaryFrame,
+  encodeTerminalBinaryFrame,
+  parseTerminalWebSocketServerControlFrame,
+  TERMINAL_BINARY_FRAME_TYPE,
+  TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
+  TERMINAL_WEBSOCKET_CLOSE,
+  TERMINAL_WEBSOCKET_MAX_BINARY_BYTES,
+  TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES,
+  TERMINAL_WEBSOCKET_SOCKET_HARD_BUFFER_BYTES,
+  TERMINAL_WEBSOCKET_SUBPROTOCOL,
+} from "@orkestrator/protocol/terminal-websocket";
 import { randomBytes } from "node:crypto";
 import { chmod, stat, utimes, writeFile } from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -36,7 +67,6 @@ import {
   writeRendererAsset,
 } from "./gateway-test-harness.js";
 
-
 describe("gateway terminal WebSocket", () => {
   test("rejects missing origins and unsupported protocol versions before upgrade", async () => {
     const terminalGateway = new TerminalWebSocketGateway({
@@ -48,13 +78,19 @@ describe("gateway terminal WebSocket", () => {
     const rejectedStatus = (protocol: string, headers: IncomingHttpHeaders = {}) => {
       let response = "";
       const socket = {
-        end: mock((chunk: string) => { response = chunk; }),
+        end: mock((chunk: string) => {
+          response = chunk;
+        }),
         destroy: mock(() => undefined),
       } as unknown as Duplex;
-      terminalGateway.handleUpgrade({
-        url: "/__orkestrator/terminal",
-        headers: { "sec-websocket-protocol": protocol, ...headers },
-      } as IncomingMessage, socket, Buffer.alloc(0));
+      terminalGateway.handleUpgrade(
+        {
+          url: "/__orkestrator/terminal",
+          headers: { "sec-websocket-protocol": protocol, ...headers },
+        } as IncomingMessage,
+        socket,
+        Buffer.alloc(0),
+      );
       return Number.parseInt(response.split("\r\n", 1)[0]?.split(" ")[1] ?? "0", 10);
     };
 
@@ -67,41 +103,59 @@ describe("gateway terminal WebSocket", () => {
     });
     let deniedOriginResponse = "";
     const deniedOriginSocket = {
-      end: mock((chunk: string) => { deniedOriginResponse = chunk; }),
+      end: mock((chunk: string) => {
+        deniedOriginResponse = chunk;
+      }),
       destroy: mock(() => undefined),
     } as unknown as Duplex;
-    deniedOriginGateway.handleUpgrade({
-      url: "/__orkestrator/terminal",
-      headers: {
-        origin: "https://attacker.invalid",
-        "sec-websocket-protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
-      },
-    } as IncomingMessage, deniedOriginSocket, Buffer.alloc(0));
+    deniedOriginGateway.handleUpgrade(
+      {
+        url: "/__orkestrator/terminal",
+        headers: {
+          origin: "https://attacker.invalid",
+          "sec-websocket-protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
+        },
+      } as IncomingMessage,
+      deniedOriginSocket,
+      Buffer.alloc(0),
+    );
     expect(deniedOriginResponse).toStartWith("HTTP/1.1 403");
     deniedOriginGateway.close();
     expect(rejectedStatus("orkestrator-terminal.v999")).toBe(426);
     let malformedResponse = "";
     const malformedSocket = {
-      end: mock((chunk: string) => { malformedResponse = chunk; }),
+      end: mock((chunk: string) => {
+        malformedResponse = chunk;
+      }),
       destroy: mock(() => undefined),
     } as unknown as Duplex;
-    expect(() => terminalGateway.handleUpgrade({
-      url: "//[",
-      headers: {},
-    } as IncomingMessage, malformedSocket, Buffer.alloc(0))).not.toThrow();
+    expect(() =>
+      terminalGateway.handleUpgrade(
+        {
+          url: "//[",
+          headers: {},
+        } as IncomingMessage,
+        malformedSocket,
+        Buffer.alloc(0),
+      ),
+    ).not.toThrow();
     expect(malformedResponse).toStartWith("HTTP/1.1 400");
     terminalGateway.close();
   });
 
   test("bounds unauthenticated sockets and accepts a same-origin auth cookie", async () => {
     const { gateway, info } = await startGateway();
-    const terminalWebSocket = (gateway as unknown as {
-      terminalWebSocket: { authTimeoutMs: number };
-    }).terminalWebSocket;
+    const terminalWebSocket = (
+      gateway as unknown as {
+        terminalWebSocket: { authTimeoutMs: number };
+      }
+    ).terminalWebSocket;
     terminalWebSocket.authTimeoutMs = 15;
 
     const unauthenticated = await openTerminalSocket(info, { authenticate: false });
-    const timedOut = new Promise<number>((resolve) => unauthenticated.socket.once("close", resolve));
+    const timedOut = new Promise<number>((resolve) =>
+      unauthenticated.socket.once("close", resolve),
+    );
     expect(await timedOut).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
 
     const origin = new URL(info.url).origin;
@@ -112,8 +166,10 @@ describe("gateway terminal WebSocket", () => {
         Cookie: `orkestrator_gateway_auth=${info.token}`,
       },
     });
-    expect(await nextTerminalControl(cookieAuthenticated.inbox, "ready"))
-      .toMatchObject({ type: "ready", version: 1 });
+    expect(await nextTerminalControl(cookieAuthenticated.inbox, "ready")).toMatchObject({
+      type: "ready",
+      version: 1,
+    });
     cookieAuthenticated.socket.terminate();
   });
 
@@ -129,17 +185,21 @@ describe("gateway terminal WebSocket", () => {
       body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
     });
     const cookie = exchanged.headers["set-cookie"]![0]!;
-    const sessions = (gateway as unknown as {
-      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
-    }).agentTestSessions;
+    const sessions = (
+      gateway as unknown as {
+        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      }
+    ).agentTestSessions;
     [...sessions.values()][0]!.expiresAt = Date.now() + 40;
 
     const socket = await openTerminalSocket(info, {
       authenticate: false,
       headers: { Origin: new URL(info.url).origin, Cookie: cookie },
     });
-    expect(await nextTerminalControl(socket.inbox, "ready"))
-      .toMatchObject({ type: "ready", version: 1 });
+    expect(await nextTerminalControl(socket.inbox, "ready")).toMatchObject({
+      type: "ready",
+      version: 1,
+    });
     const closeCode = await new Promise<number>((resolve) => socket.socket.once("close", resolve));
     expect(closeCode).toBe(TERMINAL_WEBSOCKET_CLOSE.authenticationRequired);
   });
@@ -157,9 +217,11 @@ describe("gateway terminal WebSocket", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
     });
-    const sessions = (gateway as unknown as {
-      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
-    }).agentTestSessions;
+    const sessions = (
+      gateway as unknown as {
+        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      }
+    ).agentTestSessions;
     expect(sessions.size).toBeGreaterThan(0);
     // Sockets arm their expiry timer from the deadline seen at authentication, so
     // the short window has to exist before this one connects. An implementation
@@ -174,11 +236,15 @@ describe("gateway terminal WebSocket", () => {
         Cookie: `orkestrator_gateway_auth=${info.token}`,
       },
     });
-    expect(await nextTerminalControl(socket.inbox, "ready"))
-      .toMatchObject({ type: "ready", version: 1 });
+    expect(await nextTerminalControl(socket.inbox, "ready")).toMatchObject({
+      type: "ready",
+      version: 1,
+    });
 
     let closed: number | null = null;
-    socket.socket.once("close", (code: number) => { closed = code; });
+    socket.socket.once("close", (code: number) => {
+      closed = code;
+    });
     await new Promise((resolve) => setTimeout(resolve, 200));
 
     expect(closed).toBeNull();
@@ -189,7 +255,10 @@ describe("gateway terminal WebSocket", () => {
     const { info } = await startGateway();
     for (const [payload, expected] of [
       ["{", TERMINAL_WEBSOCKET_CLOSE.protocolError],
-      ["x".repeat(TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES + 1), TERMINAL_WEBSOCKET_CLOSE.messageTooLarge],
+      [
+        "x".repeat(TERMINAL_WEBSOCKET_MAX_CONTROL_BYTES + 1),
+        TERMINAL_WEBSOCKET_CLOSE.messageTooLarge,
+      ],
     ] as const) {
       const { socket } = await openTerminalSocket(info);
       const closed = new Promise<number>((resolve) => socket.once("close", resolve));
@@ -199,23 +268,31 @@ describe("gateway terminal WebSocket", () => {
 
     const { socket } = await openTerminalSocket(info);
     const closed = new Promise<number>((resolve) => socket.once("close", resolve));
-    socket.send(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.output,
-      channelId: 1,
-      generation: 1,
-      revision: 1,
-      bytes: new Uint8Array(),
-    }));
+    socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 1,
+        generation: 1,
+        revision: 1,
+        bytes: new Uint8Array(),
+      }),
+    );
     expect(await closed).toBe(TERMINAL_WEBSOCKET_CLOSE.protocolError);
 
     const truncated = await openTerminalSocket(info);
-    const truncatedClose = new Promise<number>((resolve) => truncated.socket.once("close", resolve));
+    const truncatedClose = new Promise<number>((resolve) =>
+      truncated.socket.once("close", resolve),
+    );
     truncated.socket.send(new Uint8Array([TERMINAL_BINARY_FRAME_TYPE.input]));
     expect(await truncatedClose).toBe(TERMINAL_WEBSOCKET_CLOSE.protocolError);
 
     const unsupported = await openTerminalSocket(info, { authenticate: false });
-    const unsupportedClose = new Promise<number>((resolve) => unsupported.socket.once("close", resolve));
-    unsupported.socket.send(JSON.stringify({ type: "authenticate", version: 2, token: info.token }));
+    const unsupportedClose = new Promise<number>((resolve) =>
+      unsupported.socket.once("close", resolve),
+    );
+    unsupported.socket.send(
+      JSON.stringify({ type: "authenticate", version: 2, token: info.token }),
+    );
     expect(await unsupportedClose).toBe(TERMINAL_WEBSOCKET_CLOSE.unsupportedVersion);
 
     const repeated = await openTerminalSocket(info);
@@ -228,41 +305,73 @@ describe("gateway terminal WebSocket", () => {
     const backend = {
       invoke: mock(async (command: string, args: Record<string, unknown>) => {
         if (command === "get_terminal_session") return { id: args.sessionId, running: true };
-        if (command === "get_terminal_output_snapshot") return { output: "", generation: 1, revision: 0 };
+        if (command === "get_terminal_output_snapshot")
+          return { output: "", generation: 1, revision: 0 };
         return undefined;
       }),
     };
     const { gateway, info } = await startGateway({ backend });
     const generationSocket = await openTerminalSocket(info);
-    generationSocket.socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "generation" }));
+    generationSocket.socket.send(
+      JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "generation" }),
+    );
     const generationChannel = await nextTerminalControl(generationSocket.inbox, "subscribed");
     if (generationChannel.type !== "subscribed") throw new Error("Expected subscribed frame");
-    gateway.emit("terminal-output-generation", { text: "new generation", generation: 2, revision: 1 });
-    expect(await nextTerminalControl(generationSocket.inbox, "desync"))
-      .toMatchObject({ reason: "generation-changed", generation: 2 });
+    gateway.emit("terminal-output-generation", {
+      text: "new generation",
+      generation: 2,
+      revision: 1,
+    });
+    expect(await nextTerminalControl(generationSocket.inbox, "desync")).toMatchObject({
+      reason: "generation-changed",
+      generation: 2,
+    });
     generationSocket.socket.terminate();
 
     const oversizedSocket = await openTerminalSocket(info);
-    oversizedSocket.socket.send(JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "oversized" }));
+    oversizedSocket.socket.send(
+      JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "oversized" }),
+    );
     await nextTerminalControl(oversizedSocket.inbox, "subscribed");
     gateway.emit("terminal-output-oversized", {
-      text: "x".repeat(TERMINAL_WEBSOCKET_MAX_BINARY_BYTES), generation: 1, revision: 1,
+      text: "x".repeat(TERMINAL_WEBSOCKET_MAX_BINARY_BYTES),
+      generation: 1,
+      revision: 1,
     });
-    expect(await nextTerminalControl(oversizedSocket.inbox, "desync"))
-      .toMatchObject({ reason: "slow-consumer" });
+    expect(await nextTerminalControl(oversizedSocket.inbox, "desync")).toMatchObject({
+      reason: "slow-consumer",
+    });
     oversizedSocket.socket.terminate();
 
     const unknownSocket = await openTerminalSocket(info);
-    const unknownClose = new Promise<number>((resolve) => unknownSocket.socket.once("close", resolve));
-    unknownSocket.socket.send(JSON.stringify({
-      type: "resize", channelId: 99, operationId: 1, cols: 80, rows: 24,
-    }));
-    expect(await nextTerminalControl(unknownSocket.inbox, "operation-result"))
-      .toMatchObject({ channelId: 99, operationId: 1, operation: "resize", ok: false });
+    const unknownClose = new Promise<number>((resolve) =>
+      unknownSocket.socket.once("close", resolve),
+    );
+    unknownSocket.socket.send(
+      JSON.stringify({
+        type: "resize",
+        channelId: 99,
+        operationId: 1,
+        cols: 80,
+        rows: 24,
+      }),
+    );
+    expect(await nextTerminalControl(unknownSocket.inbox, "operation-result")).toMatchObject({
+      channelId: 99,
+      operationId: 1,
+      operation: "resize",
+      ok: false,
+    });
     for (let operationId = 2; operationId <= 3; operationId += 1) {
-      unknownSocket.socket.send(JSON.stringify({
-        type: "resize", channelId: 99, operationId, cols: 80, rows: 24,
-      }));
+      unknownSocket.socket.send(
+        JSON.stringify({
+          type: "resize",
+          channelId: 99,
+          operationId,
+          cols: 80,
+          rows: 24,
+        }),
+      );
     }
     expect(await unknownClose).toBe(TERMINAL_WEBSOCKET_CLOSE.policyViolation);
   });
@@ -272,7 +381,8 @@ describe("gateway terminal WebSocket", () => {
       invoke: mock(async (command: string, args: Record<string, unknown>) => {
         const sessionId = String(args.sessionId);
         if (sessionId === "failed") throw new Error("backend failed");
-        if (command === "get_terminal_session") return { id: sessionId, running: sessionId !== "missing" };
+        if (command === "get_terminal_session")
+          return { id: sessionId, running: sessionId !== "missing" };
         if (command === "get_terminal_output_snapshot") {
           if (sessionId === "missing") return { output: "", generation: 0, revision: 0 };
           return { mode: "delta", output: "", deltas: [], generation: 3, revision: 4 };
@@ -282,40 +392,67 @@ describe("gateway terminal WebSocket", () => {
     };
     const { gateway, info } = await startGateway({ backend });
     const { socket, inbox } = await openTerminalSocket(info);
-    socket.send(JSON.stringify({
-      type: "subscribe", requestId: 1, sessionId: "current", knownGeneration: 3, knownRevision: 4,
-    }));
+    socket.send(
+      JSON.stringify({
+        type: "subscribe",
+        requestId: 1,
+        sessionId: "current",
+        knownGeneration: 3,
+        knownRevision: 4,
+      }),
+    );
     const current = await nextTerminalControl(inbox, "subscribed");
     expect(current).toMatchObject({ requestId: 1, recovery: "current" });
     if (current.type !== "subscribed") throw new Error("Expected subscribed frame");
 
     socket.send(JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "current" }));
-    expect(await nextTerminalControl(inbox, "error"))
-      .toMatchObject({ code: "subscription-denied", requestId: 2 });
+    expect(await nextTerminalControl(inbox, "error")).toMatchObject({
+      code: "subscription-denied",
+      requestId: 2,
+    });
     socket.send(JSON.stringify({ type: "subscribe", requestId: 3, sessionId: "missing" }));
-    expect(await nextTerminalControl(inbox, "error"))
-      .toMatchObject({ code: "subscription-denied", requestId: 3 });
+    expect(await nextTerminalControl(inbox, "error")).toMatchObject({
+      code: "subscription-denied",
+      requestId: 3,
+    });
     socket.send(JSON.stringify({ type: "subscribe", requestId: 4, sessionId: "failed" }));
-    expect(await nextTerminalControl(inbox, "error"))
-      .toMatchObject({ code: "terminal-unavailable", requestId: 4 });
+    expect(await nextTerminalControl(inbox, "error")).toMatchObject({
+      code: "terminal-unavailable",
+      requestId: 4,
+    });
 
     gateway.emit("terminal-output-current", { text: "gap", generation: 3, revision: 6 });
-    expect(await nextTerminalControl(inbox, "desync"))
-      .toMatchObject({ channelId: current.channelId, reason: "revision-gap", revision: 6 });
+    expect(await nextTerminalControl(inbox, "desync")).toMatchObject({
+      channelId: current.channelId,
+      reason: "revision-gap",
+      revision: 6,
+    });
     socket.send(JSON.stringify({ type: "unsubscribe", channelId: current.channelId }));
-    expect(await nextTerminalControl(inbox, "unsubscribed"))
-      .toMatchObject({ channelId: current.channelId });
-    socket.send(JSON.stringify({
-      type: "subscribe", requestId: 5, sessionId: "current", knownGeneration: 3, knownRevision: 4,
-    }));
-    expect(await nextTerminalControl(inbox, "subscribed"))
-      .toMatchObject({ requestId: 5, sessionId: "current", recovery: "current" });
+    expect(await nextTerminalControl(inbox, "unsubscribed")).toMatchObject({
+      channelId: current.channelId,
+    });
+    socket.send(
+      JSON.stringify({
+        type: "subscribe",
+        requestId: 5,
+        sessionId: "current",
+        knownGeneration: 3,
+        knownRevision: 4,
+      }),
+    );
+    expect(await nextTerminalControl(inbox, "subscribed")).toMatchObject({
+      requestId: 5,
+      sessionId: "current",
+      recovery: "current",
+    });
     socket.terminate();
   });
 
   test("announces reconciliation overflow only after the channel mapping", async () => {
     let releaseSnapshot!: () => void;
-    const snapshotBlocked = new Promise<void>((resolve) => { releaseSnapshot = resolve; });
+    const snapshotBlocked = new Promise<void>((resolve) => {
+      releaseSnapshot = resolve;
+    });
     let snapshotStarted = false;
     const backend = {
       invoke: mock(async (command: string) => {
@@ -334,24 +471,30 @@ describe("gateway terminal WebSocket", () => {
     await waitUntil(() => snapshotStarted, "snapshot did not start");
     for (let revision = 1; revision <= 40; revision += 1) {
       gateway.emit("terminal-output-race", {
-        text: "x".repeat(16 * 1024), generation: 1, revision,
+        text: "x".repeat(16 * 1024),
+        generation: 1,
+        revision,
       });
     }
     releaseSnapshot();
-    expect(await nextTerminalControl(inbox, "subscribed"))
-      .toMatchObject({ requestId: 1, sessionId: "race" });
-    expect(await nextTerminalControl(inbox, "desync"))
-      .toMatchObject({ reason: "slow-consumer" });
+    expect(await nextTerminalControl(inbox, "subscribed")).toMatchObject({
+      requestId: 1,
+      sessionId: "race",
+    });
+    expect(await nextTerminalControl(inbox, "desync")).toMatchObject({ reason: "slow-consumer" });
     socket.terminate();
   });
 
   test("acknowledges rejected operations and bounds a blocked per-session queue", async () => {
     let releaseWrite!: () => void;
-    const blockedWrite = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const blockedWrite = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
     const backend = {
       invoke: mock(async (command: string) => {
         if (command === "get_terminal_session") return { id: "ops", running: true };
-        if (command === "get_terminal_output_snapshot") return { output: "", generation: 1, revision: 0 };
+        if (command === "get_terminal_output_snapshot")
+          return { output: "", generation: 1, revision: 0 };
         if (command === "terminal_resize") throw new Error("sensitive backend detail");
         if (command === "terminal_write") await blockedWrite;
         return undefined;
@@ -363,9 +506,15 @@ describe("gateway terminal WebSocket", () => {
     const subscribed = await nextTerminalControl(inbox, "subscribed");
     if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
 
-    socket.send(JSON.stringify({
-      type: "resize", channelId: subscribed.channelId, operationId: 9, cols: 80, rows: 24,
-    }));
+    socket.send(
+      JSON.stringify({
+        type: "resize",
+        channelId: subscribed.channelId,
+        operationId: 9,
+        cols: 80,
+        rows: 24,
+      }),
+    );
     expect(await nextTerminalControl(inbox, "operation-result")).toEqual({
       type: "operation-result",
       channelId: subscribed.channelId,
@@ -376,31 +525,40 @@ describe("gateway terminal WebSocket", () => {
     });
 
     for (let revision = 1; revision <= 257; revision += 1) {
-      socket.send(encodeTerminalBinaryFrame({
-        type: TERMINAL_BINARY_FRAME_TYPE.input,
-        channelId: subscribed.channelId,
-        generation: 1,
-        revision,
-        bytes: new Uint8Array(),
-      }));
+      socket.send(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.input,
+          channelId: subscribed.channelId,
+          generation: 1,
+          revision,
+          bytes: new Uint8Array(),
+        }),
+      );
     }
     let saturated: TerminalWebSocketServerControlFrame | undefined;
     while (!saturated) {
       const frame = await nextTerminalControl(inbox, "operation-result");
       if (frame.type === "operation-result" && frame.operationId === 257) saturated = frame;
     }
-    expect(saturated).toMatchObject({ operation: "input", ok: false, message: "Terminal operation queue is full" });
+    expect(saturated).toMatchObject({
+      operation: "input",
+      ok: false,
+      message: "Terminal operation queue is full",
+    });
     releaseWrite();
     socket.terminate();
   });
 
   test("bounds aggregate operation bytes across independently blocked sessions", async () => {
     let releaseWrites!: () => void;
-    const blockedWrites = new Promise<void>((resolve) => { releaseWrites = resolve; });
+    const blockedWrites = new Promise<void>((resolve) => {
+      releaseWrites = resolve;
+    });
     const backend = {
       invoke: mock(async (command: string, args: Record<string, unknown>) => {
         if (command === "get_terminal_session") return { id: args.sessionId, running: true };
-        if (command === "get_terminal_output_snapshot") return { output: "", generation: 1, revision: 0 };
+        if (command === "get_terminal_output_snapshot")
+          return { output: "", generation: 1, revision: 0 };
         if (command === "terminal_write") await blockedWrites;
         return undefined;
       }),
@@ -409,7 +567,9 @@ describe("gateway terminal WebSocket", () => {
     const { socket, inbox } = await openTerminalSocket(info);
     const channels: number[] = [];
     for (let requestId = 1; requestId <= 33; requestId += 1) {
-      socket.send(JSON.stringify({ type: "subscribe", requestId, sessionId: `aggregate-${requestId}` }));
+      socket.send(
+        JSON.stringify({ type: "subscribe", requestId, sessionId: `aggregate-${requestId}` }),
+      );
       const subscribed = await nextTerminalControl(inbox, "subscribed");
       if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
       channels.push(subscribed.channelId);
@@ -418,13 +578,15 @@ describe("gateway terminal WebSocket", () => {
       TERMINAL_WEBSOCKET_MAX_BINARY_BYTES - TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES,
     );
     for (const channelId of channels) {
-      socket.send(encodeTerminalBinaryFrame({
-        type: TERMINAL_BINARY_FRAME_TYPE.input,
-        channelId,
-        generation: 1,
-        revision: 1,
-        bytes: payload,
-      }));
+      socket.send(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.input,
+          channelId,
+          generation: 1,
+          revision: 1,
+          bytes: payload,
+        }),
+      );
     }
     let aggregateResult: TerminalWebSocketServerControlFrame | undefined;
     while (!aggregateResult) {
@@ -452,7 +614,9 @@ describe("gateway terminal WebSocket", () => {
     await revoked;
 
     const replacementSocket = await openTerminalSocket({ ...info, token: replacement });
-    const stopped = new Promise<void>((resolve) => replacementSocket.socket.once("close", () => resolve()));
+    const stopped = new Promise<void>((resolve) =>
+      replacementSocket.socket.once("close", () => resolve()),
+    );
     await gateway.stop();
     await stopped;
   });
@@ -495,40 +659,55 @@ describe("gateway terminal WebSocket", () => {
     // A client legitimately adopts a newer generation from an authoritative
     // snapshot before this channel hears about the restart. Treating that as a
     // protocol violation would tear down every other terminal on the socket.
-    socket.send(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.input,
-      channelId: stale.channelId,
-      generation: 2,
-      revision: 1,
-      bytes: new TextEncoder().encode("x"),
-    }));
+    socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: stale.channelId,
+        generation: 2,
+        revision: 1,
+        bytes: new TextEncoder().encode("x"),
+      }),
+    );
     expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
-      channelId: stale.channelId, operationId: 1, operation: "input", ok: false,
+      channelId: stale.channelId,
+      operationId: 1,
+      operation: "input",
+      ok: false,
     });
     expect(await nextTerminalControl(inbox, "desync")).toMatchObject({
-      channelId: stale.channelId, reason: "generation-changed", generation: 2,
+      channelId: stale.channelId,
+      reason: "generation-changed",
+      generation: 2,
     });
 
     // A non-increasing sequence is at worst a duplicate, not a violation.
-    socket.send(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.input,
-      channelId: healthy.channelId,
-      generation: 1,
-      revision: 5,
-      bytes: new TextEncoder().encode("first"),
-    }));
+    socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: healthy.channelId,
+        generation: 1,
+        revision: 5,
+        bytes: new TextEncoder().encode("first"),
+      }),
+    );
     expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
-      channelId: healthy.channelId, operationId: 5, ok: true,
+      channelId: healthy.channelId,
+      operationId: 5,
+      ok: true,
     });
-    socket.send(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.input,
-      channelId: healthy.channelId,
-      generation: 1,
-      revision: 5,
-      bytes: new TextEncoder().encode("replay"),
-    }));
+    socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: healthy.channelId,
+        generation: 1,
+        revision: 5,
+        bytes: new TextEncoder().encode("replay"),
+      }),
+    );
     expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
-      channelId: healthy.channelId, operationId: 5, ok: false,
+      channelId: healthy.channelId,
+      operationId: 5,
+      ok: false,
     });
 
     // The untouched channel is still live on the still-open socket.
@@ -565,22 +744,35 @@ describe("gateway terminal WebSocket", () => {
     const subscribed = await nextTerminalControl(inbox, "subscribed");
     if (subscribed.type !== "subscribed") throw new Error("Expected subscribed frame");
 
-    socket.send(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.input,
-      channelId: subscribed.channelId,
-      generation: 1,
-      revision: 1,
-      bytes: new TextEncoder().encode("ls\r"),
-    }));
+    socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: subscribed.channelId,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("ls\r"),
+      }),
+    );
     expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
-      operation: "input", ok: false, message: "Terminal session is not running",
+      operation: "input",
+      ok: false,
+      message: "Terminal session is not running",
     });
 
-    socket.send(JSON.stringify({
-      type: "resize", channelId: subscribed.channelId, operationId: 9, cols: 80, rows: 24,
-    }));
+    socket.send(
+      JSON.stringify({
+        type: "resize",
+        channelId: subscribed.channelId,
+        operationId: 9,
+        cols: 80,
+        rows: 24,
+      }),
+    );
     expect(await nextTerminalControl(inbox, "operation-result")).toMatchObject({
-      operationId: 9, operation: "resize", ok: false, message: "Terminal session is not running",
+      operationId: 9,
+      operation: "resize",
+      ok: false,
+      message: "Terminal session is not running",
     });
     socket.terminate();
   });
@@ -625,16 +817,16 @@ describe("gateway terminal WebSocket", () => {
     });
     const closed = new Promise<void>((resolve) => raw.once("close", () => resolve()));
     raw.write(
-      `GET /__orkestrator/terminal HTTP/1.1\r\n`
-      + `Host: ${target.host}\r\n`
-      + `Upgrade: websocket\r\nConnection: Upgrade\r\n`
-      + `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n`
-      + `Sec-WebSocket-Version: 13\r\n`
-      + `Sec-WebSocket-Protocol: ${TERMINAL_WEBSOCKET_SUBPROTOCOL}\r\n`
-      // An origin-less upgrade that already carries a credential is refused, so
-      // this has to look like the browser client it is standing in for.
-      + `Origin: http://${target.host}\r\n`
-      + `Authorization: Bearer ${info.token}\r\n\r\n`,
+      `GET /__orkestrator/terminal HTTP/1.1\r\n` +
+        `Host: ${target.host}\r\n` +
+        `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+        `Sec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n` +
+        `Sec-WebSocket-Version: 13\r\n` +
+        `Sec-WebSocket-Protocol: ${TERMINAL_WEBSOCKET_SUBPROTOCOL}\r\n` +
+        // An origin-less upgrade that already carries a credential is refused, so
+        // this has to look like the browser client it is standing in for.
+        `Origin: http://${target.host}\r\n` +
+        `Authorization: Bearer ${info.token}\r\n\r\n`,
     );
     await new Promise<void>((resolve, reject) => {
       const onData = (chunk: Buffer) => {
@@ -668,26 +860,36 @@ describe("gateway terminal WebSocket", () => {
       backend: { invoke: mock(async () => undefined) },
       tokenMatches: () => true,
       originAllowed: () => true,
-      logger: { debug: (message: string) => warnings.push(message), warn: () => {}, error: () => {} },
+      logger: {
+        debug: (message: string) => warnings.push(message),
+        warn: () => {},
+        error: () => {},
+      },
     });
     const written: string[] = [];
     let destroyed = false;
     const socket = {
       destroyed: false,
       end: (chunk: string) => written.push(chunk),
-      destroy: () => { destroyed = true; },
+      destroy: () => {
+        destroyed = true;
+      },
       once: () => undefined,
       removeListener: () => undefined,
     } as unknown as Duplex;
     // `ws` throws on a request with no key rather than returning a status, and
     // that must not escape the listener's upgrade callback.
-    const handled = terminalGateway.handleUpgrade({
-      url: "/__orkestrator/terminal",
-      headers: {
-        origin: "http://localhost",
-        "sec-websocket-protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
-      },
-    } as unknown as IncomingMessage, socket, Buffer.alloc(0));
+    const handled = terminalGateway.handleUpgrade(
+      {
+        url: "/__orkestrator/terminal",
+        headers: {
+          origin: "http://localhost",
+          "sec-websocket-protocol": TERMINAL_WEBSOCKET_SUBPROTOCOL,
+        },
+      } as unknown as IncomingMessage,
+      socket,
+      Buffer.alloc(0),
+    );
 
     expect(handled).toBe(true);
     // The listener's upgrade callback must not see this throw, and the socket
@@ -699,15 +901,22 @@ describe("gateway terminal WebSocket", () => {
 
   test("multiplexes isolated terminal channels, raw input, resize, and retained replay", async () => {
     const terminalState = new Map([
-      ["session-a", { generation: 1, revision: 0, deltas: [] as Array<{ revision: number; text: string }> }],
-      ["session-b", { generation: 7, revision: 0, deltas: [] as Array<{ revision: number; text: string }> }],
+      [
+        "session-a",
+        { generation: 1, revision: 0, deltas: [] as Array<{ revision: number; text: string }> },
+      ],
+      [
+        "session-b",
+        { generation: 7, revision: 0, deltas: [] as Array<{ revision: number; text: string }> },
+      ],
     ]);
     const operations: Array<{ command: string; args: Record<string, unknown> }> = [];
     const backend = {
       invoke: mock(async (command: string, args: Record<string, unknown>) => {
         operations.push({ command, args });
         const state = terminalState.get(String(args.sessionId));
-        if (command === "get_terminal_session") return { id: args.sessionId, running: Boolean(state) };
+        if (command === "get_terminal_session")
+          return { id: args.sessionId, running: Boolean(state) };
         if (command === "get_terminal_output_snapshot") {
           if (!state) return { output: "", generation: 0, revision: 0, truncated: false };
           const knownGeneration = args.sinceGeneration;
@@ -723,7 +932,12 @@ describe("gateway terminal WebSocket", () => {
               truncated: false,
             };
           }
-          return { output: "", generation: state.generation, revision: state.revision, truncated: false };
+          return {
+            output: "",
+            generation: state.generation,
+            revision: state.revision,
+            truncated: false,
+          };
         }
         return undefined;
       }),
@@ -740,14 +954,21 @@ describe("gateway terminal WebSocket", () => {
         socket.once("error", reject);
       });
       socket.send(JSON.stringify({ type: "authenticate", version: 1, token: info.token }));
-      expect(await nextTerminalControl(inbox, "ready")).toMatchObject({ type: "ready", version: 1 });
+      expect(await nextTerminalControl(inbox, "ready")).toMatchObject({
+        type: "ready",
+        version: 1,
+      });
       return { socket, inbox };
     };
 
     const first = await connect();
     first.socket.send(JSON.stringify({ type: "subscribe", requestId: 1, sessionId: "session-a" }));
     const subscribedA = await nextTerminalControl(first.inbox, "subscribed");
-    expect(subscribedA).toMatchObject({ type: "subscribed", sessionId: "session-a", recovery: "snapshot-required" });
+    expect(subscribedA).toMatchObject({
+      type: "subscribed",
+      sessionId: "session-a",
+      recovery: "snapshot-required",
+    });
     if (subscribedA.type !== "subscribed") throw new Error("Expected subscribed frame");
 
     first.socket.send(JSON.stringify({ type: "subscribe", requestId: 2, sessionId: "session-b" }));
@@ -767,49 +988,79 @@ describe("gateway terminal WebSocket", () => {
       const message = await first.inbox.next();
       if (message.binary) binaryFrames.push(decodeTerminalBinaryFrame(message.data));
     }
-    expect(binaryFrames.map((frame) => [frame.channelId, new TextDecoder().decode(frame.bytes)]).sort())
-      .toEqual([
+    expect(
+      binaryFrames.map((frame) => [frame.channelId, new TextDecoder().decode(frame.bytes)]).sort(),
+    ).toEqual(
+      [
         [subscribedA.channelId, "alpha"],
         [subscribedB.channelId, "beta"],
-      ].sort());
+      ].sort(),
+    );
 
-    first.socket.send(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.input,
-      channelId: subscribedA.channelId,
-      generation: 1,
-      revision: 1,
-      bytes: new TextEncoder().encode("pwd\r"),
-    }));
-    first.socket.send(JSON.stringify({
-      type: "resize",
-      channelId: subscribedA.channelId,
-      operationId: 2,
-      cols: 120,
-      rows: 40,
-    }));
+    first.socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: subscribedA.channelId,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("pwd\r"),
+      }),
+    );
+    first.socket.send(
+      JSON.stringify({
+        type: "resize",
+        channelId: subscribedA.channelId,
+        operationId: 2,
+        cols: 120,
+        rows: 40,
+      }),
+    );
     await waitUntil(
       () => operations.some((entry) => entry.command === "terminal_resize"),
       "terminal input and resize were not routed",
     );
-    expect(operations).toContainEqual({ command: "terminal_write", args: { sessionId: "session-a", data: "pwd\r" } });
-    expect(operations).toContainEqual({ command: "terminal_resize", args: { sessionId: "session-a", cols: 120, rows: 40 } });
-    expect(await nextTerminalControl(first.inbox, "operation-result"))
-      .toMatchObject({ operation: "input", operationId: 1, ok: true });
-    expect(await nextTerminalControl(first.inbox, "operation-result"))
-      .toMatchObject({ operation: "resize", operationId: 2, ok: true });
+    expect(operations).toContainEqual({
+      command: "terminal_write",
+      args: { sessionId: "session-a", data: "pwd\r" },
+    });
+    expect(operations).toContainEqual({
+      command: "terminal_resize",
+      args: { sessionId: "session-a", cols: 120, rows: 40 },
+    });
+    expect(await nextTerminalControl(first.inbox, "operation-result")).toMatchObject({
+      operation: "input",
+      operationId: 1,
+      ok: true,
+    });
+    expect(await nextTerminalControl(first.inbox, "operation-result")).toMatchObject({
+      operation: "resize",
+      operationId: 2,
+      ok: true,
+    });
 
     first.socket.terminate();
-    expect(operations.some((entry) => entry.command === "detach_terminal" || entry.command === "close_local_terminal_session")).toBe(false);
+    expect(
+      operations.some(
+        (entry) =>
+          entry.command === "detach_terminal" || entry.command === "close_local_terminal_session",
+      ),
+    ).toBe(false);
 
     const second = await connect();
-    second.socket.send(JSON.stringify({
-      type: "subscribe",
-      requestId: 3,
-      sessionId: "session-a",
-      knownGeneration: 1,
-      knownRevision: 0,
-    }));
-    expect(await nextTerminalControl(second.inbox, "subscribed")).toMatchObject({ recovery: "delta", baseRevision: 0, targetRevision: 1 });
+    second.socket.send(
+      JSON.stringify({
+        type: "subscribe",
+        requestId: 3,
+        sessionId: "session-a",
+        knownGeneration: 1,
+        knownRevision: 0,
+      }),
+    );
+    expect(await nextTerminalControl(second.inbox, "subscribed")).toMatchObject({
+      recovery: "delta",
+      baseRevision: 0,
+      targetRevision: 1,
+    });
     let replay;
     do {
       const message = await second.inbox.next();
@@ -838,7 +1089,10 @@ describe("gateway terminal WebSocket", () => {
       const message = await second.inbox.next();
       if (message.binary) {
         const frame = decodeTerminalBinaryFrame(message.data);
-        if (frame.channelId === secondSubscribedB.channelId && new TextDecoder().decode(frame.bytes) === "still-fast") {
+        if (
+          frame.channelId === secondSubscribedB.channelId &&
+          new TextDecoder().decode(frame.bytes) === "still-fast"
+        ) {
           sawFastOutput = true;
         }
       } else {
@@ -853,7 +1107,9 @@ describe("gateway terminal WebSocket", () => {
 
   test("preserves accepted input order across a socket reconnect", async () => {
     let releaseFirstWrite!: () => void;
-    const firstWriteBlocked = new Promise<void>((resolve) => { releaseFirstWrite = resolve; });
+    const firstWriteBlocked = new Promise<void>((resolve) => {
+      releaseFirstWrite = resolve;
+    });
     const writes: string[] = [];
     const backend = {
       invoke: mock(async (command: string, args: Record<string, unknown>) => {
@@ -888,24 +1144,28 @@ describe("gateway terminal WebSocket", () => {
     };
 
     const first = await connect(1);
-    first.socket.send(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.input,
-      channelId: first.channelId,
-      generation: 1,
-      revision: 1,
-      bytes: new TextEncoder().encode("first"),
-    }));
+    first.socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: first.channelId,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("first"),
+      }),
+    );
     await waitUntil(() => writes.length === 1, "first terminal write did not begin");
     first.socket.terminate();
 
     const second = await connect(2);
-    second.socket.send(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.input,
-      channelId: second.channelId,
-      generation: 1,
-      revision: 1,
-      bytes: new TextEncoder().encode("second"),
-    }));
+    second.socket.send(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: second.channelId,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("second"),
+      }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(writes).toEqual(["first"]);
     releaseFirstWrite();
@@ -942,9 +1202,11 @@ describe("gateway terminal WebSocket", () => {
     const close = new Promise<number>((resolve) => socket.once("close", resolve));
     // Model a non-reading transport whose kernel/write backlog has reached the
     // hard cap. The next frame must disconnect instead of growing the queue.
-    const terminalWebSocket = (gateway as unknown as {
-      terminalWebSocket: { sockets: Set<{ ws: WebSocket }> };
-    }).terminalWebSocket;
+    const terminalWebSocket = (
+      gateway as unknown as {
+        terminalWebSocket: { sockets: Set<{ ws: WebSocket }> };
+      }
+    ).terminalWebSocket;
     const serverState = [...terminalWebSocket.sockets][0];
     if (!serverState) throw new Error("Expected terminal WebSocket state");
     Object.defineProperty(serverState.ws, "bufferedAmount", {
@@ -957,9 +1219,6 @@ describe("gateway terminal WebSocket", () => {
 });
 
 describe("remote gateway", () => {
-
-
-
   test("negotiates shared compression primitives and excludes precompressed content", async () => {
     expect(negotiateEncoding("gzip, br")).toBe("br");
     expect(negotiateEncoding("br;q=0, gzip;q=0.5")).toBe("gzip");
@@ -976,11 +1235,10 @@ describe("remote gateway", () => {
     const source = Buffer.from("shared compression ".repeat(COMPRESSION_MIN_BYTES));
     expect((await compressBody(source, "br")).byteLength).toBeLessThan(source.byteLength);
     expect((await compressBody(source, "gzip")).byteLength).toBeLessThan(source.byteLength);
-    expect((await compressBody("shared compression ".repeat(COMPRESSION_MIN_BYTES), "gzip")).byteLength)
-      .toBeLessThan(source.byteLength);
+    expect(
+      (await compressBody("shared compression ".repeat(COMPRESSION_MIN_BYTES), "gzip")).byteLength,
+    ).toBeLessThan(source.byteLength);
   });
-
-
 
   test("compresses eligible invoke bodies above the threshold with Brotli then gzip", async () => {
     const payload = "dynamic invoke body ".repeat(256);
@@ -988,15 +1246,16 @@ describe("remote gateway", () => {
       compression: "body",
       backend: { invoke: mock(async () => payload) },
     });
-    const invoke = (acceptEncoding: string) => requestUrl(`${info.url}__orkestrator/invoke`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${info.token}`,
-        "content-type": "application/json",
-        "accept-encoding": acceptEncoding,
-      },
-      body: JSON.stringify({ command: "large_response", args: {} }),
-    });
+    const invoke = (acceptEncoding: string) =>
+      requestUrl(`${info.url}__orkestrator/invoke`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "content-type": "application/json",
+          "accept-encoding": acceptEncoding,
+        },
+        body: JSON.stringify({ command: "large_response", args: {} }),
+      });
 
     const brotli = await invoke("br, gzip");
     expect(brotli.headers["content-encoding"]).toBe("br");
@@ -1011,8 +1270,6 @@ describe("remote gateway", () => {
     expect(identity.headers["content-encoding"]).toBeUndefined();
     expect(identity.json()).toEqual({ result: payload });
   });
-
-
 
   test("prefers Brotli, then gzip, then identity for static sibling assets", async () => {
     const dataDir = await createTempDir("ork-static-siblings-");
@@ -1047,8 +1304,6 @@ describe("remote gateway", () => {
     expect(identity.body).toBe("console.log('identity');".repeat(256));
   });
 
-
-
   test("rejects stale compressed siblings and falls back to fresh on-the-fly compression", async () => {
     const dataDir = await createTempDir("ork-static-stale-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -1074,16 +1329,13 @@ describe("remote gateway", () => {
     expect(decodeResponseBody(response)).toBe("console.log('source body');".repeat(256));
   });
 
-
-
   test("revalidates Last-Modified, serves immutable hashed assets, and keeps the SPA fallback no-cache", async () => {
     const dataDir = await createTempDir("ork-static-cache-");
-    const rendererRoot = await createRendererRoot(dataDir, "<!doctype html><div id='root'>index</div>");
-    await writeRendererAsset(
-      rendererRoot,
-      "assets/app-12345678.js",
-      "console.log('cache');",
+    const rendererRoot = await createRendererRoot(
+      dataDir,
+      "<!doctype html><div id='root'>index</div>",
     );
+    await writeRendererAsset(rendererRoot, "assets/app-12345678.js", "console.log('cache');");
 
     const { info } = await startGateway({ dataDir, rendererRoot, compression: "off" });
     const authorization = { authorization: `Bearer ${info.token}` };
@@ -1110,8 +1362,6 @@ describe("remote gateway", () => {
     expect(notModified.rawBody.byteLength).toBe(0);
   });
 
-
-
   test("rejects traversal even when compressed sibling lookup is enabled", async () => {
     const dataDir = await createTempDir("ork-static-traversal-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -1127,8 +1377,6 @@ describe("remote gateway", () => {
 
     expect(response.status).toBe(403);
   });
-
-
 
   test("compresses static assets on the fly when no precompressed siblings exist", async () => {
     const dataDir = await createTempDir("ork-static-fallback-");
@@ -1151,8 +1399,6 @@ describe("remote gateway", () => {
     expect(decodeResponseBody(response)).toContain("fallback");
   });
 
-
-
   test("bounds on-the-fly compression source bytes and serves oversized assets as identity", async () => {
     const dataDir = await createTempDir("ork-static-fallback-bound-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -1172,8 +1418,6 @@ describe("remote gateway", () => {
     expect(response.rawBody.byteLength).toBe(source.byteLength);
   });
 
-
-
   test("classifies fallback compression outcomes as compressed, not-beneficial, or declined", async () => {
     const root = await createTempDir("ork-static-outcome-");
     const compressiblePath = path.join(root, "app.js");
@@ -1183,49 +1427,59 @@ describe("remote gateway", () => {
     await writeFile(incompressiblePath, "x");
     const incompressibleStat = await stat(incompressiblePath);
 
-    expect(await compressStaticFileWithinLimits(
-      compressiblePath,
-      compressibleStat.mtimeMs,
-      compressibleStat.size,
-      ["br", "gzip"],
-      false,
-    )).toMatchObject({ status: "compressed", encoding: "br" });
+    expect(
+      await compressStaticFileWithinLimits(
+        compressiblePath,
+        compressibleStat.mtimeMs,
+        compressibleStat.size,
+        ["br", "gzip"],
+        false,
+      ),
+    ).toMatchObject({ status: "compressed", encoding: "br" });
 
     // No encoding the client accepts is a property of the request, not of this
     // server's budget, so it must not be reported as a decline.
-    expect(await compressStaticFileWithinLimits(
-      compressiblePath,
-      compressibleStat.mtimeMs,
-      compressibleStat.size,
-      [],
-      false,
-    )).toEqual({ status: "not-beneficial" });
+    expect(
+      await compressStaticFileWithinLimits(
+        compressiblePath,
+        compressibleStat.mtimeMs,
+        compressibleStat.size,
+        [],
+        false,
+      ),
+    ).toEqual({ status: "not-beneficial" });
 
-    expect(await compressStaticFileWithinLimits(
-      incompressiblePath,
-      incompressibleStat.mtimeMs,
-      incompressibleStat.size,
-      ["br", "gzip"],
-      false,
-    )).toEqual({ status: "not-beneficial" });
+    expect(
+      await compressStaticFileWithinLimits(
+        incompressiblePath,
+        incompressibleStat.mtimeMs,
+        incompressibleStat.size,
+        ["br", "gzip"],
+        false,
+      ),
+    ).toEqual({ status: "not-beneficial" });
 
     // Over the source cap, and a read that cannot be satisfied, are both
     // server-side declines rather than statements about the representation.
-    expect(await compressStaticFileWithinLimits(
-      compressiblePath,
-      compressibleStat.mtimeMs,
-      MAX_STATIC_FALLBACK_SOURCE_BYTES + 1,
-      ["br"],
-      false,
-    )).toEqual({ status: "declined" });
+    expect(
+      await compressStaticFileWithinLimits(
+        compressiblePath,
+        compressibleStat.mtimeMs,
+        MAX_STATIC_FALLBACK_SOURCE_BYTES + 1,
+        ["br"],
+        false,
+      ),
+    ).toEqual({ status: "declined" });
 
-    expect(await compressStaticFileWithinLimits(
-      path.join(root, "missing.js"),
-      compressibleStat.mtimeMs,
-      compressibleStat.size,
-      ["br"],
-      true,
-    )).toEqual({ status: "declined" });
+    expect(
+      await compressStaticFileWithinLimits(
+        path.join(root, "missing.js"),
+        compressibleStat.mtimeMs,
+        compressibleStat.size,
+        ["br"],
+        true,
+      ),
+    ).toEqual({ status: "declined" });
 
     // A forbidden identity forces a coded form even when it is larger.
     const forced = await compressStaticFileWithinLimits(
@@ -1237,8 +1491,6 @@ describe("remote gateway", () => {
     );
     expect(forced).toMatchObject({ status: "compressed", encoding: "gzip" });
   });
-
-
 
   test("does not crash the gateway when a validated asset becomes unreadable mid-response", async () => {
     if (process.getuid?.() === 0) return;
@@ -1278,8 +1530,6 @@ describe("remote gateway", () => {
     await chmod(assetPath, 0o600);
   });
 
-
-
   test("serves precompressed build-script file types with aligned MIME types", async () => {
     const dataDir = await createTempDir("ork-static-mime-compression-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -1312,8 +1562,6 @@ describe("remote gateway", () => {
     }
   });
 
-
-
   test("sync-flushes compressed SSE immediately and cleans up its compressor", async () => {
     const { gateway, info } = await startGateway({ compression: "on" });
     const stream = await openCompressedEventStream(gateway, info);
@@ -1343,8 +1591,6 @@ describe("remote gateway", () => {
     expect(writer.compressor.destroyed).toBe(true);
   });
 
-
-
   test("destroys a compressed SSE response and clears pending bytes on codec failure", async () => {
     const { gateway, info } = await startGateway({ compression: "on" });
     const stream = await openCompressedEventStream(gateway, info);
@@ -1363,14 +1609,9 @@ describe("remote gateway", () => {
     );
     expect(writer.compressor.destroyed).toBe(true);
     expect(writer.writableLength).toBe(0);
-    await waitUntil(
-      () => stream.aborted(),
-      "Failed compressed response was not aborted",
-    );
+    await waitUntil(() => stream.aborted(), "Failed compressed response was not aborted");
     stream.close();
   });
-
-
 
   test("keeps SSE identity in off and body modes", async () => {
     for (const compression of ["off", "body"] as const) {
@@ -1381,8 +1622,6 @@ describe("remote gateway", () => {
       stream.close();
     }
   });
-
-
 
   test("preserves compressed SSE soft-limit recovery and keepalives", async () => {
     const { gateway, info } = await startGateway({
@@ -1413,24 +1652,25 @@ describe("remote gateway", () => {
       () => stream.received().includes(pane),
       "Compressed stream did not recover its retained tmux repaint",
     );
-    expect(stream.received()).not.toContain("\"desynced\":true");
+    expect(stream.received()).not.toContain('"desynced":true');
     stream.close();
   });
-
-
 
   test("drops a real non-reading incompressible compressed stream at the hard limit", async () => {
     const { gateway, info } = await startGateway({ compression: "on" });
     const endpoint = new URL(`${info.url}__orkestrator/events`);
-    const request = httpRequest({
-      hostname: endpoint.hostname,
-      port: endpoint.port,
-      path: endpoint.pathname,
-      headers: {
-        authorization: `Bearer ${info.token}`,
-        "accept-encoding": "gzip",
+    const request = httpRequest(
+      {
+        hostname: endpoint.hostname,
+        port: endpoint.port,
+        path: endpoint.pathname,
+        headers: {
+          authorization: `Bearer ${info.token}`,
+          "accept-encoding": "gzip",
+        },
       },
-    }, (response) => response.pause());
+      (response) => response.pause(),
+    );
     request.on("error", () => undefined);
     request.end();
     await waitUntil(
@@ -1449,8 +1689,6 @@ describe("remote gateway", () => {
     expect(writer.compressor.destroyed).toBe(true);
     request.destroy();
   });
-
-
 
   test("applies event filters before writing to connected clients", async () => {
     const dataDir = await createTempDir("ork-gateway-filter-");
@@ -1471,9 +1709,7 @@ describe("remote gateway", () => {
       }),
       destroy: mock(() => undefined),
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, unknown> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, unknown> }).clients;
     clients.set(client, {
       prefixes: null,
       includedPrefixes: ["terminal-output-one"],
@@ -1488,8 +1724,6 @@ describe("remote gateway", () => {
     expect(writes).toHaveLength(1);
     expect(writes[0]).toContain('"event":"terminal-output-one"');
   });
-
-
 
   test("counts one event frame per delivery, and none when nobody receives it", async () => {
     const { gateway, info } = await startGateway();
@@ -1508,8 +1742,9 @@ describe("remote gateway", () => {
     // count and the byte total scale with deliveries rather than with emits.
     gateway.emit("environment-renamed", payload);
     await waitUntil(
-      () => first.received().includes("environment-renamed")
-        && second.received().includes("environment-renamed"),
+      () =>
+        first.received().includes("environment-renamed") &&
+        second.received().includes("environment-renamed"),
       "Both streams should have received the frame",
     );
     metrics = await readGatewayMetrics(info);
@@ -1522,8 +1757,8 @@ describe("remote gateway", () => {
     // `id:` line, which the byte count has to include.
     const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     const expectedFrameBytes = Buffer.byteLength(
-      `id: ${replay.generation}:${replay.latestRevision}\n`
-      + `data: ${JSON.stringify({ event: "environment-renamed", payload })}\n\n`,
+      `id: ${replay.generation}:${replay.latestRevision}\n` +
+        `data: ${JSON.stringify({ event: "environment-renamed", payload })}\n\n`,
     );
     expect(receivedBytes).toBe(expectedFrameBytes * 2);
     expect(metrics.events["environment-renamed"]).toEqual({
@@ -1556,8 +1791,6 @@ describe("remote gateway", () => {
     filtered.close();
   });
 
-
-
   test("attributes keepalive drops to a reserved label and counts keepalives", async () => {
     const { gateway, info } = await startGateway({ keepaliveMs: 5 });
     const lagging = await openEventStream(gateway, info);
@@ -1582,8 +1815,6 @@ describe("remote gateway", () => {
     releaseBufferedBytes(lagging.response);
     healthy.close();
   });
-
-
 
   test("counts a desync recovery frame and keeps the connecting gauge released", async () => {
     const { gateway, info } = await startGateway();
@@ -1617,8 +1848,6 @@ describe("remote gateway", () => {
     client.close();
   });
 
-
-
   test("drops projected soft-limit terminal frames and flushes a desync notice on drain", async () => {
     const dataDir = await createTempDir("ork-gateway-soft-limit-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -1644,9 +1873,7 @@ describe("remote gateway", () => {
       excludedPrefixes: null,
       desyncedSessions: new Set<string>(),
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, typeof state> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     clients.set(client, state);
 
     gateway.emit("terminal-output-session-a", {
@@ -1671,8 +1898,6 @@ describe("remote gateway", () => {
     expect(writes[0]).toContain('"desynced":true');
   });
 
-
-
   test("disconnects instead of retaining one oversized authoritative frame", async () => {
     const dataDir = await createTempDir("ork-gateway-oversized-frame-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -1688,9 +1913,7 @@ describe("remote gateway", () => {
       write: mock(() => true),
       destroy: mock(() => undefined),
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, unknown> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, unknown> }).clients;
     clients.set(client, {
       prefixes: null,
       includedPrefixes: null,
@@ -1704,22 +1927,16 @@ describe("remote gateway", () => {
     expect(clients.has(client)).toBe(false);
   });
 
-
-
   test("keeps a scoped subscription restricted to its own prefixes", () => {
     expect(eventMatchesSubscription("menu-zoom", ["menu-", "environment-"])).toBe(true);
     expect(eventMatchesSubscription("terminal-output-one", ["menu-"])).toBe(false);
     // An explicit include still wins over a base scope that omits the event, and
     // an exclude still removes one the base scope would otherwise carry.
-    expect(eventMatchesSubscription(
-      "terminal-output-one",
-      ["menu-"],
-      ["terminal-output-one"],
-    )).toBe(true);
+    expect(
+      eventMatchesSubscription("terminal-output-one", ["menu-"], ["terminal-output-one"]),
+    ).toBe(true);
     expect(eventMatchesSubscription("menu-zoom", ["menu-"], null, ["menu-"])).toBe(false);
   });
-
-
 
   test("rejects non-GET event-stream requests", async () => {
     const { info } = await startGateway();
@@ -1733,8 +1950,6 @@ describe("remote gateway", () => {
     expect(response.headers.allow).toBe("GET");
   });
 
-
-
   test("advances scoped replay cursors across omitted global revisions", async () => {
     const { gateway, info } = await startGateway();
     const initial = await openEventStream(gateway, info, "?events=menu-");
@@ -1745,9 +1960,8 @@ describe("remote gateway", () => {
     await waitUntil(() => eventClients(gateway).size === 0, "Initial scoped stream did not close");
 
     gateway.emit("environment-renamed", { id: "omitted" });
-    const omittedCursor = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay.latestCursor;
+    const omittedCursor = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay
+      .latestCursor;
     gateway.emit("menu-zoom", "in");
 
     const replayed = await openEventStream(
@@ -1766,8 +1980,6 @@ describe("remote gateway", () => {
     expect(eventFrames(replayed.received(), "menu-zoom")).toHaveLength(1);
     replayed.close();
   });
-
-
 
   test("terminal-only streams ignore gateway replay cursors and control frames", async () => {
     const { gateway, info } = await startGateway();
@@ -1796,8 +2008,6 @@ describe("remote gateway", () => {
     terminal.close();
   });
 
-
-
   test("replays a retained authoritative gap and echoes the client cursor", async () => {
     const { gateway, info } = await startGateway();
     const initial = await openEventStream(gateway, info);
@@ -1812,11 +2022,7 @@ describe("remote gateway", () => {
     gateway.emit("environment-renamed", { id: "one" });
     gateway.emit("environment-setup-complete", { id: "two" });
 
-    const replayed = await openEventStream(
-      gateway,
-      info,
-      `?since=${encodeURIComponent(cursor)}`,
-    );
+    const replayed = await openEventStream(gateway, info, `?since=${encodeURIComponent(cursor)}`);
     await waitUntil(
       () => replayed.received().includes("environment-setup-complete"),
       "Retained gap was not replayed",
@@ -1832,8 +2038,6 @@ describe("remote gateway", () => {
     expect(eventFrames(replayed.received(), "environment-setup-complete")).toHaveLength(1);
     replayed.close();
   });
-
-
 
   test("accepts Last-Event-ID and reconciles invalid or prior-generation cursors", async () => {
     const { gateway, info } = await startGateway();
@@ -1867,17 +2071,11 @@ describe("remote gateway", () => {
     invalid.close();
     await waitUntil(() => eventClients(gateway).size === 0, "Invalid stream did not close");
 
-    const prior = await openEventStream(
-      gateway,
-      info,
-      `?since=${"a".repeat(32)}%3A0`,
-    );
+    const prior = await openEventStream(gateway, info, `?since=${"a".repeat(32)}%3A0`);
     expect(eventFrames(prior.received(), "gateway.reconcile-required")).toHaveLength(1);
     expect(prior.received()).toContain('"reason":"prior-generation"');
     prior.close();
   });
-
-
 
   test("prefers a newer Last-Event-ID over a stale explicit since cursor", async () => {
     const { gateway, info } = await startGateway();
@@ -1889,9 +2087,8 @@ describe("remote gateway", () => {
     await waitUntil(() => eventClients(gateway).size === 0, "Initial stream did not close");
 
     gateway.emit("environment-renamed", { id: "already-delivered" });
-    const newerCursor = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay.latestCursor;
+    const newerCursor = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay
+      .latestCursor;
     gateway.emit("environment-setup-complete", { id: "still-missing" });
 
     const resumed = await openEventStream(
@@ -1910,8 +2107,6 @@ describe("remote gateway", () => {
     resumed.close();
   });
 
-
-
   test("prefers the header even when it trails the explicit since cursor", async () => {
     const { gateway, info } = await startGateway();
     const initial = await openEventStream(gateway, info);
@@ -1922,9 +2117,8 @@ describe("remote gateway", () => {
     await waitUntil(() => eventClients(gateway).size === 0, "Initial stream did not close");
 
     gateway.emit("environment-renamed", { id: "between" });
-    const newerCursor = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay.latestCursor;
+    const newerCursor = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay
+      .latestCursor;
 
     // The browser owns Last-Event-ID and always advances it, so a header behind
     // the query means the query is the untrustworthy one. Preferring the header
@@ -1944,8 +2138,6 @@ describe("remote gateway", () => {
     expect(eventFrames(resumed.received(), "gateway.reconcile-required")).toHaveLength(0);
     resumed.close();
   });
-
-
 
   test("treats a blank cursor in either position as absent rather than malformed", async () => {
     const { gateway, info } = await startGateway();
@@ -1974,8 +2166,6 @@ describe("remote gateway", () => {
     }
   });
 
-
-
   test("a whitespace-only header falls back to the explicit since cursor", async () => {
     const { gateway, info } = await startGateway();
     const initial = await openEventStream(gateway, info);
@@ -1987,12 +2177,9 @@ describe("remote gateway", () => {
 
     gateway.emit("environment-renamed", { id: "missed" });
 
-    const resumed = await openEventStream(
-      gateway,
-      info,
-      `?since=${encodeURIComponent(cursor)}`,
-      { "Last-Event-ID": "  " },
-    );
+    const resumed = await openEventStream(gateway, info, `?since=${encodeURIComponent(cursor)}`, {
+      "Last-Event-ID": "  ",
+    });
     await waitUntil(
       () => resumed.received().includes('"id":"missed"'),
       "Blank header did not fall back to the query cursor",
@@ -2000,8 +2187,6 @@ describe("remote gateway", () => {
     expect(resumed.received()).toContain('"status":"replayed"');
     resumed.close();
   });
-
-
 
   test("keeps replay for a stream whose includes are not all terminal output", async () => {
     const { gateway, info } = await startGateway();
@@ -2026,8 +2211,6 @@ describe("remote gateway", () => {
     mixed.close();
   });
 
-
-
   test("reports the full reconciliation payload, not just its reason", async () => {
     const { gateway, info } = await startGateway({
       eventReplay: { frameCapacity: 1, idleRetentionMs: 60_000 },
@@ -2042,11 +2225,7 @@ describe("remote gateway", () => {
     gateway.emit("environment-renamed", { id: "one" });
     gateway.emit("environment-renamed", { id: "two" });
 
-    const expired = await openEventStream(
-      gateway,
-      info,
-      `?since=${encodeURIComponent(cursor)}`,
-    );
+    const expired = await openEventStream(gateway, info, `?since=${encodeURIComponent(cursor)}`);
     const frame = eventFrames(expired.received(), "gateway.reconcile-required")[0];
     expect(frame).toBeDefined();
     const payload = JSON.parse(frame!.slice(frame!.indexOf("data: ") + 6)) as {
@@ -2063,8 +2242,6 @@ describe("remote gateway", () => {
     });
     expired.close();
   });
-
-
 
   test("reports replay handshake outcomes and ring occupancy on /metrics", async () => {
     const { gateway, info } = await startGateway({
@@ -2083,14 +2260,9 @@ describe("remote gateway", () => {
     await waitUntil(() => eventClients(gateway).size === 0, "Caught-up stream did not close");
 
     gateway.emit("environment-renamed", { id: "one" });
-    const afterOne = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay.latestCursor;
-    const replayed = await openEventStream(
-      gateway,
-      info,
-      `?since=${encodeURIComponent(cursor)}`,
-    );
+    const afterOne = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay
+      .latestCursor;
+    const replayed = await openEventStream(gateway, info, `?since=${encodeURIComponent(cursor)}`);
     replayed.response.destroy();
     replayed.close();
     await waitUntil(() => eventClients(gateway).size === 0, "Replayed stream did not close");
@@ -2101,7 +2273,7 @@ describe("remote gateway", () => {
     const expired = await openEventStream(gateway, info, `?since=${encodeURIComponent(cursor)}`);
     const invalid = await openEventStream(gateway, info, "?since=not-a-cursor");
 
-    const metrics = await readGatewayMetrics(info) as unknown as {
+    const metrics = (await readGatewayMetrics(info)) as unknown as {
       replay: {
         fresh: number;
         caughtUp: number;
@@ -2129,14 +2301,12 @@ describe("remote gateway", () => {
       droppedFrames: 1,
       latestRevision: 2,
     });
-    expect(afterOne).toBe(`${(
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay.generation}:1`);
+    expect(afterOne).toBe(
+      `${(gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay.generation}:1`,
+    );
     expired.close();
     invalid.close();
   });
-
-
 
   test("stops retaining replay payloads once the gateway stops", async () => {
     const { gateway } = await startGateway({ eventReplay: { idleRetentionMs: 60_000 } });
@@ -2153,8 +2323,6 @@ describe("remote gateway", () => {
     expect(replay.since(0).complete).toBe(false);
   });
 
-
-
   test("reports caught-up and future same-generation cursors explicitly", async () => {
     const { gateway, info } = await startGateway();
     const initial = await openEventStream(gateway, info);
@@ -2164,11 +2332,7 @@ describe("remote gateway", () => {
     initial.close();
     await waitUntil(() => eventClients(gateway).size === 0, "Initial stream did not close");
 
-    const caughtUp = await openEventStream(
-      gateway,
-      info,
-      `?since=${encodeURIComponent(cursor)}`,
-    );
+    const caughtUp = await openEventStream(gateway, info, `?since=${encodeURIComponent(cursor)}`);
     expect(caughtUp.received()).toContain('"status":"caught-up"');
     expect(eventFrames(caughtUp.received(), "gateway.reconcile-required")).toHaveLength(0);
     caughtUp.response.destroy();
@@ -2193,8 +2357,6 @@ describe("remote gateway", () => {
     future.close();
   });
 
-
-
   test("advances a scoped cursor past omitted revisions on the keepalive tick", async () => {
     const { gateway, info } = await startGateway({ keepaliveMs: 20 });
     const scoped = await openEventStream(gateway, info, "?events=menu-");
@@ -2206,9 +2368,8 @@ describe("remote gateway", () => {
     for (let index = 0; index < 5; index += 1) {
       gateway.emit("environment-renamed", { id: `omitted-${index}` });
     }
-    const latest = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay.latestCursor;
+    const latest = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay
+      .latestCursor;
 
     await waitUntil(
       () => eventFrames(scoped.received(), "gateway.cursor").length > 0,
@@ -2243,17 +2404,14 @@ describe("remote gateway", () => {
     resumed.close();
   });
 
-
-
   test("a matching frame supersedes an omitted cursor instead of rewinding it", async () => {
     const { gateway, info } = await startGateway({ keepaliveMs: 20 });
     const scoped = await openEventStream(gateway, info, "?events=menu-");
 
     gateway.emit("environment-renamed", { id: "omitted" });
     gateway.emit("menu-zoom", "in");
-    const latest = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay.latestCursor;
+    const latest = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay
+      .latestCursor;
     await waitUntil(
       () => scoped.received().includes('"event":"menu-zoom"'),
       "Scoped stream never received its matching event",
@@ -2269,8 +2427,6 @@ describe("remote gateway", () => {
     expect(frameId(eventFrames(scoped.received(), "menu-zoom")[0]!)).toBe(latest);
     scoped.close();
   });
-
-
 
   test("terminal-only streams never receive an omitted cursor frame", async () => {
     const { gateway, info } = await startGateway({ keepaliveMs: 20 });
@@ -2291,8 +2447,6 @@ describe("remote gateway", () => {
     terminal.close();
   });
 
-
-
   test("reconciles instead of destroying a client mid-replay when the window will not fit", () => {
     const gateway = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -2301,9 +2455,7 @@ describe("remote gateway", () => {
       logger: createLogger(),
       eventReplay: { idleRetentionMs: 60_000 },
     });
-    const replay = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay;
+    const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     const cursor = replay.latestCursor;
     const frame = replay.append("environment-renamed", { id: "x".repeat(4096) });
 
@@ -2331,9 +2483,7 @@ describe("remote gateway", () => {
       sentRevision: 0,
       omittedRevision: null,
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, typeof state> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     clients.set(client, state);
     (
       gateway as unknown as {
@@ -2355,8 +2505,6 @@ describe("remote gateway", () => {
     replay.releaseRetained();
   });
 
-
-
   test("the default replay window leaves headroom below the per-client hard buffer", () => {
     const replay = new GatewayEventReplay("generation");
     try {
@@ -2368,8 +2516,6 @@ describe("remote gateway", () => {
       replay.releaseRetained();
     }
   });
-
-
 
   test("emits one reconciliation path when the requested gap has expired", async () => {
     const { gateway, info } = await startGateway({
@@ -2390,11 +2536,7 @@ describe("remote gateway", () => {
     gateway.emit("environment-renamed", { id: "two" });
     gateway.emit("environment-renamed", { id: "three" });
 
-    const expired = await openEventStream(
-      gateway,
-      info,
-      `?since=${encodeURIComponent(cursor)}`,
-    );
+    const expired = await openEventStream(gateway, info, `?since=${encodeURIComponent(cursor)}`);
     await waitUntil(
       () => expired.received().includes("gateway.reconcile-required"),
       "Expired cursor did not reconcile",
@@ -2406,8 +2548,6 @@ describe("remote gateway", () => {
     expect(expired.received()).not.toContain('"id":"three"');
     expired.close();
   });
-
-
 
   test("bounds replay by frame count and encoded bytes and expires idle payloads", async () => {
     const countBound = new GatewayEventReplay("generation", {
@@ -2451,8 +2591,6 @@ describe("remote gateway", () => {
     byteBound.releaseRetained();
   });
 
-
-
   test("buffers events emitted during replay and keeps terminal output out of the ring", () => {
     const gateway = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -2460,9 +2598,7 @@ describe("remote gateway", () => {
       rendererRoot: "/tmp",
       logger: createLogger(),
     });
-    const replay = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay;
+    const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     gateway.emit("environment-renamed", { id: "base" });
     const cursor = replay.latestCursor;
     gateway.emit("environment-renamed", { id: "before" });
@@ -2489,9 +2625,7 @@ describe("remote gateway", () => {
       desyncedSessions: new Set<string>(),
       handshake: { events: [], bytes: 0 },
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, typeof state> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     clients.set(client, state);
     (
       gateway as unknown as {
@@ -2513,8 +2647,6 @@ describe("remote gateway", () => {
     replay.releaseRetained();
   });
 
-
-
   test("does not advance an invalid cursor before reconciliation is delivered", () => {
     const gateway = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -2522,9 +2654,7 @@ describe("remote gateway", () => {
       rendererRoot: "/tmp",
       logger: createLogger(),
     });
-    const replay = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay;
+    const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     gateway.emit("environment-renamed", { id: "missed" });
     const writes: string[] = [];
     const state = {
@@ -2534,9 +2664,7 @@ describe("remote gateway", () => {
       desyncedSessions: new Set<string>(),
       handshake: { events: [], bytes: 0 },
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, typeof state> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     const client = {
       writableLength: 0,
       write: mock((message: string) => {
@@ -2589,8 +2717,6 @@ describe("remote gateway", () => {
     replay.releaseRetained();
   });
 
-
-
   test("buffers terminal output emitted during an authoritative replay handshake", () => {
     const gateway = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -2598,9 +2724,7 @@ describe("remote gateway", () => {
       rendererRoot: "/tmp",
       logger: createLogger(),
     });
-    const replay = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay;
+    const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     const cursor = replay.latestCursor;
     const writes: string[] = [];
     const client = {
@@ -2621,9 +2745,7 @@ describe("remote gateway", () => {
       desyncedSessions: new Set<string>(),
       handshake: { events: [], bytes: 0 },
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, typeof state> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     clients.set(client, state);
     (
       gateway as unknown as {
@@ -2641,8 +2763,6 @@ describe("remote gateway", () => {
     replay.releaseRetained();
   });
 
-
-
   test("enforces the replay-handshake byte limit at its exact boundary", () => {
     const run = (byteAdjustment: number) => {
       const gateway = new OrkestratorGateway({
@@ -2651,15 +2771,12 @@ describe("remote gateway", () => {
         rendererRoot: "/tmp",
         logger: createLogger(),
       });
-      const replay = (
-        gateway as unknown as { eventReplay: GatewayEventReplay }
-      ).eventReplay;
+      const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
       const event = "environment-renamed";
       const payload = { id: "one" };
       const message = `id: ${replay.generation}:1\ndata: ${JSON.stringify({ event, payload })}\n\n`;
-      (
-        gateway as unknown as { replayHandshakeMaxBytes: number }
-      ).replayHandshakeMaxBytes = Buffer.byteLength(message) + byteAdjustment;
+      (gateway as unknown as { replayHandshakeMaxBytes: number }).replayHandshakeMaxBytes =
+        Buffer.byteLength(message) + byteAdjustment;
       const writes: string[] = [];
       const client = {
         writableLength: 0,
@@ -2677,9 +2794,7 @@ describe("remote gateway", () => {
         desyncedSessions: new Set<string>(),
         handshake: { events: [], bytes: 0 },
       };
-      const clients = (
-        gateway as unknown as { clients: Map<object, typeof state> }
-      ).clients;
+      const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
       clients.set(client, state);
       (
         gateway as unknown as {
@@ -2705,8 +2820,6 @@ describe("remote gateway", () => {
     expect(overflow.clients.has(overflow.client)).toBe(false);
   });
 
-
-
   test("enforces the replay-handshake frame count at its exact boundary", () => {
     const run = (capacity: number) => {
       const gateway = new OrkestratorGateway({
@@ -2716,9 +2829,7 @@ describe("remote gateway", () => {
         logger: createLogger(),
         eventReplay: { handshakeFrameCapacity: capacity },
       });
-      const replay = (
-        gateway as unknown as { eventReplay: GatewayEventReplay }
-      ).eventReplay;
+      const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
       const writes: string[] = [];
       const client = {
         writableLength: 0,
@@ -2743,9 +2854,7 @@ describe("remote gateway", () => {
         sentRevision: 0,
         omittedRevision: null,
       };
-      const clients = (
-        gateway as unknown as { clients: Map<object, typeof state> }
-      ).clients;
+      const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
       clients.set(client, state);
       (
         gateway as unknown as {
@@ -2769,8 +2878,6 @@ describe("remote gateway", () => {
     expect(overflow.client.destroy).toHaveBeenCalledTimes(1);
     expect(overflow.clients.has(overflow.client)).toBe(false);
   });
-
-
 
   test("releases the connecting gauge and unregisters a client that throws mid-handshake", () => {
     const gateway = new OrkestratorGateway({
@@ -2800,15 +2907,13 @@ describe("remote gateway", () => {
     // The client is registered before the handshake writes, so a throw here
     // would otherwise leave it in the map with no `close` handler ever wired up
     // and the `connecting` gauge incremented for the life of the process.
-    expect(() => (
-      gateway as unknown as {
-        handleEvents(request: IncomingMessage, response: ServerResponse, url: URL): void;
-      }
-    ).handleEvents(
-      request,
-      response,
-      new URL("http://127.0.0.1/__orkestrator/events"),
-    )).toThrow("socket vanished");
+    expect(() =>
+      (
+        gateway as unknown as {
+          handleEvents(request: IncomingMessage, response: ServerResponse, url: URL): void;
+        }
+      ).handleEvents(request, response, new URL("http://127.0.0.1/__orkestrator/events")),
+    ).toThrow("socket vanished");
 
     expect(clients.size).toBe(0);
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -2817,8 +2922,6 @@ describe("remote gateway", () => {
     expect(stream.open).toBe(0);
     expect(stream.opened).toBe(0);
   });
-
-
 
   test("applies and clamps the replay-handshake bounds", () => {
     const build = (eventReplay?: { handshakeFrameCapacity?: number; handshakeMaxBytes?: number }) =>
@@ -2842,8 +2945,6 @@ describe("remote gateway", () => {
     });
   });
 
-
-
   test("disconnects replay and filtered control frames at the hard buffer limit", () => {
     const gateway = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -2851,13 +2952,9 @@ describe("remote gateway", () => {
       rendererRoot: "/tmp",
       logger: createLogger(),
     });
-    const replay = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay;
+    const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     const frame = replay.append("environment-renamed", { id: "one" });
-    const clients = (
-      gateway as unknown as { clients: Map<object, unknown> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, unknown> }).clients;
 
     for (const prefixes of [null, ["menu-"]] as const) {
       const client = {
@@ -2875,11 +2972,7 @@ describe("remote gateway", () => {
       clients.set(client, state);
       const written = (
         gateway as unknown as {
-          writeReplayFrame(
-            client: object,
-            state: typeof state,
-            frame: typeof frame,
-          ): boolean;
+          writeReplayFrame(client: object, state: typeof state, frame: typeof frame): boolean;
         }
       ).writeReplayFrame(client, state, frame);
       expect(written).toBe(false);
@@ -2889,8 +2982,6 @@ describe("remote gateway", () => {
     }
     replay.releaseRetained();
   });
-
-
 
   test("disconnects instead of growing the replay-handshake buffer without bound", () => {
     const gateway = new OrkestratorGateway({
@@ -2903,9 +2994,7 @@ describe("remote gateway", () => {
         handshakeMaxBytes: 1024 * 1024,
       },
     });
-    const replay = (
-      gateway as unknown as { eventReplay: GatewayEventReplay }
-    ).eventReplay;
+    const replay = (gateway as unknown as { eventReplay: GatewayEventReplay }).eventReplay;
     const cursor = replay.latestCursor;
     const client = {
       writableLength: 0,
@@ -2925,9 +3014,7 @@ describe("remote gateway", () => {
       desyncedSessions: new Set<string>(),
       handshake: { events: [], bytes: 0 },
     };
-    const clients = (
-      gateway as unknown as { clients: Map<object, typeof state> }
-    ).clients;
+    const clients = (gateway as unknown as { clients: Map<object, typeof state> }).clients;
     clients.set(client, state);
     (
       gateway as unknown as {
@@ -2944,8 +3031,6 @@ describe("remote gateway", () => {
     expect(state.handshake.events).toHaveLength(1);
     replay.releaseRetained();
   });
-
-
 
   test("flushes a desync notice to a quiet stream once its socket drains", async () => {
     const { gateway, info } = await startGateway();
@@ -2964,15 +3049,13 @@ describe("remote gateway", () => {
     expect(refused).toBe(false);
 
     await waitUntil(
-      () => stream.received().includes("\"desynced\":true"),
+      () => stream.received().includes('"desynced":true'),
       "Drained stream never learned it was desynced",
     );
     expect(stream.received()).toContain("terminal-output-session-a");
 
     stream.close();
   });
-
-
 
   test("sends a plain desync notice when a tmux session drops on a broad stream", async () => {
     const { gateway, info } = await startGateway();
@@ -2990,13 +3073,11 @@ describe("remote gateway", () => {
     );
     // A broad stream is not the one terminal subscribed to this pane, so it must
     // not accumulate repaints it never asked for.
-    expect(stream.received()).toContain("\"desynced\":true");
+    expect(stream.received()).toContain('"desynced":true');
     expect(stream.received()).not.toContain(pane);
 
     stream.close();
   });
-
-
 
   test("disconnects a parked stream when even its desync notice would overflow", async () => {
     const { gateway, info } = await startGateway();
@@ -3012,10 +3093,8 @@ describe("remote gateway", () => {
 
     await waitUntil(() => stream.aborted(), "Hopeless stream was never disconnected");
     expect(eventClients(gateway).size).toBe(0);
-    expect(stream.received()).not.toContain("\"desynced\":true");
+    expect(stream.received()).not.toContain('"desynced":true');
   });
-
-
 
   test("drops a parked stream instead of writing keepalives past the hard limit", async () => {
     const { gateway, info } = await startGateway({ keepaliveMs: 5 });
@@ -3034,57 +3113,63 @@ describe("remote gateway", () => {
     expect(eventClients(gateway).size).toBe(0);
   });
 
-
-
   test("rewrites browser-preview asset paths into their isolated proxy namespace", () => {
     const prefix = "/__orkestrator/browser/loopback/3000";
     const target = new URL("http://127.0.0.1:3000/");
 
-    expect(rewriteBrowserPreviewBody(
+    expect(
+      rewriteBrowserPreviewBody(
+        [
+          '<script type="module" src="/src/main.tsx"></script>',
+          "<link rel='stylesheet' href='/src/style.css'>",
+          "<img src=/assets/logo.png alt=logo>",
+          "<style>body { background: url(/assets/grid.png) }</style>",
+        ].join("\n"),
+        prefix,
+        target,
+        "html",
+      ),
+    ).toBe(
       [
-        '<script type="module" src="/src/main.tsx"></script>',
-        "<link rel='stylesheet' href='/src/style.css'>",
-        "<img src=/assets/logo.png alt=logo>",
-        "<style>body { background: url(/assets/grid.png) }</style>",
+        `<script type="module" src="${prefix}/src/main.tsx"></script>`,
+        `<link rel='stylesheet' href='${prefix}/src/style.css'>`,
+        `<img src=${prefix}/assets/logo.png alt=logo>`,
+        `<style>body { background: url(${prefix}/assets/grid.png) }</style>`,
       ].join("\n"),
-      prefix,
-      target,
-      "html",
-    )).toBe([
-      `<script type="module" src="${prefix}/src/main.tsx"></script>`,
-      `<link rel='stylesheet' href='${prefix}/src/style.css'>`,
-      `<img src=${prefix}/assets/logo.png alt=logo>`,
-      `<style>body { background: url(${prefix}/assets/grid.png) }</style>`,
-    ].join("\n"));
+    );
 
-    expect(rewriteBrowserPreviewBody(
+    expect(
+      rewriteBrowserPreviewBody(
+        [
+          "import '/src/style.css'",
+          'import { app } from "/src/app.ts"',
+          "const page = await import('/src/page.ts')",
+          "const worker = new URL('/src/worker.ts', import.meta.url)",
+          "fetch('http://localhost:3000/api/status')",
+        ].join("\n"),
+        prefix,
+        target,
+        "js",
+      ),
+    ).toBe(
       [
-        "import '/src/style.css'",
-        'import { app } from "/src/app.ts"',
-        "const page = await import('/src/page.ts')",
-        "const worker = new URL('/src/worker.ts', import.meta.url)",
-        "fetch('http://localhost:3000/api/status')",
+        `import '${prefix}/src/style.css'`,
+        `import { app } from "${prefix}/src/app.ts"`,
+        `const page = await import('${prefix}/src/page.ts')`,
+        `const worker = new URL('${prefix}/src/worker.ts', import.meta.url)`,
+        `fetch('${prefix}/api/status')`,
       ].join("\n"),
-      prefix,
-      target,
-      "js",
-    )).toBe([
-      `import '${prefix}/src/style.css'`,
-      `import { app } from "${prefix}/src/app.ts"`,
-      `const page = await import('${prefix}/src/page.ts')`,
-      `const worker = new URL('${prefix}/src/worker.ts', import.meta.url)`,
-      `fetch('${prefix}/api/status')`,
-    ].join("\n"));
+    );
 
-    expect(rewriteBrowserPreviewBody(
-      '@import "/theme.css";\nbody { background: url(\'/assets/grid.png\') }',
-      prefix,
-      target,
-      "css",
-    )).toBe(`@import "${prefix}/theme.css";\nbody { background: url('${prefix}/assets/grid.png') }`);
+    expect(
+      rewriteBrowserPreviewBody(
+        "@import \"/theme.css\";\nbody { background: url('/assets/grid.png') }",
+        prefix,
+        target,
+        "css",
+      ),
+    ).toBe(`@import "${prefix}/theme.css";\nbody { background: url('${prefix}/assets/grid.png') }`);
   });
-
-
 
   test("detects Tailscale addresses and prefers IPv4 bind candidates", () => {
     expect(isTailscaleAddress("100.64.0.1")).toBe(true);
@@ -3093,42 +3178,69 @@ describe("remote gateway", () => {
     expect(isTailscaleAddress("192.168.1.20")).toBe(false);
     expect(isTailscaleAddress("fd7a:115c:a1e0:abcd::1")).toBe(true);
 
-    expect(selectTailscaleBindAddress({
-      en0: [{ address: "192.168.1.20", family: "IPv4", internal: false, netmask: "255.255.255.0", cidr: null, mac: "00:00:00:00:00:00" }],
-      utun5: [
-        { address: "fd7a:115c:a1e0:abcd::1", family: "IPv6", internal: false, netmask: "ffff:ffff:ffff:ffff::", cidr: null, mac: "00:00:00:00:00:00", scopeid: 0 },
-        { address: "100.88.12.3", family: "IPv4", internal: false, netmask: "255.192.0.0", cidr: null, mac: "00:00:00:00:00:00" },
-      ],
-    })).toBe("100.88.12.3");
+    expect(
+      selectTailscaleBindAddress({
+        en0: [
+          {
+            address: "192.168.1.20",
+            family: "IPv4",
+            internal: false,
+            netmask: "255.255.255.0",
+            cidr: null,
+            mac: "00:00:00:00:00:00",
+          },
+        ],
+        utun5: [
+          {
+            address: "fd7a:115c:a1e0:abcd::1",
+            family: "IPv6",
+            internal: false,
+            netmask: "ffff:ffff:ffff:ffff::",
+            cidr: null,
+            mac: "00:00:00:00:00:00",
+            scopeid: 0,
+          },
+          {
+            address: "100.88.12.3",
+            family: "IPv4",
+            internal: false,
+            netmask: "255.192.0.0",
+            cidr: null,
+            mac: "00:00:00:00:00:00",
+          },
+        ],
+      }),
+    ).toBe("100.88.12.3");
   });
-
-
 
   test("delivers backend events to authenticated event streams", async () => {
     const { gateway, info } = await startGateway({ keepaliveMs: 5 });
 
     const eventBody = await new Promise<string>((resolve, reject) => {
       const parsed = new URL(`${info.url}__orkestrator/events`);
-      const request = httpRequest({
-        hostname: parsed.hostname,
-        port: parsed.port,
-        path: parsed.pathname,
-        headers: { authorization: `Bearer ${info.token}` },
-      }, (response) => {
-        let body = "";
-        let emitted = false;
-        response.on("data", (chunk) => {
-          body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
-          if (!emitted && body.includes(": connected") && body.includes(": keepalive")) {
-            emitted = true;
-            gateway.emit("menu-zoom", "in");
-          }
-          if (body.includes(": keepalive") && body.includes("\"event\":\"menu-zoom\"")) {
-            response.destroy();
-            resolve(body);
-          }
-        });
-      });
+      const request = httpRequest(
+        {
+          hostname: parsed.hostname,
+          port: parsed.port,
+          path: parsed.pathname,
+          headers: { authorization: `Bearer ${info.token}` },
+        },
+        (response) => {
+          let body = "";
+          let emitted = false;
+          response.on("data", (chunk) => {
+            body += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+            if (!emitted && body.includes(": connected") && body.includes(": keepalive")) {
+              emitted = true;
+              gateway.emit("menu-zoom", "in");
+            }
+            if (body.includes(": keepalive") && body.includes('"event":"menu-zoom"')) {
+              response.destroy();
+              resolve(body);
+            }
+          });
+        },
+      );
       request.on("error", reject);
       request.end();
     });
@@ -3138,8 +3250,6 @@ describe("remote gateway", () => {
     expect(eventBody).toContain("menu-zoom");
   });
 
-
-
   test("forces proxy upstream identity and compresses bounded response bodies once", async () => {
     const body = JSON.stringify({ value: "proxy response ".repeat(512) });
     const upstreamEncodings: Array<string | undefined> = [];
@@ -3148,7 +3258,7 @@ describe("remote gateway", () => {
       response.writeHead(200, {
         "content-type": "application/json; charset=utf-8",
         "content-length": Buffer.byteLength(body),
-        etag: "\"identity-etag\"",
+        etag: '"identity-etag"',
         "content-md5": "identity-md5",
         "content-digest": "sha-256=:identity:",
         "repr-digest": "sha-256=:identity:",
@@ -3191,8 +3301,6 @@ describe("remote gateway", () => {
     expect(sample?.responseBytes).toBe(result.rawBody.byteLength);
   });
 
-
-
   test("sync-flushes proxied SSE before the upstream stream ends", async () => {
     const target = createServer((request, response) => {
       expect(request.headers["accept-encoding"]).toBe("identity");
@@ -3207,44 +3315,44 @@ describe("remote gateway", () => {
     const address = target.address();
     if (!address || typeof address !== "object") throw new Error("Target server did not bind");
     const { info } = await startGateway({ compression: "on" });
-    const endpoint = new URL(
-      `${info.url}__orkestrator/proxy/loopback/${address.port}/events`,
-    );
+    const endpoint = new URL(`${info.url}__orkestrator/proxy/loopback/${address.port}/events`);
 
     let downstream: ReturnType<typeof httpRequest> | null = null;
     const firstFrame = new Promise<string>((resolve, reject) => {
-      downstream = httpRequest({
-        hostname: endpoint.hostname,
-        port: endpoint.port,
-        path: endpoint.pathname,
-        headers: {
-          authorization: `Bearer ${info.token}`,
-          "accept-encoding": "gzip",
+      downstream = httpRequest(
+        {
+          hostname: endpoint.hostname,
+          port: endpoint.port,
+          path: endpoint.pathname,
+          headers: {
+            authorization: `Bearer ${info.token}`,
+            "accept-encoding": "gzip",
+          },
         },
-      }, (response) => {
-        expect(response.headers["content-encoding"]).toBe("gzip");
-        const decoder = createGunzip({
-          finishFlush: zlibConstants.Z_SYNC_FLUSH,
-        });
-        response.pipe(decoder);
-        decoder.once("data", (chunk) => resolve(chunk.toString("utf8")));
-        decoder.once("error", reject);
-      });
+        (response) => {
+          expect(response.headers["content-encoding"]).toBe("gzip");
+          const decoder = createGunzip({
+            finishFlush: zlibConstants.Z_SYNC_FLUSH,
+          });
+          response.pipe(decoder);
+          decoder.once("data", (chunk) => resolve(chunk.toString("utf8")));
+          decoder.once("error", reject);
+        },
+      );
       downstream.once("error", reject);
       downstream.end();
     });
 
-    await expect(Promise.race([
-      firstFrame,
-      new Promise<never>((_, reject) => setTimeout(
-        () => reject(new Error("Proxied SSE frame was buffered")),
-        1_000,
-      )),
-    ])).resolves.toContain("data: first");
+    await expect(
+      Promise.race([
+        firstFrame,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Proxied SSE frame was buffered")), 1_000),
+        ),
+      ]),
+    ).resolves.toContain("data: first");
     downstream?.destroy();
   });
-
-
 
   test("serves browser previews with rewritten root assets and iframe-safe headers", async () => {
     const target = createServer((request, response) => {
@@ -3263,7 +3371,8 @@ describe("remote gateway", () => {
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
     const prefix = `/__orkestrator/browser/loopback/${targetAddress.port}`;
@@ -3281,8 +3390,6 @@ describe("remote gateway", () => {
     expect(script.body).toBe(`import "${prefix}/src/dependency.js";`);
   });
 
-
-
   test("recompresses bounded browser-preview text after rewriting", async () => {
     const source = `<script src="/asset.js"></script>${" preview text".repeat(512)}`;
     const upstreamEncodings: Array<string | undefined> = [];
@@ -3291,7 +3398,7 @@ describe("remote gateway", () => {
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "content-length": Buffer.byteLength(source),
-        etag: "\"upstream-identity\"",
+        etag: '"upstream-identity"',
         "content-md5": "identity-md5",
         "content-digest": "sha-256=:identity:",
         "repr-digest": "sha-256=:identity:",
@@ -3329,8 +3436,6 @@ describe("remote gateway", () => {
     );
   });
 
-
-
   test("decodes compressed preview text before rewriting it", async () => {
     const compressed = gzipSync('<script src="/asset.js"></script>');
     const target = createServer((_request, response) => {
@@ -3344,7 +3449,8 @@ describe("remote gateway", () => {
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
     const prefix = `/__orkestrator/browser/loopback/${targetAddress.port}`;
@@ -3356,10 +3462,8 @@ describe("remote gateway", () => {
     expect(result.headers["content-encoding"]).toBeUndefined();
   });
 
-
-
   test("rejects compressed preview text that expands beyond the rewrite limit", async () => {
-    const compressed = gzipSync(Buffer.alloc((8 * 1024 * 1024) + 1, 97));
+    const compressed = gzipSync(Buffer.alloc(8 * 1024 * 1024 + 1, 97));
     const target = createServer((_request, response) => {
       response.writeHead(200, {
         "content-type": "text/css; charset=utf-8",
@@ -3371,17 +3475,19 @@ describe("remote gateway", () => {
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
-    const result = await requestUrl(`${info.url}__orkestrator/browser/loopback/${targetAddress.port}/large.css`, {
-      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
-    });
+    const result = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/large.css`,
+      {
+        headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+      },
+    );
     expect(result.status).toBe(502);
     expect(result.body).toContain("exceeded 8388608 decoded bytes");
   });
-
-
 
   test("passes non-UTF-8 preview documents through without rewriting", async () => {
     const body = '<script src="/asset.js"></script>';
@@ -3395,14 +3501,17 @@ describe("remote gateway", () => {
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const { info } = await startGateway();
-    const result = await requestUrl(`${info.url}__orkestrator/browser/loopback/${targetAddress.port}/`, {
-      headers: { authorization: `Bearer ${info.token}`, origin: "null" },
-    });
+    const result = await requestUrl(
+      `${info.url}__orkestrator/browser/loopback/${targetAddress.port}/`,
+      {
+        headers: { authorization: `Bearer ${info.token}`, origin: "null" },
+      },
+    );
     expect(result.status).toBe(200);
     expect(result.body).toBe(body);
   });
-
 });

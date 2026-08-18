@@ -107,8 +107,6 @@ import type {
   RepositoryConfig,
 } from "./command-fixtures";
 
-
-
 describe("environment status and settings commands", () => {
   test("reports Claude credential availability through the credential status handler", async () => {
     const { context } = createContext([]);
@@ -123,72 +121,77 @@ describe("environment status and settings commands", () => {
     expect(hasClaudeCredentials).toHaveBeenCalledTimes(1);
   });
 
-  test("preserves an admitted container start while its container is not yet persisted", async () => {
-    const environment = createEnvironment({
-      id: "env-active-start-status",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context, updates } = createContext(environment);
-    const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
-    const originalImplementation = updateEnvironment.getMockImplementation();
-    let announceCreating!: () => void;
-    let releaseCreating!: () => void;
-    const creatingPersisted = new Promise<void>((resolve) => {
-      announceCreating = resolve;
-    });
-    const creatingRelease = new Promise<void>((resolve) => {
-      releaseCreating = resolve;
-    });
-    updateEnvironment.mockImplementation(async (
-      environmentId: string,
-      update: Record<string, unknown>,
-    ) => {
-      const updated = await originalImplementation!(environmentId, update);
-      if (update.status === "creating") {
-        announceCreating();
-        await creatingRelease;
-      }
-      return updated;
-    });
-    const commands = createCommandRegistry();
+  test(
+    "preserves an admitted container start while its container is not yet persisted",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-active-start-status",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context, updates } = createContext(environment);
+      const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
+      const originalImplementation = updateEnvironment.getMockImplementation();
+      let announceCreating!: () => void;
+      let releaseCreating!: () => void;
+      const creatingPersisted = new Promise<void>((resolve) => {
+        announceCreating = resolve;
+      });
+      const creatingRelease = new Promise<void>((resolve) => {
+        releaseCreating = resolve;
+      });
+      updateEnvironment.mockImplementation(
+        async (environmentId: string, update: Record<string, unknown>) => {
+          const updated = await originalImplementation!(environmentId, update);
+          if (update.status === "creating") {
+            announceCreating();
+            await creatingRelease;
+          }
+          return updated;
+        },
+      );
+      const commands = createCommandRegistry();
 
-    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 case "$1" in
   create) printf 'container-active-start-status\\n' ;;
   start|exec) exit 0 ;;
 esac
-`, async () => {
-        await commands.get("start_environment_background")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await creatingPersisted;
+`,
+          async () => {
+            await commands.get("start_environment_background")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await creatingPersisted;
 
-        await expect(commands.get("get_environments")?.(
-          { projectId: environment.projectId },
-          context,
-        )).resolves.toEqual([
-          expect.objectContaining({
-            id: environment.id,
-            status: "creating",
-            containerId: null,
-          }),
-        ]);
-        expect(updatesWithStatus(updates, "stopped")).toHaveLength(0);
+            await expect(
+              commands.get("get_environments")?.({ projectId: environment.projectId }, context),
+            ).resolves.toEqual([
+              expect.objectContaining({
+                id: environment.id,
+                status: "creating",
+                containerId: null,
+              }),
+            ]);
+            expect(updatesWithStatus(updates, "stopped")).toHaveLength(0);
 
-        releaseCreating();
-        await waitForCondition(
-          () => environment.status === "running",
-          "active start to finish",
+            releaseCreating();
+            await waitForCondition(
+              () => environment.status === "running",
+              "active start to finish",
+            );
+          },
         );
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("preserves a durable lifecycle failure over Docker container state", async () => {
     const environment = createEnvironment({
@@ -201,7 +204,8 @@ esac
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   printf 'container-error-status\\trunning\\n'
@@ -212,27 +216,32 @@ if [ "$1" = "inspect" ]; then
   exit 0
 fi
 exit 1
-`, async ({ all }) => {
-      await expect(commands.get("get_environments")?.(
-        { projectId: environment.projectId },
-        context,
-      )).resolves.toEqual([
-        expect.objectContaining({
-          id: environment.id,
-          status: "error",
-          lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable,
-        }),
-      ]);
+`,
+      async ({ all }) => {
+        await expect(
+          commands.get("get_environments")?.({ projectId: environment.projectId }, context),
+        ).resolves.toEqual([
+          expect.objectContaining({
+            id: environment.id,
+            status: "error",
+            lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable,
+          }),
+        ]);
 
-      const calls = await fs.readFile(all, "utf8");
-      expect(calls).toContain("ps -a");
-      expect(calls).not.toContain("inspect -f");
-    });
+        const calls = await fs.readFile(all, "utf8");
+        expect(calls).toContain("ps -a");
+        expect(calls).not.toContain("inspect -f");
+      },
+    );
     expect(updates).toHaveLength(0);
   });
 
   test("synchronizes individual and all stored environment statuses", async () => {
-    const local = createEnvironment({ id: "env-local", environmentType: "local", containerId: null });
+    const local = createEnvironment({
+      id: "env-local",
+      environmentType: "local",
+      containerId: null,
+    });
     const missingContainer = createEnvironment({
       id: "env-missing",
       environmentType: "containerized",
@@ -241,15 +250,23 @@ exit 1
     const { context, updates } = createContext([local, missingContainer]);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("sync_environment_status")?.({ environmentId: local.id }, context)).resolves.toEqual(toClientEnvironment(local));
-    await expect(commands.get("sync_environment_status")?.({ environmentId: "unknown" }, context))
-      .rejects.toThrow("Environment not found: unknown");
-    await withFakeDocker(`#!/bin/sh
+    await expect(
+      commands.get("sync_environment_status")?.({ environmentId: local.id }, context),
+    ).resolves.toEqual(toClientEnvironment(local));
+    await expect(
+      commands.get("sync_environment_status")?.({ environmentId: "unknown" }, context),
+    ).rejects.toThrow("Environment not found: unknown");
+    await withFakeDocker(
+      `#!/bin/sh
 printf 'Error: No such object: %s\\n' "$4" >&2
 exit 1
-`, async () => {
-      await expect(commands.get("sync_all_environments_with_docker")?.({}, context)).resolves.toEqual(["env-missing"]);
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("sync_all_environments_with_docker")?.({}, context),
+        ).resolves.toEqual(["env-missing"]);
+      },
+    );
     expect(updates).toContainEqual({ status: "stopped", containerId: null });
   });
 
@@ -269,7 +286,8 @@ exit 1
     const { context, updates } = createContext([agreeing, transitioned]);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   printf 'container-agree\\trunning\\n'
@@ -281,18 +299,20 @@ if [ "$1" = "inspect" ]; then
   exit 0
 fi
 exit 0
-`, async ({ all }) => {
-      await commands.get("get_environments")?.({ projectId: agreeing.projectId }, context);
-      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
-      // The whole batch shares one labelled `docker ps` instead of one
-      // `docker inspect` per environment.
-      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
-      // Only the container whose snapshot state disagrees with storage is
-      // confirmed with a fresh inspect before anything is rewritten.
-      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
-        "inspect -f {{.State.Status}} container-transitioned",
-      ]);
-    });
+`,
+      async ({ all }) => {
+        await commands.get("get_environments")?.({ projectId: agreeing.projectId }, context);
+        const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+        // The whole batch shares one labelled `docker ps` instead of one
+        // `docker inspect` per environment.
+        expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+        // Only the container whose snapshot state disagrees with storage is
+        // confirmed with a fresh inspect before anything is rewritten.
+        expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+          "inspect -f {{.State.Status}} container-transitioned",
+        ]);
+      },
+    );
 
     expect(updates).toEqual([{ status: "stopped" }]);
     expect(agreeing.status).toBe("running");
@@ -309,24 +329,26 @@ exit 0
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   printf 'container-burst\\trunning\\n'
   exit 0
 fi
 exit 1
-`, async ({ all }) => {
-      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
-      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
-      await expect(commands.get("get_environment_status")?.(
-        { environmentId: environment.id },
-        context,
-      )).resolves.toBe("running");
-      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
-      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
-      expect(log.some((line) => line.startsWith("inspect"))).toBe(false);
-    });
+`,
+      async ({ all }) => {
+        await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+        await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+        await expect(
+          commands.get("get_environment_status")?.({ environmentId: environment.id }, context),
+        ).resolves.toBe("running");
+        const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+        expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+        expect(log.some((line) => line.startsWith("inspect"))).toBe(false);
+      },
+    );
     expect(updates).toHaveLength(0);
   });
 
@@ -343,7 +365,8 @@ exit 1
     const owner = dockerOwnerNamespace(context.storage.getDataDir());
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   exit 0
@@ -353,25 +376,26 @@ if [ "$1" = "inspect" ]; then
   exit 0
 fi
 exit 1
-`, async ({ all }) => {
-      await withFixedDate("2026-08-14T12:00:00.000Z", async () => {
-        await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
-        environment.containerId = "container-created-after-snapshot";
-        environment.status = "running";
-        environment.lifecycleError = undefined;
+`,
+      async ({ all }) => {
+        await withFixedDate("2026-08-14T12:00:00.000Z", async () => {
+          await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+          environment.containerId = "container-created-after-snapshot";
+          environment.status = "running";
+          environment.lifecycleError = undefined;
 
-        await expect(commands.get("sync_environment_status")?.(
-          { environmentId: environment.id },
-          context,
-        )).resolves.toEqual(toClientEnvironment(environment));
-      });
+          await expect(
+            commands.get("sync_environment_status")?.({ environmentId: environment.id }, context),
+          ).resolves.toEqual(toClientEnvironment(environment));
+        });
 
-      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
-      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(1);
-      expect(log.filter((line) => line.startsWith("inspect -f"))).toEqual([
-        `inspect -f {{ index .Config.Labels "orkestrator-owner" }}\t{{.State.Status}} container-created-after-snapshot`,
-      ]);
-    });
+        const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+        expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(1);
+        expect(log.filter((line) => line.startsWith("inspect -f"))).toEqual([
+          `inspect -f {{ index .Config.Labels "orkestrator-owner" }}\t{{.State.Status}} container-created-after-snapshot`,
+        ]);
+      },
+    );
     expect(updates).toHaveLength(0);
     expect(environment.containerId).toBe("container-created-after-snapshot");
   });
@@ -386,24 +410,27 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   printf 'container-cache-expiry\\trunning\\n'
   exit 0
 fi
 exit 1
-`, async ({ all }) => {
-      await withFixedDate("2026-07-28T12:00:00.000Z", () =>
-        commands.get("get_environments")?.({ projectId: environment.projectId }, context)
-      );
-      await withFixedDate("2026-07-28T12:00:03.001Z", () =>
-        commands.get("get_environments")?.({ projectId: environment.projectId }, context)
-      );
+`,
+      async ({ all }) => {
+        await withFixedDate("2026-07-28T12:00:00.000Z", () =>
+          commands.get("get_environments")?.({ projectId: environment.projectId }, context),
+        );
+        await withFixedDate("2026-07-28T12:00:03.001Z", () =>
+          commands.get("get_environments")?.({ projectId: environment.projectId }, context),
+        );
 
-      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
-      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(2);
-    });
+        const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+        expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(2);
+      },
+    );
   });
 
   test("falls back to per-container inspect when the shared docker scan fails", async () => {
@@ -416,7 +443,8 @@ exit 1
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   exit 1
@@ -426,17 +454,16 @@ if [ "$1" = "inspect" ]; then
   exit 0
 fi
 exit 1
-`, async ({ all }) => {
-      await commands.get("get_environments")?.(
-        { projectId: environment.projectId },
-        context,
-      );
-      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
-      expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(1);
-      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
-        "inspect -f {{.State.Status}} container-cache-failure",
-      ]);
-    });
+`,
+      async ({ all }) => {
+        await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+        const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+        expect(log.filter((line) => line.startsWith("ps -a"))).toHaveLength(1);
+        expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+          "inspect -f {{.State.Status}} container-cache-failure",
+        ]);
+      },
+    );
     expect(updates).toHaveLength(0);
   });
 
@@ -456,7 +483,8 @@ exit 1
     const { context, updates } = createContext([listed, missing]);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "ps" ]; then
   printf 'container-listed\\trunning\\n'
@@ -464,15 +492,18 @@ if [ "$1" = "ps" ]; then
 fi
 printf 'Error: No such object: container-absent\\n' >&2
 exit 1
-`, async ({ all }) => {
-      await expect(commands.get("sync_all_environments_with_docker")?.({}, context))
-        .resolves.toEqual([missing.id]);
-      const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
-      expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
-      expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
-        "inspect -f {{.State.Status}} container-absent",
-      ]);
-    });
+`,
+      async ({ all }) => {
+        await expect(
+          commands.get("sync_all_environments_with_docker")?.({}, context),
+        ).resolves.toEqual([missing.id]);
+        const log = (await fs.readFile(all, "utf8")).split("\n").filter(Boolean);
+        expect(log.filter((line) => line.startsWith("ps -a")).length).toBe(1);
+        expect(log.filter((line) => line.startsWith("inspect"))).toEqual([
+          "inspect -f {{.State.Status}} container-absent",
+        ]);
+      },
+    );
     expect(updates).toEqual([{ status: "stopped", containerId: null }]);
   });
 
@@ -492,12 +523,14 @@ exit 1
       pendingAgentLaunch: true,
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "high",
-      initialPromptAttachments: [{
-        id: "attachment-1",
-        name: "diagram.png",
-        previewUrl: "blob:diagram",
-        base64Data: "aW1hZ2U=",
-      }],
+      initialPromptAttachments: [
+        {
+          id: "attachment-1",
+          name: "diagram.png",
+          previewUrl: "blob:diagram",
+          base64Data: "aW1hZ2U=",
+        },
+      ],
     });
     const { context, updates } = createContext([local, container]);
     const commands = createCommandRegistry();
@@ -513,13 +546,16 @@ exit 1
     expect(local.pendingAgentLaunch).toBe(false);
     expect(local.initialAgentModel).toBeUndefined();
     expect(local.initialReasoningEffort).toBeUndefined();
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 exit 0
-`, async (logs) => {
-      await commands.get("stop_environment")?.({ environmentId: container.id }, context);
-      expect(await fs.readFile(logs.all, "utf8")).toContain("stop container-1");
-    });
+`,
+      async (logs) => {
+        await commands.get("stop_environment")?.({ environmentId: container.id }, context);
+        expect(await fs.readFile(logs.all, "utf8")).toContain("stop container-1");
+      },
+    );
     // Both lanes clear it, containerized as well as local.
     const allStopUpdates = updatesWithStatus(updates, "stopped");
     expect(allStopUpdates).toHaveLength(2);
@@ -527,7 +563,9 @@ exit 0
     expect(container.pendingAgentLaunch).toBe(false);
     expect(container.initialAgentModel).toBeUndefined();
     expect(container.initialReasoningEffort).toBeUndefined();
-    await expect(commands.get("recreate_environment")?.({ environmentId: local.id }, context)).resolves.toBeUndefined();
+    await expect(
+      commands.get("recreate_environment")?.({ environmentId: local.id }, context),
+    ).resolves.toBeUndefined();
   });
 
   test("strict lifecycle commands never stop, recreate, or delete a foreign container", async () => {
@@ -541,26 +579,32 @@ exit 0
     context.strictDockerOwner = true;
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'another-owner\\trunning\\n'
   exit 0
 fi
 exit 0
-`, async ({ all }) => {
-      for (const command of ["stop_environment", "recreate_environment", "delete_environment"] as const) {
-        await expect(commands.get(command)?.(
-          { environmentId: environment.id },
-          context,
-        )).rejects.toThrow("not owned by this development profile");
-      }
+`,
+      async ({ all }) => {
+        for (const command of [
+          "stop_environment",
+          "recreate_environment",
+          "delete_environment",
+        ] as const) {
+          await expect(
+            commands.get(command)?.({ environmentId: environment.id }, context),
+          ).rejects.toThrow("not owned by this development profile");
+        }
 
-      const log = await fs.readFile(all, "utf8");
-      expect(log.match(/inspect -f/g)).toHaveLength(3);
-      expect(log).not.toContain("stop foreign-container");
-      expect(log).not.toContain("rm -f foreign-container");
-    });
+        const log = await fs.readFile(all, "utf8");
+        expect(log.match(/inspect -f/g)).toHaveLength(3);
+        expect(log).not.toContain("stop foreign-container");
+        expect(log).not.toContain("rm -f foreign-container");
+      },
+    );
     expect(updates).toHaveLength(0);
     expect(environment.containerId).toBe("foreign-container");
   });
@@ -588,7 +632,8 @@ exit 0
     context.strictDockerOwner = true;
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'error: no such object: %s\\n' "$4" >&2
@@ -598,25 +643,28 @@ if [ "$1" = "create" ]; then
   exit 42
 fi
 exit 0
-`, async ({ all }) => {
-      await expect(commands.get("delete_environment")?.(
-        { environmentId: deletable.id },
-        context,
-      )).resolves.toBeUndefined();
+`,
+      async ({ all }) => {
+        await expect(
+          commands.get("delete_environment")?.({ environmentId: deletable.id }, context),
+        ).resolves.toBeUndefined();
 
-      // Recreate goes on to provision a fresh container, which this fake fails
-      // at `create`. The regression under test is only that it got that far
-      // rather than being refused by the ownership probe.
-      const recreateFailure = await commands.get("recreate_environment")?.(
-        { environmentId: recreatable.id },
-        context,
-      ).then(() => null, (error: unknown) => String(error));
-      expect(recreateFailure ?? "").not.toContain("not owned by this development profile");
+        // Recreate goes on to provision a fresh container, which this fake fails
+        // at `create`. The regression under test is only that it got that far
+        // rather than being refused by the ownership probe.
+        const recreateFailure = await commands
+          .get("recreate_environment")?.({ environmentId: recreatable.id }, context)
+          .then(
+            () => null,
+            (error: unknown) => String(error),
+          );
+        expect(recreateFailure ?? "").not.toContain("not owned by this development profile");
 
-      const log = await fs.readFile(all, "utf8");
-      expect(log.match(/inspect -f/g)).toHaveLength(2);
-      expect(log).toContain("rm -f vanished-container");
-    });
+        const log = await fs.readFile(all, "utf8");
+        expect(log.match(/inspect -f/g)).toHaveLength(2);
+        expect(log).toContain("rm -f vanished-container");
+      },
+    );
   });
 
   test("agent-test container mounts come from the isolated profile paths, not the host home", async () => {
@@ -645,78 +693,81 @@ exit 0
     };
 
     try {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "create" ]; then
   exit 42
 fi
 exit 0
-`, async ({ all, home }) => {
-        const isolated = path.join(home, "isolated");
-        const hostHome = path.join(home, "host-home");
-        const claudeConfigDir = path.join(isolated, "claude");
-        const codexHome = path.join(isolated, "codex");
-        const xdgConfigHome = path.join(isolated, "xdg-config");
-        const xdgDataHome = path.join(isolated, "xdg-data");
-        const xdgStateHome = path.join(isolated, "xdg-state");
-        for (const directory of [
-          claudeConfigDir,
-          codexHome,
-          path.join(xdgConfigHome, "opencode"),
-          path.join(xdgDataHome, "opencode"),
-          path.join(xdgStateHome, "opencode"),
-          hostHome,
-          path.join(hostHome, ".cursor"),
-          path.join(hostHome, ".grok"),
-          path.join(hostHome, ".config", "grok"),
-          // Decoys: the developer's real agent homes, which `withFakeDocker`
-          // points $HOME at. An agent-test container must never mount these.
-          path.join(home, ".claude"),
-          path.join(home, ".codex"),
-          path.join(home, ".config", "opencode"),
-        ]) await fs.mkdir(directory, { recursive: true });
-        await fs.writeFile(path.join(hostHome, ".claude.json"), "{}");
-        await fs.writeFile(path.join(home, ".claude.json"), "{}");
-        await fs.writeFile(path.join(xdgStateHome, "opencode", "model.json"), "{}");
+`,
+        async ({ all, home }) => {
+          const isolated = path.join(home, "isolated");
+          const hostHome = path.join(home, "host-home");
+          const claudeConfigDir = path.join(isolated, "claude");
+          const codexHome = path.join(isolated, "codex");
+          const xdgConfigHome = path.join(isolated, "xdg-config");
+          const xdgDataHome = path.join(isolated, "xdg-data");
+          const xdgStateHome = path.join(isolated, "xdg-state");
+          for (const directory of [
+            claudeConfigDir,
+            codexHome,
+            path.join(xdgConfigHome, "opencode"),
+            path.join(xdgDataHome, "opencode"),
+            path.join(xdgStateHome, "opencode"),
+            hostHome,
+            path.join(hostHome, ".cursor"),
+            path.join(hostHome, ".grok"),
+            path.join(hostHome, ".config", "grok"),
+            // Decoys: the developer's real agent homes, which `withFakeDocker`
+            // points $HOME at. An agent-test container must never mount these.
+            path.join(home, ".claude"),
+            path.join(home, ".codex"),
+            path.join(home, ".config", "opencode"),
+          ])
+            await fs.mkdir(directory, { recursive: true });
+          await fs.writeFile(path.join(hostHome, ".claude.json"), "{}");
+          await fs.writeFile(path.join(home, ".claude.json"), "{}");
+          await fs.writeFile(path.join(xdgStateHome, "opencode", "model.json"), "{}");
 
-        process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
-        process.env.CODEX_HOME = codexHome;
-        process.env.XDG_CONFIG_HOME = xdgConfigHome;
-        process.env.XDG_DATA_HOME = xdgDataHome;
-        process.env.XDG_STATE_HOME = xdgStateHome;
-        process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
-        process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = claudeConfigDir;
-        process.env.CURSOR_API_KEY = "agent-test-cursor-key";
+          process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+          process.env.CODEX_HOME = codexHome;
+          process.env.XDG_CONFIG_HOME = xdgConfigHome;
+          process.env.XDG_DATA_HOME = xdgDataHome;
+          process.env.XDG_STATE_HOME = xdgStateHome;
+          process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
+          process.env.ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR = claudeConfigDir;
+          process.env.CURSOR_API_KEY = "agent-test-cursor-key";
 
-        await commands.get("provision_environment")?.(
-          { environmentId: environment.id },
-          context,
-        ).catch(() => undefined);
+          await commands
+            .get("provision_environment")?.({ environmentId: environment.id }, context)
+            .catch(() => undefined);
 
-        const log = await fs.readFile(all, "utf8");
-        expect(log).toContain(`-v ${claudeConfigDir}:/claude-config:ro`);
-        expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
-        expect(log).toContain(`-v ${path.join(xdgConfigHome, "opencode")}:/opencode-config:ro`);
-        expect(log).toContain(`-v ${path.join(xdgDataHome, "opencode")}:/opencode-data:ro`);
-        expect(log).toContain(
-          `-v ${path.join(xdgStateHome, "opencode", "model.json")}:/opencode-state/model.json:ro`,
-        );
-        expect(log).toContain(`-v ${path.join(hostHome, ".cursor")}:/cursor-config:ro`);
-        expect(log).toContain(`-v ${path.join(hostHome, ".grok")}:/grok-home:ro`);
-        expect(log).toContain(`-v ${path.join(hostHome, ".config", "grok")}:/grok-config:ro`);
-        expect(log).toContain("-e CURSOR_API_KEY");
-        expect(log).not.toContain("agent-test-cursor-key");
-        // `.claude.json` has no CLAUDE_CONFIG_DIR equivalent, so it is the one
-        // path resolved against the recorded host home rather than an env var.
-        expect(log).toContain(`-v ${path.join(hostHome, ".claude.json")}:/claude-config.json:ro`);
+          const log = await fs.readFile(all, "utf8");
+          expect(log).toContain(`-v ${claudeConfigDir}:/claude-config:ro`);
+          expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
+          expect(log).toContain(`-v ${path.join(xdgConfigHome, "opencode")}:/opencode-config:ro`);
+          expect(log).toContain(`-v ${path.join(xdgDataHome, "opencode")}:/opencode-data:ro`);
+          expect(log).toContain(
+            `-v ${path.join(xdgStateHome, "opencode", "model.json")}:/opencode-state/model.json:ro`,
+          );
+          expect(log).toContain(`-v ${path.join(hostHome, ".cursor")}:/cursor-config:ro`);
+          expect(log).toContain(`-v ${path.join(hostHome, ".grok")}:/grok-home:ro`);
+          expect(log).toContain(`-v ${path.join(hostHome, ".config", "grok")}:/grok-config:ro`);
+          expect(log).toContain("-e CURSOR_API_KEY");
+          expect(log).not.toContain("agent-test-cursor-key");
+          // `.claude.json` has no CLAUDE_CONFIG_DIR equivalent, so it is the one
+          // path resolved against the recorded host home rather than an env var.
+          expect(log).toContain(`-v ${path.join(hostHome, ".claude.json")}:/claude-config.json:ro`);
 
-        expect(log).not.toContain(`${path.join(home, ".claude")}:/claude-config`);
-        expect(log).not.toContain(`${path.join(home, ".codex")}:`);
-        expect(log).not.toContain(`${path.join(home, ".config", "opencode")}:`);
-        expect(log).not.toContain(`${path.join(home, ".claude.json")}:`);
-        // The developer's actual HOME and gitconfig remain outside the profile.
-        expect(log).not.toContain("/tmp/gitconfig");
-      });
+          expect(log).not.toContain(`${path.join(home, ".claude")}:/claude-config`);
+          expect(log).not.toContain(`${path.join(home, ".codex")}:`);
+          expect(log).not.toContain(`${path.join(home, ".config", "opencode")}:`);
+          expect(log).not.toContain(`${path.join(home, ".claude.json")}:`);
+          // The developer's actual HOME and gitconfig remain outside the profile.
+          expect(log).not.toContain("/tmp/gitconfig");
+        },
+      );
     } finally {
       for (const [name, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[name];
@@ -742,32 +793,34 @@ exit 0
     const savedClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 
     try {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "create" ]; then
   exit 42
 fi
 exit 0
-`, async ({ all, home }) => {
-        const codexHome = path.join(home, "isolated", "codex");
-        const claudeConfigDir = path.join(home, "isolated", "claude");
-        await fs.mkdir(codexHome, { recursive: true });
-        await fs.mkdir(claudeConfigDir, { recursive: true });
-        process.env.CODEX_HOME = codexHome;
-        process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
+`,
+        async ({ all, home }) => {
+          const codexHome = path.join(home, "isolated", "codex");
+          const claudeConfigDir = path.join(home, "isolated", "claude");
+          await fs.mkdir(codexHome, { recursive: true });
+          await fs.mkdir(claudeConfigDir, { recursive: true });
+          process.env.CODEX_HOME = codexHome;
+          process.env.CLAUDE_CONFIG_DIR = claudeConfigDir;
 
-        await commands.get("provision_environment")?.(
-          { environmentId: environment.id },
-          context,
-        ).catch(() => undefined);
+          await commands
+            .get("provision_environment")?.({ environmentId: environment.id }, context)
+            .catch(() => undefined);
 
-        const log = await fs.readFile(all, "utf8");
-        expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
-        // The Claude directory exists and is readable; only the profile's
-        // credential-source list keeps it out of the container.
-        expect(log).not.toContain("/claude-config");
-        expect(log).not.toContain("/opencode-config");
-      });
+          const log = await fs.readFile(all, "utf8");
+          expect(log).toContain(`-v ${codexHome}:/codex-home:ro`);
+          // The Claude directory exists and is readable; only the profile's
+          // credential-source list keeps it out of the container.
+          expect(log).not.toContain("/claude-config");
+          expect(log).not.toContain("/opencode-config");
+        },
+      );
     } finally {
       if (savedCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = savedCodexHome;
@@ -789,21 +842,23 @@ exit 0
     context.strictDockerOwner = true;
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock.\\n' >&2
   exit 1
 fi
 exit 0
-`, async ({ all }) => {
-      await expect(commands.get("stop_environment")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("Cannot connect to the Docker daemon");
+`,
+      async ({ all }) => {
+        await expect(
+          commands.get("stop_environment")?.({ environmentId: environment.id }, context),
+        ).rejects.toThrow("Cannot connect to the Docker daemon");
 
-      expect(await fs.readFile(all, "utf8")).not.toContain("stop unreachable-container");
-    });
+        expect(await fs.readFile(all, "utf8")).not.toContain("stop unreachable-container");
+      },
+    );
     expect(updates).toHaveLength(0);
   });
 
@@ -850,10 +905,9 @@ exit 0
     commandTesting.setTerminateProcessTree(async () => false);
 
     // The failure is surfaced...
-    await expect(commands.get("stop_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow("Failed to stop all local servers");
+    await expect(
+      commands.get("stop_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow("Failed to stop all local servers");
 
     // ...but not at the cost of stranding the environment as running, with no
     // way for the user to stop it from the UI.
@@ -865,53 +919,70 @@ exit 0
   test("stores PR metadata, normalized settings, and deduplicated domain changes", async () => {
     const environment = createEnvironment({
       allowedDomains: ["api.example.com", "shared.example.com"],
-      initialPromptAttachments: [{
-        id: "attachment-1",
-        name: "diagram.png",
-        previewUrl: "blob:diagram",
-        base64Data: "aW1hZ2U=",
-      }],
+      initialPromptAttachments: [
+        {
+          id: "attachment-1",
+          name: "diagram.png",
+          previewUrl: "blob:diagram",
+          base64Data: "aW1hZ2U=",
+        },
+      ],
     });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await commands.get("set_environment_pr")?.({
-      environmentId: environment.id,
-      prUrl: "https://github.com/acme/repo/pull/42",
-      prState: "open",
-      hasMergeConflicts: false,
-    }, context);
+    await commands.get("set_environment_pr")?.(
+      {
+        environmentId: environment.id,
+        prUrl: "https://github.com/acme/repo/pull/42",
+        prState: "open",
+        hasMergeConflicts: false,
+      },
+      context,
+    );
     expect(updates).toContainEqual({
       prUrl: "https://github.com/acme/repo/pull/42",
       prState: "open",
       hasMergeConflicts: false,
     });
-    await expect(commands.get("get_environment_pr_url")?.({ environmentId: environment.id }, context))
-      .resolves.toBe("https://github.com/acme/repo/pull/42");
+    await expect(
+      commands.get("get_environment_pr_url")?.({ environmentId: environment.id }, context),
+    ).resolves.toBe("https://github.com/acme/repo/pull/42");
     await commands.get("clear_environment_pr")?.({ environmentId: environment.id }, context);
     expect(updates).toContainEqual({ prUrl: null, prState: null, hasMergeConflicts: null });
-    await expect(commands.get("get_environment_pr_url")?.({ environmentId: "missing" }, context)).resolves.toBeNull();
+    await expect(
+      commands.get("get_environment_pr_url")?.({ environmentId: "missing" }, context),
+    ).resolves.toBeNull();
 
-    await commands.get("update_port_mappings")?.({
-      environmentId: environment.id,
-      portMappings: [{ hostPort: 3000, containerPort: 3001, protocol: "tcp" }],
-    }, context);
+    await commands.get("update_port_mappings")?.(
+      {
+        environmentId: environment.id,
+        portMappings: [{ hostPort: 3000, containerPort: 3001, protocol: "tcp" }],
+      },
+      context,
+    );
     expect(updates).toContainEqual({
       portMappings: [{ hostPort: 3000, containerPort: 3001, protocol: "tcp" }],
     });
-    await commands.get("update_port_mappings")?.({ environmentId: environment.id, portMappings: null }, context);
+    await commands.get("update_port_mappings")?.(
+      { environmentId: environment.id, portMappings: null },
+      context,
+    );
     expect(updates).toContainEqual({ portMappings: [] });
-    await commands.get("update_environment_agent_settings")?.({
-      environmentId: environment.id,
-      defaultAgent: "codex",
-      claudeMode: "native",
-      claudeNativeBackend: "bridge",
-      opencodeMode: "native",
-      codexMode: "native",
-      pendingAgentLaunch: true,
-      initialAgentModel: "gpt-5.6-sol",
-      initialReasoningEffort: "high",
-    }, context);
+    await commands.get("update_environment_agent_settings")?.(
+      {
+        environmentId: environment.id,
+        defaultAgent: "codex",
+        claudeMode: "native",
+        claudeNativeBackend: "bridge",
+        opencodeMode: "native",
+        codexMode: "native",
+        pendingAgentLaunch: true,
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "high",
+      },
+      context,
+    );
     expect(updates).toContainEqual({
       defaultAgent: "codex",
       claudeMode: "native",
@@ -922,17 +993,20 @@ exit 0
       initialAgentModel: "gpt-5.6-sol",
       initialReasoningEffort: "high",
     });
-    await commands.get("update_environment_agent_settings")?.({
-      environmentId: environment.id,
-      defaultAgent: "codex",
-      claudeMode: null,
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: "native",
-      pendingAgentLaunch: false,
-      initialAgentModel: "must-not-survive",
-      initialReasoningEffort: "ultra",
-    }, context);
+    await commands.get("update_environment_agent_settings")?.(
+      {
+        environmentId: environment.id,
+        defaultAgent: "codex",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: "native",
+        pendingAgentLaunch: false,
+        initialAgentModel: "must-not-survive",
+        initialReasoningEffort: "ultra",
+      },
+      context,
+    );
     // Clearing the flag must emit both option keys explicitly: `updateEnvironment`
     // only clears a stored field when the key is present, so dropping the keys
     // here would leave the previous run's model on the environment.
@@ -953,16 +1027,19 @@ exit 0
     expect(environment.initialAgentModel).toBeUndefined();
     expect(environment.initialReasoningEffort).toBeUndefined();
     expect(environment.initialPromptAttachments).toBeUndefined();
-    await commands.get("update_environment_agent_settings")?.({
-      environmentId: environment.id,
-      defaultAgent: "codex",
-      claudeMode: null,
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: "native",
-      initialAgentModel: "gpt-5.4-mini",
-      initialReasoningEffort: "medium",
-    }, context);
+    await commands.get("update_environment_agent_settings")?.(
+      {
+        environmentId: environment.id,
+        defaultAgent: "codex",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: "native",
+        initialAgentModel: "gpt-5.4-mini",
+        initialReasoningEffort: "medium",
+      },
+      context,
+    );
     expect(updates.at(-1)).toEqual({
       defaultAgent: "codex",
       claudeMode: null,
@@ -973,16 +1050,19 @@ exit 0
       initialReasoningEffort: "medium",
     });
     expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
-    await commands.get("update_environment_agent_settings")?.({
-      environmentId: environment.id,
-      defaultAgent: "codex",
-      claudeMode: null,
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: "native",
-      initialAgentModel: 42,
-      initialReasoningEffort: {},
-    }, context);
+    await commands.get("update_environment_agent_settings")?.(
+      {
+        environmentId: environment.id,
+        defaultAgent: "codex",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: "native",
+        initialAgentModel: 42,
+        initialReasoningEffort: {},
+      },
+      context,
+    );
     expect(updates.at(-1)).toEqual({
       defaultAgent: "codex",
       claudeMode: null,
@@ -993,14 +1073,17 @@ exit 0
     // Omitting the flag must leave an in-flight launch intent alone: the settings
     // dialog, FeaturesView and the non-Claude pipeline lanes all call this
     // command without it while an environment may still be awaiting its launch.
-    await commands.get("update_environment_agent_settings")?.({
-      environmentId: environment.id,
-      defaultAgent: "claude",
-      claudeMode: "terminal",
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: null,
-    }, context);
+    await commands.get("update_environment_agent_settings")?.(
+      {
+        environmentId: environment.id,
+        defaultAgent: "claude",
+        claudeMode: "terminal",
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: null,
+      },
+      context,
+    );
     expect(updates).toContainEqual({
       defaultAgent: "claude",
       claudeMode: "terminal",
@@ -1010,42 +1093,54 @@ exit 0
     });
     expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
     // A non-boolean must not be coerced either.
-    await commands.get("update_environment_agent_settings")?.({
-      environmentId: environment.id,
-      defaultAgent: "claude",
-      claudeMode: "terminal",
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: null,
-      pendingAgentLaunch: "true",
-    }, context);
+    await commands.get("update_environment_agent_settings")?.(
+      {
+        environmentId: environment.id,
+        defaultAgent: "claude",
+        claudeMode: "terminal",
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: null,
+        pendingAgentLaunch: "true",
+      },
+      context,
+    );
     expect(updates.at(-1)).not.toHaveProperty("pendingAgentLaunch");
 
     // Re-arm a launch with options so the clear below has something to destroy.
-    await commands.get("update_environment_agent_settings")?.({
-      environmentId: environment.id,
-      defaultAgent: "codex",
-      claudeMode: null,
-      claudeNativeBackend: null,
-      opencodeMode: null,
-      codexMode: "native",
-      pendingAgentLaunch: true,
-      initialAgentModel: "gpt-5.6-sol",
-      initialReasoningEffort: "high",
-    }, context);
+    await commands.get("update_environment_agent_settings")?.(
+      {
+        environmentId: environment.id,
+        defaultAgent: "codex",
+        claudeMode: null,
+        claudeNativeBackend: null,
+        opencodeMode: null,
+        codexMode: "native",
+        pendingAgentLaunch: true,
+        initialAgentModel: "gpt-5.6-sol",
+        initialReasoningEffort: "high",
+      },
+      context,
+    );
     expect(environment.initialAgentModel).toBe("gpt-5.6-sol");
 
-    await commands.get("set_environment_pending_agent_launch")?.({
-      environmentId: environment.id,
-      pending: false,
-    }, context);
+    await commands.get("set_environment_pending_agent_launch")?.(
+      {
+        environmentId: environment.id,
+        pending: false,
+      },
+      context,
+    );
     expectClearsPendingAgentLaunch(updates.at(-1));
     expect(environment.initialAgentModel).toBeUndefined();
     expect(environment.initialReasoningEffort).toBeUndefined();
-    await commands.get("set_environment_pending_agent_launch")?.({
-      environmentId: environment.id,
-      pending: true,
-    }, context);
+    await commands.get("set_environment_pending_agent_launch")?.(
+      {
+        environmentId: environment.id,
+        pending: true,
+      },
+      context,
+    );
     // Arming must not touch the options: the renderer sets the model through
     // `update_environment_agent_settings`, and clobbering it here would drop a
     // choice that had already been recorded.
@@ -1054,58 +1149,96 @@ exit 0
     expect(updates.at(-1)).not.toHaveProperty("initialReasoningEffort");
     // A malformed call must fail rather than silently destroying the intent by
     // reading a missing/garbage value as `false`.
-    expect(() => commands.get("set_environment_pending_agent_launch")?.({
-      environmentId: environment.id,
-    }, context)).toThrow("Expected pending to be a boolean");
-    expect(() => commands.get("set_environment_pending_agent_launch")?.({
-      environmentId: environment.id,
-      pending: "false",
-    }, context)).toThrow("Expected pending to be a boolean");
+    expect(() =>
+      commands.get("set_environment_pending_agent_launch")?.(
+        {
+          environmentId: environment.id,
+        },
+        context,
+      ),
+    ).toThrow("Expected pending to be a boolean");
+    expect(() =>
+      commands.get("set_environment_pending_agent_launch")?.(
+        {
+          environmentId: environment.id,
+          pending: "false",
+        },
+        context,
+      ),
+    ).toThrow("Expected pending to be a boolean");
 
-    await commands.get("set_environment_initial_prompt")?.({
-      environmentId: environment.id,
-      initialPrompt: "Fix the bug [image](/work/attachment-1.png)",
-    }, context);
+    await commands.get("set_environment_initial_prompt")?.(
+      {
+        environmentId: environment.id,
+        initialPrompt: "Fix the bug [image](/work/attachment-1.png)",
+      },
+      context,
+    );
     expect(updates).toContainEqual({
       initialPrompt: "Fix the bug [image](/work/attachment-1.png)",
     });
-    expect(() => commands.get("set_environment_initial_prompt")?.({
-      environmentId: environment.id,
-      initialPrompt: 42,
-    }, context)).toThrow("Expected initialPrompt to be a string");
-    await commands.get("update_environment_allowed_domains")?.({
-      environmentId: environment.id,
-      domains: ["one.example.com", "two.example.com"],
-    }, context);
+    expect(() =>
+      commands.get("set_environment_initial_prompt")?.(
+        {
+          environmentId: environment.id,
+          initialPrompt: 42,
+        },
+        context,
+      ),
+    ).toThrow("Expected initialPrompt to be a string");
+    await commands.get("update_environment_allowed_domains")?.(
+      {
+        environmentId: environment.id,
+        domains: ["one.example.com", "two.example.com"],
+      },
+      context,
+    );
     expect(updates).toContainEqual({ allowedDomains: ["one.example.com", "two.example.com"] });
 
     environment.allowedDomains = ["api.example.com", "shared.example.com"];
-    await expect(commands.get("add_environment_domains")?.({
-      environmentId: environment.id,
-      domains: ["shared.example.com", "new.example.com"],
-    }, context)).resolves.toBe("api.example.com,shared.example.com,new.example.com");
+    await expect(
+      commands.get("add_environment_domains")?.(
+        {
+          environmentId: environment.id,
+          domains: ["shared.example.com", "new.example.com"],
+        },
+        context,
+      ),
+    ).resolves.toBe("api.example.com,shared.example.com,new.example.com");
     expect(updates).toContainEqual({
       allowedDomains: ["api.example.com", "shared.example.com", "new.example.com"],
     });
-    await expect(commands.get("remove_environment_domains")?.({
-      environmentId: environment.id,
-      domains: ["shared.example.com"],
-    }, context)).resolves.toBe("api.example.com,new.example.com");
-    await expect(commands.get("add_environment_domains")?.({
-      environmentId: "missing",
-      domains: [],
-    }, context)).rejects.toThrow("Environment not found: missing");
-    await expect(commands.get("remove_environment_domains")?.({
-      environmentId: "missing",
-      domains: [],
-    }, context)).rejects.toThrow("Environment not found: missing");
+    await expect(
+      commands.get("remove_environment_domains")?.(
+        {
+          environmentId: environment.id,
+          domains: ["shared.example.com"],
+        },
+        context,
+      ),
+    ).resolves.toBe("api.example.com,new.example.com");
+    await expect(
+      commands.get("add_environment_domains")?.(
+        {
+          environmentId: "missing",
+          domains: [],
+        },
+        context,
+      ),
+    ).rejects.toThrow("Environment not found: missing");
+    await expect(
+      commands.get("remove_environment_domains")?.(
+        {
+          environmentId: "missing",
+          domains: [],
+        },
+        context,
+      ),
+    ).rejects.toThrow("Environment not found: missing");
   });
 });
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -1121,8 +1254,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -1142,94 +1273,98 @@ exit 1
     return created;
   }
 
-
-
   test("rejects local environment creation before persistence when the project has no checkout", async () => {
     const { context } = createContext([]);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("create_environment")?.(
-      {
-        projectId: "project-1",
-        name: "Cannot start locally",
-        environmentType: "local",
-      },
-      context,
-    )).rejects.toThrow("Project has no local path - cannot create a local worktree");
+    await expect(
+      commands.get("create_environment")?.(
+        {
+          projectId: "project-1",
+          name: "Cannot start locally",
+          environmentType: "local",
+        },
+        context,
+      ),
+    ).rejects.toThrow("Project has no local path - cannot create a local worktree");
     await expect(context.storage.getEnvironmentsByProject("project-1")).resolves.toEqual([]);
   });
-
-
 
   test("creates unnamed environments with a default timestamp while storing the initial prompt", async () => {
     const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(`#!/bin/sh
+    await withFakeCodex(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
 exit 42
-`, async (logPath) => {
-      const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
-        commands.get("create_environment")?.(
-          {
-            projectId: "project-1",
-            initialPrompt: "Please review the OAuth callback flow",
-            environmentType: "local",
-          },
-          context,
-        ) as Promise<Environment>,
-      );
+`,
+      async (logPath) => {
+        const result = await withFixedDate(
+          "2026-04-15T12:34:56.789Z",
+          async () =>
+            commands.get("create_environment")?.(
+              {
+                projectId: "project-1",
+                initialPrompt: "Please review the OAuth callback flow",
+                environmentType: "local",
+              },
+              context,
+            ) as Promise<Environment>,
+        );
 
-      expect(result.name).toBe("20260415-123456");
-      expect(result.branch).toBe("20260415-123456");
-      expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
-      expect(result.createdAt).toBe("2026-04-15T12:34:56.789Z");
-      expect(result.lastActivityAt).toBe(result.createdAt);
-      await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
-    });
+        expect(result.name).toBe("20260415-123456");
+        expect(result.branch).toBe("20260415-123456");
+        expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
+        expect(result.createdAt).toBe("2026-04-15T12:34:56.789Z");
+        expect(result.lastActivityAt).toBe(result.createdAt);
+        await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
+      },
+    );
   });
-
-
 
   test("creates unnamed environments from a naming prompt without running codex during create", async () => {
     const { context } = createContext([]);
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(`#!/bin/sh
+    await withFakeCodex(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
 exit 42
-`, async (logPath) => {
-      const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
-        commands.get("create_environment")?.(
-          {
-            projectId: "project-1",
-            namingPrompt: "Build task\n\nShip the feature\n\nAll checks green",
-            environmentType: "containerized",
-          },
-          context,
-        ) as Promise<Environment>,
-      );
+`,
+      async (logPath) => {
+        const result = await withFixedDate(
+          "2026-04-15T12:34:56.789Z",
+          async () =>
+            commands.get("create_environment")?.(
+              {
+                projectId: "project-1",
+                namingPrompt: "Build task\n\nShip the feature\n\nAll checks green",
+                environmentType: "containerized",
+              },
+              context,
+            ) as Promise<Environment>,
+        );
 
-      expect(result.name).toBe("20260415-123456");
-      expect(result.branch).toBe("20260415-123456");
-      expect(result.initialPrompt).toBeUndefined();
-      expect(result.pendingRenamePrompt).toBeUndefined();
-      expect(
-        (await context.storage.getEnvironment(result.id))?.pendingRenamePrompt,
-      ).toBe("Build task\n\nShip the feature\n\nAll checks green");
-      await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
-    });
+        expect(result.name).toBe("20260415-123456");
+        expect(result.branch).toBe("20260415-123456");
+        expect(result.initialPrompt).toBeUndefined();
+        expect(result.pendingRenamePrompt).toBeUndefined();
+        expect((await context.storage.getEnvironment(result.id))?.pendingRenamePrompt).toBe(
+          "Build task\n\nShip the feature\n\nAll checks green",
+        );
+        await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
+      },
+    );
   });
-
-
 
   test("does not persist a naming prompt when an explicit environment name is provided", async () => {
     const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
     const commands = createCommandRegistry();
 
-    const result = await commands.get("create_environment")?.(
+    const result = (await commands.get("create_environment")?.(
       {
         projectId: "project-1",
         name: "Manual Name",
@@ -1237,19 +1372,17 @@ exit 42
         environmentType: "local",
       },
       context,
-    ) as Environment;
+    )) as Environment;
 
     expect(result.name).toBe("manual-name");
     expect(result.pendingRenamePrompt).toBeUndefined();
   });
 
-
-
   test("persists the originating build pipeline on a created environment", async () => {
     const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
     const commands = createCommandRegistry();
 
-    const result = await commands.get("create_environment")?.(
+    const result = (await commands.get("create_environment")?.(
       {
         projectId: "project-1",
         name: "GitHub issue build",
@@ -1257,15 +1390,13 @@ exit 42
         buildPipelineId: "pipeline-github-42",
       },
       context,
-    ) as Environment;
+    )) as Environment;
 
     expect(result.buildPipelineId).toBe("pipeline-github-42");
-    expect(
-      (await context.storage.getEnvironment(result.id))?.buildPipelineId,
-    ).toBe("pipeline-github-42");
+    expect((await context.storage.getEnvironment(result.id))?.buildPipelineId).toBe(
+      "pipeline-github-42",
+    );
   });
-
-
 
   test("clears a pending prompt when the user manually renames the environment", async () => {
     const environment = createEnvironment({
@@ -1284,138 +1415,143 @@ exit 42
     expect(environment.pendingRenamePrompt).toBeUndefined();
   });
 
+  test(
+    "completes a persisted prompt rename in the backend after startup",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("timestamp-name");
+      const environment = createEnvironment({
+        id: "env-pending-rename",
+        name: "timestamp-name",
+        branch: "timestamp-name",
+        environmentType: "local",
+        worktreePath,
+        status: "stopped",
+        setupScriptsComplete: true,
+        pendingRenamePrompt: "Please review the OAuth callback flow",
+      });
+      const { context, emitted } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        await expect(
+          commands.get("start_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            setupStarted: false,
+            environment: expect.objectContaining({
+              id: environment.id,
+              status: "running",
+            }),
+          }),
+        );
 
-  test("completes a persisted prompt rename in the backend after startup", async () => {
-    const worktreePath = await createGitRepoOnBranch("timestamp-name");
-    const environment = createEnvironment({
-      id: "env-pending-rename",
-      name: "timestamp-name",
-      branch: "timestamp-name",
-      environmentType: "local",
-      worktreePath,
-      status: "stopped",
-      setupScriptsComplete: true,
-      pendingRenamePrompt: "Please review the OAuth callback flow",
-    });
-    const { context, emitted } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
+        // The caller does not issue a separate rename command. The backend-owned
+        // task survives a renderer reload and emits the normal rehydration event.
+        await waitForCondition(
+          () => emitted.some(({ event }) => event === "environment-renamed"),
+          "pending environment rename",
+        );
 
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await expect(commands.get("start_environment")?.(
-        { environmentId: environment.id },
-        context,
-      )).resolves.toEqual(expect.objectContaining({
-        setupStarted: false,
-        environment: expect.objectContaining({
-          id: environment.id,
-          status: "running",
-        }),
-      }));
+        expect(environment.name).toBe("review-oauth-flow");
+        expect(environment.branch).toBe("review-oauth-flow");
+        expect(environment.pendingRenamePrompt).toBeUndefined();
+        expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
+      });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-      // The caller does not issue a separate rename command. The backend-owned
-      // task survives a renderer reload and emits the normal rehydration event.
-      await waitForCondition(
-        () => emitted.some(({ event }) => event === "environment-renamed"),
-        "pending environment rename",
-      );
+  test(
+    "resumes a persisted rename while rehydrating an already-running environment",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("timestamp-name");
+      const environment = createEnvironment({
+        id: "env-pending-rename-rehydrate",
+        name: "timestamp-name",
+        branch: "timestamp-name",
+        environmentType: "local",
+        worktreePath,
+        status: "running",
+        setupScriptsComplete: true,
+        pendingRenamePrompt: "Reconcile the background session state",
+      });
+      const { context, emitted } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
-      expect(environment.name).toBe("review-oauth-flow");
-      expect(environment.branch).toBe("review-oauth-flow");
+      await withFakeCodex(codexSlugScript("Reconcile Session State"), async () => {
+        await expect(
+          commands.get("get_environments")?.({ projectId: environment.projectId }, context),
+        ).resolves.toEqual([expect.objectContaining({ id: environment.id, status: "running" })]);
+
+        await waitForCondition(
+          () => emitted.some(({ event }) => event === "environment-renamed"),
+          "rehydrated pending environment rename",
+        );
+      });
+
+      expect(environment.name).toBe("reconcile-session-state");
       expect(environment.pendingRenamePrompt).toBeUndefined();
-      expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
-
-  test("resumes a persisted rename while rehydrating an already-running environment", async () => {
-    const worktreePath = await createGitRepoOnBranch("timestamp-name");
-    const environment = createEnvironment({
-      id: "env-pending-rename-rehydrate",
-      name: "timestamp-name",
-      branch: "timestamp-name",
-      environmentType: "local",
-      worktreePath,
-      status: "running",
-      setupScriptsComplete: true,
-      pendingRenamePrompt: "Reconcile the background session state",
-    });
-    const { context, emitted } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
-
-    await withFakeCodex(codexSlugScript("Reconcile Session State"), async () => {
-      await expect(commands.get("get_environments")?.(
-        { projectId: environment.projectId },
-        context,
-      )).resolves.toEqual([expect.objectContaining({ id: environment.id, status: "running" })]);
-
-      await waitForCondition(
-        () => emitted.some(({ event }) => event === "environment-renamed"),
-        "rehydrated pending environment rename",
-      );
-    });
-
-    expect(environment.name).toBe("reconcile-session-state");
-    expect(environment.pendingRenamePrompt).toBeUndefined();
-    expect(await currentGitBranch(worktreePath)).toBe("reconcile-session-state");
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+      expect(await currentGitBranch(worktreePath)).toBe("reconcile-session-state");
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("does not run codex exec for initial-prompt-only environment naming", async () => {
     const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(`#!/bin/sh
+    await withFakeCodex(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
 printf 'codex auth required\\n' >&2
 exit 1
-`, async (logPath) => {
-      const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
-        commands.get("create_environment")?.(
-          {
-            projectId: "project-1",
-            initialPrompt: "Please review the OAuth callback flow",
-            environmentType: "local",
-          },
-          context,
-        ) as Promise<Environment>,
-      );
+`,
+      async (logPath) => {
+        const result = await withFixedDate(
+          "2026-04-15T12:34:56.789Z",
+          async () =>
+            commands.get("create_environment")?.(
+              {
+                projectId: "project-1",
+                initialPrompt: "Please review the OAuth callback flow",
+                environmentType: "local",
+              },
+              context,
+            ) as Promise<Environment>,
+        );
 
-      expect(result.name).toBe("20260415-123456");
-      expect(result.branch).toBe("20260415-123456");
-      expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
-      await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
-    });
+        expect(result.name).toBe("20260415-123456");
+        expect(result.branch).toBe("20260415-123456");
+        expect(result.initialPrompt).toBe("Please review the OAuth callback flow");
+        await expect(fs.readFile(logPath, "utf8")).rejects.toThrow();
+      },
+    );
   });
-
-
 
   test("falls back to the default timestamp name when an initial prompt cannot form a slug", async () => {
     const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });
     const commands = createCommandRegistry();
 
-    const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
-      commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          initialPrompt: "🔥🔥🔥",
-          environmentType: "local",
-        },
-        context,
-      ) as Promise<Environment>,
+    const result = await withFixedDate(
+      "2026-04-15T12:34:56.789Z",
+      async () =>
+        commands.get("create_environment")?.(
+          {
+            projectId: "project-1",
+            initialPrompt: "🔥🔥🔥",
+            environmentType: "local",
+          },
+          context,
+        ) as Promise<Environment>,
     );
 
     expect(result.name).toBe("20260415-123456");
     expect(result.branch).toBe(result.name);
     expect(result.initialPrompt).toBe("🔥🔥🔥");
   });
-
-
 
   test("suffixes default timestamp names when another environment already uses the same timestamp", async () => {
     const existing = createEnvironment({
@@ -1426,21 +1562,21 @@ exit 1
     const { context } = createContext(existing, { project: LOCAL_PROJECT_FOR_CREATE });
     const commands = createCommandRegistry();
 
-    const result = await withFixedDate("2026-04-15T12:34:56.789Z", async () =>
-      commands.get("create_environment")?.(
-        {
-          projectId: "project-1",
-          environmentType: "local",
-        },
-        context,
-      ) as Promise<Environment>,
+    const result = await withFixedDate(
+      "2026-04-15T12:34:56.789Z",
+      async () =>
+        commands.get("create_environment")?.(
+          {
+            projectId: "project-1",
+            environmentType: "local",
+          },
+          context,
+        ) as Promise<Environment>,
     );
 
     expect(result.name).toBe("20260415-123456-1");
     expect(result.branch).toBe("20260415-123456-1");
   });
-
-
 
   test("suffixes explicit environment names when the current project already uses the slug", async () => {
     const existing = createEnvironment({
@@ -1451,20 +1587,18 @@ exit 1
     const { context } = createContext(existing, { project: LOCAL_PROJECT_FOR_CREATE });
     const commands = createCommandRegistry();
 
-    const result = await commands.get("create_environment")?.(
+    const result = (await commands.get("create_environment")?.(
       {
         projectId: "project-1",
         name: "Custom Name",
         environmentType: "local",
       },
       context,
-    ) as Environment;
+    )) as Environment;
 
     expect(result.name).toBe("custom-name-1");
     expect(result.branch).toBe("custom-name-1");
   });
-
-
 
   test("renames environments from prompts using codex exec output", async () => {
     const environment = createEnvironment({
@@ -1481,7 +1615,8 @@ exit 1
     context.resourceRoot = appRoot;
     const commands = createCommandRegistry();
 
-    await withFakeCodex(`#!/bin/sh
+    await withFakeCodex(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_CODEX_LOG"
 out=""
 prev=""
@@ -1493,35 +1628,41 @@ for arg in "$@"; do
 done
 [ -n "$out" ] || exit 2
 printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
-`, async (logPath) => {
-      await expect(commands.get("rename_environment_from_prompt")?.(
-        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-        context,
-      )).resolves.toBeUndefined();
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("rename_environment_from_prompt")?.(
+            { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+            context,
+          ),
+        ).resolves.toBeUndefined();
 
-      expect(environment.name).toBe("review-oauth-flow");
-      expect(environment.branch).toBe("review-oauth-flow");
-      expect(environment.prUrl).toBeNull();
-      expect(environment.prState).toBeNull();
-      expect(environment.hasMergeConflicts).toBeNull();
-      expect(emitted).toContainEqual({
-        event: "environment-renamed",
-        payload: {
-          environment_id: environment.id,
-          new_name: "review-oauth-flow",
-          new_branch: "review-oauth-flow",
-        },
-      });
+        expect(environment.name).toBe("review-oauth-flow");
+        expect(environment.branch).toBe("review-oauth-flow");
+        expect(environment.prUrl).toBeNull();
+        expect(environment.prState).toBeNull();
+        expect(environment.hasMergeConflicts).toBeNull();
+        expect(emitted).toContainEqual({
+          event: "environment-renamed",
+          payload: {
+            environment_id: environment.id,
+            new_name: "review-oauth-flow",
+            new_branch: "review-oauth-flow",
+          },
+        });
 
-      const codexLog = await fs.readFile(logPath, "utf8");
-      expect(codexLog).toContain("--model gpt-5.6-luna --config model_reasoning_effort=\"medium\" --sandbox read-only");
-      expect(codexLog).toContain("exec --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules");
-      expect(codexLog).toContain("--output-last-message");
-      expect(codexLog).not.toContain("claude");
-    });
+        const codexLog = await fs.readFile(logPath, "utf8");
+        expect(codexLog).toContain(
+          '--model gpt-5.6-luna --config model_reasoning_effort="medium" --sandbox read-only',
+        );
+        expect(codexLog).toContain(
+          "exec --skip-git-repo-check --ephemeral --ignore-user-config --ignore-rules",
+        );
+        expect(codexLog).toContain("--output-last-message");
+        expect(codexLog).not.toContain("claude");
+      },
+    );
   });
-
-
 
   test("suffixes prompt-renamed environments when another environment already uses the generated slug", async () => {
     const environment = createEnvironment({
@@ -1547,10 +1688,12 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     const commands = createCommandRegistry();
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await expect(commands.get("rename_environment_from_prompt")?.(
-        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-        context,
-      )).resolves.toBeUndefined();
+      await expect(
+        commands.get("rename_environment_from_prompt")?.(
+          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+          context,
+        ),
+      ).resolves.toBeUndefined();
 
       expect(environment.name).toBe("review-oauth-flow-1");
       expect(environment.branch).toBe("review-oauth-flow-1");
@@ -1558,12 +1701,14 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       expect(existing.branch).toBe("review-oauth-flow");
       expect(emitted).toContainEqual({
         event: "environment-renamed",
-        payload: { environment_id: environment.id, new_name: "review-oauth-flow-1", new_branch: "review-oauth-flow-1" },
+        payload: {
+          environment_id: environment.id,
+          new_name: "review-oauth-flow-1",
+          new_branch: "review-oauth-flow-1",
+        },
       });
     });
   });
-
-
 
   test("suffixes prompt-renamed local environments when the project already has the generated branch", async () => {
     const { worktree } = await createGitWorktreeWithOrigin();
@@ -1591,17 +1736,17 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     const commands = createCommandRegistry();
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await expect(commands.get("rename_environment_from_prompt")?.(
-        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-        context,
-      )).resolves.toBeUndefined();
+      await expect(
+        commands.get("rename_environment_from_prompt")?.(
+          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+          context,
+        ),
+      ).resolves.toBeUndefined();
 
       expect(environment.name).toBe("review-oauth-flow-1");
       expect(environment.branch).toBe("review-oauth-flow-1");
     });
   });
-
-
 
   test("renames the live local git branch and advances stored branch on success", async () => {
     const worktreePath = await createGitRepoOnBranch("old-branch");
@@ -1620,10 +1765,12 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     const commands = createCommandRegistry();
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await expect(commands.get("rename_environment_from_prompt")?.(
-        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-        context,
-      )).resolves.toBeUndefined();
+      await expect(
+        commands.get("rename_environment_from_prompt")?.(
+          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+          context,
+        ),
+      ).resolves.toBeUndefined();
 
       expect(environment.name).toBe("review-oauth-flow");
       expect(environment.branch).toBe("review-oauth-flow");
@@ -1644,12 +1791,14 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
       });
       expect(emitted).toContainEqual({
         event: "environment-renamed",
-        payload: { environment_id: environment.id, new_name: "review-oauth-flow", new_branch: "review-oauth-flow" },
+        payload: {
+          environment_id: environment.id,
+          new_name: "review-oauth-flow",
+          new_branch: "review-oauth-flow",
+        },
       });
     });
   });
-
-
 
   test("rolls back a local rename when push configuration fails", async () => {
     const worktreePath = await createGitRepoOnBranch("old-branch");
@@ -1669,10 +1818,12 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
       await withFailingGitSubcommand("config", async () => {
-        await expect(commands.get("rename_environment_from_prompt")?.(
-          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-          context,
-        )).resolves.toBeUndefined();
+        await expect(
+          commands.get("rename_environment_from_prompt")?.(
+            { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+            context,
+          ),
+        ).resolves.toBeUndefined();
       });
     });
 
@@ -1693,8 +1844,6 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     });
   });
 
-
-
   test("advances the stored branch when a local rollback fails and the new branch is the only one left", async () => {
     const worktreePath = await createGitRepoOnBranch("old-branch");
     const environment = createEnvironment({
@@ -1714,10 +1863,12 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         `  *" config --worktree push.default "*) echo "forced config failure" >&2; exit 42 ;;
   *" branch -m -- review-oauth-flow old-branch"*) echo "forced rollback failure" >&2; exit 42 ;;`,
         async () => {
-          await expect(commands.get("rename_environment_from_prompt")?.(
-            { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-            context,
-          )).resolves.toBeUndefined();
+          await expect(
+            commands.get("rename_environment_from_prompt")?.(
+              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+              context,
+            ),
+          ).resolves.toBeUndefined();
         },
       );
     });
@@ -1730,8 +1881,6 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     expect(environment.prState).toBeNull();
     expect(environment.hasMergeConflicts).toBeNull();
   });
-
-
 
   test("keeps the stored branch when a local rollback took effect but reported failure", async () => {
     const worktreePath = await createGitRepoOnBranch("old-branch");
@@ -1757,25 +1906,31 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
         `  *" config --worktree push.default "*) echo "forced config failure" >&2; exit 42 ;;
   *" branch -m -- review-oauth-flow old-branch"*) real_git "$@"; echo "forced timeout" >&2; exit 42 ;;`,
         async () => {
-          await expect(commands.get("rename_environment_from_prompt")?.(
-            { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-            context,
-          )).resolves.toBeUndefined();
+          await expect(
+            commands.get("rename_environment_from_prompt")?.(
+              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+              context,
+            ),
+          ).resolves.toBeUndefined();
         },
       );
     });
 
     // The rollback did land, so the stored branch and its PR metadata must survive.
-    expect(await gitOutput(worktreePath, ["branch", "--list", "old-branch", "--format=%(refname:short)"]))
-      .toBe("old-branch");
+    expect(
+      await gitOutput(worktreePath, [
+        "branch",
+        "--list",
+        "old-branch",
+        "--format=%(refname:short)",
+      ]),
+    ).toBe("old-branch");
     expect(await gitOutput(worktreePath, ["branch", "--list", "review-oauth-flow"])).toBe("");
     expect(environment.branch).toBe("old-branch");
     expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
     expect(environment.prState).toBe("open");
     expect(environment.hasMergeConflicts).toBe(true);
   });
-
-
 
   test("renames the running container git branch and advances stored branch", async () => {
     const environment = createEnvironment({
@@ -1797,37 +1952,48 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     const commands = createCommandRegistry();
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 fi
 exit 0
-`, async (logs) => {
-        await expect(commands.get("rename_environment_from_prompt")?.(
-          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-          context,
-        )).resolves.toBeUndefined();
+`,
+        async (logs) => {
+          await expect(
+            commands.get("rename_environment_from_prompt")?.(
+              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+              context,
+            ),
+          ).resolves.toBeUndefined();
 
-        expect(environment.name).toBe("review-oauth-flow");
-        expect(environment.branch).toBe("review-oauth-flow");
-        expect(environment.prUrl).toBeNull();
+          expect(environment.name).toBe("review-oauth-flow");
+          expect(environment.branch).toBe("review-oauth-flow");
+          expect(environment.prUrl).toBeNull();
 
-        const execLog = await fs.readFile(logs.exec, "utf8");
-        expect(execLog).toContain("git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow'");
-        expect(execLog).toContain("git -C /workspace config --local push.default current");
-        expect(execLog).toContain("git -C /workspace config --local push.autoSetupRemote true");
-        // The upstream the rename carried over from the old name has to go, or the
-        // renamed branch keeps comparing itself against origin/old-branch.
-        expect(execLog).toContain("git -C /workspace config --local --unset-all 'branch.review-oauth-flow.merge'");
-        expect(execLog).toContain("git -C /workspace config --local --unset-all 'branch.review-oauth-flow.remote'");
-        // Nothing may pre-create an upstream for a branch that has never been pushed.
-        expect(execLog).not.toContain("config --local 'branch.review-oauth-flow.merge' 'refs/heads/review-oauth-flow'");
-      });
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog).toContain(
+            "git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow'",
+          );
+          expect(execLog).toContain("git -C /workspace config --local push.default current");
+          expect(execLog).toContain("git -C /workspace config --local push.autoSetupRemote true");
+          // The upstream the rename carried over from the old name has to go, or the
+          // renamed branch keeps comparing itself against origin/old-branch.
+          expect(execLog).toContain(
+            "git -C /workspace config --local --unset-all 'branch.review-oauth-flow.merge'",
+          );
+          expect(execLog).toContain(
+            "git -C /workspace config --local --unset-all 'branch.review-oauth-flow.remote'",
+          );
+          // Nothing may pre-create an upstream for a branch that has never been pushed.
+          expect(execLog).not.toContain(
+            "config --local 'branch.review-oauth-flow.merge' 'refs/heads/review-oauth-flow'",
+          );
+        },
+      );
     });
   });
-
-
 
   test("rolls back a container rename when push configuration fails", async () => {
     const environment = createEnvironment({
@@ -1846,7 +2012,8 @@ exit 0
     const commands = createCommandRegistry();
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -1855,27 +2022,33 @@ if [ "$1" = "exec" ]; then
   esac
 fi
 exit 0
-`, async (logs) => {
-        await expect(commands.get("rename_environment_from_prompt")?.(
-          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-          context,
-        )).resolves.toBeUndefined();
+`,
+        async (logs) => {
+          await expect(
+            commands.get("rename_environment_from_prompt")?.(
+              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+              context,
+            ),
+          ).resolves.toBeUndefined();
 
-        expect(environment.branch).toBe("old-branch");
-        expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
-        expect(environment.prState).toBe("open");
-        expect(environment.hasMergeConflicts).toBe(true);
+          expect(environment.branch).toBe("old-branch");
+          expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
+          expect(environment.prState).toBe("open");
+          expect(environment.hasMergeConflicts).toBe(true);
 
-        const execCalls = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
-        expect(execCalls).toHaveLength(3);
-        expect(execCalls[0]).toContain("git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow'");
-        expect(execCalls[1]).toContain("git -C /workspace config --local push.default current");
-        expect(execCalls[2]).toContain("git -C /workspace branch -m -- 'review-oauth-flow' 'old-branch'");
-      });
+          const execCalls = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
+          expect(execCalls).toHaveLength(3);
+          expect(execCalls[0]).toContain(
+            "git -C /workspace branch -m -- 'old-branch' 'review-oauth-flow'",
+          );
+          expect(execCalls[1]).toContain("git -C /workspace config --local push.default current");
+          expect(execCalls[2]).toContain(
+            "git -C /workspace branch -m -- 'review-oauth-flow' 'old-branch'",
+          );
+        },
+      );
     });
   });
-
-
 
   test("advances storage after push configuration and container rollback both fail", async () => {
     const environment = createEnvironment({
@@ -1895,7 +2068,8 @@ exit 0
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
       // Only the new branch resolves, so the rename is the state that survived.
-      await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -1908,27 +2082,33 @@ if [ "$1" = "exec" ]; then
   esac
 fi
 exit 0
-`, async (logs) => {
-        await expect(commands.get("rename_environment_from_prompt")?.(
-          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-          context,
-        )).resolves.toBeUndefined();
+`,
+        async (logs) => {
+          await expect(
+            commands.get("rename_environment_from_prompt")?.(
+              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+              context,
+            ),
+          ).resolves.toBeUndefined();
 
-        expect(environment.branch).toBe("review-oauth-flow");
-        expect(environment.prUrl).toBeNull();
-        expect(environment.prState).toBeNull();
-        expect(environment.hasMergeConflicts).toBeNull();
+          expect(environment.branch).toBe("review-oauth-flow");
+          expect(environment.prUrl).toBeNull();
+          expect(environment.prState).toBeNull();
+          expect(environment.hasMergeConflicts).toBeNull();
 
-        const execCalls = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
-        expect(execCalls).toHaveLength(5);
-        expect(execCalls[2]).toContain("git -C /workspace branch -m -- 'review-oauth-flow' 'old-branch'");
-        expect(execCalls[3]).toContain("rev-parse --verify --quiet 'refs/heads/review-oauth-flow'");
-        expect(execCalls[4]).toContain("rev-parse --verify --quiet 'refs/heads/old-branch'");
-      });
+          const execCalls = (await fs.readFile(logs.exec, "utf8")).trim().split("\n");
+          expect(execCalls).toHaveLength(5);
+          expect(execCalls[2]).toContain(
+            "git -C /workspace branch -m -- 'review-oauth-flow' 'old-branch'",
+          );
+          expect(execCalls[3]).toContain(
+            "rev-parse --verify --quiet 'refs/heads/review-oauth-flow'",
+          );
+          expect(execCalls[4]).toContain("rev-parse --verify --quiet 'refs/heads/old-branch'");
+        },
+      );
     });
   });
-
-
 
   test("keeps the stored branch when a container rollback outcome cannot be established", async () => {
     const environment = createEnvironment({
@@ -1949,7 +2129,8 @@ exit 0
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
       // Both names resolve, so the rollback may well have landed; clearing the PR
       // metadata on that guess is not recoverable, and keeping the branch is.
-      await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -1961,22 +2142,24 @@ if [ "$1" = "exec" ]; then
   esac
 fi
 exit 0
-`, async () => {
-        await expect(commands.get("rename_environment_from_prompt")?.(
-          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-          context,
-        )).resolves.toBeUndefined();
+`,
+        async () => {
+          await expect(
+            commands.get("rename_environment_from_prompt")?.(
+              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+              context,
+            ),
+          ).resolves.toBeUndefined();
 
-        expect(environment.name).toBe("review-oauth-flow");
-        expect(environment.branch).toBe("old-branch");
-        expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
-        expect(environment.prState).toBe("open");
-        expect(environment.hasMergeConflicts).toBe(true);
-      });
+          expect(environment.name).toBe("review-oauth-flow");
+          expect(environment.branch).toBe("old-branch");
+          expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
+          expect(environment.prState).toBe("open");
+          expect(environment.hasMergeConflicts).toBe(true);
+        },
+      );
     });
   });
-
-
 
   test("keeps the stored branch when a container rollback fails and the container is unreachable", async () => {
     const environment = createEnvironment({
@@ -1995,7 +2178,8 @@ exit 0
     const commands = createCommandRegistry();
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -2006,19 +2190,21 @@ if [ "$1" = "exec" ]; then
   esac
 fi
 exit 0
-`, async () => {
-        await expect(commands.get("rename_environment_from_prompt")?.(
-          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-          context,
-        )).resolves.toBeUndefined();
+`,
+        async () => {
+          await expect(
+            commands.get("rename_environment_from_prompt")?.(
+              { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+              context,
+            ),
+          ).resolves.toBeUndefined();
 
-        expect(environment.branch).toBe("old-branch");
-        expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
-      });
+          expect(environment.branch).toBe("old-branch");
+          expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
+        },
+      );
     });
   });
-
-
 
   test("keeps stored branch and PR metadata when the live git branch rename fails", async () => {
     // worktreePath is a plain directory (not a git repo) so `git branch -m` fails.
@@ -2036,10 +2222,12 @@ exit 0
     const commands = createCommandRegistry();
 
     await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await expect(commands.get("rename_environment_from_prompt")?.(
-        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-        context,
-      )).resolves.toBeUndefined();
+      await expect(
+        commands.get("rename_environment_from_prompt")?.(
+          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+          context,
+        ),
+      ).resolves.toBeUndefined();
 
       // Display name advances, but the branch and PR metadata stay put (no divergence).
       expect(environment.name).toBe("review-oauth-flow");
@@ -2050,26 +2238,28 @@ exit 0
       expect(updates).toEqual([{ name: "review-oauth-flow" }]);
       expect(emitted).toContainEqual({
         event: "environment-renamed",
-        payload: { environment_id: environment.id, new_name: "review-oauth-flow", new_branch: "old-branch" },
+        payload: {
+          environment_id: environment.id,
+          new_name: "review-oauth-flow",
+          new_branch: "old-branch",
+        },
       });
     });
   });
-
-
 
   test("rejects renaming from an empty prompt without touching storage", async () => {
     const environment = createEnvironment({ environmentType: "local", worktreePath: undefined });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("rename_environment_from_prompt")?.(
-      { environmentId: environment.id, prompt: "   " },
-      context,
-    )).rejects.toThrow("Prompt cannot be empty");
+    await expect(
+      commands.get("rename_environment_from_prompt")?.(
+        { environmentId: environment.id, prompt: "   " },
+        context,
+      ),
+    ).rejects.toThrow("Prompt cannot be empty");
     expect(updates).toHaveLength(0);
   });
-
-
 
   test("surfaces codex failures during rename", async () => {
     const environment = createEnvironment({ environmentType: "local", worktreePath: undefined });
@@ -2077,19 +2267,22 @@ exit 0
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(`#!/bin/sh
+    await withFakeCodex(
+      `#!/bin/sh
 printf 'codex auth required\\n' >&2
 exit 1
-`, async () => {
-      await expect(commands.get("rename_environment_from_prompt")?.(
-        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-        context,
-      )).rejects.toThrow("codex auth required");
-      expect(updates).toHaveLength(0);
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("rename_environment_from_prompt")?.(
+            { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+            context,
+          ),
+        ).rejects.toThrow("codex auth required");
+        expect(updates).toHaveLength(0);
+      },
+    );
   });
-
-
 
   test("rejects when codex output has no extractable slug", async () => {
     const environment = createEnvironment({ environmentType: "local", worktreePath: undefined });
@@ -2097,7 +2290,8 @@ exit 1
     await isolateCodexBinaryLookup(context);
     const commands = createCommandRegistry();
 
-    await withFakeCodex(`#!/bin/sh
+    await withFakeCodex(
+      `#!/bin/sh
 out=""
 prev=""
 for arg in "$@"; do
@@ -2106,16 +2300,18 @@ for arg in "$@"; do
 done
 [ -n "$out" ] || exit 2
 printf '%s\\n' '{}' > "$out"
-`, async () => {
-      await expect(commands.get("rename_environment_from_prompt")?.(
-        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-        context,
-      )).rejects.toThrow("Could not extract slug");
-      expect(updates).toHaveLength(0);
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("rename_environment_from_prompt")?.(
+            { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+            context,
+          ),
+        ).rejects.toThrow("Could not extract slug");
+        expect(updates).toHaveLength(0);
+      },
+    );
   });
-
-
 
   test("rejects when codex slug sanitizes to an empty name", async () => {
     const environment = createEnvironment({ environmentType: "local", worktreePath: undefined });
@@ -2124,27 +2320,33 @@ printf '%s\\n' '{}' > "$out"
     const commands = createCommandRegistry();
 
     await withFakeCodex(codexSlugScript("###"), async () => {
-      await expect(commands.get("rename_environment_from_prompt")?.(
-        { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-        context,
-      )).rejects.toThrow("Generated name is empty");
+      await expect(
+        commands.get("rename_environment_from_prompt")?.(
+          { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+          context,
+        ),
+      ).rejects.toThrow("Generated name is empty");
       expect(updates).toHaveLength(0);
     });
   });
 
-
-
   test("keeps running local environments running during status sync", async () => {
-    const environment = createEnvironment({ status: "running", containerId: null, environmentType: "local" });
+    const environment = createEnvironment({
+      status: "running",
+      containerId: null,
+      environmentType: "local",
+    });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("get_environment_status")?.({ environmentId: environment.id }, context)).resolves.toBe("running");
-    await expect(commands.get("get_environments")?.({ projectId: environment.projectId }, context)).resolves.toEqual([toClientEnvironment(environment)]);
+    await expect(
+      commands.get("get_environment_status")?.({ environmentId: environment.id }, context),
+    ).resolves.toBe("running");
+    await expect(
+      commands.get("get_environments")?.({ projectId: environment.projectId }, context),
+    ).resolves.toEqual([toClientEnvironment(environment)]);
     expect(updates).toHaveLength(0);
   });
-
-
 
   test("returns read-only environment snapshots without invoking Docker reconciliation", async () => {
     const environment = createEnvironment({
@@ -2178,19 +2380,21 @@ printf '%s\\n' '{}' > "$out"
       pendingAgentLaunch: false,
       initialAgentModel: "launch-only-model",
       initialReasoningEffort: "high",
-      initialPromptAttachments: [{
-        id: "image-1",
-        name: "private.png",
-        base64Data: "cHJpdmF0ZQ==",
-      }],
+      initialPromptAttachments: [
+        {
+          id: "image-1",
+          name: "private.png",
+          base64Data: "cHJpdmF0ZQ==",
+        },
+      ],
     });
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    const snapshots = await commands.get("get_environment_snapshots")?.(
+    const snapshots = (await commands.get("get_environment_snapshots")?.(
       { projectId: environment.projectId },
       context,
-    ) as Array<Record<string, unknown>>;
+    )) as Array<Record<string, unknown>>;
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]).toMatchObject({
       id: environment.id,
@@ -2214,8 +2418,6 @@ printf '%s\\n' '{}' > "$out"
     expect(updates).toHaveLength(0);
   });
 
-
-
   /**
    * The setup-start commands return the environment *nested* inside a result
    * object, so they need their own projection rather than inheriting the one
@@ -2232,19 +2434,21 @@ printf '%s\\n' '{}' > "$out"
       setupScriptsComplete: false,
       opencodePid: 40,
       pendingRenamePrompt: "backend-owned rename prompt",
-      initialPromptAttachments: [{
-        id: "image-1",
-        name: "private.png",
-        base64Data: "cHJpdmF0ZQ==",
-      }],
+      initialPromptAttachments: [
+        {
+          id: "image-1",
+          name: "private.png",
+          base64Data: "cHJpdmF0ZQ==",
+        },
+      ],
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    const result = await commands.get("ensure_environment_setup")?.(
+    const result = (await commands.get("ensure_environment_setup")?.(
       { environmentId: environment.id },
       context,
-    ) as { environment: Record<string, unknown> };
+    )) as { environment: Record<string, unknown> };
 
     expect(result.environment).toMatchObject({ id: environment.id });
     for (const field of [
@@ -2259,11 +2463,10 @@ printf '%s\\n' '{}' > "$out"
     }
     expect(result.environment.hasInitialPromptAttachments).toBe(true);
     // The stored record keeps everything the projection strips.
-    expect((await context.storage.getEnvironment(environment.id))?.initialPromptAttachments)
-      .toHaveLength(1);
+    expect(
+      (await context.storage.getEnvironment(environment.id))?.initialPromptAttachments,
+    ).toHaveLength(1);
   });
-
-
 
   test("passes an absent recreate result through without projecting it", async () => {
     const environment = createEnvironment({
@@ -2277,17 +2480,13 @@ printf '%s\\n' '{}' > "$out"
 
     // A recreate with nothing to recreate has no result to project. Projecting
     // `undefined` would hand the renderer an object with no environment in it.
-    await expect(commands.get("recreate_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).resolves.toBeUndefined();
-    await expect(commands.get("recreate_environment")?.(
-      { environmentId: "missing-environment" },
-      context,
-    )).resolves.toBeUndefined();
+    await expect(
+      commands.get("recreate_environment")?.({ environmentId: environment.id }, context),
+    ).resolves.toBeUndefined();
+    await expect(
+      commands.get("recreate_environment")?.({ environmentId: "missing-environment" }, context),
+    ).resolves.toBeUndefined();
   });
-
-
 
   test("preserves container identity when Docker status reconciliation fails transiently", async () => {
     const environment = createEnvironment({
@@ -2298,22 +2497,22 @@ printf '%s\\n' '{}' > "$out"
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\n' 'Cannot connect to the Docker daemon' >&2
 exit 1
-`, async () => {
-      await expect(commands.get("get_environments")?.(
-        { projectId: environment.projectId },
-        context,
-      )).resolves.toEqual([toClientEnvironment(environment)]);
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("get_environments")?.({ projectId: environment.projectId }, context),
+        ).resolves.toEqual([toClientEnvironment(environment)]);
+      },
+    );
 
     expect(environment.containerId).toBe("container-existing");
     expect(environment.status).toBe("running");
     expect(updates).toHaveLength(0);
   });
-
-
 
   test("clears a container identity only when Docker confirms the container is absent", async () => {
     const environment = createEnvironment({
@@ -2324,33 +2523,37 @@ exit 1
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\n' 'Error: No such object: container-missing' >&2
 exit 1
-`, async () => {
-      await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
-    });
+`,
+      async () => {
+        await commands.get("get_environments")?.({ projectId: environment.projectId }, context);
+      },
+    );
 
     expect(environment.containerId).toBeNull();
     expect(environment.status).toBe("stopped");
     expect(updates).toContainEqual({ status: "stopped", containerId: null });
   });
 
+  test(
+    "runs inactive container setup in the backend and persists completion",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-setup",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context, emitted } = createContext(environment);
+      const commands = createCommandRegistry();
 
-
-  test("runs inactive container setup in the backend and persists completion", async () => {
-    const environment = createEnvironment({
-      id: "env-container-setup",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context, emitted } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
@@ -2374,83 +2577,91 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      const setupPromise = commands.get("run_environment_setup")?.({ environmentId: environment.id }, context) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
-      const updated = await setupPromise;
+`,
+        async (logs) => {
+          const setupPromise = commands.get("run_environment_setup")?.(
+            { environmentId: environment.id },
+            context,
+          ) as Promise<Environment>;
+          await waitForPtyProcessCount(1);
+          ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+          const updated = await setupPromise;
 
-      expect(updated.setupScriptsComplete).toBe(true);
-      expect(updated.createdFromCommit).toBe("1111111111111111111111111111111111111111");
-      expect(environment.setupScriptsComplete).toBe(true);
-      expect(environment.createdFromCommit).toBe("1111111111111111111111111111111111111111");
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("workspace-setup.sh --prepare-only");
-      expect(execLog).toContain("git -C /workspace rev-parse --verify 'HEAD^{commit}'");
-      expect(execLog.indexOf("workspace-setup.sh --prepare-only")).toBeLessThan(
-        execLog.indexOf("git -C /workspace rev-parse --verify 'HEAD^{commit}'"),
-      );
-      expect(ptySpawn).toHaveBeenCalledWith(
-        "docker",
-        expect.arrayContaining([
-          "exec",
-          "-it",
-          "container-1",
-          "zsh",
-          "-lc",
-          expect.stringContaining("/usr/local/bin/workspace-setup.sh"),
-        ]),
-        expect.any(Object),
-      );
-      expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("flock");
-      const setupOutput = emitted
-        .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
-        .map((entry) => (entry.payload as { text: string }).text)
-        .join("");
-      expect(setupOutput).toContain("[orkestrator] Starting environment setup");
-      expect(setupOutput).toContain("/usr/local/bin/workspace-setup.sh");
-      const setupStarted = emitted
-        .filter((entry) => entry.event === "environment-setup-started")
-        .at(-1)?.payload;
-      expect(setupStarted).toMatchObject({
-        environment_id: environment.id,
-        session_id: `${environment.id}:setup`,
-        environment: {
-          id: environment.id,
-          setupScriptsComplete: false,
-          createdFromCommit: environment.createdFromCommit,
+          expect(updated.setupScriptsComplete).toBe(true);
+          expect(updated.createdFromCommit).toBe("1111111111111111111111111111111111111111");
+          expect(environment.setupScriptsComplete).toBe(true);
+          expect(environment.createdFromCommit).toBe("1111111111111111111111111111111111111111");
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(execLog).toContain("workspace-setup.sh --prepare-only");
+          expect(execLog).toContain("git -C /workspace rev-parse --verify 'HEAD^{commit}'");
+          expect(execLog.indexOf("workspace-setup.sh --prepare-only")).toBeLessThan(
+            execLog.indexOf("git -C /workspace rev-parse --verify 'HEAD^{commit}'"),
+          );
+          expect(ptySpawn).toHaveBeenCalledWith(
+            "docker",
+            expect.arrayContaining([
+              "exec",
+              "-it",
+              "container-1",
+              "zsh",
+              "-lc",
+              expect.stringContaining("/usr/local/bin/workspace-setup.sh"),
+            ]),
+            expect.any(Object),
+          );
+          expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("flock");
+          const setupOutput = emitted
+            .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
+            .map((entry) => (entry.payload as { text: string }).text)
+            .join("");
+          expect(setupOutput).toContain("[orkestrator] Starting environment setup");
+          expect(setupOutput).toContain("/usr/local/bin/workspace-setup.sh");
+          const setupStarted = emitted
+            .filter((entry) => entry.event === "environment-setup-started")
+            .at(-1)?.payload;
+          expect(setupStarted).toMatchObject({
+            environment_id: environment.id,
+            session_id: `${environment.id}:setup`,
+            environment: {
+              id: environment.id,
+              setupScriptsComplete: false,
+              createdFromCommit: environment.createdFromCommit,
+            },
+          });
+          const setupComplete = emitted.find(
+            (entry) => entry.event === "environment-setup-complete",
+          )?.payload;
+          expect(setupComplete).toMatchObject({
+            environment_id: environment.id,
+            success: true,
+            environment: {
+              id: updated.id,
+              setupScriptsComplete: true,
+              createdFromCommit: updated.createdFromCommit,
+            },
+          });
         },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test(
+    "retries container baseline capture before any setup command runs",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-baseline-retry",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
       });
-      const setupComplete = emitted.find(
-        (entry) => entry.event === "environment-setup-complete",
-      )?.payload;
-      expect(setupComplete).toMatchObject({
-        environment_id: environment.id,
-        success: true,
-        environment: {
-          id: updated.id,
-          setupScriptsComplete: true,
-          createdFromCommit: updated.createdFromCommit,
-        },
-      });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-
-
-  test("retries container baseline capture before any setup command runs", async () => {
-    const environment = createEnvironment({
-      id: "env-container-baseline-retry",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
@@ -2481,48 +2692,56 @@ if [ "$1" = "exec" ]; then
   esac
 fi
 exit 0
-`, async (logs) => {
-      await expect(commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("transient capture failure");
-      expect(ptySpawn).not.toHaveBeenCalled();
-      expect(environment.setupScriptsComplete).toBe(false);
-      expect(environment.createdFromCommit).toBeUndefined();
+`,
+        async (logs) => {
+          await expect(
+            commands.get("run_environment_setup")?.({ environmentId: environment.id }, context),
+          ).rejects.toThrow("transient capture failure");
+          expect(ptySpawn).not.toHaveBeenCalled();
+          expect(environment.setupScriptsComplete).toBe(false);
+          expect(environment.createdFromCommit).toBeUndefined();
 
-      const retry = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      expect(environment.createdFromCommit).toBe("4444444444444444444444444444444444444444");
-      expect(environment.setupScriptsComplete).toBe(false);
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
-      await expect(retry).resolves.toMatchObject({
-        createdFromCommit: "4444444444444444444444444444444444444444",
-        setupScriptsComplete: true,
+          const retry = commands.get("run_environment_setup")?.(
+            { environmentId: environment.id },
+            context,
+          ) as Promise<Environment>;
+          await waitForPtyProcessCount(1);
+          expect(environment.createdFromCommit).toBe("4444444444444444444444444444444444444444");
+          expect(environment.setupScriptsComplete).toBe(false);
+          ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+          await expect(retry).resolves.toMatchObject({
+            createdFromCommit: "4444444444444444444444444444444444444444",
+            setupScriptsComplete: true,
+          });
+
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(
+            execLog
+              .split("\n")
+              .filter((line) => line.includes("workspace-setup.sh --prepare-only")),
+          ).toHaveLength(2);
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test(
+    "rejects an invalid container HEAD without starting setup",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-invalid-head",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
       });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog.split("\n").filter((line) => line.includes("workspace-setup.sh --prepare-only"))).toHaveLength(2);
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
-
-  test("rejects an invalid container HEAD without starting setup", async () => {
-    const environment = createEnvironment({
-      id: "env-container-invalid-head",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -2542,59 +2761,65 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async () => {
-      await expect(commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("Could not resolve environment creation commit");
-      expect(ptySpawn).not.toHaveBeenCalled();
-      expect(environment.setupScriptsComplete).toBe(false);
-      expect(environment.createdFromCommit).toBeUndefined();
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+`,
+        async () => {
+          await expect(
+            commands.get("run_environment_setup")?.({ environmentId: environment.id }, context),
+          ).rejects.toThrow("Could not resolve environment creation commit");
+          expect(ptySpawn).not.toHaveBeenCalled();
+          expect(environment.setupScriptsComplete).toBe(false);
+          expect(environment.createdFromCommit).toBeUndefined();
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "preserves an existing baseline without preparing or recapturing HEAD",
+    async () => {
+      const originalCommit = "7777777777777777777777777777777777777777";
+      const environment = createEnvironment({
+        id: "env-container-existing-baseline",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        createdFromCommit: originalCommit,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-
-  test("preserves an existing baseline without preparing or recapturing HEAD", async () => {
-    const originalCommit = "7777777777777777777777777777777777777777";
-    const environment = createEnvironment({
-      id: "env-container-existing-baseline",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      createdFromCommit: originalCommit,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      const setup = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
-      await expect(setup).resolves.toMatchObject({
-        createdFromCommit: originalCommit,
-        setupScriptsComplete: true,
-      });
+`,
+        async (logs) => {
+          const setup = commands.get("run_environment_setup")?.(
+            { environmentId: environment.id },
+            context,
+          ) as Promise<Environment>;
+          await waitForPtyProcessCount(1);
+          ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+          await expect(setup).resolves.toMatchObject({
+            createdFromCommit: originalCommit,
+            setupScriptsComplete: true,
+          });
 
-      const dockerLog = await fs.readFile(logs.all, "utf8");
-      expect(dockerLog).not.toContain("--prepare-only");
-      expect(dockerLog).not.toContain("rev-parse");
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+          const dockerLog = await fs.readFile(logs.all, "utf8");
+          expect(dockerLog).not.toContain("--prepare-only");
+          expect(dockerLog).not.toContain("rev-parse");
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("preserves a running environment and pending launch when setup fails before publishing an attempt", async () => {
     const worktreePath = await createTempDir("ork-electron-setup-invalid-config-");
@@ -2615,10 +2840,9 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("run_environment_setup")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow();
+    await expect(
+      commands.get("run_environment_setup")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow();
 
     expect(ptySpawn).not.toHaveBeenCalled();
     expect(environment).toMatchObject({
@@ -2631,35 +2855,36 @@ exit 0
     });
   });
 
+  test(
+    "a failed baseline storage write blocks setup and succeeds on retry",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-baseline-storage-retry",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context, updates } = createContext(environment);
+      let failBaselineWrite = true;
+      context.storage.updateEnvironment = mock(
+        async (environmentId: string, update: Partial<Environment>) => {
+          if (environmentId !== environment.id)
+            throw new Error(`Environment not found: ${environmentId}`);
+          if (failBaselineWrite && update.createdFromCommit) {
+            failBaselineWrite = false;
+            throw new Error("baseline storage unavailable");
+          }
+          updates.push(update);
+          Object.assign(environment, update);
+          return environment;
+        },
+      ) as typeof context.storage.updateEnvironment;
+      const commands = createCommandRegistry();
 
-
-  test("a failed baseline storage write blocks setup and succeeds on retry", async () => {
-    const environment = createEnvironment({
-      id: "env-container-baseline-storage-retry",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context, updates } = createContext(environment);
-    let failBaselineWrite = true;
-    context.storage.updateEnvironment = mock(async (
-      environmentId: string,
-      update: Partial<Environment>,
-    ) => {
-      if (environmentId !== environment.id) throw new Error(`Environment not found: ${environmentId}`);
-      if (failBaselineWrite && update.createdFromCommit) {
-        failBaselineWrite = false;
-        throw new Error("baseline storage unavailable");
-      }
-      updates.push(update);
-      Object.assign(environment, update);
-      return environment;
-    }) as typeof context.storage.updateEnvironment;
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -2679,42 +2904,46 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async () => {
-      await expect(commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("baseline storage unavailable");
-      expect(ptySpawn).not.toHaveBeenCalled();
-      expect(environment.setupScriptsComplete).toBe(false);
+`,
+        async () => {
+          await expect(
+            commands.get("run_environment_setup")?.({ environmentId: environment.id }, context),
+          ).rejects.toThrow("baseline storage unavailable");
+          expect(ptySpawn).not.toHaveBeenCalled();
+          expect(environment.setupScriptsComplete).toBe(false);
 
-      const retry = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
-      await expect(retry).resolves.toMatchObject({
-        createdFromCommit: "5555555555555555555555555555555555555555",
-        setupScriptsComplete: true,
+          const retry = commands.get("run_environment_setup")?.(
+            { environmentId: environment.id },
+            context,
+          ) as Promise<Environment>;
+          await waitForPtyProcessCount(1);
+          ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+          await expect(retry).resolves.toMatchObject({
+            createdFromCommit: "5555555555555555555555555555555555555555",
+            setupScriptsComplete: true,
+          });
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test(
+    "serializes concurrent setup starts through one preparation and PTY",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-concurrent-setup",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-
-
-  test("serializes concurrent setup starts through one preparation and PTY", async () => {
-    const environment = createEnvironment({
-      id: "env-container-concurrent-setup",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
@@ -2735,26 +2964,32 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      const first = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      const second = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      expect(ptySpawn).toHaveBeenCalledTimes(1);
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
-      await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+`,
+        async (logs) => {
+          const first = commands.get("run_environment_setup")?.(
+            { environmentId: environment.id },
+            context,
+          ) as Promise<Environment>;
+          const second = commands.get("run_environment_setup")?.(
+            { environmentId: environment.id },
+            context,
+          ) as Promise<Environment>;
+          await waitForPtyProcessCount(1);
+          expect(ptySpawn).toHaveBeenCalledTimes(1);
+          ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+          await expect(Promise.all([first, second])).resolves.toHaveLength(2);
 
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog.split("\n").filter((line) => line.includes("workspace-setup.sh --prepare-only"))).toHaveLength(1);
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+          const execLog = await fs.readFile(logs.exec, "utf8");
+          expect(
+            execLog
+              .split("\n")
+              .filter((line) => line.includes("workspace-setup.sh --prepare-only")),
+          ).toHaveLength(1);
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("returns completed container environments without rerunning backend setup", async () => {
     const environment = createEnvironment({
@@ -2768,18 +3003,22 @@ exit 0
     const { context, emitted } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 exit 1
-`, async () => {
-      const result = await commands.get("run_environment_setup")?.({ environmentId: environment.id }, context);
+`,
+      async () => {
+        const result = await commands.get("run_environment_setup")?.(
+          { environmentId: environment.id },
+          context,
+        );
 
-      expect(result).toEqual(toClientEnvironment(environment));
-      expect(emitted).toEqual([]);
-    });
+        expect(result).toEqual(toClientEnvironment(environment));
+        expect(emitted).toEqual([]);
+      },
+    );
   });
-
-
 
   test("ensures no-op local setup without spawning a terminal", async () => {
     const { worktree: worktreePath } = await createGitWorktreeWithOrigin();
@@ -2794,15 +3033,20 @@ exit 1
     const { context, emitted } = createContext(environment);
     const commands = createCommandRegistry();
 
-    const result = await commands.get("ensure_environment_setup")?.({ environmentId: environment.id }, context);
+    const result = await commands.get("ensure_environment_setup")?.(
+      { environmentId: environment.id },
+      context,
+    );
 
-    expect(result).toEqual(expect.objectContaining({
-      setupStarted: false,
-      environment: expect.objectContaining({
-        id: environment.id,
-        setupScriptsComplete: true,
+    expect(result).toEqual(
+      expect.objectContaining({
+        setupStarted: false,
+        environment: expect.objectContaining({
+          id: environment.id,
+          setupScriptsComplete: true,
+        }),
       }),
-    }));
+    );
     expect(environment.setupScriptsComplete).toBe(true);
     expect(ptySpawn).not.toHaveBeenCalled();
     expect(emitted).toContainEqual({
@@ -2818,68 +3062,69 @@ exit 1
     });
   });
 
+  test(
+    "spawns local setup commands in an interactive login PTY",
+    async () => {
+      const { worktree: worktreePath } = await createGitWorktreeWithOrigin();
+      await fs.writeFile(
+        path.join(worktreePath, "orkestrator-ai.json"),
+        JSON.stringify({ setupLocal: ["bun install", "bun run prepare"] }),
+      );
+      const environment = createEnvironment({
+        id: "env-local-setup-terminal",
+        environmentType: "local",
+        setupScriptsComplete: false,
+        worktreePath,
+        containerId: null,
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
+      const setupPromise = commands.get("run_environment_setup")?.(
+        { environmentId: environment.id },
+        context,
+      ) as Promise<Environment>;
+      await waitForPtyProcessCount(1);
 
-  test("spawns local setup commands in an interactive login PTY", async () => {
-    const { worktree: worktreePath } = await createGitWorktreeWithOrigin();
-    await fs.writeFile(
-      path.join(worktreePath, "orkestrator-ai.json"),
-      JSON.stringify({ setupLocal: ["bun install", "bun run prepare"] }),
-    );
-    const environment = createEnvironment({
-      id: "env-local-setup-terminal",
-      environmentType: "local",
-      setupScriptsComplete: false,
-      worktreePath,
-      containerId: null,
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+      expect(ptySpawn.mock.calls[0]?.[0]).toBe(expectedLocalShellPath());
+      expect(ptySpawn.mock.calls[0]?.[1]?.[0]).toBe("-ilc");
+      expect(ptySpawn.mock.calls[0]?.[1]?.[1]).toContain("bun install && bun run prepare");
+      expect(ptySpawn.mock.calls[0]?.[2]).toMatchObject({
+        cwd: worktreePath,
+        cols: 80,
+        rows: 24,
+      });
 
-    const setupPromise = commands.get("run_environment_setup")?.(
-      { environmentId: environment.id },
-      context,
-    ) as Promise<Environment>;
-    await waitForPtyProcessCount(1);
+      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+      await expect(setupPromise).resolves.toEqual(
+        expect.objectContaining({ setupScriptsComplete: true }),
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-    expect(ptySpawn.mock.calls[0]?.[0]).toBe(expectedLocalShellPath());
-    expect(ptySpawn.mock.calls[0]?.[1]?.[0]).toBe("-ilc");
-    expect(ptySpawn.mock.calls[0]?.[1]?.[1]).toContain(
-      "bun install && bun run prepare",
-    );
-    expect(ptySpawn.mock.calls[0]?.[2]).toMatchObject({
-      cwd: worktreePath,
-      cols: 80,
-      rows: 24,
-    });
+  test(
+    "emits a failure event when inactive container setup fails",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-setup-fails",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+        // Seed the launch intent *and* both one-shot options, otherwise the
+        // "must not survive" assertions below are vacuously true.
+        pendingAgentLaunch: true,
+        initialAgentModel: "claude-fable-5[1m]",
+        initialReasoningEffort: "max",
+      });
+      const { context, emitted } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
-    await expect(setupPromise).resolves.toEqual(
-      expect.objectContaining({ setupScriptsComplete: true }),
-    );
-  }, ASYNC_TEST_BUDGET_MS);
-
-
-
-  test("emits a failure event when inactive container setup fails", async () => {
-    const environment = createEnvironment({
-      id: "env-container-setup-fails",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-      // Seed the launch intent *and* both one-shot options, otherwise the
-      // "must not survive" assertions below are vacuously true.
-      pendingAgentLaunch: true,
-      initialAgentModel: "claude-fable-5[1m]",
-      initialReasoningEffort: "max",
-    });
-    const { context, emitted } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'running\n'
@@ -2902,163 +3147,180 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async () => {
-      const setupPromise = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      ptyProcesses[0]?.emitData(SETUP_FAILED_OSC);
-      await expect(setupPromise).rejects.toThrow("Setup script failed");
+`,
+        async () => {
+          const setupPromise = commands.get("run_environment_setup")?.(
+            { environmentId: environment.id },
+            context,
+          ) as Promise<Environment>;
+          await waitForPtyProcessCount(1);
+          ptyProcesses[0]?.emitData(SETUP_FAILED_OSC);
+          await expect(setupPromise).rejects.toThrow("Setup script failed");
 
-      expect(environment.setupScriptsComplete).toBe(false);
-      expect(environment.status).toBe("error");
-      expect(environment.lifecycleError).toBe(
-        ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript,
+          expect(environment.setupScriptsComplete).toBe(false);
+          expect(environment.status).toBe("error");
+          expect(environment.lifecycleError).toBe(ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript);
+          const failure = emitted.find(
+            (entry) =>
+              entry.event === "environment-setup-complete" &&
+              (entry.payload as { success?: boolean }).success === false,
+          );
+          expect(failure?.payload).toMatchObject({
+            environment_id: environment.id,
+            success: false,
+            error: "Setup script failed",
+          });
+          // A launch that can never be honoured must not survive the failure.
+          expect(environment.pendingAgentLaunch).toBe(false);
+          expect(environment.initialAgentModel).toBeUndefined();
+          expect(environment.initialReasoningEffort).toBeUndefined();
+          expect(
+            (failure?.payload as { environment?: Environment }).environment?.pendingAgentLaunch,
+          ).toBe(false);
+          expect(
+            (failure?.payload as { environment?: Environment }).environment?.initialAgentModel,
+          ).toBeUndefined();
+          expect(
+            (failure?.payload as { environment?: Environment }).environment?.initialReasoningEffort,
+          ).toBeUndefined();
+
+          // A renderer may have been inactive when the one-shot event fired. The
+          // failure must therefore survive a registry/backend reconstruction and be
+          // available from an authoritative snapshot alone.
+          const restartedRegistry = createCommandRegistry();
+          await expect(
+            restartedRegistry.get("get_environment_snapshots")?.(
+              { projectId: environment.projectId },
+              context,
+            ),
+          ).resolves.toEqual([
+            expect.objectContaining({
+              id: environment.id,
+              status: "error",
+              lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript,
+            }),
+          ]);
+          await expect(
+            restartedRegistry.get("get_environments")?.(
+              { projectId: environment.projectId },
+              context,
+            ),
+          ).resolves.toEqual([
+            expect.objectContaining({
+              id: environment.id,
+              status: "error",
+              lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript,
+            }),
+          ]);
+        },
       );
-      const failure = emitted.find((entry) =>
-        entry.event === "environment-setup-complete"
-        && (entry.payload as { success?: boolean }).success === false
-      );
-      expect(failure?.payload).toMatchObject({
-        environment_id: environment.id,
-        success: false,
-        error: "Setup script failed",
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test(
+    "completes setup when the done marker is split across PTY chunks",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-split-marker",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
       });
-      // A launch that can never be honoured must not survive the failure.
-      expect(environment.pendingAgentLaunch).toBe(false);
-      expect(environment.initialAgentModel).toBeUndefined();
-      expect(environment.initialReasoningEffort).toBeUndefined();
-      expect(
-        (failure?.payload as { environment?: Environment }).environment?.pendingAgentLaunch,
-      ).toBe(false);
-      expect(
-        (failure?.payload as { environment?: Environment }).environment?.initialAgentModel,
-      ).toBeUndefined();
-      expect(
-        (failure?.payload as { environment?: Environment }).environment?.initialReasoningEffort,
-      ).toBeUndefined();
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-      // A renderer may have been inactive when the one-shot event fired. The
-      // failure must therefore survive a registry/backend reconstruction and be
-      // available from an authoritative snapshot alone.
-      const restartedRegistry = createCommandRegistry();
-      await expect(restartedRegistry.get("get_environment_snapshots")?.(
-        { projectId: environment.projectId },
-        context,
-      )).resolves.toEqual([
-        expect.objectContaining({
-          id: environment.id,
-          status: "error",
-          lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript,
-        }),
-      ]);
-      await expect(restartedRegistry.get("get_environments")?.(
-        { projectId: environment.projectId },
-        context,
-      )).resolves.toEqual([
-        expect.objectContaining({
-          id: environment.id,
-          status: "error",
-          lifecycleError: ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript,
-        }),
-      ]);
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+      await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+        const setupPromise = commands.get("run_environment_setup")?.(
+          { environmentId: environment.id },
+          context,
+        ) as Promise<Environment>;
+        await waitForPtyProcessCount(1);
+        // Deliver the completion marker split across two reads, mimicking how a
+        // PTY can chunk output at an arbitrary boundary.
+        const splitAt = Math.floor(SETUP_DONE_OSC.length / 2);
+        ptyProcesses[0]?.emitData(SETUP_DONE_OSC.slice(0, splitAt));
+        ptyProcesses[0]?.emitData(SETUP_DONE_OSC.slice(splitAt));
+        const updated = await setupPromise;
 
-
-
-  test("completes setup when the done marker is split across PTY chunks", async () => {
-    const environment = createEnvironment({
-      id: "env-container-split-marker",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
-      const setupPromise = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      // Deliver the completion marker split across two reads, mimicking how a
-      // PTY can chunk output at an arbitrary boundary.
-      const splitAt = Math.floor(SETUP_DONE_OSC.length / 2);
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC.slice(0, splitAt));
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC.slice(splitAt));
-      const updated = await setupPromise;
-
-      expect(updated.setupScriptsComplete).toBe(true);
-      expect(environment.setupScriptsComplete).toBe(true);
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
-
-  test("fails setup when the PTY exits before reporting completion", async () => {
-    const environment = createEnvironment({
-      id: "env-container-early-exit",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context, emitted } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
-      const setupPromise = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      ptyProcesses[0]?.emitExit({ exitCode: 1 });
-      await expect(setupPromise).rejects.toThrow("Setup terminal exited before reporting completion");
-
-      expect(environment.setupScriptsComplete).toBe(false);
-      expect(
-        emitted.find((entry) =>
-          entry.event === "environment-setup-complete"
-          && (entry.payload as { success?: boolean }).success === false
-        )?.payload,
-      ).toMatchObject({
-        environment_id: environment.id,
-        success: false,
-        error: "Setup terminal exited before reporting completion",
+        expect(updated.setupScriptsComplete).toBe(true);
+        expect(environment.setupScriptsComplete).toBe(true);
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "fails setup when the PTY exits before reporting completion",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-early-exit",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context, emitted } = createContext(environment);
+      const commands = createCommandRegistry();
 
+      await withFakeDocker(RUNNING_CONTAINER_DOCKER_SCRIPT, async () => {
+        const setupPromise = commands.get("run_environment_setup")?.(
+          { environmentId: environment.id },
+          context,
+        ) as Promise<Environment>;
+        await waitForPtyProcessCount(1);
+        ptyProcesses[0]?.emitExit({ exitCode: 1 });
+        await expect(setupPromise).rejects.toThrow(
+          "Setup terminal exited before reporting completion",
+        );
 
-  test("syncs the host gh auth token after starting a newly created container", async () => {
-    const environment = createEnvironment({
-      id: "env-container-create",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: null,
-      status: "stopped",
-      branch: "feature/container-create",
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+        expect(environment.setupScriptsComplete).toBe(false);
+        expect(
+          emitted.find(
+            (entry) =>
+              entry.event === "environment-setup-complete" &&
+              (entry.payload as { success?: boolean }).success === false,
+          )?.payload,
+        ).toMatchObject({
+          environment_id: environment.id,
+          success: false,
+          error: "Setup terminal exited before reporting completion",
+        });
+      });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-    await withFakeGh(`#!/bin/sh
+  test(
+    "syncs the host gh auth token after starting a newly created container",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-create",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: null,
+        status: "stopped",
+        branch: "feature/container-create",
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "auth" ] && [ "$2" = "token" ]; then
   printf 'host-gh-token\\n'
   exit 0
 fi
 exit 1
-`, async (ghLog) => {
-      await withFakeDocker(`#!/bin/sh
+`,
+        async (ghLog) => {
+          await withFakeDocker(
+            `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create) printf 'container-created\\n'; exit 0 ;;
@@ -3085,69 +3347,88 @@ case "$1" in
     ;;
 esac
 exit 0
-`, async (logs) => {
-        let result: unknown;
-        try {
-          result = await commands.get("start_environment")?.({ environmentId: environment.id }, context);
-        } catch (error) {
-          const dockerCalls = await fs.readFile(logs.all, "utf8").catch(() => "");
-          const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
-          throw new Error(`${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nGH calls:\n${ghCalls}`);
-        }
-        expect(result).toEqual(expect.objectContaining({
-          setupStarted: true,
-          setupSessionId: `${environment.id}:setup`,
-          environment: expect.objectContaining({
-            id: environment.id,
-            status: "running",
-          }),
-        }));
-        await waitForPtyProcessCount(1);
-        expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain("/usr/local/bin/workspace-setup.sh");
-        ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+`,
+            async (logs) => {
+              let result: unknown;
+              try {
+                result = await commands.get("start_environment")?.(
+                  { environmentId: environment.id },
+                  context,
+                );
+              } catch (error) {
+                const dockerCalls = await fs.readFile(logs.all, "utf8").catch(() => "");
+                const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
+                throw new Error(
+                  `${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nGH calls:\n${ghCalls}`,
+                );
+              }
+              expect(result).toEqual(
+                expect.objectContaining({
+                  setupStarted: true,
+                  setupSessionId: `${environment.id}:setup`,
+                  environment: expect.objectContaining({
+                    id: environment.id,
+                    status: "running",
+                  }),
+                }),
+              );
+              await waitForPtyProcessCount(1);
+              expect(ptySpawn.mock.calls[0]?.[1].at(-1)).toContain(
+                "/usr/local/bin/workspace-setup.sh",
+              );
+              ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
 
-        const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
-        expect(ghCalls).toContain("auth token --hostname github.com");
+              const ghCalls = await fs.readFile(ghLog, "utf8").catch(() => "");
+              expect(ghCalls).toContain("auth token --hostname github.com");
 
-        const dockerCalls = await fs.readFile(logs.all, "utf8");
-        expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
-        expect(dockerCalls).not.toContain("-e GH_TOKEN");
-        expect(dockerCalls).not.toContain("host-gh-token");
-        expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("host-gh-token");
-        expect(environment.containerId).toBe("container-created");
+              const dockerCalls = await fs.readFile(logs.all, "utf8");
+              expect(dockerCalls).not.toContain("-e GITHUB_TOKEN");
+              expect(dockerCalls).not.toContain("-e GH_TOKEN");
+              expect(dockerCalls).not.toContain("host-gh-token");
+              expect(await fs.readFile(`${logs.exec}.stdin`, "utf8")).toBe("host-gh-token");
+              expect(environment.containerId).toBe("container-created");
 
-        const execCalls = await fs.readFile(logs.exec, "utf8");
-        expect(execCalls).toMatch(/exec --user root container-created sh -c/);
-        expect(execCalls).toContain("chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files");
+              const execCalls = await fs.readFile(logs.exec, "utf8");
+              expect(execCalls).toMatch(/exec --user root container-created sh -c/);
+              expect(execCalls).toContain(
+                "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
+              );
+            },
+          );
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test(
+    "accepts a background container start before Docker creation finishes",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-background",
+        environmentType: "containerized",
+        worktreePath: undefined,
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        pendingAgentLaunch: true,
+        networkAccessMode: "full",
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-background-container-start-");
+      const startedPath = path.join(gateDirectory, "started");
+      const releasePath = path.join(gateDirectory, "release");
+      const shellStartedPath = startedPath.replaceAll("'", "'\\''");
+      const shellReleasePath = releasePath.replaceAll("'", "'\\''");
 
-
-
-  test("accepts a background container start before Docker creation finishes", async () => {
-    const environment = createEnvironment({
-      id: "env-container-background",
-      environmentType: "containerized",
-      worktreePath: undefined,
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      pendingAgentLaunch: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-background-container-start-");
-    const startedPath = path.join(gateDirectory, "started");
-    const releasePath = path.join(gateDirectory, "release");
-    const shellStartedPath = startedPath.replaceAll("'", "'\\''");
-    const shellReleasePath = releasePath.replaceAll("'", "'\\''");
-
-    await withFakeGh(`#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 exit 1
-`, async () => {
-      await withFakeDocker(`#!/bin/sh
+`,
+        async () => {
+          await withFakeDocker(
+            `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -3159,47 +3440,52 @@ case "$1" in
     exit 0
     ;;
 esac
-`, async () => {
-        try {
-          await expect(
-            commands.get("start_environment_background")?.(
-              { environmentId: environment.id },
-              context,
-            ),
-          ).resolves.toBeUndefined();
+`,
+            async () => {
+              try {
+                await expect(
+                  commands.get("start_environment_background")?.(
+                    { environmentId: environment.id },
+                    context,
+                  ),
+                ).resolves.toBeUndefined();
 
-          await waitForCondition(
-            () => existsSync(startedPath),
-            "background Docker create to begin",
+                await waitForCondition(
+                  () => existsSync(startedPath),
+                  "background Docker create to begin",
+                );
+                expect(environment.status).toBe("creating");
+                expect(environment.containerId).toBeNull();
+                expect(environment.pendingAgentLaunch).toBe(true);
+              } finally {
+                await fs.writeFile(releasePath, "");
+              }
+
+              await waitForCondition(
+                () => environment.status === "running",
+                "background environment start to finish",
+              );
+              expect(environment.containerId).toBe("container-background");
+              // The start task owns lifecycle only; the renderer clears this after it
+              // has durably persisted the requested agent tab.
+              expect(environment.pendingAgentLaunch).toBe(true);
+            },
           );
-          expect(environment.status).toBe("creating");
-          expect(environment.containerId).toBeNull();
-          expect(environment.pendingAgentLaunch).toBe(true);
-        } finally {
-          await fs.writeFile(releasePath, "");
-        }
-
-        await waitForCondition(
-          () => environment.status === "running",
-          "background environment start to finish",
-        );
-        expect(environment.containerId).toBe("container-background");
-        // The start task owns lifecycle only; the renderer clears this after it
-        // has durably persisted the requested agent tab.
-        expect(environment.pendingAgentLaunch).toBe(true);
-      });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("rejects a background start before admission when the environment is missing or shutdown began", async () => {
     const commands = createCommandRegistry();
     const missing = createContext([]);
-    await expect(commands.get("start_environment_background")?.(
-      { environmentId: "missing-environment" },
-      missing.context,
-    )).rejects.toThrow("Environment not found: missing-environment");
+    await expect(
+      commands.get("start_environment_background")?.(
+        { environmentId: "missing-environment" },
+        missing.context,
+      ),
+    ).rejects.toThrow("Environment not found: missing-environment");
 
     const environment = createEnvironment({
       id: "env-background-shutdown",
@@ -3208,33 +3494,33 @@ esac
     });
     const { context } = createContext(environment);
     await context.environmentLifecycleTasks.beginShutdown();
-    await expect(commands.get("start_environment_background")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow("Backend is shutting down");
+    await expect(
+      commands.get("start_environment_background")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow("Backend is shutting down");
     expect(environment.status).toBe("stopped");
     expect(environment.lifecycleError).toBe("Previous failure");
   });
 
+  test(
+    "deduplicates concurrent background starts for one environment",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-background-deduplicated",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-background-dedupe-");
+      const releasePath = path.join(gateDirectory, "release");
+      const shellReleasePath = releasePath.replaceAll("'", "'\\''");
 
-
-  test("deduplicates concurrent background starts for one environment", async () => {
-    const environment = createEnvironment({
-      id: "env-background-deduplicated",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-background-dedupe-");
-    const releasePath = path.join(gateDirectory, "release");
-    const shellReleasePath = releasePath.replaceAll("'", "'\\''");
-
-    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -3243,88 +3529,107 @@ case "$1" in
     ;;
   start|exec) exit 0 ;;
 esac
-`, async (logs) => {
-        await Promise.all([
-          commands.get("start_environment_background")?.({ environmentId: environment.id }, context),
-          commands.get("start_environment_background")?.({ environmentId: environment.id }, context),
-        ]);
-        await fs.writeFile(releasePath, "");
-        await waitForCondition(
-          () => environment.status === "running",
-          "deduplicated background start to finish",
+`,
+          async (logs) => {
+            await Promise.all([
+              commands.get("start_environment_background")?.(
+                { environmentId: environment.id },
+                context,
+              ),
+              commands.get("start_environment_background")?.(
+                { environmentId: environment.id },
+                context,
+              ),
+            ]);
+            await fs.writeFile(releasePath, "");
+            await waitForCondition(
+              () => environment.status === "running",
+              "deduplicated background start to finish",
+            );
+            const calls = await fs.readFile(logs.all, "utf8");
+            expect(calls.split("\n").filter((line) => line.startsWith("create "))).toHaveLength(1);
+          },
         );
-        const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls.split("\n").filter((line) => line.startsWith("create "))).toHaveLength(1);
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "persists and logs only a safe background start failure",
+    async () => {
+      const secret = "https://user:private-token@example.invalid/private/repo.git";
+      const environment = createEnvironment({
+        id: "env-background-failure",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        lifecycleError: "Old failure",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
 
-
-  test("persists and logs only a safe background start failure", async () => {
-    const secret = "https://user:private-token@example.invalid/private/repo.git";
-    const environment = createEnvironment({
-      id: "env-background-failure",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      lifecycleError: "Old failure",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      await withFakeDocker(`#!/bin/sh
+      try {
+        await withFakeDocker(
+          `#!/bin/sh
 if [ "$1" = "create" ]; then
   printf '%s\\n' '${secret}' >&2
   exit 1
 fi
 exit 0
-`, async () => {
-        await expect(commands.get("start_environment_background")?.(
-          { environmentId: environment.id },
-          context,
-        )).resolves.toBeUndefined();
-        await waitForCondition(
-          () => environment.status === "error",
-          "background failure to persist",
+`,
+          async () => {
+            await expect(
+              commands.get("start_environment_background")?.(
+                { environmentId: environment.id },
+                context,
+              ),
+            ).resolves.toBeUndefined();
+            await waitForCondition(
+              () => environment.status === "error",
+              "background failure to persist",
+            );
+          },
         );
-      });
-      expect(environment.lifecycleError).toBe(
-        "Environment start failed. Check the backend logs and retry.",
-      );
-      expect(JSON.stringify(errorLog.mock.calls)).not.toContain(secret);
-      expect(JSON.stringify(errorLog.mock.calls)).toContain(environment.lifecycleError);
+        expect(environment.lifecycleError).toBe(
+          "Environment start failed. Check the backend logs and retry.",
+        );
+        expect(JSON.stringify(errorLog.mock.calls)).not.toContain(secret);
+        expect(JSON.stringify(errorLog.mock.calls)).toContain(environment.lifecycleError);
 
-      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-        await withFakeDocker(`#!/bin/sh
+        await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+          await withFakeDocker(
+            `#!/bin/sh
 case "$1" in
   create) printf 'container-after-retry\\n' ;;
   start|exec) exit 0 ;;
 esac
-`, async () => {
-          await expect(commands.get("start_environment")?.(
-            { environmentId: environment.id },
-            context,
-          )).resolves.toEqual(expect.objectContaining({
-            environment: expect.objectContaining({
-              id: environment.id,
-              status: "running",
-            }),
-          }));
+`,
+            async () => {
+              await expect(
+                commands.get("start_environment")?.({ environmentId: environment.id }, context),
+              ).resolves.toEqual(
+                expect.objectContaining({
+                  environment: expect.objectContaining({
+                    id: environment.id,
+                    status: "running",
+                  }),
+                }),
+              );
+            },
+          );
         });
-      });
-      expect(environment.status).toBe("running");
-      expect(environment.lifecycleError).toBeNull();
-    } finally {
-      errorLog.mockRestore();
-    }
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+        expect(environment.status).toBe("running");
+        expect(environment.lifecycleError).toBeNull();
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("removes a newly created container when persisting its identity fails", async () => {
     const environment = createEnvironment({
@@ -3339,119 +3644,121 @@ esac
     const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
     const originalImplementation = updateEnvironment.getMockImplementation();
     let rejectedContainerIdentity = false;
-    updateEnvironment.mockImplementation(async (
-      environmentId: string,
-      update: Record<string, unknown>,
-    ) => {
-      if (!rejectedContainerIdentity && update.containerId === "container-unpersisted") {
-        rejectedContainerIdentity = true;
-        throw new Error("storage unavailable at /private/user/path");
-      }
-      return originalImplementation!(environmentId, update);
-    });
+    updateEnvironment.mockImplementation(
+      async (environmentId: string, update: Record<string, unknown>) => {
+        if (!rejectedContainerIdentity && update.containerId === "container-unpersisted") {
+          rejectedContainerIdentity = true;
+          throw new Error("storage unavailable at /private/user/path");
+        }
+        return originalImplementation!(environmentId, update);
+      },
+    );
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create) printf 'container-unpersisted\\n' ;;
   rm) exit 0 ;;
 esac
-`, async (logs) => {
-      await expect(commands.get("start_environment")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("storage unavailable");
-      const calls = await fs.readFile(logs.all, "utf8");
-      expect(calls).toContain("rm -f container-unpersisted");
-      expect(environment.containerId).toBeNull();
-      expect(environment.status).toBe("error");
-      expect(environment.lifecycleError).not.toContain("/private/user/path");
-    });
+`,
+      async (logs) => {
+        await expect(
+          commands.get("start_environment")?.({ environmentId: environment.id }, context),
+        ).rejects.toThrow("storage unavailable");
+        const calls = await fs.readFile(logs.all, "utf8");
+        expect(calls).toContain("rm -f container-unpersisted");
+        expect(environment.containerId).toBeNull();
+        expect(environment.status).toBe("error");
+        expect(environment.lifecycleError).not.toContain("/private/user/path");
+      },
+    );
   });
 
-
-
-  test("removes a newly created worktree and its branch when persisting them fails", async () => {
-    const { worktree, remote } = await createGitWorktreeWithOrigin();
-    const projectName = "rollback-repo";
-    const branch = `worktree-rollback-${randomUUID().slice(0, 8)}`;
-    const expectedWorktreePath = expectedManagedWorktreePath(projectName, branch);
-    await fs.rm(expectedWorktreePath, { recursive: true, force: true });
-
-    const environment = createEnvironment({
-      id: "env-worktree-persist-compensation",
-      status: "stopped",
-      worktreePath: undefined,
-      branch,
-      environmentType: "local",
-    });
-    const { context } = createContext(environment, {
-      project: {
-        id: environment.projectId,
-        name: projectName,
-        gitUrl: remote,
-        localPath: worktree,
-        addedAt: new Date(0).toISOString(),
-        order: 0,
-      },
-    });
-    const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
-    const originalImplementation = updateEnvironment.getMockImplementation();
-    updateEnvironment.mockImplementation(async (
-      environmentId: string,
-      update: Record<string, unknown>,
-    ) => {
-      // `createLocalWorktree` has already succeeded at this point, so the
-      // compensation under test is the one in `startEnvironmentOnce`, not the
-      // one inside worktree creation.
-      if (update.worktreePath === expectedWorktreePath) {
-        throw new Error("storage unavailable at /private/user/path");
-      }
-      return originalImplementation!(environmentId, update);
-    });
-    const commands = createCommandRegistry();
-
-    try {
-      await expect(commands.get("start_environment")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("storage unavailable");
-
-      expect(environment.status).toBe("error");
-      expect(environment.worktreePath).toBeUndefined();
-      expect(environment.lifecycleError).not.toContain("/private/user/path");
-      // `git worktree add -b` created a branch as well as a directory. Leaving
-      // it behind makes the next start pick `<slug>-1` and drift the branch
-      // name further on every retry.
-      await expectLocalWorktreeRolledBack(worktree, expectedWorktreePath, branch);
-    } finally {
-      updateEnvironment.mockImplementation(originalImplementation!);
+  test(
+    "removes a newly created worktree and its branch when persisting them fails",
+    async () => {
+      const { worktree, remote } = await createGitWorktreeWithOrigin();
+      const projectName = "rollback-repo";
+      const branch = `worktree-rollback-${randomUUID().slice(0, 8)}`;
+      const expectedWorktreePath = expectedManagedWorktreePath(projectName, branch);
       await fs.rm(expectedWorktreePath, { recursive: true, force: true });
-      await runGit(worktree, ["branch", "-D", branch]).catch(() => undefined);
-    }
-  }, ASYNC_TEST_BUDGET_MS);
 
+      const environment = createEnvironment({
+        id: "env-worktree-persist-compensation",
+        status: "stopped",
+        worktreePath: undefined,
+        branch,
+        environmentType: "local",
+      });
+      const { context } = createContext(environment, {
+        project: {
+          id: environment.projectId,
+          name: projectName,
+          gitUrl: remote,
+          localPath: worktree,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        },
+      });
+      const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
+      const originalImplementation = updateEnvironment.getMockImplementation();
+      updateEnvironment.mockImplementation(
+        async (environmentId: string, update: Record<string, unknown>) => {
+          // `createLocalWorktree` has already succeeded at this point, so the
+          // compensation under test is the one in `startEnvironmentOnce`, not the
+          // one inside worktree creation.
+          if (update.worktreePath === expectedWorktreePath) {
+            throw new Error("storage unavailable at /private/user/path");
+          }
+          return originalImplementation!(environmentId, update);
+        },
+      );
+      const commands = createCommandRegistry();
 
+      try {
+        await expect(
+          commands.get("start_environment")?.({ environmentId: environment.id }, context),
+        ).rejects.toThrow("storage unavailable");
 
-  test("queues a container stop behind background provisioning", async () => {
-    const environment = createEnvironment({
-      id: "env-background-stop-race",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      pendingAgentLaunch: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-background-stop-race-");
-    const startedPath = path.join(gateDirectory, "started");
-    const releasePath = path.join(gateDirectory, "release");
+        expect(environment.status).toBe("error");
+        expect(environment.worktreePath).toBeUndefined();
+        expect(environment.lifecycleError).not.toContain("/private/user/path");
+        // `git worktree add -b` created a branch as well as a directory. Leaving
+        // it behind makes the next start pick `<slug>-1` and drift the branch
+        // name further on every retry.
+        await expectLocalWorktreeRolledBack(worktree, expectedWorktreePath, branch);
+      } finally {
+        updateEnvironment.mockImplementation(originalImplementation!);
+        await fs.rm(expectedWorktreePath, { recursive: true, force: true });
+        await runGit(worktree, ["branch", "-D", branch]).catch(() => undefined);
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-      await withFakeDocker(`#!/bin/sh
+  test(
+    "queues a container stop behind background provisioning",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-background-stop-race",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        pendingAgentLaunch: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-background-stop-race-");
+      const startedPath = path.join(gateDirectory, "started");
+      const releasePath = path.join(gateDirectory, "release");
+
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -3461,47 +3768,52 @@ case "$1" in
     ;;
   start|stop|exec) exit 0 ;;
 esac
-`, async (logs) => {
-        await commands.get("start_environment_background")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await waitForCondition(() => existsSync(startedPath), "container create to begin");
-        const stop = commands.get("stop_environment")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await fs.writeFile(releasePath, "");
-        await expect(stop).resolves.toBeUndefined();
-        expect(environment.status).toBe("stopped");
-        expect(environment.pendingAgentLaunch).toBe(false);
-        const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls.indexOf("start container-stop-race")).toBeLessThan(
-          calls.indexOf("stop container-stop-race"),
+`,
+          async (logs) => {
+            await commands.get("start_environment_background")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await waitForCondition(() => existsSync(startedPath), "container create to begin");
+            const stop = commands.get("stop_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await fs.writeFile(releasePath, "");
+            await expect(stop).resolves.toBeUndefined();
+            expect(environment.status).toBe("stopped");
+            expect(environment.pendingAgentLaunch).toBe(false);
+            const calls = await fs.readFile(logs.all, "utf8");
+            expect(calls.indexOf("start container-stop-race")).toBeLessThan(
+              calls.indexOf("stop container-stop-race"),
+            );
+          },
         );
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "queues container deletion behind provisioning and removes the created resource",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-background-delete-race",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-background-delete-race-");
+      const startedPath = path.join(gateDirectory, "started");
+      const releasePath = path.join(gateDirectory, "release");
 
-
-  test("queues container deletion behind provisioning and removes the created resource", async () => {
-    const environment = createEnvironment({
-      id: "env-background-delete-race",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-background-delete-race-");
-    const startedPath = path.join(gateDirectory, "started");
-    const releasePath = path.join(gateDirectory, "release");
-
-    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -3511,95 +3823,98 @@ case "$1" in
     ;;
   start|exec|rm) exit 0 ;;
 esac
-`, async (logs) => {
-        await commands.get("start_environment_background")?.(
-          { environmentId: environment.id },
-          context,
+`,
+          async (logs) => {
+            await commands.get("start_environment_background")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await waitForCondition(() => existsSync(startedPath), "container create to begin");
+            const deletion = commands.get("delete_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await fs.writeFile(releasePath, "");
+            await expect(deletion).resolves.toBeUndefined();
+            await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
+            const calls = await fs.readFile(logs.all, "utf8");
+            expect(calls).toContain("rm -f container-delete-race");
+          },
         );
-        await waitForCondition(() => existsSync(startedPath), "container create to begin");
-        const deletion = commands.get("delete_environment")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await fs.writeFile(releasePath, "");
-        await expect(deletion).resolves.toBeUndefined();
-        await expect(context.storage.getEnvironment(environment.id)).resolves.toBeNull();
-        const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls).toContain("rm -f container-delete-race");
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "queues a local stop behind a background start",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("feature-local-start-stop");
+      const environment = createEnvironment({
+        id: "env-local-background-stop-race",
+        environmentType: "local",
+        worktreePath,
+        branch: "feature-local-start-stop",
+        status: "stopped",
+        setupScriptsComplete: true,
+        pendingAgentLaunch: true,
+      });
+      const { context } = createContext(environment);
+      const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
+      const originalImplementation = updateEnvironment.getMockImplementation();
+      let announceCreating!: () => void;
+      let releaseCreating!: () => void;
+      const creatingStarted = new Promise<void>((resolve) => {
+        announceCreating = resolve;
+      });
+      const creatingRelease = new Promise<void>((resolve) => {
+        releaseCreating = resolve;
+      });
+      updateEnvironment.mockImplementation(
+        async (environmentId: string, update: Record<string, unknown>) => {
+          if (update.status === "creating") {
+            announceCreating();
+            await creatingRelease;
+          }
+          return originalImplementation!(environmentId, update);
+        },
+      );
+      const commands = createCommandRegistry();
 
+      await commands.get("start_environment_background")?.(
+        { environmentId: environment.id },
+        context,
+      );
+      await creatingStarted;
+      const stop = commands.get("stop_environment")?.({ environmentId: environment.id }, context);
+      releaseCreating();
+      await expect(stop).resolves.toBeUndefined();
+      expect(environment.status).toBe("stopped");
+      expect(environment.pendingAgentLaunch).toBe(false);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-  test("queues a local stop behind a background start", async () => {
-    const worktreePath = await createGitRepoOnBranch("feature-local-start-stop");
-    const environment = createEnvironment({
-      id: "env-local-background-stop-race",
-      environmentType: "local",
-      worktreePath,
-      branch: "feature-local-start-stop",
-      status: "stopped",
-      setupScriptsComplete: true,
-      pendingAgentLaunch: true,
-    });
-    const { context } = createContext(environment);
-    const updateEnvironment = context.storage.updateEnvironment as ReturnType<typeof mock>;
-    const originalImplementation = updateEnvironment.getMockImplementation();
-    let announceCreating!: () => void;
-    let releaseCreating!: () => void;
-    const creatingStarted = new Promise<void>((resolve) => {
-      announceCreating = resolve;
-    });
-    const creatingRelease = new Promise<void>((resolve) => {
-      releaseCreating = resolve;
-    });
-    updateEnvironment.mockImplementation(async (
-      environmentId: string,
-      update: Record<string, unknown>,
-    ) => {
-      if (update.status === "creating") {
-        announceCreating();
-        await creatingRelease;
-      }
-      return originalImplementation!(environmentId, update);
-    });
-    const commands = createCommandRegistry();
+  test(
+    "queues stop behind container recreation without orphaning the replacement",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-recreate-stop-race",
+        environmentType: "containerized",
+        containerId: "container-old",
+        status: "running",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-recreate-stop-race-");
+      const startedPath = path.join(gateDirectory, "started");
+      const releasePath = path.join(gateDirectory, "release");
 
-    await commands.get("start_environment_background")?.(
-      { environmentId: environment.id },
-      context,
-    );
-    await creatingStarted;
-    const stop = commands.get("stop_environment")?.(
-      { environmentId: environment.id },
-      context,
-    );
-    releaseCreating();
-    await expect(stop).resolves.toBeUndefined();
-    expect(environment.status).toBe("stopped");
-    expect(environment.pendingAgentLaunch).toBe(false);
-  }, ASYNC_TEST_BUDGET_MS);
-
-
-
-  test("queues stop behind container recreation without orphaning the replacement", async () => {
-    const environment = createEnvironment({
-      id: "env-recreate-stop-race",
-      environmentType: "containerized",
-      containerId: "container-old",
-      status: "running",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-recreate-stop-race-");
-    const startedPath = path.join(gateDirectory, "started");
-    const releasePath = path.join(gateDirectory, "release");
-
-    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1:$2" in
   rm:-f)
@@ -3611,34 +3926,38 @@ case "$1" in
   create) printf 'container-replacement\\n' ;;
   start|stop|exec|rm) exit 0 ;;
 esac
-`, async (logs) => {
-        const recreate = commands.get("recreate_environment")?.(
-          { environmentId: environment.id },
-          context,
+`,
+          async (logs) => {
+            const recreate = commands.get("recreate_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await waitForCondition(() => existsSync(startedPath), "container removal to begin");
+            const stop = commands.get("stop_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await fs.writeFile(releasePath, "");
+            await expect(recreate).resolves.toEqual(
+              expect.objectContaining({
+                environment: expect.objectContaining({
+                  id: environment.id,
+                  containerId: "container-replacement",
+                }),
+              }),
+            );
+            await expect(stop).resolves.toBeUndefined();
+            expect(environment.containerId).toBe("container-replacement");
+            expect(environment.status).toBe("stopped");
+            const calls = await fs.readFile(logs.all, "utf8");
+            expect(calls).toContain("rm -f container-old");
+            expect(calls).toContain("stop container-replacement");
+          },
         );
-        await waitForCondition(() => existsSync(startedPath), "container removal to begin");
-        const stop = commands.get("stop_environment")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await fs.writeFile(releasePath, "");
-        await expect(recreate).resolves.toEqual(expect.objectContaining({
-          environment: expect.objectContaining({
-            id: environment.id,
-            containerId: "container-replacement",
-          }),
-        }));
-        await expect(stop).resolves.toBeUndefined();
-        expect(environment.containerId).toBe("container-replacement");
-        expect(environment.status).toBe("stopped");
-        const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls).toContain("rm -f container-old");
-        expect(calls).toContain("stop container-replacement");
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("refuses to delete a merging environment without reserving the tombstone", async () => {
     const environment = createEnvironment({
@@ -3651,16 +3970,13 @@ esac
     const commands = createCommandRegistry();
     commandTesting.markEnvironmentMerging(environment.id);
 
-    await expect(commands.get("delete_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow("Environment is currently being merged");
+    await expect(
+      commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow("Environment is currently being merged");
     // Reserving before the refusal would block local-server starts and further
     // merges for an environment that is not being deleted at all.
     expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
   });
-
-
 
   test("rejects starts while deletion is reserved before cleanup settles", async () => {
     const worktreePath = await createTempDir("ork-start-while-delete-reserved-");
@@ -3682,10 +3998,7 @@ esac
     const terminationResult = new Promise<boolean>((resolve) => {
       releaseTermination = resolve;
     });
-    commandTesting.setLocalServerProcess(
-      `codex:${environment.id}`,
-      createFakeChild(95050),
-    );
+    commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95050));
     commandTesting.setTerminateProcessTree(async () => {
       announceTermination();
       return terminationResult;
@@ -3698,21 +4011,17 @@ esac
     await terminationStarted;
     expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(true);
 
-    await expect(commands.get("start_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
-    await expect(commands.get("start_environment_background")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
+    await expect(
+      commands.get("start_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
+    await expect(
+      commands.get("start_environment_background")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
 
     releaseTermination(false);
     await expect(deletion).rejects.toThrow("Failed to stop all local servers");
     commandTesting.setTerminateProcessTree(async () => true);
   });
-
-
 
   test("rejects starts carrying a durable deletion tombstone", async () => {
     const environment = createEnvironment({
@@ -3726,36 +4035,35 @@ esac
     const { context, updates } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await expect(commands.get("start_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
-    await expect(commands.get("start_environment_background")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
+    await expect(
+      commands.get("start_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
+    await expect(
+      commands.get("start_environment_background")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow(`Environment is being deleted: ${environment.id}`);
     expect(updates).toHaveLength(0);
   });
 
+  test(
+    "rechecks a durable deletion tombstone when a queued start executes",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-queued-start-delete-tombstone",
+        environmentType: "containerized",
+        containerId: "container-queued-delete-tombstone",
+        status: "running",
+        setupScriptsComplete: true,
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-queued-start-delete-tombstone-");
+      const stopStartedPath = path.join(gateDirectory, "stop-started");
+      const releaseStopPath = path.join(gateDirectory, "release-stop");
+      const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
 
-
-  test("rechecks a durable deletion tombstone when a queued start executes", async () => {
-    const environment = createEnvironment({
-      id: "env-queued-start-delete-tombstone",
-      environmentType: "containerized",
-      containerId: "container-queued-delete-tombstone",
-      status: "running",
-      setupScriptsComplete: true,
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-queued-start-delete-tombstone-");
-    const stopStartedPath = path.join(gateDirectory, "stop-started");
-    const releaseStopPath = path.join(gateDirectory, "release-stop");
-    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      await withFakeDocker(`#!/bin/sh
+      try {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "stop" ]; then
   : > '${stopStartedPath.replaceAll("'", "'\\''")}'
@@ -3763,42 +4071,43 @@ if [ "$1" = "stop" ]; then
   exit 0
 fi
 exit 0
-`, async ({ all }) => {
-        const stop = commands.get("stop_environment")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await waitForCondition(() => existsSync(stopStartedPath), "container stop to begin");
-        await commands.get("start_environment_background")?.(
-          { environmentId: environment.id },
-          context,
-        );
+`,
+          async ({ all }) => {
+            const stop = commands.get("stop_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await waitForCondition(() => existsSync(stopStartedPath), "container stop to begin");
+            await commands.get("start_environment_background")?.(
+              { environmentId: environment.id },
+              context,
+            );
 
-        // This represents deletion intent persisted while the accepted start
-        // was waiting behind an earlier lifecycle operation.
-        environment.deletionRequestedAt = "2026-07-29T11:00:00.000Z";
-        await fs.writeFile(releaseStopPath, "");
-        await expect(stop).resolves.toBeUndefined();
-        await waitForCondition(
-          () => errorLog.mock.calls.some(([message]) =>
-            String(message).includes("background start failed")
-          ),
-          "queued start rejection",
+            // This represents deletion intent persisted while the accepted start
+            // was waiting behind an earlier lifecycle operation.
+            environment.deletionRequestedAt = "2026-07-29T11:00:00.000Z";
+            await fs.writeFile(releaseStopPath, "");
+            await expect(stop).resolves.toBeUndefined();
+            await waitForCondition(
+              () =>
+                errorLog.mock.calls.some(([message]) =>
+                  String(message).includes("background start failed"),
+                ),
+              "queued start rejection",
+            );
+
+            const calls = await fs.readFile(all, "utf8");
+            expect(calls.split("\n").filter((line) => line.startsWith("start "))).toHaveLength(0);
+            expect(environment.status).toBe("stopped");
+            expect(environment.deletionRequestedAt).toBe("2026-07-29T11:00:00.000Z");
+          },
         );
-
-        const calls = await fs.readFile(all, "utf8");
-        expect(calls.split("\n").filter((line) => line.startsWith("start "))).toHaveLength(0);
-        expect(environment.status).toBe("stopped");
-        expect(environment.deletionRequestedAt).toBe(
-          "2026-07-29T11:00:00.000Z",
-        );
-      });
-    } finally {
-      errorLog.mockRestore();
-    }
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("refuses deletion while local servers are shutting down", async () => {
     const environment = createEnvironment({
@@ -3811,31 +4120,31 @@ exit 0
     const commands = createCommandRegistry();
     closeLocalServerAdmission();
 
-    await expect(commands.get("delete_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow("Backend is shutting down");
+    await expect(
+      commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow("Backend is shutting down");
     expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
   });
 
+  test(
+    "deduplicates concurrent foreground starts for one environment",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-foreground-deduplicated",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-foreground-dedupe-");
+      const releasePath = path.join(gateDirectory, "release");
 
-
-  test("deduplicates concurrent foreground starts for one environment", async () => {
-    const environment = createEnvironment({
-      id: "env-foreground-deduplicated",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-foreground-dedupe-");
-    const releasePath = path.join(gateDirectory, "release");
-
-    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -3844,19 +4153,27 @@ case "$1" in
     ;;
   start|exec) exit 0 ;;
 esac
-`, async (logs) => {
-        const first = commands.get("start_environment")?.({ environmentId: environment.id }, context);
-        const second = commands.get("start_environment")?.({ environmentId: environment.id }, context);
-        await fs.writeFile(releasePath, "");
-        await Promise.all([first, second]);
+`,
+          async (logs) => {
+            const first = commands.get("start_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            const second = commands.get("start_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await fs.writeFile(releasePath, "");
+            await Promise.all([first, second]);
 
-        const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls.split("\n").filter((line) => line.startsWith("create "))).toHaveLength(1);
+            const calls = await fs.readFile(logs.all, "utf8");
+            expect(calls.split("\n").filter((line) => line.startsWith("create "))).toHaveLength(1);
+          },
+        );
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("clears a stale failure only once the stop has actually committed", async () => {
     const environment = createEnvironment({
@@ -3869,18 +4186,20 @@ esac
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 if [ "$1" = "stop" ]; then
   printf 'container runtime refused stop\\n' >&2
   exit 1
 fi
 exit 0
-`, async () => {
-      await expect(commands.get("stop_environment")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("container runtime refused stop");
-    });
+`,
+      async () => {
+        await expect(
+          commands.get("stop_environment")?.({ environmentId: environment.id }, context),
+        ).rejects.toThrow("container runtime refused stop");
+      },
+    );
     // Clearing ahead of the stop would have erased the only explanation the
     // user has, leaving an environment in `error` with nothing to show.
     expect(environment.status).toBe("error");
@@ -3889,16 +4208,13 @@ exit 0
     );
 
     await withFakeDocker("#!/bin/sh\nexit 0\n", async () => {
-      await expect(commands.get("stop_environment")?.(
-        { environmentId: environment.id },
-        context,
-      )).resolves.toBeUndefined();
+      await expect(
+        commands.get("stop_environment")?.({ environmentId: environment.id }, context),
+      ).resolves.toBeUndefined();
     });
     expect(environment.status).toBe("stopped");
     expect(environment.lifecycleError).toBeNull();
   });
-
-
 
   test("keeps a local stop failure's explanation while still recording the stop", async () => {
     const worktreePath = await createTempDir("ork-electron-stop-local-keeps-error-");
@@ -3915,10 +4231,9 @@ exit 0
     commandTesting.setLocalServerProcess(`codex:${environment.id}`, createFakeChild(95010));
     commandTesting.setTerminateProcessTree(async () => false);
 
-    await expect(commands.get("stop_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow("Failed to stop all local servers");
+    await expect(
+      commands.get("stop_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow("Failed to stop all local servers");
 
     // Partial progress is recorded so the environment is not stranded, but the
     // failure it was already carrying is not silently erased by a stop that
@@ -3931,25 +4246,26 @@ exit 0
     commandTesting.setTerminateProcessTree(async () => true);
   });
 
+  test(
+    "queues a recreate behind an in-flight start instead of interleaving it",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-start-recreate-race",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-start-recreate-race-");
+      const startedPath = path.join(gateDirectory, "started");
+      const releasePath = path.join(gateDirectory, "release");
 
-
-  test("queues a recreate behind an in-flight start instead of interleaving it", async () => {
-    const environment = createEnvironment({
-      id: "env-start-recreate-race",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-start-recreate-race-");
-    const startedPath = path.join(gateDirectory, "started");
-    const releasePath = path.join(gateDirectory, "release");
-
-    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -3963,57 +4279,67 @@ case "$1" in
     ;;
   start|stop|exec|rm) exit 0 ;;
 esac
-`, async (logs) => {
-        await commands.get("start_environment_background")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await waitForCondition(() => existsSync(startedPath), "first container create to begin");
-        const recreate = commands.get("recreate_environment")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await fs.writeFile(releasePath, "");
-        await expect(recreate).resolves.toEqual(expect.objectContaining({
-          environment: expect.objectContaining({
-            id: environment.id,
-            containerId: "container-recreated",
-            status: "running",
-          }),
-        }));
+`,
+          async (logs) => {
+            await commands.get("start_environment_background")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await waitForCondition(
+              () => existsSync(startedPath),
+              "first container create to begin",
+            );
+            const recreate = commands.get("recreate_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await fs.writeFile(releasePath, "");
+            await expect(recreate).resolves.toEqual(
+              expect.objectContaining({
+                environment: expect.objectContaining({
+                  id: environment.id,
+                  containerId: "container-recreated",
+                  status: "running",
+                }),
+              }),
+            );
 
-        expect(environment.containerId).toBe("container-recreated");
-        expect(environment.status).toBe("running");
-        const calls = await fs.readFile(logs.all, "utf8");
-        // The recreate observed the container the start had produced, which is
-        // only possible if it ran after that start committed rather than
-        // alongside it.
-        expect(calls.indexOf("start container-first")).toBeLessThan(
-          calls.indexOf("rm -f container-first"),
+            expect(environment.containerId).toBe("container-recreated");
+            expect(environment.status).toBe("running");
+            const calls = await fs.readFile(logs.all, "utf8");
+            // The recreate observed the container the start had produced, which is
+            // only possible if it ran after that start committed rather than
+            // alongside it.
+            expect(calls.indexOf("start container-first")).toBeLessThan(
+              calls.indexOf("rm -f container-first"),
+            );
+          },
         );
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "a start requested after a stop does not join the start the stop will undo",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-start-dedupe-invalidated",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-start-dedupe-invalidated-");
+      const startedPath = path.join(gateDirectory, "started");
+      const releasePath = path.join(gateDirectory, "release");
 
-
-  test("a start requested after a stop does not join the start the stop will undo", async () => {
-    const environment = createEnvironment({
-      id: "env-start-dedupe-invalidated",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-start-dedupe-invalidated-");
-    const startedPath = path.join(gateDirectory, "started");
-    const releasePath = path.join(gateDirectory, "release");
-
-    await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-      await withFakeDocker(`#!/bin/sh
+      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+        await withFakeDocker(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -4023,59 +4349,66 @@ case "$1" in
     ;;
   start|stop|exec) exit 0 ;;
 esac
-`, async () => {
-        await commands.get("start_environment_background")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await waitForCondition(() => existsSync(startedPath), "container create to begin");
+`,
+          async () => {
+            await commands.get("start_environment_background")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await waitForCondition(() => existsSync(startedPath), "container create to begin");
 
-        const stop = commands.get("stop_environment")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        // Joining the in-flight start here would resolve as soon as that start
-        // finished — before the stop that is already queued ahead of it — and
-        // report a running environment the user had asked to be stopped.
-        const restart = commands.get("start_environment")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        await fs.writeFile(releasePath, "");
+            const stop = commands.get("stop_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            // Joining the in-flight start here would resolve as soon as that start
+            // finished — before the stop that is already queued ahead of it — and
+            // report a running environment the user had asked to be stopped.
+            const restart = commands.get("start_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+            await fs.writeFile(releasePath, "");
 
-        await expect(stop).resolves.toBeUndefined();
-        await expect(restart).resolves.toEqual(expect.objectContaining({
-          environment: expect.objectContaining({
-            id: environment.id,
-            status: "running",
-          }),
-        }));
-        expect(environment.status).toBe("running");
+            await expect(stop).resolves.toBeUndefined();
+            await expect(restart).resolves.toEqual(
+              expect.objectContaining({
+                environment: expect.objectContaining({
+                  id: environment.id,
+                  status: "running",
+                }),
+              }),
+            );
+            expect(environment.status).toBe("running");
+          },
+        );
       });
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "runs work queued behind a lifecycle operation that rejected",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-queue-not-poisoned",
+        environmentType: "containerized",
+        containerId: null,
+        status: "stopped",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const gateDirectory = await createTempDir("ork-queue-not-poisoned-");
+      const startedPath = path.join(gateDirectory, "started");
+      const releasePath = path.join(gateDirectory, "release");
+      const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
 
-
-  test("runs work queued behind a lifecycle operation that rejected", async () => {
-    const environment = createEnvironment({
-      id: "env-queue-not-poisoned",
-      environmentType: "containerized",
-      containerId: null,
-      status: "stopped",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const gateDirectory = await createTempDir("ork-queue-not-poisoned-");
-    const startedPath = path.join(gateDirectory, "started");
-    const releasePath = path.join(gateDirectory, "release");
-    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-        await withFakeDocker(`#!/bin/sh
+      try {
+        await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+          await withFakeDocker(
+            `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -4086,50 +4419,55 @@ case "$1" in
     ;;
   start|stop|exec) exit 0 ;;
 esac
-`, async () => {
-          await commands.get("start_environment_background")?.(
-            { environmentId: environment.id },
-            context,
-          );
-          await waitForCondition(() => existsSync(startedPath), "container create to begin");
-          // Queued while the predecessor is still running, so it can only run
-          // through the rejected tail.
-          const stop = commands.get("stop_environment")?.(
-            { environmentId: environment.id },
-            context,
-          );
-          await fs.writeFile(releasePath, "");
+`,
+            async () => {
+              await commands.get("start_environment_background")?.(
+                { environmentId: environment.id },
+                context,
+              );
+              await waitForCondition(() => existsSync(startedPath), "container create to begin");
+              // Queued while the predecessor is still running, so it can only run
+              // through the rejected tail.
+              const stop = commands.get("stop_environment")?.(
+                { environmentId: environment.id },
+                context,
+              );
+              await fs.writeFile(releasePath, "");
 
-          await expect(stop).resolves.toBeUndefined();
-          expect(environment.status).toBe("stopped");
+              await expect(stop).resolves.toBeUndefined();
+              expect(environment.status).toBe("stopped");
+            },
+          );
         });
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test(
+    "recreates a container even when the old one cannot be removed",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-recreate-remove-failure",
+        environmentType: "containerized",
+        containerId: "container-still-present",
+        status: "running",
+        setupScriptsComplete: true,
+        networkAccessMode: "full",
       });
-    } finally {
-      errorLog.mockRestore();
-    }
-  }, ASYNC_TEST_BUDGET_MS);
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
 
-
-
-  test("recreates a container even when the old one cannot be removed", async () => {
-    const environment = createEnvironment({
-      id: "env-recreate-remove-failure",
-      environmentType: "containerized",
-      containerId: "container-still-present",
-      status: "running",
-      setupScriptsComplete: true,
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const errorLog = spyOn(console, "error").mockImplementation(() => undefined);
-
-    try {
-      // Recreate is the repair action for an already-broken container, so a
-      // daemon that refuses the removal must not be what makes the environment
-      // permanently unrepairable from the UI.
-      await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
-        await withFakeDocker(`#!/bin/sh
+      try {
+        // Recreate is the repair action for an already-broken container, so a
+        // daemon that refuses the removal must not be what makes the environment
+        // permanently unrepairable from the UI.
+        await withFakeGh("#!/bin/sh\nexit 1\n", async () => {
+          await withFakeDocker(
+            `#!/bin/sh
 case "$1" in
   rm)
     printf 'container runtime refused removal\\n' >&2
@@ -4138,71 +4476,80 @@ case "$1" in
   create) printf 'container-after-recreate\\n' ;;
   start|exec) exit 0 ;;
 esac
-`, async () => {
-          await expect(commands.get("recreate_environment")?.(
-            { environmentId: environment.id },
-            context,
-          )).resolves.toEqual(expect.objectContaining({
-            environment: expect.objectContaining({
-              id: environment.id,
-              containerId: "container-after-recreate",
-              status: "running",
-            }),
-          }));
+`,
+            async () => {
+              await expect(
+                commands.get("recreate_environment")?.({ environmentId: environment.id }, context),
+              ).resolves.toEqual(
+                expect.objectContaining({
+                  environment: expect.objectContaining({
+                    id: environment.id,
+                    containerId: "container-after-recreate",
+                    status: "running",
+                  }),
+                }),
+              );
+            },
+          );
         });
+
+        expect(environment.containerId).toBe("container-after-recreate");
+        expect(environment.status).toBe("running");
+        expect(environment.lifecycleError).toBeNull();
+        // The daemon-level cause is still recoverable from the backend logs.
+        expect(JSON.stringify(errorLog.mock.calls)).toContain("container runtime refused removal");
+      } finally {
+        errorLog.mockRestore();
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test(
+    "stages configured gitignored files into new container environments",
+    async () => {
+      const projectPath = await createTempDir("ork-electron-container-copy-source-");
+      await runGit(projectPath, ["init"]);
+      await runGit(projectPath, ["checkout", "-b", "main"]);
+      await fs.writeFile(
+        path.join(projectPath, ".gitignore"),
+        "environments.json\nnested/secret.json\n",
+      );
+      await runGit(projectPath, ["add", ".gitignore"]);
+      await runGit(projectPath, ["commit", "-m", "ignore copied files"]);
+      await fs.mkdir(path.join(projectPath, "nested"), { recursive: true });
+      await fs.writeFile(path.join(projectPath, "environments.json"), '{"copied":true}\n');
+      await fs.writeFile(path.join(projectPath, "nested", "secret.json"), '{"nested":true}\n');
+      await runGit(projectPath, ["check-ignore", "environments.json"]);
+
+      const environment = createEnvironment({
+        id: "env-container-copy",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: null,
+        status: "stopped",
+        networkAccessMode: "full",
       });
+      const { context } = createContext(environment, {
+        project: {
+          id: environment.projectId,
+          name: "Copy Source",
+          gitUrl: "https://github.com/acme/copy-source.git",
+          localPath: projectPath,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        },
+        repositoryConfig: {
+          defaultBranch: "main",
+          prBaseBranch: "main",
+          filesToCopy: ["environments.json", "nested/secret.json"],
+        },
+      });
+      const commands = createCommandRegistry();
 
-      expect(environment.containerId).toBe("container-after-recreate");
-      expect(environment.status).toBe("running");
-      expect(environment.lifecycleError).toBeNull();
-      // The daemon-level cause is still recoverable from the backend logs.
-      expect(JSON.stringify(errorLog.mock.calls)).toContain("container runtime refused removal");
-    } finally {
-      errorLog.mockRestore();
-    }
-  }, ASYNC_TEST_BUDGET_MS);
-
-
-
-  test("stages configured gitignored files into new container environments", async () => {
-    const projectPath = await createTempDir("ork-electron-container-copy-source-");
-    await runGit(projectPath, ["init"]);
-    await runGit(projectPath, ["checkout", "-b", "main"]);
-    await fs.writeFile(path.join(projectPath, ".gitignore"), "environments.json\nnested/secret.json\n");
-    await runGit(projectPath, ["add", ".gitignore"]);
-    await runGit(projectPath, ["commit", "-m", "ignore copied files"]);
-    await fs.mkdir(path.join(projectPath, "nested"), { recursive: true });
-    await fs.writeFile(path.join(projectPath, "environments.json"), "{\"copied\":true}\n");
-    await fs.writeFile(path.join(projectPath, "nested", "secret.json"), "{\"nested\":true}\n");
-    await runGit(projectPath, ["check-ignore", "environments.json"]);
-
-    const environment = createEnvironment({
-      id: "env-container-copy",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: null,
-      status: "stopped",
-      networkAccessMode: "full",
-    });
-    const { context } = createContext(environment, {
-      project: {
-        id: environment.projectId,
-        name: "Copy Source",
-        gitUrl: "https://github.com/acme/copy-source.git",
-        localPath: projectPath,
-        addedAt: new Date(0).toISOString(),
-        order: 0,
-      },
-      repositoryConfig: {
-        defaultBranch: "main",
-        prBaseBranch: "main",
-        filesToCopy: ["environments.json", "nested/secret.json"],
-      },
-    });
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -4240,43 +4587,62 @@ case "$1" in
     ;;
 esac
 exit 0
-`, async (logs) => {
-      let result: unknown;
-      try {
-        result = await commands.get("start_environment")?.({ environmentId: environment.id }, context);
-      } catch (error) {
-        const dockerCalls = await fs.readFile(logs.all, "utf8").catch(() => "");
-        const copiedRoot = await fs.readFile(`${logs.all}.container-copy-root`, "utf8").catch(() => "");
-        throw new Error(`${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nCopied root:\n${copiedRoot}`);
-      }
-      expect(result).toEqual(expect.objectContaining({
-        setupStarted: true,
-        setupSessionId: `${environment.id}:setup`,
-        environment: expect.objectContaining({
-          id: environment.id,
-          containerId: "container-copy-created",
-          status: "running",
-        }),
-      }));
-      await waitForPtyProcessCount(1);
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+`,
+        async (logs) => {
+          let result: unknown;
+          try {
+            result = await commands.get("start_environment")?.(
+              { environmentId: environment.id },
+              context,
+            );
+          } catch (error) {
+            const dockerCalls = await fs.readFile(logs.all, "utf8").catch(() => "");
+            const copiedRoot = await fs
+              .readFile(`${logs.all}.container-copy-root`, "utf8")
+              .catch(() => "");
+            throw new Error(
+              `${error instanceof Error ? error.message : String(error)}\nDocker calls:\n${dockerCalls}\nCopied root:\n${copiedRoot}`,
+            );
+          }
+          expect(result).toEqual(
+            expect.objectContaining({
+              setupStarted: true,
+              setupSessionId: `${environment.id}:setup`,
+              environment: expect.objectContaining({
+                id: environment.id,
+                containerId: "container-copy-created",
+                status: "running",
+              }),
+            }),
+          );
+          await waitForPtyProcessCount(1);
+          ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
 
-      await expect(fs.readFile(`${logs.all}.container-copy-root`, "utf8")).resolves.toBe("{\"copied\":true}\n");
-      await expect(fs.readFile(`${logs.all}.container-copy-nested`, "utf8")).resolves.toBe("{\"nested\":true}\n");
-      await expect(fs.readFile(`${logs.all}.container-copy-dest`, "utf8")).resolves.toBe("container-copy-created:/project-files\n");
-      expect(environment.containerId).toBe("container-copy-created");
+          await expect(fs.readFile(`${logs.all}.container-copy-root`, "utf8")).resolves.toBe(
+            '{"copied":true}\n',
+          );
+          await expect(fs.readFile(`${logs.all}.container-copy-nested`, "utf8")).resolves.toBe(
+            '{"nested":true}\n',
+          );
+          await expect(fs.readFile(`${logs.all}.container-copy-dest`, "utf8")).resolves.toBe(
+            "container-copy-created:/project-files\n",
+          );
+          expect(environment.containerId).toBe("container-copy-created");
 
-      const execCalls = await fs.readFile(logs.exec, "utf8");
-      expect(execCalls).toMatch(/exec --user root container-copy-created sh -c/);
-      expect(execCalls).toContain("chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files");
-    });
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+          const execCalls = await fs.readFile(logs.exec, "utf8");
+          expect(execCalls).toMatch(/exec --user root container-copy-created sh -c/);
+          expect(execCalls).toContain(
+            "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
+          );
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("removes a newly created container when configured file docker copy fails", async () => {
     const projectPath = await createTempDir("ork-electron-container-copy-fail-source-");
-    await fs.writeFile(path.join(projectPath, "settings.json"), "{\"copied\":true}\n");
+    await fs.writeFile(path.join(projectPath, "settings.json"), '{"copied":true}\n');
 
     const environment = createEnvironment({
       id: "env-container-copy-fail",
@@ -4304,7 +4670,8 @@ exit 0
     });
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -4320,25 +4687,30 @@ case "$1" in
     ;;
 esac
 exit 0
-`, async (logs) => {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+`,
+      async (logs) => {
+        await expect(
+          commands.get("start_environment")?.({ environmentId: environment.id }, context),
+        ).rejects.toThrow();
 
-      const dockerCalls = (await fs.readFile(logs.all, "utf8")).split("\n").filter(Boolean);
-      expect(dockerCalls.some((line) => line.startsWith("create "))).toBe(true);
-      expect(dockerCalls.some((line) => line.startsWith("cp "))).toBe(true);
-      expect(dockerCalls.some((line) => line.startsWith("start "))).toBe(false);
-      await expect(fs.readFile(logs.rm, "utf8")).resolves.toBe("rm -f container-copy-fail\n");
-      expect(environment.status).toBe("error");
-      expect(environment.containerId).toBeNull();
-    });
+        const dockerCalls = (await fs.readFile(logs.all, "utf8")).split("\n").filter(Boolean);
+        expect(dockerCalls.some((line) => line.startsWith("create "))).toBe(true);
+        expect(dockerCalls.some((line) => line.startsWith("cp "))).toBe(true);
+        expect(dockerCalls.some((line) => line.startsWith("start "))).toBe(false);
+        await expect(fs.readFile(logs.rm, "utf8")).resolves.toBe("rm -f container-copy-fail\n");
+        expect(environment.status).toBe("error");
+        expect(environment.containerId).toBeNull();
+      },
+    );
   });
-
-
 
   test("rejects configured container file symlinks that escape the project and removes the container", async () => {
     const projectPath = await createTempDir("ork-electron-container-copy-symlink-source-");
-    const outsidePath = path.join(await createTempDir("ork-electron-container-copy-outside-"), "secret.json");
-    await fs.writeFile(outsidePath, "{\"outside\":true}\n");
+    const outsidePath = path.join(
+      await createTempDir("ork-electron-container-copy-outside-"),
+      "secret.json",
+    );
+    await fs.writeFile(outsidePath, '{"outside":true}\n');
     await fs.symlink(outsidePath, path.join(projectPath, "secret-link.json"));
 
     const environment = createEnvironment({
@@ -4367,7 +4739,8 @@ exit 0
     });
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
   create)
@@ -4380,22 +4753,22 @@ case "$1" in
     ;;
 esac
 exit 0
-`, async (logs) => {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow(
-        "Configured file to copy must stay inside the project: secret-link.json",
-      );
+`,
+      async (logs) => {
+        await expect(
+          commands.get("start_environment")?.({ environmentId: environment.id }, context),
+        ).rejects.toThrow("Configured file to copy must stay inside the project: secret-link.json");
 
-      const dockerCalls = (await fs.readFile(logs.all, "utf8")).split("\n").filter(Boolean);
-      expect(dockerCalls.some((line) => line.startsWith("create "))).toBe(true);
-      expect(dockerCalls.some((line) => line.startsWith("cp "))).toBe(false);
-      expect(dockerCalls.some((line) => line.startsWith("start "))).toBe(false);
-      await expect(fs.readFile(logs.rm, "utf8")).resolves.toBe("rm -f container-symlink-fail\n");
-      expect(environment.status).toBe("error");
-      expect(environment.containerId).toBeNull();
-    });
+        const dockerCalls = (await fs.readFile(logs.all, "utf8")).split("\n").filter(Boolean);
+        expect(dockerCalls.some((line) => line.startsWith("create "))).toBe(true);
+        expect(dockerCalls.some((line) => line.startsWith("cp "))).toBe(false);
+        expect(dockerCalls.some((line) => line.startsWith("start "))).toBe(false);
+        await expect(fs.readFile(logs.rm, "utf8")).resolves.toBe("rm -f container-symlink-fail\n");
+        expect(environment.status).toBe("error");
+        expect(environment.containerId).toBeNull();
+      },
+    );
   });
-
-
 
   test("creates local worktrees from the fetched remote base branch", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
@@ -4428,19 +4801,27 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupStarted: false,
-        environment: expect.objectContaining({
-          id: environment.id,
-          status: "running",
+      await expect(
+        commands.get("start_environment")?.({ environmentId: environment.id }, context),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          setupStarted: false,
+          environment: expect.objectContaining({
+            id: environment.id,
+            status: "running",
+          }),
         }),
-      }));
+      );
 
       expect(environment.worktreePath).toBeDefined();
       expect(environment.branch).toBe("feature-remote-base");
-      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("remote\n");
+      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe(
+        "remote\n",
+      );
       expect(environment.createdFromCommit).toMatch(/^[0-9a-f]{40}$/);
-      await expect(currentGitCommit(environment.worktreePath!)).resolves.toBe(environment.createdFromCommit);
+      await expect(currentGitCommit(environment.worktreePath!)).resolves.toBe(
+        environment.createdFromCommit,
+      );
       await expect(configuredGitPushBehaviour(environment.worktreePath!)).resolves.toEqual({
         pushDefault: "current",
         autoSetupRemote: "true",
@@ -4454,11 +4835,15 @@ exit 0
       // The branch starts from origin/main but must not adopt it as an upstream, and
       // must not claim a same-named upstream that does not exist yet either: that is
       // what would make `git status` report a gone upstream and `git pull` fail.
-      await expect(configuredGitUpstream(environment.worktreePath!, "feature-remote-base")).resolves.toEqual({
+      await expect(
+        configuredGitUpstream(environment.worktreePath!, "feature-remote-base"),
+      ).resolves.toEqual({
         remote: "",
         merge: "",
       });
-      expect(await gitOutput(environment.worktreePath!, ["status", "-sb"])).toBe("## feature-remote-base");
+      expect(await gitOutput(environment.worktreePath!, ["status", "-sb"])).toBe(
+        "## feature-remote-base",
+      );
 
       // A plain `git push` has to publish the environment branch and leave the base
       // branch it was created from exactly where it was.
@@ -4466,29 +4851,34 @@ exit 0
       await fs.writeFile(path.join(environment.worktreePath!, "tracked.txt"), "environment\n");
       await runGit(environment.worktreePath!, ["commit", "-am", "environment commit"]);
       await runGit(environment.worktreePath!, ["push"]);
-      expect(await gitOutput(remote, ["rev-parse", "refs/heads/feature-remote-base"]))
-        .toBe(await gitOutput(environment.worktreePath!, ["rev-parse", "HEAD"]));
+      expect(await gitOutput(remote, ["rev-parse", "refs/heads/feature-remote-base"])).toBe(
+        await gitOutput(environment.worktreePath!, ["rev-parse", "HEAD"]),
+      );
       expect(await gitOutput(remote, ["rev-parse", "refs/heads/main"])).toBe(baseBefore);
-      await expect(configuredGitUpstream(environment.worktreePath!, "feature-remote-base")).resolves.toEqual({
+      await expect(
+        configuredGitUpstream(environment.worktreePath!, "feature-remote-base"),
+      ).resolves.toEqual({
         remote: "origin",
         merge: "refs/heads/feature-remote-base",
       });
     } finally {
-      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+      if (environment.worktreePath)
+        await fs.rm(environment.worktreePath, { recursive: true, force: true });
     }
   });
 
-
-
   test("copies configured gitignored files into new local worktrees", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
-    await fs.writeFile(path.join(worktree, ".gitignore"), "environments.json\nnested/secret.json\n");
+    await fs.writeFile(
+      path.join(worktree, ".gitignore"),
+      "environments.json\nnested/secret.json\n",
+    );
     await runGit(worktree, ["add", ".gitignore"]);
     await runGit(worktree, ["commit", "-m", "ignore copied files"]);
     await runGit(worktree, ["push", "origin", "main"]);
     await fs.mkdir(path.join(worktree, "nested"), { recursive: true });
-    await fs.writeFile(path.join(worktree, "environments.json"), "{\"local\":true}\n");
-    await fs.writeFile(path.join(worktree, "nested", "secret.json"), "{\"nested\":true}\n");
+    await fs.writeFile(path.join(worktree, "environments.json"), '{"local":true}\n');
+    await fs.writeFile(path.join(worktree, "nested", "secret.json"), '{"nested":true}\n');
     await runGit(worktree, ["check-ignore", "environments.json"]);
 
     const environment = createEnvironment({
@@ -4515,23 +4905,30 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupStarted: false,
-        environment: expect.objectContaining({
-          id: environment.id,
-          status: "running",
+      await expect(
+        commands.get("start_environment")?.({ environmentId: environment.id }, context),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          setupStarted: false,
+          environment: expect.objectContaining({
+            id: environment.id,
+            status: "running",
+          }),
         }),
-      }));
+      );
 
       expect(environment.worktreePath).toBeDefined();
-      expect(await fs.readFile(path.join(environment.worktreePath!, "environments.json"), "utf8")).toBe("{\"local\":true}\n");
-      expect(await fs.readFile(path.join(environment.worktreePath!, "nested", "secret.json"), "utf8")).toBe("{\"nested\":true}\n");
+      expect(
+        await fs.readFile(path.join(environment.worktreePath!, "environments.json"), "utf8"),
+      ).toBe('{"local":true}\n');
+      expect(
+        await fs.readFile(path.join(environment.worktreePath!, "nested", "secret.json"), "utf8"),
+      ).toBe('{"nested":true}\n');
     } finally {
-      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+      if (environment.worktreePath)
+        await fs.rm(environment.worktreePath, { recursive: true, force: true });
     }
   });
-
-
 
   test("rolls back a local worktree when a configured file is missing", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
@@ -4565,9 +4962,9 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow(
-        "Configured file to copy not found: missing.json",
-      );
+      await expect(
+        commands.get("start_environment")?.({ environmentId: environment.id }, context),
+      ).rejects.toThrow("Configured file to copy not found: missing.json");
 
       expect(environment.status).toBe("error");
       expect(environment.worktreePath).toBeUndefined();
@@ -4578,8 +4975,6 @@ exit 0
       await runGit(worktree, ["branch", "-D", branch]).catch(() => undefined);
     }
   });
-
-
 
   test("rolls back a local worktree when a configured path is a directory", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
@@ -4614,9 +5009,9 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow(
-        "Configured path to copy is not a file: nested-dir",
-      );
+      await expect(
+        commands.get("start_environment")?.({ environmentId: environment.id }, context),
+      ).rejects.toThrow("Configured path to copy is not a file: nested-dir");
 
       expect(environment.status).toBe("error");
       expect(environment.worktreePath).toBeUndefined();
@@ -4628,8 +5023,6 @@ exit 0
     }
   });
 
-
-
   test("suffixes local worktree branches when origin has an unfetched branch with the stored name", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
     const updater = await createTempDir("ork-electron-remote-branch-");
@@ -4640,7 +5033,13 @@ exit 0
     await runGit(updater, ["commit", "-m", "remote branch"]);
     await runGit(updater, ["push", "origin", "review-oauth-callback"]);
 
-    const { stdout: knownBranches } = await execFileAsync("git", ["-C", worktree, "branch", "-a", "--format=%(refname:short)"]);
+    const { stdout: knownBranches } = await execFileAsync("git", [
+      "-C",
+      worktree,
+      "branch",
+      "-a",
+      "--format=%(refname:short)",
+    ]);
     expect(knownBranches).not.toContain("review-oauth-callback");
 
     const environment = createEnvironment({
@@ -4664,23 +5063,28 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupStarted: false,
-        environment: expect.objectContaining({
-          id: environment.id,
-          status: "running",
+      await expect(
+        commands.get("start_environment")?.({ environmentId: environment.id }, context),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          setupStarted: false,
+          environment: expect.objectContaining({
+            id: environment.id,
+            status: "running",
+          }),
         }),
-      }));
+      );
 
       expect(environment.worktreePath).toBeDefined();
       expect(environment.branch).toBe("review-oauth-callback-1");
-      await expect(currentGitBranch(environment.worktreePath!)).resolves.toBe("review-oauth-callback-1");
+      await expect(currentGitBranch(environment.worktreePath!)).resolves.toBe(
+        "review-oauth-callback-1",
+      );
     } finally {
-      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+      if (environment.worktreePath)
+        await fs.rm(environment.worktreePath, { recursive: true, force: true });
     }
   });
-
-
 
   test("creates local worktrees from a configured remote default branch", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
@@ -4711,23 +5115,28 @@ exit 0
     const commands = createCommandRegistry();
 
     try {
-      await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).resolves.toEqual(expect.objectContaining({
-        setupStarted: false,
-        environment: expect.objectContaining({
-          id: environment.id,
-          status: "running",
+      await expect(
+        commands.get("start_environment")?.({ environmentId: environment.id }, context),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          setupStarted: false,
+          environment: expect.objectContaining({
+            id: environment.id,
+            status: "running",
+          }),
         }),
-      }));
+      );
 
       expect(environment.worktreePath).toBeDefined();
       expect(environment.branch).toBe("feature-custom-base");
-      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe("develop\n");
+      expect(await fs.readFile(path.join(environment.worktreePath!, "tracked.txt"), "utf8")).toBe(
+        "develop\n",
+      );
     } finally {
-      if (environment.worktreePath) await fs.rm(environment.worktreePath, { recursive: true, force: true });
+      if (environment.worktreePath)
+        await fs.rm(environment.worktreePath, { recursive: true, force: true });
     }
   });
-
-
 
   test("marks local environment errored when the remote base branch is missing", async () => {
     const { worktree, remote } = await createGitWorktreeWithOrigin();
@@ -4750,14 +5159,14 @@ exit 0
     });
     const commands = createCommandRegistry();
 
-    await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+    await expect(
+      commands.get("start_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow();
 
     expect(environment.status).toBe("error");
     expect(environment.worktreePath).toBeUndefined();
     expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
   });
-
-
 
   test("marks local environment errored when the project repository has no origin remote", async () => {
     const repo = await createGitRepoOnBranch("main");
@@ -4780,67 +5189,74 @@ exit 0
     });
     const commands = createCommandRegistry();
 
-    await expect(commands.get("start_environment")?.({ environmentId: environment.id }, context)).rejects.toThrow();
+    await expect(
+      commands.get("start_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow();
 
     expect(environment.status).toBe("error");
     expect(environment.worktreePath).toBeUndefined();
     expect(updates.map((update) => update.status)).toEqual(["creating", "error"]);
   });
 
+  test(
+    "refuses to prepare a workspace on a base image that predates the prepare contract",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-stale-image",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-
-  test("refuses to prepare a workspace on a base image that predates the prepare contract", async () => {
-    const environment = createEnvironment({
-      id: "env-container-stale-image",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    // An older image's workspace-setup.sh has no argument handling at all: the
-    // capability probe finds nothing, and invoking --prepare-only there would run
-    // the whole setup - including repository-controlled commands, as root - before
-    // HEAD is read, producing a baseline that is not a pre-setup one.
-    await withFakeDocker(`#!/bin/sh
+      // An older image's workspace-setup.sh has no argument handling at all: the
+      // capability probe finds nothing, and invoking --prepare-only there would run
+      // the whole setup - including repository-controlled commands, as root - before
+      // HEAD is read, producing a baseline that is not a pre-setup one.
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      await expect(commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("Container base image is out of date");
+`,
+        async (logs) => {
+          await expect(
+            commands.get("run_environment_setup")?.({ environmentId: environment.id }, context),
+          ).rejects.toThrow("Container base image is out of date");
 
-      const dockerLog = await fs.readFile(logs.all, "utf8");
-      expect(dockerLog).not.toContain("--prepare-only");
-      expect(ptySpawn).not.toHaveBeenCalled();
-      expect(environment.createdFromCommit).toBeUndefined();
-      expect(environment.setupScriptsComplete).toBe(false);
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+          const dockerLog = await fs.readFile(logs.all, "utf8");
+          expect(dockerLog).not.toContain("--prepare-only");
+          expect(ptySpawn).not.toHaveBeenCalled();
+          expect(environment.createdFromCommit).toBeUndefined();
+          expect(environment.setupScriptsComplete).toBe(false);
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "rejects a preparation run that never reports completion",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-prepare-silent",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-
-  test("rejects a preparation run that never reports completion", async () => {
-    const environment = createEnvironment({
-      id: "env-container-prepare-silent",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -4859,31 +5275,35 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async () => {
-      await expect(commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("did not report completion");
-      expect(ptySpawn).not.toHaveBeenCalled();
-      expect(environment.createdFromCommit).toBeUndefined();
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+`,
+        async () => {
+          await expect(
+            commands.get("run_environment_setup")?.({ environmentId: environment.id }, context),
+          ).rejects.toThrow("did not report completion");
+          expect(ptySpawn).not.toHaveBeenCalled();
+          expect(environment.createdFromCommit).toBeUndefined();
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "opens the setup terminal before preparation and streams the clone output into it",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-prepare-stream",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context, emitted } = createContext(environment);
+      const commands = createCommandRegistry();
 
-
-  test("opens the setup terminal before preparation and streams the clone output into it", async () => {
-    const environment = createEnvironment({
-      id: "env-container-prepare-stream",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context, emitted } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await withFakeDocker(`#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 if [ "$1" = "inspect" ]; then
   printf 'running\\n'
   exit 0
@@ -4906,52 +5326,57 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async () => {
-      const setupPromise = commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      ) as Promise<Environment>;
-      await waitForPtyProcessCount(1);
-      ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
-      await setupPromise;
+`,
+        async () => {
+          const setupPromise = commands.get("run_environment_setup")?.(
+            { environmentId: environment.id },
+            context,
+          ) as Promise<Environment>;
+          await waitForPtyProcessCount(1);
+          ptyProcesses[0]?.emitData(SETUP_DONE_OSC);
+          await setupPromise;
 
-      const setupOutput = emitted
-        .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
-        .map((entry) => (entry.payload as { text: string }).text)
-        .join("");
-      // Preparation performs the clone, so its announcement and output have to
-      // reach the terminal before the setup commands are even known.
-      expect(setupOutput).toContain("[orkestrator] Preparing workspace");
-      expect(setupOutput).toContain("Cloning into /workspace...");
-      expect(setupOutput.indexOf("[orkestrator] Preparing workspace")).toBeLessThan(
-        setupOutput.indexOf("[orkestrator] Starting environment setup"),
+          const setupOutput = emitted
+            .filter((entry) => entry.event === `terminal-output-${environment.id}:setup`)
+            .map((entry) => (entry.payload as { text: string }).text)
+            .join("");
+          // Preparation performs the clone, so its announcement and output have to
+          // reach the terminal before the setup commands are even known.
+          expect(setupOutput).toContain("[orkestrator] Preparing workspace");
+          expect(setupOutput).toContain("Cloning into /workspace...");
+          expect(setupOutput.indexOf("[orkestrator] Preparing workspace")).toBeLessThan(
+            setupOutput.indexOf("[orkestrator] Starting environment setup"),
+          );
+          // The buffer survives into the setup phase rather than being reset by it.
+          expect(setupOutput.indexOf("Cloning into /workspace...")).toBeLessThan(
+            setupOutput.indexOf("[orkestrator] Starting environment setup"),
+          );
+        },
       );
-      // The buffer survives into the setup phase rather than being reset by it.
-      expect(setupOutput.indexOf("Cloning into /workspace...")).toBeLessThan(
-        setupOutput.indexOf("[orkestrator] Starting environment setup"),
-      );
-    });
-  }, ASYNC_TEST_BUDGET_MS);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "closes the setup session when the terminal cannot be spawned after preparation",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container-spawn-fails",
+        environmentType: "containerized",
+        setupScriptsComplete: false,
+        worktreePath: undefined,
+        containerId: "container-1",
+        status: "running",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-
-  test("closes the setup session when the terminal cannot be spawned after preparation", async () => {
-    const environment = createEnvironment({
-      id: "env-container-spawn-fails",
-      environmentType: "containerized",
-      setupScriptsComplete: false,
-      worktreePath: undefined,
-      containerId: "container-1",
-      status: "running",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    // Preparation succeeds and opens the session, then the container disappears
-    // before the setup PTY starts. Nothing but this path can close that session,
-    // because no process was ever attached to it.
-    let preparedOnce = false;
-    await withFakeDocker(`#!/bin/sh
+      // Preparation succeeds and opens the session, then the container disappears
+      // before the setup PTY starts. Nothing but this path can close that session,
+      // because no process was ever attached to it.
+      let preparedOnce = false;
+      await withFakeDocker(
+        `#!/bin/sh
 if [ "$1" = "inspect" ]; then
   if [ -f "$FAKE_DOCKER_LOG.prepared" ]; then
     printf 'exited\\n'
@@ -4978,63 +5403,74 @@ if [ "$1" = "exec" ]; then
   exit 0
 fi
 exit 0
-`, async () => {
-      preparedOnce = true;
-      await expect(commands.get("run_environment_setup")?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("Container is not running");
+`,
+        async () => {
+          preparedOnce = true;
+          await expect(
+            commands.get("run_environment_setup")?.({ environmentId: environment.id }, context),
+          ).rejects.toThrow("Container is not running");
 
-      const session = await commands.get("await_environment_setup_session")?.(
-        { environmentId: environment.id },
-        context,
-      ) as { running: boolean; success?: boolean };
-      expect(session).toMatchObject({ running: false, success: false });
-      // The baseline was still captured and kept, so a retry does not re-prepare.
-      expect(environment.createdFromCommit).toBe("7777777777777777777777777777777777777777");
-      expect(environment.setupScriptsComplete).toBe(false);
-      expect(ptySpawn).not.toHaveBeenCalled();
-    });
-    expect(preparedOnce).toBe(true);
-  }, ASYNC_TEST_BUDGET_MS);
+          const session = (await commands.get("await_environment_setup_session")?.(
+            { environmentId: environment.id },
+            context,
+          )) as { running: boolean; success?: boolean };
+          expect(session).toMatchObject({ running: false, success: false });
+          // The baseline was still captured and kept, so a retry does not re-prepare.
+          expect(environment.createdFromCommit).toBe("7777777777777777777777777777777777777777");
+          expect(environment.setupScriptsComplete).toBe(false);
+          expect(ptySpawn).not.toHaveBeenCalled();
+        },
+      );
+      expect(preparedOnce).toBe(true);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
+  test(
+    "rehydration resumes only persisted cleanup after a merge was already confirmed",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-merge-cleanup-recovery-");
+      const environment = createEnvironment({
+        id: "env-merge-cleanup-recovery",
+        worktreePath,
+        prUrl: null,
+        prState: "merged",
+        cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
+      await expect(
+        commands.get("get_environments")?.(
+          {
+            projectId: environment.projectId,
+          },
+          context,
+        ),
+      ).resolves.toContainEqual(
+        expect.objectContaining({
+          id: environment.id,
+          cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
+        }),
+      );
 
-  test("rehydration resumes only persisted cleanup after a merge was already confirmed", async () => {
-    const worktreePath = await createTempDir("ork-electron-merge-cleanup-recovery-");
-    const environment = createEnvironment({
-      id: "env-merge-cleanup-recovery",
-      worktreePath,
-      prUrl: null,
-      prState: "merged",
-      cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-
-    await expect(commands.get("get_environments")?.({
-      projectId: environment.projectId,
-    }, context)).resolves.toContainEqual(expect.objectContaining({
-      id: environment.id,
-      cleanupAfterMergeRequestedAt: "2026-07-28T12:00:00.000Z",
-    }));
-
-    await waitForCondition(
-      () => !environment.cleanupAfterMergeRequestedAt
-        || environment.deletionRequestedAt !== undefined,
-      "persisted cleanup recovery to begin",
-    );
-    let recoveredEnvironment: Environment | null = environment;
-    for (let attempt = 0; attempt < 100 && recoveredEnvironment; attempt += 1) {
-      recoveredEnvironment = await context.storage.getEnvironment(environment.id);
-      if (recoveredEnvironment) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+      await waitForCondition(
+        () =>
+          !environment.cleanupAfterMergeRequestedAt ||
+          environment.deletionRequestedAt !== undefined,
+        "persisted cleanup recovery to begin",
+      );
+      let recoveredEnvironment: Environment | null = environment;
+      for (let attempt = 0; attempt < 100 && recoveredEnvironment; attempt += 1) {
+        recoveredEnvironment = await context.storage.getEnvironment(environment.id);
+        if (recoveredEnvironment) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
       }
-    }
-    expect(recoveredEnvironment).toBeNull();
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+      expect(recoveredEnvironment).toBeNull();
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("deletes the remote head branch during merged local environment cleanup", async () => {
     const worktreePath = await createTempDir("ork-electron-cleanup-delete-worktree-");
@@ -5046,7 +5482,8 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
   printf '%s\\n' '{"head":{"ref":"feature/cleanup","repo":{"full_name":"acme/repo"}}}'
@@ -5057,17 +5494,23 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/cleanup"
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeUndefined();
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("api repos/acme/repo/pulls/42");
-      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/cleanup --method DELETE");
-      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain("api repos/acme/repo/pulls/42");
+        expect(ghLog).toContain(
+          "api repos/acme/repo/git/refs/heads/feature/cleanup --method DELETE",
+        );
+        await expect(
+          commands.get("get_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test("continues merged environment cleanup when the remote head branch is already deleted", async () => {
     const worktreePath = await createTempDir("ork-electron-cleanup-delete-404-worktree-");
@@ -5079,7 +5522,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/pulls/42" ]; then
   printf '%s\\n' '{"head":{"ref":"feature/already-cleaned","repo":{"full_name":"acme/repo"}}}'
@@ -5091,16 +5535,22 @@ if [ "$1" = "api" ] && [ "$2" = "repos/acme/repo/git/refs/heads/feature/already-
 fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeUndefined();
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("api repos/acme/repo/git/refs/heads/feature/already-cleaned --method DELETE");
-      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain(
+          "api repos/acme/repo/git/refs/heads/feature/already-cleaned --method DELETE",
+        );
+        await expect(
+          commands.get("get_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test("does not delete remote branches during closed environment cleanup", async () => {
     const worktreePath = await createTempDir("ork-electron-cleanup-closed-worktree-");
@@ -5112,19 +5562,24 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf 'gh should not be called\\n' >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeUndefined();
 
-      expect(existsSync(logPath)).toBe(false);
-      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
-    });
+        expect(existsSync(logPath)).toBe(false);
+        await expect(
+          commands.get("get_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test("deletes the remote head branch during merged running container cleanup", async () => {
     const environment = createEnvironment({
@@ -5139,7 +5594,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -5168,20 +5624,24 @@ if [ "$1" = "rm" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+`,
+      async (logs) => {
+        await expect(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeUndefined();
 
-      const execLog = await fs.readFile(logs.exec, "utf8");
-      expect(execLog).toContain("pulls/42");
-      expect(execLog).toContain("refs/heads/feature/container-cleanup");
-      expect(execLog).toContain("DELETE");
-      const rmLog = await fs.readFile(logs.rm, "utf8");
-      expect(rmLog).toContain("container-1");
-      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
-    });
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog).toContain("pulls/42");
+        expect(execLog).toContain("refs/heads/feature/container-cleanup");
+        expect(execLog).toContain("DELETE");
+        const rmLog = await fs.readFile(logs.rm, "utf8");
+        expect(rmLog).toContain("container-1");
+        await expect(
+          commands.get("get_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test("removes the environment even when remote branch deletion fails for a non-404 reason", async () => {
     const worktreePath = await createTempDir("ork-electron-cleanup-delete-error-worktree-");
@@ -5193,20 +5653,25 @@ exit 0
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf '%s\\n' 'HTTP 500: Internal Server Error' >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeUndefined();
 
-      const ghLog = await fs.readFile(logPath, "utf8");
-      expect(ghLog).toContain("api repos/acme/repo/pulls/42");
-      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
-    });
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain("api repos/acme/repo/pulls/42");
+        await expect(
+          commands.get("get_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test("does not delete remote branches when a merged environment has no PR url", async () => {
     const worktreePath = await createTempDir("ork-electron-cleanup-no-prurl-worktree-");
@@ -5218,19 +5683,24 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeGh(`#!/bin/sh
+    await withFakeGh(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf 'gh should not be called\\n' >&2
 exit 1
-`, async (logPath) => {
-      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeUndefined();
 
-      expect(existsSync(logPath)).toBe(false);
-      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
-    });
+        expect(existsSync(logPath)).toBe(false);
+        await expect(
+          commands.get("get_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test("does not delete remote branches when a merged container environment is not running", async () => {
     const environment = createEnvironment({
@@ -5245,7 +5715,8 @@ exit 1
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
 
-    await withFakeDocker(`#!/bin/sh
+    await withFakeDocker(
+      `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
@@ -5257,17 +5728,21 @@ if [ "$1" = "rm" ]; then
   exit 0
 fi
 exit 0
-`, async (logs) => {
-      await expect(commands.get("delete_environment")?.({ environmentId: environment.id }, context)).resolves.toBeUndefined();
+`,
+      async (logs) => {
+        await expect(
+          commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeUndefined();
 
-      expect(existsSync(logs.exec)).toBe(false);
-      const rmLog = await fs.readFile(logs.rm, "utf8");
-      expect(rmLog).toContain("container-stopped");
-      await expect(commands.get("get_environment")?.({ environmentId: environment.id }, context)).resolves.toBeNull();
-    });
+        expect(existsSync(logs.exec)).toBe(false);
+        const rmLog = await fs.readFile(logs.rm, "utf8");
+        expect(rmLog).toContain("container-stopped");
+        await expect(
+          commands.get("get_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toBeNull();
+      },
+    );
   });
-
-
 
   test("retains the environment and process ownership when deletion cannot reap a server", async () => {
     const worktreePath = await createTempDir("ork-electron-delete-failure-");
@@ -5278,19 +5753,16 @@ exit 0
     commandTesting.setLocalServerProcess(`codex:${environment.id}`, child);
     commandTesting.setTerminateProcessTree(async () => false);
 
-    await expect(commands.get("delete_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).rejects.toThrow("Failed to stop all local servers");
+    await expect(
+      commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+    ).rejects.toThrow("Failed to stop all local servers");
     expect(await context.storage.getEnvironment(environment.id)).toBe(environment);
     expect(existsSync(worktreePath)).toBe(true);
     expect(commandTesting.getLocalServerProcess(`codex:${environment.id}`)).toBe(child);
 
     commandTesting.setTerminateProcessTree(async () => true);
-    await expect(commands.get("delete_environment")?.(
-      { environmentId: environment.id },
-      context,
-    )).resolves.toBeUndefined();
+    await expect(
+      commands.get("delete_environment")?.({ environmentId: environment.id }, context),
+    ).resolves.toBeUndefined();
   });
-
 });

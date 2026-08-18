@@ -33,9 +33,12 @@ export async function saveInitialPromptAttachments(options: {
   if (attachments.length === 0) {
     return [];
   }
-  return writeInitialPromptAttachments(environmentId, attachments.map(({ id, name, base64Data }) => ({
-    id,
-    name,
-    base64Data,
-  })));
+  return writeInitialPromptAttachments(
+    environmentId,
+    attachments.map(({ id, name, base64Data }) => ({
+      id,
+      name,
+      base64Data,
+    })),
+  );
 }

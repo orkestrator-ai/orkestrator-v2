@@ -1,7 +1,4 @@
-import {
-  useCallback,
-  useMemo,
-} from "react";
+import { useCallback, useMemo } from "react";
 import { countTextLines, splitTextLines } from "@orkestrator/protocol/tool-diff";
 import {
   Brain,
@@ -12,28 +9,17 @@ import {
   ExternalLink as ExternalLinkIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import { useTerminalContext } from "@/contexts/TerminalContext";
-import {
-  type ToolDiffMetadata,
-} from "@/lib/opencode-client";
-import {
-  getToolDisplayName,
-  getToolTitleDisplayName,
-} from "@/lib/tool-names";
+import { type ToolDiffMetadata } from "@/lib/opencode-client";
+import { getToolDisplayName, getToolTitleDisplayName } from "@/lib/tool-names";
 import {
   isBackgroundTaskActionTool,
   isBackgroundTaskStopTool,
 } from "@/lib/chat/native-message-adapters";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
-import {
-  type NativeBackgroundTask,
-} from "@/lib/chat/native-message-types";
+import { type NativeBackgroundTask } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
   markdownComponents,
@@ -41,17 +27,8 @@ import {
   stringToolArg,
 } from "./NativeMessage.shared";
 
-export function ThinkingPart({
-  content,
-  expansionKey,
-}: {
-  content: string;
-  expansionKey: string;
-}) {
-  const hasTaskList = useMemo(
-    () => TASK_LIST_SYNTAX_PATTERN.test(content),
-    [content],
-  );
+export function ThinkingPart({ content, expansionKey }: { content: string; expansionKey: string }) {
+  const hasTaskList = useMemo(() => TASK_LIST_SYNTAX_PATTERN.test(content), [content]);
   // Backed by the shared store using the stable key supplied by MessagePart,
   // so an expanded block survives the virtualized list unmounting it while
   // off-screen.
@@ -70,14 +47,9 @@ export function ThinkingPart({
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen} className="my-0">
-      <CollapsibleTrigger
-        className="flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground cursor-pointer"
-      >
+      <CollapsibleTrigger className="flex items-center gap-2 w-full text-xs text-muted-foreground py-1.5 px-2 rounded-md transition-colors hover:text-foreground cursor-pointer">
         <ChevronRight
-          className={cn(
-            "w-3 h-3 transition-transform shrink-0",
-            isOpen && "rotate-90",
-          )}
+          className={cn("w-3 h-3 transition-transform shrink-0", isOpen && "rotate-90")}
         />
         <Brain className="h-3.5 w-3.5 shrink-0" />
         <span className="font-medium shrink-0">Thinking</span>
@@ -111,9 +83,7 @@ function taskCommandFromOutput(output?: string): string | undefined {
     // Older Claude transcripts store the TaskStop result as plain text.
   }
 
-  const messageMatch = output.match(
-    /Successfully stopped task:\s*\S+\s+\(([\s\S]+)\)\s*$/,
-  );
+  const messageMatch = output.match(/Successfully stopped task:\s*\S+\s+\(([\s\S]+)\)\s*$/);
   return messageMatch?.[1]?.trim() || undefined;
 }
 
@@ -175,14 +145,10 @@ export function ToolPart({
   const isTaskStop = isBackgroundTaskStopTool(toolName);
   const isTaskAction = isBackgroundTaskActionTool(toolName);
   const isBackgroundLaunch = toolArgs?.run_in_background === true;
-  const taskId =
-    backgroundTask?.id
-    ?? stringToolArg(toolArgs, "task_id", "taskId");
+  const taskId = backgroundTask?.id ?? stringToolArg(toolArgs, "task_id", "taskId");
   const taskDescription =
-    backgroundTask?.description
-    ?? (isBackgroundLaunch
-      ? stringToolArg(toolArgs, "description")
-      : undefined);
+    backgroundTask?.description ??
+    (isBackgroundLaunch ? stringToolArg(toolArgs, "description") : undefined);
 
   const stateColors = {
     success: "text-green-600",
@@ -194,8 +160,7 @@ export function ToolPart({
   // its output only loads *because* the row was expanded, so gating the trigger
   // on already-present output would make it permanently unreachable.
   const hasExpandableContent =
-    toolOutput || toolError || deferredDetails
-    || (toolArgs && Object.keys(toolArgs).length > 0);
+    toolOutput || toolError || deferredDetails || (toolArgs && Object.keys(toolArgs).length > 0);
 
   // The collapsed row is a single truncating line, so anything shown there is
   // flattened and capped rather than relying on CSS alone — the accessible name
@@ -354,8 +319,12 @@ export function ToolPart({
           toolState === "failure"
             ? "failure"
             : isTaskStop
-              ? (toolState === "pending" ? "stopping…" : "stopped")
-              : (toolState === "pending" ? "running..." : toolState),
+              ? toolState === "pending"
+                ? "stopping…"
+                : "stopped"
+              : toolState === "pending"
+                ? "running..."
+                : toolState,
         className: stateColors[toolState],
       }
     : undefined;
@@ -365,9 +334,8 @@ export function ToolPart({
    * and the task itself is still `completed` — so deferring to the lifecycle
    * here would paint a green "completed" over an action that failed.
    */
-  const displayedState = toolState === "failure"
-    ? toolResultState
-    : lifecycleState ?? toolResultState;
+  const displayedState =
+    toolState === "failure" ? toolResultState : (lifecycleState ?? toolResultState);
 
   // Format the command input for shell-like display
   const formatInput = () => {
@@ -377,9 +345,7 @@ export function ToolPart({
       // `command` may be a derived, length-capped label rather than the literal
       // arguments, so keep the authoritative source visible alongside it.
       const input = typeof toolArgs.input === "string" ? toolArgs.input.trim() : "";
-      return input
-        ? `$ ${toolArgs.command}\n\n${input}`
-        : `$ ${toolArgs.command}`;
+      return input ? `$ ${toolArgs.command}\n\n${input}` : `$ ${toolArgs.command}`;
     }
     // For other tools, show a JSON representation of args
     return JSON.stringify(toolArgs, null, 2);
@@ -430,9 +396,7 @@ export function ToolPart({
           </span>
         )}
         {displayedState && (
-          <span
-            className={cn("ml-auto shrink-0", displayedState.className)}
-          >
+          <span className={cn("ml-auto shrink-0", displayedState.className)}>
             {displayedState.label}
           </span>
         )}
@@ -486,13 +450,15 @@ export function ToolPart({
  * not suppress the before/after fallback the way a real diff does.
  */
 export function hasRenderableDiff(toolDiff?: ToolDiffMetadata): boolean {
-  return Boolean(toolDiff?.diff)
-    || toolDiff?.before !== undefined
-    || toolDiff?.after !== undefined
+  return (
+    Boolean(toolDiff?.diff) ||
+    toolDiff?.before !== undefined ||
+    toolDiff?.after !== undefined ||
     // A deferred diff has a body waiting behind `detailRef`; routing it to the
     // generic tool row would drop the edit treatment for the whole collapsed
     // lifetime of the part.
-    || toolDiff?.deferred === true;
+    toolDiff?.deferred === true
+  );
 }
 
 /** Parse unified diff output into lines with +/- indicators */
@@ -502,11 +468,7 @@ function parseDiffLines(
   if (!output) return [];
   const lines = output.split("\n");
   return lines.map((line) => {
-    if (
-      line.startsWith("+++") ||
-      line.startsWith("---") ||
-      line.startsWith("@@")
-    ) {
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) {
       return { type: "header" as const, content: line };
     } else if (line.startsWith("+")) {
       return { type: "add" as const, content: line };
@@ -637,9 +599,7 @@ export function EditToolPart({
   const filePath = toolDiff?.filePath;
   const fileName = filePath ? filePath.split("/").pop() : null;
   const shouldShowToolTitle =
-    Boolean(displayToolTitle) &&
-    !fileName &&
-    displayToolTitle !== displayToolName;
+    Boolean(displayToolTitle) && !fileName && displayToolTitle !== displayToolName;
 
   // Diff work is keyed on the *values* it reads, not on `toolDiff`'s identity.
   // Normalization rebuilds every part object on each streaming frame, so an
@@ -742,18 +702,12 @@ export function EditToolPart({
         {/* Line count stats - shown after filename */}
         {(additions > 0 || deletions > 0) && (
           <span className="flex items-center gap-1 shrink-0">
-            {additions > 0 && (
-              <span className="text-green-500 font-mono">+{additions}</span>
-            )}
-            {deletions > 0 && (
-              <span className="text-red-400 font-mono">-{deletions}</span>
-            )}
+            {additions > 0 && <span className="text-green-500 font-mono">+{additions}</span>}
+            {deletions > 0 && <span className="text-red-400 font-mono">-{deletions}</span>}
           </span>
         )}
         {toolState && (
-          <span
-            className={cn("ml-auto shrink-0", stateColors[toolState] || "")}
-          >
+          <span className={cn("ml-auto shrink-0", stateColors[toolState] || "")}>
             {toolState === "pending" ? "running..." : toolState}
           </span>
         )}
@@ -791,8 +745,7 @@ export function EditToolPart({
                         "px-3 py-0.5",
                         line.type === "add" && "bg-green-500/20 text-green-400",
                         line.type === "remove" && "bg-red-500/20 text-red-400",
-                        line.type === "header" &&
-                          "bg-blue-500/10 text-blue-400",
+                        line.type === "header" && "bg-blue-500/10 text-blue-400",
                         line.type === "context" && "text-foreground/60",
                       )}
                     >

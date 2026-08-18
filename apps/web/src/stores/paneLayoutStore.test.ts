@@ -10,9 +10,7 @@ const stopTmuxSession = mock(async (_tabId: string, _environmentId?: string) => 
 const deleteClaudeSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteCodexSession = mock(async (_client: unknown, _sessionId: string) => true);
 const deleteOpenCodeSession = mock(async (_client: unknown, _sessionId: string) => true);
-const deleteAgentHandoff = mock(
-  async (_handoffId: string, _environmentId: string) => true,
-);
+const deleteAgentHandoff = mock(async (_handoffId: string, _environmentId: string) => true);
 const getAgentHandoff = mock(async (_handoffId: string) => null);
 const pruneAgentHandoffs = mock(
   async (_environmentId: string, _referencedHandoffIds: string[]) => [] as string[],
@@ -92,24 +90,16 @@ afterEach(() => {
 });
 
 const { getAllLeaves, usePaneLayoutStore } = await import("./paneLayoutStore");
-const {
-  loadAgentHandoff,
-  rememberAgentHandoff,
-  resetAgentHandoffCache,
-} = await import("@/lib/agent-handoff");
-const { useTerminalSessionStore, createSessionKey: createTerminalSessionKey } = await import("./terminalSessionStore");
+const { loadAgentHandoff, rememberAgentHandoff, resetAgentHandoffCache } =
+  await import("@/lib/agent-handoff");
+const { useTerminalSessionStore, createSessionKey: createTerminalSessionKey } =
+  await import("./terminalSessionStore");
 const { useClaudeStore } = await import("./claudeStore");
 const { useCodexStore } = await import("./codexStore");
 const { useOpenCodeStore } = await import("./openCodeStore");
 const { useEnvironmentStore } = await import("./environmentStore");
-const {
-  createTerminalKey,
-  useTerminalPortalStore,
-} = await import("./terminalPortalStore");
-const {
-  createClaudeTmuxStateKey,
-  useClaudeTmuxStore,
-} = await import("./claudeTmuxStore");
+const { createTerminalKey, useTerminalPortalStore } = await import("./terminalPortalStore");
+const { createClaudeTmuxStateKey, useClaudeTmuxStore } = await import("./claudeTmuxStore");
 
 function resetStores() {
   usePaneLayoutStore.setState({
@@ -137,8 +127,7 @@ function resetStores() {
     sessions: new Map(),
     messageQueue: new Map(),
   });
-  useEnvironmentStore.setState({
-  });
+  useEnvironmentStore.setState({});
   useTerminalPortalStore.setState({
     paneHosts: new Map(),
     terminals: new Map(),
@@ -194,19 +183,18 @@ function seedSingleTabEnvironment(
   });
 }
 
-function seedPaneTree(
-  root: any,
-  activePaneId: string,
-  environmentId = "env-pane",
-) {
+function seedPaneTree(root: any, activePaneId: string, environmentId = "env-pane") {
   usePaneLayoutStore.setState({
     activeEnvironmentId: environmentId,
     environments: new Map([
-      [environmentId, {
-        containerId: null,
-        activePaneId,
-        root,
-      }],
+      [
+        environmentId,
+        {
+          containerId: null,
+          activePaneId,
+          root,
+        },
+      ],
     ]),
   });
 }
@@ -243,10 +231,12 @@ describe("paneLayoutStore tab cleanup", () => {
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
 
-    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: "pty-local",
-      persistentSessionId: "persistent-1",
-    }));
+    expect(teardownTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "pty-local",
+        persistentSessionId: "persistent-1",
+      }),
+    );
   });
 
   test("closing a container terminal tab delegates detachment to the backend", () => {
@@ -256,11 +246,13 @@ describe("paneLayoutStore tab cleanup", () => {
 
     usePaneLayoutStore.getState().removeTab("default", "tab-terminal");
 
-    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
-      environmentId: "env-container",
-      sessionId: "pty-container",
-      kind: "terminal",
-    }));
+    expect(teardownTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId: "env-container",
+        sessionId: "pty-container",
+        kind: "terminal",
+      }),
+    );
   });
 
   test("closing a Claude tmux tab records backend teardown intent", () => {
@@ -289,7 +281,9 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("logs browser-preview destruction failures after removing local state", async () => {
     consoleDebugSpy = spyOn(console, "debug").mockImplementation(() => {});
-    const destroy = mock(async () => { throw new Error("destroy failed"); });
+    const destroy = mock(async () => {
+      throw new Error("destroy failed");
+    });
     window.orkestrator = { browserPreview: { destroy } } as never;
     seedSingleTabEnvironment("env-browser", null, { id: "browser-tab", type: "browser" });
 
@@ -332,22 +326,24 @@ describe("paneLayoutStore tab cleanup", () => {
   test("retains a handoff until its last referencing tab is closed", () => {
     usePaneLayoutStore.setState({
       activeEnvironmentId: "env-shared",
-      environments: new Map([[
-        "env-shared",
-        {
-          containerId: null,
-          activePaneId: "default",
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [
-              { id: "first", type: "plain", agentHandoffId: "handoff-shared" },
-              { id: "second", type: "plain", agentHandoffId: "handoff-shared" },
-            ],
-            activeTabId: "first",
+      environments: new Map([
+        [
+          "env-shared",
+          {
+            containerId: null,
+            activePaneId: "default",
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [
+                { id: "first", type: "plain", agentHandoffId: "handoff-shared" },
+                { id: "second", type: "plain", agentHandoffId: "handoff-shared" },
+              ],
+              activeTabId: "first",
+            },
           },
-        },
-      ]]),
+        ],
+      ]),
     } as never);
 
     usePaneLayoutStore.getState().removeTab("default", "first", "env-shared");
@@ -359,32 +355,34 @@ describe("paneLayoutStore tab cleanup", () => {
   });
 
   test("deletes only unreferenced handoffs when a whole pane is closed", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "closing",
-          tabs: [
-            { id: "unique", type: "plain", agentHandoffId: "handoff-unique" },
-            { id: "shared-left", type: "plain", agentHandoffId: "handoff-shared" },
-          ],
-          activeTabId: "unique",
-        },
-        {
-          kind: "leaf",
-          id: "remaining",
-          tabs: [
-            { id: "shared-right", type: "plain", agentHandoffId: "handoff-shared" },
-          ],
-          activeTabId: "shared-right",
-        },
-      ],
-    }, "closing", "env-close-pane");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "closing",
+            tabs: [
+              { id: "unique", type: "plain", agentHandoffId: "handoff-unique" },
+              { id: "shared-left", type: "plain", agentHandoffId: "handoff-shared" },
+            ],
+            activeTabId: "unique",
+          },
+          {
+            kind: "leaf",
+            id: "remaining",
+            tabs: [{ id: "shared-right", type: "plain", agentHandoffId: "handoff-shared" }],
+            activeTabId: "shared-right",
+          },
+        ],
+      },
+      "closing",
+      "env-close-pane",
+    );
 
     usePaneLayoutStore.getState().closePane("closing", "env-close-pane");
 
@@ -413,9 +411,21 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("closing native agent tabs delegates provider cleanup to the backend", () => {
     const tabs = [
-      { id: "claude-tab", type: "agent-native", nativeAgentData: { platform: "claude", environmentId: "env-native" } },
-      { id: "codex-tab", type: "agent-native", nativeAgentData: { platform: "codex", environmentId: "env-native" } },
-      { id: "opencode-tab", type: "agent-native", nativeAgentData: { platform: "opencode", environmentId: "env-native" } },
+      {
+        id: "claude-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "claude", environmentId: "env-native" },
+      },
+      {
+        id: "codex-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "codex", environmentId: "env-native" },
+      },
+      {
+        id: "opencode-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "opencode", environmentId: "env-native" },
+      },
     ];
     usePaneLayoutStore.setState({
       activeEnvironmentId: "env-native",
@@ -465,13 +475,22 @@ describe("paneLayoutStore tab cleanup", () => {
     usePaneLayoutStore.getState().removeTab("default", "opencode-tab");
 
     expect(teardownTab).toHaveBeenCalledWith({
-      environmentId: "env-native", tabId: "claude-tab", kind: "claude-native", sessionId: "claude-session",
+      environmentId: "env-native",
+      tabId: "claude-tab",
+      kind: "claude-native",
+      sessionId: "claude-session",
     });
     expect(teardownTab).toHaveBeenCalledWith({
-      environmentId: "env-native", tabId: "codex-tab", kind: "codex-native", sessionId: "codex-session",
+      environmentId: "env-native",
+      tabId: "codex-tab",
+      kind: "codex-native",
+      sessionId: "codex-session",
     });
     expect(teardownTab).toHaveBeenCalledWith({
-      environmentId: "env-native", tabId: "opencode-tab", kind: "opencode-native", sessionId: "opencode-session",
+      environmentId: "env-native",
+      tabId: "opencode-tab",
+      kind: "opencode-native",
+      sessionId: "opencode-session",
     });
     expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
     expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
@@ -495,7 +514,11 @@ describe("paneLayoutStore tab cleanup", () => {
               tabs: [
                 { id: "terminal-tab", type: "plain" },
                 { id: "tmux-tab", type: "claude-tmux" },
-                { id: "codex-tab", type: "agent-native", nativeAgentData: { platform: "codex", environmentId: "env-reset" } },
+                {
+                  id: "codex-tab",
+                  type: "agent-native",
+                  nativeAgentData: { platform: "codex", environmentId: "env-reset" },
+                },
                 { id: "browser-tab", type: "browser" },
               ] as any,
               activeTabId: "terminal-tab",
@@ -517,15 +540,25 @@ describe("paneLayoutStore tab cleanup", () => {
     usePaneLayoutStore.getState().reset("env-reset");
 
     expect(teardownTab).toHaveBeenCalledTimes(3);
-    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
-      environmentId: "env-reset", tabId: "terminal-tab", sessionId: "pty-reset",
-    }));
+    expect(teardownTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId: "env-reset",
+        tabId: "terminal-tab",
+        sessionId: "pty-reset",
+      }),
+    );
     expect(teardownTab).toHaveBeenCalledWith({
-      environmentId: "env-reset", tabId: "tmux-tab", kind: "claude-tmux",
+      environmentId: "env-reset",
+      tabId: "tmux-tab",
+      kind: "claude-tmux",
     });
-    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
-      environmentId: "env-reset", tabId: "codex-tab", sessionId: "codex-session",
-    }));
+    expect(teardownTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId: "env-reset",
+        tabId: "codex-tab",
+        sessionId: "codex-session",
+      }),
+    );
     expect(destroy).toHaveBeenCalledWith("browser-tab");
     expect(usePaneLayoutStore.getState().getAllTabs("env-reset")).toEqual([]);
   });
@@ -533,56 +566,66 @@ describe("paneLayoutStore tab cleanup", () => {
   test("closing a populated pane cleans up every resource in that pane", () => {
     const destroy = mock(async () => {});
     window.orkestrator = { browserPreview: { destroy } } as never;
-    seedPaneTree({
-      kind: "split",
-      id: "split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "closing-pane",
-          tabs: [
-            { id: "browser-tab", type: "browser" },
-            { id: "terminal-tab", type: "plain" },
-          ],
-          activeTabId: "browser-tab",
-        },
-        {
-          kind: "leaf",
-          id: "remaining-pane",
-          tabs: [{ id: "remaining-tab", type: "plain" }],
-          activeTabId: "remaining-tab",
-        },
-      ],
-    }, "closing-pane", "env-close-pane");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "closing-pane",
+            tabs: [
+              { id: "browser-tab", type: "browser" },
+              { id: "terminal-tab", type: "plain" },
+            ],
+            activeTabId: "browser-tab",
+          },
+          {
+            kind: "leaf",
+            id: "remaining-pane",
+            tabs: [{ id: "remaining-tab", type: "plain" }],
+            activeTabId: "remaining-tab",
+          },
+        ],
+      },
+      "closing-pane",
+      "env-close-pane",
+    );
     const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-close-pane");
     useTerminalSessionStore.getState().setSession(terminalKey, { sessionId: "pty-close-pane" });
     const terminalDispose = mock(() => {});
     useTerminalPortalStore.setState({
-      terminals: new Map([[
-        createTerminalKey("env-close-pane", "terminal-tab"),
-        {
-          environmentId: "env-close-pane",
-          tabId: "terminal-tab",
-          terminal: { dispose: terminalDispose },
-          portalElement: document.createElement("div"),
-        } as never,
-      ]]),
+      terminals: new Map([
+        [
+          createTerminalKey("env-close-pane", "terminal-tab"),
+          {
+            environmentId: "env-close-pane",
+            tabId: "terminal-tab",
+            terminal: { dispose: terminalDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
     });
 
     usePaneLayoutStore.getState().closePane("closing-pane", "env-close-pane");
 
     expect(destroy).toHaveBeenCalledWith("browser-tab");
-    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
-      environmentId: "env-close-pane", tabId: "terminal-tab", sessionId: "pty-close-pane",
-    }));
+    expect(teardownTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId: "env-close-pane",
+        tabId: "terminal-tab",
+        sessionId: "pty-close-pane",
+      }),
+    );
     expect(useTerminalSessionStore.getState().sessions.has(terminalKey)).toBe(false);
     expect(terminalDispose).toHaveBeenCalledTimes(1);
-    expect(
-      useTerminalPortalStore.getState().hasTerminal("env-close-pane", "terminal-tab"),
-    ).toBe(false);
+    expect(useTerminalPortalStore.getState().hasTerminal("env-close-pane", "terminal-tab")).toBe(
+      false,
+    );
     expect(usePaneLayoutStore.getState().getRoot("env-close-pane")).toMatchObject({
       kind: "leaf",
       id: "remaining-pane",
@@ -597,7 +640,12 @@ describe("paneLayoutStore tab cleanup", () => {
 
     const envState = usePaneLayoutStore.getState().environments.get("env-root");
     expect(envState).toBeDefined();
-    const root = envState!.root as { kind: "leaf"; id: string; tabs: unknown[]; activeTabId: string | null };
+    const root = envState!.root as {
+      kind: "leaf";
+      id: string;
+      tabs: unknown[];
+      activeTabId: string | null;
+    };
     expect(root.kind).toBe("leaf");
     expect(root.id).toBe("default");
     expect(root.tabs).toEqual([]);
@@ -610,16 +658,32 @@ describe("paneLayoutStore tab cleanup", () => {
     const tabs = [
       { id: "terminal-tab", type: "plain" },
       { id: "tmux-tab", type: "claude-tmux" },
-      { id: "claude-tab", type: "agent-native", nativeAgentData: { platform: "claude", environmentId: "env-cleanup-errors" } },
-      { id: "codex-tab", type: "agent-native", nativeAgentData: { platform: "codex", environmentId: "env-cleanup-errors" } },
-      { id: "opencode-tab", type: "agent-native", nativeAgentData: { platform: "opencode", environmentId: "env-cleanup-errors" } },
+      {
+        id: "claude-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "claude", environmentId: "env-cleanup-errors" },
+      },
+      {
+        id: "codex-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "codex", environmentId: "env-cleanup-errors" },
+      },
+      {
+        id: "opencode-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "opencode", environmentId: "env-cleanup-errors" },
+      },
     ];
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs,
-      activeTabId: "terminal-tab",
-    }, "default", "env-cleanup-errors");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs,
+        activeTabId: "terminal-tab",
+      },
+      "default",
+      "env-cleanup-errors",
+    );
 
     const terminalKey = createTerminalSessionKey(null, "terminal-tab", "env-cleanup-errors");
     useTerminalSessionStore.getState().setSession(terminalKey, {
@@ -674,9 +738,21 @@ describe("paneLayoutStore tab cleanup", () => {
      * were never reclaimed for the life of the process.
      */
     const tabs = [
-      { id: "claude-tab", type: "agent-native", nativeAgentData: { platform: "claude", environmentId: "env-leak" } },
-      { id: "codex-tab", type: "agent-native", nativeAgentData: { platform: "codex", environmentId: "env-leak" } },
-      { id: "opencode-tab", type: "agent-native", nativeAgentData: { platform: "opencode", environmentId: "env-leak" } },
+      {
+        id: "claude-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "claude", environmentId: "env-leak" },
+      },
+      {
+        id: "codex-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "codex", environmentId: "env-leak" },
+      },
+      {
+        id: "opencode-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "opencode", environmentId: "env-leak" },
+      },
     ];
     seedPaneTree(
       { kind: "leaf", id: "default", tabs, activeTabId: "claude-tab" },
@@ -709,27 +785,31 @@ describe("paneLayoutStore tab cleanup", () => {
   });
 
   test("clears setup state and closes a child pane when its last tab is removed", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "setup-pane",
-          tabs: [{ id: "setup-tab", type: "plain", isSetupTab: true }],
-          activeTabId: "setup-tab",
-        },
-        {
-          kind: "leaf",
-          id: "remaining-pane",
-          tabs: [{ id: "remaining-tab", type: "plain" }],
-          activeTabId: "remaining-tab",
-        },
-      ],
-    }, "setup-pane", "env-setup-close");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "setup-pane",
+            tabs: [{ id: "setup-tab", type: "plain", isSetupTab: true }],
+            activeTabId: "setup-tab",
+          },
+          {
+            kind: "leaf",
+            id: "remaining-pane",
+            tabs: [{ id: "remaining-tab", type: "plain" }],
+            activeTabId: "remaining-tab",
+          },
+        ],
+      },
+      "setup-pane",
+      "env-setup-close",
+    );
 
     usePaneLayoutStore.getState().removeTab("setup-pane", "setup-tab", "env-setup-close");
 
@@ -749,23 +829,25 @@ describe("paneLayoutStore tab cleanup", () => {
       isSetupTab: true,
     });
     useTerminalPortalStore.setState({
-      terminals: new Map([[
-        createTerminalKey("env-setup-root", "setup-tab"),
-        {
-          environmentId: "env-setup-root",
-          tabId: "setup-tab",
-          terminal: { dispose: terminalDispose },
-          portalElement: document.createElement("div"),
-        } as never,
-      ]]),
+      terminals: new Map([
+        [
+          createTerminalKey("env-setup-root", "setup-tab"),
+          {
+            environmentId: "env-setup-root",
+            tabId: "setup-tab",
+            terminal: { dispose: terminalDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
     });
 
     usePaneLayoutStore.getState().removeTab("default", "setup-tab", "env-setup-root");
 
     expect(terminalDispose).toHaveBeenCalledTimes(1);
-    expect(
-      useTerminalPortalStore.getState().hasTerminal("env-setup-root", "setup-tab"),
-    ).toBe(false);
+    expect(useTerminalPortalStore.getState().hasTerminal("env-setup-root", "setup-tab")).toBe(
+      false,
+    );
     expect(usePaneLayoutStore.getState().getRoot("env-setup-root")).toMatchObject({
       kind: "leaf",
       id: "default",
@@ -776,37 +858,39 @@ describe("paneLayoutStore tab cleanup", () => {
 
   test("clears setup state when a setup tab is removed from a pane with other tabs", () => {
     const terminalDispose = mock(() => {});
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        { id: "setup-tab", type: "plain", isSetupTab: true },
-        { id: "other-tab", type: "plain" },
-      ],
-      activeTabId: "setup-tab",
-    }, "default", "env-setup-siblings");
-    useTerminalPortalStore.setState({
-      terminals: new Map([[
-        createTerminalKey("env-setup-siblings", "setup-tab"),
-        {
-          environmentId: "env-setup-siblings",
-          tabId: "setup-tab",
-          terminal: { dispose: terminalDispose },
-          portalElement: document.createElement("div"),
-        } as never,
-      ]]),
-    });
-
-    usePaneLayoutStore.getState().removeTab(
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "setup-tab", type: "plain", isSetupTab: true },
+          { id: "other-tab", type: "plain" },
+        ],
+        activeTabId: "setup-tab",
+      },
       "default",
-      "setup-tab",
       "env-setup-siblings",
     );
+    useTerminalPortalStore.setState({
+      terminals: new Map([
+        [
+          createTerminalKey("env-setup-siblings", "setup-tab"),
+          {
+            environmentId: "env-setup-siblings",
+            tabId: "setup-tab",
+            terminal: { dispose: terminalDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
+    });
+
+    usePaneLayoutStore.getState().removeTab("default", "setup-tab", "env-setup-siblings");
 
     expect(terminalDispose).toHaveBeenCalledTimes(1);
-    expect(
-      useTerminalPortalStore.getState().hasTerminal("env-setup-siblings", "setup-tab"),
-    ).toBe(false);
+    expect(useTerminalPortalStore.getState().hasTerminal("env-setup-siblings", "setup-tab")).toBe(
+      false,
+    );
     expect(usePaneLayoutStore.getState().getRoot("env-setup-siblings")).toMatchObject({
       kind: "leaf",
       id: "default",
@@ -816,59 +900,66 @@ describe("paneLayoutStore tab cleanup", () => {
   });
 
   test("closing a pane clears setup state when it held the tree's last setup tab", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "closing",
-          tabs: [
-            { id: "plain-tab", type: "plain" },
-            { id: "setup-tab", type: "plain", isSetupTab: true },
-          ],
-          activeTabId: "setup-tab",
-        },
-        {
-          kind: "leaf",
-          id: "remaining",
-          tabs: [{ id: "remaining-tab", type: "plain" }],
-          activeTabId: "remaining-tab",
-        },
-      ],
-    }, "closing", "env-close-last-setup");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "closing",
+            tabs: [
+              { id: "plain-tab", type: "plain" },
+              { id: "setup-tab", type: "plain", isSetupTab: true },
+            ],
+            activeTabId: "setup-tab",
+          },
+          {
+            kind: "leaf",
+            id: "remaining",
+            tabs: [{ id: "remaining-tab", type: "plain" }],
+            activeTabId: "remaining-tab",
+          },
+        ],
+      },
+      "closing",
+      "env-close-last-setup",
+    );
 
     usePaneLayoutStore.getState().closePane("closing", "env-close-last-setup");
-
   });
 
   test("closing a pane keeps setup state while another pane still runs setup", () => {
     // Setup scripts can be split across panes; the flag is environment-wide, so
     // it may only clear once the last setup tab in the tree is gone.
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "closing",
-          tabs: [{ id: "setup-closing", type: "plain", isSetupTab: true }],
-          activeTabId: "setup-closing",
-        },
-        {
-          kind: "leaf",
-          id: "remaining",
-          tabs: [{ id: "setup-remaining", type: "plain", isSetupTab: true }],
-          activeTabId: "setup-remaining",
-        },
-      ],
-    }, "closing", "env-close-other-setup");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "closing",
+            tabs: [{ id: "setup-closing", type: "plain", isSetupTab: true }],
+            activeTabId: "setup-closing",
+          },
+          {
+            kind: "leaf",
+            id: "remaining",
+            tabs: [{ id: "setup-remaining", type: "plain", isSetupTab: true }],
+            activeTabId: "setup-remaining",
+          },
+        ],
+      },
+      "closing",
+      "env-close-other-setup",
+    );
 
     usePaneLayoutStore.getState().closePane("closing", "env-close-other-setup");
 
@@ -881,70 +972,72 @@ describe("paneLayoutStore tab cleanup", () => {
   test("destroys a sole child browser preview only once", () => {
     const destroy = mock(async () => undefined);
     window.orkestrator = { browserPreview: { destroy } } as never;
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "closing",
-          tabs: [{ id: "browser", type: "browser" }],
-          activeTabId: "browser",
-        },
-        {
-          kind: "leaf",
-          id: "remaining",
-          tabs: [{ id: "file", type: "file" }],
-          activeTabId: "file",
-        },
-      ],
-    }, "closing", "env-browser-once");
-
-    usePaneLayoutStore.getState().removeTab(
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "closing",
+            tabs: [{ id: "browser", type: "browser" }],
+            activeTabId: "browser",
+          },
+          {
+            kind: "leaf",
+            id: "remaining",
+            tabs: [{ id: "file", type: "file" }],
+            activeTabId: "file",
+          },
+        ],
+      },
       "closing",
-      "browser",
       "env-browser-once",
     );
+
+    usePaneLayoutStore.getState().removeTab("closing", "browser", "env-browser-once");
 
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledWith("browser");
   });
 
   test("records a sole child tmux teardown only once", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "closing",
-          tabs: [{ id: "tmux", type: "claude-tmux" }],
-          activeTabId: "tmux",
-        },
-        {
-          kind: "leaf",
-          id: "remaining",
-          tabs: [{ id: "file", type: "file" }],
-          activeTabId: "file",
-        },
-      ],
-    }, "closing", "env-tmux-once");
-
-    usePaneLayoutStore.getState().removeTab(
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "closing",
+            tabs: [{ id: "tmux", type: "claude-tmux" }],
+            activeTabId: "tmux",
+          },
+          {
+            kind: "leaf",
+            id: "remaining",
+            tabs: [{ id: "file", type: "file" }],
+            activeTabId: "file",
+          },
+        ],
+      },
       "closing",
-      "tmux",
       "env-tmux-once",
     );
 
+    usePaneLayoutStore.getState().removeTab("closing", "tmux", "env-tmux-once");
+
     expect(teardownTab).toHaveBeenCalledTimes(1);
     expect(teardownTab).toHaveBeenCalledWith({
-      environmentId: "env-tmux-once", tabId: "tmux", kind: "claude-tmux",
+      environmentId: "env-tmux-once",
+      tabId: "tmux",
+      kind: "claude-tmux",
     });
   });
 });
@@ -961,17 +1054,33 @@ describe("paneLayoutStore authoritative cleanup", () => {
       { id: "removed-terminal", type: "plain", isSetupTab: true },
       { id: "removed-browser", type: "browser", browserData: { url: "http://localhost:3000" } },
       { id: "removed-tmux", type: "claude-tmux" },
-      { id: "removed-claude", type: "agent-native", nativeAgentData: { platform: "claude", environmentId } },
-      { id: "removed-codex", type: "agent-native", nativeAgentData: { platform: "codex", environmentId } },
-      { id: "removed-opencode", type: "agent-native", nativeAgentData: { platform: "opencode", environmentId } },
+      {
+        id: "removed-claude",
+        type: "agent-native",
+        nativeAgentData: { platform: "claude", environmentId },
+      },
+      {
+        id: "removed-codex",
+        type: "agent-native",
+        nativeAgentData: { platform: "codex", environmentId },
+      },
+      {
+        id: "removed-opencode",
+        type: "agent-native",
+        nativeAgentData: { platform: "opencode", environmentId },
+      },
       { id: "retained-terminal", type: "plain" },
     ] as TabInfo[];
-    seedPaneTree({
-      kind: "leaf",
-      id: "old-pane",
-      tabs,
-      activeTabId: "removed-terminal",
-    }, "old-pane", environmentId);
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "old-pane",
+        tabs,
+        activeTabId: "removed-terminal",
+      },
+      "old-pane",
+      environmentId,
+    );
     usePaneLayoutStore.setState((state) => {
       const environments = new Map(state.environments);
       environments.set(environmentId, {
@@ -1044,21 +1153,9 @@ describe("paneLayoutStore authoritative cleanup", () => {
       store.getState().setSelectedModel(sessionKey, "model");
       return sessionKey;
     };
-    const claudeKey = seedNativeSession(
-      "removed-claude",
-      "claude-session",
-      useClaudeStore,
-    );
-    const codexKey = seedNativeSession(
-      "removed-codex",
-      "codex-session",
-      useCodexStore,
-    );
-    const openCodeKey = seedNativeSession(
-      "removed-opencode",
-      "opencode-session",
-      useOpenCodeStore,
-    );
+    const claudeKey = seedNativeSession("removed-claude", "claude-session", useClaudeStore);
+    const codexKey = seedNativeSession("removed-codex", "codex-session", useCodexStore);
+    const openCodeKey = seedNativeSession("removed-opencode", "opencode-session", useOpenCodeStore);
 
     const scopedTmuxKey = createClaudeTmuxStateKey(environmentId, "removed-tmux");
     const tmuxStore = useClaudeTmuxStore.getState();
@@ -1094,14 +1191,12 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(useTerminalSessionStore.getState().sessions.has(retainedTerminalKey)).toBe(true);
     expect(removedTerminalDispose).toHaveBeenCalledTimes(1);
     expect(retainedTerminalDispose).not.toHaveBeenCalled();
-    expect(useTerminalPortalStore.getState().hasTerminal(
-      environmentId,
-      "removed-terminal",
-    )).toBe(false);
-    expect(useTerminalPortalStore.getState().hasTerminal(
-      environmentId,
-      "retained-terminal",
-    )).toBe(true);
+    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "removed-terminal")).toBe(
+      false,
+    );
+    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "retained-terminal")).toBe(
+      true,
+    );
     expect(destroy).toHaveBeenCalledWith("removed-browser");
     expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
     expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
@@ -1113,12 +1208,14 @@ describe("paneLayoutStore authoritative cleanup", () => {
     expect(useClaudeTmuxStore.getState().getDraftText(scopedTmuxKey)).toBe("");
     expect(useClaudeTmuxStore.getState().getTab("removed-tmux").running).toBe(false);
 
-    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
-      environmentId,
-      tabId: "removed-terminal",
-      sessionId: "pty-removed",
-      persistentSessionId: "persistent-removed",
-    }));
+    expect(teardownTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId,
+        tabId: "removed-terminal",
+        sessionId: "pty-removed",
+        persistentSessionId: "persistent-removed",
+      }),
+    );
     expect(stopTmuxSession).not.toHaveBeenCalled();
     expect(deleteClaudeSession).not.toHaveBeenCalled();
     expect(deleteCodexSession).not.toHaveBeenCalled();
@@ -1150,12 +1247,14 @@ describe("paneLayoutStore authoritative cleanup", () => {
       },
     });
 
-    expect(teardownTab).toHaveBeenCalledWith(expect.objectContaining({
-      environmentId,
-      tabId: "terminal",
-      sessionId: "pty-local-authoritative",
-      persistentSessionId: "persistent-local-authoritative",
-    }));
+    expect(teardownTab).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentId,
+        tabId: "terminal",
+        sessionId: "pty-local-authoritative",
+        persistentSessionId: "persistent-local-authoritative",
+      }),
+    );
     expect(useTerminalSessionStore.getState().sessions.has(sessionKey)).toBe(false);
   });
 
@@ -1165,28 +1264,32 @@ describe("paneLayoutStore authoritative cleanup", () => {
     const sharedHandoff = { id: "handoff-shared" };
     rememberAgentHandoff(uniqueHandoff as never);
     rememberAgentHandoff(sharedHandoff as never);
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        {
-          id: "unique",
-          type: "plain",
-          agentHandoffId: uniqueHandoff.id,
-        },
-        {
-          id: "shared-removed",
-          type: "plain",
-          agentHandoffId: sharedHandoff.id,
-        },
-        {
-          id: "shared-retained",
-          type: "plain",
-          agentHandoffId: sharedHandoff.id,
-        },
-      ],
-      activeTabId: "unique",
-    }, "default", environmentId);
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "unique",
+            type: "plain",
+            agentHandoffId: uniqueHandoff.id,
+          },
+          {
+            id: "shared-removed",
+            type: "plain",
+            agentHandoffId: sharedHandoff.id,
+          },
+          {
+            id: "shared-retained",
+            type: "plain",
+            agentHandoffId: sharedHandoff.id,
+          },
+        ],
+        activeTabId: "unique",
+      },
+      "default",
+      environmentId,
+    );
     usePaneLayoutStore.setState({ hydration: new Map([[environmentId, "done"]]) });
 
     usePaneLayoutStore.getState().applyAuthoritativeLayout(environmentId, {
@@ -1195,26 +1298,23 @@ describe("paneLayoutStore authoritative cleanup", () => {
       root: {
         kind: "leaf",
         id: "default",
-        tabs: [{
-          id: "shared-retained",
-          type: "plain",
-          agentHandoffId: sharedHandoff.id,
-        }],
+        tabs: [
+          {
+            id: "shared-retained",
+            type: "plain",
+            agentHandoffId: sharedHandoff.id,
+          },
+        ],
         activeTabId: "shared-retained",
       },
     });
 
     await expect(loadAgentHandoff(uniqueHandoff.id)).resolves.toBeNull();
-    await expect(loadAgentHandoff(sharedHandoff.id)).resolves.toBe(
-      sharedHandoff as never,
-    );
+    await expect(loadAgentHandoff(sharedHandoff.id)).resolves.toBe(sharedHandoff as never);
     expect(getAgentHandoff).toHaveBeenCalledTimes(1);
     expect(getAgentHandoff).toHaveBeenCalledWith(uniqueHandoff.id);
     expect(deleteAgentHandoff).not.toHaveBeenCalled();
-    expect(pruneAgentHandoffs).toHaveBeenCalledWith(
-      environmentId,
-      [sharedHandoff.id],
-    );
+    expect(pruneAgentHandoffs).toHaveBeenCalledWith(environmentId, [sharedHandoff.id]);
   });
 
   test("authoritative handoff replacement evicts the old retained-tab cache entry", async () => {
@@ -1238,46 +1338,50 @@ describe("paneLayoutStore authoritative cleanup", () => {
       root: {
         kind: "leaf",
         id: "default",
-        tabs: [{
-          id: "retained-tab",
-          type: "plain",
-          agentHandoffId: newHandoff.id,
-        }],
+        tabs: [
+          {
+            id: "retained-tab",
+            type: "plain",
+            agentHandoffId: newHandoff.id,
+          },
+        ],
         activeTabId: "retained-tab",
       },
     });
 
     await expect(loadAgentHandoff(oldHandoff.id)).resolves.toBeNull();
-    await expect(loadAgentHandoff(newHandoff.id)).resolves.toBe(
-      newHandoff as never,
-    );
+    await expect(loadAgentHandoff(newHandoff.id)).resolves.toBe(newHandoff as never);
     expect(getAgentHandoff).toHaveBeenCalledTimes(1);
     expect(getAgentHandoff).toHaveBeenCalledWith(oldHandoff.id);
   });
 
   test("preserves resources for a tab moved to another pane", () => {
     const environmentId = "env-authoritative-move";
-    seedPaneTree({
-      kind: "split",
-      id: "old-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "old-left",
-          tabs: [{ id: "moving", type: "plain" }],
-          activeTabId: "moving",
-        },
-        {
-          kind: "leaf",
-          id: "old-right",
-          tabs: [{ id: "other", type: "file" }],
-          activeTabId: "other",
-        },
-      ],
-    }, "old-left", environmentId);
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "old-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "old-left",
+            tabs: [{ id: "moving", type: "plain" }],
+            activeTabId: "moving",
+          },
+          {
+            kind: "leaf",
+            id: "old-right",
+            tabs: [{ id: "other", type: "file" }],
+            activeTabId: "other",
+          },
+        ],
+      },
+      "old-left",
+      environmentId,
+    );
     usePaneLayoutStore.setState({ hydration: new Map([[environmentId, "done"]]) });
     const sessionKey = createTerminalSessionKey(null, "moving", environmentId);
     useTerminalSessionStore.getState().setSession(sessionKey, {
@@ -1285,15 +1389,17 @@ describe("paneLayoutStore authoritative cleanup", () => {
     });
     const terminalDispose = mock(() => {});
     useTerminalPortalStore.setState({
-      terminals: new Map([[
-        createTerminalKey(environmentId, "moving"),
-        {
-          environmentId,
-          tabId: "moving",
-          terminal: { dispose: terminalDispose },
-          portalElement: document.createElement("div"),
-        } as never,
-      ]]),
+      terminals: new Map([
+        [
+          createTerminalKey(environmentId, "moving"),
+          {
+            environmentId,
+            tabId: "moving",
+            terminal: { dispose: terminalDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
     });
 
     usePaneLayoutStore.getState().applyAuthoritativeLayout(environmentId, {
@@ -1319,15 +1425,19 @@ describe("paneLayoutStore authoritative cleanup", () => {
 
   test("keeps setup state when the authoritative layout still holds a setup tab", () => {
     const environmentId = "env-authoritative-setup-retained";
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        { id: "setup-removed", type: "plain", isSetupTab: true },
-        { id: "setup-retained", type: "plain", isSetupTab: true },
-      ],
-      activeTabId: "setup-removed",
-    }, "default", environmentId);
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "setup-removed", type: "plain", isSetupTab: true },
+          { id: "setup-retained", type: "plain", isSetupTab: true },
+        ],
+        activeTabId: "setup-removed",
+      },
+      "default",
+      environmentId,
+    );
     usePaneLayoutStore.setState({ hydration: new Map([[environmentId, "done"]]) });
 
     usePaneLayoutStore.getState().applyAuthoritativeLayout(environmentId, {
@@ -1342,7 +1452,10 @@ describe("paneLayoutStore authoritative cleanup", () => {
     });
 
     expect(
-      usePaneLayoutStore.getState().getAllTabs(environmentId).map((tab) => tab.id),
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs(environmentId)
+        .map((tab) => tab.id),
     ).toEqual(["setup-retained"]);
   });
 
@@ -1350,15 +1463,19 @@ describe("paneLayoutStore authoritative cleanup", () => {
     // `file` and `looped-review` match none of the type branches, so the
     // unconditional portal disposal is the only reclaim they get.
     const environmentId = "env-authoritative-plain-types";
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        { id: "file-tab", type: "file", fileData: { filePath: "/repo/a.ts" } },
-        { id: "review-tab", type: "looped-review" },
-      ],
-      activeTabId: "file-tab",
-    }, "default", environmentId);
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "file-tab", type: "file", fileData: { filePath: "/repo/a.ts" } },
+          { id: "review-tab", type: "looped-review" },
+        ],
+        activeTabId: "file-tab",
+      },
+      "default",
+      environmentId,
+    );
     usePaneLayoutStore.setState({ hydration: new Map([[environmentId, "done"]]) });
     const fileDispose = mock(() => {});
     const reviewDispose = mock(() => {});
@@ -1400,10 +1517,8 @@ describe("paneLayoutStore authoritative cleanup", () => {
 
     expect(fileDispose).toHaveBeenCalledTimes(1);
     expect(reviewDispose).toHaveBeenCalledTimes(1);
-    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "file-tab"))
-      .toBe(false);
-    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "review-tab"))
-      .toBe(false);
+    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "file-tab")).toBe(false);
+    expect(useTerminalPortalStore.getState().hasTerminal(environmentId, "review-tab")).toBe(false);
     expect(usePaneLayoutStore.getState().getAllTabs(environmentId)).toEqual([]);
     expect(closeLocalTerminalSession).not.toHaveBeenCalled();
     expect(detachTerminal).not.toHaveBeenCalled();
@@ -1456,30 +1571,35 @@ describe("paneLayoutStore authoritative cleanup", () => {
       root: {
         kind: "leaf",
         id: "default",
-        tabs: [{
-          id: "startup-agent",
-          type: "agent-native",
-          nativeAgentData: {
-            platform: "codex",
-            environmentId,
-            sessionId: "late-session",
+        tabs: [
+          {
+            id: "startup-agent",
+            type: "agent-native",
+            nativeAgentData: {
+              platform: "codex",
+              environmentId,
+              sessionId: "late-session",
+            },
           },
-        }],
+        ],
         activeTabId: "startup-agent",
       },
     });
 
-    expect(usePaneLayoutStore.getState().getAllTabs(environmentId)).toEqual([{
-      id: "startup-agent",
-      type: "agent-native",
-      nativeAgentData: {
-        platform: "codex",
-        environmentId,
-        sessionId: "late-session",
+    expect(usePaneLayoutStore.getState().getAllTabs(environmentId)).toEqual([
+      {
+        id: "startup-agent",
+        type: "agent-native",
+        nativeAgentData: {
+          platform: "codex",
+          environmentId,
+          sessionId: "late-session",
+        },
       },
-    }]);
-    expect(usePaneLayoutStore.getState().environments.get(environmentId)?.containerId)
-      .toBe("container-late");
+    ]);
+    expect(usePaneLayoutStore.getState().environments.get(environmentId)?.containerId).toBe(
+      "container-late",
+    );
   });
 
   test("contains browser cleanup failures while installing the authoritative layout", async () => {
@@ -1560,14 +1680,18 @@ describe("paneLayoutStore environment scoping", () => {
 
     store.initialize("container-a", "env-a");
     store.initialize("container-b", "env-b");
-    store.addTab("default", {
-      id: "file-a",
-      type: "file",
-      fileData: {
-        filePath: "/tmp/env-a.txt",
-        isLocalEnvironment: true,
+    store.addTab(
+      "default",
+      {
+        id: "file-a",
+        type: "file",
+        fileData: {
+          filePath: "/tmp/env-a.txt",
+          isLocalEnvironment: true,
+        },
       },
-    }, "env-a");
+      "env-a",
+    );
     store.addTab("default", { id: "plain-b", type: "plain" }, "env-b");
     store.setActiveEnvironment("env-b");
 
@@ -1584,15 +1708,19 @@ describe("paneLayoutStore environment scoping", () => {
   test("writes and clears native session ids on the owning tab", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "claude-a",
-      type: "agent-native",
-      nativeAgentData: {
-        platform: "claude",
-        environmentId: "env-a",
-        containerId: "container-a",
+    store.addTab(
+      "default",
+      {
+        id: "claude-a",
+        type: "agent-native",
+        nativeAgentData: {
+          platform: "claude",
+          environmentId: "env-a",
+          containerId: "container-a",
+        },
       },
-    }, "env-a");
+      "env-a",
+    );
 
     store.updateTabNativeSessionId("claude-a", "session-1", "env-a");
     const updated = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
@@ -1614,15 +1742,19 @@ describe("paneLayoutStore environment scoping", () => {
   test("writes both identity projections for an ACP tab", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "cursor-a",
-      type: "agent-native",
-      nativeAgentData: {
-        platform: "cursor",
-        environmentId: "env-a",
-        containerId: "container-a",
+    store.addTab(
+      "default",
+      {
+        id: "cursor-a",
+        type: "agent-native",
+        nativeAgentData: {
+          platform: "cursor",
+          environmentId: "env-a",
+          containerId: "container-a",
+        },
       },
-    }, "env-a");
+      "env-a",
+    );
 
     const added = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
     expect(added?.nativeAgentData).toMatchObject({
@@ -1646,15 +1778,19 @@ describe("paneLayoutStore environment scoping", () => {
   test("updates a tab that only carries the canonical identity", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "codex-a",
-      type: "agent-native",
-      nativeAgentData: {
-        platform: "codex",
-        environmentId: "env-a",
-        containerId: "container-a",
+    store.addTab(
+      "default",
+      {
+        id: "codex-a",
+        type: "agent-native",
+        nativeAgentData: {
+          platform: "codex",
+          environmentId: "env-a",
+          containerId: "container-a",
+        },
       },
-    }, "env-a");
+      "env-a",
+    );
 
     store.updateTabNativeSessionId("codex-a", "thread-1", "env-a");
     const updated = usePaneLayoutStore.getState().getAllTabs("env-a")[0];
@@ -1670,11 +1806,15 @@ describe("paneLayoutStore environment scoping", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
     store.initialize("container-b", "env-b");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
     store.addTab("default", { id: "plain-b", type: "plain" }, "env-b");
     store.setActiveEnvironment("env-b");
 
@@ -1692,11 +1832,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("bounds persisted browser history and rebases its cursor", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
     const history = Array.from({ length: 125 }, (_, index) => `http://localhost/${index}`);
 
     store.updateTabBrowserUrl("browser-a", history[120]!, "env-a", history, 120);
@@ -1710,11 +1854,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("keeps a history that is exactly at the bound untouched", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
     const history = Array.from({ length: 100 }, (_, index) => `http://localhost/${index}`);
 
     store.updateTabBrowserUrl("browser-a", history[99]!, "env-a", history, 99);
@@ -1727,11 +1875,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("removes credentials, queries, and fragments from durable browser history", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
 
     store.updateTabBrowserUrl(
       "browser-a",
@@ -1746,25 +1898,26 @@ describe("paneLayoutStore environment scoping", () => {
 
     const data = usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData;
     expect(data?.url).toBe("https://example.com/current?token=current");
-    expect(data?.history).toEqual([
-      "https://example.com/previous",
-      "https://example.com/current",
-    ]);
+    expect(data?.history).toEqual(["https://example.com/previous", "https://example.com/current"]);
     expect(data?.historyIndex).toBe(1);
   });
 
   test("migrates existing sensitive history during a URL-only update", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: {
-        url: "https://example.com/old",
-        history: ["https://alice:secret@example.com/old?token=secret#private"],
-        historyIndex: 0,
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: {
+          url: "https://example.com/old",
+          history: ["https://alice:secret@example.com/old?token=secret#private"],
+          historyIndex: 0,
+        },
       },
-    }, "env-a");
+      "env-a",
+    );
 
     store.updateTabBrowserUrl("browser-a", "https://example.com/new?view=full", "env-a");
 
@@ -1782,15 +1935,19 @@ describe("paneLayoutStore environment scoping", () => {
       { length: 120 },
       (_, index) => `https://example.com/${index}?token=${index}`,
     );
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: {
-        url: history[119]!,
-        history,
-        historyIndex: 119,
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: {
+          url: history[119]!,
+          history,
+          historyIndex: 119,
+        },
       },
-    }, "env-a");
+      "env-a",
+    );
 
     store.updateTabBrowserUrl("browser-a", "https://example.com/new?view=full", "env-a");
 
@@ -1804,11 +1961,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("clamps a cursor sent without a history against the stored one", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
     store.updateTabBrowserUrl("browser-a", "b", "env-a", ["a", "b"], 1);
 
     store.updateTabBrowserUrl("browser-a", "a", "env-a", undefined, 7);
@@ -1823,11 +1984,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("drops a cursor that has no history to address and stores a history without one", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
 
     store.updateTabBrowserUrl("browser-a", "a", "env-a", undefined, 3);
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData).toEqual({
@@ -1844,11 +2009,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("stores an emptied browser history with a cursor that points nowhere", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
 
     store.updateTabBrowserUrl("browser-a", "", "env-a", [], 0);
 
@@ -1861,11 +2030,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("clamps malformed browser cursors to the bounded history", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
 
     store.updateTabBrowserUrl("browser-a", "b", "env-a", ["a", "b"], 99);
     expect(usePaneLayoutStore.getState().getAllTabs("env-a")[0]?.browserData?.historyIndex).toBe(1);
@@ -1877,11 +2050,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("updates browser addresses through the active environment fallback", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "" },
+      },
+      "env-a",
+    );
     store.setActiveEnvironment("env-a");
 
     usePaneLayoutStore.getState().updateTabBrowserUrl("browser-a", "http://localhost:3000/");
@@ -1893,11 +2070,15 @@ describe("paneLayoutStore environment scoping", () => {
   test("ignores unchanged, missing, and non-browser URL updates", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "browser-a",
-      type: "browser",
-      browserData: { url: "http://localhost:3000/" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "browser-a",
+        type: "browser",
+        browserData: { url: "http://localhost:3000/" },
+      },
+      "env-a",
+    );
     store.addTab("default", { id: "plain-a", type: "plain" }, "env-a");
     store.setActiveEnvironment("env-a");
     const originalEnvironments = usePaneLayoutStore.getState().environments;
@@ -1939,16 +2120,20 @@ describe("paneLayoutStore environment scoping", () => {
   test("preserves and focuses a tab added before late hydration begins", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize(null, "env-pending-tab");
-    store.addTab("default", {
-      id: "build-pipeline-1",
-      type: "claude-build",
-      buildTabData: {
-        pipelineId: "pipeline-1",
-        environmentId: "env-pending-tab",
-        taskId: "task-1",
-        isLocal: true,
+    store.addTab(
+      "default",
+      {
+        id: "build-pipeline-1",
+        type: "claude-build",
+        buildTabData: {
+          pipelineId: "pipeline-1",
+          environmentId: "env-pending-tab",
+          taskId: "task-1",
+          isLocal: true,
+        },
       },
-    }, "env-pending-tab");
+      "env-pending-tab",
+    );
     // TerminalContainer can mount after the build handoff. Its hydration must
     // merge, not replace, the tab that was created in that undefined state.
     store.beginHydration("env-pending-tab");
@@ -1964,29 +2149,36 @@ describe("paneLayoutStore environment scoping", () => {
       },
     });
 
-    const hydrated = usePaneLayoutStore
-      .getState()
-      .environments.get("env-pending-tab");
+    const hydrated = usePaneLayoutStore.getState().environments.get("env-pending-tab");
     expect(hydrated?.activePaneId).toBe("restored");
-    expect(hydrated && getAllLeaves(hydrated.root)[0]?.tabs.map((tab) => tab.id))
-      .toEqual(["restored-tab", "build-pipeline-1"]);
-    expect(hydrated && getAllLeaves(hydrated.root)[0]?.activeTabId)
-      .toBe("build-pipeline-1");
+    expect(hydrated && getAllLeaves(hydrated.root)[0]?.tabs.map((tab) => tab.id)).toEqual([
+      "restored-tab",
+      "build-pipeline-1",
+    ]);
+    expect(hydrated && getAllLeaves(hydrated.root)[0]?.activeTabId).toBe("build-pipeline-1");
   });
 
   test("updates Codex and OpenCode session ids and ignores unsupported or unchanged updates", () => {
     const store = usePaneLayoutStore.getState();
     store.initialize("container-a", "env-a");
-    store.addTab("default", {
-      id: "codex",
-      type: "agent-native",
-      nativeAgentData: { environmentId: "env-a" },
-    }, "env-a");
-    store.addTab("default", {
-      id: "opencode",
-      type: "agent-native",
-      nativeAgentData: { environmentId: "env-a" },
-    }, "env-a");
+    store.addTab(
+      "default",
+      {
+        id: "codex",
+        type: "agent-native",
+        nativeAgentData: { environmentId: "env-a" },
+      },
+      "env-a",
+    );
+    store.addTab(
+      "default",
+      {
+        id: "opencode",
+        type: "agent-native",
+        nativeAgentData: { environmentId: "env-a" },
+      },
+      "env-a",
+    );
     store.addTab("default", { id: "plain", type: "plain" }, "env-a");
 
     store.updateTabNativeSessionId("codex", "codex-1", "env-a");
@@ -2007,26 +2199,32 @@ describe("paneLayoutStore environment scoping", () => {
   test("sets and resets a hidden environment without changing the active environment", () => {
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-a", {
-          root: {
-            kind: "leaf",
-            id: "pane-a",
-            tabs: [{ id: "tab-a", type: "plain" }],
-            activeTabId: "tab-a",
+        [
+          "env-a",
+          {
+            root: {
+              kind: "leaf",
+              id: "pane-a",
+              tabs: [{ id: "tab-a", type: "plain" }],
+              activeTabId: "tab-a",
+            },
+            activePaneId: "stale-pane",
+            containerId: "container-a",
           },
-          activePaneId: "stale-pane",
-          containerId: "container-a",
-        }],
-        ["env-b", {
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [{ id: "tab-b", type: "plain" }],
-            activeTabId: "tab-b",
+        ],
+        [
+          "env-b",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [{ id: "tab-b", type: "plain" }],
+              activeTabId: "tab-b",
+            },
+            activePaneId: "default",
+            containerId: "container-b",
           },
-          activePaneId: "default",
-          containerId: "container-b",
-        }],
+        ],
       ]),
       activeEnvironmentId: "env-b",
     });
@@ -2055,29 +2253,35 @@ describe("paneLayoutStore environment scoping", () => {
   test("removes a tab from an explicit environment without touching the active environment", () => {
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-a", {
-          root: {
-            kind: "leaf",
-            id: "pane-a",
-            tabs: [
-              { id: "tab-a-1", type: "plain" },
-              { id: "tab-a-2", type: "plain" },
-            ],
-            activeTabId: "tab-a-2",
+        [
+          "env-a",
+          {
+            root: {
+              kind: "leaf",
+              id: "pane-a",
+              tabs: [
+                { id: "tab-a-1", type: "plain" },
+                { id: "tab-a-2", type: "plain" },
+              ],
+              activeTabId: "tab-a-2",
+            },
+            activePaneId: "pane-a",
+            containerId: "container-a",
           },
-          activePaneId: "pane-a",
-          containerId: "container-a",
-        }],
-        ["env-b", {
-          root: {
-            kind: "leaf",
-            id: "pane-b",
-            tabs: [{ id: "tab-b", type: "plain" }],
-            activeTabId: "tab-b",
+        ],
+        [
+          "env-b",
+          {
+            root: {
+              kind: "leaf",
+              id: "pane-b",
+              tabs: [{ id: "tab-b", type: "plain" }],
+              activeTabId: "tab-b",
+            },
+            activePaneId: "pane-b",
+            containerId: "container-b",
           },
-          activePaneId: "pane-b",
-          containerId: "container-b",
-        }],
+        ],
       ]),
       activeEnvironmentId: "env-b",
     });
@@ -2098,44 +2302,50 @@ describe("paneLayoutStore environment scoping", () => {
   test("moves a tab inside an explicit environment without relying on the active environment", () => {
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-a", {
-          root: {
-            kind: "split",
-            id: "split-a",
-            direction: "horizontal",
-            sizes: [50, 50],
-            depth: 1,
-            children: [
-              {
-                kind: "leaf",
-                id: "pane-a-left",
-                tabs: [
-                  { id: "tab-a", type: "plain" },
-                  { id: "tab-a-left-other", type: "plain" },
-                ],
-                activeTabId: "tab-a",
-              },
-              {
-                kind: "leaf",
-                id: "pane-a-right",
-                tabs: [{ id: "tab-a-right", type: "plain" }],
-                activeTabId: "tab-a-right",
-              },
-            ],
+        [
+          "env-a",
+          {
+            root: {
+              kind: "split",
+              id: "split-a",
+              direction: "horizontal",
+              sizes: [50, 50],
+              depth: 1,
+              children: [
+                {
+                  kind: "leaf",
+                  id: "pane-a-left",
+                  tabs: [
+                    { id: "tab-a", type: "plain" },
+                    { id: "tab-a-left-other", type: "plain" },
+                  ],
+                  activeTabId: "tab-a",
+                },
+                {
+                  kind: "leaf",
+                  id: "pane-a-right",
+                  tabs: [{ id: "tab-a-right", type: "plain" }],
+                  activeTabId: "tab-a-right",
+                },
+              ],
+            },
+            activePaneId: "pane-a-left",
+            containerId: "container-a",
           },
-          activePaneId: "pane-a-left",
-          containerId: "container-a",
-        }],
-        ["env-b", {
-          root: {
-            kind: "leaf",
-            id: "pane-b",
-            tabs: [{ id: "tab-b", type: "plain" }],
-            activeTabId: "tab-b",
+        ],
+        [
+          "env-b",
+          {
+            root: {
+              kind: "leaf",
+              id: "pane-b",
+              tabs: [{ id: "tab-b", type: "plain" }],
+              activeTabId: "tab-b",
+            },
+            activePaneId: "pane-b",
+            containerId: "container-b",
           },
-          activePaneId: "pane-b",
-          containerId: "container-b",
-        }],
+        ],
       ]),
       activeEnvironmentId: "env-b",
     });
@@ -2171,23 +2381,23 @@ describe("paneLayoutStore splitting", () => {
     ["top", "vertical", 0],
     ["bottom", "vertical", 1],
   ] as const)("moves a tab into a same-pane %s edge split", (edge, direction, newPaneIndex) => {
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        { id: "tab-one", type: "plain" },
-        { id: "tab-two", type: "plain" },
-      ],
-      activeTabId: "tab-two",
-    }, "default", "env-split");
-
-    usePaneLayoutStore.getState().splitPaneAtEdge(
-      "default",
-      edge,
-      "tab-two",
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "tab-one", type: "plain" },
+          { id: "tab-two", type: "plain" },
+        ],
+        activeTabId: "tab-two",
+      },
       "default",
       "env-split",
     );
+
+    usePaneLayoutStore
+      .getState()
+      .splitPaneAtEdge("default", edge, "tab-two", "default", "env-split");
 
     const root = usePaneLayoutStore.getState().getRoot("env-split");
     expect(root.kind).toBe("split");
@@ -2209,38 +2419,38 @@ describe("paneLayoutStore splitting", () => {
   });
 
   test("moves a tab across panes and preserves the non-empty source pane", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "source",
-          tabs: [
-            { id: "source-stays", type: "plain" },
-            { id: "tab-moving", type: "plain" },
-          ],
-          activeTabId: "tab-moving",
-        },
-        {
-          kind: "leaf",
-          id: "target",
-          tabs: [{ id: "target-tab", type: "plain" }],
-          activeTabId: "target-tab",
-        },
-      ],
-    }, "source", "env-cross-split");
-
-    usePaneLayoutStore.getState().splitPaneAtEdge(
-      "target",
-      "top",
-      "tab-moving",
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "source",
+            tabs: [
+              { id: "source-stays", type: "plain" },
+              { id: "tab-moving", type: "plain" },
+            ],
+            activeTabId: "tab-moving",
+          },
+          {
+            kind: "leaf",
+            id: "target",
+            tabs: [{ id: "target-tab", type: "plain" }],
+            activeTabId: "target-tab",
+          },
+        ],
+      },
       "source",
       "env-cross-split",
     );
+
+    usePaneLayoutStore
+      .getState()
+      .splitPaneAtEdge("target", "top", "tab-moving", "source", "env-cross-split");
 
     const root = usePaneLayoutStore.getState().getRoot("env-cross-split");
     expect(root.kind).toBe("split");
@@ -2262,35 +2472,35 @@ describe("paneLayoutStore splitting", () => {
   });
 
   test("closes an emptied source pane after a cross-pane split", async () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "source",
-          tabs: [{ id: "tab-moving", type: "plain" }],
-          activeTabId: "tab-moving",
-        },
-        {
-          kind: "leaf",
-          id: "target",
-          tabs: [{ id: "target-tab", type: "plain" }],
-          activeTabId: "target-tab",
-        },
-      ],
-    }, "source", "env-empty-source");
-
-    usePaneLayoutStore.getState().splitPaneAtEdge(
-      "target",
-      "right",
-      "tab-moving",
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "source",
+            tabs: [{ id: "tab-moving", type: "plain" }],
+            activeTabId: "tab-moving",
+          },
+          {
+            kind: "leaf",
+            id: "target",
+            tabs: [{ id: "target-tab", type: "plain" }],
+            activeTabId: "target-tab",
+          },
+        ],
+      },
       "source",
       "env-empty-source",
     );
+
+    usePaneLayoutStore
+      .getState()
+      .splitPaneAtEdge("target", "right", "tab-moving", "source", "env-empty-source");
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     const root = usePaneLayoutStore.getState().getRoot("env-empty-source");
@@ -2333,13 +2543,7 @@ describe("paneLayoutStore splitting", () => {
     seedPaneTree(root, "deep-target", "env-max-depth");
 
     const store = usePaneLayoutStore.getState();
-    store.splitPaneAtEdge(
-      "deep-target",
-      "right",
-      "tab-two",
-      "deep-target",
-      "env-max-depth",
-    );
+    store.splitPaneAtEdge("deep-target", "right", "tab-two", "deep-target", "env-max-depth");
     store.splitPane("deep-target", "horizontal", "tab-two", "env-max-depth");
 
     expect(usePaneLayoutStore.getState().getRoot("env-max-depth")).toBe(root);
@@ -2385,39 +2589,43 @@ describe("paneLayoutStore pane and tab actions", () => {
   });
 
   test("activates an existing tab instead of adding a duplicate", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [{ id: "left-tab", type: "plain" }],
-          activeTabId: "left-tab",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [
-            { id: "right-tab", type: "plain" },
-            { id: "existing-tab", type: "plain" },
-          ],
-          activeTabId: "right-tab",
-        },
-      ],
-    }, "left", "env-duplicate");
-
-    usePaneLayoutStore.getState().addTab(
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "left-tab", type: "plain" }],
+            activeTabId: "left-tab",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [
+              { id: "right-tab", type: "plain" },
+              { id: "existing-tab", type: "plain" },
+            ],
+            activeTabId: "right-tab",
+          },
+        ],
+      },
       "left",
-      { id: "existing-tab", type: "plain" },
       "env-duplicate",
     );
 
+    usePaneLayoutStore
+      .getState()
+      .addTab("left", { id: "existing-tab", type: "plain" }, "env-duplicate");
+
     const store = usePaneLayoutStore.getState();
-    expect(store.getAllTabs("env-duplicate").filter((tab) => tab.id === "existing-tab")).toHaveLength(1);
+    expect(
+      store.getAllTabs("env-duplicate").filter((tab) => tab.id === "existing-tab"),
+    ).toHaveLength(1);
     expect(store.getPane("right", "env-duplicate")?.activeTabId).toBe("existing-tab");
     expect(store.getActivePaneId("env-duplicate")).toBe("right");
     expect(store.getPane("missing-pane", "env-duplicate")).toBeNull();
@@ -2425,56 +2633,72 @@ describe("paneLayoutStore pane and tab actions", () => {
   });
 
   test("reorders tabs and ignores invalid indexes", () => {
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        { id: "tab-a", type: "plain" },
-        { id: "tab-b", type: "plain" },
-        { id: "tab-c", type: "plain" },
-      ],
-      activeTabId: "tab-a",
-    }, "default", "env-reorder");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "tab-a", type: "plain" },
+          { id: "tab-b", type: "plain" },
+          { id: "tab-c", type: "plain" },
+        ],
+        activeTabId: "tab-a",
+      },
+      "default",
+      "env-reorder",
+    );
 
     const store = usePaneLayoutStore.getState();
     store.reorderTabs("default", 0, 2, "env-reorder");
-    expect(store.getAllTabs("env-reorder").map((tab) => tab.id)).toEqual(["tab-b", "tab-c", "tab-a"]);
+    expect(store.getAllTabs("env-reorder").map((tab) => tab.id)).toEqual([
+      "tab-b",
+      "tab-c",
+      "tab-a",
+    ]);
 
     store.reorderTabs("default", -1, 0, "env-reorder");
     store.reorderTabs("default", 0, 3, "env-reorder");
     store.reorderTabs("default", 0.5, 1, "env-reorder");
-    expect(store.getAllTabs("env-reorder").map((tab) => tab.id)).toEqual(["tab-b", "tab-c", "tab-a"]);
+    expect(store.getAllTabs("env-reorder").map((tab) => tab.id)).toEqual([
+      "tab-b",
+      "tab-c",
+      "tab-a",
+    ]);
   });
 
   test("moves tabs within a pane and inserts at a requested cross-pane index", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [
-            { id: "tab-a", type: "plain" },
-            { id: "tab-b", type: "plain" },
-            { id: "tab-c", type: "plain" },
-          ],
-          activeTabId: "tab-c",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [
-            { id: "tab-x", type: "plain" },
-            { id: "tab-y", type: "plain" },
-          ],
-          activeTabId: "tab-x",
-        },
-      ],
-    }, "left", "env-indexed-move");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [
+              { id: "tab-a", type: "plain" },
+              { id: "tab-b", type: "plain" },
+              { id: "tab-c", type: "plain" },
+            ],
+            activeTabId: "tab-c",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [
+              { id: "tab-x", type: "plain" },
+              { id: "tab-y", type: "plain" },
+            ],
+            activeTabId: "tab-x",
+          },
+        ],
+      },
+      "left",
+      "env-indexed-move",
+    );
 
     const store = usePaneLayoutStore.getState();
     store.moveTab("left", "left", "tab-c", 0, "env-indexed-move");
@@ -2497,35 +2721,33 @@ describe("paneLayoutStore pane and tab actions", () => {
   });
 
   test("collapses an emptied source pane after moving its last tab", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [{ id: "tab-moving", type: "plain" }],
-          activeTabId: "tab-moving",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [{ id: "tab-target", type: "plain" }],
-          activeTabId: "tab-target",
-        },
-      ],
-    }, "left", "env-empty-move");
-
-    usePaneLayoutStore.getState().moveTab(
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "tab-moving", type: "plain" }],
+            activeTabId: "tab-moving",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "tab-target", type: "plain" }],
+            activeTabId: "tab-target",
+          },
+        ],
+      },
       "left",
-      "right",
-      "tab-moving",
-      0,
       "env-empty-move",
     );
+
+    usePaneLayoutStore.getState().moveTab("left", "right", "tab-moving", 0, "env-empty-move");
 
     expect(usePaneLayoutStore.getState().getRoot("env-empty-move")).toMatchObject({
       kind: "leaf",
@@ -2536,160 +2758,160 @@ describe("paneLayoutStore pane and tab actions", () => {
   });
 
   test("preserves a live terminal when moving the last source tab", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [{ id: "terminal-moving", type: "plain" }],
-          activeTabId: "terminal-moving",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [{ id: "tab-target", type: "plain" }],
-          activeTabId: "tab-target",
-        },
-      ],
-    }, "left", "env-live-move");
-    const sessionKey = createTerminalSessionKey(
-      null,
-      "terminal-moving",
-      "env-live-move",
-    );
-    useTerminalSessionStore.getState().setSession(
-      sessionKey,
-      { sessionId: "pty-live-move" },
-    );
-
-    usePaneLayoutStore.getState().moveTab(
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "terminal-moving", type: "plain" }],
+            activeTabId: "terminal-moving",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "tab-target", type: "plain" }],
+            activeTabId: "tab-target",
+          },
+        ],
+      },
       "left",
-      "right",
-      "terminal-moving",
-      undefined,
       "env-live-move",
     );
+    const sessionKey = createTerminalSessionKey(null, "terminal-moving", "env-live-move");
+    useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-live-move" });
+
+    usePaneLayoutStore
+      .getState()
+      .moveTab("left", "right", "terminal-moving", undefined, "env-live-move");
 
     expect(closeLocalTerminalSession).not.toHaveBeenCalled();
     expect(detachTerminal).not.toHaveBeenCalled();
-    expect(
-      useTerminalSessionStore.getState().sessions.get(sessionKey)?.sessionId,
-    ).toBe("pty-live-move");
+    expect(useTerminalSessionStore.getState().sessions.get(sessionKey)?.sessionId).toBe(
+      "pty-live-move",
+    );
   });
 
   test("keeps the moved tab's portal terminal instance alive across panes", () => {
     // A move is not a close: disposing the xterm instance here would blank the
     // terminal the user just dragged into another pane.
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [
-            { id: "terminal-moving", type: "plain" },
-            { id: "left-stays", type: "plain" },
-          ],
-          activeTabId: "terminal-moving",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [{ id: "tab-target", type: "plain" }],
-          activeTabId: "tab-target",
-        },
-      ],
-    }, "left", "env-move-portal");
-    const terminalDispose = mock(() => {});
-    useTerminalPortalStore.setState({
-      terminals: new Map([[
-        createTerminalKey("env-move-portal", "terminal-moving"),
-        {
-          environmentId: "env-move-portal",
-          tabId: "terminal-moving",
-          terminal: { dispose: terminalDispose },
-          portalElement: document.createElement("div"),
-        } as never,
-      ]]),
-    });
-
-    usePaneLayoutStore.getState().moveTab(
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [
+              { id: "terminal-moving", type: "plain" },
+              { id: "left-stays", type: "plain" },
+            ],
+            activeTabId: "terminal-moving",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "tab-target", type: "plain" }],
+            activeTabId: "tab-target",
+          },
+        ],
+      },
       "left",
-      "right",
-      "terminal-moving",
-      undefined,
       "env-move-portal",
     );
+    const terminalDispose = mock(() => {});
+    useTerminalPortalStore.setState({
+      terminals: new Map([
+        [
+          createTerminalKey("env-move-portal", "terminal-moving"),
+          {
+            environmentId: "env-move-portal",
+            tabId: "terminal-moving",
+            terminal: { dispose: terminalDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
+    });
+
+    usePaneLayoutStore
+      .getState()
+      .moveTab("left", "right", "terminal-moving", undefined, "env-move-portal");
 
     expect(terminalDispose).not.toHaveBeenCalled();
     expect(
       useTerminalPortalStore.getState().hasTerminal("env-move-portal", "terminal-moving"),
     ).toBe(true);
     expect(
-      usePaneLayoutStore.getState().getPane("right", "env-move-portal")
+      usePaneLayoutStore
+        .getState()
+        .getPane("right", "env-move-portal")
         ?.tabs.map((tab) => tab.id),
     ).toEqual(["tab-target", "terminal-moving"]);
   });
 
   test("keeps the portal terminal alive when the emptied source pane collapses", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [{ id: "terminal-moving", type: "plain" }],
-          activeTabId: "terminal-moving",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [{ id: "tab-target", type: "plain" }],
-          activeTabId: "tab-target",
-        },
-      ],
-    }, "left", "env-move-portal-collapse");
-    const terminalDispose = mock(() => {});
-    useTerminalPortalStore.setState({
-      terminals: new Map([[
-        createTerminalKey("env-move-portal-collapse", "terminal-moving"),
-        {
-          environmentId: "env-move-portal-collapse",
-          tabId: "terminal-moving",
-          terminal: { dispose: terminalDispose },
-          portalElement: document.createElement("div"),
-        } as never,
-      ]]),
-    });
-
-    usePaneLayoutStore.getState().moveTab(
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "terminal-moving", type: "plain" }],
+            activeTabId: "terminal-moving",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "tab-target", type: "plain" }],
+            activeTabId: "tab-target",
+          },
+        ],
+      },
       "left",
-      "right",
-      "terminal-moving",
-      undefined,
       "env-move-portal-collapse",
     );
+    const terminalDispose = mock(() => {});
+    useTerminalPortalStore.setState({
+      terminals: new Map([
+        [
+          createTerminalKey("env-move-portal-collapse", "terminal-moving"),
+          {
+            environmentId: "env-move-portal-collapse",
+            tabId: "terminal-moving",
+            terminal: { dispose: terminalDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
+    });
+
+    usePaneLayoutStore
+      .getState()
+      .moveTab("left", "right", "terminal-moving", undefined, "env-move-portal-collapse");
 
     expect(terminalDispose).not.toHaveBeenCalled();
     expect(
-      useTerminalPortalStore.getState()
-        .hasTerminal("env-move-portal-collapse", "terminal-moving"),
+      useTerminalPortalStore.getState().hasTerminal("env-move-portal-collapse", "terminal-moving"),
     ).toBe(true);
-    expect(usePaneLayoutStore.getState().getRoot("env-move-portal-collapse"))
-      .toMatchObject({ kind: "leaf", id: "right" });
+    expect(usePaneLayoutStore.getState().getRoot("env-move-portal-collapse")).toMatchObject({
+      kind: "leaf",
+      id: "right",
+    });
   });
 
   test("moving the only tab of a root-level leaf leaves the store untouched", () => {
@@ -2702,13 +2924,9 @@ describe("paneLayoutStore pane and tab actions", () => {
     const seeded = usePaneLayoutStore.getState().environments;
     const originalRoot = usePaneLayoutStore.getState().getRoot("env-root-leaf-move");
 
-    usePaneLayoutStore.getState().moveTab(
-      "default",
-      "default",
-      "only-tab",
-      undefined,
-      "env-root-leaf-move",
-    );
+    usePaneLayoutStore
+      .getState()
+      .moveTab("default", "default", "only-tab", undefined, "env-root-leaf-move");
 
     expect(usePaneLayoutStore.getState().environments).toBe(seeded);
     expect(usePaneLayoutStore.getState().getRoot("env-root-leaf-move")).toBe(originalRoot);
@@ -2729,41 +2947,55 @@ describe("paneLayoutStore pane and tab actions", () => {
   });
 
   test("clears a tab initial prompt without changing its other data", () => {
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [{
-        id: "prompt-tab",
-        type: "plain",
-        initialPrompt: "Run the checks",
-        initialCommands: ["bun test"],
-      }],
-      activeTabId: "prompt-tab",
-    }, "default", "env-prompt");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "prompt-tab",
+            type: "plain",
+            initialPrompt: "Run the checks",
+            initialCommands: ["bun test"],
+          },
+        ],
+        activeTabId: "prompt-tab",
+      },
+      "default",
+      "env-prompt",
+    );
 
     usePaneLayoutStore.getState().clearTabInitialPrompt("prompt-tab", "env-prompt");
 
-    expect(usePaneLayoutStore.getState().getAllTabs("env-prompt")).toEqual([{
-      id: "prompt-tab",
-      type: "plain",
-      initialPrompt: undefined,
-      initialCommands: ["bun test"],
-    }]);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-prompt")).toEqual([
+      {
+        id: "prompt-tab",
+        type: "plain",
+        initialPrompt: undefined,
+        initialCommands: ["bun test"],
+      },
+    ]);
   });
 
   test("clears, deletes and evicts a consumed handoff reference", async () => {
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [{
-        id: "handoff-tab",
-        type: "agent-native",
-        agentHandoffId: "handoff-1",
-        displayTitle: "Codex · from Claude",
-        nativeAgentData: { environmentId: "env-handoff" },
-      }],
-      activeTabId: "handoff-tab",
-    }, "default", "env-handoff");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "handoff-tab",
+            type: "agent-native",
+            agentHandoffId: "handoff-1",
+            displayTitle: "Codex · from Claude",
+            nativeAgentData: { environmentId: "env-handoff" },
+          },
+        ],
+        activeTabId: "handoff-tab",
+      },
+      "default",
+      "env-handoff",
+    );
     rememberAgentHandoff({ id: "handoff-1" } as never);
 
     usePaneLayoutStore.getState().clearTabAgentHandoff("handoff-tab", "env-handoff");
@@ -2784,22 +3016,29 @@ describe("paneLayoutStore pane and tab actions", () => {
   });
 
   test("clearing an already-consumed handoff is a no-op", () => {
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [{
-        id: "handoff-tab",
-        type: "agent-native",
-        consumedAgentHandoffId: "handoff-1",
-      }],
-      activeTabId: "handoff-tab",
-    }, "default", "env-handoff");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "handoff-tab",
+            type: "agent-native",
+            consumedAgentHandoffId: "handoff-1",
+          },
+        ],
+        activeTabId: "handoff-tab",
+      },
+      "default",
+      "env-handoff",
+    );
 
     usePaneLayoutStore.getState().clearTabAgentHandoff("handoff-tab", "env-handoff");
 
     expect(deleteAgentHandoff).not.toHaveBeenCalled();
-    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0])
-      .toMatchObject({ consumedAgentHandoffId: "handoff-1" });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff")[0]).toMatchObject({
+      consumedAgentHandoffId: "handoff-1",
+    });
   });
 
   test("hydration reconciles stored handoffs against the restored layout", () => {
@@ -2851,69 +3090,82 @@ describe("paneLayoutStore pane and tab actions", () => {
   });
 
   test("clearing one of multiple handoff references preserves backend storage", () => {
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        { id: "first", type: "plain", agentHandoffId: "handoff-shared" },
-        { id: "second", type: "plain", agentHandoffId: "handoff-shared" },
-      ],
-      activeTabId: "first",
-    }, "default", "env-handoff");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "first", type: "plain", agentHandoffId: "handoff-shared" },
+          { id: "second", type: "plain", agentHandoffId: "handoff-shared" },
+        ],
+        activeTabId: "first",
+      },
+      "default",
+      "env-handoff",
+    );
 
     usePaneLayoutStore.getState().clearTabAgentHandoff("first", "env-handoff");
 
     expect(deleteAgentHandoff).not.toHaveBeenCalled();
     expect(
-      usePaneLayoutStore.getState().getAllTabs("env-handoff")
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-handoff")
         .find((tab) => tab.id === "second")?.agentHandoffId,
     ).toBe("handoff-shared");
   });
 
   test("consumes one-shot agent options without clearing the pending prompt", () => {
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [{
-        id: "review-tab",
-        type: "agent-native",
-        initialPrompt: "Review the diff",
-        initialAgentModel: "gpt-5.6-sol",
-        initialReasoningEffort: "xhigh",
-        initialExecutionProfileId: "plan",
-      }],
-      activeTabId: "review-tab",
-    }, "default", "env-review");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "review-tab",
+            type: "agent-native",
+            initialPrompt: "Review the diff",
+            initialAgentModel: "gpt-5.6-sol",
+            initialReasoningEffort: "xhigh",
+            initialExecutionProfileId: "plan",
+          },
+        ],
+        activeTabId: "review-tab",
+      },
+      "default",
+      "env-review",
+    );
 
     usePaneLayoutStore.getState().clearTabInitialAgentOptions("review-tab", "env-review");
 
-    expect(usePaneLayoutStore.getState().getAllTabs("env-review")).toEqual([{
-      id: "review-tab",
-      type: "agent-native",
-      initialPrompt: "Review the diff",
-      initialAgentModel: undefined,
-      initialReasoningEffort: undefined,
-      initialExecutionProfileId: undefined,
-    }]);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-review")).toEqual([
+      {
+        id: "review-tab",
+        type: "agent-native",
+        initialPrompt: "Review the diff",
+        initialAgentModel: undefined,
+        initialReasoningEffort: undefined,
+        initialExecutionProfileId: undefined,
+      },
+    ]);
   });
 
   test("splits a pane and activates the pane containing the moved tab", () => {
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        { id: "tab-one", type: "plain" },
-        { id: "tab-two", type: "plain" },
-      ],
-      activeTabId: "tab-two",
-    }, "default", "env-split-action");
-
-    usePaneLayoutStore.getState().splitPane(
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "tab-one", type: "plain" },
+          { id: "tab-two", type: "plain" },
+        ],
+        activeTabId: "tab-two",
+      },
       "default",
-      "vertical",
-      "tab-two",
       "env-split-action",
     );
+
+    usePaneLayoutStore.getState().splitPane("default", "vertical", "tab-two", "env-split-action");
 
     const store = usePaneLayoutStore.getState();
     const root = store.getRoot("env-split-action");
@@ -2925,47 +3177,53 @@ describe("paneLayoutStore pane and tab actions", () => {
         { kind: "leaf", tabs: [{ id: "tab-two" }], activeTabId: "tab-two" },
       ],
     });
-    expect(getAllLeaves(root).map((leaf) => leaf.id)).toContain(store.getActivePaneId("env-split-action"));
+    expect(getAllLeaves(root).map((leaf) => leaf.id)).toContain(
+      store.getActivePaneId("env-split-action"),
+    );
     expect(store.getActivePane("env-split-action")?.activeTabId).toBe("tab-two");
   });
 
   test("updates nested split sizes and collapses nested panes", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "outer",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [{ id: "left-tab", type: "plain" }],
-          activeTabId: "left-tab",
-        },
-        {
-          kind: "split",
-          id: "inner",
-          direction: "vertical",
-          sizes: [50, 50],
-          depth: 2,
-          children: [
-            {
-              kind: "leaf",
-              id: "middle",
-              tabs: [{ id: "middle-tab", type: "plain" }],
-              activeTabId: "middle-tab",
-            },
-            {
-              kind: "leaf",
-              id: "right",
-              tabs: [{ id: "right-tab", type: "plain" }],
-              activeTabId: "right-tab",
-            },
-          ],
-        },
-      ],
-    }, "middle", "env-nested");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "outer",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "left-tab", type: "plain" }],
+            activeTabId: "left-tab",
+          },
+          {
+            kind: "split",
+            id: "inner",
+            direction: "vertical",
+            sizes: [50, 50],
+            depth: 2,
+            children: [
+              {
+                kind: "leaf",
+                id: "middle",
+                tabs: [{ id: "middle-tab", type: "plain" }],
+                activeTabId: "middle-tab",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [{ id: "right-tab", type: "plain" }],
+                activeTabId: "right-tab",
+              },
+            ],
+          },
+        ],
+      },
+      "middle",
+      "env-nested",
+    );
 
     const store = usePaneLayoutStore.getState();
     store.closePane("missing-pane", "env-nested");
@@ -3029,45 +3287,47 @@ describe("paneLayoutStore guard branches", () => {
     usePaneLayoutStore.getState().setActiveTab("default", "ghost-tab", "env-ghost-tab");
 
     const pane = usePaneLayoutStore.getState().getPane("default", "env-ghost-tab");
-    expect(usePaneLayoutStore.getState().getRoot("env-ghost-tab")).toBe(
-      originalRoot,
-    );
+    expect(usePaneLayoutStore.getState().getRoot("env-ghost-tab")).toBe(originalRoot);
     expect(pane?.tabs.map((tab) => tab.id)).toEqual(["tab-one"]);
     expect(pane?.activeTabId).toBe("tab-one");
   });
 
   test("getOpenFilePaths collects paths from every pane, duplicates included", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [
-            { id: "file-a", type: "file", fileData: { filePath: "/repo/a.ts" } },
-            { id: "plain-a", type: "plain" },
-            { id: "file-empty", type: "file", fileData: { filePath: "" } },
-          ],
-          activeTabId: "file-a",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [
-            // The same file opened in a second pane must still be reported so
-            // callers can see it is open, hence duplicates are preserved.
-            { id: "file-a-copy", type: "file", fileData: { filePath: "/repo/a.ts" } },
-            { id: "file-b", type: "file", fileData: { filePath: "/repo/b.ts" } },
-            { id: "file-no-data", type: "file" },
-          ],
-          activeTabId: "file-b",
-        },
-      ],
-    }, "left", "env-open-files");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [
+              { id: "file-a", type: "file", fileData: { filePath: "/repo/a.ts" } },
+              { id: "plain-a", type: "plain" },
+              { id: "file-empty", type: "file", fileData: { filePath: "" } },
+            ],
+            activeTabId: "file-a",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [
+              // The same file opened in a second pane must still be reported so
+              // callers can see it is open, hence duplicates are preserved.
+              { id: "file-a-copy", type: "file", fileData: { filePath: "/repo/a.ts" } },
+              { id: "file-b", type: "file", fileData: { filePath: "/repo/b.ts" } },
+              { id: "file-no-data", type: "file" },
+            ],
+            activeTabId: "file-b",
+          },
+        ],
+      },
+      "left",
+      "env-open-files",
+    );
 
     expect(usePaneLayoutStore.getState().getOpenFilePaths("env-open-files")).toEqual([
       "/repo/a.ts",
@@ -3120,20 +3380,14 @@ describe("paneLayoutStore guard branches", () => {
         direction: "horizontal",
         sizes: [50, 50],
         depth,
-        children: [
-          root,
-          { kind: "leaf", id: `filler-${depth}`, tabs: [], activeTabId: null },
-        ],
+        children: [root, { kind: "leaf", id: `filler-${depth}`, tabs: [], activeTabId: null }],
       };
     }
     seedPaneTree(root, "deep-target", "env-split-depth");
 
-    usePaneLayoutStore.getState().splitPane(
-      "deep-target",
-      "horizontal",
-      "tab-two",
-      "env-split-depth",
-    );
+    usePaneLayoutStore
+      .getState()
+      .splitPane("deep-target", "horizontal", "tab-two", "env-split-depth");
 
     expect(usePaneLayoutStore.getState().getRoot("env-split-depth")).toBe(root);
   });
@@ -3164,27 +3418,31 @@ describe("paneLayoutStore guard branches", () => {
     usePaneLayoutStore.getState().updateSizes("split-1", [30, 70]);
     expect(usePaneLayoutStore.getState().environments).toBe(before);
 
-    seedPaneTree({
-      kind: "split",
-      id: "outer",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [{ id: "left-tab", type: "plain" }],
-          activeTabId: "left-tab",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [{ id: "right-tab", type: "plain" }],
-          activeTabId: "right-tab",
-        },
-      ],
-    }, "left", "env-sizes");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "outer",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "left-tab", type: "plain" }],
+            activeTabId: "left-tab",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "right-tab", type: "plain" }],
+            activeTabId: "right-tab",
+          },
+        ],
+      },
+      "left",
+      "env-sizes",
+    );
     const seeded = usePaneLayoutStore.getState().environments;
 
     usePaneLayoutStore.getState().updateSizes("outer", [30, 70], "missing-env");
@@ -3212,20 +3470,25 @@ describe("paneLayoutStore guard branches", () => {
     usePaneLayoutStore.getState().clearTabInitialPrompt("tab-one");
     expect(usePaneLayoutStore.getState().environments).toBe(before);
 
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [{ id: "prompt-tab", type: "plain", initialPrompt: "Run the checks" }],
-      activeTabId: "prompt-tab",
-    }, "default", "env-clear-prompt");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [{ id: "prompt-tab", type: "plain", initialPrompt: "Run the checks" }],
+        activeTabId: "prompt-tab",
+      },
+      "default",
+      "env-clear-prompt",
+    );
     const seeded = usePaneLayoutStore.getState().environments;
 
     usePaneLayoutStore.getState().clearTabInitialPrompt("prompt-tab", "missing-env");
     usePaneLayoutStore.getState().clearTabInitialPrompt("missing-tab", "env-clear-prompt");
 
     expect(usePaneLayoutStore.getState().environments).toBe(seeded);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-clear-prompt")[0]?.initialPrompt)
-      .toBe("Run the checks");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-clear-prompt")[0]?.initialPrompt).toBe(
+      "Run the checks",
+    );
   });
 
   test("clearTabInitialAgentOptions is a no-op for unknown environments and tabs", () => {
@@ -3233,17 +3496,23 @@ describe("paneLayoutStore guard branches", () => {
     usePaneLayoutStore.getState().clearTabInitialAgentOptions("tab-one");
     expect(usePaneLayoutStore.getState().environments).toBe(before);
 
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [{
-        id: "review-tab",
-        type: "agent-native",
-        initialAgentModel: "gpt-5.6-sol",
-        initialReasoningEffort: "xhigh",
-      }],
-      activeTabId: "review-tab",
-    }, "default", "env-clear-options");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "review-tab",
+            type: "agent-native",
+            initialAgentModel: "gpt-5.6-sol",
+            initialReasoningEffort: "xhigh",
+          },
+        ],
+        activeTabId: "review-tab",
+      },
+      "default",
+      "env-clear-options",
+    );
     const seeded = usePaneLayoutStore.getState().environments;
 
     usePaneLayoutStore.getState().clearTabInitialAgentOptions("review-tab", "missing-env");
@@ -3272,9 +3541,9 @@ describe("paneLayoutStore guard branches", () => {
     usePaneLayoutStore.getState().clearTabAgentHandoff("missing-tab", "env-handoff-noop");
 
     expect(usePaneLayoutStore.getState().environments).toBe(seeded);
-    expect(
-      usePaneLayoutStore.getState().getAllTabs("env-handoff-noop")[0]?.agentHandoffId,
-    ).toBe("handoff-1");
+    expect(usePaneLayoutStore.getState().getAllTabs("env-handoff-noop")[0]?.agentHandoffId).toBe(
+      "handoff-1",
+    );
     expect(deleteAgentHandoff).not.toHaveBeenCalled();
   });
 });
@@ -3285,42 +3554,46 @@ describe("paneLayoutStore remaining branch coverage", () => {
   });
 
   test("selects the first nested sibling leaf when closing the active pane", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "outer",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "closing",
-          tabs: [{ id: "closing-tab", type: "file" }],
-          activeTabId: "closing-tab",
-        },
-        {
-          kind: "split",
-          id: "nested",
-          direction: "vertical",
-          sizes: [50, 50],
-          depth: 2,
-          children: [
-            {
-              kind: "leaf",
-              id: "nested-first",
-              tabs: [{ id: "first-tab", type: "file" }],
-              activeTabId: "first-tab",
-            },
-            {
-              kind: "leaf",
-              id: "nested-second",
-              tabs: [{ id: "second-tab", type: "file" }],
-              activeTabId: "second-tab",
-            },
-          ],
-        },
-      ],
-    }, "closing", "env-nested-sibling");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "outer",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "closing",
+            tabs: [{ id: "closing-tab", type: "file" }],
+            activeTabId: "closing-tab",
+          },
+          {
+            kind: "split",
+            id: "nested",
+            direction: "vertical",
+            sizes: [50, 50],
+            depth: 2,
+            children: [
+              {
+                kind: "leaf",
+                id: "nested-first",
+                tabs: [{ id: "first-tab", type: "file" }],
+                activeTabId: "first-tab",
+              },
+              {
+                kind: "leaf",
+                id: "nested-second",
+                tabs: [{ id: "second-tab", type: "file" }],
+                activeTabId: "second-tab",
+              },
+            ],
+          },
+        ],
+      },
+      "closing",
+      "env-nested-sibling",
+    );
 
     usePaneLayoutStore.getState().closePane("closing", "env-nested-sibling");
 
@@ -3328,40 +3601,41 @@ describe("paneLayoutStore remaining branch coverage", () => {
       kind: "split",
       id: "nested",
     });
-    expect(usePaneLayoutStore.getState().getActivePaneId("env-nested-sibling"))
-      .toBe("nested-first");
+    expect(usePaneLayoutStore.getState().getActivePaneId("env-nested-sibling")).toBe(
+      "nested-first",
+    );
   });
 
   test("appends a sole source tab when no destination index is provided", () => {
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "source",
-          tabs: [{ id: "moving", type: "file" }],
-          activeTabId: "moving",
-        },
-        {
-          kind: "leaf",
-          id: "target",
-          tabs: [{ id: "target-tab", type: "file" }],
-          activeTabId: "target-tab",
-        },
-      ],
-    }, "source", "env-append-move");
-
-    usePaneLayoutStore.getState().moveTab(
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "source",
+            tabs: [{ id: "moving", type: "file" }],
+            activeTabId: "moving",
+          },
+          {
+            kind: "leaf",
+            id: "target",
+            tabs: [{ id: "target-tab", type: "file" }],
+            activeTabId: "target-tab",
+          },
+        ],
+      },
       "source",
-      "target",
-      "moving",
-      undefined,
       "env-append-move",
     );
+
+    usePaneLayoutStore
+      .getState()
+      .moveTab("source", "target", "moving", undefined, "env-append-move");
 
     expect(usePaneLayoutStore.getState().getRoot("env-append-move")).toMatchObject({
       kind: "leaf",
@@ -3378,25 +3652,28 @@ describe("paneLayoutStore remaining branch coverage", () => {
       initialAgentModel: "keep-model",
       initialReasoningEffort: "high" as const,
     };
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        {
-          id: "target",
-          type: "agent-native",
-          initialAgentModel: "clear-model",
-          initialReasoningEffort: "xhigh",
-        },
-        sibling,
-      ],
-      activeTabId: "target",
-    }, "default", "env-clear-options-siblings");
-
-    usePaneLayoutStore.getState().clearTabInitialAgentOptions(
-      "target",
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          {
+            id: "target",
+            type: "agent-native",
+            initialAgentModel: "clear-model",
+            initialReasoningEffort: "xhigh",
+          },
+          sibling,
+        ],
+        activeTabId: "target",
+      },
+      "default",
       "env-clear-options-siblings",
     );
+
+    usePaneLayoutStore
+      .getState()
+      .clearTabInitialAgentOptions("target", "env-clear-options-siblings");
 
     const tabs = usePaneLayoutStore.getState().getAllTabs("env-clear-options-siblings");
     expect(tabs[0]).toMatchObject({
@@ -3464,10 +3741,10 @@ describe("paneLayoutStore remaining branch coverage", () => {
 
     expect(targetDispose).toHaveBeenCalledTimes(1);
     expect(retainedDispose).not.toHaveBeenCalled();
-    expect(useTerminalPortalStore.getState().hasTerminal("env-reset-portals", "target"))
-      .toBe(false);
-    expect(useTerminalPortalStore.getState().hasTerminal("env-retained", "retained"))
-      .toBe(true);
+    expect(useTerminalPortalStore.getState().hasTerminal("env-reset-portals", "target")).toBe(
+      false,
+    );
+    expect(useTerminalPortalStore.getState().hasTerminal("env-retained", "retained")).toBe(true);
   });
 
   test("removeTab disposes the removed tab's portal terminal", () => {
@@ -3477,40 +3754,31 @@ describe("paneLayoutStore remaining branch coverage", () => {
       type: "plain",
     });
     useTerminalPortalStore.setState({
-      terminals: new Map([[
-        createTerminalKey("env-remove-portal", "terminal-tab"),
-        {
-          environmentId: "env-remove-portal",
-          tabId: "terminal-tab",
-          terminal: { dispose: terminalDispose },
-          portalElement: document.createElement("div"),
-        } as never,
-      ]]),
+      terminals: new Map([
+        [
+          createTerminalKey("env-remove-portal", "terminal-tab"),
+          {
+            environmentId: "env-remove-portal",
+            tabId: "terminal-tab",
+            terminal: { dispose: terminalDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
     });
 
-    usePaneLayoutStore.getState().removeTab(
-      "default",
-      "terminal-tab",
-      "env-remove-portal",
-    );
+    usePaneLayoutStore.getState().removeTab("default", "terminal-tab", "env-remove-portal");
 
     expect(terminalDispose).toHaveBeenCalledTimes(1);
-    expect(
-      useTerminalPortalStore.getState().hasTerminal(
-        "env-remove-portal",
-        "terminal-tab",
-      ),
-    ).toBe(false);
+    expect(useTerminalPortalStore.getState().hasTerminal("env-remove-portal", "terminal-tab")).toBe(
+      false,
+    );
   });
 
   test("addTab ignores missing environments and pane ids", () => {
     const initialEnvironments = usePaneLayoutStore.getState().environments;
     usePaneLayoutStore.getState().addTab("default", { id: "tab", type: "file" });
-    usePaneLayoutStore.getState().addTab(
-      "default",
-      { id: "tab", type: "file" },
-      "missing-env",
-    );
+    usePaneLayoutStore.getState().addTab("default", { id: "tab", type: "file" }, "missing-env");
     expect(usePaneLayoutStore.getState().environments).toBe(initialEnvironments);
 
     seedSingleTabEnvironment("env-add-guards", null, {
@@ -3519,15 +3787,14 @@ describe("paneLayoutStore remaining branch coverage", () => {
     });
     const originalRoot = usePaneLayoutStore.getState().getRoot("env-add-guards");
 
-    usePaneLayoutStore.getState().addTab(
-      "missing-pane",
-      { id: "new-tab", type: "file" },
-      "env-add-guards",
-    );
+    usePaneLayoutStore
+      .getState()
+      .addTab("missing-pane", { id: "new-tab", type: "file" }, "env-add-guards");
 
     expect(usePaneLayoutStore.getState().getRoot("env-add-guards")).toBe(originalRoot);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-add-guards"))
-      .toEqual([{ id: "existing", type: "file" }]);
+    expect(usePaneLayoutStore.getState().getAllTabs("env-add-guards")).toEqual([
+      { id: "existing", type: "file" },
+    ]);
   });
 
   test("removeTab ignores missing environments, panes, and pane-tab mismatches", () => {
@@ -3536,57 +3803,55 @@ describe("paneLayoutStore remaining branch coverage", () => {
     usePaneLayoutStore.getState().removeTab("default", "tab", "missing-env");
     expect(usePaneLayoutStore.getState().environments).toBe(initialEnvironments);
 
-    seedPaneTree({
-      kind: "split",
-      id: "root-split",
-      direction: "horizontal",
-      sizes: [50, 50],
-      depth: 1,
-      children: [
-        {
-          kind: "leaf",
-          id: "left",
-          tabs: [{ id: "left-tab", type: "file" }],
-          activeTabId: "left-tab",
-        },
-        {
-          kind: "leaf",
-          id: "right",
-          tabs: [{ id: "right-tab", type: "plain" }],
-          activeTabId: "right-tab",
-        },
-      ],
-    }, "left", "env-remove-guards");
+    seedPaneTree(
+      {
+        kind: "split",
+        id: "root-split",
+        direction: "horizontal",
+        sizes: [50, 50],
+        depth: 1,
+        children: [
+          {
+            kind: "leaf",
+            id: "left",
+            tabs: [{ id: "left-tab", type: "file" }],
+            activeTabId: "left-tab",
+          },
+          {
+            kind: "leaf",
+            id: "right",
+            tabs: [{ id: "right-tab", type: "plain" }],
+            activeTabId: "right-tab",
+          },
+        ],
+      },
+      "left",
+      "env-remove-guards",
+    );
     const rightTerminalDispose = mock(() => {});
     useTerminalPortalStore.setState({
-      terminals: new Map([[
-        createTerminalKey("env-remove-guards", "right-tab"),
-        {
-          environmentId: "env-remove-guards",
-          tabId: "right-tab",
-          terminal: { dispose: rightTerminalDispose },
-          portalElement: document.createElement("div"),
-        } as never,
-      ]]),
+      terminals: new Map([
+        [
+          createTerminalKey("env-remove-guards", "right-tab"),
+          {
+            environmentId: "env-remove-guards",
+            tabId: "right-tab",
+            terminal: { dispose: rightTerminalDispose },
+            portalElement: document.createElement("div"),
+          } as never,
+        ],
+      ]),
     });
     const originalRoot = usePaneLayoutStore.getState().getRoot("env-remove-guards");
 
-    usePaneLayoutStore.getState().removeTab(
-      "missing-pane",
-      "right-tab",
-      "env-remove-guards",
-    );
-    usePaneLayoutStore.getState().removeTab(
-      "left",
-      "right-tab",
-      "env-remove-guards",
-    );
+    usePaneLayoutStore.getState().removeTab("missing-pane", "right-tab", "env-remove-guards");
+    usePaneLayoutStore.getState().removeTab("left", "right-tab", "env-remove-guards");
 
     expect(usePaneLayoutStore.getState().getRoot("env-remove-guards")).toBe(originalRoot);
     expect(rightTerminalDispose).not.toHaveBeenCalled();
-    expect(
-      useTerminalPortalStore.getState().hasTerminal("env-remove-guards", "right-tab"),
-    ).toBe(true);
+    expect(useTerminalPortalStore.getState().hasTerminal("env-remove-guards", "right-tab")).toBe(
+      true,
+    );
   });
 
   test("reorderTabs ignores missing scopes, panes, and unchanged indexes", () => {
@@ -3595,34 +3860,31 @@ describe("paneLayoutStore remaining branch coverage", () => {
     usePaneLayoutStore.getState().reorderTabs("default", 0, 1, "missing-env");
     expect(usePaneLayoutStore.getState().environments).toBe(initialEnvironments);
 
-    seedPaneTree({
-      kind: "leaf",
-      id: "default",
-      tabs: [
-        { id: "first", type: "file" },
-        { id: "second", type: "file" },
-      ],
-      activeTabId: "first",
-    }, "default", "env-reorder-guards");
+    seedPaneTree(
+      {
+        kind: "leaf",
+        id: "default",
+        tabs: [
+          { id: "first", type: "file" },
+          { id: "second", type: "file" },
+        ],
+        activeTabId: "first",
+      },
+      "default",
+      "env-reorder-guards",
+    );
     const originalRoot = usePaneLayoutStore.getState().getRoot("env-reorder-guards");
 
-    usePaneLayoutStore.getState().reorderTabs(
-      "missing-pane",
-      0,
-      1,
-      "env-reorder-guards",
-    );
-    usePaneLayoutStore.getState().reorderTabs(
-      "default",
-      1,
-      1,
-      "env-reorder-guards",
-    );
+    usePaneLayoutStore.getState().reorderTabs("missing-pane", 0, 1, "env-reorder-guards");
+    usePaneLayoutStore.getState().reorderTabs("default", 1, 1, "env-reorder-guards");
 
-    expect(usePaneLayoutStore.getState().getRoot("env-reorder-guards"))
-      .toBe(originalRoot);
-    expect(usePaneLayoutStore.getState().getAllTabs("env-reorder-guards")
-      .map(({ id }) => id)).toEqual(["first", "second"]);
+    expect(usePaneLayoutStore.getState().getRoot("env-reorder-guards")).toBe(originalRoot);
+    expect(
+      usePaneLayoutStore
+        .getState()
+        .getAllTabs("env-reorder-guards")
+        .map(({ id }) => id),
+    ).toEqual(["first", "second"]);
   });
 
   test("setActivePane ignores missing environments and pane ids", () => {
@@ -3637,13 +3899,8 @@ describe("paneLayoutStore remaining branch coverage", () => {
       type: "plain",
     });
     const seeded = usePaneLayoutStore.getState().environments;
-    usePaneLayoutStore.getState().setActivePane(
-      "missing-pane",
-      "env-active-pane-guard",
-    );
+    usePaneLayoutStore.getState().setActivePane("missing-pane", "env-active-pane-guard");
     expect(usePaneLayoutStore.getState().environments).toBe(seeded);
-    expect(
-      usePaneLayoutStore.getState().getActivePaneId("env-active-pane-guard"),
-    ).toBe("default");
+    expect(usePaneLayoutStore.getState().getActivePaneId("env-active-pane-guard")).toBe("default");
   });
 });

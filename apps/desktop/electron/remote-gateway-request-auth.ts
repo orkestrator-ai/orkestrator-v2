@@ -40,12 +40,17 @@ function previewInitiatorScope(details: GatewayRequestDetails): string | null {
   return frameBrowserPreviewScope(details.frame) ?? browserPreviewScope(details.referrer);
 }
 
-function canAttachGatewayAuthorization(details: GatewayRequestDetails, browserPreviewOnly: boolean): boolean {
+function canAttachGatewayAuthorization(
+  details: GatewayRequestDetails,
+  browserPreviewOnly: boolean,
+): boolean {
   const initiatorScope = previewInitiatorScope(details);
   const targetScope = browserPreviewScope(details.url);
   if (browserPreviewOnly) {
-    return targetScope !== null
-      && (details.resourceType === "mainFrame" || targetScope === initiatorScope);
+    return (
+      targetScope !== null &&
+      (details.resourceType === "mainFrame" || targetScope === initiatorScope)
+    );
   }
   if (initiatorScope) return targetScope === initiatorScope;
   // A new browser preview is the only gateway navigation an untrusted subframe
@@ -60,9 +65,11 @@ function withoutAmbientGatewayCredentials(headers: Record<string, string>): Reco
   return Object.fromEntries(
     Object.entries(headers).filter(([name]) => {
       const normalized = name.toLowerCase();
-      return normalized !== "authorization"
-        && normalized !== "cookie"
-        && normalized !== "proxy-authorization";
+      return (
+        normalized !== "authorization" &&
+        normalized !== "cookie" &&
+        normalized !== "proxy-authorization"
+      );
     }),
   );
 }
@@ -99,12 +106,17 @@ export function installRemoteGatewayRequestAuth(
   });
   webRequest.onHeadersReceived(filter, (details, callback) => {
     const authorization = getAuthorization(details.url);
-    if (!authorization || !canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)) {
+    if (
+      !authorization ||
+      !canAttachGatewayAuthorization(details, options.browserPreviewOnly === true)
+    ) {
       callback({ responseHeaders: details.responseHeaders });
       return;
     }
     const responseHeaders = Object.fromEntries(
-      Object.entries(details.responseHeaders ?? {}).filter(([name]) => name.toLowerCase() !== "access-control-allow-origin"),
+      Object.entries(details.responseHeaders ?? {}).filter(
+        ([name]) => name.toLowerCase() !== "access-control-allow-origin",
+      ),
     );
     callback({
       responseHeaders: {

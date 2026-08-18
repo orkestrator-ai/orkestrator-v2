@@ -38,9 +38,7 @@ async function authenticatedInvoke(page: Page, status: Status) {
   // Exercise the exact host command agents use. Its stdout is parsed in memory
   // and never copied into Playwright output, so the one-shot code stays out of
   // traces and reports.
-  const command = spawnSync("bun", [
-    "run", "dev:login", "--", "--profile", profile, "--json",
-  ], {
+  const command = spawnSync("bun", ["run", "dev:login", "--", "--profile", profile, "--json"], {
     cwd: repositoryRoot,
     encoding: "utf8",
   });
@@ -57,11 +55,14 @@ async function authenticatedInvoke(page: Page, status: Status) {
   expect(page.url()).not.toContain("/__orkestrator/agent-test/login");
   expect(page.url()).not.toContain("code=");
   return async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
-    const invokeResponse = await page.request.post(new URL("/__orkestrator/invoke", status.browserUrl!).href, {
-      data: { command, args },
-    });
+    const invokeResponse = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl!).href,
+      {
+        data: { command, args },
+      },
+    );
     expect(invokeResponse.ok(), `${command}: ${await invokeResponse.text()}`).toBe(true);
-    return (await invokeResponse.json() as { result: T }).result;
+    return ((await invokeResponse.json()) as { result: T }).result;
   };
 }
 
@@ -78,7 +79,9 @@ test("real browser gateway exercises an authoritative local environment", async 
   expect(fixture).toBeTruthy();
 
   await page.goto(status.browserUrl!);
-  await expect(page.getByText(fixture!.name, { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(fixture!.name, { exact: false }).first()).toBeVisible({
+    timeout: 30_000,
+  });
 
   const environment = await invoke<Environment>("create_environment", {
     projectId: fixture!.id,
@@ -88,7 +91,9 @@ test("real browser gateway exercises an authoritative local environment", async 
   });
   try {
     await invoke("start_environment", { environmentId: environment.id });
-    const hydrated = await invoke<Environment>("get_environment", { environmentId: environment.id });
+    const hydrated = await invoke<Environment>("get_environment", {
+      environmentId: environment.id,
+    });
     expect(hydrated.worktreePath).toBeTruthy();
     expect(hydrated.worktreePath!.includes(`${path.sep}worktrees${path.sep}`)).toBe(true);
 
@@ -110,21 +115,32 @@ test("real browser gateway exercises an authoritative local environment", async 
     await invoke("get_projects");
     await invoke("get_environments", { projectId: fixture!.id });
     await page.reload();
-    await expect(page.getByText(fixture!.name, { exact: false }).first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText(fixture!.name, { exact: false }).first()).toBeVisible({
+      timeout: 30_000,
+    });
 
-    await expect.poll(
-      () => invoke<string>("get_terminal_output_buffer", { sessionId: terminal.sessionId }),
-      { timeout: 15_000 },
-    ).toContain("background-done");
+    await expect
+      .poll(() => invoke<string>("get_terminal_output_buffer", { sessionId: terminal.sessionId }), {
+        timeout: 15_000,
+      })
+      .toContain("background-done");
     await invoke<void>("refresh_environment_diff_stats", {
       environmentId: environment.id,
     });
-    await expect.poll(async () => {
-      const snapshot = await invoke<{
-        entries: Array<{ environmentId: string; stats: { filesChanged: number } }>;
-      }>("get_environment_diff_stats");
-      return snapshot.entries.find((entry) => entry.environmentId === environment.id)?.stats.filesChanged ?? 0;
-    }, { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect
+      .poll(
+        async () => {
+          const snapshot = await invoke<{
+            entries: Array<{ environmentId: string; stats: { filesChanged: number } }>;
+          }>("get_environment_diff_stats");
+          return (
+            snapshot.entries.find((entry) => entry.environmentId === environment.id)?.stats
+              .filesChanged ?? 0
+          );
+        },
+        { timeout: 15_000 },
+      )
+      .toBeGreaterThan(0);
     await invoke("close_local_terminal_session", { sessionId: terminal.sessionId });
   } finally {
     await invoke("stop_environment", { environmentId: environment.id }).catch(() => undefined);
@@ -133,7 +149,10 @@ test("real browser gateway exercises an authoritative local environment", async 
 });
 
 test("Docker fixture rejects containers owned by another profile", async ({ page }) => {
-  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires an agent-test profile seeded with a container fixture");
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1",
+    "requires an agent-test profile seeded with a container fixture",
+  );
 
   const status = await profileStatus();
   expect(status.status).toBe("ready");
@@ -145,7 +164,9 @@ test("Docker fixture rejects containers owned by another profile", async ({ page
   const fixture = projects.find((project) => project.localPath === status.testProject);
   expect(fixture).toBeTruthy();
   const environments = await invoke<Environment[]>("get_environments", { projectId: fixture!.id });
-  const containerFixture = environments.find((environment) => environment.name === "fixture-container");
+  const containerFixture = environments.find(
+    (environment) => environment.name === "fixture-container",
+  );
   expect(containerFixture?.containerId).toBeTruthy();
   expect(containerFixture?.status).toBe("running");
 
@@ -154,20 +175,29 @@ test("Docker fixture rejects containers owned by another profile", async ({ page
     requestedId: profile,
     flavor: "agent-test",
   });
-  const foreign = spawnSync("docker", [
-    "create",
-    "--label", "app=orkestrator-v2",
-    "--label", "orkestrator-owner=foreign-agent-test-profile",
-    runtime.dockerImage,
-    "true",
-  ], { encoding: "utf8" });
+  const foreign = spawnSync(
+    "docker",
+    [
+      "create",
+      "--label",
+      "app=orkestrator-v2",
+      "--label",
+      "orkestrator-owner=foreign-agent-test-profile",
+      runtime.dockerImage,
+      "true",
+    ],
+    { encoding: "utf8" },
+  );
   expect(foreign.status, foreign.stderr).toBe(0);
   const foreignContainerId = foreign.stdout.trim();
   expect(foreignContainerId).toBeTruthy();
   try {
-    const response = await page.request.post(new URL("/__orkestrator/invoke", status.browserUrl!).href, {
-      data: { command: "get_container_logs", args: { containerId: foreignContainerId } },
-    });
+    const response = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl!).href,
+      {
+        data: { command: "get_container_logs", args: { containerId: foreignContainerId } },
+      },
+    );
     expect(response.ok()).toBe(false);
     expect(await response.text()).toContain("not owned by this development profile");
 
@@ -181,8 +211,13 @@ test("Docker fixture rejects containers owned by another profile", async ({ page
   }
 });
 
-test("Docker fixture ships a Playwright browser that launches for both container users", async ({ page }) => {
-  test.skip(process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1", "requires an agent-test profile seeded with a container fixture");
+test("Docker fixture ships a Playwright browser that launches for both container users", async ({
+  page,
+}) => {
+  test.skip(
+    process.env.ORKESTRATOR_AGENT_TEST_DOCKER !== "1",
+    "requires an agent-test profile seeded with a container fixture",
+  );
   // Chromium's first launch pays for process startup in a cold container.
   test.setTimeout(180_000);
 
@@ -193,7 +228,9 @@ test("Docker fixture ships a Playwright browser that launches for both container
   const fixture = projects.find((project) => project.localPath === status.testProject);
   expect(fixture).toBeTruthy();
   const environments = await invoke<Environment[]>("get_environments", { projectId: fixture!.id });
-  const containerFixture = environments.find((environment) => environment.name === "fixture-container");
+  const containerFixture = environments.find(
+    (environment) => environment.name === "fixture-container",
+  );
   expect(containerFixture?.containerId).toBeTruthy();
   expect(containerFixture?.status).toBe("running");
   const containerId = containerFixture!.containerId!;
@@ -202,9 +239,11 @@ test("Docker fixture ships a Playwright browser that launches for both container
   // well under what a real page needs and fails as a mid-run renderer crash, so
   // assert the mount the container was actually created with rather than the
   // argv that asked for it.
-  const shm = spawnSync("docker", [
-    "exec", containerId, "sh", "-c", "df -k /dev/shm | awk 'NR==2 {print $2}'",
-  ], { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" });
+  const shm = spawnSync(
+    "docker",
+    ["exec", containerId, "sh", "-c", "df -k /dev/shm | awk 'NR==2 {print $2}'"],
+    { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" },
+  );
   expect(shm.error, shm.stderr).toBeUndefined();
   expect(shm.status, shm.stderr).toBe(0);
   const shmMegabytes = Number(shm.stdout.trim()) / 1024;
@@ -215,13 +254,20 @@ test("Docker fixture ships a Playwright browser that launches for both container
   // and for both identities, because Chromium refuses to run as uid 0 unless
   // Playwright's default `chromiumSandbox: false` supplies --no-sandbox.
   for (const user of ["node", "orkroot"]) {
-    const launch = spawnSync("docker", [
-      "exec",
-      "-u", user,
-      "-e", "NODE_PATH=/usr/local/share/npm-global/lib/node_modules",
-      containerId,
-      "node", "/usr/local/share/verify-playwright.cjs",
-    ], { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" });
+    const launch = spawnSync(
+      "docker",
+      [
+        "exec",
+        "-u",
+        user,
+        "-e",
+        "NODE_PATH=/usr/local/share/npm-global/lib/node_modules",
+        containerId,
+        "node",
+        "/usr/local/share/verify-playwright.cjs",
+      ],
+      { encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" },
+    );
     expect(launch.error, `${user}: ${launch.stderr}`).toBeUndefined();
     expect(launch.status, `${user}: ${launch.stderr}`).toBe(0);
     expect(launch.stdout).toContain("chromium launch verified");

@@ -214,7 +214,6 @@ describe("codex bridge private boundary coverage", () => {
     expect(metadataCalls.every((call) => call.paths === paths)).toBe(true);
   });
 
-
   test("serialized SSE writer bounds its backlog and drops frames after overflow", async () => {
     let releaseFirstWrite!: () => void;
     const firstWriteGate = new Promise<void>((resolve) => {
@@ -298,11 +297,7 @@ describe("codex bridge private boundary coverage", () => {
     handler();
     await Bun.sleep(0);
 
-    expect(calls).toEqual([
-      ["clear", timer],
-      ["shutdown-titles"],
-      ["exit", 0],
-    ]);
+    expect(calls).toEqual([["clear", timer], ["shutdown-titles"], ["exit", 0]]);
   });
 
   test("drains the Codex engine before exiting", async () => {
@@ -420,16 +415,14 @@ describe("codex bridge private boundary coverage", () => {
       return marker;
     };
 
-    expect(__testing.startBridgeServerForTesting(
-      { CODEX_BRIDGE_NO_SERVER: "1" },
-      start,
-    )).toBeUndefined();
+    expect(
+      __testing.startBridgeServerForTesting({ CODEX_BRIDGE_NO_SERVER: "1" }, start),
+    ).toBeUndefined();
     expect(calls).toEqual([]);
 
-    expect(__testing.startBridgeServerForTesting(
-      { PORT: "5123", HOSTNAME: "127.0.0.1" },
-      start,
-    )).toBe(marker);
+    expect(
+      __testing.startBridgeServerForTesting({ PORT: "5123", HOSTNAME: "127.0.0.1" }, start),
+    ).toBe(marker);
     expect(calls).toEqual([
       expect.objectContaining({ port: 5123, hostname: "127.0.0.1", fetch: expect.any(Function) }),
     ]);
@@ -504,20 +497,15 @@ describe("codex bridge private boundary coverage", () => {
     console.error = (...args: unknown[]) => errors.push(args);
 
     try {
-      await __testing.startSelectedEngineForTesting(
-        {},
-        {
-          start: async () => undefined,
-          getHealth: () => ({ codexVersion: "0.145.0" }),
-        } as never,
-      );
+      await __testing.startSelectedEngineForTesting({}, {
+        start: async () => undefined,
+        getHealth: () => ({ codexVersion: "0.145.0" }),
+      } as never);
     } finally {
       console.error = originalConsoleError;
     }
 
-    expect(errors).toEqual([
-      ["[codex-bridge] app-server engine ready (codex 0.145.0)"],
-    ]);
+    expect(errors).toEqual([["[codex-bridge] app-server engine ready (codex 0.145.0)"]]);
   });
 
   test("contains idle cleanup failures", async () => {
@@ -535,21 +523,16 @@ describe("codex bridge private boundary coverage", () => {
       console.warn = originalWarn;
     }
 
-    expect(warnings).toEqual([
-      ["[codex-bridge] Idle sweep failed:", expect.any(Error)],
-    ]);
+    expect(warnings).toEqual([["[codex-bridge] Idle sweep failed:", expect.any(Error)]]);
   });
 
   test("contains rejected SSE keepalive writes", async () => {
     const errors: unknown[][] = [];
     const originalConsoleError = console.error;
     console.error = (...args: unknown[]) => errors.push(args);
-    const timer = __testing.startSseKeepaliveForTesting(
-      async () => {
-        throw new Error("closed stream");
-      },
-      1,
-    );
+    const timer = __testing.startSseKeepaliveForTesting(async () => {
+      throw new Error("closed stream");
+    }, 1);
 
     try {
       for (let attempt = 0; attempt < 20 && errors.length === 0; attempt += 1) {
@@ -574,12 +557,9 @@ describe("codex bridge private boundary coverage", () => {
     });
     const revision = __testing.eventRingForTesting().latestRevision;
     const writes: Array<{ event: string; data: string; id?: string }> = [];
-    const timer = __testing.startSseKeepaliveForTesting(
-      async (frame) => {
-        writes.push(frame);
-      },
-      5,
-    );
+    const timer = __testing.startSseKeepaliveForTesting(async (frame) => {
+      writes.push(frame);
+    }, 5);
 
     try {
       jest.advanceTimersByTime(5);
@@ -589,11 +569,13 @@ describe("codex bridge private boundary coverage", () => {
       jest.useRealTimers();
     }
 
-    expect(writes).toEqual([{
-      event: "keepalive",
-      id: String(revision),
-      data: "{}",
-    }]);
+    expect(writes).toEqual([
+      {
+        event: "keepalive",
+        id: String(revision),
+        data: "{}",
+      },
+    ]);
   });
 
   test("keeps an idle heartbeat floor while using the faster active cadence", async () => {
@@ -648,19 +630,25 @@ describe("codex bridge private boundary coverage", () => {
         __testing.FALLBACK_MODELS,
       );
 
-      writeFileSync(cachePath, JSON.stringify({
-        version: __testing.BRIDGE_MODEL_CACHE_VERSION - 1,
-        models: __testing.FALLBACK_MODELS,
-      }));
+      writeFileSync(
+        cachePath,
+        JSON.stringify({
+          version: __testing.BRIDGE_MODEL_CACHE_VERSION - 1,
+          models: __testing.FALLBACK_MODELS,
+        }),
+      );
       await expect(__testing.readPersistedBridgeCache()).resolves.toBeNull();
 
       writeFileSync(cachePath, "{malformed");
       await expect(__testing.readPersistedBridgeCache()).resolves.toBeNull();
 
-      writeFileSync(cachePath, JSON.stringify({
-        version: __testing.BRIDGE_MODEL_CACHE_VERSION,
-        models: [],
-      }));
+      writeFileSync(
+        cachePath,
+        JSON.stringify({
+          version: __testing.BRIDGE_MODEL_CACHE_VERSION,
+          models: [],
+        }),
+      );
       await expect(__testing.readPersistedBridgeCache()).resolves.toBeNull();
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
@@ -698,13 +686,18 @@ describe("codex bridge private boundary coverage", () => {
     const path = join(root, "models_cache.json");
 
     try {
-      writeFileSync(path, JSON.stringify({
-        models: [{
-          slug: "from-cli-cache",
-          display_name: "From CLI cache",
-          supported_reasoning_levels: [{ effort: "medium" }],
-        }],
-      }));
+      writeFileSync(
+        path,
+        JSON.stringify({
+          models: [
+            {
+              slug: "from-cli-cache",
+              display_name: "From CLI cache",
+              supported_reasoning_levels: [{ effort: "medium" }],
+            },
+          ],
+        }),
+      );
       await expect(__testing.readCodexCliModelCache()).resolves.toEqual([
         expect.objectContaining({ id: "from-cli-cache", name: "From CLI cache" }),
       ]);
@@ -726,16 +719,18 @@ describe("codex bridge private boundary coverage", () => {
       const failure = async () => {
         throw new Error("debug models unavailable");
       };
-      await expect(__testing.fetchLiveModelsFromCliForTesting(
-        failure as never,
-        { CODEX_PATH: "/opt/test-codex" },
-      )).resolves.toBeNull();
+      await expect(
+        __testing.fetchLiveModelsFromCliForTesting(failure as never, {
+          CODEX_PATH: "/opt/test-codex",
+        }),
+      ).resolves.toBeNull();
 
       const empty = async () => ({ stdout: JSON.stringify({ models: [] }), stderr: "" });
-      await expect(__testing.fetchLiveModelsFromCliForTesting(
-        empty as never,
-        { CODEX_PATH: "/opt/test-codex" },
-      )).resolves.toBeNull();
+      await expect(
+        __testing.fetchLiveModelsFromCliForTesting(empty as never, {
+          CODEX_PATH: "/opt/test-codex",
+        }),
+      ).resolves.toBeNull();
     } finally {
       console.warn = originalWarn;
     }
@@ -750,10 +745,10 @@ describe("codex bridge private boundary coverage", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
 
-    expect(__testing.sanitizeLogFileComponentForTesting("../unsafe:id%"))
-      .toBe(".._unsafe_id_");
-    expect(__testing.normalizeLogPayloadForTesting({ nested: [1, true] }))
-      .toEqual({ nested: [1, true] });
+    expect(__testing.sanitizeLogFileComponentForTesting("../unsafe:id%")).toBe(".._unsafe_id_");
+    expect(__testing.normalizeLogPayloadForTesting({ nested: [1, true] })).toEqual({
+      nested: [1, true],
+    });
     expect(__testing.normalizeLogPayloadForTesting(circular)).toBe("[object Object]");
     await __testing.writeCodexRawLogForTesting(
       "../unsafe:id%",
@@ -779,10 +774,12 @@ describe("codex bridge private boundary coverage", () => {
     console.error = (...args: unknown[]) => errors.push(args);
 
     try {
-      await expect(__testing.writeCodexRawLogForTesting("session", {}, null))
-        .resolves.toBeUndefined();
-      await expect(__testing.writeCodexRawLogForTesting("session", {}, blockingFile))
-        .resolves.toBeUndefined();
+      await expect(
+        __testing.writeCodexRawLogForTesting("session", {}, null),
+      ).resolves.toBeUndefined();
+      await expect(
+        __testing.writeCodexRawLogForTesting("session", {}, blockingFile),
+      ).resolves.toBeUndefined();
     } finally {
       console.error = originalConsoleError;
     }
@@ -797,65 +794,80 @@ describe("codex bridge private boundary coverage", () => {
     const extract = __testing.extractPersistedMessageTextForTesting;
 
     expect(extract("not-an-array", "assistant")).toBeNull();
-    expect(extract([null, 1, { type: "input_text", text: "wrong role" }], "assistant"))
-      .toBeNull();
+    expect(extract([null, 1, { type: "input_text", text: "wrong role" }], "assistant")).toBeNull();
     expect(extract([{ type: "output_text", text: "   " }], "assistant")).toBeNull();
-    expect(extract([
-      { type: "output_text", text: "first" },
-      { type: "output_text", text: "second" },
-    ], "assistant")).toBe("first\nsecond");
-    expect(extract([
-      { type: "input_text", text: "# AGENTS.md instructions for /tmp/repo\nignored" },
-    ], "user")).toBeNull();
-    expect(extract([
-      {
-        type: "input_text",
-        text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
-      },
-    ], "user")).toBeNull();
-    expect(extract([
-      {
-        type: "input_text",
-        text: "<recommended_plugins>\nPlease compare these plugin recommendations.",
-      },
-    ], "user")).toBe(
-      "<recommended_plugins>\nPlease compare these plugin recommendations.",
-    );
-    expect(extract([{ type: "input_text", text: "user prompt" }], "user"))
-      .toBe("user prompt");
+    expect(
+      extract(
+        [
+          { type: "output_text", text: "first" },
+          { type: "output_text", text: "second" },
+        ],
+        "assistant",
+      ),
+    ).toBe("first\nsecond");
+    expect(
+      extract(
+        [{ type: "input_text", text: "# AGENTS.md instructions for /tmp/repo\nignored" }],
+        "user",
+      ),
+    ).toBeNull();
+    expect(
+      extract(
+        [
+          {
+            type: "input_text",
+            text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+          },
+        ],
+        "user",
+      ),
+    ).toBeNull();
+    expect(
+      extract(
+        [
+          {
+            type: "input_text",
+            text: "<recommended_plugins>\nPlease compare these plugin recommendations.",
+          },
+        ],
+        "user",
+      ),
+    ).toBe("<recommended_plugins>\nPlease compare these plugin recommendations.");
+    expect(extract([{ type: "input_text", text: "user prompt" }], "user")).toBe("user prompt");
   });
 
   test("covers persisted metadata fallbacks, aliases, and cached blank titles", async () => {
     const root = temporaryRoot();
     const transcriptPath = join(root, "rollout-alias-thread.jsonl");
-    writeFileSync(transcriptPath, [
-      JSON.stringify({
-        timestamp: "2026-07-17T10:00:00.000Z",
-        type: "session_meta",
-        payload: { id: "real-thread", cwd: "/workspace" },
-      }),
-      "",
-    ].join("\n"));
+    writeFileSync(
+      transcriptPath,
+      [
+        JSON.stringify({
+          timestamp: "2026-07-17T10:00:00.000Z",
+          type: "session_meta",
+          payload: { id: "real-thread", cwd: "/workspace" },
+        }),
+        "",
+      ].join("\n"),
+    );
 
-    await expect(__testing.getPersistedSessionMetaForTesting(
-      "missing",
-      "Fallback",
-      "2026-07-17T11:00:00.000Z",
-      undefined,
-      [],
-    )).resolves.toEqual({
+    await expect(
+      __testing.getPersistedSessionMetaForTesting(
+        "missing",
+        "Fallback",
+        "2026-07-17T11:00:00.000Z",
+        undefined,
+        [],
+      ),
+    ).resolves.toEqual({
       id: "missing",
       title: "Fallback",
       titleSource: "codex",
       updatedAt: "2026-07-17T11:00:00.000Z",
     });
-    await expect(__testing.getPersistedSessionMetaForTesting(
-      "missing",
-      undefined,
-      undefined,
-      undefined,
-      [],
-    )).resolves.toBeNull();
+    await expect(
+      __testing.getPersistedSessionMetaForTesting("missing", undefined, undefined, undefined, []),
+    ).resolves.toBeNull();
 
     const aliased = await __testing.getPersistedSessionMetaForTesting(
       "alias-thread",
@@ -895,13 +907,11 @@ describe("codex bridge private boundary coverage", () => {
 
     const malformedPath = join(root, "rollout-malformed.jsonl");
     writeFileSync(malformedPath, '{"type":"event_msg","payload":{}}\n');
-    await expect(__testing.getPersistedSessionMetaForTesting(
-      "malformed",
-      "Recovered",
-      undefined,
-      undefined,
-      [malformedPath],
-    )).resolves.toMatchObject({
+    await expect(
+      __testing.getPersistedSessionMetaForTesting("malformed", "Recovered", undefined, undefined, [
+        malformedPath,
+      ]),
+    ).resolves.toMatchObject({
       id: "malformed",
       title: "Recovered",
       transcriptPath: malformedPath,
@@ -915,8 +925,9 @@ describe("codex bridge private boundary coverage", () => {
     mkdirSync(process.env.CODEX_HOME, { recursive: true });
 
     try {
-      await expect(__testing.hydrateMessagesFromPersistedSessionForTesting("missing-thread"))
-        .resolves.toEqual({ messages: [], title: undefined });
+      await expect(
+        __testing.hydrateMessagesFromPersistedSessionForTesting("missing-thread"),
+      ).resolves.toEqual({ messages: [], title: undefined });
     } finally {
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
@@ -968,15 +979,15 @@ describe("codex bridge private boundary coverage", () => {
     expect(events).toEqual([{ event: "open" }]);
   });
 
-
   test("reads optional text files and returns undefined for missing paths", async () => {
     const root = temporaryRoot();
     const path = join(root, "present.txt");
     writeFileSync(path, "present", "utf8");
 
     await expect(__testing.readTextFileIfPresentForTesting(path)).resolves.toBe("present");
-    await expect(__testing.readTextFileIfPresentForTesting(join(root, "missing.txt")))
-      .resolves.toBeUndefined();
+    await expect(
+      __testing.readTextFileIfPresentForTesting(join(root, "missing.txt")),
+    ).resolves.toBeUndefined();
   });
 
   test("keeps the newest duplicate persisted transcript metadata", async () => {
@@ -1016,11 +1027,14 @@ describe("codex bridge private boundary coverage", () => {
   });
 
   test("merges persisted metadata without allowing older duplicates to win", () => {
-    const sessions = new Map<string, {
-      id: string;
-      updatedAt: string;
-      transcriptPath?: string;
-    }>();
+    const sessions = new Map<
+      string,
+      {
+        id: string;
+        updatedAt: string;
+        transcriptPath?: string;
+      }
+    >();
     const older = {
       id: "thread",
       updatedAt: "2026-07-17T10:00:00.000Z",

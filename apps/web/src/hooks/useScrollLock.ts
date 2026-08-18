@@ -64,12 +64,14 @@ export function clearPersistedScrollState(persistKey: string) {
  */
 export function useScrollLock(
   scrollRef: RefObject<HTMLDivElement | null>,
-  options: UseScrollLockOptions = {}
+  options: UseScrollLockOptions = {},
 ): UseScrollLockReturn {
   const { scrollTrigger, mountTrigger, isActive = true, persistKey } = options;
 
   const initialPersistedState = persistKey ? persistedScrollState.get(persistKey) : undefined;
-  const [isScrollLocked, setIsScrollLocked] = useState(initialPersistedState?.isScrollLocked ?? true);
+  const [isScrollLocked, setIsScrollLocked] = useState(
+    initialPersistedState?.isScrollLocked ?? true,
+  );
   const [isAtBottom, setIsAtBottom] = useState(initialPersistedState?.isAtBottom ?? true);
   // Track the viewport element in state to trigger re-renders when it becomes available
   const [viewportElement, setViewportElement] = useState<HTMLElement | null>(null);
@@ -110,11 +112,9 @@ export function useScrollLock(
         return root;
       }
       // Try Radix's internal attribute first, then fall back to data-slot
-      return (
-        root.querySelector("[data-radix-scroll-area-viewport]") ||
+      return (root.querySelector("[data-radix-scroll-area-viewport]") ||
         root.querySelector('[data-slot="scroll-area-viewport"]') ||
-        root.querySelector('[data-scroll-viewport="true"]')
-      ) as HTMLElement | null;
+        root.querySelector('[data-scroll-viewport="true"]')) as HTMLElement | null;
     };
 
     // Try immediately
@@ -139,7 +139,7 @@ export function useScrollLock(
           console.warn(
             "[useScrollLock] Failed to find viewport after",
             VIEWPORT_POLL_MAX_ATTEMPTS,
-            "attempts"
+            "attempts",
           );
         }
         clearInterval(interval);
@@ -147,7 +147,7 @@ export function useScrollLock(
     }, VIEWPORT_POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mountTrigger intentionally re-runs search when it changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mountTrigger intentionally re-runs search when it changes
   }, [scrollRef, mountTrigger]);
 
   // Check initial scroll position when viewport becomes available

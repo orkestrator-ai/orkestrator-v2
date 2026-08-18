@@ -16,9 +16,7 @@ import {
 } from "./normalization.js";
 import { BaselineMap } from "./diff-budget.js";
 
-async function withIsolatedTempDir<T>(
-  callback: (directory: string) => Promise<T>,
-): Promise<T> {
+async function withIsolatedTempDir<T>(callback: (directory: string) => Promise<T>): Promise<T> {
   const directory = await mkdtemp(join(tmpdir(), "normalization-test-"));
   const previousTempDir = process.env.TMPDIR;
   process.env.TMPDIR = directory;
@@ -48,30 +46,45 @@ describe("reasoning normalization", () => {
       "\uFE0F",
       " \u200b\u2060\n",
     ]) {
-      expect(await itemToParts({
-        id: "reasoning",
-        type: "reasoning",
-        text,
-      }, "/tmp")).toEqual([]);
+      expect(
+        await itemToParts(
+          {
+            id: "reasoning",
+            type: "reasoning",
+            text,
+          },
+          "/tmp",
+        ),
+      ).toEqual([]);
     }
   });
 
   test("preserves non-empty thinking content byte-for-byte", async () => {
     const content = "  Inspecting the workspace.\n";
-    expect(await itemToParts({
-      id: "reasoning",
-      type: "reasoning",
-      text: content,
-    }, "/tmp")).toEqual([{ type: "thinking", content }]);
+    expect(
+      await itemToParts(
+        {
+          id: "reasoning",
+          type: "reasoning",
+          text: content,
+        },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "thinking", content }]);
   });
 
   test("preserves meaningful emoji containing default-ignorable joiners", async () => {
     const content = " \u{1F469}\u200D\u{1F4BB}\uFE0F ";
-    expect(await itemToParts({
-      id: "reasoning",
-      type: "reasoning",
-      text: content,
-    }, "/tmp")).toEqual([{ type: "thinking", content }]);
+    expect(
+      await itemToParts(
+        {
+          id: "reasoning",
+          type: "reasoning",
+          text: content,
+        },
+        "/tmp",
+      ),
+    ).toEqual([{ type: "thinking", content }]);
   });
 });
 
@@ -116,9 +129,7 @@ describe("diff line counting", () => {
 
 describe("git diff fallbacks", () => {
   test("returns undefined when git cannot read HEAD content", async () => {
-    expect(
-      await readGitHeadTextFile("/path/that/does/not/exist", "missing.txt"),
-    ).toBeUndefined();
+    expect(await readGitHeadTextFile("/path/that/does/not/exist", "missing.txt")).toBeUndefined();
   });
 
   test("returns undefined when git HEAD output exceeds the read cap", async () => {
@@ -132,11 +143,7 @@ describe("git diff fallbacks", () => {
         cwd: directory,
         stdio: "ignore",
       });
-      await writeFile(
-        join(directory, "oversized.txt"),
-        "x".repeat(2 * 1024 * 1024 + 1),
-        "utf8",
-      );
+      await writeFile(join(directory, "oversized.txt"), "x".repeat(2 * 1024 * 1024 + 1), "utf8");
       execFileSync("git", ["add", "oversized.txt"], { cwd: directory, stdio: "ignore" });
       execFileSync("git", ["commit", "-m", "oversized"], {
         cwd: directory,
@@ -149,8 +156,7 @@ describe("git diff fallbacks", () => {
 
   test("returns undefined without creating temp files for equal content", async () => {
     await withIsolatedTempDir(async (directory) => {
-      expect(await runGitDiffNoIndex("/tmp", "same.txt", "same\n", "same\n"))
-        .toBeUndefined();
+      expect(await runGitDiffNoIndex("/tmp", "same.txt", "same\n", "same\n")).toBeUndefined();
       expect(await readdir(directory)).toEqual([]);
     });
   });
@@ -158,12 +164,7 @@ describe("git diff fallbacks", () => {
   test("cleans its temp directory when git execution fails without stdout", async () => {
     await withIsolatedTempDir(async (directory) => {
       expect(
-        await runGitDiffNoIndex(
-          "/path/that/does/not/exist",
-          "failed.txt",
-          "before\n",
-          "after\n",
-        ),
+        await runGitDiffNoIndex("/path/that/does/not/exist", "failed.txt", "before\n", "after\n"),
       ).toBeUndefined();
       expect(await readdir(directory)).toEqual([]);
     });
@@ -176,18 +177,20 @@ describe("git diff fallbacks", () => {
       throw new Error("simulated write failure");
     });
 
-    await expect(normalizationTesting.runGitDiffNoIndexWithIo(
-      "/tmp",
-      "unwritable.txt",
-      "before\n",
-      "after\n",
-      {
-        makeTempDir: async () => "/tmp/normalization-write-failure",
-        writeTextFile,
-        removeTempDir,
-        execute,
-      },
-    )).rejects.toThrow("simulated write failure");
+    await expect(
+      normalizationTesting.runGitDiffNoIndexWithIo(
+        "/tmp",
+        "unwritable.txt",
+        "before\n",
+        "after\n",
+        {
+          makeTempDir: async () => "/tmp/normalization-write-failure",
+          writeTextFile,
+          removeTempDir,
+          execute,
+        },
+      ),
+    ).rejects.toThrow("simulated write failure");
     expect(writeTextFile).toHaveBeenCalledTimes(1);
     expect(execute).not.toHaveBeenCalled();
     expect(removeTempDir).toHaveBeenCalledTimes(1);
@@ -269,10 +272,10 @@ describe("getFileChangeDiffMetadata", () => {
 
   test("reports zero counts rather than throwing when git cannot run", async () => {
     await withIsolatedTempDir(async (directory) => {
-      const metadata = await getFileChangeDiffMetadata(
-        "/path/that/does/not/exist",
-        { path: "missing.ts", kind: "update" },
-      );
+      const metadata = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
+        path: "missing.ts",
+        kind: "update",
+      });
 
       // Diff detail is additive; a transcript must still render without it.
       expect(metadata).toMatchObject({ additions: 0, deletions: 0 });
@@ -283,10 +286,10 @@ describe("getFileChangeDiffMetadata", () => {
 
   test("resolves an absolute change path without re-joining it to cwd", async () => {
     await withIsolatedTempDir(async () => {
-      const metadata = await getFileChangeDiffMetadata(
-        "/path/that/does/not/exist",
-        { path: "/tmp/elsewhere/a.ts", kind: "add" },
-      );
+      const metadata = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
+        path: "/tmp/elsewhere/a.ts",
+        kind: "add",
+      });
 
       expect(metadata.filePath).toBe("/tmp/elsewhere/a.ts");
     });
@@ -294,14 +297,14 @@ describe("getFileChangeDiffMetadata", () => {
 
   test("skips the HEAD read for an added file and the disk read for a deleted one", async () => {
     await withIsolatedTempDir(async () => {
-      const added = await getFileChangeDiffMetadata(
-        "/path/that/does/not/exist",
-        { path: "added.ts", kind: "add" },
-      );
-      const deleted = await getFileChangeDiffMetadata(
-        "/path/that/does/not/exist",
-        { path: "deleted.ts", kind: "delete" },
-      );
+      const added = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
+        path: "added.ts",
+        kind: "add",
+      });
+      const deleted = await getFileChangeDiffMetadata("/path/that/does/not/exist", {
+        path: "deleted.ts",
+        kind: "delete",
+      });
 
       expect(added.before).toBeUndefined();
       expect(deleted.after).toBeUndefined();
@@ -312,20 +315,21 @@ describe("getFileChangeDiffMetadata", () => {
 describe("command normalization bounds", () => {
   test("caps oversized failed command output without duplicating it", async () => {
     const oversized = "x".repeat(DEFAULT_MAX_COMMAND_OUTPUT_CHARS + 10);
-    const [part] = await itemToParts({
-      id: "command",
-      type: "command_execution",
-      command: "generate",
-      aggregated_output: oversized,
-      status: "failed",
-    }, "/tmp");
+    const [part] = await itemToParts(
+      {
+        id: "command",
+        type: "command_execution",
+        command: "generate",
+        aggregated_output: oversized,
+        status: "failed",
+      },
+      "/tmp",
+    );
 
     expect(part?.toolOutput).toBeUndefined();
     // The cap is a memory bound, so the truncated result must fit *inside* it —
     // appending the notice must not push it back over.
-    expect(part?.toolError?.length).toBeLessThanOrEqual(
-      DEFAULT_MAX_COMMAND_OUTPUT_CHARS,
-    );
+    expect(part?.toolError?.length).toBeLessThanOrEqual(DEFAULT_MAX_COMMAND_OUTPUT_CHARS);
     expect(part?.toolError).toEndWith("… output truncated");
   });
 
@@ -336,18 +340,19 @@ describe("command normalization bounds", () => {
     expect(capCommandOutput(exact)).toBe(exact);
     expect(capCommandOutput(exact).length).toBe(DEFAULT_MAX_COMMAND_OUTPUT_CHARS);
 
-    const [part] = await itemToParts({
-      id: "exact",
-      type: "command_execution",
-      command: "generate",
-      aggregated_output: exact,
-      status: "completed",
-    }, "/tmp");
+    const [part] = await itemToParts(
+      {
+        id: "exact",
+        type: "command_execution",
+        command: "generate",
+        aggregated_output: exact,
+        status: "completed",
+      },
+      "/tmp",
+    );
     expect(part?.toolOutput).toBe(exact);
 
-    expect(capCommandOutput("z".repeat(DEFAULT_MAX_COMMAND_OUTPUT_CHARS + 1))).not.toBe(
-      exact,
-    );
+    expect(capCommandOutput("z".repeat(DEFAULT_MAX_COMMAND_OUTPUT_CHARS + 1))).not.toBe(exact);
   });
 
   test("never slices from the end when the cap is tighter than the notice", () => {
@@ -358,20 +363,34 @@ describe("command normalization bounds", () => {
   });
 
   test("keeps ordinary output byte-for-byte and supplies a default failure", async () => {
-    expect((await itemToParts({
-      id: "ok",
-      type: "command_execution",
-      command: "echo ok",
-      aggregated_output: "ok\n",
-      status: "completed",
-    }, "/tmp"))[0]?.toolOutput).toBe("ok\n");
+    expect(
+      (
+        await itemToParts(
+          {
+            id: "ok",
+            type: "command_execution",
+            command: "echo ok",
+            aggregated_output: "ok\n",
+            status: "completed",
+          },
+          "/tmp",
+        )
+      )[0]?.toolOutput,
+    ).toBe("ok\n");
 
-    expect((await itemToParts({
-      id: "failed",
-      type: "command_execution",
-      command: "false",
-      aggregated_output: "",
-      status: "failed",
-    }, "/tmp"))[0]?.toolError).toBe("Command failed");
+    expect(
+      (
+        await itemToParts(
+          {
+            id: "failed",
+            type: "command_execution",
+            command: "false",
+            aggregated_output: "",
+            status: "failed",
+          },
+          "/tmp",
+        )
+      )[0]?.toolError,
+    ).toBe("Command failed");
   });
 });

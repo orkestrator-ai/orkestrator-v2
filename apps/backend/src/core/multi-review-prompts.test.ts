@@ -7,16 +7,25 @@ import {
 
 const report = {
   reviewScope: {
-    targetBranch: "main", baseRef: "origin/main...HEAD", commit: null,
-    filesReviewed: [], filesSkipped: [], filesLeftUncommitted: [], commandsRun: [],
-    commandsNotRun: [], limitations: [],
+    targetBranch: "main",
+    baseRef: "origin/main...HEAD",
+    commit: null,
+    filesReviewed: [],
+    filesSkipped: [],
+    filesLeftUncommitted: [],
+    commandsRun: [],
+    commandsNotRun: [],
+    limitations: [],
   },
   whatChanged: { overview: "", before: "", after: "", keyCodeChanges: [], userImpact: "" },
   riskProfile: { changeTypes: ["feature"], riskAreas: [], overallRisk: "low", reasoning: "" },
   testResults: { total: 0, passed: 0, failed: 0, notRun: 0, failures: [] },
-  strengths: [], issues: [], testCoverageGaps: [],
+  strengths: [],
+  issues: [],
+  testCoverageGaps: [],
   verdict: { ready: "yes", reasoning: "" },
-  summaryOfChange: "", reviewSummary: "",
+  summaryOfChange: "",
+  reviewSummary: "",
 } as unknown as StructuredReviewReport;
 
 describe("multi review reviewer prompt", () => {
@@ -50,8 +59,9 @@ describe("multi review reviewer prompt", () => {
     expect(prompt).toContain("**Captured worktree fingerprint**");
     expect(prompt).toContain("never review a fresh clone, checkout, or worktree that omits them");
     // Step 1 reconciles against the state "above", so the order is load-bearing.
-    expect(prompt.indexOf("**Authoritative worktree state**"))
-      .toBeLessThan(prompt.indexOf("## Step 1: Establish the automated review snapshot"));
+    expect(prompt.indexOf("**Authoritative worktree state**")).toBeLessThan(
+      prompt.indexOf("## Step 1: Establish the automated review snapshot"),
+    );
   });
 
   // A crafted filename must render as evidence, not as prompt markup.

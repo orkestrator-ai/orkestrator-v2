@@ -1,9 +1,6 @@
 // Configuration routes
 import { Hono } from "hono";
-import {
-  getAvailableModelCatalog,
-  getClaudeRuntimeVersions,
-} from "../services/session-manager.js";
+import { getAvailableModelCatalog, getClaudeRuntimeVersions } from "../services/session-manager.js";
 import type { ModelsResponse } from "../types/index.js";
 
 const config = new Hono();

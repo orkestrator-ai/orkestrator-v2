@@ -170,10 +170,7 @@ export function pruneDiffCache(cache: Map<string, ToolDiffMetadata>): number {
  * at the start, and `Map` iterates in insertion order — so re-inserting is what
  * makes "oldest key" mean "least recently used".
  */
-export function touchBaseline(
-  baselines: BaselineMap,
-  path: string,
-): void {
+export function touchBaseline(baselines: BaselineMap, path: string): void {
   if (!baselines.has(path)) return;
   const value = baselines.get(path);
   baselines.delete(path);

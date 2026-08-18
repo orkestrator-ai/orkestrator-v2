@@ -185,13 +185,9 @@ describe("json file cache", () => {
     test("treats a selector that throws as an absent slice", async () => {
       await writeFile(file, JSON.stringify({ value: 1 }));
 
-      const result = await readJsonSliceCached<{ value: number }, unknown>(
-        file,
-        "explodes",
-        () => {
-          throw new Error("unexpected shape");
-        },
-      );
+      const result = await readJsonSliceCached<{ value: number }, unknown>(file, "explodes", () => {
+        throw new Error("unexpected shape");
+      });
 
       expect(result).toBeNull();
     });

@@ -21,7 +21,6 @@ import {
   waitFor,
 } from "./session-manager-test-harness.js";
 
-
 describe("background task reducer", () => {
   test("drops unresolved Bash candidates past the bound without failing the turn", async () => {
     const created = createSession("bounded Bash candidates");
@@ -32,12 +31,14 @@ describe("background task reducer", () => {
       type: "assistant",
       message: {
         id: "assistant-background-before-the-bound",
-        content: [{
-          type: "tool_use",
-          id: "bash-real-background",
-          name: "Bash",
-          input: { command: "bun run test", run_in_background: true },
-        }],
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-real-background",
+            name: "Bash",
+            input: { command: "bun run test", run_in_background: true },
+          },
+        ],
       },
     });
     call.push({
@@ -109,8 +110,8 @@ describe("background task reducer", () => {
       });
       await waitFor(
         () =>
-          getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "running"
-          && getSession(created.id)?.usage !== undefined,
+          getSession(created.id)?.backgroundTasks?.["agent-1"]?.status === "running" &&
+          getSession(created.id)?.usage !== undefined,
       );
 
       expect(inputClosed).toBe(false);
@@ -163,12 +164,14 @@ describe("background task reducer", () => {
       await waitFor(() => inputClosed);
       expect(await inputCompletion).toEqual({ done: true, value: undefined });
       expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
-      expect(events.flatMap((event) => {
-        const data = event.data as { completionBlockedByBackgroundTasks?: boolean };
-        return typeof data.completionBlockedByBackgroundTasks === "boolean"
-          ? [data.completionBlockedByBackgroundTasks]
-          : [];
-      })).toEqual([false, false, false]);
+      expect(
+        events.flatMap((event) => {
+          const data = event.data as { completionBlockedByBackgroundTasks?: boolean };
+          return typeof data.completionBlockedByBackgroundTasks === "boolean"
+            ? [data.completionBlockedByBackgroundTasks]
+            : [];
+        }),
+      ).toEqual([false, false, false]);
       expect(getSession(created.id)?.status).toBe("running");
 
       call.finish();
@@ -212,16 +215,18 @@ describe("background task reducer", () => {
       message: {
         id: "assistant-cycle-two",
         role: "assistant",
-        content: [{
-          type: "tool_use",
-          id: "bash-cycle-two",
-          name: "Bash",
-          input: {
-            command: "bun run build",
-            description: "Second background task",
-            run_in_background: true,
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-cycle-two",
+            name: "Bash",
+            input: {
+              command: "bun run build",
+              description: "Second background task",
+              run_in_background: true,
+            },
           },
-        }],
+        ],
         stop_reason: "tool_use",
       },
       parent_tool_use_id: null,
@@ -238,8 +243,8 @@ describe("background task reducer", () => {
 
     await waitFor(
       () =>
-        created.status === "idle"
-        && created.backgroundTasks?.["task-cycle-two"]?.status === "running",
+        created.status === "idle" &&
+        created.backgroundTasks?.["task-cycle-two"]?.status === "running",
     );
     expect(created.abortController).toBeUndefined();
     expect(inputClosed).toBe(false);
@@ -313,12 +318,9 @@ describe("background task reducer", () => {
   test("closes a retained query when no continuation follows the notification", async () => {
     const created = createSession("continuation never arrives");
     track(created.id);
-    const promptPromise = sendPrompt(
-      created.id,
-      "delegate to a silent provider",
-      undefined,
-      { retainedContinuationTimeoutMs: 25 },
-    );
+    const promptPromise = sendPrompt(created.id, "delegate to a silent provider", undefined, {
+      retainedContinuationTimeoutMs: 25,
+    });
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -357,12 +359,9 @@ describe("background task reducer", () => {
   test("does not let the continuation watchdog close input while a sibling task runs", async () => {
     const created = createSession("sibling task still running");
     track(created.id);
-    const promptPromise = sendPrompt(
-      created.id,
-      "delegate twice",
-      undefined,
-      { retainedContinuationTimeoutMs: 25 },
-    );
+    const promptPromise = sendPrompt(created.id, "delegate twice", undefined, {
+      retainedContinuationTimeoutMs: 25,
+    });
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -383,8 +382,8 @@ describe("background task reducer", () => {
     call.push({ type: "result", subtype: "success" });
     await waitFor(
       () =>
-        created.status === "idle"
-        && created.backgroundTasks?.["agent-sibling-two"]?.status === "running",
+        created.status === "idle" &&
+        created.backgroundTasks?.["agent-sibling-two"]?.status === "running",
     );
 
     call.push({
@@ -393,9 +392,7 @@ describe("background task reducer", () => {
       task_id: "agent-sibling-one",
       status: "completed",
     });
-    await waitFor(
-      () => created.backgroundTasks?.["agent-sibling-one"]?.status === "completed",
-    );
+    await waitFor(() => created.backgroundTasks?.["agent-sibling-one"]?.status === "completed");
 
     // The watchdog bounds a *silent* retained query. The second task is still
     // running, so closing stdin here would kill work the user is waiting on.
@@ -421,8 +418,7 @@ describe("background task reducer", () => {
     track(created.id);
     const firstPrompt = sendPrompt(created.id, "delegate first");
     const firstCall = await nextQueryCall();
-    const firstInput =
-      (firstCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const firstInput = (firstCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await firstInput.next()).done).toBe(false);
 
     firstCall.push({
@@ -444,8 +440,9 @@ describe("background task reducer", () => {
     // Releasing exists so a follow-up turn can start while the older CLI lives.
     const secondPrompt = sendPrompt(created.id, "delegate second");
     const secondCall = await nextQueryCall();
-    const secondInput =
-      (secondCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const secondInput = (secondCall.prompt as AsyncIterable<SDKUserMessage>)[
+      Symbol.asyncIterator
+    ]();
     expect((await secondInput.next()).done).toBe(false);
     secondCall.push({
       type: "system",
@@ -456,8 +453,7 @@ describe("background task reducer", () => {
     secondCall.push({ type: "result", subtype: "success" });
     await waitFor(
       () =>
-        created.status === "idle"
-        && created.backgroundTasks?.["agent-newer"]?.status === "running",
+        created.status === "idle" && created.backgroundTasks?.["agent-newer"]?.status === "running",
     );
 
     // The older query resumes. It must not publish `running` or take abort
@@ -548,15 +544,20 @@ describe("background task reducer", () => {
       expect(getSession(created.id)?.status).toBe("running");
       expect(getSession(created.id)?.abortController).toBe(secondCall.options.abortController);
       expect(getSession(created.id)?.completionBlockedByBackgroundTasks).toBe(false);
-      const abortedIdleIndex = events.findIndex((event) =>
-        event.type === "session.idle"
-        && (event.data as { aborted?: boolean }).aborted === true
+      const abortedIdleIndex = events.findIndex(
+        (event) =>
+          event.type === "session.idle" && (event.data as { aborted?: boolean }).aborted === true,
       );
       expect(abortedIdleIndex).toBeGreaterThanOrEqual(0);
-      expect(events.slice(abortedIdleIndex + 1).some((event) =>
-        (event.data as { completionBlockedByBackgroundTasks?: boolean })
-          .completionBlockedByBackgroundTasks === true
-      )).toBe(false);
+      expect(
+        events
+          .slice(abortedIdleIndex + 1)
+          .some(
+            (event) =>
+              (event.data as { completionBlockedByBackgroundTasks?: boolean })
+                .completionBlockedByBackgroundTasks === true,
+          ),
+      ).toBe(false);
 
       secondCall.push({ type: "result", subtype: "success" });
       secondCall.finish();
@@ -757,27 +758,31 @@ describe("background task reducer", () => {
       type: "assistant",
       message: {
         id: "assistant-background-bash",
-        content: [{
-          type: "tool_use",
-          id: "bash-tool-1",
-          name: "Bash",
-          input: {
-            command: "bun run test",
-            description: "Run the full test suite",
-            run_in_background: true,
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-tool-1",
+            name: "Bash",
+            input: {
+              command: "bun run test",
+              description: "Run the full test suite",
+              run_in_background: true,
+            },
           },
-        }],
+        ],
       },
     });
     call.push({
       type: "user",
       message: {
         role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "bash-tool-1",
-          content: "Command running in background with ID: bash-task-1",
-        }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "bash-tool-1",
+            content: "Command running in background with ID: bash-task-1",
+          },
+        ],
       },
       parent_tool_use_id: null,
       tool_use_result: {
@@ -804,8 +809,8 @@ describe("background task reducer", () => {
     });
     await waitFor(
       () =>
-        getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status === "running"
-        && getSession(created.id)?.usage !== undefined,
+        getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status === "running" &&
+        getSession(created.id)?.usage !== undefined,
     );
 
     expect(getSession(created.id)?.backgroundTasks?.["bash-task-1"]).toMatchObject({
@@ -822,11 +827,13 @@ describe("background task reducer", () => {
     call.push({
       type: "system",
       subtype: "background_tasks_changed",
-      tasks: [{
-        task_id: "bash-task-1",
-        task_type: "bash",
-        description: "Run the full test suite",
-      }],
+      tasks: [
+        {
+          task_id: "bash-task-1",
+          task_type: "bash",
+          description: "Run the full test suite",
+        },
+      ],
     });
     await waitFor(
       () => getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status === "running",
@@ -848,9 +855,7 @@ describe("background task reducer", () => {
     call.finish();
     await promptPromise;
     expect(getSession(created.id)?.status).toBe("idle");
-    expect(getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status).toBe(
-      "completed",
-    );
+    expect(getSession(created.id)?.backgroundTasks?.["bash-task-1"]?.status).toBe("completed");
   });
 
   /**
@@ -878,23 +883,27 @@ describe("background task reducer", () => {
       type: "assistant",
       message: {
         id: "assistant-level-first",
-        content: [{
-          type: "tool_use",
-          id: "bash-tool-lf",
-          name: "Bash",
-          input: { command: "bun run test", run_in_background: true },
-        }],
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-tool-lf",
+            name: "Bash",
+            input: { command: "bun run test", run_in_background: true },
+          },
+        ],
       },
     });
     call.push({
       type: "user",
       message: {
         role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "bash-tool-lf",
-          content: "Command running in background with ID: bash-task-lf",
-        }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "bash-tool-lf",
+            content: "Command running in background with ID: bash-task-lf",
+          },
+        ],
       },
       parent_tool_use_id: null,
       tool_use_result: { backgroundTaskId: "bash-task-lf" },
@@ -902,11 +911,13 @@ describe("background task reducer", () => {
     call.push({
       type: "system",
       subtype: "background_tasks_changed",
-      tasks: [{
-        task_id: "bash-task-lf",
-        task_type: "bash",
-        description: "Run the full test suite",
-      }],
+      tasks: [
+        {
+          task_id: "bash-task-lf",
+          task_type: "bash",
+          description: "Run the full test suite",
+        },
+      ],
     });
     call.push({ type: "result", subtype: "success" });
     await waitFor(() => getSession(created.id)?.status === "idle");
@@ -924,9 +935,7 @@ describe("background task reducer", () => {
       subtype: "background_tasks_changed",
       tasks: [],
     });
-    await waitFor(
-      () => getSession(created.id)?.backgroundTasks?.["bash-task-lf"] === undefined,
-    );
+    await waitFor(() => getSession(created.id)?.backgroundTasks?.["bash-task-lf"] === undefined);
 
     // Liveness is honest: the task is out of the live set, so no stale running
     // indicator can wedge. But the continuation has not arrived, so neither the
@@ -971,9 +980,9 @@ describe("background task reducer", () => {
     expect(getSession(created.id)?.status).toBe("idle");
     expect(
       getSession(created.id)?.messages.some((message) =>
-        message.parts.some((part) =>
-          part.type === "text" && part.content.includes("here is the report")
-        )
+        message.parts.some(
+          (part) => part.type === "text" && part.content.includes("here is the report"),
+        ),
       ),
     ).toBe(true);
   });
@@ -981,12 +990,9 @@ describe("background task reducer", () => {
   test("the continuation watchdog still releases a query parked by a level signal", async () => {
     const created = createSession("level before edge, no continuation");
     track(created.id);
-    const promptPromise = sendPrompt(
-      created.id,
-      "run the suite in the background",
-      undefined,
-      { retainedContinuationTimeoutMs: 25 },
-    );
+    const promptPromise = sendPrompt(created.id, "run the suite in the background", undefined, {
+      retainedContinuationTimeoutMs: 25,
+    });
     const call = await nextQueryCall();
     const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
     expect((await input.next()).done).toBe(false);
@@ -1067,16 +1073,18 @@ describe("background task reducer", () => {
       type: "assistant",
       message: {
         id: "assistant-provisional-bash",
-        content: [{
-          type: "tool_use",
-          id: "bash-tool-provisional",
-          name: "Bash",
-          input: {
-            command: "bun run test",
-            description: "Run tests provisionally",
-            run_in_background: true,
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-tool-provisional",
+            name: "Bash",
+            input: {
+              command: "bun run test",
+              description: "Run tests provisionally",
+              run_in_background: true,
+            },
           },
-        }],
+        ],
       },
     });
     call.push({
@@ -1104,16 +1112,18 @@ describe("background task reducer", () => {
       type: "user",
       message: {
         role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "bash-tool-provisional",
-          content: "Command running in background with ID: bash-task-fallback",
-        }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "bash-tool-provisional",
+            content: "Command running in background with ID: bash-task-fallback",
+          },
+        ],
       },
       parent_tool_use_id: null,
     });
-    await waitFor(() =>
-      getSession(created.id)?.backgroundTasks?.["bash-task-fallback"]?.status === "running"
+    await waitFor(
+      () => getSession(created.id)?.backgroundTasks?.["bash-task-fallback"]?.status === "running",
     );
     expect(
       getSession(created.id)?.backgroundTasks?.["pending-bash:bash-tool-provisional"],
@@ -1150,12 +1160,14 @@ describe("background task reducer", () => {
       type: "assistant",
       message: {
         id: "assistant-failed-provisional",
-        content: [{
-          type: "tool_use",
-          id: "bash-failed-provisional",
-          name: "Bash",
-          input: { command: "bun run test", run_in_background: true },
-        }],
+        content: [
+          {
+            type: "tool_use",
+            id: "bash-failed-provisional",
+            name: "Bash",
+            input: { command: "bun run test", run_in_background: true },
+          },
+        ],
       },
     });
     call.push({ type: "result", subtype: "success" });
@@ -1166,12 +1178,14 @@ describe("background task reducer", () => {
       type: "user",
       message: {
         role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "bash-failed-provisional",
-          content: "command failed",
-          is_error: true,
-        }],
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "bash-failed-provisional",
+            content: "command failed",
+            is_error: true,
+          },
+        ],
       },
       tool_use_result: { backgroundTaskId: "must-not-launch" },
     });
@@ -1288,16 +1302,18 @@ describe("background task reducer", () => {
             type: "assistant",
             message: {
               id: `assistant-${subtype}`,
-              content: [{
-                type: "tool_use",
-                id: `tool-${subtype}`,
-                name: "Bash",
-                input: {
-                  command: "bun run test",
-                  description: `${subtype} command`,
-                  run_in_background: true,
+              content: [
+                {
+                  type: "tool_use",
+                  id: `tool-${subtype}`,
+                  name: "Bash",
+                  input: {
+                    command: "bun run test",
+                    description: `${subtype} command`,
+                    run_in_background: true,
+                  },
                 },
-              }],
+              ],
             },
           },
           {
@@ -1346,139 +1362,145 @@ describe("background task reducer", () => {
       undefined,
       "alternate-task",
     ],
-  ])("retains a foreground Bash candidate until delayed %s arrives", async (
-    _label,
-    content,
-    toolUseResult,
-    taskId,
-  ) => {
-    const created = createSession(`delayed ${taskId}`);
-    track(created.id);
-    const promptPromise = sendPrompt(created.id, "run a command");
-    const call = await nextQueryCall();
-    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-    expect((await input.next()).done).toBe(false);
-    let inputClosed = false;
-    const inputCompletion = input.next().then((result) => {
-      inputClosed = result.done === true;
-      return result;
-    });
+  ])(
+    "retains a foreground Bash candidate until delayed %s arrives",
+    async (_label, content, toolUseResult, taskId) => {
+      const created = createSession(`delayed ${taskId}`);
+      track(created.id);
+      const promptPromise = sendPrompt(created.id, "run a command");
+      const call = await nextQueryCall();
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      expect((await input.next()).done).toBe(false);
+      let inputClosed = false;
+      const inputCompletion = input.next().then((result) => {
+        inputClosed = result.done === true;
+        return result;
+      });
 
-    call.push({
-      type: "assistant",
-      message: {
-        id: `assistant-${taskId}`,
-        content: [{
-          type: "tool_use",
-          id: `tool-${taskId}`,
-          name: "Bash",
-          input: { command: "bun run test" },
-        }],
-      },
-    });
-    call.push({ type: "result", subtype: "success" });
-    await waitFor(() => created.status === "idle");
-    expect(created.backgroundTasks).toBeUndefined();
-    expect(inputClosed).toBe(false);
+      call.push({
+        type: "assistant",
+        message: {
+          id: `assistant-${taskId}`,
+          content: [
+            {
+              type: "tool_use",
+              id: `tool-${taskId}`,
+              name: "Bash",
+              input: { command: "bun run test" },
+            },
+          ],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      await waitFor(() => created.status === "idle");
+      expect(created.backgroundTasks).toBeUndefined();
+      expect(inputClosed).toBe(false);
 
-    call.push({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: `tool-${taskId}`,
-          content,
-        }],
-      },
-      ...(toolUseResult === undefined ? {} : { tool_use_result: toolUseResult }),
-    });
-    await waitFor(() => created.backgroundTasks?.[taskId]?.status === "running");
-    expect(inputClosed).toBe(false);
+      call.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: `tool-${taskId}`,
+              content,
+            },
+          ],
+        },
+        ...(toolUseResult === undefined ? {} : { tool_use_result: toolUseResult }),
+      });
+      await waitFor(() => created.backgroundTasks?.[taskId]?.status === "running");
+      expect(inputClosed).toBe(false);
 
-    call.push({
-      type: "system",
-      subtype: "task_notification",
-      task_id: taskId,
-      tool_use_id: `tool-${taskId}`,
-      status: "completed",
-    });
-    pushSuccessfulContinuationResult(call);
-    expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    call.finish();
-    await promptPromise;
-  });
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: taskId,
+        tool_use_id: `tool-${taskId}`,
+        status: "completed",
+      });
+      pushSuccessfulContinuationResult(call);
+      expect(await inputCompletion).toEqual({ done: true, value: undefined });
+      call.finish();
+      await promptPromise;
+    },
+  );
 
   test.each([
     ["manual backgrounding", { backgroundedByUser: true }],
     ["timeout backgrounding", { timedOutAfterMs: 120_000 }],
-  ])("retains missing-id %s evidence until lifecycle supplies the id", async (
-    _label,
-    toolUseResult,
-  ) => {
-    const created = createSession("missing background task id");
-    track(created.id);
-    const promptPromise = sendPrompt(created.id, "run a command");
-    const call = await nextQueryCall();
-    const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
-    expect((await input.next()).done).toBe(false);
-    let inputClosed = false;
-    const inputCompletion = input.next().then((result) => {
-      inputClosed = result.done === true;
-      return result;
-    });
+  ])(
+    "retains missing-id %s evidence until lifecycle supplies the id",
+    async (_label, toolUseResult) => {
+      const created = createSession("missing background task id");
+      track(created.id);
+      const promptPromise = sendPrompt(created.id, "run a command");
+      const call = await nextQueryCall();
+      const input = (call.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+      expect((await input.next()).done).toBe(false);
+      let inputClosed = false;
+      const inputCompletion = input.next().then((result) => {
+        inputClosed = result.done === true;
+        return result;
+      });
 
-    call.push({
-      type: "assistant",
-      message: {
-        id: "assistant-missing-background-id",
-        content: [{
-          type: "tool_use",
-          id: "tool-missing-background-id",
-          name: "Bash",
-          input: { command: "bun run test" },
-        }],
-      },
-    });
-    call.push({ type: "result", subtype: "success" });
-    await waitFor(() => created.status === "idle");
-    call.push({
-      type: "user",
-      message: {
-        role: "user",
-        content: [{
-          type: "tool_result",
-          tool_use_id: "tool-missing-background-id",
-          content: "Backgrounding acknowledged without an id",
-        }],
-      },
-      tool_use_result: toolUseResult,
-    });
-    await Bun.sleep(0);
-    expect(created.backgroundTasks).toBeUndefined();
-    expect(inputClosed).toBe(false);
+      call.push({
+        type: "assistant",
+        message: {
+          id: "assistant-missing-background-id",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-missing-background-id",
+              name: "Bash",
+              input: { command: "bun run test" },
+            },
+          ],
+        },
+      });
+      call.push({ type: "result", subtype: "success" });
+      await waitFor(() => created.status === "idle");
+      call.push({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-missing-background-id",
+              content: "Backgrounding acknowledged without an id",
+            },
+          ],
+        },
+        tool_use_result: toolUseResult,
+      });
+      await Bun.sleep(0);
+      expect(created.backgroundTasks).toBeUndefined();
+      expect(inputClosed).toBe(false);
 
-    call.push({
-      type: "system",
-      subtype: "task_started",
-      task_id: "late-lifecycle-task",
-      tool_use_id: "tool-missing-background-id",
-      description: "Late lifecycle task",
-    });
-    await waitFor(() => created.backgroundTasks?.["late-lifecycle-task"]?.status === "running");
-    expect(inputClosed).toBe(false);
-    call.push({
-      type: "system",
-      subtype: "task_notification",
-      task_id: "late-lifecycle-task",
-      tool_use_id: "tool-missing-background-id",
-      status: "completed",
-    });
-    pushSuccessfulContinuationResult(call);
-    expect(await inputCompletion).toEqual({ done: true, value: undefined });
-    call.finish();
-    await promptPromise;
-  });
+      call.push({
+        type: "system",
+        subtype: "task_started",
+        task_id: "late-lifecycle-task",
+        tool_use_id: "tool-missing-background-id",
+        description: "Late lifecycle task",
+      });
+      await waitFor(() => created.backgroundTasks?.["late-lifecycle-task"]?.status === "running");
+      expect(inputClosed).toBe(false);
+      call.push({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "late-lifecycle-task",
+        tool_use_id: "tool-missing-background-id",
+        status: "completed",
+      });
+      pushSuccessfulContinuationResult(call);
+      expect(await inputCompletion).toEqual({ done: true, value: undefined });
+      call.finish();
+      await promptPromise;
+    },
+  );
 
   // Parallel tool calls arrive as several tool_result blocks in one user
   // message. Judging the message as a whole discarded the background handoff
@@ -1741,23 +1763,27 @@ describe("background task reducer", () => {
         type: "assistant",
         message: {
           id: `assistant-${toolName}`,
-          content: [{
-            type: "tool_use",
-            id: "colliding-tool",
-            name: toolName,
-            input: { run_in_background: true },
-          }],
+          content: [
+            {
+              type: "tool_use",
+              id: "colliding-tool",
+              name: toolName,
+              input: { run_in_background: true },
+            },
+          ],
         },
       },
       {
         type: "user",
         message: {
           role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: "colliding-tool",
-            content: "arbitrary third-party output",
-          }],
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "colliding-tool",
+              content: "arbitrary third-party output",
+            },
+          ],
         },
         tool_use_result: { backgroundTaskId: "collision" },
       },
@@ -1772,23 +1798,27 @@ describe("background task reducer", () => {
         type: "assistant",
         message: {
           id: "assistant-foreground-bash",
-          content: [{
-            type: "tool_use",
-            id: "foreground-bash",
-            name: "Bash",
-            input: { command: "bun test" },
-          }],
+          content: [
+            {
+              type: "tool_use",
+              id: "foreground-bash",
+              name: "Bash",
+              input: { command: "bun test" },
+            },
+          ],
         },
       },
       {
         type: "user",
         message: {
           role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: "foreground-bash",
-            content: "done",
-          }],
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "foreground-bash",
+              content: "done",
+            },
+          ],
         },
         tool_use_result: { backgroundTaskId: "unvouched-task" },
       },
@@ -1802,10 +1832,7 @@ describe("background task reducer", () => {
   // command that prints one (`cat` of a doc, a build log) mints a task nothing
   // will ever settle — pinning the CLI process and the session transcript.
   test.each([
-    [
-      "an embedded label",
-      "the docs say Command running in background with ID: fake-task",
-    ],
+    ["an embedded label", "the docs say Command running in background with ID: fake-task"],
     [
       "a line-leading label inside multi-line output",
       "reading notes\nBackground task ID: fake-task\ndone",
@@ -1821,33 +1848,34 @@ describe("background task reducer", () => {
         { type: "text", text: "Background task ID: fake-task" },
       ],
     ],
-    [
-      "a label preceded by output on the same line",
-      "  done. Background task ID: fake-task",
-    ],
+    ["a label preceded by output on the same line", "  done. Background task ID: fake-task"],
   ])("does not parse %s from ordinary Bash output", async (_label, content) => {
     const { session } = await runPromptWithMessages([
       {
         type: "assistant",
         message: {
           id: "assistant-foreground-doc-output",
-          content: [{
-            type: "tool_use",
-            id: "foreground-doc-output",
-            name: "Bash",
-            input: { command: "printf docs" },
-          }],
+          content: [
+            {
+              type: "tool_use",
+              id: "foreground-doc-output",
+              name: "Bash",
+              input: { command: "printf docs" },
+            },
+          ],
         },
       },
       {
         type: "user",
         message: {
           role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: "foreground-doc-output",
-            content,
-          }],
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "foreground-doc-output",
+              content,
+            },
+          ],
         },
       },
     ]);
@@ -1862,23 +1890,27 @@ describe("background task reducer", () => {
         type: "assistant",
         message: {
           id: "assistant-foreground-exclusive-label",
-          content: [{
-            type: "tool_use",
-            id: "foreground-exclusive-label",
-            name: "Bash",
-            input: { command: "printf docs" },
-          }],
+          content: [
+            {
+              type: "tool_use",
+              id: "foreground-exclusive-label",
+              name: "Bash",
+              input: { command: "printf docs" },
+            },
+          ],
         },
       },
       {
         type: "user",
         message: {
           role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: "foreground-exclusive-label",
-            content: "\n  Background task ID: real-task  \n",
-          }],
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "foreground-exclusive-label",
+              content: "\n  Background task ID: real-task  \n",
+            },
+          ],
         },
       },
     ]);
@@ -1895,23 +1927,27 @@ describe("background task reducer", () => {
         type: "assistant",
         message: {
           id: "assistant-structured-intent-embedded-label",
-          content: [{
-            type: "tool_use",
-            id: "structured-intent-embedded-label",
-            name: "Bash",
-            input: { command: "bun run test" },
-          }],
+          content: [
+            {
+              type: "tool_use",
+              id: "structured-intent-embedded-label",
+              name: "Bash",
+              input: { command: "bun run test" },
+            },
+          ],
         },
       },
       {
         type: "user",
         message: {
           role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: "structured-intent-embedded-label",
-            content: "partial output\nCommand running in background with ID: trusted-task",
-          }],
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "structured-intent-embedded-label",
+              content: "partial output\nCommand running in background with ID: trusted-task",
+            },
+          ],
         },
         tool_use_result: { timedOutAfterMs: 120_000 },
       },
@@ -1929,33 +1965,34 @@ describe("background task reducer", () => {
     ["non-string task id", { backgroundTaskId: 42 }],
     ["blank task id", { backgroundTaskId: "   " }],
     ["control character in task id", { backgroundTaskId: "bad\ntask" }],
-    [
-      "oversized task id",
-      { backgroundTaskId: "x".repeat(513) },
-    ],
+    ["oversized task id", { backgroundTaskId: "x".repeat(513) }],
   ])("ignores %s in a Bash tool result", async (_label, toolUseResult) => {
     const { session } = await runPromptWithMessages([
       {
         type: "assistant",
         message: {
           id: "assistant-malformed-launch",
-          content: [{
-            type: "tool_use",
-            id: "bash-malformed-launch",
-            name: "Bash",
-            input: { command: "bun test", run_in_background: true },
-          }],
+          content: [
+            {
+              type: "tool_use",
+              id: "bash-malformed-launch",
+              name: "Bash",
+              input: { command: "bun test", run_in_background: true },
+            },
+          ],
         },
       },
       {
         type: "user",
         message: {
           role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: "bash-malformed-launch",
-            content: "result",
-          }],
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "bash-malformed-launch",
+              content: "result",
+            },
+          ],
         },
         tool_use_result: toolUseResult,
       },
@@ -1970,10 +2007,7 @@ describe("background task reducer", () => {
   });
 
   test.each([
-    [
-      "no correlated result block",
-      [],
-    ],
+    ["no correlated result block", []],
     [
       "multiple candidate result ids",
       [
@@ -1990,12 +2024,14 @@ describe("background task reducer", () => {
     ],
     [
       "a failed correlated result block",
-      [{
-        type: "tool_result",
-        tool_use_id: "bash-ambiguous",
-        content: "failed",
-        is_error: true,
-      }],
+      [
+        {
+          type: "tool_result",
+          tool_use_id: "bash-ambiguous",
+          content: "failed",
+          is_error: true,
+        },
+      ],
     ],
     [
       "an invalid correlated result id",
@@ -2007,12 +2043,14 @@ describe("background task reducer", () => {
         type: "assistant",
         message: {
           id: "assistant-ambiguous-launch",
-          content: [{
-            type: "tool_use",
-            id: "bash-ambiguous",
-            name: "Bash",
-            input: { command: "bun test", run_in_background: true },
-          }],
+          content: [
+            {
+              type: "tool_use",
+              id: "bash-ambiguous",
+              name: "Bash",
+              input: { command: "bun test", run_in_background: true },
+            },
+          ],
         },
       },
       {
@@ -2056,105 +2094,111 @@ describe("background task reducer", () => {
       { timedOutAfterMs: 30_000 },
       "bun run lint",
     ],
-  ])("describes a provisional Bash launch using %s", async (
-    _label,
-    input,
-    structuredFields,
-    expectedDescription,
-  ) => {
-    const { session, finish } = await inspectDuringTurn(
-      [
-        {
-          type: "assistant",
-          message: {
-            id: "assistant-description-fallback",
-            content: [{
-              type: "tool_use",
-              id: "bash-description-fallback",
-              name: "Bash",
-              input,
-            }],
+  ])(
+    "describes a provisional Bash launch using %s",
+    async (_label, input, structuredFields, expectedDescription) => {
+      const { session, finish } = await inspectDuringTurn(
+        [
+          {
+            type: "assistant",
+            message: {
+              id: "assistant-description-fallback",
+              content: [
+                {
+                  type: "tool_use",
+                  id: "bash-description-fallback",
+                  name: "Bash",
+                  input,
+                },
+              ],
+            },
           },
-        },
-        {
-          type: "user",
-          message: {
-            role: "user",
-            content: [{
-              type: "tool_result",
-              tool_use_id: "bash-description-fallback",
-              content: "backgrounded",
-            }],
+          {
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "bash-description-fallback",
+                  content: "backgrounded",
+                },
+              ],
+            },
+            tool_use_result: {
+              backgroundTaskId: "description-task",
+              ...structuredFields,
+            },
           },
-          tool_use_result: {
-            backgroundTaskId: "description-task",
-            ...structuredFields,
-          },
-        },
-      ],
-      (s) => s.backgroundTasks?.["description-task"] !== undefined,
-    );
+        ],
+        (s) => s.backgroundTasks?.["description-task"] !== undefined,
+      );
 
-    expect(session.backgroundTasks?.["description-task"]).toMatchObject({
-      description: expectedDescription,
-      status: "running",
-    });
-    await finish();
-    // No lifecycle edge followed the provisional launch, so closing the only
-    // provider stream must leave an honest terminal snapshot rather than a
-    // task that remains live forever.
-    expect(session.backgroundTasks?.["description-task"]).toMatchObject({
-      status: "killed",
-    });
-  });
+      expect(session.backgroundTasks?.["description-task"]).toMatchObject({
+        description: expectedDescription,
+        status: "running",
+      });
+      await finish();
+      // No lifecycle edge followed the provisional launch, so closing the only
+      // provider stream must leave an honest terminal snapshot rather than a
+      // task that remains live forever.
+      expect(session.backgroundTasks?.["description-task"]).toMatchObject({
+        status: "killed",
+      });
+    },
+  );
 
   test.each([
     ["completed", "completed"],
     ["failed", "failed"],
     ["stopped", "killed"],
-  ] as const)("does not resurrect a %s task when its Bash launch arrives late", async (
-    notificationStatus,
-    expectedStatus,
-  ) => {
-    const { session } = await runPromptWithMessages([
-      {
-        type: "assistant",
-        message: {
-          id: `assistant-late-${notificationStatus}`,
-          content: [{
-            type: "tool_use",
-            id: "bash-late-launch",
-            name: "Bash",
-            input: { command: "bun test", run_in_background: true },
-          }],
+  ] as const)(
+    "does not resurrect a %s task when its Bash launch arrives late",
+    async (notificationStatus, expectedStatus) => {
+      const { session } = await runPromptWithMessages([
+        {
+          type: "assistant",
+          message: {
+            id: `assistant-late-${notificationStatus}`,
+            content: [
+              {
+                type: "tool_use",
+                id: "bash-late-launch",
+                name: "Bash",
+                input: { command: "bun test", run_in_background: true },
+              },
+            ],
+          },
         },
-      },
-      {
-        type: "system",
-        subtype: "task_notification",
-        task_id: "late-launch-task",
-        status: notificationStatus,
-        summary: "already settled",
-      },
-      {
-        type: "user",
-        message: {
-          role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: "bash-late-launch",
-            content: "backgrounded",
-          }],
+        {
+          type: "system",
+          subtype: "task_notification",
+          task_id: "late-launch-task",
+          status: notificationStatus,
+          summary: "already settled",
         },
-        tool_use_result: { backgroundTaskId: "late-launch-task" },
-      },
-    ]);
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "bash-late-launch",
+                content: "backgrounded",
+              },
+            ],
+          },
+          tool_use_result: { backgroundTaskId: "late-launch-task" },
+        },
+      ]);
 
-    expect(session.backgroundTasks?.["late-launch-task"]).toMatchObject({
-      status: expectedStatus,
-      toolUseId: "bash-late-launch",
-    });
-  });
+      expect(session.backgroundTasks?.["late-launch-task"]).toMatchObject({
+        status: expectedStatus,
+        toolUseId: "bash-late-launch",
+      });
+    },
+  );
 
   test("does not resume a paused task when its Bash launch arrives late", async () => {
     const { session, finish } = await inspectDuringTurn(
@@ -2163,12 +2207,14 @@ describe("background task reducer", () => {
           type: "assistant",
           message: {
             id: "assistant-late-paused",
-            content: [{
-              type: "tool_use",
-              id: "bash-late-paused",
-              name: "Bash",
-              input: { command: "bun test", run_in_background: true },
-            }],
+            content: [
+              {
+                type: "tool_use",
+                id: "bash-late-paused",
+                name: "Bash",
+                input: { command: "bun test", run_in_background: true },
+              },
+            ],
           },
         },
         {
@@ -2186,11 +2232,13 @@ describe("background task reducer", () => {
           type: "user",
           message: {
             role: "user",
-            content: [{
-              type: "tool_result",
-              tool_use_id: "bash-late-paused",
-              content: "backgrounded",
-            }],
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "bash-late-paused",
+                content: "backgrounded",
+              },
+            ],
           },
           tool_use_result: { backgroundTaskId: "paused-launch-task" },
         },
@@ -2218,23 +2266,27 @@ describe("background task reducer", () => {
         type: "assistant",
         message: {
           id: "assistant-stop-provisional",
-          content: [{
-            type: "tool_use",
-            id: "bash-stop-provisional",
-            name: "Bash",
-            input: { command: "bun test", run_in_background: true },
-          }],
+          content: [
+            {
+              type: "tool_use",
+              id: "bash-stop-provisional",
+              name: "Bash",
+              input: { command: "bun test", run_in_background: true },
+            },
+          ],
         },
       });
       call.push({
         type: "user",
         message: {
           role: "user",
-          content: [{
-            type: "tool_result",
-            tool_use_id: "bash-stop-provisional",
-            content: "backgrounded",
-          }],
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "bash-stop-provisional",
+              content: "backgrounded",
+            },
+          ],
         },
         tool_use_result: { backgroundTaskId: "stop-provisional-task" },
       });
@@ -2244,16 +2296,18 @@ describe("background task reducer", () => {
         usage: { input_tokens: 1, output_tokens: 1 },
       });
       await waitFor(
-        () => getSession(created.id)?.backgroundTasks?.["stop-provisional-task"]?.status
-          === "running",
+        () =>
+          getSession(created.id)?.backgroundTasks?.["stop-provisional-task"]?.status === "running",
       );
 
-      expect(events.some(
-        (event) =>
-          event.type === "session.updated"
-          && (event.data as { backgroundTasks?: Record<string, BackgroundTaskSnapshot> })
-            .backgroundTasks?.["stop-provisional-task"]?.status === "running",
-      )).toBe(true);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "session.updated" &&
+            (event.data as { backgroundTasks?: Record<string, BackgroundTaskSnapshot> })
+              .backgroundTasks?.["stop-provisional-task"]?.status === "running",
+        ),
+      ).toBe(true);
       expect(await stopBackgroundTask(created.id, "stop-provisional-task")).toEqual({ ok: true });
       expect(stopTask).toHaveBeenCalledWith("stop-provisional-task");
       expect(getSession(created.id)?.backgroundTasks?.["stop-provisional-task"]).toMatchObject({
@@ -2344,13 +2398,15 @@ describe("background task reducer", () => {
 
   test("creates a correlated live task from progress without a start edge", async () => {
     const { session, finish } = await inspectDuringTurn(
-      [{
-        type: "system",
-        subtype: "task_progress",
-        task_id: "task-progress-only",
-        tool_use_id: "agent-tool-progress-only",
-        description: "Recovered progress",
-      }],
+      [
+        {
+          type: "system",
+          subtype: "task_progress",
+          task_id: "task-progress-only",
+          tool_use_id: "agent-tool-progress-only",
+          description: "Recovered progress",
+        },
+      ],
       (s) => s.backgroundTasks?.["task-progress-only"] !== undefined,
     );
 
@@ -2401,8 +2457,8 @@ describe("background task reducer", () => {
       expect(
         events.filter(
           (event) =>
-            event.type === "session.updated"
-            && (event.data as { backgroundTasks?: unknown })?.backgroundTasks !== undefined,
+            event.type === "session.updated" &&
+            (event.data as { backgroundTasks?: unknown })?.backgroundTasks !== undefined,
         ).length,
       ).toBeGreaterThanOrEqual(2);
     });
@@ -2550,29 +2606,22 @@ describe("background task reducer", () => {
   });
 
   test("bounds retained terminal lifecycle history", async () => {
-    const messages = Array.from(
-      { length: MAX_TERMINAL_BACKGROUND_TASKS + 7 },
-      (_, index) => ({
-        type: "system",
-        subtype: "task_notification",
-        task_id: `task-terminal-${index}`,
-        status: "completed",
-        summary: `Task ${index}`,
-      }),
-    );
+    const messages = Array.from({ length: MAX_TERMINAL_BACKGROUND_TASKS + 7 }, (_, index) => ({
+      type: "system",
+      subtype: "task_notification",
+      task_id: `task-terminal-${index}`,
+      status: "completed",
+      summary: `Task ${index}`,
+    }));
     const { session } = await runPromptWithMessages(messages);
 
-    expect(Object.keys(session.backgroundTasks ?? {})).toHaveLength(
-      MAX_TERMINAL_BACKGROUND_TASKS,
-    );
-    expect(session.backgroundTasks?.[`task-terminal-${
-      MAX_TERMINAL_BACKGROUND_TASKS + 6
-    }`]).toBeDefined();
+    expect(Object.keys(session.backgroundTasks ?? {})).toHaveLength(MAX_TERMINAL_BACKGROUND_TASKS);
+    expect(
+      session.backgroundTasks?.[`task-terminal-${MAX_TERMINAL_BACKGROUND_TASKS + 6}`],
+    ).toBeDefined();
     expect(session.backgroundTasks?.["task-terminal-0"]).toBeUndefined();
   });
 });
-
-
 
 describe("stopBackgroundTask", () => {
   test("distinguishes an unknown session from an unknown task", async () => {
@@ -2714,9 +2763,9 @@ describe("stopBackgroundTask", () => {
           "claude-mock": { inputTokens: 1, outputTokens: 1, contextWindow: 200_000 },
         },
       });
-      await waitFor(() =>
-        session.status === "idle"
-        && session.backgroundTasks?.["task-held"]?.status === "running"
+      await waitFor(
+        () =>
+          session.status === "idle" && session.backgroundTasks?.["task-held"]?.status === "running",
       );
 
       expect(await stopBackgroundTask(session.id, "task-held")).toEqual({ ok: true });
@@ -2724,12 +2773,14 @@ describe("stopBackgroundTask", () => {
       expect(session.backgroundTasks?.["task-held"]?.status).toBe("killed");
       expect(session.completionBlockedByBackgroundTasks).toBe(false);
       expect(await inputCompletion).toEqual({ done: true, value: undefined });
-      expect(events.flatMap((event) => {
-        const data = event.data as { completionBlockedByBackgroundTasks?: boolean };
-        return typeof data.completionBlockedByBackgroundTasks === "boolean"
-          ? [data.completionBlockedByBackgroundTasks]
-          : [];
-      })).toEqual([false, false]);
+      expect(
+        events.flatMap((event) => {
+          const data = event.data as { completionBlockedByBackgroundTasks?: boolean };
+          return typeof data.completionBlockedByBackgroundTasks === "boolean"
+            ? [data.completionBlockedByBackgroundTasks]
+            : [];
+        }),
+      ).toEqual([false, false]);
 
       expect(session.status).toBe("idle");
       call.finish();
@@ -2865,9 +2916,7 @@ describe("stopBackgroundTask", () => {
     const session = createSession("candidate-only control");
     track(session.id);
     const close = mock(async () => {});
-    session.backgroundTaskCandidates = new Map([
-      ["candidate-tool", { close }],
-    ]);
+    session.backgroundTaskCandidates = new Map([["candidate-tool", { close }]]);
 
     expect(deleteSession(session.id)).toBe(true);
     await waitFor(() => close.mock.calls.length === 1);

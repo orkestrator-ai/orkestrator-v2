@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import * as realBackend from "@/lib/backend";
@@ -31,11 +23,7 @@ import {
 } from "@/lib/agent-handoff";
 import { useAgentHandoff } from "./useAgentHandoff";
 
-function message(
-  id: string,
-  role: NativeMessage["role"],
-  content: string,
-): NativeMessage {
+function message(id: string, role: NativeMessage["role"], content: string): NativeMessage {
   return {
     id,
     role,
@@ -99,7 +87,7 @@ describe("useAgentHandoff", () => {
   test("returns provider messages immediately when no handoff is requested", () => {
     const providerMessage = message("provider-1", "assistant", "Already here");
     const { result } = renderHook(() =>
-      useAgentHandoff(undefined, "codex", "env-1", [providerMessage])
+      useAgentHandoff(undefined, "codex", "env-1", [providerMessage]),
     );
 
     expect(result.current).toMatchObject({
@@ -119,9 +107,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-success");
     mockGetAgentHandoff.mockImplementationOnce(async () => pending.promise);
 
-    const { result } = renderHook(() =>
-      useAgentHandoff("handoff-success", "codex", "env-1", [])
-    );
+    const { result } = renderHook(() => useAgentHandoff("handoff-success", "codex", "env-1", []));
 
     expect(result.current).toMatchObject({
       handoffId: "handoff-success",
@@ -153,7 +139,7 @@ describe("useAgentHandoff", () => {
     );
 
     const { result } = renderHook(() =>
-      useAgentHandoff("handoff-restored", "codex", "env-1", [providerMessage])
+      useAgentHandoff("handoff-restored", "codex", "env-1", [providerMessage]),
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
 
@@ -176,12 +162,7 @@ describe("useAgentHandoff", () => {
       mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
       const { result } = renderHook(() =>
-        useAgentHandoff(
-          snapshot.id,
-          "codex",
-          "env-1",
-          [message(id, role, content)],
-        )
+        useAgentHandoff(snapshot.id, "codex", "env-1", [message(id, role, content)]),
       );
       await waitFor(() => expect(result.current.ready).toBe(true));
 
@@ -198,12 +179,9 @@ describe("useAgentHandoff", () => {
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
     const { result } = renderHook(() =>
-      useAgentHandoff(
-        snapshot.id,
-        "codex",
-        "env-1",
-        [message("optimistic-carrier", "user", transported)],
-      )
+      useAgentHandoff(snapshot.id, "codex", "env-1", [
+        message("optimistic-carrier", "user", transported),
+      ]),
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
 
@@ -224,15 +202,10 @@ describe("useAgentHandoff", () => {
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
     const { result } = renderHook(() =>
-      useAgentHandoff(
-        snapshot.id,
-        "codex",
-        "env-1",
-        [
-          message("error-first-send", "assistant", "First send failed"),
-          message("optimistic-retry", "user", transported),
-        ],
-      )
+      useAgentHandoff(snapshot.id, "codex", "env-1", [
+        message("error-first-send", "assistant", "First send failed"),
+        message("optimistic-retry", "user", transported),
+      ]),
     );
     await waitFor(() => expect(result.current.ready).toBe(true));
 
@@ -243,21 +216,19 @@ describe("useAgentHandoff", () => {
       "First send failed",
       "Continue after the error",
     ]);
-    expect(result.current.displayMessages.some(
-      ({ content }) => content.includes("<orkestrator-handoff"),
-    )).toBe(false);
+    expect(
+      result.current.displayMessages.some(({ content }) =>
+        content.includes("<orkestrator-handoff"),
+      ),
+    ).toBe(false);
   });
 
   test("reports a missing handoff and leaves the destination usable", async () => {
-    const { result } = renderHook(() =>
-      useAgentHandoff("handoff-missing", "codex", "env-1", [])
-    );
+    const { result } = renderHook(() => useAgentHandoff("handoff-missing", "codex", "env-1", []));
 
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.handoff).toBeNull();
-    expect(result.current.error).toBe(
-      "The transferred conversation could not be loaded.",
-    );
+    expect(result.current.error).toBe("The transferred conversation could not be loaded.");
     expect(result.current.displayMessages[0]).toMatchObject({
       id: "handoff:handoff-missing:error",
       role: "system",
@@ -269,9 +240,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-cursor", { destinationProvider: "cursor" });
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result } = renderHook(() =>
-      useAgentHandoff("handoff-cursor", "cursor", "env-1", [])
-    );
+    const { result } = renderHook(() => useAgentHandoff("handoff-cursor", "cursor", "env-1", []));
 
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.error).toBeNull();
@@ -288,9 +257,7 @@ describe("useAgentHandoff", () => {
     const snapshot = handoff("handoff-grok", { destinationProvider: "grok" });
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
-    const { result } = renderHook(() =>
-      useAgentHandoff("handoff-grok", "cursor", "env-1", [])
-    );
+    const { result } = renderHook(() => useAgentHandoff("handoff-grok", "cursor", "env-1", []));
 
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.handoff).toBeNull();
@@ -302,7 +269,7 @@ describe("useAgentHandoff", () => {
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
     const { result } = renderHook(() =>
-      useAgentHandoff("handoff-provider", "opencode", "env-1", [])
+      useAgentHandoff("handoff-provider", "opencode", "env-1", []),
     );
 
     await waitFor(() => expect(result.current.ready).toBe(true));
@@ -316,14 +283,12 @@ describe("useAgentHandoff", () => {
     mockGetAgentHandoff.mockResolvedValueOnce(record(snapshot));
 
     const { result } = renderHook(() =>
-      useAgentHandoff("handoff-environment", "codex", "env-2", [])
+      useAgentHandoff("handoff-environment", "codex", "env-2", []),
     );
 
     await waitFor(() => expect(result.current.ready).toBe(true));
     expect(result.current.handoff).toBeNull();
-    expect(result.current.error).toBe(
-      "This transfer belongs to another environment.",
-    );
+    expect(result.current.error).toBe("This transfer belongs to another environment.");
     expect(result.current.pendingHistory).toBeUndefined();
   });
 
@@ -332,7 +297,7 @@ describe("useAgentHandoff", () => {
     mockGetAgentHandoff.mockRejectedValueOnce(new Error("handoff storage unavailable"));
 
     const { result } = renderHook(() =>
-      useAgentHandoff("handoff-error", "codex", "env-1", [providerMessage])
+      useAgentHandoff("handoff-error", "codex", "env-1", [providerMessage]),
     );
 
     await waitFor(() => expect(result.current.ready).toBe(true));
@@ -347,14 +312,10 @@ describe("useAgentHandoff", () => {
   test("uses a safe generic error for a non-Error load rejection", async () => {
     mockGetAgentHandoff.mockRejectedValueOnce("storage rejected without an Error");
 
-    const { result } = renderHook(() =>
-      useAgentHandoff("handoff-non-error", "codex", "env-1", [])
-    );
+    const { result } = renderHook(() => useAgentHandoff("handoff-non-error", "codex", "env-1", []));
 
     await waitFor(() => expect(result.current.ready).toBe(true));
-    expect(result.current.error).toBe(
-      "The transferred conversation could not be loaded.",
-    );
+    expect(result.current.error).toBe("The transferred conversation could not be loaded.");
     expect(result.current.pendingHistory).toBeUndefined();
   });
 
@@ -364,12 +325,11 @@ describe("useAgentHandoff", () => {
     const firstSnapshot = handoff("handoff-first");
     const secondSnapshot = handoff("handoff-second");
     mockGetAgentHandoff.mockImplementation(async (handoffId) =>
-      handoffId === "handoff-first" ? firstPending.promise : secondPending.promise
+      handoffId === "handoff-first" ? firstPending.promise : secondPending.promise,
     );
 
     const { result, rerender } = renderHook(
-      ({ handoffId }: { handoffId: string }) =>
-        useAgentHandoff(handoffId, "codex", "env-1", []),
+      ({ handoffId }: { handoffId: string }) => useAgentHandoff(handoffId, "codex", "env-1", []),
       { initialProps: { handoffId: "handoff-first" } },
     );
 
@@ -410,9 +370,7 @@ describe("useAgentHandoff", () => {
 
     await act(async () => pending.resolve(record(snapshot)));
     await waitFor(() =>
-      expect(result.current.error).toBe(
-        "This transfer belongs to another environment.",
-      )
+      expect(result.current.error).toBe("This transfer belongs to another environment."),
     );
     expect(result.current.handoff).toBeNull();
   });
@@ -423,8 +381,7 @@ describe("useAgentHandoff", () => {
     mockGetAgentHandoff.mockImplementationOnce(async () => pending.promise);
 
     const { result, rerender } = renderHook(
-      ({ handoffId }: { handoffId?: string }) =>
-        useAgentHandoff(handoffId, "codex", "env-1", []),
+      ({ handoffId }: { handoffId?: string }) => useAgentHandoff(handoffId, "codex", "env-1", []),
       {
         initialProps: {
           handoffId: snapshot.id,
@@ -460,7 +417,7 @@ describe("useAgentHandoff", () => {
     mockGetAgentHandoff.mockImplementationOnce(async () => pending.promise);
 
     const { result, unmount } = renderHook(() =>
-      useAgentHandoff(snapshot.id, "codex", "env-1", [])
+      useAgentHandoff(snapshot.id, "codex", "env-1", []),
     );
     expect(result.current.ready).toBe(false);
 
@@ -481,12 +438,7 @@ describe("useAgentHandoff", () => {
       }: {
         destinationProvider: AgentProvider;
         environmentId: string;
-      }) => useAgentHandoff(
-        "handoff-revalidated",
-        destinationProvider,
-        environmentId,
-        [],
-      ),
+      }) => useAgentHandoff("handoff-revalidated", destinationProvider, environmentId, []),
       {
         initialProps: {
           destinationProvider: "codex" as AgentProvider,
@@ -500,16 +452,14 @@ describe("useAgentHandoff", () => {
     expect(result.current.ready).toBe(false);
     expect(result.current.pendingHistory).toBeUndefined();
     await waitFor(() =>
-      expect(result.current.error).toBe("This transfer belongs to another agent.")
+      expect(result.current.error).toBe("This transfer belongs to another agent."),
     );
 
     rerender({ destinationProvider: "codex", environmentId: "env-2" });
     expect(result.current.ready).toBe(false);
     expect(result.current.pendingHistory).toBeUndefined();
     await waitFor(() =>
-      expect(result.current.error).toBe(
-        "This transfer belongs to another environment.",
-      )
+      expect(result.current.error).toBe("This transfer belongs to another environment."),
     );
   });
 
@@ -596,13 +546,7 @@ describe("useAgentHandoff", () => {
      * No backend read should happen, and the raw frame must stay hidden.
      */
     const { result } = renderHook(() =>
-      useAgentHandoff(
-        undefined,
-        "codex",
-        "env-1",
-        [bootstrap, reply],
-        "handoff-consumed",
-      )
+      useAgentHandoff(undefined, "codex", "env-1", [bootstrap, reply], "handoff-consumed"),
     );
 
     expect(mockGetAgentHandoff).not.toHaveBeenCalled();

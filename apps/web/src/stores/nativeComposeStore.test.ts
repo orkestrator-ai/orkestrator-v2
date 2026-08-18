@@ -73,8 +73,8 @@ describe("nativeComposeStore", () => {
     unassignedNativeComposePersistenceStore.getState().setDraftMetadata?.(sessionKey, {
       executionProfileId: "plan",
     });
-    expect(
-      useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId,
-    ).toBe("plan");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.executionProfileId).toBe(
+      "plan",
+    );
   });
 });

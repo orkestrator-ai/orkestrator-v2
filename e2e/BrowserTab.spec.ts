@@ -15,7 +15,10 @@ async function expectNoHorizontalOverflow(locator: Locator) {
 test("browser toolbar follows pane container breakpoints without horizontal overflow", async ({
   page,
 }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "desktop project provides all pane widths");
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "desktop project provides all pane widths",
+  );
   await page.goto("/browser");
 
   const pane = page.getByTestId("browser-pane");
@@ -59,8 +62,13 @@ test("browser toolbar follows pane container breakpoints without horizontal over
   await expectNoHorizontalOverflow(root);
 });
 
-test("long errors and the empty state stay contained in a narrow pane", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop-chromium", "covered once in the desktop layout engine");
+test("long errors and the empty state stay contained in a narrow pane", async ({
+  page,
+}, testInfo) => {
+  test.skip(
+    testInfo.project.name !== "desktop-chromium",
+    "covered once in the desktop layout engine",
+  );
   await page.goto("/browser");
   const pane = page.getByTestId("browser-pane");
   const root = pane.locator(":scope > div");

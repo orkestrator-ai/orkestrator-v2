@@ -38,10 +38,7 @@ async function headerGeometry(header: Locator) {
 test("the diff header fits a phone and the editor uses the full width", async ({
   page,
 }, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "mobile-chromium",
-    "this asserts the phone layout",
-  );
+  test.skip(testInfo.project.name !== "mobile-chromium", "this asserts the phone layout");
   await page.goto(`/diff-viewer?branch=${encodeURIComponent(longBranch)}`);
 
   const pane = page.getByTestId("diff-viewer-pane");
@@ -58,13 +55,8 @@ test("the diff header fits a phone and the editor uses the full width", async ({
   await expect(branchReference).toBeVisible();
   await expect(branchReference).toHaveText(`vs ${longBranch}`);
 
-  const {
-    headerWidth,
-    headerClientWidth,
-    headerScrollWidth,
-    siblingOverlap,
-    worstOverflow,
-  } = await headerGeometry(header);
+  const { headerWidth, headerClientWidth, headerScrollWidth, siblingOverlap, worstOverflow } =
+    await headerGeometry(header);
   expect(headerWidth).toBeLessThanOrEqual(390);
   expect(headerScrollWidth).toBeLessThanOrEqual(headerClientWidth + 1);
   expect(siblingOverlap).toBeLessThanOrEqual(1);
@@ -119,10 +111,7 @@ for (const statusCase of [
   test(`the ${statusCase.query} file state renders accessibly on a phone`, async ({
     page,
   }, testInfo) => {
-    test.skip(
-      testInfo.project.name !== "mobile-chromium",
-      "this asserts the phone layout",
-    );
+    test.skip(testInfo.project.name !== "mobile-chromium", "this asserts the phone layout");
     await page.goto(`/diff-viewer?status=${statusCase.query}`);
 
     const pane = page.getByTestId("diff-viewer-pane");
@@ -134,9 +123,7 @@ for (const statusCase of [
   });
 }
 
-test("the mounted diff switches exactly at the mobile breakpoint", async ({
-  page,
-}, testInfo) => {
+test("the mounted diff switches exactly at the mobile breakpoint", async ({ page }, testInfo) => {
   test.skip(
     testInfo.project.name !== "desktop-chromium",
     "this resizes the desktop viewport across the breakpoint",
@@ -167,10 +154,7 @@ test("the mounted diff switches exactly at the mobile breakpoint", async ({
 test("the desktop diff keeps its mode controls and full-ref tooltip", async ({
   page,
 }, testInfo) => {
-  test.skip(
-    testInfo.project.name !== "desktop-chromium",
-    "this asserts the desktop layout",
-  );
+  test.skip(testInfo.project.name !== "desktop-chromium", "this asserts the desktop layout");
   await page.goto("/diff-viewer");
 
   const pane = page.getByTestId("diff-viewer-pane");

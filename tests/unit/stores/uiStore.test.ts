@@ -114,22 +114,10 @@ describe("uiStore", () => {
       useUIStore.getState().selectProject(projectId);
     }
 
-    expect(useUIStore.getState().recentProjectIds).toEqual([
-      "p3",
-      "p6",
-      "p5",
-      "p4",
-      "p2",
-    ]);
+    expect(useUIStore.getState().recentProjectIds).toEqual(["p3", "p6", "p5", "p4", "p2"]);
 
     useUIStore.getState().selectProject(null);
-    expect(useUIStore.getState().recentProjectIds).toEqual([
-      "p3",
-      "p6",
-      "p5",
-      "p4",
-      "p2",
-    ]);
+    expect(useUIStore.getState().recentProjectIds).toEqual(["p3", "p6", "p5", "p4", "p2"]);
   });
 
   test("toggleProjectCollapse adds and removes", () => {
@@ -241,7 +229,9 @@ describe("uiStore", () => {
 
   test("collapseEmptyProjects collapses only empty projects", () => {
     const projectsWithEnvs = new Set(["project-2"]);
-    useUIStore.getState().collapseEmptyProjects(["project-1", "project-2", "project-3"], projectsWithEnvs);
+    useUIStore
+      .getState()
+      .collapseEmptyProjects(["project-1", "project-2", "project-3"], projectsWithEnvs);
 
     const collapsed = useUIStore.getState().collapsedProjects;
     expect(collapsed).toContain("project-1");
@@ -253,10 +243,7 @@ describe("uiStore", () => {
     useUIStore.setState({ collapsedProjects: ["project-1"] });
     const before = useUIStore.getState();
 
-    useUIStore.getState().collapseEmptyProjects(
-      ["project-1", "project-2"],
-      new Set(["project-2"]),
-    );
+    useUIStore.getState().collapseEmptyProjects(["project-1", "project-2"], new Set(["project-2"]));
 
     expect(useUIStore.getState()).toBe(before);
     expect(useUIStore.getState().collapsedProjects).toEqual(["project-1"]);

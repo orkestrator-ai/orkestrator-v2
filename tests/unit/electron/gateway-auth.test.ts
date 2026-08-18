@@ -24,11 +24,7 @@ import {
   waitUntil,
 } from "./gateway-test-harness.js";
 
-
 describe("remote gateway", () => {
-
-
-
   test("keeps the control listener identity and merges Origin with Accept-Encoding remotely", async () => {
     const dataDir = await createTempDir("ork-dynamic-control-");
     const rendererRoot = await createRendererRoot(dataDir);
@@ -45,9 +41,8 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => payload) },
     });
     expect(info.browserUrl).toBeDefined();
-    const invoke = (baseUrl: string, origin?: string) => requestUrl(
-      `${baseUrl}__orkestrator/invoke`,
-      {
+    const invoke = (baseUrl: string, origin?: string) =>
+      requestUrl(`${baseUrl}__orkestrator/invoke`, {
         method: "POST",
         headers: {
           authorization: `Bearer ${info.token}`,
@@ -56,8 +51,7 @@ describe("remote gateway", () => {
           ...(origin ? { origin } : {}),
         },
         body: JSON.stringify({ command: "large_response", args: {} }),
-      },
-    );
+      });
 
     const control = await invoke(info.url);
     expect(control.headers["content-encoding"]).toBeUndefined();
@@ -74,14 +68,12 @@ describe("remote gateway", () => {
     expect(eventClients(gateway).size).toBe(0);
   });
 
-
-
   test("merges Vary values without clobbering Origin", () => {
     expect(appendVary("Origin", "Accept-Encoding")).toBe("Origin, Accept-Encoding");
-    expect(appendVary("origin, accept-encoding", "Accept-Encoding")).toBe("origin, accept-encoding");
+    expect(appendVary("origin, accept-encoding", "Accept-Encoding")).toBe(
+      "origin, accept-encoding",
+    );
   });
-
-
 
   test("authenticates metrics routes and validates, sanitizes, and evicts client reports", async () => {
     const { info } = await startGateway();
@@ -172,10 +164,11 @@ describe("remote gateway", () => {
     expect(metrics.recentClientBootReports.at(-1)?.resourceCount).toBe(39);
     expect(metrics.recentClientBootReports[0]?.nextHopProtocol).toBe("h2");
     expect(metrics.recentClientBootReports.at(-1)?.nextHopProtocol).toBe("other");
-    expect(metrics.recentClientBootReports.every((report) => (
-      report.platform === "desktop-browser"
-      && report.navigationType === "navigate"
-    ))).toBe(true);
+    expect(
+      metrics.recentClientBootReports.every(
+        (report) => report.platform === "desktop-browser" && report.navigationType === "navigate",
+      ),
+    ).toBe(true);
     expect(metrics.routes["client-metrics"]).toMatchObject({
       requests: 46,
       statusCodes: {
@@ -188,8 +181,6 @@ describe("remote gateway", () => {
     expect(metrics.routes["client-metrics"]!.requestBytes).toBeGreaterThan(0);
     expect(metrics.routes["client-metrics"]!.responseBytes).toBeGreaterThan(0);
   });
-
-
 
   test("persists a generated auth token and honors an explicit environment token", async () => {
     const dataDir = await createTempDir("ork-gateway-auth-");
@@ -206,17 +197,19 @@ describe("remote gateway", () => {
     expect(explicit.token).toBe("explicit-token-value");
     expect(explicit).toMatchObject({ editable: false, source: "environment" });
 
-    await expect(loadOrCreateGatewayToken(dataDir, {
-      ORKESTRATOR_GATEWAY_TOKEN: "short",
-    })).rejects.toThrow("Invalid ORKESTRATOR_GATEWAY_TOKEN");
+    await expect(
+      loadOrCreateGatewayToken(dataDir, {
+        ORKESTRATOR_GATEWAY_TOKEN: "short",
+      }),
+    ).rejects.toThrow("Invalid ORKESTRATOR_GATEWAY_TOKEN");
 
     await writeFile(generated.authFile, JSON.stringify({ token: "invalid" }));
     const repaired = await loadOrCreateGatewayToken(dataDir, {});
     expect(repaired.token).not.toBe("invalid");
-    expect(JSON.parse(await readFile(generated.authFile, "utf8"))).toEqual({ token: repaired.token });
+    expect(JSON.parse(await readFile(generated.authFile, "utf8"))).toEqual({
+      token: repaired.token,
+    });
   });
-
-
 
   test("honors startup guardrails for disabled, missing, invalid, and non-Tailscale binds", async () => {
     const dataDir = await createTempDir("ork-gateway-guard-");
@@ -236,7 +229,18 @@ describe("remote gateway", () => {
       backend: { invoke: mock(async () => null) },
       dataDir,
       rendererRoot,
-      interfaces: { en0: [{ address: "192.168.1.20", family: "IPv4", internal: false, netmask: "255.255.255.0", cidr: null, mac: "00:00:00:00:00:00" }] },
+      interfaces: {
+        en0: [
+          {
+            address: "192.168.1.20",
+            family: "IPv4",
+            internal: false,
+            netmask: "255.255.255.0",
+            cidr: null,
+            mac: "00:00:00:00:00:00",
+          },
+        ],
+      },
       env: {},
       logger,
     });
@@ -248,7 +252,18 @@ describe("remote gateway", () => {
       rendererRoot,
       fallbackBindAddress: "127.0.0.1",
       port: 0,
-      interfaces: { en0: [{ address: "192.168.1.20", family: "IPv4", internal: false, netmask: "255.255.255.0", cidr: null, mac: "00:00:00:00:00:00" }] },
+      interfaces: {
+        en0: [
+          {
+            address: "192.168.1.20",
+            family: "IPv4",
+            internal: false,
+            netmask: "255.255.255.0",
+            cidr: null,
+            mac: "00:00:00:00:00:00",
+          },
+        ],
+      },
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger,
     });
@@ -265,7 +280,9 @@ describe("remote gateway", () => {
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger,
     });
-    await expect(nonTailscaleFallback.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
+    await expect(nonTailscaleFallback.start()).rejects.toThrow(
+      "Refusing to bind gateway to non-Tailscale address",
+    );
 
     const nonTailscaleBind = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -275,7 +292,9 @@ describe("remote gateway", () => {
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
       logger,
     });
-    await expect(nonTailscaleBind.start()).rejects.toThrow("Refusing to bind gateway to non-Tailscale address");
+    await expect(nonTailscaleBind.start()).rejects.toThrow(
+      "Refusing to bind gateway to non-Tailscale address",
+    );
 
     const invalidPort = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -287,8 +306,6 @@ describe("remote gateway", () => {
     });
     await expect(invalidPort.start()).rejects.toThrow("Invalid gateway port");
   });
-
-
 
   test("keeps a loopback control listener separate from the browser listener", async () => {
     const { info } = await startGateway({
@@ -304,8 +321,6 @@ describe("remote gateway", () => {
     expect(controlResponse.status).toBe(200);
     expect(browserResponse.status).toBe(200);
   });
-
-
 
   test("allows only the authenticated control listener to manage Electron web access", async () => {
     const getStatus = mock(() => ({ enabled: false, running: false, url: null, error: null }));
@@ -353,8 +368,6 @@ describe("remote gateway", () => {
     expect(unauthenticated.status).toBe(401);
   });
 
-
-
   test("validates web access methods and request bodies", async () => {
     const setEnabled = mock(async (enabled: boolean) => ({
       enabled,
@@ -395,16 +408,18 @@ describe("remote gateway", () => {
     expect(setEnabled).not.toHaveBeenCalled();
   });
 
-
-
   test("surfaces web access controller failures without affecting other control requests", async () => {
     const { info } = await startGateway({
       controlBindAddress: "127.0.0.1",
       controlPort: 0,
       webClientControl: {
         getStatus: () => ({ enabled: true, running: false, url: null, error: null }),
-        setEnabled: async () => { throw new Error("lifecycle unavailable"); },
-        resetServe: async () => { throw new Error("reset unavailable"); },
+        setEnabled: async () => {
+          throw new Error("lifecycle unavailable");
+        },
+        resetServe: async () => {
+          throw new Error("reset unavailable");
+        },
       },
     });
     const headers = {
@@ -430,21 +445,17 @@ describe("remote gateway", () => {
     expect(status.status).toBe(200);
   });
 
-
-
   test("rejects a non-loopback control listener", async () => {
     await expect(startGateway({ controlBindAddress: "0.0.0.0" })).rejects.toThrow(
       "Control listener must use a loopback address",
     );
   });
 
-
-
   test("requires authentication before invoking backend commands", async () => {
     const dataDir = await createTempDir("ork-gateway-server-");
     const rendererRoot = path.join(dataDir, "dist");
     await mkdir(rendererRoot);
-    await writeFile(path.join(rendererRoot, "index.html"), "<div id=\"root\"></div>");
+    await writeFile(path.join(rendererRoot, "index.html"), '<div id="root"></div>');
 
     const backend = {
       invoke: mock(async (command: string, args: Record<string, unknown>) => ({ command, args })),
@@ -456,7 +467,12 @@ describe("remote gateway", () => {
       bindAddress: "127.0.0.1",
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
+      logger: {
+        debug: mock(() => undefined),
+        error: mock(() => undefined),
+        info: mock(() => undefined),
+        warn: mock(() => undefined),
+      },
       allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
@@ -522,8 +538,6 @@ describe("remote gateway", () => {
     expect(backendError.json()).toEqual({ error: "backend failed" });
   });
 
-
-
   test("supports allow-all and trailing-slash origin rules", async () => {
     const wildcard = await startGateway({ allowedOrigins: ["*"] });
     const anyOrigin = await requestUrl(`${wildcard.info.url}__orkestrator/status`, {
@@ -553,8 +567,6 @@ describe("remote gateway", () => {
     expect(rejected.status).toBe(403);
   });
 
-
-
   test("reads CORS origins from the environment and honors wildcard ports", async () => {
     const { info } = await startGateway({
       env: {
@@ -571,7 +583,9 @@ describe("remote gateway", () => {
       },
     });
     expect(allowed.status).toBe(200);
-    expect(allowed.headers["access-control-allow-origin"]).toBe("https://branch.preview.example:8443");
+    expect(allowed.headers["access-control-allow-origin"]).toBe(
+      "https://branch.preview.example:8443",
+    );
 
     for (const origin of [
       "https://preview.example:8443",
@@ -584,8 +598,6 @@ describe("remote gateway", () => {
       expect(rejected.status).toBe(403);
     }
   });
-
-
 
   test("sets and clears the auth cookie through login and logout", async () => {
     const { info } = await startGateway();
@@ -618,8 +630,6 @@ describe("remote gateway", () => {
     expect(logout.status).toBe(303);
     expect(logout.headers["set-cookie"]?.[0]).toContain("Max-Age=0");
   });
-
-
 
   test("uses a loopback-only single-use exchange for agent-test browser sessions", async () => {
     const { info } = await startGateway({ agentTestMode: true });
@@ -662,10 +672,11 @@ describe("remote gateway", () => {
     expect(reused.status).toBe(401);
   });
 
-
-
   test("signs a browser in through a single-use agent-test login link", async () => {
-    const { gateway, info } = await startGateway({ agentTestMode: true, agentTestProfile: "agent-login-qa" });
+    const { gateway, info } = await startGateway({
+      agentTestMode: true,
+      agentTestProfile: "agent-login-qa",
+    });
     const mint = async () => {
       const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
         method: "POST",
@@ -718,8 +729,6 @@ describe("remote gateway", () => {
     expect((await requestUrl(loginUrl(expiredCode))).status).toBe(401);
   });
 
-
-
   test("hides the agent-test login link and its hint outside an agent-test profile", async () => {
     const { info } = await startGateway();
     const link = await requestUrl(`${info.url}__orkestrator/agent-test/login?code=anything`);
@@ -732,8 +741,6 @@ describe("remote gateway", () => {
     expect(page.body).not.toContain("dev:login");
   });
 
-
-
   test("rejects the agent-test login link on the control listener", async () => {
     const { info } = await startGateway({
       agentTestMode: true,
@@ -745,8 +752,6 @@ describe("remote gateway", () => {
     const control = await requestUrl(`${info.url}__orkestrator/agent-test/login?code=anything`);
     expect(control.status).toBe(404);
   });
-
-
 
   test("gates the agent-test session route the same way as the bootstrap routes", async () => {
     // Renewing a credential is as much of a privileged operation as minting one,
@@ -771,8 +776,6 @@ describe("remote gateway", () => {
     });
     expect(onControl.status).toBe(404);
   });
-
-
 
   test("answers the agent-test session route 404 without a session and 405 for other methods", async () => {
     const { info } = await startGateway({ agentTestMode: true });
@@ -807,8 +810,6 @@ describe("remote gateway", () => {
     expect(metrics.routes["agent-test-bootstrap"]?.requests).toBe(2);
   });
 
-
-
   test("evicts the nearest-deadline agent-test session, not the earliest issued", async () => {
     const { gateway } = await startGateway({ agentTestMode: true });
     const internals = gateway as unknown as {
@@ -838,8 +839,6 @@ describe("remote gateway", () => {
     expect(sessions.has(idle)).toBe(false);
   });
 
-
-
   test("bounds minted bootstrap codes at their cap", async () => {
     const { gateway, info } = await startGateway({ agentTestMode: true });
     const bootstraps = (gateway as unknown as { agentTestBootstraps: Map<string, number> })
@@ -865,8 +864,6 @@ describe("remote gateway", () => {
     expect(newest.status).toBe(303);
   });
 
-
-
   test("leaves a durable-token event stream open when another client's session lapses", async () => {
     // The expiry timers must key off the credential actually presented. Closing a
     // token-authenticated stream would break every production browser client.
@@ -883,9 +880,11 @@ describe("remote gateway", () => {
       body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
     });
     const cookie = exchanged.headers["set-cookie"]![0]!;
-    const sessions = (gateway as unknown as {
-      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
-    }).agentTestSessions;
+    const sessions = (
+      gateway as unknown as {
+        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      }
+    ).agentTestSessions;
     expect(sessions.size).toBe(1);
 
     // The token stream connects first, while the session is still healthy, so its
@@ -910,13 +909,13 @@ describe("remote gateway", () => {
     sessionStream.close();
   });
 
-
-
   test("renews only on explicit activity and stops at its absolute lifetime", async () => {
     const { gateway, info } = await startGateway({ agentTestMode: true });
-    const sessions = (gateway as unknown as {
-      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
-    }).agentTestSessions;
+    const sessions = (
+      gateway as unknown as {
+        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      }
+    ).agentTestSessions;
     const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
       method: "POST",
       headers: { authorization: `Bearer ${info.token}` },
@@ -956,8 +955,6 @@ describe("remote gateway", () => {
     expect(sessions.has(session)).toBe(false);
   });
 
-
-
   test("closes an established event stream when its agent-test session expires", async () => {
     const { gateway, info } = await startGateway({ agentTestMode: true });
     const minted = await requestUrl(`${info.url}__orkestrator/agent-test/bootstrap`, {
@@ -970,9 +967,11 @@ describe("remote gateway", () => {
       body: JSON.stringify({ code: (minted.json() as { code: string }).code }),
     });
     const cookie = exchanged.headers["set-cookie"]![0]!;
-    const sessions = (gateway as unknown as {
-      agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
-    }).agentTestSessions;
+    const sessions = (
+      gateway as unknown as {
+        agentTestSessions: Map<string, { expiresAt: number; absoluteExpiresAt: number }>;
+      }
+    ).agentTestSessions;
     const entry = [...sessions.values()][0]!;
     entry.expiresAt = Date.now() + 40;
 
@@ -988,8 +987,6 @@ describe("remote gateway", () => {
     stream.close();
   });
 
-
-
   test("does not store the persistent gateway token in an agent-test login cookie", async () => {
     const { info } = await startGateway({ agentTestMode: true });
     const accepted = await requestUrl(`${info.url}__orkestrator/login`, {
@@ -1002,8 +999,6 @@ describe("remote gateway", () => {
     expect(cookie).toContain("orkestrator_gateway_auth=");
     expect(cookie).not.toContain(info.token);
   });
-
-
 
   test("returns and rotates the persisted token for an authenticated client", async () => {
     const { info, dataDir } = await startGateway({ env: {} });
@@ -1040,17 +1035,10 @@ describe("remote gateway", () => {
     expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe(replacement);
   });
 
-
-
   test("rejects invalid token boundaries before changing the active credential", async () => {
     const { info } = await startGateway({ env: {} });
     const oldCookie = `orkestrator_gateway_auth=${info.token}`;
-    const invalidTokens = [
-      "short",
-      "a".repeat(1025),
-      "\ud800".repeat(16),
-      "😀".repeat(512),
-    ];
+    const invalidTokens = ["short", "a".repeat(1025), "\ud800".repeat(16), "😀".repeat(512)];
 
     for (const token of invalidTokens) {
       const response = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
@@ -1067,8 +1055,6 @@ describe("remote gateway", () => {
     expect(stillAuthenticated.status).toBe(200);
     expect(stillAuthenticated.json()).toMatchObject({ token: info.token });
   });
-
-
 
   test("normalizes valid token whitespace before persistence and cookie issuance", async () => {
     const { info, dataDir } = await startGateway({ env: {} });
@@ -1087,23 +1073,16 @@ describe("remote gateway", () => {
     expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe("replacement-token-123456");
   });
 
-
-
   test("serializes concurrent rotations and leaves disk and memory on the last queued token", async () => {
     const { gateway, dataDir } = await startGateway({ env: {} });
     const firstToken = `first-${"a".repeat(64)}`;
     const secondToken = `second-${"b".repeat(900)}`;
 
-    await Promise.all([
-      gateway.setToken(firstToken),
-      gateway.setToken(secondToken),
-    ]);
+    await Promise.all([gateway.setToken(firstToken), gateway.setToken(secondToken)]);
 
     expect(await gateway.getTokenSettings()).toMatchObject({ token: secondToken });
     expect((await loadOrCreateGatewayToken(dataDir, {})).token).toBe(secondToken);
   });
-
-
 
   test("returns 500 for persistence failures and keeps the previous active token", async () => {
     const { info, dataDir } = await startGateway({ env: {} });
@@ -1127,8 +1106,6 @@ describe("remote gateway", () => {
     expect(oldTokenStillWorks.status).toBe(200);
   });
 
-
-
   test("rejects edits when the token is managed by the environment", async () => {
     const { info } = await startGateway();
     const response = await requestUrl(`${info.url}__orkestrator/gateway-settings`, {
@@ -1145,8 +1122,6 @@ describe("remote gateway", () => {
       error: "Gateway token is managed by ORKESTRATOR_GATEWAY_TOKEN and cannot be changed here",
     });
   });
-
-
 
   test("proxies authenticated loopback POSTs without leaking gateway credentials or browser origin", async () => {
     const targetRequests: Array<{
@@ -1181,12 +1156,13 @@ describe("remote gateway", () => {
     });
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
     const targetAddress = target.address();
-    if (!targetAddress || typeof targetAddress !== "object") throw new Error("Target server did not bind");
+    if (!targetAddress || typeof targetAddress !== "object")
+      throw new Error("Target server did not bind");
 
     const dataDir = await createTempDir("ork-gateway-proxy-");
     const rendererRoot = path.join(dataDir, "dist");
     await mkdir(rendererRoot);
-    await writeFile(path.join(rendererRoot, "index.html"), "<div id=\"root\"></div>");
+    await writeFile(path.join(rendererRoot, "index.html"), '<div id="root"></div>');
 
     const gateway = new OrkestratorGateway({
       backend: { invoke: mock(async () => null) },
@@ -1195,43 +1171,52 @@ describe("remote gateway", () => {
       bindAddress: "127.0.0.1",
       port: 0,
       env: { ORKESTRATOR_GATEWAY_TOKEN: "test-token-123456" },
-      logger: { debug: mock(() => undefined), error: mock(() => undefined), info: mock(() => undefined), warn: mock(() => undefined) },
+      logger: {
+        debug: mock(() => undefined),
+        error: mock(() => undefined),
+        info: mock(() => undefined),
+        warn: mock(() => undefined),
+      },
       allowNonTailscaleBind: true,
     });
     gateways.push(gateway);
     const info = await gateway.start();
 
     try {
-      const response = await requestUrl(`${info!.url}__orkestrator/proxy/loopback/${targetAddress.port}/hello?x=1`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${info!.token}`,
-          "proxy-authorization": "Basic must-not-reach-upstream",
-          cookie: "orkestrator_gateway_auth=test-token-123456; app_session=abc123",
-          origin: new URL(info!.url).origin,
-          "content-type": "application/json",
-          "x-orkestrator-codex-token": "codex-bridge-token",
-          "x-orkestrator-opencode-token": "opencode-password",
-          "x-orkestrator-acp-token": "acp-bridge-token",
+      const response = await requestUrl(
+        `${info!.url}__orkestrator/proxy/loopback/${targetAddress.port}/hello?x=1`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${info!.token}`,
+            "proxy-authorization": "Basic must-not-reach-upstream",
+            cookie: "orkestrator_gateway_auth=test-token-123456; app_session=abc123",
+            origin: new URL(info!.url).origin,
+            "content-type": "application/json",
+            "x-orkestrator-codex-token": "codex-bridge-token",
+            "x-orkestrator-opencode-token": "opencode-password",
+            "x-orkestrator-acp-token": "acp-bridge-token",
+          },
+          body: JSON.stringify({ prompt: "review" }),
         },
-        body: JSON.stringify({ prompt: "review" }),
-      });
+      );
       expect(response.status).toBe(200);
       expect(response.json()).toEqual({ ok: true, url: "/hello?x=1" });
-      expect(targetRequests).toEqual([{
-        authorization: `Basic ${Buffer.from("opencode:opencode-password").toString("base64")}`,
-        proxyAuthorization: undefined,
-        codexToken: "codex-bridge-token",
-        acpToken: "acp-bridge-token",
-        openCodeToken: undefined,
-        cookie: "app_session=abc123",
-        origin: undefined,
-        method: "POST",
-        body: JSON.stringify({ prompt: "review" }),
-      }]);
+      expect(targetRequests).toEqual([
+        {
+          authorization: `Basic ${Buffer.from("opencode:opencode-password").toString("base64")}`,
+          proxyAuthorization: undefined,
+          codexToken: "codex-bridge-token",
+          acpToken: "acp-bridge-token",
+          openCodeToken: undefined,
+          cookie: "app_session=abc123",
+          origin: undefined,
+          method: "POST",
+          body: JSON.stringify({ prompt: "review" }),
+        },
+      ]);
     } finally {
       await new Promise<void>((resolve) => target.close(() => resolve()));
     }
   });
-
 });

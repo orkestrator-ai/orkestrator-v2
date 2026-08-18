@@ -74,22 +74,21 @@ export function selectableOpenCodeDefaultModel(
 ): unknown {
   if (typeof storedModelId !== "string") return storedModelId;
   const stored = storedModelId.trim();
-  if (
-    !stored.includes("/")
-    || isSelectableOpenCodeModelId(stored, allowedProviders)
-  ) {
+  if (!stored.includes("/") || isSelectableOpenCodeModelId(stored, allowedProviders)) {
     return storedModelId;
   }
-  return [
-    ...favoriteModels
-      .filter((favorite) => favorite.platform === "opencode")
-      .map((favorite) => favorite.modelId),
-    DEFAULT_OPENCODE_MODEL_ID,
-  ].find((modelId) =>
-    isConcreteOpenCodeModelId(modelId)
-    && isSelectableOpenCodeModelId(modelId, allowedProviders)
-  )
-    ?? storedModelId;
+  return (
+    [
+      ...favoriteModels
+        .filter((favorite) => favorite.platform === "opencode")
+        .map((favorite) => favorite.modelId),
+      DEFAULT_OPENCODE_MODEL_ID,
+    ].find(
+      (modelId) =>
+        isConcreteOpenCodeModelId(modelId) &&
+        isSelectableOpenCodeModelId(modelId, allowedProviders),
+    ) ?? storedModelId
+  );
 }
 
 /**
@@ -100,10 +99,7 @@ export function selectableOpenCodeDefaultModel(
  * dependency order, and normalization runs while the config is still being
  * loaded.
  */
-function repositoryDefaultAgent(
-  repository: JsonRecord,
-  globalDefaultAgent: unknown,
-): unknown {
+function repositoryDefaultAgent(repository: JsonRecord, globalDefaultAgent: unknown): unknown {
   return repository.defaultAgent ?? globalDefaultAgent ?? "claude";
 }
 
@@ -134,8 +130,8 @@ export function normalizeOpenCodeRepositoryDefaults<T>(
   const next: JsonRecord = {};
   for (const [id, repository] of Object.entries(repositories)) {
     if (
-      !isRecord(repository)
-      || repositoryDefaultAgent(repository, globalDefaultAgent) !== "opencode"
+      !isRecord(repository) ||
+      repositoryDefaultAgent(repository, globalDefaultAgent) !== "opencode"
     ) {
       next[id] = repository;
       continue;
@@ -152,5 +148,5 @@ export function normalizeOpenCodeRepositoryDefaults<T>(
     changed = true;
     next[id] = { ...repository, defaultModel };
   }
-  return changed ? next as T : repositories;
+  return changed ? (next as T) : repositories;
 }

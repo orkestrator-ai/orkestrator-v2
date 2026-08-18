@@ -21,7 +21,17 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Trash2, Send, CheckCircle2, Hammer, ExternalLink, Loader2, Paperclip, ImageIcon, X } from "lucide-react";
+import {
+  Trash2,
+  Send,
+  CheckCircle2,
+  Hammer,
+  ExternalLink,
+  Loader2,
+  Paperclip,
+  ImageIcon,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { KanbanTask, KanbanStatus } from "@/stores/kanbanStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
@@ -29,10 +39,7 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
-import {
-  BuildLaunchDialog,
-  type BuildLaunchSelection,
-} from "@/components/build/BuildLaunchDialog";
+import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
 import { readImage } from "@/lib/native/clipboard";
 import { getKanbanImageData, openInBrowser } from "@/lib/backend";
 import {
@@ -92,17 +99,20 @@ interface KanbanCreateDraft {
 function isKanbanCreateDraft(value: unknown): value is KanbanCreateDraft {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const candidate = value as Partial<KanbanCreateDraft>;
-  return typeof candidate.title === "string"
-    && typeof candidate.description === "string"
-    && typeof candidate.acceptanceCriteria === "string"
-    && Array.isArray(candidate.images)
-    && candidate.images.every((image) =>
-      image
-      && typeof image.id === "string"
-      && typeof image.filename === "string"
-      && typeof image.data === "string"
-      && typeof image.previewUrl === "string"
-    );
+  return (
+    typeof candidate.title === "string" &&
+    typeof candidate.description === "string" &&
+    typeof candidate.acceptanceCriteria === "string" &&
+    Array.isArray(candidate.images) &&
+    candidate.images.every(
+      (image) =>
+        image &&
+        typeof image.id === "string" &&
+        typeof image.filename === "string" &&
+        typeof image.data === "string" &&
+        typeof image.previewUrl === "string",
+    )
+  );
 }
 
 /** Renders comment text with clickable URLs */
@@ -116,13 +126,16 @@ function CommentText({ text }: { text: string }) {
           <button
             key={i}
             className="text-blue-400 hover:underline cursor-pointer inline"
-            onClick={(e) => { e.preventDefault(); void openInBrowser(part); }}
+            onClick={(e) => {
+              e.preventDefault();
+              void openInBrowser(part);
+            }}
           >
             {part}
           </button>
         ) : (
           <span key={i}>{part}</span>
-        )
+        ),
       )}
     </>
   );
@@ -136,12 +149,18 @@ interface KanbanTaskDialogProps {
   createForProjectId?: string;
 }
 
-const TASK_DIALOG_CONTENT_CLASS = "sm:max-w-[560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0";
+const TASK_DIALOG_CONTENT_CLASS =
+  "sm:max-w-[560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0";
 const TASK_DIALOG_BODY_CLASS = "min-h-0 flex-1";
 const TASK_DIALOG_BODY_INNER_CLASS = "space-y-4 p-6";
 const TASK_DIALOG_FOOTER_CLASS = "border-t border-border p-4 sm:p-6";
 
-export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId }: KanbanTaskDialogProps) {
+export function KanbanTaskDialog({
+  task,
+  open,
+  onOpenChange,
+  createForProjectId,
+}: KanbanTaskDialogProps) {
   const updateTask = useKanbanStore((s) => s.updateTask);
   const deleteTask = useKanbanStore((s) => s.deleteTask);
   const addTaskStore = useKanbanStore((s) => s.addTask);
@@ -158,16 +177,17 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   // Held rather than started immediately: a task that already owns an
   // environment asks for confirmation first, and the answer must not lose the
   // configuration the user just made.
-  const [confirmBuildSelection, setConfirmBuildSelection] =
-    useState<BuildLaunchSelection | null>(null);
+  const [confirmBuildSelection, setConfirmBuildSelection] = useState<BuildLaunchSelection | null>(
+    null,
+  );
 
   const isCreateMode = !!createForProjectId;
   const buildProjectId = createForProjectId ?? task?.projectId ?? "";
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(buildProjectId);
-  const {
-    catalog: launchCatalog,
-    defaults: launchDefaults,
-  } = useBuildLaunchOptions(buildProjectId, open);
+  const { catalog: launchCatalog, defaults: launchDefaults } = useBuildLaunchOptions(
+    buildProjectId,
+    open,
+  );
 
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
@@ -209,10 +229,10 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
     void loadComposeDraft<KanbanCreateDraft>(draftKey)
       .then((persisted) => {
         if (
-          disposed
-          || !persisted
-          || !isKanbanCreateDraft(persisted.value)
-          || createDraftEditRevisionRef.current !== revisionAtRequest
+          disposed ||
+          !persisted ||
+          !isKanbanCreateDraft(persisted.value) ||
+          createDraftEditRevisionRef.current !== revisionAtRequest
         ) {
           return;
         }
@@ -233,12 +253,15 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         createDraftHydratedRef.current = null;
       }
       if (
-        !createDraftClosingRef.current
-        && createDraftEditRevisionRef.current !== revisionAtRequest
+        !createDraftClosingRef.current &&
+        createDraftEditRevisionRef.current !== revisionAtRequest
       ) {
         const latest = createDraftValuesRef.current;
-        const empty = !latest.title && !latest.description
-          && !latest.acceptanceCriteria && latest.images.length === 0;
+        const empty =
+          !latest.title &&
+          !latest.description &&
+          !latest.acceptanceCriteria &&
+          latest.images.length === 0;
         const operation = empty
           ? discardComposeDraft(draftKey)
           : persistComposeDraft(draftKey, "project", createForProjectId, latest);
@@ -263,16 +286,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         acceptanceCriteria: editAC,
         images: pendingImages,
       };
-      const empty = !draft.title && !draft.description
-        && !draft.acceptanceCriteria && draft.images.length === 0;
+      const empty =
+        !draft.title &&
+        !draft.description &&
+        !draft.acceptanceCriteria &&
+        draft.images.length === 0;
       const operation = empty
         ? discardComposeDraft(draftKey)
-        : persistComposeDraft(
-            draftKey,
-            "project",
-            createForProjectId,
-            draft,
-          );
+        : persistComposeDraft(draftKey, "project", createForProjectId, draft);
       void operation.catch((error) => {
         console.warn("[KanbanTaskDialog] Failed to persist create draft:", error);
       });
@@ -299,10 +320,12 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         } catch {
           // Image file may have been deleted; ignore
         }
-      })
+      }),
     );
-    return () => { cancelled = true; };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- imageUrlCache intentionally excluded to avoid re-fetch loop
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- imageUrlCache intentionally excluded to avoid re-fetch loop
   }, [open, task]);
 
   // Reset create mode fields when dialog opens in create mode
@@ -329,100 +352,111 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   };
 
   // Process an image file (File object) into base64
-  const processImageFile = useCallback(async (file: File): Promise<{ filename: string; data: string; previewUrl: string } | null> => {
-    if (!file.type.startsWith("image/")) {
-      toast.error("Only image files are supported");
-      return null;
-    }
-    if (file.size > MAX_IMAGE_SIZE) {
-      toast.error("Image is too large (max 5 MB)");
-      return null;
-    }
-    try {
-      const data = await fileToBase64(file);
-      const previewUrl = `data:${file.type};base64,${data}`;
-      return { filename: file.name, data, previewUrl };
-    } catch {
-      toast.error("Failed to read image file");
-      return null;
-    }
-  }, []);
+  const processImageFile = useCallback(
+    async (file: File): Promise<{ filename: string; data: string; previewUrl: string } | null> => {
+      if (!file.type.startsWith("image/")) {
+        toast.error("Only image files are supported");
+        return null;
+      }
+      if (file.size > MAX_IMAGE_SIZE) {
+        toast.error("Image is too large (max 5 MB)");
+        return null;
+      }
+      try {
+        const data = await fileToBase64(file);
+        const previewUrl = `data:${file.type};base64,${data}`;
+        return { filename: file.name, data, previewUrl };
+      } catch {
+        toast.error("Failed to read image file");
+        return null;
+      }
+    },
+    [],
+  );
 
   // Handle paste events for image attachment
   // Browser/iOS images come from the paste event; Electron's clipboard bridge
   // remains the fallback for native screenshots without an image MIME item.
-  const handlePaste = useCallback(async (e: ClipboardEvent) => {
-    // Only handle if focus is within this dialog
-    const activeEl = document.activeElement;
-    if (!activeEl || !dialogContentRef.current?.contains(activeEl)) return;
+  const handlePaste = useCallback(
+    async (e: ClipboardEvent) => {
+      // Only handle if focus is within this dialog
+      const activeEl = document.activeElement;
+      if (!activeEl || !dialogContentRef.current?.contains(activeEl)) return;
 
-    // No early-return for text/plain clipboard — Electron screenshots may not
-    // expose an image item, so the native bridge still needs to be attempted.
-    try {
-      const pastedBlob = getPastedImageBlob(e);
-      if (pastedBlob) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
+      // No early-return for text/plain clipboard — Electron screenshots may not
+      // expose an image item, so the native bridge still needs to be attempted.
+      try {
+        const pastedBlob = getPastedImageBlob(e);
+        if (pastedBlob) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+
+        const image = await readImage(pastedBlob);
+        const rgba = await image.rgba();
+        const { width, height } = await image.size();
+
+        let canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
+        ctx.putImageData(imageDataObj, 0, 0);
+
+        // Resize if needed to fit within RGBA size limit
+        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+
+        const dataUrl = canvas.toDataURL("image/png");
+        const base64Data = dataUrl.split(",")[1];
+        canvas.width = 0;
+        canvas.height = 0;
+
+        if (!base64Data) return;
+
+        // Validate size
+        const estimatedSize = (base64Data.length * 3) / 4;
+        if (estimatedSize > MAX_IMAGE_SIZE) {
+          toast.error("Image is too large (max 5 MB)");
+          return;
+        }
+
+        if (!pastedBlob) {
+          e.preventDefault();
+          // stopImmediatePropagation prevents other document-level capture handlers
+          // (compose bars) from also calling readImage() for the same event.
+          e.stopImmediatePropagation();
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const filename = `clipboard-${timestamp}.png`;
+
+        if (isCreateMode || !task) {
+          createDraftEditRevisionRef.current += 1;
+          setPendingImages((prev) => [
+            ...prev,
+            { id: createUuid(), filename, data: base64Data, previewUrl: dataUrl },
+          ]);
+        } else {
+          void addImage(task.id, filename, base64Data);
+        }
+        toast.success("Image pasted");
+      } catch {
+        // No image on clipboard — let the event propagate for text paste
       }
-
-      const image = await readImage(pastedBlob);
-      const rgba = await image.rgba();
-      const { width, height } = await image.size();
-
-      let canvas = document.createElement("canvas");
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-
-      const imageDataObj = new ImageData(new Uint8ClampedArray(rgba), width, height);
-      ctx.putImageData(imageDataObj, 0, 0);
-
-      // Resize if needed to fit within RGBA size limit
-      canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
-
-      const dataUrl = canvas.toDataURL("image/png");
-      const base64Data = dataUrl.split(",")[1];
-      canvas.width = 0;
-      canvas.height = 0;
-
-      if (!base64Data) return;
-
-      // Validate size
-      const estimatedSize = (base64Data.length * 3) / 4;
-      if (estimatedSize > MAX_IMAGE_SIZE) {
-        toast.error("Image is too large (max 5 MB)");
-        return;
-      }
-
-      if (!pastedBlob) {
-        e.preventDefault();
-        // stopImmediatePropagation prevents other document-level capture handlers
-        // (compose bars) from also calling readImage() for the same event.
-        e.stopImmediatePropagation();
-      }
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `clipboard-${timestamp}.png`;
-
-      if (isCreateMode || !task) {
-        createDraftEditRevisionRef.current += 1;
-        setPendingImages((prev) => [...prev, { id: createUuid(), filename, data: base64Data, previewUrl: dataUrl }]);
-      } else {
-        void addImage(task.id, filename, base64Data);
-      }
-      toast.success("Image pasted");
-    } catch {
-      // No image on clipboard — let the event propagate for text paste
-    }
-  }, [isCreateMode, task, addImage]);
+    },
+    [isCreateMode, task, addImage],
+  );
 
   // Register paste listener at document level with capture phase
   // (matches the pattern used by compose bars for reliable native clipboard access)
   useEffect(() => {
     if (!open) return;
 
-    const listener = (e: Event) => { void handlePaste(e as ClipboardEvent); };
+    const listener = (e: Event) => {
+      void handlePaste(e as ClipboardEvent);
+    };
     document.addEventListener("paste", listener, { capture: true });
     return () => document.removeEventListener("paste", listener, { capture: true });
   }, [open, handlePaste]);
@@ -436,31 +470,34 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   }, []);
 
   // Process files selected from the file input
-  const handleFileInputChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const handleFileInputChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
 
-    let attached = 0;
-    for (const file of files) {
-      const result = await processImageFile(file);
-      if (!result) continue;
+      let attached = 0;
+      for (const file of files) {
+        const result = await processImageFile(file);
+        if (!result) continue;
 
-      if (isCreateMode || !task) {
-        createDraftEditRevisionRef.current += 1;
-        setPendingImages((prev) => [...prev, { id: createUuid(), ...result }]);
-      } else {
-        void addImage(task.id, result.filename, result.data);
+        if (isCreateMode || !task) {
+          createDraftEditRevisionRef.current += 1;
+          setPendingImages((prev) => [...prev, { id: createUuid(), ...result }]);
+        } else {
+          void addImage(task.id, result.filename, result.data);
+        }
+        attached++;
       }
-      attached++;
-    }
 
-    if (attached > 0) {
-      toast.success(`Image${attached > 1 ? "s" : ""} attached`);
-    }
+      if (attached > 0) {
+        toast.success(`Image${attached > 1 ? "s" : ""} attached`);
+      }
 
-    // Reset file input so the same file can be re-selected
-    e.target.value = "";
-  }, [isCreateMode, task, addImage, processImageFile]);
+      // Reset file input so the same file can be re-selected
+      e.target.value = "";
+    },
+    [isCreateMode, task, addImage, processImageFile],
+  );
 
   // Hidden file input for image attachment (shared across create and edit modes)
   const fileInput = (
@@ -502,17 +539,12 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
       const ac = editAC.trim();
       const imagesToSave = [...pendingImages];
       const draftKey = composeDraftKey("kanban-create", createForProjectId, "task");
-      void persistComposeDraft(
-        draftKey,
-        "project",
-        createForProjectId,
-        {
-          title: editTitle,
-          description: editDescription,
-          acceptanceCriteria: editAC,
-          images: imagesToSave,
-        } satisfies KanbanCreateDraft,
-      ).catch((error) => {
+      void persistComposeDraft(draftKey, "project", createForProjectId, {
+        title: editTitle,
+        description: editDescription,
+        acceptanceCriteria: editAC,
+        images: imagesToSave,
+      } satisfies KanbanCreateDraft).catch((error) => {
         console.warn("[KanbanTaskDialog] Failed to preserve create draft:", error);
       });
       handleOpenChange(false, false);
@@ -525,7 +557,9 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
           void updateTask(newTaskId, { acceptanceCriteria: ac });
         }
         // Save pending images to the newly created task
-        const results = await Promise.allSettled(imagesToSave.map((img) => addImage(newTaskId, img.filename, img.data)));
+        const results = await Promise.allSettled(
+          imagesToSave.map((img) => addImage(newTaskId, img.filename, img.data)),
+        );
         const failed = results.filter((r) => r.status === "rejected").length;
         if (failed > 0) {
           toast.error(`Failed to save ${failed} image${failed > 1 ? "s" : ""}`);
@@ -583,9 +617,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
     if (!task) return;
     setIsBuildStarting(true);
     try {
-      const pipelineId = await startBuild(task, selection.environmentType, selection.steps.build.agent, {
-        steps: selection.steps,
-      });
+      const pipelineId = await startBuild(
+        task,
+        selection.environmentType,
+        selection.steps.build.agent,
+        {
+          steps: selection.steps,
+        },
+      );
       if (!pipelineId) return;
       handleOpenChange(false);
     } catch (error) {
@@ -643,12 +682,11 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
         );
         const failedImages = imageResults.filter((result) => result.status === "rejected").length;
         if (failedImages > 0) {
-          toast.error(
-            `Failed to save ${failedImages} image${failedImages > 1 ? "s" : ""}`,
-          );
+          toast.error(`Failed to save ${failedImages} image${failedImages > 1 ? "s" : ""}`);
         }
 
-        newTask = useKanbanStore.getState().tasks.find((candidate) => candidate.id === newTaskId) ?? null;
+        newTask =
+          useKanbanStore.getState().tasks.find((candidate) => candidate.id === newTaskId) ?? null;
         if (!newTask) {
           toast.error("Task created but could not start build");
           handleOpenChange(false);
@@ -702,13 +740,14 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
             </Button>
           </div>
           {allImages.length === 0 ? (
-            <p className="text-xs text-muted-foreground italic">No images attached. Paste or click the attach button.</p>
+            <p className="text-xs text-muted-foreground italic">
+              No images attached. Paste or click the attach button.
+            </p>
           ) : (
             <div className="flex flex-wrap gap-2">
               {allImages.map((img) => {
-                const previewUrl = "previewUrl" in img
-                  ? (img as PendingImage).previewUrl
-                  : imageUrlCache[img.id];
+                const previewUrl =
+                  "previewUrl" in img ? (img as PendingImage).previewUrl : imageUrlCache[img.id];
                 if (!previewUrl) {
                   // Still loading from disk
                   return (
@@ -766,7 +805,12 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   const renderPreviewDialog = () => {
     if (!previewImage) return null;
     return (
-      <Dialog open={!!previewImage} onOpenChange={(open) => { if (!open) setPreviewImage(null); }}>
+      <Dialog
+        open={!!previewImage}
+        onOpenChange={(open) => {
+          if (!open) setPreviewImage(null);
+        }}
+      >
         <DialogContent className="max-w-[90vw] max-h-[90vh] p-2 flex flex-col items-center justify-center">
           <DialogTitle className="sr-only">{previewImage.filename}</DialogTitle>
           <DialogDescription className="sr-only">
@@ -857,7 +901,11 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
             {/* Create Actions */}
             <div className={`flex flex-wrap gap-2 ${TASK_DIALOG_FOOTER_CLASS}`}>
-              <Button size="sm" onClick={handleCreate} disabled={!editTitle.trim() || isBuildStarting}>
+              <Button
+                size="sm"
+                onClick={handleCreate}
+                disabled={!editTitle.trim() || isBuildStarting}
+              >
                 Create Task
               </Button>
               <Button
@@ -899,197 +947,208 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
   return (
     <>
       {fileInput}
-        <Dialog open={open} onOpenChange={handleOpenChange}>
-          <DialogContent
-            ref={dialogContentRef}
-            className={TASK_DIALOG_CONTENT_CLASS}
-            onInteractOutside={(e) => e.preventDefault()}
-          >
-            <ScrollArea className={TASK_DIALOG_BODY_CLASS}>
-              <div className={TASK_DIALOG_BODY_INNER_CLASS}>
-                <DialogHeader>
-                  <DialogDescription className="sr-only">
-                    View and edit task details, build actions, images, and comments.
-                  </DialogDescription>
-                  <div className="flex items-center justify-between pr-6">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
-                        {STATUS_LABELS[task.status]}
-                      </span>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                      onClick={handleDelete}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogContent
+          ref={dialogContentRef}
+          className={TASK_DIALOG_CONTENT_CLASS}
+          onInteractOutside={(e) => e.preventDefault()}
+        >
+          <ScrollArea className={TASK_DIALOG_BODY_CLASS}>
+            <div className={TASK_DIALOG_BODY_INNER_CLASS}>
+              <DialogHeader>
+                <DialogDescription className="sr-only">
+                  View and edit task details, build actions, images, and comments.
+                </DialogDescription>
+                <div className="flex items-center justify-between pr-6">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">
+                      {STATUS_LABELS[task.status]}
+                    </span>
                   </div>
-                  {isEditing ? (
-                    <div className="space-y-2 pt-1">
-                      <Input
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        className="text-lg font-semibold"
-                        autoFocus
-                      />
-                      <Textarea
-                        value={editDescription}
-                        onChange={(e) => setEditDescription(e.target.value)}
-                        placeholder="Description..."
-                        rows={3}
-                        className="max-h-[calc(10lh+1rem)] overflow-y-auto"
-                      />
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={handleSaveEdit}>Save</Button>
-                        <Button size="sm" variant="ghost" onClick={handleCancelEdit}>Cancel</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="cursor-pointer" onClick={handleStartEdit}>
-                      <DialogTitle className="text-lg">{task.title}</DialogTitle>
-                      {task.description ? (
-                        <p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap">
-                          {task.description}
-                        </p>
-                      ) : (
-                        <p className="mt-1 text-sm text-muted-foreground/50 italic">
-                          Click to add a description...
-                        </p>
-                      )}
-                    </div>
-                  )}
-                </DialogHeader>
-
-                <Separator />
-
-                {/* Acceptance Criteria */}
-                <div>
-                  <div className="flex items-center gap-1.5 mb-2">
-                    <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-                    <h4 className="text-sm font-medium">Acceptance Criteria</h4>
-                  </div>
-                  {isEditingAC ? (
-                    <div className="space-y-2">
-                      <Textarea
-                        value={editAC}
-                        onChange={(e) => setEditAC(e.target.value)}
-                        placeholder="Define what 'done' looks like..."
-                        rows={4}
-                        className="max-h-[calc(10lh+1rem)] overflow-y-auto"
-                        autoFocus
-                      />
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={handleSaveAC}>Save</Button>
-                        <Button size="sm" variant="ghost" onClick={handleCancelAC}>Cancel</Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      className="cursor-pointer rounded-md border border-border/50 p-2.5 hover:border-border transition-colors min-h-[40px]"
-                      onClick={handleStartEditAC}
-                    >
-                      {task.acceptanceCriteria ? (
-                        <p className="text-sm text-foreground whitespace-pre-wrap">
-                          {task.acceptanceCriteria}
-                        </p>
-                      ) : (
-                        <p className="text-sm text-muted-foreground/50 italic">
-                          Click to add acceptance criteria...
-                        </p>
-                      )}
-                    </div>
-                  )}
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                    onClick={handleDelete}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
+                {isEditing ? (
+                  <div className="space-y-2 pt-1">
+                    <Input
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      className="text-lg font-semibold"
+                      autoFocus
+                    />
+                    <Textarea
+                      value={editDescription}
+                      onChange={(e) => setEditDescription(e.target.value)}
+                      placeholder="Description..."
+                      rows={3}
+                      className="max-h-[calc(10lh+1rem)] overflow-y-auto"
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={handleSaveEdit}>
+                        Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="cursor-pointer" onClick={handleStartEdit}>
+                    <DialogTitle className="text-lg">{task.title}</DialogTitle>
+                    {task.description ? (
+                      <p className="mt-1 text-sm text-muted-foreground whitespace-pre-wrap">
+                        {task.description}
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-sm text-muted-foreground/50 italic">
+                        Click to add a description...
+                      </p>
+                    )}
+                  </div>
+                )}
+              </DialogHeader>
 
-                {/* Images */}
-                {renderImageSection()}
+              <Separator />
 
-                <Separator />
+              {/* Acceptance Criteria */}
+              <div>
+                <div className="flex items-center gap-1.5 mb-2">
+                  <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+                  <h4 className="text-sm font-medium">Acceptance Criteria</h4>
+                </div>
+                {isEditingAC ? (
+                  <div className="space-y-2">
+                    <Textarea
+                      value={editAC}
+                      onChange={(e) => setEditAC(e.target.value)}
+                      placeholder="Define what 'done' looks like..."
+                      rows={4}
+                      className="max-h-[calc(10lh+1rem)] overflow-y-auto"
+                      autoFocus
+                    />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={handleSaveAC}>
+                        Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={handleCancelAC}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    className="cursor-pointer rounded-md border border-border/50 p-2.5 hover:border-border transition-colors min-h-[40px]"
+                    onClick={handleStartEditAC}
+                  >
+                    {task.acceptanceCriteria ? (
+                      <p className="text-sm text-foreground whitespace-pre-wrap">
+                        {task.acceptanceCriteria}
+                      </p>
+                    ) : (
+                      <p className="text-sm text-muted-foreground/50 italic">
+                        Click to add acceptance criteria...
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
 
-                {/* Build Actions */}
-                {(() => {
-                  const existingPipeline = getPipelineByTaskId(task.id);
-                  const hasActiveBuild = existingPipeline && !["complete", "failed"].includes(existingPipeline.phase);
+              {/* Images */}
+              {renderImageSection()}
 
-                  return (
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
+              <Separator />
+
+              {/* Build Actions */}
+              {(() => {
+                const existingPipeline = getPipelineByTaskId(task.id);
+                const hasActiveBuild =
+                  existingPipeline && !["complete", "failed"].includes(existingPipeline.phase);
+
+                return (
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5 flex-1"
+                        disabled={isBuildStarting || !!hasActiveBuild}
+                        onClick={() => setBuildDialogOpen(true)}
+                      >
+                        {isBuildStarting ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Hammer className="h-3.5 w-3.5" />
+                        )}
+                        Build…
+                      </Button>
+                      {task.environmentId && (
                         <Button
                           size="sm"
                           variant="outline"
-                          className="gap-1.5 flex-1"
-                          disabled={isBuildStarting || !!hasActiveBuild}
-                          onClick={() => setBuildDialogOpen(true)}
+                          className="gap-1.5"
+                          onClick={() => {
+                            navigateToBuild(task);
+                            handleOpenChange(false);
+                          }}
                         >
-                          {isBuildStarting ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Hammer className="h-3.5 w-3.5" />
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          View Build
+                          {existingPipeline && (
+                            <span className="text-xs text-muted-foreground ml-1">
+                              ({existingPipeline.phase})
+                            </span>
                           )}
-                          Build…
                         </Button>
-                        {task.environmentId && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="gap-1.5"
-                            onClick={() => {
-                              navigateToBuild(task);
-                              handleOpenChange(false);
-                            }}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                            View Build
-                            {existingPipeline && (
-                              <span className="text-xs text-muted-foreground ml-1">
-                                ({existingPipeline.phase})
-                              </span>
-                            )}
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                <Separator />
-
-                {/* Comments */}
-                <div className="flex-1 min-h-0">
-                  <h4 className="text-sm font-medium mb-2">Comments ({task.comments.length})</h4>
-                  <ScrollArea className="max-h-[200px]">
-                    <div className="space-y-3 pr-3">
-                      {task.comments.length === 0 && (
-                        <p className="text-xs text-muted-foreground italic">No comments yet</p>
                       )}
-                      {task.comments.map((comment) => (
-                        <div
-                          key={comment.id}
-                          className="group/comment rounded-md bg-muted/50 p-2.5 text-sm"
-                        >
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="whitespace-pre-wrap text-foreground flex-1"><CommentText text={comment.text} /></p>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-5 w-5 shrink-0 opacity-0 group-hover/comment:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
-                              onClick={() => void deleteComment(task.id, comment.id)}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                          <span className="text-[10px] text-muted-foreground mt-1 block">
-                            {new Date(comment.createdAt).toLocaleString()}
-                          </span>
-                        </div>
-                      ))}
                     </div>
-                  </ScrollArea>
-                </div>
+                  </div>
+                );
+              })()}
+
+              <Separator />
+
+              {/* Comments */}
+              <div className="flex-1 min-h-0">
+                <h4 className="text-sm font-medium mb-2">Comments ({task.comments.length})</h4>
+                <ScrollArea className="max-h-[200px]">
+                  <div className="space-y-3 pr-3">
+                    {task.comments.length === 0 && (
+                      <p className="text-xs text-muted-foreground italic">No comments yet</p>
+                    )}
+                    {task.comments.map((comment) => (
+                      <div
+                        key={comment.id}
+                        className="group/comment rounded-md bg-muted/50 p-2.5 text-sm"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="whitespace-pre-wrap text-foreground flex-1">
+                            <CommentText text={comment.text} />
+                          </p>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 shrink-0 opacity-0 group-hover/comment:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                            onClick={() => void deleteComment(task.id, comment.id)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <span className="text-[10px] text-muted-foreground mt-1 block">
+                          {new Date(comment.createdAt).toLocaleString()}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </ScrollArea>
               </div>
-            </ScrollArea>
+            </div>
+          </ScrollArea>
 
           {/* Add Comment */}
           <div className={`flex items-center gap-2 ${TASK_DIALOG_FOOTER_CLASS}`}>
@@ -1113,20 +1172,24 @@ export function KanbanTaskDialog({ task, open, onOpenChange, createForProjectId 
 
         <AlertDialog
           open={!!confirmBuildSelection}
-          onOpenChange={(open) => { if (!open) setConfirmBuildSelection(null); }}
+          onOpenChange={(open) => {
+            if (!open) setConfirmBuildSelection(null);
+          }}
         >
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>Environment Already Exists</AlertDialogTitle>
               <AlertDialogDescription>
-                This task already has an environment linked to it. Starting a new build will create an additional environment.
+                This task already has an environment linked to it. Starting a new build will create
+                an additional environment.
                 <span className="block mt-2">
                   Are you sure you want to start a new{" "}
                   <strong>
                     {confirmBuildSelection?.environmentType === "containerized"
                       ? "container"
                       : "local"}
-                  </strong> build?
+                  </strong>{" "}
+                  build?
                 </span>
               </AlertDialogDescription>
             </AlertDialogHeader>

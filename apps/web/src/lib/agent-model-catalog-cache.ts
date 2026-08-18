@@ -14,26 +14,18 @@ export async function hydrateAgentModelCatalogCache(): Promise<void> {
   const cursorModelsBeforeRead = useAgentModelCatalogStore.getState().cursorModels;
   const grokModelsBeforeRead = useAgentModelCatalogStore.getState().grokModels;
   const cache = await getAgentModelCatalogCache();
-  if (
-    cache.claude?.models.length
-    && useClaudeStore.getState().models === claudeModelsBeforeRead
-  ) {
+  if (cache.claude?.models.length && useClaudeStore.getState().models === claudeModelsBeforeRead) {
     useClaudeStore.getState().setModels(cache.claude.models);
   }
-  if (
-    cache.codex?.models.length
-    && useCodexStore.getState().models === codexModelsBeforeRead
-  ) {
+  if (cache.codex?.models.length && useCodexStore.getState().models === codexModelsBeforeRead) {
     useCodexStore.getState().setModels(cache.codex.models);
   }
   const currentAcpModels = useAgentModelCatalogStore.getState();
   useAgentModelCatalogStore.setState({
-    ...(cache.cursor?.models.length
-      && currentAcpModels.cursorModels === cursorModelsBeforeRead
+    ...(cache.cursor?.models.length && currentAcpModels.cursorModels === cursorModelsBeforeRead
       ? { cursorModels: cache.cursor.models }
       : {}),
-    ...(cache.grok?.models.length
-      && currentAcpModels.grokModels === grokModelsBeforeRead
+    ...(cache.grok?.models.length && currentAcpModels.grokModels === grokModelsBeforeRead
       ? { grokModels: cache.grok.models }
       : {}),
   });

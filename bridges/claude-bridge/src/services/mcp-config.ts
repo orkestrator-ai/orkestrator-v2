@@ -62,11 +62,11 @@ export function getOrkestratorAgentMcpServer(
   try {
     const url = new URL(rawUrl);
     if (
-      url.protocol !== "http:"
-      || !["127.0.0.1", "localhost", "host.docker.internal"].includes(url.hostname)
-      || url.pathname !== "/mcp"
-      || url.username
-      || url.password
+      url.protocol !== "http:" ||
+      !["127.0.0.1", "localhost", "host.docker.internal"].includes(url.hostname) ||
+      url.pathname !== "/mcp" ||
+      url.username ||
+      url.password
     ) {
       return null;
     }
@@ -100,9 +100,7 @@ export async function loadGlobalMcpServers(): Promise<McpServersConfig> {
 /**
  * Load project-specific MCP server configurations from <cwd>/.mcp.json
  */
-export async function loadProjectMcpServers(
-  cwd: string
-): Promise<McpServersConfig> {
+export async function loadProjectMcpServers(cwd: string): Promise<McpServersConfig> {
   const servers = await readJsonSliceCached<McpJsonConfig, McpServersConfig>(
     join(cwd, ".mcp.json"),
     "mcpServers",
@@ -118,9 +116,7 @@ export async function loadProjectMcpServers(
  * The slice key carries `cwd` because the selector closes over it — two
  * projects must not serve each other's overrides from the same entry.
  */
-export async function loadProjectOverridesFromGlobal(
-  cwd: string
-): Promise<McpServersConfig> {
+export async function loadProjectOverridesFromGlobal(cwd: string): Promise<McpServersConfig> {
   const servers = await readJsonSliceCached<ClaudeJsonConfig, McpServersConfig>(
     claudeJsonPath(),
     `projects:${cwd}:mcpServers`,
@@ -134,7 +130,7 @@ export async function loadProjectOverridesFromGlobal(
  * Determine if a server config is HTTP type
  */
 function isHttpConfig(
-  config: McpServerConfig
+  config: McpServerConfig,
 ): config is { type: "http"; url: string; headers?: Record<string, string> } {
   return config.type === "http" && "url" in config;
 }
@@ -142,9 +138,7 @@ function isHttpConfig(
 /**
  * Determine if a server config is stdio type
  */
-function isStdioConfig(
-  config: McpServerConfig
-): config is {
+function isStdioConfig(config: McpServerConfig): config is {
   type?: "stdio";
   command: string;
   args?: string[];
@@ -156,9 +150,7 @@ function isStdioConfig(
 /**
  * Convert a single MCP server config to SDK format
  */
-export function configToSdkFormat(
-  config: McpServerConfig
-): SdkMcpServerConfig | null {
+export function configToSdkFormat(config: McpServerConfig): SdkMcpServerConfig | null {
   if (isHttpConfig(config)) {
     // Remote MCP servers use HTTP transport. The SDK also supports "sse" transport,
     // but our config schema uses "http" for all URL-based servers.
@@ -188,9 +180,7 @@ export function configToSdkFormat(
  * 2. Project entry in ~/.claude.json
  * 3. Global mcpServers in ~/.claude.json
  */
-export async function getMergedMcpServers(
-  cwd: string
-): Promise<McpServersConfig> {
+export async function getMergedMcpServers(cwd: string): Promise<McpServersConfig> {
   const [global, projectGlobal, projectLocal] = await Promise.all([
     loadGlobalMcpServers(),
     loadProjectOverridesFromGlobal(cwd),
@@ -299,9 +289,6 @@ export async function getMcpRuntimeConfig(
   // parsing is concerned, and dropping it would misattribute its tools.
   return {
     servers,
-    names: new Set([
-      ...Object.keys(configs),
-      ...(agentServer ? [AGENT_MCP_SERVER_NAME] : []),
-    ]),
+    names: new Set([...Object.keys(configs), ...(agentServer ? [AGENT_MCP_SERVER_NAME] : [])]),
   };
 }

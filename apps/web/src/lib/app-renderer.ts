@@ -3,10 +3,7 @@ import type { Root, RootOptions } from "react-dom/client";
 
 export interface RenderReactRootOptions {
   children: ReactNode;
-  createRoot(
-    container: Element | DocumentFragment,
-    options?: RootOptions,
-  ): Pick<Root, "render">;
+  createRoot(container: Element | DocumentFragment, options?: RootOptions): Pick<Root, "render">;
   document: Pick<Document, "getElementById">;
   rootOptions?: RootOptions;
 }

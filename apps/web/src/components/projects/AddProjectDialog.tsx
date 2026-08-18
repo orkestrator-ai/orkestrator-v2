@@ -113,11 +113,12 @@ export function AddProjectDialog({
         title: "Select repository directory",
         defaultPath: localPath.trim() || undefined,
       });
-      const repositoryPath = typeof selected === "string"
-        ? selected
-        : window.orkestratorGateway?.enabled
-          ? localPath.trim()
-          : "";
+      const repositoryPath =
+        typeof selected === "string"
+          ? selected
+          : window.orkestratorGateway?.enabled
+            ? localPath.trim()
+            : "";
       if (!repositoryPath) return;
 
       setLocalPath(repositoryPath);
@@ -140,11 +141,12 @@ export function AddProjectDialog({
         title: "Choose an empty project folder",
         defaultPath: newProjectPath.trim() || undefined,
       });
-      const projectPath = typeof selected === "string"
-        ? selected
-        : window.orkestratorGateway?.enabled
-          ? newProjectPath.trim()
-          : "";
+      const projectPath =
+        typeof selected === "string"
+          ? selected
+          : window.orkestratorGateway?.enabled
+            ? newProjectPath.trim()
+            : "";
       if (projectPath) {
         setNewProjectPath(projectPath);
         setError(null);
@@ -197,16 +199,7 @@ export function AddProjectDialog({
         setIsLoading(false);
       }
     },
-    [
-      gitUrl,
-      handleOpenChange,
-      isValidUrl,
-      localPath,
-      newProjectPath,
-      onAdd,
-      onCreate,
-      source,
-    ],
+    [gitUrl, handleOpenChange, isValidUrl, localPath, newProjectPath, onAdd, onCreate, source],
   );
 
   const canSubmit = source === "scratch" ? newProjectPath.trim() : gitUrl.trim();
@@ -217,8 +210,8 @@ export function AddProjectDialog({
         <DialogHeader>
           <DialogTitle>Add project</DialogTitle>
           <DialogDescription>
-            Bring in a repository you already have, or start a private GitHub project from an
-            empty folder.
+            Bring in a repository you already have, or start a private GitHub project from an empty
+            folder.
           </DialogDescription>
         </DialogHeader>
 
@@ -351,7 +344,11 @@ export function AddProjectDialog({
             </TabsContent>
           </Tabs>
 
-          {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+          {error && (
+            <p className="text-sm text-destructive" role="alert">
+              {error}
+            </p>
+          )}
 
           <DialogFooter>
             <Button

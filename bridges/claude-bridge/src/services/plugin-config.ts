@@ -11,7 +11,12 @@
 
 import { readdir, access } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
-import type { PluginInfo, PluginConfig, ClaudeJsonPluginsConfig, InstalledPluginsFile } from "../types/plugins.js";
+import type {
+  PluginInfo,
+  PluginConfig,
+  ClaudeJsonPluginsConfig,
+  InstalledPluginsFile,
+} from "../types/plugins.js";
 import { claudeHome, claudeJsonPath, claudePluginsDir } from "./claude-home.js";
 import { readJsonSliceCached } from "./json-file-cache.js";
 
@@ -40,10 +45,7 @@ async function pathExists(path: string): Promise<boolean> {
  */
 function isPathWithin(parentDir: string, candidatePath: string): boolean {
   const relativePath = relative(parentDir, candidatePath);
-  return (
-    relativePath === "" ||
-    (!relativePath.startsWith("..") && !isAbsolute(relativePath))
-  );
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
 }
 
 /**
@@ -121,10 +123,11 @@ export async function loadCliInstalledPlugins(): Promise<PluginConfig[]> {
   const pluginsDir = claudePluginsDir();
   const installedPluginsPath = join(pluginsDir, "installed_plugins.json");
 
-  const plugins = await readJsonSliceCached<
-    InstalledPluginsFile,
-    InstalledPluginsFile["plugins"]
-  >(installedPluginsPath, "plugins", (config) => config?.plugins);
+  const plugins = await readJsonSliceCached<InstalledPluginsFile, InstalledPluginsFile["plugins"]>(
+    installedPluginsPath,
+    "plugins",
+    (config) => config?.plugins,
+  );
 
   if (!plugins) {
     return scanCliPluginsDirectory(pluginsDir);
@@ -146,7 +149,7 @@ export function remapInstalledPlugins(
   pluginsDir: string,
   // Only the `plugins` record is used, and that is all the slice cache
   // retains — the file's own `version` field is not needed here.
-  installedPlugins: Pick<InstalledPluginsFile, "plugins">
+  installedPlugins: Pick<InstalledPluginsFile, "plugins">,
 ): PluginConfig[] {
   const plugins: PluginConfig[] = [];
   const CLAUDE_PLUGINS_MARKER = "/.claude/plugins/";
@@ -160,13 +163,11 @@ export function remapInstalledPlugins(
       let resolvedPath: string;
 
       if (markerIdx !== -1) {
-        const relativePath = entry.installPath.substring(
-          markerIdx + CLAUDE_PLUGINS_MARKER.length
-        );
+        const relativePath = entry.installPath.substring(markerIdx + CLAUDE_PLUGINS_MARKER.length);
         const remappedPath = resolve(pluginsDir, relativePath);
         if (!isPathWithin(pluginsRoot, remappedPath)) {
           console.warn(
-            `[plugin-config] Skipping plugin with unsafe install path: "${entry.installPath}"`
+            `[plugin-config] Skipping plugin with unsafe install path: "${entry.installPath}"`,
           );
           continue;
         }
@@ -188,9 +189,7 @@ export function remapInstalledPlugins(
 /**
  * Also check for project-specific plugin overrides in ~/.claude.json projects section
  */
-export async function loadProjectOverridesFromGlobal(
-  cwd: string
-): Promise<PluginConfig[]> {
+export async function loadProjectOverridesFromGlobal(cwd: string): Promise<PluginConfig[]> {
   // The slice key carries `cwd` because the selector closes over it — two
   // projects must not serve each other's overrides from the same entry.
   const plugins = await readJsonSliceCached<ClaudeJsonPluginsConfig, PluginConfig[]>(
@@ -206,7 +205,7 @@ export async function loadProjectOverridesFromGlobal(
  * Read plugin manifest to get name and metadata
  */
 export async function readPluginManifest(
-  pluginPath: string
+  pluginPath: string,
 ): Promise<{ name: string; description?: string } | null> {
   const manifestPath = join(pluginPath, ".claude-plugin", "plugin.json");
   const manifest = await readJsonSliceCached<
@@ -306,7 +305,7 @@ export async function getPluginsForSdk(cwd: string): Promise<SdkPluginConfig[]> 
     } else {
       const pluginName = config.path.split("/").pop() || "unknown";
       console.warn(
-        `[plugin-config] Skipping plugin "${pluginName}" - path does not exist: "${config.path}"`
+        `[plugin-config] Skipping plugin "${pluginName}" - path does not exist: "${config.path}"`,
       );
     }
   }

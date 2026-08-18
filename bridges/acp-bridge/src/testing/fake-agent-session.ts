@@ -54,9 +54,10 @@ export function handleSessionMessage(message: JsonObject): boolean {
   if (message.method === "session/list" && typeof message.id === "number") {
     const params = isObject(message.params) ? message.params : {};
     const cwd = typeof params.cwd === "string" ? params.cwd : process.cwd();
-    const listedCwd = process.env.FAKE_ACP_LIST_MISSING_CWD === "1"
-      ? {}
-      : { cwd: process.env.FAKE_ACP_LIST_WRONG_CWD === "1" ? `${cwd}-other` : cwd };
+    const listedCwd =
+      process.env.FAKE_ACP_LIST_MISSING_CWD === "1"
+        ? {}
+        : { cwd: process.env.FAKE_ACP_LIST_WRONG_CWD === "1" ? `${cwd}-other` : cwd };
     const cursor = typeof params.cursor === "string" ? params.cursor : "";
     if (process.env.FAKE_ACP_LIST_COUNTER_FILE) {
       appendFileSync(process.env.FAKE_ACP_LIST_COUNTER_FILE, `${cursor || "<none>"}\n`);
@@ -68,11 +69,13 @@ export function handleSessionMessage(message: JsonObject): boolean {
         jsonrpc: "2.0",
         id: message.id,
         result: {
-          sessions: [{
-            sessionId: "looping-session",
-            ...listedCwd,
-            title: "Looping ACP work",
-          }],
+          sessions: [
+            {
+              sessionId: "looping-session",
+              ...listedCwd,
+              title: "Looping ACP work",
+            },
+          ],
           nextCursor: "same-cursor",
         },
       });
@@ -147,7 +150,11 @@ export function handleSessionMessage(message: JsonObject): boolean {
     const configId = typeof params.configId === "string" ? params.configId : "";
     const option = cursorConfig.configOptions.find((entry) => entry.id === configId);
     if (option) option.currentValue = params.value as never;
-    write({ jsonrpc: "2.0", id: message.id, result: { configOptions: cursorConfig.configOptions } });
+    write({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { configOptions: cursorConfig.configOptions },
+    });
     return true;
   }
   if (message.method === "session/set_mode" && typeof message.id === "number") {
@@ -160,7 +167,8 @@ export function handleSessionMessage(message: JsonObject): boolean {
   }
   if (message.method === "session/set_model" && typeof message.id === "number") {
     const params = isObject(message.params) ? message.params : {};
-    const modelId = typeof params.modelId === "string" ? params.modelId : grokConfig.models.currentModelId;
+    const modelId =
+      typeof params.modelId === "string" ? params.modelId : grokConfig.models.currentModelId;
     grokConfig.models.currentModelId = modelId;
     const meta = isObject(params._meta) ? params._meta : {};
     const current = grokConfig.models.availableModels.find((model) => model.modelId === modelId);
@@ -179,11 +187,12 @@ export function handleSessionMessage(message: JsonObject): boolean {
       appendFileSync(process.env.FAKE_ACP_LIFECYCLE_FILE, `load:${process.pid}\n`);
     }
     if (process.env.FAKE_ACP_FAIL_LOAD_SESSION === "1") {
-      const fail = (): void => write({
-        jsonrpc: "2.0",
-        id: message.id,
-        error: { code: -32603, message: "fake agent cannot load that session" },
-      });
+      const fail = (): void =>
+        write({
+          jsonrpc: "2.0",
+          id: message.id,
+          error: { code: -32603, message: "fake agent cannot load that session" },
+        });
       const failDelayMs = Number(process.env.FAKE_ACP_FAIL_LOAD_DELAY_MS ?? "0");
       if (Number.isSafeInteger(failDelayMs) && failDelayMs > 0) {
         setTimeout(fail, failDelayMs);
@@ -193,14 +202,14 @@ export function handleSessionMessage(message: JsonObject): boolean {
       return true;
     }
     const params = isObject(message.params) ? message.params : {};
-    const replaySessionId = typeof params.sessionId === "string"
-      ? params.sessionId
-      : "external-session";
-    const replay = (update: JsonObject): void => write({
-      jsonrpc: "2.0",
-      method: "session/update",
-      params: { sessionId: replaySessionId, update },
-    });
+    const replaySessionId =
+      typeof params.sessionId === "string" ? params.sessionId : "external-session";
+    const replay = (update: JsonObject): void =>
+      write({
+        jsonrpc: "2.0",
+        method: "session/update",
+        params: { sessionId: replaySessionId, update },
+      });
     if (process.env.FAKE_ACP_REPLAY_HISTORY === "1") {
       replay({
         sessionUpdate: "user_message_chunk",
@@ -252,7 +261,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
       replay({
         sessionUpdate: "tool_call",
         toolCallId: "replay-search-1",
-        title: "grep --include=\"*.json\" \"scripts\"",
+        title: 'grep --include="*.json" "scripts"',
         kind: "search",
         status: "pending",
         rawInput: { pattern: "scripts", path: "/workspace" },
@@ -292,12 +301,14 @@ export function handleSessionMessage(message: JsonObject): boolean {
         },
         ...(holdTurnFile && !existsSync(holdTurnFile)
           ? []
-          : [{
-              id: "replay-read-1",
-              title: "Read first.json (1 - 40)",
-              path: "/workspace/first.json",
-              content: "first contents",
-            }]),
+          : [
+              {
+                id: "replay-read-1",
+                title: "Read first.json (1 - 40)",
+                path: "/workspace/first.json",
+                content: "first contents",
+              },
+            ]),
       ];
       for (const entry of settled) {
         replay({
@@ -376,7 +387,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
       replay({
         sessionUpdate: "tool_call",
         toolCallId: "replay-search-1",
-        title: "grep --include=\"*.json\" \"scripts\"",
+        title: 'grep --include="*.json" "scripts"',
         kind: "search",
         status: "pending",
         rawInput: { pattern: "scripts", path: "/workspace" },
@@ -409,7 +420,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
       for (const replayed of [
         {
           id: "replay-search-1",
-          title: "grep --include=\"*.json\" \"scripts\"",
+          title: 'grep --include="*.json" "scripts"',
           kind: "search",
           rawInput: { pattern: "scripts", path: "/workspace" },
           rawOutput: { totalMatches: 1, truncated: false },
@@ -430,7 +441,7 @@ export function handleSessionMessage(message: JsonObject): boolean {
         },
         {
           id: "replay-search-2",
-          title: "grep --include=\"*.ts\" \"strict\"",
+          title: 'grep --include="*.ts" "strict"',
           kind: "search",
           rawInput: { pattern: "strict", path: "/workspace/src" },
           rawOutput: { totalMatches: 2, truncated: false },
@@ -477,9 +488,24 @@ export function handleSessionMessage(message: JsonObject): boolean {
     }
     if (process.env.FAKE_ACP_REPLAY_CURSOR_OVERSIZED_METADATA === "1") {
       for (const replayed of [
-        { id: "replay-huge-b", title: "Read huge-b.json", path: "/workspace/huge-b.json", output: "huge-b" },
-        { id: "replay-huge-a", title: "Read huge-a.json", path: "/workspace/huge-a.json", output: "huge-a" },
-        { id: "replay-huge-c", title: "Read huge-c.json", path: "/workspace/huge-c.json", output: "huge-c" },
+        {
+          id: "replay-huge-b",
+          title: "Read huge-b.json",
+          path: "/workspace/huge-b.json",
+          output: "huge-b",
+        },
+        {
+          id: "replay-huge-a",
+          title: "Read huge-a.json",
+          path: "/workspace/huge-a.json",
+          output: "huge-a",
+        },
+        {
+          id: "replay-huge-c",
+          title: "Read huge-c.json",
+          path: "/workspace/huge-c.json",
+          output: "huge-c",
+        },
       ]) {
         replay({
           sessionUpdate: "tool_call",
@@ -504,7 +530,10 @@ export function handleSessionMessage(message: JsonObject): boolean {
       replay({
         sessionUpdate: "user_message",
         // Array-form content: several blocks in one update.
-        content: [{ type: "text", text: "Earlier " }, { type: "text", text: "question" }],
+        content: [
+          { type: "text", text: "Earlier " },
+          { type: "text", text: "question" },
+        ],
       });
       replay({
         sessionUpdate: "agent_thought_chunk",
@@ -537,11 +566,14 @@ export function handleSessionMessage(message: JsonObject): boolean {
         });
       }
     }
-    const answer = (): void => write({
-      jsonrpc: "2.0",
-      id: message.id as number,
-      result: sessionPayload(typeof params.sessionId === "string" ? params.sessionId : "fake-session"),
-    });
+    const answer = (): void =>
+      write({
+        jsonrpc: "2.0",
+        id: message.id as number,
+        result: sessionPayload(
+          typeof params.sessionId === "string" ? params.sessionId : "fake-session",
+        ),
+      });
     // Holds `session/load` open so a second resume for the same ACP session
     // genuinely races the first rather than finding it already finished.
     const loadDelayMs = Number(process.env.FAKE_ACP_LOAD_DELAY_MS ?? "0");

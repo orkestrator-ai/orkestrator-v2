@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
-const manifest = await Bun.file(path.join(packageRoot, "package.json")).json() as {
+const manifest = (await Bun.file(path.join(packageRoot, "package.json")).json()) as {
   version?: string;
 };
 if (typeof manifest.version !== "string") {
@@ -41,21 +41,15 @@ async function stop(child: Bun.Subprocess): Promise<number | undefined> {
 let backend: Bun.Subprocess | undefined;
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-packed-smoke-"));
 try {
-  await run([
-    process.execPath,
-    "pm",
-    "pack",
-    "--cwd",
+  await run(
+    [process.execPath, "pm", "pack", "--cwd", packageRoot, "--destination", temporaryRoot],
     packageRoot,
-    "--destination",
-    temporaryRoot,
-  ], packageRoot);
+  );
   await run([process.execPath, "init", "-y"], temporaryRoot);
-  await run([
-    process.execPath,
-    "add",
-    path.join(temporaryRoot, `orkestrator-${manifest.version}.tgz`),
-  ], temporaryRoot);
+  await run(
+    [process.execPath, "add", path.join(temporaryRoot, `orkestrator-${manifest.version}.tgz`)],
+    temporaryRoot,
+  );
 
   // The bridges are spawned lazily by an environment, long after startup, so a
   // dependency the backend never touches would otherwise fail in front of a
@@ -82,18 +76,24 @@ try {
   const executable = path.join(temporaryRoot, "node_modules", ".bin", "orkestrator");
   // `child` keeps the piped-stdio type the spawn options imply; `backend` is the
   // widened handle the cleanup below reaches for.
-  const child = Bun.spawn([
-    executable,
-    "--host", "127.0.0.1",
-    "--port", "0",
-    "--allow-non-tailscale-bind",
-    "--data-dir", dataDir,
-  ], {
-    cwd: temporaryRoot,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env },
-  });
+  const child = Bun.spawn(
+    [
+      executable,
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+      "--allow-non-tailscale-bind",
+      "--data-dir",
+      dataDir,
+    ],
+    {
+      cwd: temporaryRoot,
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env },
+    },
+  );
   backend = child;
 
   // Killing the child is what unblocks the read below: `reader.read()` never

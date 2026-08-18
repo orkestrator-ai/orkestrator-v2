@@ -7,11 +7,7 @@ import * as realTmuxClient from "@/lib/claude-tmux-client";
 import * as realTerminalPaste from "@/lib/terminal-paste";
 import * as realClipboardImagePaste from "@/hooks/useClipboardImagePaste";
 import type { TerminalOutputPayload } from "@/hooks/useTerminal";
-import {
-  emitViewportChange,
-  restoreMatchMedia,
-  setMobileViewport,
-} from "../../mocks/match-media";
+import { emitViewportChange, restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
 
 const realXtermSnapshot = { ...realXterm };
 const realFitAddonSnapshot = { ...realFitAddon };
@@ -114,14 +110,12 @@ class MockFitAddon {
   }
 }
 
-const listenMock = mock(async (
-  _eventName: string,
-  handler: OutputHandler,
-  _options?: { signal?: AbortSignal },
-) => {
-  outputHandler = handler;
-  return unlistenMock;
-});
+const listenMock = mock(
+  async (_eventName: string, handler: OutputHandler, _options?: { signal?: AbortSignal }) => {
+    outputHandler = handler;
+    return unlistenMock;
+  },
+);
 const unlistenMock = mock(() => {});
 const createInteractiveTerminalMock = mock(async () => "pty-1");
 const startInteractiveTerminalMock = mock(async () => {});
@@ -167,9 +161,8 @@ mock.module("@/hooks/useClipboardImagePaste", () => ({
   },
 }));
 
-const { ClaudeTmuxInteractiveTerminal } = await import(
-  "@/components/claude/ClaudeTmuxInteractiveTerminal"
-);
+const { ClaudeTmuxInteractiveTerminal } =
+  await import("@/components/claude/ClaudeTmuxInteractiveTerminal");
 
 describe("ClaudeTmuxInteractiveTerminal", () => {
   const originalResizeObserver = globalThis.ResizeObserver;
@@ -229,11 +222,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
   test("attaches, forwards terminal output and input, resizes, and detaches on unmount", async () => {
     const { unmount } = render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
     );
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
@@ -249,9 +238,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     });
 
     expect(Array.from(terminalInstances[0]!.writes[0]!)).toEqual([65, 66]);
-    await waitFor(() =>
-      expect(writeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", "x"),
-    );
+    await waitFor(() => expect(writeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", "x"));
     expect(resizeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", 120, 30);
     expect(terminalInstances[0]!.focused).toBe(true);
 
@@ -263,13 +250,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("sends Shift+Enter as LF to the tmux input bridge", async () => {
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
     const preventDefault = mock(() => {});
@@ -285,51 +266,41 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
     expect(handled).toBe(false);
     expect(preventDefault).toHaveBeenCalledTimes(1);
-    await waitFor(() =>
-      expect(writeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", "\n"),
-    );
+    await waitFor(() => expect(writeInteractiveTerminalMock).toHaveBeenCalledWith("pty-1", "\n"));
 
     writeInteractiveTerminalMock.mockClear();
-    expect(terminalInstances[0]!.emitKey({
-      type: "keydown",
-      key: "Enter",
-      shiftKey: false,
-      ctrlKey: false,
-      metaKey: false,
-      altKey: false,
-    })).toBe(true);
+    expect(
+      terminalInstances[0]!.emitKey({
+        type: "keydown",
+        key: "Enter",
+        shiftKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+      }),
+    ).toBe(true);
     expect(writeInteractiveTerminalMock).not.toHaveBeenCalled();
   });
 
   test("passes Cmd+W through to the application tab shortcut", async () => {
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
-    expect(terminalInstances[0]!.emitKey({
-      type: "keydown",
-      key: "w",
-      metaKey: true,
-      ctrlKey: false,
-      altKey: false,
-      shiftKey: false,
-    })).toBe(false);
+    expect(
+      terminalInstances[0]!.emitKey({
+        type: "keydown",
+        key: "w",
+        metaKey: true,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+      }),
+    ).toBe(false);
   });
 
   test("fits without focusing the terminal when activated on mobile", async () => {
     setMobileViewport(true);
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
 
@@ -351,11 +322,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     expect(screen.queryByRole("toolbar", { name: "Terminal keys" }) === null).toBe(true);
 
     view.rerender(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
     );
 
     const toolbar = screen.getByRole("toolbar", { name: "Terminal keys" });
@@ -388,44 +355,31 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     setMobileViewport(true);
     let resolveStart!: () => void;
     startInteractiveTerminalMock.mockImplementationOnce(
-      () => new Promise<void>((resolve) => {
-        resolveStart = resolve;
-      }),
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve;
+        }),
     );
 
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalled());
     expect(
-      screen.getAllByRole("button").every((button) =>
-        (button as HTMLButtonElement).disabled
-      ),
+      screen.getAllByRole("button").every((button) => (button as HTMLButtonElement).disabled),
     ).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Up arrow" }));
     expect(writeInteractiveTerminalMock).not.toHaveBeenCalled();
 
     resolveStart();
     await waitFor(() =>
-      expect(
-        (screen.getByRole("button", { name: "Up arrow" }) as HTMLButtonElement).disabled,
-      ).toBe(false)
+      expect((screen.getByRole("button", { name: "Up arrow" }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
     );
   });
 
   test("focuses the terminal when it is attached on desktop", async () => {
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
 
@@ -448,11 +402,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     terminal.focused = false;
 
     view.rerender(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
     );
     expect(terminal.focused).toBe(true);
 
@@ -466,11 +416,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
       />,
     );
     view.rerender(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
     );
 
     expect(terminal.focused).toBe(false);
@@ -618,9 +564,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
     await waitFor(() => expect(capturedImagePasteOptions?.onImageSaved).toBeDefined());
 
     await act(async () => {
-      await capturedImagePasteOptions!.onImageSaved!(
-        "/workspace/.orkestrator/clipboard/image.png",
-      );
+      await capturedImagePasteOptions!.onImageSaved!("/workspace/.orkestrator/clipboard/image.png");
     });
 
     expect(writeInteractiveTerminalMock).toHaveBeenCalledWith(
@@ -662,13 +606,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   test("cleans up the created session and listener when start fails", async () => {
     startInteractiveTerminalMock.mockRejectedValueOnce(new Error("spawn failed"));
 
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
 
     await screen.findByText("Error: spawn failed");
 
@@ -677,12 +615,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("reports a missing environment without creating a terminal session", async () => {
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" isActive />);
 
     await screen.findByText("No environment specified for interactive terminal");
     expect(createInteractiveTerminalMock).not.toHaveBeenCalled();
@@ -692,13 +625,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   test("reports session creation failures without attempting to start", async () => {
     createInteractiveTerminalMock.mockRejectedValueOnce(new Error("create failed"));
 
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
 
     await screen.findByText("Error: create failed");
     expect(startInteractiveTerminalMock).not.toHaveBeenCalled();
@@ -708,13 +635,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   test("contains fit failures while keeping the tmux session attached", async () => {
     fitFailure = new Error("fit unavailable");
 
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
 
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1"));
     expect(screen.queryByText("Error: fit unavailable") === null).toBe(true);
@@ -729,18 +650,14 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
     try {
       render(
-        <ClaudeTmuxInteractiveTerminal
-          tabId="tab-1"
-          environmentId={environmentId}
-          isActive
-        />,
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
       );
 
       await waitFor(() =>
         expect(consoleError).toHaveBeenCalledWith(
           "[ClaudeTmuxInteractiveTerminal] Failed to resize terminal:",
           expect.objectContaining({ message: "resize unavailable" }),
-        )
+        ),
       );
       expect(startInteractiveTerminalMock).toHaveBeenCalledWith("pty-1");
     } finally {
@@ -749,13 +666,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("coalesces desync notices while terminal recovery is in flight", async () => {
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
 
     const recovery = deferred<void>();
@@ -775,13 +686,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
   });
 
   test("retries a failed desync recovery and accepts the restored full frame", async () => {
-    render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
-    );
+    render(<ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />);
     await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
 
     startInteractiveTerminalMock.mockRejectedValueOnce(new Error("transient recovery failure"));
@@ -811,11 +716,7 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
     try {
       render(
-        <ClaudeTmuxInteractiveTerminal
-          tabId="tab-1"
-          environmentId={environmentId}
-          isActive
-        />,
+        <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
       );
       await waitFor(() => expect(startInteractiveTerminalMock).toHaveBeenCalledTimes(1));
 
@@ -841,29 +742,27 @@ describe("ClaudeTmuxInteractiveTerminal", () => {
 
   test("cancels pending listener setup and detaches when the component unmounts", async () => {
     let listenSignal: AbortSignal | undefined;
-    listenMock.mockImplementationOnce((
-      _eventName,
-      handler: OutputHandler,
-      options?: { signal?: AbortSignal },
-    ) => {
-      outputHandler = handler;
-      listenSignal = options?.signal;
-      return new Promise((_resolve, reject) => {
-        listenSignal?.addEventListener("abort", () => {
-          unlistenMock();
-          const error = new Error("cancelled");
-          error.name = "AbortError";
-          reject(error);
-        }, { once: true });
-      });
-    });
+    listenMock.mockImplementationOnce(
+      (_eventName, handler: OutputHandler, options?: { signal?: AbortSignal }) => {
+        outputHandler = handler;
+        listenSignal = options?.signal;
+        return new Promise((_resolve, reject) => {
+          listenSignal?.addEventListener(
+            "abort",
+            () => {
+              unlistenMock();
+              const error = new Error("cancelled");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        });
+      },
+    );
 
     const { unmount } = render(
-      <ClaudeTmuxInteractiveTerminal
-        tabId="tab-1"
-        environmentId={environmentId}
-        isActive
-      />,
+      <ClaudeTmuxInteractiveTerminal tabId="tab-1" environmentId={environmentId} isActive />,
     );
 
     await waitFor(() => expect(listenMock).toHaveBeenCalledTimes(1));

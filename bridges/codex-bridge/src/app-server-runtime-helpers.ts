@@ -95,8 +95,10 @@ import {
 } from "@orkestrator/protocol/structured-output";
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 
-
-export function toEngineInput(prompt: string, attachments: PromptAttachmentInput[]): EngineUserInput[] {
+export function toEngineInput(
+  prompt: string,
+  attachments: PromptAttachmentInput[],
+): EngineUserInput[] {
   const input: EngineUserInput[] = [];
   // Codex stores the image itself as an opaque base64 data URL and forgets
   // where it came from, so the text carries the path as well. That is the only
@@ -142,5 +144,3 @@ export function toBridgeModel(model: {
 }
 
 export type { PersistedSessionTitleSource, SessionTitleSource };
-
-

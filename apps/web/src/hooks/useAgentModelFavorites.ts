@@ -49,12 +49,12 @@ export function mergeReorderedFavoriteModels(
   const visibleKeySet = new Set(visibleKeys);
   const reorderedKeySet = new Set(reorderedKeys);
   if (
-    visibleKeySet.size !== visibleKeys.length
-    || reorderedKeySet.size !== reorderedKeys.length
-    || visibleKeySet.size !== reorderedKeySet.size
-    || visibleKeys.some((key) => !reorderedKeySet.has(key))
-    || allFavorites.filter((favorite) => visibleKeySet.has(favoriteModelKey(favorite))).length
-      !== visibleFavorites.length
+    visibleKeySet.size !== visibleKeys.length ||
+    reorderedKeySet.size !== reorderedKeys.length ||
+    visibleKeySet.size !== reorderedKeySet.size ||
+    visibleKeys.some((key) => !reorderedKeySet.has(key)) ||
+    allFavorites.filter((favorite) => visibleKeySet.has(favoriteModelKey(favorite))).length !==
+      visibleFavorites.length
   ) {
     return null;
   }
@@ -110,7 +110,8 @@ export function useAgentModelFavorites() {
     (state) => state.config.global.favoriteModels ?? EMPTY_FAVORITE_MODELS,
   );
   const enabledPlatforms = useConfigStore(
-    (state): AgentPlatform[] => state.config.global.enabledAgentPlatforms ?? DEFAULT_ENABLED_PLATFORMS,
+    (state): AgentPlatform[] =>
+      state.config.global.enabledAgentPlatforms ?? DEFAULT_ENABLED_PLATFORMS,
   );
 
   const toggleFavorite = useCallback((model: AgentModel) => {

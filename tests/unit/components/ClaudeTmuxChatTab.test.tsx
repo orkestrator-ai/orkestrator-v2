@@ -1,23 +1,10 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  spyOn,
-  test,
-} from "bun:test";
-
+import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
-
 import { forwardRef, useEffect, useImperativeHandle, useRef as useReactRef } from "react";
 
-
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
-
 
 import {
   createClaudeTmuxStateKey,
@@ -25,63 +12,39 @@ import {
   type TmuxQueuedMessage,
 } from "@/stores/claudeTmuxStore";
 
-
 import { useEnvironmentStore } from "@/stores/environmentStore";
-
 
 import { useConfigStore } from "@/stores/configStore";
 
-
 import { useClaudeStore } from "@/stores/claudeStore";
-
 
 import { useUIStore } from "@/stores/uiStore";
 
-
-import {
-  tmuxElicitationDraftKey,
-  usePromptDraftStore,
-} from "@/stores/promptDraftStore";
-
+import { tmuxElicitationDraftKey, usePromptDraftStore } from "@/stores/promptDraftStore";
 
 import { clearPersistedVirtuosoState } from "@/hooks/useVirtuosoScrollState";
 
-
 import * as realTmuxClient from "@/lib/claude-tmux-client";
-
 
 import * as realBackend from "@/lib/backend";
 
-
-import type {
-  ClaudeMessage as ClaudeMessageType,
-  ClaudeModel,
-} from "@/lib/claude-client";
-
+import type { ClaudeMessage as ClaudeMessageType, ClaudeModel } from "@/lib/claude-client";
 
 import * as realInteractiveTerminal from "@/components/claude/ClaudeTmuxInteractiveTerminal";
 
-
 import * as realFileMentionMenu from "@/components/chat/FileMentionMenu";
-
 
 import * as realReactVirtuoso from "react-virtuoso";
 
-
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
-
 
 import { mockReadImage } from "../../mocks/clipboard";
 
-
 import { restoreMatchMedia, setMobileViewport } from "../../mocks/match-media";
-
 
 import type { Environment, FileCandidate } from "@/types";
 
-
 import { seedQueuedPrompt } from "@/stores/testing/queue-projection";
-
 
 import {
   applyPromptQueueSnapshot,
@@ -89,67 +52,47 @@ import {
   resetPromptQueueRevisions,
 } from "@/lib/prompt-queue-persistence";
 
-
-
 const realTmuxClientSnapshot = { ...realTmuxClient };
-
 
 const realBackendSnapshot = { ...realBackend };
 
-
 const realInteractiveTerminalSnapshot = { ...realInteractiveTerminal };
-
 
 const realFileMentionMenuSnapshot = { ...realFileMentionMenu };
 
-
 const realReactVirtuosoSnapshot = { ...realReactVirtuoso };
-
 
 const VIRTUOSO_WINDOW_SIZE = 25;
 
-
 let lastVirtuosoProps: Record<string, any> | null = null;
-
 
 let dateNowSpy: ReturnType<typeof spyOn> | undefined;
 
-
 const virtuosoScrollToIndexMock = mock(() => {});
 
-
 const virtuosoScrollToMock = mock(() => {});
-
 
 const virtuosoGetStateMock = mock((callback: (snapshot: any) => void) => {
   callback({ ranges: [], scrollTop: 0 });
 });
 
-
 const getFileTreeMock = mock(async () => []);
-
 
 const getLocalFileTreeMock = mock(async () => []);
 
-
 const writeContainerFileMock = mock(async () => {});
-
 
 const writeLocalFileMock = mock(async () => "/tmp/worktrees/env/.orkestrator/clipboard/test.png");
 
-
 const renameEnvironmentFromPromptMock = mock(async () => {});
 
-
 const openInBrowserMock = mock(async () => {});
-
 
 const updateGlobalConfigMock = mock(async (global: any) => ({
   version: "1.0",
   global,
   repositories: {},
 }));
-
 
 const getClaudeModelCatalogMock = mock(async (environmentId: string) => ({
   environmentId,
@@ -159,27 +102,25 @@ const getClaudeModelCatalogMock = mock(async (environmentId: string) => ({
   stale: false,
 }));
 
-
 const getComposeDraftMock = mock(async () => null);
 
-
-const saveComposeDraftMock = mock(async (
-  draftKey: string,
-  ownerType: "environment" | "project",
-  ownerId: string,
-  value: unknown,
-) => ({
-  draftKey,
-  ownerType,
-  ownerId,
-  value,
-  revision: 1,
-  updatedAt: new Date(0).toISOString(),
-}));
-
+const saveComposeDraftMock = mock(
+  async (
+    draftKey: string,
+    ownerType: "environment" | "project",
+    ownerId: string,
+    value: unknown,
+  ) => ({
+    draftKey,
+    ownerType,
+    ownerId,
+    value,
+    revision: 1,
+    updatedAt: new Date(0).toISOString(),
+  }),
+);
 
 const deleteComposeDraftMock = mock(async () => undefined);
-
 
 const enqueuePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, message: { id: string }) =>
@@ -189,24 +130,23 @@ const enqueuePromptQueueMessageMock = mock(
     ]),
 );
 
-
 const requeuePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, message: { id: string }) => {
-    const current = useClaudeTmuxStore.getState()
+    const current = useClaudeTmuxStore
+      .getState()
       .getQueuedMessages(promptQueueSessionKey(queueKey));
     return promptQueueSnapshot(
       queueKey,
       environmentId,
-      current.some((candidate) => candidate.id === message.id)
-        ? current
-        : [message, ...current],
+      current.some((candidate) => candidate.id === message.id) ? current : [message, ...current],
     );
   },
 );
 
-
-const claimedPromptMessages = new Map<string, { id: string; text?: string; attachments?: unknown[] }>();
-
+const claimedPromptMessages = new Map<
+  string,
+  { id: string; text?: string; attachments?: unknown[] }
+>();
 
 const acknowledgePromptQueueClaimMock = mock(
   async (queueKey: string, environmentId: string, claimToken: string) => {
@@ -214,13 +154,10 @@ const acknowledgePromptQueueClaimMock = mock(
     return promptQueueSnapshot(
       queueKey,
       environmentId,
-      useClaudeTmuxStore
-        .getState()
-        .getQueuedMessages(promptQueueSessionKey(queueKey)),
+      useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
     );
   },
 );
-
 
 const rejectPromptQueueClaimMock = mock(
   async (queueKey: string, environmentId: string, claimToken: string) => {
@@ -229,31 +166,27 @@ const rejectPromptQueueClaimMock = mock(
     const current = useClaudeTmuxStore
       .getState()
       .getQueuedMessages(promptQueueSessionKey(queueKey));
-    return promptQueueSnapshot(
-      queueKey,
-      environmentId,
-      claimed ? [claimed, ...current] : current,
-    );
+    return promptQueueSnapshot(queueKey, environmentId, claimed ? [claimed, ...current] : current);
   },
 );
 
-
-const claimPromptQueueHeadMock = mock(async (
-  queueKey: string,
-  environmentId: string,
-  _expectedMessageId: string,
-  candidateMessages: Array<{ id: string; text?: string; attachments?: unknown[] }>,
-) => {
-  const claimed = candidateMessages[0] ?? null;
-  const claimToken = claimed ? `claim-${claimed.id}` : null;
-  if (claimed && claimToken) claimedPromptMessages.set(claimToken, claimed);
-  return {
-    claimed,
-    claimToken,
-    queue: promptQueueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
-  };
-});
-
+const claimPromptQueueHeadMock = mock(
+  async (
+    queueKey: string,
+    environmentId: string,
+    _expectedMessageId: string,
+    candidateMessages: Array<{ id: string; text?: string; attachments?: unknown[] }>,
+  ) => {
+    const claimed = candidateMessages[0] ?? null;
+    const claimToken = claimed ? `claim-${claimed.id}` : null;
+    if (claimed && claimToken) claimedPromptMessages.set(claimToken, claimed);
+    return {
+      claimed,
+      claimToken,
+      queue: promptQueueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
+    };
+  },
+);
 
 const removePromptQueueMessageMock = mock(
   async (queueKey: string, environmentId: string, messageId: string) => {
@@ -271,18 +204,10 @@ const removePromptQueueMessageMock = mock(
   },
 );
 
-
 const movePromptQueueMessageMock = mock(
-  async (
-    queueKey: string,
-    environmentId: string,
-    messageId: string,
-    direction: "up" | "down",
-  ) => {
+  async (queueKey: string, environmentId: string, messageId: string, direction: "up" | "down") => {
     const messages = [
-      ...useClaudeTmuxStore
-        .getState()
-        .getQueuedMessages(promptQueueSessionKey(queueKey)),
+      ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
     ];
     const index = messages.findIndex((message) => message.id === messageId);
     const target = direction === "up" ? index - 1 : index + 1;
@@ -293,13 +218,9 @@ const movePromptQueueMessageMock = mock(
   },
 );
 
-
 let promptQueueRevision = 1;
 
-
-const promptQueueSessionKey = (queueKey: string) =>
-  queueKey.slice(queueKey.indexOf("\u0000") + 1);
-
+const promptQueueSessionKey = (queueKey: string) => queueKey.slice(queueKey.indexOf("\u0000") + 1);
 
 const promptQueueSnapshot = (
   queueKey: string,
@@ -313,7 +234,6 @@ const promptQueueSnapshot = (
   revision: promptQueueRevision++,
 });
 
-
 const retryPromptQueueDispatchMock = mock(async (queueKey: string) => {
   const sessionKey = promptQueueSessionKey(queueKey);
   return promptQueueSnapshot(
@@ -322,8 +242,6 @@ const retryPromptQueueDispatchMock = mock(async (queueKey: string) => {
     useClaudeTmuxStore.getState().getQueuedMessages(sessionKey),
   );
 });
-
-
 
 function publishTmuxQueueSnapshot(
   sessionKey: string,
@@ -359,8 +277,6 @@ function publishTmuxQueueSnapshot(
   );
 }
 
-
-
 const startSessionMock = mock(async () => ({
   tab_id: "tab-1",
   environment_id: "env-1",
@@ -374,18 +290,13 @@ const startSessionMock = mock(async () => ({
   fast_mode: false,
 }));
 
-
 const getStatusMock = mock(async () => null);
-
 
 const getTranscriptMock = mock(async () => []);
 
-
 const getPendingHooksMock = mock(async () => []);
 
-
 let subscribedHandler: ((event: realTmuxClient.TmuxEvent) => void) | null = null;
-
 
 const subscribeMock = mock(async (handler: (event: realTmuxClient.TmuxEvent) => void) => {
   subscribedHandler = handler;
@@ -394,44 +305,32 @@ const subscribeMock = mock(async (handler: (event: realTmuxClient.TmuxEvent) => 
   };
 });
 
-
 const stopSessionMock = mock(async () => {});
-
 
 const interruptSessionMock = mock(async () => {});
 
-
 const capturePaneMock = mock(async () => "");
-
 
 const sendKeysMock = mock(async () => {});
 
-
 const answerSelectionPromptMock = mock(async () => {});
-
 
 const replyHookMock = mock(async () => {});
 
-
 const submitMock = mock(async () => {});
-
 
 const switchModelMock = mock(async () => {});
 
-
 const switchEffortMock = mock(async () => {});
-
 
 const switchFastModeMock = mock(async () => {});
 
-
-const switchPlanModeMock = mock(async (_tabId: string, planMode: boolean, _environmentId?: string) =>
-  planMode ? "plan" : "bypassPermissions",
+const switchPlanModeMock = mock(
+  async (_tabId: string, planMode: boolean, _environmentId?: string) =>
+    planMode ? "plan" : "bypassPermissions",
 );
 
-
 const answerPreToolUseMock = mock(async () => {});
-
 
 const listPreviousSessionsMock = mock(async () => [
   {
@@ -441,7 +340,6 @@ const listPreviousSessionsMock = mock(async () => [
     message_count: 7,
   },
 ]);
-
 
 const interactiveTerminalRenderMock = mock(
   ({
@@ -468,8 +366,6 @@ const interactiveTerminalRenderMock = mock(
   ),
 );
 
-
-
 mock.module("@/lib/claude-tmux-client", () => ({
   ...realTmuxClientSnapshot,
   startSession: startSessionMock,
@@ -480,8 +376,7 @@ mock.module("@/lib/claude-tmux-client", () => ({
   stopSession: stopSessionMock,
   interruptSession: (tabId: string, environmentId?: string) =>
     interruptSessionMock(tabId, environmentId),
-  capturePane: (tabId: string, environmentId?: string) =>
-    capturePaneMock(tabId, environmentId),
+  capturePane: (tabId: string, environmentId?: string) => capturePaneMock(tabId, environmentId),
   sendKeys: (tabId: string, keys: string[], environmentId?: string) =>
     sendKeysMock(tabId, keys, environmentId),
   answerSelectionPrompt: (tabId: string, environmentId: string, input: unknown) =>
@@ -513,13 +408,9 @@ mock.module("@/lib/claude-tmux-client", () => ({
   listPreviousSessions: listPreviousSessionsMock,
 }));
 
-
-
 mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => ({
   ClaudeTmuxInteractiveTerminal: interactiveTerminalRenderMock,
 }));
-
-
 
 mock.module("@/lib/backend", () => ({
   claimPromptQueueHead: claimPromptQueueHeadMock,
@@ -543,8 +434,6 @@ mock.module("@/lib/backend", () => ({
   deleteComposeDraft: deleteComposeDraftMock,
 }));
 
-
-
 mock.module("@/components/chat/FileMentionMenu", () => ({
   FileMentionMenu: ({ files }: { files: FileCandidate[] }) => (
     <div>
@@ -554,8 +443,6 @@ mock.module("@/components/chat/FileMentionMenu", () => ({
     </div>
   ),
 }));
-
-
 
 mock.module("react-virtuoso", () => ({
   ...realReactVirtuosoSnapshot,
@@ -605,21 +492,10 @@ mock.module("react-virtuoso", () => ({
   }),
 }));
 
+const { ClaudeTmuxChatTab } = await import("@/components/claude/ClaudeTmuxChatTab");
 
-
-const { ClaudeTmuxChatTab } = await import(
-  "@/components/claude/ClaudeTmuxChatTab"
-);
-
-
-const {
-  parseTmuxAgentObservation,
-  parseTmuxSelectionPrompt,
-} = await import(
-  "@orkestrator/protocol/tmux-observation"
-);
-
-
+const { parseTmuxAgentObservation, parseTmuxSelectionPrompt } =
+  await import("@orkestrator/protocol/tmux-observation");
 
 if (typeof globalThis.ImageData === "undefined") {
   (globalThis as Record<string, unknown>).ImageData = class ImageData {
@@ -635,23 +511,16 @@ if (typeof globalThis.ImageData === "undefined") {
   };
 }
 
-
-
 const originalGetContext = HTMLCanvasElement.prototype.getContext;
 
-
 const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-
 
 const originalActiveElementDescriptor = Object.getOwnPropertyDescriptor(
   Document.prototype,
   "activeElement",
 );
 
-
 const putImageDataMock = mock(() => {});
-
-
 
 function setActiveElement(element: Element) {
   Object.defineProperty(document, "activeElement", {
@@ -659,8 +528,6 @@ function setActiveElement(element: Element) {
     get: () => element,
   });
 }
-
-
 
 function mockRunningTmuxStatus(pane = "") {
   getStatusMock.mockImplementation(async () => ({
@@ -675,14 +542,9 @@ function mockRunningTmuxStatus(pane = "") {
     permission_mode: "bypassPermissions",
     fast_mode: false,
     observation_generation: "generation-1",
-    observation: generatedObservation(
-      pane,
-      1,
-    ),
+    observation: generatedObservation(pane, 1),
   }));
 }
-
-
 
 function generatedObservation(pane: string, revision: number) {
   return {
@@ -690,8 +552,6 @@ function generatedObservation(pane: string, revision: number) {
     generation: "generation-1",
   };
 }
-
-
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -703,17 +563,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-
-
 async function adoptMockedPaneObservation(revision = 1) {
   const pane = await capturePaneMock();
-  useClaudeTmuxStore.getState().setObservation(
-    "tab-1",
-    generatedObservation(pane, revision),
-  );
+  useClaudeTmuxStore.getState().setObservation("tab-1", generatedObservation(pane, revision));
 }
-
-
 
 function expectSelectionAnswer(optionIndex: number) {
   expect(answerSelectionPromptMock).toHaveBeenCalledWith("tab-1", "env-1", {
@@ -723,8 +576,6 @@ function expectSelectionAnswer(optionIndex: number) {
     optionIndex,
   });
 }
-
-
 
 function seedPane(
   initialPrompt?: string,
@@ -760,8 +611,6 @@ function seedPane(
   });
 }
 
-
-
 function seedEnvironment(overrides: Partial<Environment> = {}) {
   useEnvironmentStore.setState({
     environments: [
@@ -786,20 +635,19 @@ function seedEnvironment(overrides: Partial<Environment> = {}) {
 }
 
 describe("ClaudeTmuxChatTab", () => {
-
-
   afterEach(() => {
     dateNowSpy?.mockRestore();
     dateNowSpy = undefined;
     resetPromptQueueRevisions();
   });
 
-
-
   afterAll(() => {
     mock.module("@/lib/claude-tmux-client", () => realTmuxClientSnapshot);
     mock.module("@/lib/backend", () => realBackendSnapshot);
-    mock.module("@/components/claude/ClaudeTmuxInteractiveTerminal", () => realInteractiveTerminalSnapshot);
+    mock.module(
+      "@/components/claude/ClaudeTmuxInteractiveTerminal",
+      () => realInteractiveTerminalSnapshot,
+    );
     mock.module("@/components/chat/FileMentionMenu", () => realFileMentionMenuSnapshot);
     mock.module("react-virtuoso", () => realReactVirtuosoSnapshot);
     restoreMatchMedia();
@@ -807,15 +655,9 @@ describe("ClaudeTmuxChatTab", () => {
     HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
     delete (document as { activeElement?: Element }).activeElement;
     if (originalActiveElementDescriptor) {
-      Object.defineProperty(
-        Document.prototype,
-        "activeElement",
-        originalActiveElementDescriptor,
-      );
+      Object.defineProperty(Document.prototype, "activeElement", originalActiveElementDescriptor);
     }
   });
-
-
 
   beforeEach(() => {
     setMobileViewport(false);
@@ -827,11 +669,7 @@ describe("ClaudeTmuxChatTab", () => {
     getLocalFileTreeMock.mockResolvedValue([]);
     delete (document as { activeElement?: Element }).activeElement;
     if (originalActiveElementDescriptor) {
-      Object.defineProperty(
-        Document.prototype,
-        "activeElement",
-        originalActiveElementDescriptor,
-      );
+      Object.defineProperty(Document.prototype, "activeElement", originalActiveElementDescriptor);
     }
     writeContainerFileMock.mockReset();
     writeContainerFileMock.mockImplementation(async () => {});
@@ -871,28 +709,28 @@ describe("ClaudeTmuxChatTab", () => {
     getComposeDraftMock.mockReset();
     getComposeDraftMock.mockImplementation(async () => null);
     saveComposeDraftMock.mockReset();
-    saveComposeDraftMock.mockImplementation(async (
-      draftKey: string,
-      ownerType: "environment" | "project",
-      ownerId: string,
-      value: unknown,
-    ) => ({
-      draftKey,
-      ownerType,
-      ownerId,
-      value,
-      revision: 1,
-      updatedAt: new Date(0).toISOString(),
-    }));
+    saveComposeDraftMock.mockImplementation(
+      async (
+        draftKey: string,
+        ownerType: "environment" | "project",
+        ownerId: string,
+        value: unknown,
+      ) => ({
+        draftKey,
+        ownerType,
+        ownerId,
+        value,
+        revision: 1,
+        updatedAt: new Date(0).toISOString(),
+      }),
+    );
     deleteComposeDraftMock.mockReset();
     deleteComposeDraftMock.mockImplementation(async () => undefined);
     enqueuePromptQueueMessageMock.mockReset();
     enqueuePromptQueueMessageMock.mockImplementation(
       async (queueKey: string, environmentId: string, message: { id: string }) =>
         promptQueueSnapshot(queueKey, environmentId, [
-          ...useClaudeTmuxStore
-            .getState()
-            .getQueuedMessages(promptQueueSessionKey(queueKey)),
+          ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
           message,
         ]),
     );
@@ -936,17 +774,12 @@ describe("ClaudeTmuxChatTab", () => {
         direction: "up" | "down",
       ) => {
         const messages = [
-          ...useClaudeTmuxStore
-            .getState()
-            .getQueuedMessages(promptQueueSessionKey(queueKey)),
+          ...useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
         ];
         const index = messages.findIndex((message) => message.id === messageId);
         const target = direction === "up" ? index - 1 : index + 1;
         if (index >= 0 && target >= 0 && target < messages.length) {
-          [messages[index], messages[target]] = [
-            messages[target]!,
-            messages[index]!,
-          ];
+          [messages[index], messages[target]] = [messages[target]!, messages[index]!];
         }
         return promptQueueSnapshot(queueKey, environmentId, messages);
       },
@@ -968,9 +801,7 @@ describe("ClaudeTmuxChatTab", () => {
         return promptQueueSnapshot(
           queueKey,
           environmentId,
-          useClaudeTmuxStore
-            .getState()
-            .getQueuedMessages(promptQueueSessionKey(queueKey)),
+          useClaudeTmuxStore.getState().getQueuedMessages(promptQueueSessionKey(queueKey)),
         );
       },
     );
@@ -990,25 +821,23 @@ describe("ClaudeTmuxChatTab", () => {
       },
     );
     claimPromptQueueHeadMock.mockReset();
-    claimPromptQueueHeadMock.mockImplementation(async (
-      queueKey: string,
-      environmentId: string,
-      _expectedMessageId: string,
-      candidateMessages: Array<{ id: string }>,
-    ) => {
-      const claimed = candidateMessages[0] ?? null;
-      const claimToken = claimed ? `claim-${claimed.id}` : null;
-      if (claimed && claimToken) claimedPromptMessages.set(claimToken, claimed);
-      return {
-        claimed,
-        claimToken,
-        queue: promptQueueSnapshot(
-          queueKey,
-          environmentId,
-          candidateMessages.slice(1),
-        ),
-      };
-    });
+    claimPromptQueueHeadMock.mockImplementation(
+      async (
+        queueKey: string,
+        environmentId: string,
+        _expectedMessageId: string,
+        candidateMessages: Array<{ id: string }>,
+      ) => {
+        const claimed = candidateMessages[0] ?? null;
+        const claimToken = claimed ? `claim-${claimed.id}` : null;
+        if (claimed && claimToken) claimedPromptMessages.set(claimToken, claimed);
+        return {
+          claimed,
+          claimToken,
+          queue: promptQueueSnapshot(queueKey, environmentId, candidateMessages.slice(1)),
+        };
+      },
+    );
     startSessionMock.mockClear();
     getStatusMock.mockClear();
     getStatusMock.mockImplementation(async () => null);
@@ -1044,8 +873,9 @@ describe("ClaudeTmuxChatTab", () => {
     switchModelMock.mockImplementation(async () => {});
     switchEffortMock.mockImplementation(async () => {});
     switchFastModeMock.mockImplementation(async () => {});
-    switchPlanModeMock.mockImplementation(async (_tabId: string, planMode: boolean, _environmentId?: string) =>
-      planMode ? "plan" : "bypassPermissions",
+    switchPlanModeMock.mockImplementation(
+      async (_tabId: string, planMode: boolean, _environmentId?: string) =>
+        planMode ? "plan" : "bypassPermissions",
     );
     listPreviousSessionsMock.mockImplementation(async () => [
       {
@@ -1095,8 +925,6 @@ describe("ClaudeTmuxChatTab", () => {
     seedPane("Run the audit");
   });
 
-
-
   test("jumps to the bottom when reactivated after an environment switch", async () => {
     const { rerender } = render(
       <ClaudeTmuxChatTab
@@ -1134,16 +962,10 @@ describe("ClaudeTmuxChatTab", () => {
     );
 
     await waitFor(() => {
-      expect(virtuosoScrollToIndexMock.mock.calls.length).toBeGreaterThan(
-        callsBeforeSwitch,
-      );
+      expect(virtuosoScrollToIndexMock.mock.calls.length).toBeGreaterThan(callsBeforeSwitch);
     });
-    expect(virtuosoScrollToMock.mock.calls.at(-1)).toEqual([
-      { top: 10_000_000, behavior: "auto" },
-    ]);
+    expect(virtuosoScrollToMock.mock.calls.at(-1)).toEqual([{ top: 10_000_000, behavior: "auto" }]);
   });
-
-
 
   test("starts once with tabId+envId and clears the tab initialPrompt after the backend sends it", async () => {
     render(
@@ -1189,8 +1011,6 @@ describe("ClaudeTmuxChatTab", () => {
     });
   });
 
-
-
   test("does not set busy when the backend emits a warning instead of initial-prompt-sent", async () => {
     render(
       <ClaudeTmuxChatTab
@@ -1215,8 +1035,6 @@ describe("ClaudeTmuxChatTab", () => {
     // Busy must remain false — the warning path must not flip the spinner on.
     expect(useClaudeTmuxStore.getState().getTab("tab-1").busy).toBe(false);
   });
-
-
 
   test("does not auto-relaunch when a session stops before its initial prompt is sent", async () => {
     render(
@@ -1250,8 +1068,6 @@ describe("ClaudeTmuxChatTab", () => {
     expect(screen.getByRole("button", { name: "Start fresh" })).toBeTruthy();
   });
 
-
-
   test("surfaces session start failures and allows a fresh retry", async () => {
     seedPane();
     startSessionMock.mockImplementationOnce(async () => {
@@ -1273,8 +1089,6 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => expect(startSessionMock).toHaveBeenCalledTimes(2));
   });
 
-
-
   test("surfaces event subscription failures", async () => {
     seedPane();
     subscribeMock.mockImplementationOnce(async () => {
@@ -1291,8 +1105,6 @@ describe("ClaudeTmuxChatTab", () => {
 
     expect(await screen.findByText("Error: event stream unavailable")).toBeTruthy();
   });
-
-
 
   test("cleans up an event subscription that resolves after unmount", async () => {
     let resolveSubscribe!: (unlisten: () => void) => void;
@@ -1325,8 +1137,6 @@ describe("ClaudeTmuxChatTab", () => {
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
 
-
-
   test("does not poll or expose raw pane text in native chat mode", async () => {
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
       environmentId: "env-1",
@@ -1344,8 +1154,6 @@ describe("ClaudeTmuxChatTab", () => {
     expect(capturePaneMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "Show TUI" }) === null).toBe(true);
   });
-
-
 
   test("shows elapsed thinking status only while the session is busy and running", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
@@ -1382,8 +1190,6 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => expect(screen.queryByRole("status") === null).toBe(true));
   });
 
-
-
   test("hides the thinking status when the backend reports the session stopped", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     useClaudeTmuxStore.getState().setRunning(stateKey, true, {
@@ -1400,9 +1206,7 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    expect((await screen.findByRole("status")).textContent).toBe(
-      "Claude is thinking...",
-    );
+    expect((await screen.findByRole("status")).textContent).toBe("Claude is thinking...");
     await waitFor(() => expect(subscribedHandler).not.toBeNull());
 
     act(() => {
@@ -1420,8 +1224,6 @@ describe("ClaudeTmuxChatTab", () => {
     });
   });
 
-
-
   test("captures transcript search only for the focused native chat", async () => {
     mockRunningTmuxStatus();
     const view = render(
@@ -1435,8 +1237,7 @@ describe("ClaudeTmuxChatTab", () => {
 
     await waitFor(() => {
       expect(
-        (screen.getByRole("button", { name: /terminal/i }) as HTMLButtonElement)
-          .disabled,
+        (screen.getByRole("button", { name: /terminal/i }) as HTMLButtonElement).disabled,
       ).toBe(false);
     });
 
@@ -1496,8 +1297,6 @@ describe("ClaudeTmuxChatTab", () => {
     expect(screen.queryByRole("search", { name: "Find in agent chat" }) === null).toBe(true);
   });
 
-
-
   test("surfaces Claude tmux agent tokens in native rows", async () => {
     getTranscriptMock.mockImplementation(async () => [
       {
@@ -1539,8 +1338,6 @@ Running 1 Explore agent...
     expect(screen.queryByText("8 tool uses") === null).toBe(true);
     expect(screen.queryByText("0 updates") === null).toBe(true);
   });
-
-
 
   test("keeps successful background launches active while they remain in the tmux roster", async () => {
     getTranscriptMock.mockImplementation(async () => [
@@ -1600,8 +1397,6 @@ Running 1 Explore agent...
     expect(screen.queryByText("0 updates") === null).toBe(true);
   });
 
-
-
   test("forwards the worktree path to the interactive terminal for local environments", async () => {
     getStatusMock.mockImplementation(async () => ({
       tab_id: "tab-1",
@@ -1635,11 +1430,7 @@ Running 1 Explore agent...
     });
 
     render(
-      <ClaudeTmuxChatTab
-        tabId="tab-1"
-        data={{ environmentId: "env-1", isLocal: true }}
-        isActive
-      />,
+      <ClaudeTmuxChatTab tabId="tab-1" data={{ environmentId: "env-1", isLocal: true }} isActive />,
     );
 
     const terminalButton = await waitFor(() => {
@@ -1654,8 +1445,6 @@ Running 1 Explore agent...
     expect(terminal.getAttribute("data-worktree-path")).toBe("/tmp/local-repo");
     expect(terminal.getAttribute("data-container-id")).toBe("");
   });
-
-
 
   test("passes transcript updates through the virtualized message window", async () => {
     getStatusMock.mockImplementation(async () => ({
@@ -1705,8 +1494,6 @@ Running 1 Explore agent...
     expect(lastVirtuosoProps?.followOutput(true)).toBe("auto");
   });
 
-
-
   test("windows large tmux transcripts through Virtuoso instead of rendering every message", async () => {
     getStatusMock.mockImplementation(async () => ({
       tab_id: "tab-1",
@@ -1746,8 +1533,6 @@ Running 1 Explore agent...
     expect(screen.getByText("Message 99")).toBeTruthy();
   });
 
-
-
   test("retries stale hydration three times before allowing auto-start", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     let attempt = 0;
@@ -1770,8 +1555,6 @@ Running 1 Explore agent...
     await waitFor(() => expect(startSessionMock).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/Failed to refresh Claude tmux tab/) === null).toBe(true);
   });
-
-
 
   test("clears stale transcript and hooks for a matching status without a session id", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
@@ -1825,8 +1608,6 @@ Running 1 Explore agent...
     expect(startSessionMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Plan" })).toBeTruthy();
   });
-
-
 
   test("hydrates a running backend session and replays missed transcript before auto-starting", async () => {
     getStatusMock.mockImplementation(async () => ({
@@ -1891,8 +1672,6 @@ Running 1 Explore agent...
     expect(startSessionMock).not.toHaveBeenCalled();
   });
 
-
-
   test("rehydrates missed informational events from the authoritative tmux status", async () => {
     getStatusMock.mockImplementation(async () => ({
       tab_id: "tab-1",
@@ -1947,8 +1726,6 @@ Running 1 Explore agent...
     });
     expect(screen.queryByText("Finished a background check") === null).toBe(true);
   });
-
-
 
   test("does not let a stale hydration response overwrite a live fast-mode event", async () => {
     const firstStatus = deferred<any>();
@@ -2012,8 +1789,6 @@ Running 1 Explore agent...
     expect(await screen.findByRole("button", { name: /Default.*⚡/ })).toBeTruthy();
   });
 
-
-
   test("refresh requests replace the transcript with the latest backend snapshot", async () => {
     seedPane();
     mockRunningTmuxStatus();
@@ -2058,8 +1833,6 @@ Running 1 Explore agent...
     expect(getStatusMock).toHaveBeenCalledTimes(2);
   });
 
-
-
   test("reports manual refresh failures without clearing the current transcript", async () => {
     seedPane();
     mockRunningTmuxStatus();
@@ -2092,14 +1865,10 @@ Running 1 Explore agent...
     );
 
     expect(
-      await screen.findByText(
-        "Failed to refresh Claude tmux tab: transcript unavailable",
-      ),
+      await screen.findByText("Failed to refresh Claude tmux tab: transcript unavailable"),
     ).toBeTruthy();
     expect(screen.getByText("Keep the current transcript")).toBeTruthy();
   });
-
-
 
   test("clears tmux state when a manual refresh confirms the session is missing", async () => {
     seedPane();
@@ -2139,8 +1908,6 @@ Running 1 Explore agent...
     });
     expect(screen.queryByText("Session transcript") === null).toBe(true);
   });
-
-
 
   test("does not overwrite a live tmux event with an older refresh snapshot", async () => {
     seedPane();
@@ -2205,8 +1972,6 @@ Running 1 Explore agent...
     ).toBeTruthy();
     expect(screen.getByText("Live event wins")).toBeTruthy();
   });
-
-
 
   test("hydrates backend busy state and pending hook prompts", async () => {
     getStatusMock.mockImplementation(async () => ({
@@ -2302,8 +2067,6 @@ Running 1 Explore agent...
     expect(startSessionMock).not.toHaveBeenCalled();
   });
 
-
-
   test("hydrates ExitPlanMode with its authoritative deadline", async () => {
     const requestedAt = 1_900_000_000_000;
     dateNowSpy = spyOn(Date, "now").mockReturnValue(requestedAt);
@@ -2317,16 +2080,18 @@ Running 1 Explore agent...
       resumed: false,
       busy: true,
     }));
-    getPendingHooksMock.mockImplementation(async () => [{
-      id: "plan-hydrated",
-      kind: "PreToolUse",
-      requestedAt,
-      expiresAt: requestedAt + 90_000,
-      payload: {
-        tool_name: "ExitPlanMode",
-        tool_input: { plan: "Ship it" },
+    getPendingHooksMock.mockImplementation(async () => [
+      {
+        id: "plan-hydrated",
+        kind: "PreToolUse",
+        requestedAt,
+        expiresAt: requestedAt + 90_000,
+        payload: {
+          tool_name: "ExitPlanMode",
+          tool_input: { plan: "Ship it" },
+        },
       },
-    }]);
+    ]);
 
     render(
       <ClaudeTmuxChatTab
@@ -2336,14 +2101,16 @@ Running 1 Explore agent...
       />,
     );
 
-    expect(await within(
-      await screen.findByRole("group", { name: "Claude plan ready for review" }),
-    ).findByLabelText("Time remaining 1:30")).toBeTruthy();
-    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPlans[0])
-      .toMatchObject({ requestedAt, expiresAt: requestedAt + 90_000 });
+    expect(
+      await within(
+        await screen.findByRole("group", { name: "Claude plan ready for review" }),
+      ).findByLabelText("Time remaining 1:30"),
+    ).toBeTruthy();
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPlans[0]).toMatchObject({
+      requestedAt,
+      expiresAt: requestedAt + 90_000,
+    });
   });
-
-
 
   test("hydrates pending hook snapshot as authoritative and clears stale prompts", async () => {
     useClaudeTmuxStore.getState().addPendingApproval("tab-1", {
@@ -2377,8 +2144,6 @@ Running 1 Explore agent...
       expect(tab.pendingApprovals).toEqual([]);
     });
   });
-
-
 
   test("routes live lifecycle and actionable hook events into authoritative state", async () => {
     const requestedAt = 1_900_000_000_000;
@@ -2497,19 +2262,11 @@ Running 1 Explore agent...
 
     const tab = useClaudeTmuxStore.getState().getTab("tab-1");
     expect(tab.busy).toBe(true);
-    expect(tab.pendingQuestions.map((item) => item.eventId)).toEqual([
-      "question-live",
-    ]);
+    expect(tab.pendingQuestions.map((item) => item.eventId)).toEqual(["question-live"]);
     expect(tab.pendingPlans.map((item) => item.eventId)).toEqual(["plan-live"]);
-    expect(tab.pendingApprovals.map((item) => item.eventId)).toEqual([
-      "approval-live",
-    ]);
-    expect(tab.pendingPermissions.map((item) => item.eventId)).toEqual([
-      "permission-live",
-    ]);
-    expect(tab.pendingElicitations.map((item) => item.eventId)).toEqual([
-      "elicitation-live",
-    ]);
+    expect(tab.pendingApprovals.map((item) => item.eventId)).toEqual(["approval-live"]);
+    expect(tab.pendingPermissions.map((item) => item.eventId)).toEqual(["permission-live"]);
+    expect(tab.pendingElicitations.map((item) => item.eventId)).toEqual(["elicitation-live"]);
     expect(tab.pendingElicitations[0]).toMatchObject({
       mcpServerName: "docs-mcp",
       message: "Choose a format",
@@ -2530,15 +2287,11 @@ Running 1 Explore agent...
     }
   });
 
-
-
   test("keeps busy during SubagentStop and clears it on top-level Stop", async () => {
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
     useClaudeTmuxStore.getState().setBusy("tab-1", true);
 
     render(
@@ -2578,15 +2331,11 @@ Running 1 Explore agent...
     expect(useClaudeTmuxStore.getState().getTab("tab-1").busy).toBe(false);
   });
 
-
-
   test("does not render non-actionable hook notifications above the transcript", async () => {
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
 
     render(
       <ClaudeTmuxChatTab
@@ -2630,15 +2379,11 @@ Running 1 Explore agent...
     expect(screen.queryByText("Background note") === null).toBe(true);
   });
 
-
-
   test("collapses re-delivered informational hooks and keeps a dismissal sticky", async () => {
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
 
     render(
       <ClaudeTmuxChatTab
@@ -2689,25 +2434,24 @@ Running 1 Explore agent...
         plans: [],
         permissions: [],
         elicitations: [],
-        infoEvents: [{
-          id: "notification",
-          kind: "Notification",
-          message: "Background note",
-          receivedAt: new Date(1_700_000_000_000).toISOString(),
-        }, {
-          id: "other",
-          kind: "Notification",
-          message: "Still new",
-          receivedAt: new Date(1_700_000_000_000).toISOString(),
-        }],
+        infoEvents: [
+          {
+            id: "notification",
+            kind: "Notification",
+            message: "Background note",
+            receivedAt: new Date(1_700_000_000_000).toISOString(),
+          },
+          {
+            id: "other",
+            kind: "Notification",
+            message: "Still new",
+            receivedAt: new Date(1_700_000_000_000).toISOString(),
+          },
+        ],
       });
     });
-    expect(infoEvents()).toEqual([
-      expect.objectContaining({ id: "other", message: "Still new" }),
-    ]);
+    expect(infoEvents()).toEqual([expect.objectContaining({ id: "other", message: "Still new" })]);
   });
-
-
 
   test("removes each pending hook card when the backend reports a timeout", async () => {
     const store = useClaudeTmuxStore.getState();
@@ -2801,8 +2545,6 @@ Running 1 Explore agent...
     expect(tab.pendingElicitations).toEqual([]);
   });
 
-
-
   test("does not rewrite non-file @ references in tmux prompts", async () => {
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
       environmentId: "env-1",
@@ -2817,7 +2559,7 @@ Running 1 Explore agent...
       />,
     );
 
-    const textarea = await screen.findByPlaceholderText(/@ to mention/) as HTMLTextAreaElement;
+    const textarea = (await screen.findByPlaceholderText(/@ to mention/)) as HTMLTextAreaElement;
     fireEvent.change(textarea, {
       target: {
         value: "Install @opencode-ai/sdk and contact @example.com",
@@ -2837,8 +2579,6 @@ Running 1 Explore agent...
       );
     });
   });
-
-
 
   test("passes a pre-launch fast-mode selection to the new tmux session", async () => {
     seedPane();
@@ -2861,9 +2601,11 @@ Running 1 Explore agent...
     expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
     await act(async () => {
-      fireEvent.click(await screen.findByRole("menuitemradio", {
-        name: /^Fast Lower latency/,
-      }));
+      fireEvent.click(
+        await screen.findByRole("menuitemradio", {
+          name: /^Fast Lower latency/,
+        }),
+      );
       await Promise.resolve();
     });
     fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
@@ -2877,8 +2619,6 @@ Running 1 Explore agent...
     });
     expect(switchFastModeMock).not.toHaveBeenCalled();
   });
-
-
 
   test("locks competing tmux controls while a fast-mode switch is pending", async () => {
     const pendingSwitch = deferred<void>();
@@ -2905,9 +2645,11 @@ Running 1 Explore agent...
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /Default.*\(High\)/ }));
     await act(async () => {
-      fireEvent.click(await screen.findByRole("menuitemradio", {
-        name: /^Fast Lower latency/,
-      }));
+      fireEvent.click(
+        await screen.findByRole("menuitemradio", {
+          name: /^Fast Lower latency/,
+        }),
+      );
       await Promise.resolve();
     });
 
@@ -2915,7 +2657,10 @@ Running 1 Explore agent...
       expect(screen.getByPlaceholderText(/Ask Claude anything/)).toHaveProperty("disabled", true);
       expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty("disabled", true);
       expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty("disabled", true);
-      expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toHaveProperty("disabled", true);
+      expect(screen.getByRole("button", { name: /Default.*\(High\)/ })).toHaveProperty(
+        "disabled",
+        true,
+      );
     });
     expect(submitMock).not.toHaveBeenCalled();
 
@@ -2925,8 +2670,6 @@ Running 1 Explore agent...
       expect(screen.getByRole("button", { name: /⚡/ })).toBeTruthy();
     });
   });
-
-
 
   test("offers Opus 5 in the tmux fallback catalog", async () => {
     seedPane();
@@ -2947,8 +2690,6 @@ Running 1 Explore agent...
     expect(screen.queryByText(/Opus 4\.8/) === null).toBe(true);
   });
 
-
-
   test("projects a successful catalog refresh after the initiating tab unmounts", async () => {
     seedPane();
     const pendingCatalog = deferred<{
@@ -2959,9 +2700,7 @@ Running 1 Explore agent...
       stale: false;
     }>();
     const discoveredModel = { id: "claude-opus-5", name: "Claude Opus 5" };
-    getClaudeModelCatalogMock.mockImplementationOnce(
-      async () => pendingCatalog.promise,
-    );
+    getClaudeModelCatalogMock.mockImplementationOnce(async () => pendingCatalog.promise);
 
     const view = render(
       <ClaudeTmuxChatTab
@@ -2985,13 +2724,9 @@ Running 1 Explore agent...
 
     await waitFor(() => {
       expect(useClaudeStore.getState().models).toEqual([discoveredModel]);
-      expect(useClaudeStore.getState().getModels("env-1")).toEqual([
-        discoveredModel,
-      ]);
+      expect(useClaudeStore.getState().getModels("env-1")).toEqual([discoveredModel]);
     });
   });
-
-
 
   test("ignores an older catalog response after a newer refresh completes", async () => {
     seedPane();
@@ -3046,8 +2781,6 @@ Running 1 Explore agent...
     expect(useClaudeStore.getState().models).toEqual([newerModel]);
   });
 
-
-
   test("uses the SDK list as-is when it already includes the Default sentinel", async () => {
     seedPane();
     useClaudeStore.setState({
@@ -3076,15 +2809,11 @@ Running 1 Explore agent...
     expect(screen.getByRole("button", { name: /Default \(SDK\)/ })).toBeTruthy();
   });
 
-
-
   test("switches the running tmux TUI between plan and build mode", async () => {
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
 
     render(
       <ClaudeTmuxChatTab
@@ -3122,18 +2851,14 @@ Running 1 Explore agent...
     });
   });
 
-
-
   test("keeps build mode and restores controls when a mode switch fails", async () => {
     switchPlanModeMock.mockImplementationOnce(async () => {
       throw new Error("mode switch failed");
     });
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
 
     render(
       <ClaudeTmuxChatTab
@@ -3147,21 +2872,10 @@ Running 1 Explore agent...
     fireEvent.click(await screen.findByRole("menuitem", { name: "Plan" }));
 
     expect(await screen.findByText("Error: mode switch failed")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Build" })).toHaveProperty(
-      "disabled",
-      false,
-    );
-    expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty(
-      "disabled",
-      false,
-    );
-    expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty(
-      "disabled",
-      false,
-    );
+    expect(screen.getByRole("button", { name: "Build" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: "Interrupt" })).toHaveProperty("disabled", false);
   });
-
-
 
   test("starts a previous session from the resume picker", async () => {
     seedPane();
@@ -3190,15 +2904,11 @@ Running 1 Explore agent...
     });
   });
 
-
-
   test("interrupts the running tmux session from the header", async () => {
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
 
     render(
       <ClaudeTmuxChatTab
@@ -3213,8 +2923,6 @@ Running 1 Explore agent...
     expect(interruptSessionMock).toHaveBeenCalledWith("tab-1", "env-1");
     expect(stopSessionMock).not.toHaveBeenCalled();
   });
-
-
 
   test("reorders and removes queued tmux prompts from the queue dialog", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
@@ -3261,8 +2969,6 @@ Running 1 Explore agent...
     expect(screen.queryByText("first queued") === null).toBe(true);
   });
 
-
-
   test("surfaces a parked tmux dispatch error and retries it explicitly", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     const store = useClaudeTmuxStore.getState();
@@ -3304,19 +3010,15 @@ Running 1 Explore agent...
       expect(retryPromptQueueDispatchMock).toHaveBeenCalledWith(
         promptQueueKey("claude-tmux", stateKey),
       );
-      expect(screen.getByText("+1 queued").closest("button")?.getAttribute("aria-label") === null).toBe(true);
+      expect(
+        screen.getByText("+1 queued").closest("button")?.getAttribute("aria-label") === null,
+      ).toBe(true);
     });
   });
 
-
-
   test("reports queue dialog mutation failures and keeps the projected queue intact", async () => {
-    movePromptQueueMessageMock.mockRejectedValue(
-      new Error("move storage unavailable"),
-    );
-    removePromptQueueMessageMock.mockRejectedValue(
-      new Error("remove storage unavailable"),
-    );
+    movePromptQueueMessageMock.mockRejectedValue(new Error("move storage unavailable"));
+    removePromptQueueMessageMock.mockRejectedValue(new Error("remove storage unavailable"));
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     const store = useClaudeTmuxStore.getState();
     store.setRunning(stateKey, true, {
@@ -3366,8 +3068,6 @@ Running 1 Explore agent...
     ).toEqual(["queue-1", "queue-2"]);
   });
 
-
-
   test("interrupt promotes the next queued tmux prompt to the draft", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
     const store = useClaudeTmuxStore.getState();
@@ -3401,16 +3101,17 @@ Running 1 Explore agent...
       expect(
         (screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement).value,
       ).toBe("edit after interrupt");
-      expect(useClaudeTmuxStore.getState().getQueuedMessages(stateKey).map((m) => m.text)).toEqual([
-        "stay queued",
-      ]);
+      expect(
+        useClaudeTmuxStore
+          .getState()
+          .getQueuedMessages(stateKey)
+          .map((m) => m.text),
+      ).toEqual(["stay queued"]);
       expect(useClaudeTmuxStore.getState().getTab(stateKey).busy).toBe(false);
     });
     expect(interruptSessionMock).toHaveBeenCalledWith("tab-1", "env-1");
     expect(submitMock).not.toHaveBeenCalled();
   });
-
-
 
   test("interrupt promotes a queued prompt migrated from a legacy tab key", async () => {
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
@@ -3446,18 +3147,14 @@ Running 1 Explore agent...
     expect(interruptSessionMock).toHaveBeenCalledWith("tab-1", "env-1");
   });
 
-
-
   test("shows interrupt errors without clearing busy state", async () => {
     interruptSessionMock.mockImplementationOnce(async () => {
       throw new Error("interrupt failed");
     });
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
     useClaudeTmuxStore.getState().setBusy("tab-1", true);
 
     render(
@@ -3473,8 +3170,6 @@ Running 1 Explore agent...
     expect(await screen.findByText("Error: interrupt failed")).toBeTruthy();
     expect(useClaudeTmuxStore.getState().getTab("tab-1").busy).toBe(true);
   });
-
-
 
   test("attributes a compacted reply once and dates it from the block's first message", async () => {
     // The tab compacts consecutive assistant messages, keeping the earliest
@@ -3535,8 +3230,6 @@ Running 1 Explore agent...
     expect(screen.getByText(/responded in 20s/)).toBeTruthy();
   });
 
-
-
   test("review tabs submit the shared Address all follow-up prompt", async () => {
     const message: ClaudeMessageType = {
       id: "msg-review-complete",
@@ -3575,15 +3268,9 @@ Running 1 Explore agent...
     fireEvent.click(screen.getByRole("button", { name: "Address all" }));
 
     await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        ADDRESS_ALL_REVIEW_PROMPT,
-        "env-1",
-      );
+      expect(submitMock).toHaveBeenCalledWith("tab-1", ADDRESS_ALL_REVIEW_PROMPT, "env-1");
     });
   });
-
-
 
   test("renames a timestamp-named environment before submitting the first tmux prompt", async () => {
     const callOrder: string[] = [];
@@ -3594,12 +3281,10 @@ Running 1 Explore agent...
       callOrder.push("submit");
     });
     seedEnvironment();
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
 
     render(
       <ClaudeTmuxChatTab
@@ -3609,9 +3294,7 @@ Running 1 Explore agent...
       />,
     );
 
-    const textarea = screen.getByPlaceholderText(
-      /Ask Claude anything/,
-    ) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "Implement the billing export" } });
     fireEvent.click(screen.getByTitle("Send (↵)"));
 
@@ -3620,28 +3303,20 @@ Running 1 Explore agent...
         "env-1",
         "Implement the billing export",
       );
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        "Implement the billing export",
-        "env-1",
-      );
+      expect(submitMock).toHaveBeenCalledWith("tab-1", "Implement the billing export", "env-1");
     });
     expect(callOrder).toEqual(["rename", "submit"]);
   });
-
-
 
   test("renames a compact Electron timestamp environment before submitting the first tmux prompt", async () => {
     seedEnvironment({
       name: "202604151234567",
       branch: "202604151234567",
     });
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
 
     render(
       <ClaudeTmuxChatTab
@@ -3651,9 +3326,7 @@ Running 1 Explore agent...
       />,
     );
 
-    const textarea = screen.getByPlaceholderText(
-      /Ask Claude anything/,
-    ) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "Implement the billing export" } });
     fireEvent.click(screen.getByTitle("Send (↵)"));
 
@@ -3662,24 +3335,16 @@ Running 1 Explore agent...
         "env-1",
         "Implement the billing export",
       );
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        "Implement the billing export",
-        "env-1",
-      );
+      expect(submitMock).toHaveBeenCalledWith("tab-1", "Implement the billing export", "env-1");
     });
   });
 
-
-
   test("does not rename a custom-named environment before submitting a tmux prompt", async () => {
     seedEnvironment({ name: "custom-env", branch: "custom-env" });
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
 
     render(
       <ClaudeTmuxChatTab
@@ -3689,23 +3354,15 @@ Running 1 Explore agent...
       />,
     );
 
-    const textarea = screen.getByPlaceholderText(
-      /Ask Claude anything/,
-    ) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(/Ask Claude anything/) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "Keep this branch name" } });
     fireEvent.click(screen.getByTitle("Send (↵)"));
 
     await waitFor(() => {
-      expect(submitMock).toHaveBeenCalledWith(
-        "tab-1",
-        "Keep this branch name",
-        "env-1",
-      );
+      expect(submitMock).toHaveBeenCalledWith("tab-1", "Keep this branch name", "env-1");
     });
     expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
   });
-
-
 
   test("renders compacted assistant messages and passes compacted previousMessage", async () => {
     const store = useClaudeTmuxStore.getState();
@@ -3758,25 +3415,24 @@ Running 1 Explore agent...
       "a1",
       "a1:text-block:1",
     ]);
-    expect(renderedMessages[1]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.type)).toEqual([
-      "tool-group",
-    ]);
+    expect(
+      renderedMessages[1]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.type),
+    ).toEqual(["tool-group"]);
     expect(renderedMessages[1]!.parts[0]?.type).toBe("tool-group");
     if (renderedMessages[1]!.parts[0]?.type === "tool-group") {
-      expect(renderedMessages[1]!.parts[0].parts.map((part: ClaudeMessageType["parts"][number]) => part.toolName)).toEqual([
-        "Read",
-        "Grep",
-      ]);
+      expect(
+        renderedMessages[1]!.parts[0].parts.map(
+          (part: ClaudeMessageType["parts"][number]) => part.toolName,
+        ),
+      ).toEqual(["Read", "Grep"]);
     }
-    expect(renderedMessages[2]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.type)).toEqual([
-      "text",
-    ]);
+    expect(
+      renderedMessages[2]!.parts.map((part: ClaudeMessageType["parts"][number]) => part.type),
+    ).toEqual(["text"]);
     expect(screen.getAllByText("Read").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Grep").length).toBeGreaterThan(0);
     expect(screen.getByText("done")).toBeTruthy();
   });
-
-
 
   test("pins active task-group agents in tmux transcript data and releases them in place on success", async () => {
     const store = useClaudeTmuxStore.getState();
@@ -3857,15 +3513,11 @@ Running 1 Explore agent...
         "assistant-agent:text-block:2",
         "assistant-agent:text-block:2:settled-agents",
       ]);
-      expect(renderedMessages.map((message: any) => message.parts.map((part: any) => part.type))).toEqual([
-        ["text"],
-        ["text", "text"],
-        ["task-group"],
-      ]);
+      expect(
+        renderedMessages.map((message: any) => message.parts.map((part: any) => part.type)),
+      ).toEqual([["text"], ["text", "text"], ["task-group"]]);
     });
   });
-
-
 
   test("renders each task tool call with the task list the backend derived", async () => {
     const store = useClaudeTmuxStore.getState();
@@ -3896,9 +3548,7 @@ Running 1 Explore agent...
         taskSnapshots: { [toolUse.id as string]: taskSnapshot },
         message: {
           role: "user",
-          content: [
-            { type: "tool_result", tool_use_id: toolUse.id as string, content: result },
-          ],
+          content: [{ type: "tool_result", tool_use_id: toolUse.id as string, content: result }],
         },
       } as Parameters<typeof store.applyTranscriptLine>[1]);
     };
@@ -3959,8 +3609,6 @@ Running 1 Explore agent...
     expect(screen.getByText("Task Update")).toBeTruthy();
   });
 
-
-
   test("uses absolute navigation when the pane does not expose its highlight", async () => {
     const pane = `
   1. Allow once
@@ -3973,10 +3621,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
       environmentId: "env-1",
       sessionId: "session-1",
     });
-    useClaudeTmuxStore.getState().setObservation(
-      "tab-1",
-      generatedObservation(pane, 1),
-    );
+    useClaudeTmuxStore.getState().setObservation("tab-1", generatedObservation(pane, 1));
 
     render(
       <ClaudeTmuxChatTab
@@ -3995,24 +3640,22 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     });
   });
 
-
-
   test("shows an error and re-enables selection controls when tmux key submission fails", async () => {
     answerSelectionPromptMock.mockImplementationOnce(async () => {
       throw new Error("tmux unavailable");
     });
-    capturePaneMock.mockImplementation(async () => `
+    capturePaneMock.mockImplementation(
+      async () => `
 › 1. No, exit
   2. Yes, I accept
 
 Enter to confirm · Esc to cancel
-`);
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+`,
+    );
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
     await adoptMockedPaneObservation();
 
     render(
@@ -4036,21 +3679,19 @@ Enter to confirm · Esc to cancel
     });
   });
 
-
-
   test("restores a prompt when the backend re-observes it after key submission", async () => {
-    capturePaneMock.mockImplementation(async () => `
+    capturePaneMock.mockImplementation(
+      async () => `
 › 1. No, exit
   2. Yes, I accept
 
 Enter to confirm · Esc to cancel
-`);
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+`,
+    );
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
     await adoptMockedPaneObservation();
 
     render(
@@ -4068,9 +3709,7 @@ Enter to confirm · Esc to cancel
 
     await waitFor(() => {
       expectSelectionAnswer(1);
-      expect(
-        useClaudeTmuxStore.getState().getTab("tab-1").observation.prompt,
-      ).toBeNull();
+      expect(useClaudeTmuxStore.getState().getTab("tab-1").observation.prompt).toBeNull();
     });
     const repeatedObservation = generatedObservation(await capturePaneMock(), 2);
     act(() => {
@@ -4083,27 +3722,23 @@ Enter to confirm · Esc to cancel
         observation: repeatedObservation,
       });
     });
-    expect(
-      useClaudeTmuxStore.getState().getTab("tab-1").observation,
-    ).toEqual(repeatedObservation);
+    expect(useClaudeTmuxStore.getState().getTab("tab-1").observation).toEqual(repeatedObservation);
     expect(screen.getByText("Claude is asking for a choice")).toBeTruthy();
   });
 
-
-
   test("defaults to navigate mode when no input-mode hint is present", async () => {
-    capturePaneMock.mockImplementation(async () => `
+    capturePaneMock.mockImplementation(
+      async () => `
   1. Kill stale tmux before launch (Recommended)
 › 2. Always kill before launch
 
 Enter to select · Esc to cancel
-`);
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+`,
+    );
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
     await adoptMockedPaneObservation();
 
     render(
@@ -4117,9 +3752,7 @@ Enter to select · Esc to cancel
     expect(await screen.findByText("Claude is asking for a choice")).toBeTruthy();
 
     // Submitting the already-selected option should send only Enter (delta = 0).
-    fireEvent.click(
-      screen.getByRole("button", { name: /Always kill before launch/ }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /Always kill before launch/ }));
     expect(answerSelectionPromptMock).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
@@ -4129,15 +3762,11 @@ Enter to select · Esc to cancel
     });
   });
 
-
-
   test("restores unfinished plan feedback after the tmux tab remounts", () => {
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("tab-1", true, {
-        environmentId: "env-1",
-        sessionId: "session-1",
-      });
+    useClaudeTmuxStore.getState().setRunning("tab-1", true, {
+      environmentId: "env-1",
+      sessionId: "session-1",
+    });
     useClaudeTmuxStore.getState().addPendingPlan("tab-1", {
       eventId: "plan-remount",
       plan: "Keep the pending plan",
@@ -4170,13 +3799,9 @@ Enter to select · Esc to cancel
     );
 
     expect(
-      (screen.getByPlaceholderText(
-        "What should Claude change?",
-      ) as HTMLTextAreaElement).value,
+      (screen.getByPlaceholderText("What should Claude change?") as HTMLTextAreaElement).value,
     ).toBe("Preserve this unfinished feedback");
   });
-
-
 
   test("keeps a plan pending when its response cannot be delivered", async () => {
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
@@ -4210,5 +3835,4 @@ Enter to select · Esc to cancel
     expect(useClaudeTmuxStore.getState().getTab("tab-1").pendingPlans).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Approve plan" })).toBeTruthy();
   });
-
 });

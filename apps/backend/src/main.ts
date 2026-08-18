@@ -14,9 +14,9 @@ assertSupportedPlatform();
 fixPath();
 const options = parseOptions(process.argv.slice(2));
 if (
-  (options.tailscaleServe || options.desktopWebClient)
-  && options.host
-  && options.host !== "127.0.0.1"
+  (options.tailscaleServe || options.desktopWebClient) &&
+  options.host &&
+  options.host !== "127.0.0.1"
 ) {
   const mode = options.desktopWebClient ? "--desktop-web-client" : "--tailscale-serve";
   throw new Error(`${mode} requires --host 127.0.0.1`);
@@ -47,15 +47,17 @@ gateway = new OrkestratorGateway({
   dataDir: options.dataDir,
   rendererRoot: options.rendererRoot,
   rendererDevServerUrl: options.rendererDevServerUrl,
-  bindAddress: options.tailscaleServe || options.desktopWebClient
-    ? (options.host ?? "127.0.0.1")
-    : options.host,
+  bindAddress:
+    options.tailscaleServe || options.desktopWebClient
+      ? (options.host ?? "127.0.0.1")
+      : options.host,
   fallbackBindAddress: options.fallbackHost,
   port: options.port,
   controlBindAddress: options.controlHost,
   controlPort: options.controlPort,
   compression: options.compression,
-  allowNonTailscaleBind: options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
+  allowNonTailscaleBind:
+    options.allowNonTailscaleBind || options.tailscaleServe || options.desktopWebClient,
   allowedOrigins: options.allowedOrigins,
   strictPort: options.strictGatewayPort,
   agentTestMode: options.runtimeFlavor === "agent-test",
@@ -65,18 +67,22 @@ gateway = new OrkestratorGateway({
 
 const gatewayInfo = await gateway.start();
 if (!gatewayInfo) {
-  throw new Error("No Tailscale address was found. Pass --host with a Tailscale address, or use --host 127.0.0.1 --allow-non-tailscale-bind for local development.");
+  throw new Error(
+    "No Tailscale address was found. Pass --host with a Tailscale address, or use --host 127.0.0.1 --allow-non-tailscale-bind for local development.",
+  );
 }
 
 let info = gatewayInfo;
 if (managedWebClient) {
   managedWebClient.setBrowserListenerUrl(gatewayInfo.browserUrl);
   const config = await backend.invoke<{ global?: { webClientEnabled?: boolean } }>("get_config");
-  void managedWebClient.setEnabled(config.global?.webClientEnabled ?? true).catch((error: unknown) => {
-    console.error(
-      `[TailscaleServe] Failed to initialize desktop web access: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  });
+  void managedWebClient
+    .setEnabled(config.global?.webClientEnabled ?? true)
+    .catch((error: unknown) => {
+      console.error(
+        `[TailscaleServe] Failed to initialize desktop web access: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   info = {
     ...gatewayInfo,
     // The browser listener itself is loopback-only. Its public HTTPS URL is
@@ -108,15 +114,17 @@ if (managedWebClient) {
 
 // Machine-readable startup contract used by the Electron supervisor and service managers.
 // Authentication material stays in the mode-0600 auth file and must never enter logs.
-process.stdout.write(`${JSON.stringify({
-  type: "orkestrator-backend-ready",
-  bindAddress: info.bindAddress,
-  port: info.port,
-  url: info.url,
-  authFile: info.authFile,
-  browserUrl: info.browserUrl,
-  browserError: info.browserError,
-})}\n`);
+process.stdout.write(
+  `${JSON.stringify({
+    type: "orkestrator-backend-ready",
+    bindAddress: info.bindAddress,
+    port: info.port,
+    url: info.url,
+    authFile: info.authFile,
+    browserUrl: info.browserUrl,
+    browserError: info.browserError,
+  })}\n`,
+);
 
 const stop = createBackendShutdownHandler({
   stopTailscaleServe: tailscaleServe ? () => tailscaleServe!.stop() : undefined,

@@ -61,10 +61,18 @@ export function environmentLifecycleErrorMessage(error: unknown): string {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.setupScript;
   }
   // Matched against what the Docker CLI actually emits, not a paraphrase.
-  if (/cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect/i.test(message)) {
+  if (
+    /cannot connect to the docker daemon|is the docker daemon running|docker daemon is not running|error during connect/i.test(
+      message,
+    )
+  ) {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.runtimeUnavailable;
   }
-  if (/unable to find image|pull access denied|manifest unknown|manifest for .* not found|no such image|repository does not exist/i.test(message)) {
+  if (
+    /unable to find image|pull access denied|manifest unknown|manifest for .* not found|no such image|repository does not exist/i.test(
+      message,
+    )
+  ) {
     return ENVIRONMENT_LIFECYCLE_ERROR_MESSAGES.imageUnavailable;
   }
   if (/no space left on device/i.test(message)) {
@@ -107,12 +115,11 @@ export function logEnvironmentLifecycleFailure(
   environmentId: string,
   error: unknown,
 ): void {
-  const detail = scrubLifecycleLogDetail(
-    error instanceof Error ? error.message : String(error),
-  );
-  const outcome = error instanceof CommandFailedError
-    ? ` (timedOut=${error.timedOut} executableMissing=${error.executableMissing} exitCode=${error.exitCode} signal=${error.signal})`
-    : "";
+  const detail = scrubLifecycleLogDetail(error instanceof Error ? error.message : String(error));
+  const outcome =
+    error instanceof CommandFailedError
+      ? ` (timedOut=${error.timedOut} executableMissing=${error.executableMissing} exitCode=${error.exitCode} signal=${error.signal})`
+      : "";
   console.error(
     `[environment-lifecycle] ${operation} failed for ${environmentId}: ${environmentLifecycleErrorMessage(error)}${outcome} — ${detail}`,
   );

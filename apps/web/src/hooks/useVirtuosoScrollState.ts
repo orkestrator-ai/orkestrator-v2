@@ -69,22 +69,19 @@ export function isRestorableStateSnapshot(
   if (!Number.isFinite(snapshot.scrollTop)) return false;
   if (!Array.isArray(snapshot.ranges)) return false;
   return snapshot.ranges.every((range, index, ranges) => {
-    const endIndexIsValid = Number.isInteger(range?.endIndex)
-      || (
-        range?.endIndex === Number.POSITIVE_INFINITY
-        && index === ranges.length - 1
-      );
+    const endIndexIsValid =
+      Number.isInteger(range?.endIndex) ||
+      (range?.endIndex === Number.POSITIVE_INFINITY && index === ranges.length - 1);
     const previous = ranges[index - 1];
-    return Number.isInteger(range?.startIndex)
-      && endIndexIsValid
-      && Number.isFinite(range?.size)
-      && range.startIndex >= 0
-      && range.endIndex >= range.startIndex
-      && range.size >= 0
-      && (
-        previous === undefined
-        || range.startIndex > previous.endIndex
-      );
+    return (
+      Number.isInteger(range?.startIndex) &&
+      endIndexIsValid &&
+      Number.isFinite(range?.size) &&
+      range.startIndex >= 0 &&
+      range.endIndex >= range.startIndex &&
+      range.size >= 0 &&
+      (previous === undefined || range.startIndex > previous.endIndex)
+    );
   });
 }
 
@@ -166,14 +163,9 @@ interface UseVirtuosoScrollStateReturn {
  *   scroll-down button), which keeps pace with late-rendering footer content
  */
 export function useVirtuosoScrollState(
-  options: UseVirtuosoScrollStateOptions = {}
+  options: UseVirtuosoScrollStateOptions = {},
 ): UseVirtuosoScrollStateReturn {
-  const {
-    isActive = true,
-    persistKey,
-    environmentId,
-    stickToBottomOnActivation = false,
-  } = options;
+  const { isActive = true, persistKey, environmentId, stickToBottomOnActivation = false } = options;
 
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const [scrollerEl, setScrollerEl] = useState<HTMLElement | null>(null);
@@ -280,12 +272,9 @@ export function useVirtuosoScrollState(
   // then snaps back up when the stream pauses and the animation finally lands.
   // Instant follow is what actually *reads* as smooth: content grows, the
   // viewport stays pinned to the bottom, nothing bobs.
-  const followOutput = useCallback(
-    (atBottom: boolean): "auto" | false => {
-      return atBottom || wantsStickRef.current ? "auto" : false;
-    },
-    []
-  );
+  const followOutput = useCallback((atBottom: boolean): "auto" | false => {
+    return atBottom || wantsStickRef.current ? "auto" : false;
+  }, []);
 
   const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
     const next = el instanceof HTMLElement ? el : null;
@@ -301,10 +290,7 @@ export function useVirtuosoScrollState(
   const performScrollToBottom = useCallback((behavior: "smooth" | "auto"): boolean => {
     const handle = virtuosoRef.current;
     if (!handle) return false;
-    if (
-      typeof handle.scrollToIndex !== "function" ||
-      typeof handle.scrollTo !== "function"
-    ) {
+    if (typeof handle.scrollToIndex !== "function" || typeof handle.scrollTo !== "function") {
       return false;
     }
     // Clicking the scroll-down button (or any programmatic call) is an
@@ -381,10 +367,7 @@ export function useVirtuosoScrollState(
           scrollInFlightRef.current = false;
           return;
         }
-        if (
-          !isAtBottomRef.current &&
-          attempts < SCROLL_TO_BOTTOM_MAX_ATTEMPTS
-        ) {
+        if (!isAtBottomRef.current && attempts < SCROLL_TO_BOTTOM_MAX_ATTEMPTS) {
           attempt();
           return;
         }
@@ -401,12 +384,9 @@ export function useVirtuosoScrollState(
     // reobserve from scratch on each mount.
   }, []);
 
-  const scrollToBottom = useCallback(
-    () => {
-      performScrollToBottom("smooth");
-    },
-    [performScrollToBottom]
-  );
+  const scrollToBottom = useCallback(() => {
+    performScrollToBottom("smooth");
+  }, [performScrollToBottom]);
 
   /**
    * Pin the scroller to the bottom in one synchronous write.
@@ -458,7 +438,7 @@ export function useVirtuosoScrollState(
     (_height: number) => {
       followContentGrowth();
     },
-    [followContentGrowth]
+    [followContentGrowth],
   );
 
   const growthPinRafRef = useRef<number | null>(null);
@@ -550,8 +530,7 @@ export function useVirtuosoScrollState(
       // A shrinking scrollHeight or a growing viewport also lowers scrollTop
       // while leaving the user at the bottom. Only a move that actually ends
       // away from the bottom is intent to stop following.
-      const distanceFromBottom =
-        scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
+      const distanceFromBottom = scrollerEl.scrollHeight - scrollerEl.clientHeight - st;
       if (distanceFromBottom > AT_BOTTOM_THRESHOLD) {
         wantsStickRef.current = false;
       }
@@ -643,7 +622,7 @@ export function useVirtuosoScrollState(
       typeof MutationObserver !== "undefined"
         ? new MutationObserver((records) => {
             const directChildAdded = records.some(
-              (r) => r.target === scrollerEl && r.addedNodes.length > 0
+              (r) => r.target === scrollerEl && r.addedNodes.length > 0,
             );
             if (directChildAdded) observeChildren();
             scheduleGrowthPin();
@@ -672,11 +651,7 @@ export function useVirtuosoScrollState(
     if (activationScrollRafRef.current !== null) return;
     activationScrollRafRef.current = requestAnimationFrame(() => {
       activationScrollRafRef.current = null;
-      if (
-        !mountedRef.current ||
-        !isActiveRef.current ||
-        !pendingActivationScrollRef.current
-      ) {
+      if (!mountedRef.current || !isActiveRef.current || !pendingActivationScrollRef.current) {
         return;
       }
 
@@ -692,10 +667,7 @@ export function useVirtuosoScrollState(
       // still connecting), keep the pending flag and wait for scrollerRef to
       // fire, which triggers the effect below.
       if (scrollerElRef.current) {
-        if (
-          activationScrollReadyAttemptsRef.current <
-          ACTIVATION_SCROLL_READY_MAX_ATTEMPTS
-        ) {
+        if (activationScrollReadyAttemptsRef.current < ACTIVATION_SCROLL_READY_MAX_ATTEMPTS) {
           activationScrollReadyAttemptsRef.current += 1;
           schedulePendingActivationScroll();
         } else {
@@ -738,11 +710,7 @@ export function useVirtuosoScrollState(
     }
     if (isFirstActivation && !stickToBottomOnActivation) return;
     scrollInFlightRef.current = false;
-    if (
-      !stickToBottomOnActivation &&
-      !envChanged &&
-      !wantsStickRef.current
-    ) {
+    if (!stickToBottomOnActivation && !envChanged && !wantsStickRef.current) {
       return;
     }
     pendingActivationScrollRef.current = true;
@@ -768,12 +736,7 @@ export function useVirtuosoScrollState(
       activationScrollReadyAttemptsRef.current = 0;
       schedulePendingActivationScroll();
     }
-  }, [
-    isActive,
-    scrollerEl,
-    schedulePendingActivationScroll,
-    cancelActivationScrollFrame,
-  ]);
+  }, [isActive, scrollerEl, schedulePendingActivationScroll, cancelActivationScrollFrame]);
 
   return {
     isAtBottom,

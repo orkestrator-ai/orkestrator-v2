@@ -54,9 +54,13 @@ describe("Linear backend API", () => {
   });
 
   test("reports non-JSON Linear responses without exposing request secrets", async () => {
-    globalThis.fetch = mock(async () => new Response("not-json lin_api_secret", { status: 502 })) as unknown as typeof fetch;
+    globalThis.fetch = mock(
+      async () => new Response("not-json lin_api_secret", { status: 502 }),
+    ) as unknown as typeof fetch;
 
-    await expect(verifyLinearConnection("lin_api_secret")).rejects.toThrow("Linear returned HTTP 502");
+    await expect(verifyLinearConnection("lin_api_secret")).rejects.toThrow(
+      "Linear returned HTTP 502",
+    );
   });
 
   test("loads every Linear issue page until Linear reports completion", async () => {
@@ -71,29 +75,33 @@ describe("Linear backend API", () => {
       expect(request.query).toContain("priority");
       expect(request.query).toContain("prioritySortOrder");
       expect(request.query).toContain("state { name type position }");
-      const pageIndex = request.variables.after ? Number(request.variables.after.replace("cursor-", "")) : 0;
+      const pageIndex = request.variables.after
+        ? Number(request.variables.after.replace("cursor-", ""))
+        : 0;
       const nextPage = pageIndex + 1;
 
       return jsonResponse({
         data: {
           issues: {
-            nodes: [{
-              id: `issue-${pageIndex}`,
-              identifier: `ENG-${pageIndex}`,
-              title: `Issue ${pageIndex}`,
-              sortOrder: pageCount - pageIndex,
-              updatedAt: `2026-06-${String(pageCount - pageIndex).padStart(2, "0")}T12:00:00.000Z`,
-              state: {
-                name: pageIndex % 2 === 0 ? "Todo" : "Done",
-                type: "unstarted",
-                position: pageIndex % 2,
+            nodes: [
+              {
+                id: `issue-${pageIndex}`,
+                identifier: `ENG-${pageIndex}`,
+                title: `Issue ${pageIndex}`,
+                sortOrder: pageCount - pageIndex,
+                updatedAt: `2026-06-${String(pageCount - pageIndex).padStart(2, "0")}T12:00:00.000Z`,
+                state: {
+                  name: pageIndex % 2 === 0 ? "Todo" : "Done",
+                  type: "unstarted",
+                  position: pageIndex % 2,
+                },
+                team: { key: "ENG", name: "Engineering" },
+                assignee: { name: "Ada" },
+                priority: 2,
+                prioritySortOrder: pageIndex,
+                priorityLabel: "High",
               },
-              team: { key: "ENG", name: "Engineering" },
-              assignee: { name: "Ada" },
-              priority: 2,
-              prioritySortOrder: pageIndex,
-              priorityLabel: "High",
-            }],
+            ],
             pageInfo: {
               hasNextPage: nextPage < pageCount,
               endCursor: nextPage < pageCount ? `cursor-${nextPage}` : null,
@@ -146,14 +154,16 @@ describe("Linear backend API", () => {
       ...node,
     }));
 
-    globalThis.fetch = mock(async () => jsonResponse({
-      data: {
-        issues: {
-          nodes,
-          pageInfo: { hasNextPage: false, endCursor: null },
+    globalThis.fetch = mock(async () =>
+      jsonResponse({
+        data: {
+          issues: {
+            nodes,
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
         },
-      },
-    })) as unknown as typeof fetch;
+      }),
+    ) as unknown as typeof fetch;
 
     const issues = await listLinearIssues("lin_api_secret");
 
@@ -169,14 +179,16 @@ describe("Linear backend API", () => {
   });
 
   test("fails issue pagination when Linear reports another page without a cursor", async () => {
-    globalThis.fetch = mock(async () => jsonResponse({
-      data: {
-        issues: {
-          nodes: [],
-          pageInfo: { hasNextPage: true, endCursor: null },
+    globalThis.fetch = mock(async () =>
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [],
+            pageInfo: { hasNextPage: true, endCursor: null },
+          },
         },
-      },
-    })) as unknown as typeof fetch;
+      }),
+    ) as unknown as typeof fetch;
 
     await expect(listLinearIssues("lin_api_secret")).rejects.toThrow(
       "Linear issues pagination did not return a cursor",
@@ -184,14 +196,16 @@ describe("Linear backend API", () => {
   });
 
   test("fails issue pagination when Linear repeats a cursor", async () => {
-    const fetchMock = mock(async () => jsonResponse({
-      data: {
-        issues: {
-          nodes: [],
-          pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+    const fetchMock = mock(async () =>
+      jsonResponse({
+        data: {
+          issues: {
+            nodes: [],
+            pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+          },
         },
-      },
-    }));
+      }),
+    );
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     await expect(listLinearIssues("lin_api_secret")).rejects.toThrow(
@@ -214,19 +228,22 @@ describe("Linear backend API", () => {
           data: {
             issue: {
               comments: {
-                nodes: [{
-                  id: "comment-2",
-                  body: "Second comment",
-                  createdAt: "2026-06-28T12:05:00.000Z",
-                  updatedAt: "2026-06-28T12:05:00.000Z",
-                  user: { name: "Ada" },
-                }, {
-                  id: "comment-1",
-                  body: "First comment",
-                  createdAt: "2026-06-28T12:01:00.000Z",
-                  updatedAt: "2026-06-28T12:01:00.000Z",
-                  user: { name: "Grace" },
-                }],
+                nodes: [
+                  {
+                    id: "comment-2",
+                    body: "Second comment",
+                    createdAt: "2026-06-28T12:05:00.000Z",
+                    updatedAt: "2026-06-28T12:05:00.000Z",
+                    user: { name: "Ada" },
+                  },
+                  {
+                    id: "comment-1",
+                    body: "First comment",
+                    createdAt: "2026-06-28T12:01:00.000Z",
+                    updatedAt: "2026-06-28T12:01:00.000Z",
+                    user: { name: "Grace" },
+                  },
+                ],
                 pageInfo: { hasNextPage: false, endCursor: null },
               },
             },
@@ -281,7 +298,10 @@ describe("Linear backend API", () => {
 
   test("creates issue comments and maps the created comment", async () => {
     const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, string> };
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, string>;
+      };
       expect(request.query).toContain("OrkestratorLinearIssueComment");
       expect(request.variables).toMatchObject({
         issueId: "issue-1",
@@ -304,10 +324,12 @@ describe("Linear backend API", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await expect(postLinearIssueComment("lin_api_secret", {
-      issueId: "issue-1",
-      body: " New comment ",
-    })).resolves.toEqual({
+    await expect(
+      postLinearIssueComment("lin_api_secret", {
+        issueId: "issue-1",
+        body: " New comment ",
+      }),
+    ).resolves.toEqual({
       id: "comment-new",
       body: "New comment",
       createdAt: "2026-06-28T12:10:00.000Z",
@@ -358,7 +380,9 @@ describe("Linear backend API", () => {
   test("paginates across multiple pages of issue comments", async () => {
     let call = 0;
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { variables: Record<string, string | null> };
+      const request = JSON.parse(String(init?.body)) as {
+        variables: Record<string, string | null>;
+      };
       call += 1;
       if (call === 1) {
         expect(request.variables.after).toBeNull();
@@ -366,7 +390,14 @@ describe("Linear backend API", () => {
           data: {
             issue: {
               comments: {
-                nodes: [{ id: "comment-1", body: "First", createdAt: "2026-06-28T12:01:00.000Z", user: { name: "Grace" } }],
+                nodes: [
+                  {
+                    id: "comment-1",
+                    body: "First",
+                    createdAt: "2026-06-28T12:01:00.000Z",
+                    user: { name: "Grace" },
+                  },
+                ],
                 pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
               },
             },
@@ -378,7 +409,14 @@ describe("Linear backend API", () => {
         data: {
           issue: {
             comments: {
-              nodes: [{ id: "comment-2", body: "Second", createdAt: "2026-06-28T12:05:00.000Z", user: { name: "Ada" } }],
+              nodes: [
+                {
+                  id: "comment-2",
+                  body: "Second",
+                  createdAt: "2026-06-28T12:05:00.000Z",
+                  user: { name: "Ada" },
+                },
+              ],
               pageInfo: { hasNextPage: false, endCursor: null },
             },
           },
@@ -399,11 +437,13 @@ describe("Linear backend API", () => {
         data: {
           issue: {
             comments: {
-              nodes: [{
-                id: "comment-existing",
-                body: "Done\n\n<!-- orkestrator-linear-run:pipeline-1 -->",
-                createdAt: "2026-06-28T12:00:00.000Z",
-              }],
+              nodes: [
+                {
+                  id: "comment-existing",
+                  body: "Done\n\n<!-- orkestrator-linear-run:pipeline-1 -->",
+                  createdAt: "2026-06-28T12:00:00.000Z",
+                },
+              ],
               pageInfo: { hasNextPage: false, endCursor: null },
             },
           },
@@ -412,11 +452,13 @@ describe("Linear backend API", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await expect(postLinearCompletionComment("lin_api_secret", {
-      pipelineId: "pipeline-1",
-      issueId: "issue-1",
-      body: "Done",
-    })).resolves.toEqual({
+    await expect(
+      postLinearCompletionComment("lin_api_secret", {
+        pipelineId: "pipeline-1",
+        issueId: "issue-1",
+        body: "Done",
+      }),
+    ).resolves.toEqual({
       status: "already-posted",
       commentId: "comment-existing",
       postedAt: "2026-06-28T12:00:00.000Z",
@@ -426,7 +468,10 @@ describe("Linear backend API", () => {
 
   test("creates completion comments with the pipeline marker when no marker exists", async () => {
     const fetchMock = mock(async (_url: string | URL | Request, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, string> };
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, string>;
+      };
       if (request.query.includes("OrkestratorLinearCompletionComments")) {
         return jsonResponse({
           data: {
@@ -454,11 +499,13 @@ describe("Linear backend API", () => {
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    await expect(postLinearCompletionComment("lin_api_secret", {
-      pipelineId: "pipeline-1",
-      issueId: "issue-1",
-      body: "Build complete",
-    })).resolves.toEqual({
+    await expect(
+      postLinearCompletionComment("lin_api_secret", {
+        pipelineId: "pipeline-1",
+        issueId: "issue-1",
+        body: "Build complete",
+      }),
+    ).resolves.toEqual({
       status: "posted",
       commentId: "comment-new",
       postedAt: "2026-06-28T12:05:00.000Z",
@@ -467,21 +514,25 @@ describe("Linear backend API", () => {
   });
 
   test("fails completion-comment pagination when Linear omits the next cursor", async () => {
-    globalThis.fetch = mock(async () => jsonResponse({
-      data: {
-        issue: {
-          comments: {
-            nodes: [],
-            pageInfo: { hasNextPage: true, endCursor: null },
+    globalThis.fetch = mock(async () =>
+      jsonResponse({
+        data: {
+          issue: {
+            comments: {
+              nodes: [],
+              pageInfo: { hasNextPage: true, endCursor: null },
+            },
           },
         },
-      },
-    })) as unknown as typeof fetch;
+      }),
+    ) as unknown as typeof fetch;
 
-    await expect(postLinearCompletionComment("lin_api_secret", {
-      pipelineId: "pipeline-1",
-      issueId: "issue-1",
-      body: "Build complete",
-    })).rejects.toThrow("Linear comments pagination did not return a cursor");
+    await expect(
+      postLinearCompletionComment("lin_api_secret", {
+        pipelineId: "pipeline-1",
+        issueId: "issue-1",
+        body: "Build complete",
+      }),
+    ).rejects.toThrow("Linear comments pagination did not return a cursor");
   });
 });

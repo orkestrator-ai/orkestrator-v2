@@ -11,8 +11,23 @@ import {
   type DragOverEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { useTerminalContext, MAX_TABS, type CreatableTabType, type TerminalTabType, type CreateTabOptions, type CreateFileTabOptions } from "@/contexts";
-import { createSessionKey, useClaudeOptionsStore, usePaneLayoutStore, useEnvironmentStore, useConfigStore, useTerminalSessionStore, getAllLeaves } from "@/stores";
+import {
+  useTerminalContext,
+  MAX_TABS,
+  type CreatableTabType,
+  type TerminalTabType,
+  type CreateTabOptions,
+  type CreateFileTabOptions,
+} from "@/contexts";
+import {
+  createSessionKey,
+  useClaudeOptionsStore,
+  usePaneLayoutStore,
+  useEnvironmentStore,
+  useConfigStore,
+  useTerminalSessionStore,
+  getAllLeaves,
+} from "@/stores";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { showTabLimitReachedToast } from "@/lib/tab-limit-toast";
@@ -36,10 +51,7 @@ import {
   readStoredPaneSelection,
 } from "@/lib/pane-selection-storage";
 import { listenForTerminalBrowserTabRequests } from "@/lib/terminal-links";
-import {
-  listen,
-  NATIVE_EVENT_STREAM_CONNECTED_EVENT,
-} from "@/lib/native/events";
+import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
 import { createOrkestratorScriptPrompt } from "@/prompts";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
@@ -96,11 +108,9 @@ export function TerminalContainer({
   const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const setPendingNativeLaunch = useClaudeOptionsStore((state) => state.setPendingNativeLaunch);
   const clearPendingNativeLaunch = useClaudeOptionsStore((state) => state.clearPendingNativeLaunch);
-  const claudeOptions = useClaudeOptionsStore(
-    (state) => state.options[environmentId]
-  );
+  const claudeOptions = useClaudeOptionsStore((state) => state.options[environmentId]);
   const pendingNativeLaunch = useClaudeOptionsStore(
-    (state) => state.pendingNativeLaunches[environmentId]
+    (state) => state.pendingNativeLaunches[environmentId],
   );
   const [hasAppliedClaudeOptions, setHasAppliedClaudeOptions] = useState(false);
 
@@ -115,7 +125,7 @@ export function TerminalContainer({
     envProjectId,
   } = useEnvironmentStore(
     useShallow((state) => {
-      const env = state.environments.find(e => e.id === environmentId);
+      const env = state.environments.find((e) => e.id === environmentId);
       return {
         envDefaultAgent: env?.defaultAgent,
         envOpencodeMode: env?.opencodeMode,
@@ -124,7 +134,7 @@ export function TerminalContainer({
         envCodexMode: env?.codexMode,
         envProjectId: env?.projectId,
       };
-    })
+    }),
   );
   const opencodeMode = envOpencodeMode || config.global.opencodeMode || "terminal";
   const codexMode = envCodexMode || config.global.codexMode || "native";
@@ -162,8 +172,8 @@ export function TerminalContainer({
   }).dispatchedByBackend;
 
   // Check if this is a local environment (no container)
-  const environment = useEnvironmentStore(
-    (state) => state.environments.find((env) => env.id === environmentId)
+  const environment = useEnvironmentStore((state) =>
+    state.environments.find((env) => env.id === environmentId),
   );
   const isLocalEnvironment = environment?.environmentType === "local";
   const setupPhase = environment?.setupPhase ?? "pending";
@@ -185,10 +195,13 @@ export function TerminalContainer({
   // Get derived state for THIS environment (not the globally active one).
   // Selected narrowly (the per-environment record has a stable reference) so
   // layout changes in OTHER environments do not rerender this container.
-  const currentEnvState = usePaneLayoutStore(
-    (state) => state.environments.get(environmentId)
-  );
-  const root = currentEnvState?.root ?? { kind: "leaf" as const, id: "default", tabs: [], activeTabId: null };
+  const currentEnvState = usePaneLayoutStore((state) => state.environments.get(environmentId));
+  const root = currentEnvState?.root ?? {
+    kind: "leaf" as const,
+    id: "default",
+    tabs: [],
+    activeTabId: null,
+  };
   const activePaneId = currentEnvState?.activePaneId ?? "default";
 
   // Pane layout actions (stable references, shallow-compared bundle)
@@ -223,7 +236,7 @@ export function TerminalContainer({
       getAllTabs: state.getAllTabs,
       getOpenFilePaths: state.getOpenFilePaths,
       getPane: state.getPane,
-    }))
+    })),
   );
 
   const {
@@ -267,7 +280,8 @@ export function TerminalContainer({
   );
 
   const hasBoundSetupSession = useCallback(
-    (tabId: string) => !!useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tabId))?.sessionId,
+    (tabId: string) =>
+      !!useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tabId))?.sessionId,
     [setupSessionKeyForTab],
   );
 
@@ -345,14 +359,17 @@ export function TerminalContainer({
         const attempts = (setupSessionBindAttemptsRef.current.get(tabId) ?? 0) + 1;
         setupSessionBindAttemptsRef.current.set(tabId, attempts);
         if (attempts < MAX_SETUP_SESSION_BIND_ATTEMPTS) {
-          const timer = setTimeout(() => {
-            setupSessionBindRetryTimersRef.current.delete(tabId);
-            if (setupSessionBindLifecycleGenerationRef.current === lifecycleGeneration) {
-              setSetupSessionBindRetryNonce((value) => value + 1);
-            }
-          }, setupSessionReconnectGenerationRef.current !== reconnectGeneration
-            ? 0
-            : SETUP_SESSION_BIND_RETRY_DELAY_MS * attempts);
+          const timer = setTimeout(
+            () => {
+              setupSessionBindRetryTimersRef.current.delete(tabId);
+              if (setupSessionBindLifecycleGenerationRef.current === lifecycleGeneration) {
+                setSetupSessionBindRetryNonce((value) => value + 1);
+              }
+            },
+            setupSessionReconnectGenerationRef.current !== reconnectGeneration
+              ? 0
+              : SETUP_SESSION_BIND_RETRY_DELAY_MS * attempts,
+          );
           setupSessionBindRetryTimersRef.current.set(tabId, timer);
         } else {
           lookupSettled = true;
@@ -364,8 +381,8 @@ export function TerminalContainer({
           setupSessionBindInFlightRef.current.delete(tabId);
         }
         if (
-          lookupSettled
-          && setupSessionBindLifecycleGenerationRef.current === lifecycleGeneration
+          lookupSettled &&
+          setupSessionBindLifecycleGenerationRef.current === lifecycleGeneration
         ) {
           setupSessionBindSettledTabsRef.current.add(tabId);
           // The terminal store update itself rerenders PersistentTerminal. This
@@ -378,23 +395,28 @@ export function TerminalContainer({
     [environmentId, hasBoundSetupSession, setupSessionKeyForTab],
   );
 
-  useEffect(() => () => {
-    setupSessionBindLifecycleGenerationRef.current += 1;
-    for (const timer of setupSessionBindRetryTimersRef.current.values()) {
-      clearTimeout(timer);
-    }
-    setupSessionBindRetryTimersRef.current.clear();
-    setupSessionBindAttemptsRef.current.clear();
-    setupSessionBindInFlightRef.current.clear();
-    setupSessionBindSettledTabsRef.current.clear();
-  }, [environmentId]);
+  useEffect(
+    () => () => {
+      setupSessionBindLifecycleGenerationRef.current += 1;
+      for (const timer of setupSessionBindRetryTimersRef.current.values()) {
+        clearTimeout(timer);
+      }
+      setupSessionBindRetryTimersRef.current.clear();
+      setupSessionBindAttemptsRef.current.clear();
+      setupSessionBindInFlightRef.current.clear();
+      setupSessionBindSettledTabsRef.current.clear();
+    },
+    [environmentId],
+  );
 
   useEffect(() => {
     if (!currentEnvState) return;
 
     const setupTabs = getAllLeaves(currentEnvState.root)
       .flatMap((leaf) => leaf.tabs)
-      .filter((tab) => tab.isSetupTab && (!tab.initialCommands || tab.initialCommands.length === 0));
+      .filter(
+        (tab) => tab.isSetupTab && (!tab.initialCommands || tab.initialCommands.length === 0),
+      );
 
     // Every unbound setup tab, not just the first. Binding one at a time relied
     // on this effect re-running to reach the next, and a tab it never reaches is
@@ -427,14 +449,16 @@ export function TerminalContainer({
       if (disposed) return;
       setupSessionReconnectGenerationRef.current += 1;
       setSetupSessionReconnectNonce((value) => value + 1);
-    }).then((release) => {
-      if (disposed) release();
-      else unlisten = release;
-    }).catch((error) => {
-      if (!disposed) {
-        rendererDebugLog("[setup-terminal] failed to install reconnect listener", error);
-      }
-    });
+    })
+      .then((release) => {
+        if (disposed) release();
+        else unlisten = release;
+      })
+      .catch((error) => {
+        if (!disposed) {
+          rendererDebugLog("[setup-terminal] failed to install reconnect listener", error);
+        }
+      });
     return () => {
       disposed = true;
       unlisten?.();
@@ -442,11 +466,7 @@ export function TerminalContainer({
   }, []);
 
   useEffect(() => {
-    if (
-      !currentEnvState
-      || environment?.pendingAgentLaunch
-      || backendSetupRunning
-    ) {
+    if (!currentEnvState || environment?.pendingAgentLaunch || backendSetupRunning) {
       return;
     }
     // `setupScriptsComplete` is deliberately not required here. Once a lookup
@@ -470,12 +490,17 @@ export function TerminalContainer({
           return false;
         }
         if (!setupSessionBindSettledTabsRef.current.has(tab.id)) return false;
-        const session = useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tab.id));
+        const session = useTerminalSessionStore
+          .getState()
+          .sessions.get(setupSessionKeyForTab(tab.id));
         return session?.sessionId !== `${environmentId}:setup`;
       });
 
       if (staleSetupTab) {
-        rendererDebugLog("[TerminalContainer] Removing stale setup placeholder tab:", staleSetupTab.id);
+        rendererDebugLog(
+          "[TerminalContainer] Removing stale setup placeholder tab:",
+          staleSetupTab.id,
+        );
         removeTab(leaf.id, staleSetupTab.id, environmentId);
         return;
       }
@@ -512,10 +537,13 @@ export function TerminalContainer({
     // different failure still does.
     if (reportedStartupErrorRef.current === reason) return;
     reportedStartupErrorRef.current = reason;
-    toast.error(`${startupSession.agent} could not start in ${environment?.name ?? "this environment"}`, {
-      description: reason,
-      duration: 10_000,
-    });
+    toast.error(
+      `${startupSession.agent} could not start in ${environment?.name ?? "this environment"}`,
+      {
+        description: reason,
+        duration: 10_000,
+      },
+    );
   }, [
     environment?.name,
     environment?.startupAgentSession?.agent,
@@ -534,23 +562,23 @@ export function TerminalContainer({
     // pendingAgentLaunch is the backend's retry intent after an error, so a
     // renderer must not project an ordinary text-only launch and clear it.
     if (startupSession && startupSession.status !== "running") return;
-    if (
-      startupLaunchDispatchedByBackend
-      && (environment.pendingAgentLaunch || startupSession)
-    ) {
+    if (startupLaunchDispatchedByBackend && (environment.pendingAgentLaunch || startupSession)) {
       if (
-        !currentEnvState
-        || !isEnvironmentRunning
-        || (!setupReady && environment.setupScriptsComplete !== true)
-      ) return;
+        !currentEnvState ||
+        !isEnvironmentRunning ||
+        (!setupReady && environment.setupScriptsComplete !== true)
+      )
+        return;
       const existingStartupTabId = findStartupAgentTabId(currentEnvState);
       if (existingStartupTabId) {
         if (startupSession?.providerSessionId) {
-          usePaneLayoutStore.getState().updateTabNativeSessionId(
-            existingStartupTabId,
-            startupSession.providerSessionId,
-            environmentId,
-          );
+          usePaneLayoutStore
+            .getState()
+            .updateTabNativeSessionId(
+              existingStartupTabId,
+              startupSession.providerSessionId,
+              environmentId,
+            );
           if (pendingNativeLaunch) clearPendingNativeLaunch(environmentId);
           if (claudeOptions?.launchAgent) clearOptions(environmentId);
         }
@@ -562,10 +590,8 @@ export function TerminalContainer({
       // missing startup tab means the user closed it — re-creating it here
       // would resurrect it on every render and permanently defeat the close.
       if (!environment.pendingAgentLaunch) return;
-      const agentType = startupSession?.agent
-        ?? environment.defaultAgent
-        ?? config.global.defaultAgent
-        ?? "claude";
+      const agentType =
+        startupSession?.agent ?? environment.defaultAgent ?? config.global.defaultAgent ?? "claude";
       setPendingNativeLaunch(environmentId, {
         containerId: isLocalEnvironment ? null : containerId,
         environmentId,
@@ -574,8 +600,7 @@ export function TerminalContainer({
         launchMode: "native",
         providerSessionId: startupSession?.providerSessionId,
         model: startupSession?.model ?? environment.initialAgentModel,
-        reasoningEffort:
-          startupSession?.reasoningEffort ?? environment.initialReasoningEffort,
+        reasoningEffort: startupSession?.reasoningEffort ?? environment.initialReasoningEffort,
       });
       return;
     }
@@ -588,8 +613,7 @@ export function TerminalContainer({
       if (durableLaunchClearInFlightRef.current) return;
       durableLaunchClearInFlightRef.current = true;
       const durablePaneState =
-        usePaneLayoutStore.getState().environments.get(environmentId)
-        ?? currentEnvState;
+        usePaneLayoutStore.getState().environments.get(environmentId) ?? currentEnvState;
       // Persist the tab before clearing the launch intent. If the page is
       // evicted between these operations, the still-pending flag retries; if
       // clearing succeeds, rehydration is guaranteed to find the agent tab.
@@ -607,10 +631,7 @@ export function TerminalContainer({
       // without applying them (background mount, empty catalog, init error),
       // which keeps the environment hidden-mounted and polled for the life of
       // the app.
-      void flushPaneLayoutNow(
-        environmentId,
-        createPersistedPaneLayoutInput(durablePaneState),
-      )
+      void flushPaneLayoutNow(environmentId, createPersistedPaneLayoutInput(durablePaneState))
         .then(() => backend.setEnvironmentPendingAgentLaunch(environmentId, false))
         .then((updatedEnvironment) => {
           useEnvironmentStore.getState().updateEnvironment(environmentId, updatedEnvironment);
@@ -636,14 +657,11 @@ export function TerminalContainer({
     if (claudeOptions?.launchAgent) return;
     if (!isEnvironmentRunning || pendingNativeLaunch) return;
 
-    const agentType =
-      environment.defaultAgent
-      ?? config.global.defaultAgent
-      ?? "claude";
+    const agentType = environment.defaultAgent ?? config.global.defaultAgent ?? "claude";
     const launchMode =
-      (agentType === "claude" && claudeMode === "native")
-      || (agentType === "codex" && codexMode === "native")
-      || (agentType === "opencode" && opencodeMode === "native")
+      (agentType === "claude" && claudeMode === "native") ||
+      (agentType === "codex" && codexMode === "native") ||
+      (agentType === "opencode" && opencodeMode === "native")
         ? "native"
         : "terminal";
 
@@ -655,9 +673,7 @@ export function TerminalContainer({
       agentType,
       launchMode,
       claudeNativeBackend:
-        agentType === "claude" && launchMode === "native"
-          ? claudeNativeBackend
-          : undefined,
+        agentType === "claude" && launchMode === "native" ? claudeNativeBackend : undefined,
       model: environment.initialAgentModel,
       reasoningEffort: environment.initialReasoningEffort,
     });
@@ -691,7 +707,7 @@ export function TerminalContainer({
     }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
-    })
+    }),
   );
 
   // Initialize pane layout from the backend-owned setup phase.
@@ -723,142 +739,133 @@ export function TerminalContainer({
           backend.getPaneLayout(environmentId),
           hydrateLoopedReviewWorkflowsForEnvironment(environmentId),
           hydrateMultiReviewWorkflowsForEnvironment(environmentId),
-        ])
-          .then(([layoutResult, workflowResult, multiReviewResult]) => {
-            const paneStore = usePaneLayoutStore.getState();
-            if (paneStore.hydration.get(environmentId) !== "pending") return;
+        ]).then(([layoutResult, workflowResult, multiReviewResult]) => {
+          const paneStore = usePaneLayoutStore.getState();
+          if (paneStore.hydration.get(environmentId) !== "pending") return;
 
-            if (workflowResult.status === "rejected") {
-              console.warn(
-                "[TerminalContainer] Failed to restore looped reviews:",
-                workflowResult.reason,
-              );
-            }
-            if (multiReviewResult.status === "rejected") {
-              console.warn(
-                "[TerminalContainer] Failed to restore multi reviews:",
-                multiReviewResult.reason,
-              );
-            }
-            const latestEnvironment = useEnvironmentStore
-              .getState()
-              .getEnvironmentById(environmentId);
-            const latestContainerId = latestEnvironment
-              ? (latestEnvironment.environmentType === "local"
-                ? null
-                : latestEnvironment.containerId)
-              : (isLocalEnvironment ? null : containerId);
+          if (workflowResult.status === "rejected") {
+            console.warn(
+              "[TerminalContainer] Failed to restore looped reviews:",
+              workflowResult.reason,
+            );
+          }
+          if (multiReviewResult.status === "rejected") {
+            console.warn(
+              "[TerminalContainer] Failed to restore multi reviews:",
+              multiReviewResult.reason,
+            );
+          }
+          const latestEnvironment = useEnvironmentStore
+            .getState()
+            .getEnvironmentById(environmentId);
+          const latestContainerId = latestEnvironment
+            ? latestEnvironment.environmentType === "local"
+              ? null
+              : latestEnvironment.containerId
+            : isLocalEnvironment
+              ? null
+              : containerId;
 
-            if (layoutResult.status === "rejected") {
-              console.warn(
-                "[TerminalContainer] Failed to restore pane layout:",
-                layoutResult.reason,
-              );
-              // Register the environment so a later pane-layout announcement
-              // can apply. finishHydration without a snapshot does not.
-              // Skip when a local record already exists: rewriting it would
-              // retrigger setup-session binding for a tab this renderer seeded.
-              if (!paneStore.environments.has(environmentId)) {
-                paneStore.initialize(latestContainerId, environmentId);
-              }
-              paneStore.finishHydration(environmentId);
-              return;
-            }
-
-            if (!latestEnvironment) {
-              paneStore.finishHydration(environmentId);
-              return;
-            }
-
-            const persisted = layoutResult.value;
-            const restoredSnapshot = reconcilePersistedLayout(persisted, {
-              environmentId,
-              containerId: latestContainerId,
-              isLocal: latestEnvironment.environmentType === "local",
-              worktreePath: latestEnvironment.worktreePath,
-              hasBuildPipeline: (pipelineId) =>
-                useBuildPipelineStore.getState().pipelines.has(pipelineId),
-              hasLoopedReview: (workflowId) =>
-                // A failed workflow-list request means existence is unknown,
-                // not that every persisted review was deleted. Preserve those
-                // tabs so their own read-through view can retry hydration.
-                workflowResult.status === "rejected"
-                || useLoopedReviewStore.getState().workflows.has(workflowId),
-              hasMultiReview: (workflowId) =>
-                multiReviewResult.status === "rejected"
-                || useMultiReviewStore.getState().workflows.has(workflowId),
-            });
-            const restored =
-              restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION
-                ? applyStoredPaneSelection(
-                    restoredSnapshot,
-                    environmentId,
-                    readStoredPaneSelection(environmentId),
-                  )
-                : restoredSnapshot;
-            if (!restored && !paneStore.environments.has(environmentId)) {
-              // Same empty-hydration contract as a rejected fetch: the
-              // pane-store record must exist before hydration is marked done,
-              // or deferred pane-layout refreshes no-op.
+          if (layoutResult.status === "rejected") {
+            console.warn("[TerminalContainer] Failed to restore pane layout:", layoutResult.reason);
+            // Register the environment so a later pane-layout announcement
+            // can apply. finishHydration without a snapshot does not.
+            // Skip when a local record already exists: rewriting it would
+            // retrigger setup-session binding for a tab this renderer seeded.
+            if (!paneStore.environments.has(environmentId)) {
               paneStore.initialize(latestContainerId, environmentId);
             }
-            paneStore.finishHydration(environmentId, restored ?? undefined);
+            paneStore.finishHydration(environmentId);
+            return;
+          }
 
-            // A successful migration may have been performed by this renderer
-            // on an earlier launch or by another client. Once v2 is observed,
-            // the renderer-local v1 selection can no longer be useful.
-            if (persisted?.version === PANE_LAYOUT_VERSION) {
-              clearStoredPaneSelection(environmentId);
-              if (restored) {
-                void migratePaneLayoutBrowserHistory(environmentId, persisted)
-                  .catch((error) => {
-                    console.warn(
-                      "[TerminalContainer] Failed to migrate browser history privacy fields:",
-                      error,
-                    );
-                  });
-              } else {
-                // A stale-generation or malformed current-version snapshot
-                // cannot safely be rewritten as renderer state. Remove only
-                // the exact revision we inspected; a concurrent newer layout
-                // wins the CAS and is preserved for the next reconciliation.
-                void backend.deletePaneLayout(environmentId, persisted.revision)
-                  .catch((error) => {
-                    console.warn(
-                      "[TerminalContainer] Failed to remove an unusable pane layout snapshot:",
-                      error,
-                    );
-                  });
-              }
-            }
+          if (!latestEnvironment) {
+            paneStore.finishHydration(environmentId);
+            return;
+          }
 
-            if (restored && persisted && persisted.version < PANE_LAYOUT_VERSION) {
-              // V1 contributes renderer-local selection; v2 contributes legacy
-              // provider-specific native tab records. Reconciliation has now
-              // converted either schema to v3, so persist that exact snapshot
-              // through the normal CAS chain before considering it migrated.
-              const migrated = usePaneLayoutStore
-                .getState()
-                .environments.get(environmentId);
-              if (migrated) {
-                void flushPaneLayoutNow(
-                  environmentId,
-                  createPersistedPaneLayoutInput(migrated),
-                )
-                  .then(() => {
-                    if (persisted.version === LEGACY_PANE_LAYOUT_VERSION) {
-                      clearStoredPaneSelection(environmentId);
-                    }
-                  })
-                  .catch((error) => {
-                    console.warn(
-                      "[TerminalContainer] Failed to migrate legacy pane selection:",
-                      error,
-                    );
-                  });
-              }
-            }
+          const persisted = layoutResult.value;
+          const restoredSnapshot = reconcilePersistedLayout(persisted, {
+            environmentId,
+            containerId: latestContainerId,
+            isLocal: latestEnvironment.environmentType === "local",
+            worktreePath: latestEnvironment.worktreePath,
+            hasBuildPipeline: (pipelineId) =>
+              useBuildPipelineStore.getState().pipelines.has(pipelineId),
+            hasLoopedReview: (workflowId) =>
+              // A failed workflow-list request means existence is unknown,
+              // not that every persisted review was deleted. Preserve those
+              // tabs so their own read-through view can retry hydration.
+              workflowResult.status === "rejected" ||
+              useLoopedReviewStore.getState().workflows.has(workflowId),
+            hasMultiReview: (workflowId) =>
+              multiReviewResult.status === "rejected" ||
+              useMultiReviewStore.getState().workflows.has(workflowId),
           });
+          const restored =
+            restoredSnapshot && persisted?.version === LEGACY_PANE_LAYOUT_VERSION
+              ? applyStoredPaneSelection(
+                  restoredSnapshot,
+                  environmentId,
+                  readStoredPaneSelection(environmentId),
+                )
+              : restoredSnapshot;
+          if (!restored && !paneStore.environments.has(environmentId)) {
+            // Same empty-hydration contract as a rejected fetch: the
+            // pane-store record must exist before hydration is marked done,
+            // or deferred pane-layout refreshes no-op.
+            paneStore.initialize(latestContainerId, environmentId);
+          }
+          paneStore.finishHydration(environmentId, restored ?? undefined);
+
+          // A successful migration may have been performed by this renderer
+          // on an earlier launch or by another client. Once v2 is observed,
+          // the renderer-local v1 selection can no longer be useful.
+          if (persisted?.version === PANE_LAYOUT_VERSION) {
+            clearStoredPaneSelection(environmentId);
+            if (restored) {
+              void migratePaneLayoutBrowserHistory(environmentId, persisted).catch((error) => {
+                console.warn(
+                  "[TerminalContainer] Failed to migrate browser history privacy fields:",
+                  error,
+                );
+              });
+            } else {
+              // A stale-generation or malformed current-version snapshot
+              // cannot safely be rewritten as renderer state. Remove only
+              // the exact revision we inspected; a concurrent newer layout
+              // wins the CAS and is preserved for the next reconciliation.
+              void backend.deletePaneLayout(environmentId, persisted.revision).catch((error) => {
+                console.warn(
+                  "[TerminalContainer] Failed to remove an unusable pane layout snapshot:",
+                  error,
+                );
+              });
+            }
+          }
+
+          if (restored && persisted && persisted.version < PANE_LAYOUT_VERSION) {
+            // V1 contributes renderer-local selection; v2 contributes legacy
+            // provider-specific native tab records. Reconciliation has now
+            // converted either schema to v3, so persist that exact snapshot
+            // through the normal CAS chain before considering it migrated.
+            const migrated = usePaneLayoutStore.getState().environments.get(environmentId);
+            if (migrated) {
+              void flushPaneLayoutNow(environmentId, createPersistedPaneLayoutInput(migrated))
+                .then(() => {
+                  if (persisted.version === LEGACY_PANE_LAYOUT_VERSION) {
+                    clearStoredPaneSelection(environmentId);
+                  }
+                })
+                .catch((error) => {
+                  console.warn(
+                    "[TerminalContainer] Failed to migrate legacy pane selection:",
+                    error,
+                  );
+                });
+            }
+          }
+        });
         return;
       }
     }
@@ -895,9 +902,9 @@ export function TerminalContainer({
       // does not create a pane-store record, and later pane-layout events
       // cannot apply to an environment that was never registered.
       if (
-        !backendSetupRunning
-        && environment?.pendingAgentLaunch === true
-        && startupLaunchDispatchedByBackend
+        !backendSetupRunning &&
+        environment?.pendingAgentLaunch === true &&
+        startupLaunchDispatchedByBackend
       ) {
         if (!usePaneLayoutStore.getState().environments.has(environmentId)) {
           initialize(containerId, environmentId);
@@ -916,12 +923,11 @@ export function TerminalContainer({
        * prompt typed into a PTY has no way to carry an attachment.
        */
       const backendStagesAttachments =
-        environment?.pendingAgentLaunch === true
-        && startupLaunchDispatchedByBackend;
+        environment?.pendingAgentLaunch === true && startupLaunchDispatchedByBackend;
       if (
-        claudeOptions?.launchAgent
-        && pendingAttachments.length > 0
-        && !backendStagesAttachments
+        claudeOptions?.launchAgent &&
+        pendingAttachments.length > 0 &&
+        !backendStagesAttachments
       ) {
         if (!isSavingInitialPromptAttachmentsRef.current) {
           isSavingInitialPromptAttachmentsRef.current = true;
@@ -951,8 +957,8 @@ export function TerminalContainer({
               // the user typed. (Eviction *before* this point still loses the
               // attachments themselves — they are never persisted.)
               if (
-                promptWithReferences !== currentOptions.initialPrompt
-                || pendingAttachments.length > 0
+                promptWithReferences !== currentOptions.initialPrompt ||
+                pendingAttachments.length > 0
               ) {
                 try {
                   const updatedEnvironment = await backend.setEnvironmentInitialPrompt(
@@ -960,7 +966,9 @@ export function TerminalContainer({
                     promptWithReferences,
                     [],
                   );
-                  useEnvironmentStore.getState().updateEnvironment(environmentId, updatedEnvironment);
+                  useEnvironmentStore
+                    .getState()
+                    .updateEnvironment(environmentId, updatedEnvironment);
                 } catch (error) {
                   console.warn(
                     "[TerminalContainer] Failed to persist initial prompt attachment references:",
@@ -969,7 +977,10 @@ export function TerminalContainer({
                 }
               }
             } catch (error) {
-              console.error("[TerminalContainer] Failed to save initial prompt attachments:", error);
+              console.error(
+                "[TerminalContainer] Failed to save initial prompt attachments:",
+                error,
+              );
               // Keep both renderer and backend copies so a later retry can
               // recover the images rather than silently launching without
               // them.
@@ -987,9 +998,8 @@ export function TerminalContainer({
       // hydration; targeting the literal "default" would be a no-op and make
       // this effect initialize forever because build tabs are excluded from
       // `seededTabs` above.
-      const initialPaneId = usePaneLayoutStore
-        .getState()
-        .environments.get(environmentId)?.activePaneId ?? "default";
+      const initialPaneId =
+        usePaneLayoutStore.getState().environments.get(environmentId)?.activePaneId ?? "default";
 
       // Determine initial tab type based on agent options
       let initialTabType: TerminalTabType = "plain";
@@ -1008,9 +1018,7 @@ export function TerminalContainer({
         }
       }
       const initialTabId =
-        launchAgent && initialTabType !== "plain"
-          ? STARTUP_AGENT_TAB_ID
-          : "default";
+        launchAgent && initialTabType !== "plain" ? STARTUP_AGENT_TAB_ID : "default";
 
       // Check if we should use native mode instead of terminal
       const useNativeOpenCode = initialTabType === "opencode" && opencodeMode === "native";
@@ -1024,18 +1032,17 @@ export function TerminalContainer({
           tabId: "default",
           hasDefaultSetupSession: hasBoundSetupSession("default"),
         });
-        if (
-          launchAgent
-          && initialTabType !== "plain"
-          && !startupLaunchDispatchedByBackend
-        ) {
+        if (launchAgent && initialTabType !== "plain" && !startupLaunchDispatchedByBackend) {
           setPendingNativeLaunch(environmentId, {
             containerId: isLocalEnvironment ? null : containerId,
             environmentId,
             initialPrompt: pendingInitialPrompt,
             targetPaneId: initialPaneId,
             agentType: initialTabType,
-            launchMode: useNativeOpenCode || useNativeClaude || useNativeCodex || useNativeAcp ? "native" : "terminal",
+            launchMode:
+              useNativeOpenCode || useNativeClaude || useNativeCodex || useNativeAcp
+                ? "native"
+                : "terminal",
             claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
             model: initialAgentModel,
             reasoningEffort: initialReasoningEffort,
@@ -1064,39 +1071,78 @@ export function TerminalContainer({
         setupPhase,
       });
       if (useNativeClaude) {
-        addTab(initialPaneId, createClaudeNativeLikeTab({
-          id: initialTabId,
-          nativeBackend: claudeNativeBackend,
-          containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
+        addTab(
+          initialPaneId,
+          createClaudeNativeLikeTab({
+            id: initialTabId,
+            nativeBackend: claudeNativeBackend,
+            containerId: isLocalEnvironment ? undefined : (containerId ?? undefined),
+            environmentId,
+            isLocal: isLocalEnvironment,
+            initialPrompt: pendingInitialPrompt,
+            initialAgentModel,
+            initialReasoningEffort,
+          }),
           environmentId,
-          isLocal: isLocalEnvironment,
-          initialPrompt: pendingInitialPrompt,
-          initialAgentModel,
-          initialReasoningEffort,
-        }), environmentId);
+        );
       } else if (useNativeCodex || useNativeOpenCode || useNativeAcp) {
         const platform = initialTabType as AgentPlatform;
-        addTab(initialPaneId, createAgentNativeTab({
-          id: initialTabId,
-          platform,
-          containerId: containerId ?? undefined,
+        addTab(
+          initialPaneId,
+          createAgentNativeTab({
+            id: initialTabId,
+            platform,
+            containerId: containerId ?? undefined,
+            environmentId,
+            isLocal: isLocalEnvironment,
+            initialPrompt: pendingInitialPrompt,
+            initialAgentModel,
+            initialReasoningEffort,
+          }),
           environmentId,
-          isLocal: isLocalEnvironment,
-          initialPrompt: pendingInitialPrompt,
-          initialAgentModel,
-          initialReasoningEffort,
-        }), environmentId);
+        );
       } else {
-        addTab(initialPaneId, {
-          id: initialTabId,
-          type: initialTabType,
-          initialPrompt: pendingInitialPrompt,
-          initialAgentModel,
-          initialReasoningEffort,
-        }, environmentId);
+        addTab(
+          initialPaneId,
+          {
+            id: initialTabId,
+            type: initialTabType,
+            initialPrompt: pendingInitialPrompt,
+            initialAgentModel,
+            initialReasoningEffort,
+          },
+          environmentId,
+        );
       }
     }
-  }, [isEnvironmentRunning, containerId, isLocalEnvironmentReady, isLocalEnvironment, setupPhase, backendSetupRunning, claudeOptions, initialize, addTab, environmentId, currentEnvState, environment?.pendingAgentLaunch, startupLaunchDispatchedByBackend, hydrationStatus, beginHydration, finishHydration, opencodeMode, claudeMode, claudeNativeBackend, codexMode, setPendingNativeLaunch, setOptions, worktreePath, hasBoundSetupSession, bindBackendSetupSession, setupSessionBindNonce]);
+  }, [
+    isEnvironmentRunning,
+    containerId,
+    isLocalEnvironmentReady,
+    isLocalEnvironment,
+    setupPhase,
+    backendSetupRunning,
+    claudeOptions,
+    initialize,
+    addTab,
+    environmentId,
+    currentEnvState,
+    environment?.pendingAgentLaunch,
+    startupLaunchDispatchedByBackend,
+    hydrationStatus,
+    beginHydration,
+    finishHydration,
+    opencodeMode,
+    claudeMode,
+    claudeNativeBackend,
+    codexMode,
+    setPendingNativeLaunch,
+    setOptions,
+    worktreePath,
+    hasBoundSetupSession,
+    bindBackendSetupSession,
+    setupSessionBindNonce,
+  ]);
 
   // Reset pane layout when container changes within the same environment
   // (e.g., container was stopped and restarted with a new ID).
@@ -1111,11 +1157,15 @@ export function TerminalContainer({
   useEffect(() => {
     const isSameEnvironment = previousEnvironmentIdRef.current === environmentId;
     if (
-      isSameEnvironment
-      && previousContainerIdRef.current !== null
-      && previousContainerIdRef.current !== containerId
+      isSameEnvironment &&
+      previousContainerIdRef.current !== null &&
+      previousContainerIdRef.current !== containerId
     ) {
-      rendererDebugLog("[TerminalContainer] Container changed for environment:", environmentId, "resetting panes");
+      rendererDebugLog(
+        "[TerminalContainer] Container changed for environment:",
+        environmentId,
+        "resetting panes",
+      );
       reset(environmentId);
       setHasAppliedClaudeOptions(false);
       clearPendingNativeLaunch(environmentId);
@@ -1128,7 +1178,10 @@ export function TerminalContainer({
   // This clears all terminals and tabs since their backend sessions are destroyed
   useEffect(() => {
     if (!isContainerRunning && containerId) {
-      rendererDebugLog("[TerminalContainer] Container stopped, resetting panes for environment:", environmentId);
+      rendererDebugLog(
+        "[TerminalContainer] Container stopped, resetting panes for environment:",
+        environmentId,
+      );
       reset(environmentId);
       // Clear pending native OpenCode launch on container stop
       clearPendingNativeLaunch(environmentId);
@@ -1160,10 +1213,17 @@ export function TerminalContainer({
   // Launch native tab after workspace setup completes
   useEffect(() => {
     const canLaunchPendingNative =
-      setupReady
-      && pendingNativeLaunch
-      && (containerId || isLocalEnvironmentReady);
-    rendererDebugLog("[TerminalContainer] Native tab effect check - setupPhase:", setupPhase, "hasPending:", !!pendingNativeLaunch, "containerId:", !!containerId, "isLocalEnvironmentReady:", isLocalEnvironmentReady);
+      setupReady && pendingNativeLaunch && (containerId || isLocalEnvironmentReady);
+    rendererDebugLog(
+      "[TerminalContainer] Native tab effect check - setupPhase:",
+      setupPhase,
+      "hasPending:",
+      !!pendingNativeLaunch,
+      "containerId:",
+      !!containerId,
+      "isLocalEnvironmentReady:",
+      isLocalEnvironmentReady,
+    );
 
     // Simple logic: when workspace is ready and we have a pending launch, create the tab
     // For local environments, containerId is null so we check isLocalEnvironmentReady (worktreePath exists)
@@ -1173,8 +1233,8 @@ export function TerminalContainer({
       // Only launch if this is for the current container/environment
       // For local envs, both containerId values are null, so we also check environmentId
       const containerMatch = isLocalEnvironment
-        ? (pending.containerId === null && pending.environmentId === environmentId)
-        : (pending.containerId === containerId && pending.environmentId === environmentId);
+        ? pending.containerId === null && pending.environmentId === environmentId
+        : pending.containerId === containerId && pending.environmentId === environmentId;
 
       if (containerMatch) {
         const isClaudeNative = pending.agentType === "claude";
@@ -1191,15 +1251,13 @@ export function TerminalContainer({
         const newTabId = STARTUP_AGENT_TAB_ID;
         const paneStore = usePaneLayoutStore.getState();
         const livePaneState = paneStore.environments.get(environmentId);
-        const targetPaneId =
-          (paneStore.getPane(pending.targetPaneId, environmentId)
-            ? pending.targetPaneId
+        const targetPaneId = paneStore.getPane(pending.targetPaneId, environmentId)
+          ? pending.targetPaneId
+          : livePaneState && paneStore.getPane(livePaneState.activePaneId, environmentId)
+            ? livePaneState.activePaneId
             : livePaneState
-              && paneStore.getPane(livePaneState.activePaneId, environmentId)
-              ? livePaneState.activePaneId
-              : livePaneState
-                ? getAllLeaves(livePaneState.root)[0]?.id
-                : undefined);
+              ? getAllLeaves(livePaneState.root)[0]?.id
+              : undefined;
         if (!targetPaneId) {
           console.warn(
             "[TerminalContainer] Deferred native launch because no pane is available:",
@@ -1280,11 +1338,7 @@ export function TerminalContainer({
   }, [isActive, setTerminalWrite, activePaneId]);
 
   const createBrowserTab = useCallback(
-    (
-      initialUrl: string | undefined,
-      targetPaneId = activePaneId,
-      displayTitle?: string,
-    ) => {
+    (initialUrl: string | undefined, targetPaneId = activePaneId, displayTitle?: string) => {
       if (!isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) {
         return false;
       }
@@ -1357,10 +1411,12 @@ export function TerminalContainer({
       // view keeps that idempotent, and it is resolved before the tab limit
       // because showing a tab that already exists adds nothing to count.
       if (type === "multi-review" && options?.multiReviewId) {
-        const openTab = allTabs.find((tab) =>
-          tab.type === "multi-review"
-          && tab.multiReviewTabData?.workflowId === options.multiReviewId
-          && tab.multiReviewTabData?.reviewerId === options.multiReviewReviewerId);
+        const openTab = allTabs.find(
+          (tab) =>
+            tab.type === "multi-review" &&
+            tab.multiReviewTabData?.workflowId === options.multiReviewId &&
+            tab.multiReviewTabData?.reviewerId === options.multiReviewReviewerId,
+        );
         if (openTab) {
           const pane = usePaneLayoutStore.getState().findPaneWithTab(openTab.id, environmentId);
           if (pane) {
@@ -1378,11 +1434,7 @@ export function TerminalContainer({
       }
 
       if (type === "browser") {
-        return createBrowserTab(
-          options?.initialUrl,
-          activePaneId,
-          options?.displayTitle,
-        );
+        return createBrowserTab(options?.initialUrl, activePaneId, options?.displayTitle);
       }
 
       if (type === "looped-review") {
@@ -1416,9 +1468,7 @@ export function TerminalContainer({
           multiReviewTabData: {
             environmentId,
             workflowId: options.multiReviewId,
-            ...(options.multiReviewReviewerId
-              ? { reviewerId: options.multiReviewReviewerId }
-              : {}),
+            ...(options.multiReviewReviewerId ? { reviewerId: options.multiReviewReviewerId } : {}),
             isLocal: isLocalEnvironment,
           },
         };
@@ -1467,12 +1517,12 @@ export function TerminalContainer({
       const shouldUseAcpNative =
         (type === "cursor" || type === "grok") && launchModeOverride !== "cli";
       const prelockNativePlatform = Boolean(
-        options?.initialPrompt
-        || options?.isReviewTab
-        || options?.resumeSessionId
-        || options?.initialAgentModel
-        || options?.initialReasoningEffort
-        || options?.initialConversationMode,
+        options?.initialPrompt ||
+        options?.isReviewTab ||
+        options?.resumeSessionId ||
+        options?.initialAgentModel ||
+        options?.initialReasoningEffort ||
+        options?.initialConversationMode,
       );
 
       // Check if we should create an opencode-native tab instead
@@ -1491,7 +1541,16 @@ export function TerminalContainer({
           initialReasoningEffort: options?.initialReasoningEffort,
           initialConversationMode: options?.initialConversationMode,
         });
-        rendererDebugLog("[TerminalContainer] Creating opencode-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        rendererDebugLog(
+          "[TerminalContainer] Creating opencode-native tab:",
+          newTabId,
+          "for environment:",
+          environmentId,
+          "isLocal:",
+          isLocalEnvironment,
+          "initialPrompt:",
+          !!options?.initialPrompt,
+        );
         seedDeferredNativePlatform(newTab, "opencode");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1499,11 +1558,12 @@ export function TerminalContainer({
 
       // Native Claude mode → pick the backend (SDK or tmux) by 3-tier resolution.
       if (shouldUseClaudeNative) {
-        const backend = launchModeOverride === "native"
-          ? "sdk"
-          : launchModeOverride === "tmux"
-            ? "tmux"
-            : claudeNativeBackend;
+        const backend =
+          launchModeOverride === "native"
+            ? "sdk"
+            : launchModeOverride === "tmux"
+              ? "tmux"
+              : claudeNativeBackend;
 
         const newTab = createClaudeNativeLikeTab({
           id: newTabId,
@@ -1520,7 +1580,18 @@ export function TerminalContainer({
           sessionId: options?.resumeSessionId,
           deferPlatform: !prelockNativePlatform,
         });
-        rendererDebugLog("[TerminalContainer] Creating", newTab.type, "tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        rendererDebugLog(
+          "[TerminalContainer] Creating",
+          newTab.type,
+          "tab:",
+          newTabId,
+          "for environment:",
+          environmentId,
+          "isLocal:",
+          isLocalEnvironment,
+          "initialPrompt:",
+          !!options?.initialPrompt,
+        );
         seedDeferredNativePlatform(newTab, "claude");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1541,7 +1612,16 @@ export function TerminalContainer({
           initialReasoningEffort: options?.initialReasoningEffort,
           initialConversationMode: options?.initialConversationMode,
         });
-        rendererDebugLog("[TerminalContainer] Creating codex-native tab:", newTabId, "for environment:", environmentId, "isLocal:", isLocalEnvironment, "initialPrompt:", !!options?.initialPrompt);
+        rendererDebugLog(
+          "[TerminalContainer] Creating codex-native tab:",
+          newTabId,
+          "for environment:",
+          environmentId,
+          "isLocal:",
+          isLocalEnvironment,
+          "initialPrompt:",
+          !!options?.initialPrompt,
+        );
         seedDeferredNativePlatform(newTab, "codex");
         addTab(activePaneId, newTab, environmentId);
         return true;
@@ -1580,11 +1660,31 @@ export function TerminalContainer({
         initialConversationMode: options?.initialConversationMode,
       };
 
-      rendererDebugLog("[TerminalContainer] Creating new tab:", newTabId, "type:", type, "for environment:", environmentId);
+      rendererDebugLog(
+        "[TerminalContainer] Creating new tab:",
+        newTabId,
+        "type:",
+        type,
+        "for environment:",
+        environmentId,
+      );
       addTab(activePaneId, newTab, environmentId);
       return true;
     },
-    [containerId, isEnvironmentRunning, activePaneId, addTab, getAllTabs, environmentId, opencodeMode, claudeMode, claudeNativeBackend, codexMode, isLocalEnvironmentReady, createBrowserTab]
+    [
+      containerId,
+      isEnvironmentRunning,
+      activePaneId,
+      addTab,
+      getAllTabs,
+      environmentId,
+      opencodeMode,
+      claudeMode,
+      claudeNativeBackend,
+      codexMode,
+      isLocalEnvironmentReady,
+      createBrowserTab,
+    ],
   );
 
   useEffect(() => {
@@ -1617,16 +1717,22 @@ export function TerminalContainer({
       // Note: This intentionally allows the same file to be open twice if one is in
       // diff mode and one is in regular file mode, as they serve different purposes
       const existingTab = allTabs.find(
-        (t) => t.type === "file" &&
-               t.fileData?.filePath === filePath &&
-               t.fileData?.isDiff === (options?.isDiff ?? false)
+        (t) =>
+          t.type === "file" &&
+          t.fileData?.filePath === filePath &&
+          t.fileData?.isDiff === (options?.isDiff ?? false),
       );
       if (existingTab) {
         // Activate the existing tab instead of creating a duplicate
         const pane = usePaneLayoutStore.getState().findPaneWithTab(existingTab.id, environmentId);
         if (pane) {
           usePaneLayoutStore.getState().setActiveTab(pane.id, existingTab.id, environmentId);
-          rendererDebugLog("[TerminalContainer] Activated existing tab:", existingTab.id, "in pane:", pane.id);
+          rendererDebugLog(
+            "[TerminalContainer] Activated existing tab:",
+            existingTab.id,
+            "in pane:",
+            pane.id,
+          );
         }
         return;
       }
@@ -1647,7 +1753,7 @@ export function TerminalContainer({
         type: "file",
         fileData: {
           filePath,
-          containerId: isLocalEnvironment ? undefined : containerId ?? undefined,
+          containerId: isLocalEnvironment ? undefined : (containerId ?? undefined),
           worktreePath: isLocalEnvironment ? worktreePath : undefined,
           isLocalEnvironment,
           isDiff: options?.isDiff,
@@ -1656,10 +1762,30 @@ export function TerminalContainer({
         },
       };
 
-      rendererDebugLog("[TerminalContainer] Creating file tab:", newTabId, "path:", filePath, "isDiff:", options?.isDiff, "isLocal:", isLocalEnvironment, "for environment:", environmentId);
+      rendererDebugLog(
+        "[TerminalContainer] Creating file tab:",
+        newTabId,
+        "path:",
+        filePath,
+        "isDiff:",
+        options?.isDiff,
+        "isLocal:",
+        isLocalEnvironment,
+        "for environment:",
+        environmentId,
+      );
       addTab(activePaneId, newTab, environmentId);
     },
-    [containerId, isContainerRunning, isLocalEnvironment, worktreePath, activePaneId, addTab, getAllTabs, environmentId]
+    [
+      containerId,
+      isContainerRunning,
+      isLocalEnvironment,
+      worktreePath,
+      activePaneId,
+      addTab,
+      getAllTabs,
+      environmentId,
+    ],
   );
 
   // Handler for selecting a tab by index (for Ctrl+1, Ctrl+2, etc.)
@@ -1674,7 +1800,7 @@ export function TerminalContainer({
         }
       }
     },
-    [activePaneId, environmentId, getActivePane]
+    [activePaneId, environmentId, getActivePane],
   );
 
   // Handler for closing the active tab
@@ -1716,11 +1842,11 @@ export function TerminalContainer({
     if (!isActive) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
-        event.key.toLowerCase() !== "w"
-        || !event.metaKey
-        || event.ctrlKey
-        || event.altKey
-        || event.shiftKey
+        event.key.toLowerCase() !== "w" ||
+        !event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey
       ) {
         return;
       }
@@ -1741,9 +1867,7 @@ export function TerminalContainer({
       // Give pending native launches time to be converted into tabs. Once the
       // tab exists, its initialPrompt lives in pane state until dispatched.
       const timer = setTimeout(() => {
-        const pending = useClaudeOptionsStore
-          .getState()
-          .getPendingNativeLaunch(environmentId);
+        const pending = useClaudeOptionsStore.getState().getPendingNativeLaunch(environmentId);
         if (!pending) {
           clearOptions(environmentId);
         }
@@ -1806,34 +1930,31 @@ export function TerminalContainer({
   }, []);
 
   // Handle drag over - track which pane is being hovered
-  const handleDragOver = useCallback(
-    (event: DragOverEvent) => {
-      const { over } = event;
-      if (!over) {
-        setDragOverPaneId(null);
-        return;
-      }
-
-      const overId = over.id as string;
-
-      // Check if hovering over a tabbar
-      if (overId.startsWith("tabbar:")) {
-        const targetPaneId = overId.replace("tabbar:", "");
-        setDragOverPaneId(targetPaneId);
-        return;
-      }
-
-      // Check if hovering over a tab
-      const overTab = parseDraggableTabId(overId);
-      if (overTab) {
-        setDragOverPaneId(overTab.paneId);
-        return;
-      }
-
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const { over } = event;
+    if (!over) {
       setDragOverPaneId(null);
-    },
-    []
-  );
+      return;
+    }
+
+    const overId = over.id as string;
+
+    // Check if hovering over a tabbar
+    if (overId.startsWith("tabbar:")) {
+      const targetPaneId = overId.replace("tabbar:", "");
+      setDragOverPaneId(targetPaneId);
+      return;
+    }
+
+    // Check if hovering over a tab
+    const overTab = parseDraggableTabId(overId);
+    if (overTab) {
+      setDragOverPaneId(overTab.paneId);
+      return;
+    }
+
+    setDragOverPaneId(null);
+  }, []);
 
   // Handle drag end for tab reordering and moving
   const handleDragEnd = useCallback(
@@ -1846,7 +1967,14 @@ export function TerminalContainer({
       setDragOverPaneId(null);
 
       const { active, over } = event;
-      rendererDebugLog("[TerminalContainer] DragEnd - active:", active.id, "over:", over?.id ?? "null", "lastDragOverPaneId:", lastDragOverPaneId);
+      rendererDebugLog(
+        "[TerminalContainer] DragEnd - active:",
+        active.id,
+        "over:",
+        over?.id ?? "null",
+        "lastDragOverPaneId:",
+        lastDragOverPaneId,
+      );
       if (!over) return;
 
       const activeId = active.id as string;
@@ -1860,17 +1988,38 @@ export function TerminalContainer({
       });
 
       if (action.type === "split") {
-        rendererDebugLog("[TerminalContainer] Split at edge:", action.edge, "from pane:", action.fromPaneId);
-        splitPaneAtEdge(action.targetPaneId, action.edge, action.tabId, action.fromPaneId, environmentId);
+        rendererDebugLog(
+          "[TerminalContainer] Split at edge:",
+          action.edge,
+          "from pane:",
+          action.fromPaneId,
+        );
+        splitPaneAtEdge(
+          action.targetPaneId,
+          action.edge,
+          action.tabId,
+          action.fromPaneId,
+          environmentId,
+        );
       } else if (action.type === "reorder") {
-        rendererDebugLog("[TerminalContainer] Reordering tabs:", action.fromIndex, "->", action.toIndex);
+        rendererDebugLog(
+          "[TerminalContainer] Reordering tabs:",
+          action.fromIndex,
+          "->",
+          action.toIndex,
+        );
         reorderTabs(action.paneId, action.fromIndex, action.toIndex, environmentId);
       } else if (action.type === "move") {
-        rendererDebugLog("[TerminalContainer] Moving tab to pane:", action.toPaneId, "index:", action.toIndex);
+        rendererDebugLog(
+          "[TerminalContainer] Moving tab to pane:",
+          action.toPaneId,
+          "index:",
+          action.toIndex,
+        );
         moveTab(action.fromPaneId, action.toPaneId, action.tabId, action.toIndex, environmentId);
       }
     },
-    [dragOverPaneId, environmentId, getPane, moveTab, reorderTabs, splitPaneAtEdge]
+    [dragOverPaneId, environmentId, getPane, moveTab, reorderTabs, splitPaneAtEdge],
   );
 
   const handleStartOverlayClick = useCallback(
@@ -1883,18 +2032,23 @@ export function TerminalContainer({
 
       onStartContainer?.();
     },
-    [onStartContainer]
+    [onStartContainer],
   );
 
   // Determine what overlay to show (if any)
   // For local environments, we don't have a containerId but can still show terminal
   const showNoEnvironmentOverlay = !containerId && !isLocalEnvironment;
   const showCreatingOverlay = Boolean(isContainerCreating && (containerId || isLocalEnvironment));
-  const showNotRunningOverlay = Boolean(!isEnvironmentRunning && !isContainerCreating && (containerId || isLocalEnvironment));
+  const showNotRunningOverlay = Boolean(
+    !isEnvironmentRunning && !isContainerCreating && (containerId || isLocalEnvironment),
+  );
   // Use THIS environment's tabs, not the global active environment's tabs
-  const thisEnvTabs = currentEnvState ? getAllLeaves(currentEnvState.root).flatMap((leaf) => leaf.tabs) : [];
+  const thisEnvTabs = currentEnvState
+    ? getAllLeaves(currentEnvState.root).flatMap((leaf) => leaf.tabs)
+    : [];
   // Local environments can show terminal without containerId, but need worktreePath
-  const showTerminal = isEnvironmentRunning && (containerId || isLocalEnvironmentReady) && thisEnvTabs.length > 0;
+  const showTerminal =
+    isEnvironmentRunning && (containerId || isLocalEnvironmentReady) && thisEnvTabs.length > 0;
 
   // Debug logging for local environment display issues (only in development)
   if (import.meta.env.DEV) {
@@ -1935,10 +2089,7 @@ export function TerminalContainer({
               dragOverPaneId={dragOverPaneId}
             />
             {/* Terminal portal host - renders all terminals via portals into pane targets */}
-            <TerminalPortalHost
-              containerId={containerId}
-              environmentId={environmentId}
-            />
+            <TerminalPortalHost containerId={containerId} environmentId={environmentId} />
           </div>
         </DndContext>
       )}

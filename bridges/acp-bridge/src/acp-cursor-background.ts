@@ -196,8 +196,10 @@ function hydrateOneCursorChild(state: SessionState, child: WatchableCursorChild)
   const terminalPresent = cursorTranscriptTerminalState(contents) !== undefined;
   const childState = cursorChildStateFrom(terminalPresent, active);
   syncCursorChildTranscriptParts(state, child, contents, childState);
-  if (transcriptReadCache.size >= MAX_TRANSCRIPT_READ_CACHE_ENTRIES
-    && !transcriptReadCache.has(child.transcriptPath)) {
+  if (
+    transcriptReadCache.size >= MAX_TRANSCRIPT_READ_CACHE_ENTRIES &&
+    !transcriptReadCache.has(child.transcriptPath)
+  ) {
     const oldest = transcriptReadCache.keys().next();
     if (!oldest.done) transcriptReadCache.delete(oldest.value);
   }
@@ -223,9 +225,7 @@ function cursorChildStateFrom(
   return active ? "live" : "abandoned";
 }
 
-export function cursorTranscriptTerminalState(
-  contents: string,
-): "finished" | "failed" | undefined {
+export function cursorTranscriptTerminalState(contents: string): "finished" | "failed" | undefined {
   const lines = contents.split("\n");
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index]?.trim();
@@ -234,11 +234,12 @@ export function cursorTranscriptTerminalState(
       const parsed = JSON.parse(line);
       if (!isObject(parsed)) continue;
       if (parsed.type !== "turn_ended" && parsed.type !== "result") continue;
-      const status = typeof parsed.status === "string"
-        ? parsed.status
-        : typeof parsed.subtype === "string"
-          ? parsed.subtype
-          : undefined;
+      const status =
+        typeof parsed.status === "string"
+          ? parsed.status
+          : typeof parsed.subtype === "string"
+            ? parsed.subtype
+            : undefined;
       if (parsed.is_error === true || cursorTranscriptErrorPresent(parsed.error)) {
         return "failed";
       }
@@ -342,63 +343,61 @@ export async function waitForWatchableCursorChildren(
   signal: AbortSignal,
 ): Promise<CursorChildWaitOutcome[]> {
   const started = Date.now();
-  return Promise.all(children.map(async (child) => {
-    const remaining = Math.max(0, timeoutMs - (Date.now() - started));
-    const waited = await waitForCursorChildTranscript(
-      child.transcriptPath,
-      remaining,
-      signal,
-      (contents, terminal) => {
-        // The wait itself is the proof the child is live, so the only two
-        // states reachable here are `ended` and `live` — never `abandoned`.
-        syncCursorChildTranscriptParts(
-          state,
-          child,
-          contents,
-          terminal !== undefined ? "ended" : "live",
-        );
-      },
-    );
-    const contents = existsSync(child.transcriptPath)
-      ? readTranscriptTail(child.transcriptPath)
-      : "";
-    const timedOut = waited === "timeout";
-    const cancelled = waited === "cancelled";
-    const agentState = waited === "finished"
-      ? "finished"
-      : "failed";
-    const resultText = timedOut
-      ? "The child's transcript did not report completion within the wait budget. Treat the result as unavailable."
-      : cancelled
-        ? "The parent turn was cancelled before the child reported completion."
-        : cursorTranscriptAssistantText(contents)
-          || (waited === "failed"
-            ? "The child ended without a text result."
-            : "");
-    return {
-      toolUseId: child.toolUseId,
-      agentId: child.agentId,
-      ...(child.description ? { description: child.description } : {}),
-      agentState,
-      resultText,
-      timedOut,
-    };
-  }));
+  return Promise.all(
+    children.map(async (child) => {
+      const remaining = Math.max(0, timeoutMs - (Date.now() - started));
+      const waited = await waitForCursorChildTranscript(
+        child.transcriptPath,
+        remaining,
+        signal,
+        (contents, terminal) => {
+          // The wait itself is the proof the child is live, so the only two
+          // states reachable here are `ended` and `live` — never `abandoned`.
+          syncCursorChildTranscriptParts(
+            state,
+            child,
+            contents,
+            terminal !== undefined ? "ended" : "live",
+          );
+        },
+      );
+      const contents = existsSync(child.transcriptPath)
+        ? readTranscriptTail(child.transcriptPath)
+        : "";
+      const timedOut = waited === "timeout";
+      const cancelled = waited === "cancelled";
+      const agentState = waited === "finished" ? "finished" : "failed";
+      const resultText = timedOut
+        ? "The child's transcript did not report completion within the wait budget. Treat the result as unavailable."
+        : cancelled
+          ? "The parent turn was cancelled before the child reported completion."
+          : cursorTranscriptAssistantText(contents) ||
+            (waited === "failed" ? "The child ended without a text result." : "");
+      return {
+        toolUseId: child.toolUseId,
+        agentId: child.agentId,
+        ...(child.description ? { description: child.description } : {}),
+        agentState,
+        resultText,
+        timedOut,
+      };
+    }),
+  );
 }
 
-export function formatCursorBackgroundContinuation(
-  outcomes: CursorChildWaitOutcome[],
-): string {
-  const body = outcomes.map((outcome) => {
-    const lines = [
-      `Id: ${outcome.agentId}`,
-      ...(outcome.description ? [`Task: ${outcome.description}`] : []),
-      `Status: ${outcome.timedOut ? "timeout" : outcome.agentState}`,
-      "",
-      outcome.resultText,
-    ];
-    return lines.join("\n");
-  }).join("\n\n");
+export function formatCursorBackgroundContinuation(outcomes: CursorChildWaitOutcome[]): string {
+  const body = outcomes
+    .map((outcome) => {
+      const lines = [
+        `Id: ${outcome.agentId}`,
+        ...(outcome.description ? [`Task: ${outcome.description}`] : []),
+        `Status: ${outcome.timedOut ? "timeout" : outcome.agentState}`,
+        "",
+        outcome.resultText,
+      ];
+      return lines.join("\n");
+    })
+    .join("\n\n");
   return [
     CURSOR_BACKGROUND_CONTINUATION_PREFIX,
     "",
@@ -415,12 +414,14 @@ export function pushContinuationUserMessage(state: SessionState, text: string): 
     id: userMessageId,
     role: "user",
     content,
-    parts: [{
-      type: "text",
-      content,
-      sourcePartId: `${userMessageId}:0`,
-      sourceMessageId: userMessageId,
-    }],
+    parts: [
+      {
+        type: "text",
+        content,
+        sourcePartId: `${userMessageId}:0`,
+        sourceMessageId: userMessageId,
+      },
+    ],
     createdAt: new Date().toISOString(),
   });
   state.revision += 1;

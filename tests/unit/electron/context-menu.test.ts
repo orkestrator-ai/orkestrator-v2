@@ -71,27 +71,27 @@ function createParams(overrides: Partial<ContextMenuParams> = {}): ContextMenuPa
 }
 
 function roles(template: MenuItemConstructorOptions[]): Array<string | undefined> {
-  return template
-    .filter((item) => item.type !== "separator")
-    .map((item) => item.role);
+  return template.filter((item) => item.type !== "separator").map((item) => item.role);
 }
 
 describe("Electron context menu", () => {
   test("builds the full edit menu for editable fields", () => {
-    const template = createContextMenuTemplate(createParams({
-      isEditable: true,
-      formControlType: "text-area",
-      editFlags: {
-        canUndo: true,
-        canRedo: true,
-        canCut: true,
-        canCopy: true,
-        canPaste: true,
-        canDelete: true,
-        canSelectAll: true,
-        canEditRichly: false,
-      },
-    }));
+    const template = createContextMenuTemplate(
+      createParams({
+        isEditable: true,
+        formControlType: "text-area",
+        editFlags: {
+          canUndo: true,
+          canRedo: true,
+          canCut: true,
+          canCopy: true,
+          canPaste: true,
+          canDelete: true,
+          canSelectAll: true,
+          canEditRichly: false,
+        },
+      }),
+    );
 
     expect(roles(template)).toEqual([
       "undo",
@@ -106,10 +106,12 @@ describe("Electron context menu", () => {
   });
 
   test("preserves disabled states for unavailable editable actions", () => {
-    const template = createContextMenuTemplate(createParams({
-      isEditable: true,
-      formControlType: "text-area",
-    }));
+    const template = createContextMenuTemplate(
+      createParams({
+        isEditable: true,
+        formControlType: "text-area",
+      }),
+    );
 
     for (const item of template) {
       if (item.type === "separator") {
@@ -123,15 +125,18 @@ describe("Electron context menu", () => {
   test("puts spelling suggestions before edit actions and invokes the selected correction", () => {
     const replaceMisspelling = mock((_suggestion: string) => undefined);
     const addToDictionary = mock((_word: string) => undefined);
-    const template = createContextMenuTemplate(createParams({
-      isEditable: true,
-      formControlType: "text-area",
-      misspelledWord: "mispelled",
-      dictionarySuggestions: ["misspelled", "misapplied"],
-    }), {
-      replaceMisspelling,
-      addToDictionary,
-    });
+    const template = createContextMenuTemplate(
+      createParams({
+        isEditable: true,
+        formControlType: "text-area",
+        misspelledWord: "mispelled",
+        dictionarySuggestions: ["misspelled", "misapplied"],
+      }),
+      {
+        replaceMisspelling,
+        addToDictionary,
+      },
+    );
 
     expect(template.slice(0, 4).map((item) => item.label ?? item.type)).toEqual([
       "misspelled",
@@ -148,26 +153,31 @@ describe("Electron context menu", () => {
   });
 
   test("does not add spelling actions when the clicked word is spelled correctly", () => {
-    const template = createContextMenuTemplate(createParams({
-      isEditable: true,
-      formControlType: "text-area",
-      dictionarySuggestions: ["unused"],
-    }), {
-      replaceMisspelling: mock(() => undefined),
-      addToDictionary: mock(() => undefined),
-    });
+    const template = createContextMenuTemplate(
+      createParams({
+        isEditable: true,
+        formControlType: "text-area",
+        dictionarySuggestions: ["unused"],
+      }),
+      {
+        replaceMisspelling: mock(() => undefined),
+        addToDictionary: mock(() => undefined),
+      },
+    );
 
     expect(template[0]?.role).toBe("undo");
     expect(template.some((item) => item.label === "Add to Dictionary")).toBe(false);
   });
 
   test("does not add spelling actions when handlers are unavailable", () => {
-    const template = createContextMenuTemplate(createParams({
-      isEditable: true,
-      formControlType: "text-area",
-      misspelledWord: "mispelled",
-      dictionarySuggestions: ["misspelled"],
-    }));
+    const template = createContextMenuTemplate(
+      createParams({
+        isEditable: true,
+        formControlType: "text-area",
+        misspelledWord: "mispelled",
+        dictionarySuggestions: ["misspelled"],
+      }),
+    );
 
     expect(template[0]?.role).toBe("undo");
     expect(template.some((item) => item.label === "misspelled")).toBe(false);
@@ -177,15 +187,18 @@ describe("Electron context menu", () => {
   test("offers Add to Dictionary when there are no replacement suggestions", () => {
     const replaceMisspelling = mock((_suggestion: string) => undefined);
     const addToDictionary = mock((_word: string) => undefined);
-    const template = createContextMenuTemplate(createParams({
-      isEditable: true,
-      formControlType: "text-area",
-      misspelledWord: "orkestrator",
-      dictionarySuggestions: [],
-    }), {
-      replaceMisspelling,
-      addToDictionary,
-    });
+    const template = createContextMenuTemplate(
+      createParams({
+        isEditable: true,
+        formControlType: "text-area",
+        misspelledWord: "orkestrator",
+        dictionarySuggestions: [],
+      }),
+      {
+        replaceMisspelling,
+        addToDictionary,
+      },
+    );
 
     expect(template.slice(0, 2).map((item) => item.label ?? item.type)).toEqual([
       "Add to Dictionary",
@@ -198,37 +211,41 @@ describe("Electron context menu", () => {
   });
 
   test("builds copy actions for selected non-editable text", () => {
-    const template = createContextMenuTemplate(createParams({
-      selectionText: "agent transcript",
-      editFlags: {
-        canUndo: false,
-        canRedo: false,
-        canCut: false,
-        canCopy: true,
-        canPaste: false,
-        canDelete: false,
-        canSelectAll: true,
-        canEditRichly: false,
-      },
-    }));
+    const template = createContextMenuTemplate(
+      createParams({
+        selectionText: "agent transcript",
+        editFlags: {
+          canUndo: false,
+          canRedo: false,
+          canCut: false,
+          canCopy: true,
+          canPaste: false,
+          canDelete: false,
+          canSelectAll: true,
+          canEditRichly: false,
+        },
+      }),
+    );
 
     expect(roles(template)).toEqual(["copy", "selectAll"]);
   });
 
   test("keeps copy enabled for selected text even when edit flags do not advertise copy", () => {
-    const template = createContextMenuTemplate(createParams({
-      selectionText: "agent transcript",
-      editFlags: {
-        canUndo: false,
-        canRedo: false,
-        canCut: false,
-        canCopy: false,
-        canPaste: false,
-        canDelete: false,
-        canSelectAll: false,
-        canEditRichly: false,
-      },
-    }));
+    const template = createContextMenuTemplate(
+      createParams({
+        selectionText: "agent transcript",
+        editFlags: {
+          canUndo: false,
+          canRedo: false,
+          canCut: false,
+          canCopy: false,
+          canPaste: false,
+          canDelete: false,
+          canSelectAll: false,
+          canEditRichly: false,
+        },
+      }),
+    );
 
     expect(template.find((item) => item.role === "copy")?.enabled).toBe(true);
   });
@@ -240,13 +257,21 @@ describe("Electron context menu", () => {
   test("installs a webContents listener and pops the menu when actions are available", () => {
     let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | null = null;
     const popup = mock(() => undefined);
-    const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => ({ template, popup }));
+    const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => ({
+      template,
+      popup,
+    }));
     const window = {
       webContents: {
-        on: mock((event: "context-menu", listener: (event: unknown, params: ContextMenuParams) => void) => {
-          expect(event).toBe("context-menu");
-          contextMenuListener = listener;
-        }),
+        on: mock(
+          (
+            event: "context-menu",
+            listener: (event: unknown, params: ContextMenuParams) => void,
+          ) => {
+            expect(event).toBe("context-menu");
+            contextMenuListener = listener;
+          },
+        ),
       },
     };
 
@@ -269,31 +294,35 @@ describe("Electron context menu", () => {
     const addWordToSpellCheckerDictionary = mock((_word: string) => true);
     const window = {
       webContents: {
-        on: mock((_event: "context-menu", listener: (event: unknown, params: ContextMenuParams) => void) => {
-          contextMenuListener = listener;
-        }),
+        on: mock(
+          (
+            _event: "context-menu",
+            listener: (event: unknown, params: ContextMenuParams) => void,
+          ) => {
+            contextMenuListener = listener;
+          },
+        ),
         replaceMisspelling,
         session: { addWordToSpellCheckerDictionary },
       },
     };
 
     installDefaultContextMenu(window as never, { buildFromTemplate });
-    contextMenuListener?.({}, createParams({
-      isEditable: true,
-      misspelledWord: "mispelled",
-      dictionarySuggestions: ["misspelled"],
-    }));
+    contextMenuListener?.(
+      {},
+      createParams({
+        isEditable: true,
+        misspelledWord: "mispelled",
+        dictionarySuggestions: ["misspelled"],
+      }),
+    );
 
-    builtTemplate.find((item) => item.label === "misspelled")?.click?.(
-      undefined as never,
-      undefined as never,
-      undefined as never,
-    );
-    builtTemplate.find((item) => item.label === "Add to Dictionary")?.click?.(
-      undefined as never,
-      undefined as never,
-      undefined as never,
-    );
+    builtTemplate
+      .find((item) => item.label === "misspelled")
+      ?.click?.(undefined as never, undefined as never, undefined as never);
+    builtTemplate
+      .find((item) => item.label === "Add to Dictionary")
+      ?.click?.(undefined as never, undefined as never, undefined as never);
 
     expect(replaceMisspelling).toHaveBeenCalledWith("misspelled");
     expect(addWordToSpellCheckerDictionary).toHaveBeenCalledWith("mispelled");
@@ -302,13 +331,21 @@ describe("Electron context menu", () => {
   test("does not build or pop a menu when no actions are available", () => {
     let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | null = null;
     const popup = mock(() => undefined);
-    const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => ({ template, popup }));
+    const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => ({
+      template,
+      popup,
+    }));
     const window = {
       webContents: {
-        on: mock((event: "context-menu", listener: (event: unknown, params: ContextMenuParams) => void) => {
-          expect(event).toBe("context-menu");
-          contextMenuListener = listener;
-        }),
+        on: mock(
+          (
+            event: "context-menu",
+            listener: (event: unknown, params: ContextMenuParams) => void,
+          ) => {
+            expect(event).toBe("context-menu");
+            contextMenuListener = listener;
+          },
+        ),
       },
     };
 

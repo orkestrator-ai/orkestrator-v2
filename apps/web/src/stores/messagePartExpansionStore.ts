@@ -102,24 +102,22 @@ interface MessagePartExpansionState {
   reset: () => void;
 }
 
-export const useMessagePartExpansionStore = create<MessagePartExpansionState>(
-  (set) => ({
-    expandedKeys: new Set<string>(),
+export const useMessagePartExpansionStore = create<MessagePartExpansionState>((set) => ({
+  expandedKeys: new Set<string>(),
 
-    setExpanded: (key, expanded) =>
-      set((state) => {
-        if (state.expandedKeys.has(key) === expanded) return state;
+  setExpanded: (key, expanded) =>
+    set((state) => {
+      if (state.expandedKeys.has(key) === expanded) return state;
 
-        const next = new Set(state.expandedKeys);
-        if (expanded) {
-          next.add(key);
-        } else {
-          next.delete(key);
-        }
+      const next = new Set(state.expandedKeys);
+      if (expanded) {
+        next.add(key);
+      } else {
+        next.delete(key);
+      }
 
-        return { expandedKeys: evictToCap(next, key) };
-      }),
+      return { expandedKeys: evictToCap(next, key) };
+    }),
 
-    reset: () => set({ expandedKeys: new Set<string>() }),
-  }),
-);
+  reset: () => set({ expandedKeys: new Set<string>() }),
+}));

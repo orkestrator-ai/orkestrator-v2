@@ -1,6 +1,4 @@
-import {
-  AGENT_ACTIVITY_STATES,
-} from "@orkestrator/protocol/agent-activity";
+import { AGENT_ACTIVITY_STATES } from "@orkestrator/protocol/agent-activity";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
@@ -27,9 +25,7 @@ export const PROVIDER_ACTIVITY_STATES: readonly ProviderActivityState[] = [
   "missing",
 ];
 
-export function isProviderActivityState(
-  value: unknown,
-): value is ProviderActivityState {
+export function isProviderActivityState(value: unknown): value is ProviderActivityState {
   return PROVIDER_ACTIVITY_STATES.includes(value as ProviderActivityState);
 }
 
@@ -66,7 +62,7 @@ export function setBoundedSetEntry<T>(set: Set<T>, value: T, maximumSize: number
 
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -80,10 +76,7 @@ export function nonEmptyString(value: unknown): string | null {
  * The envelope's own error body is deliberately not interpolated: it can quote
  * a prompt, a path, or a credential, and this message reaches logs.
  */
-export function assertSdkResponse(
-  response: { error?: unknown },
-  operation: string,
-): void {
+export function assertSdkResponse(response: { error?: unknown }, operation: string): void {
   if (response.error) {
     throw new Error(`${operation} failed`);
   }
@@ -95,30 +88,28 @@ export function assertSdkResponse(
  * runs instead of failing a session outright.
  */
 export function isTransientHttpStatus(status: number): boolean {
-  return status === 408
-    || status === 425
-    || status === 429
-    || status >= 500;
+  return status === 408 || status === 425 || status === 429 || status >= 500;
 }
 
-export function normalizeProviderContextUsage(
-  value: unknown,
-): NativeAgentContextUsage | undefined {
+export function normalizeProviderContextUsage(value: unknown): NativeAgentContextUsage | undefined {
   const raw = asRecord(value);
   if (!raw) return undefined;
-  const usedTokens = typeof raw.usedTokens === "number" && Number.isFinite(raw.usedTokens)
-    ? Math.max(0, raw.usedTokens)
-    : undefined;
-  const maximumTokens = typeof raw.totalTokens === "number" && Number.isFinite(raw.totalTokens)
-    ? Math.max(0, raw.totalTokens)
-    : typeof raw.maximumTokens === "number" && Number.isFinite(raw.maximumTokens)
-      ? Math.max(0, raw.maximumTokens)
+  const usedTokens =
+    typeof raw.usedTokens === "number" && Number.isFinite(raw.usedTokens)
+      ? Math.max(0, raw.usedTokens)
       : undefined;
-  const percentage = typeof raw.percentUsed === "number" && Number.isFinite(raw.percentUsed)
-    ? Math.max(0, Math.min(100, raw.percentUsed))
-    : typeof raw.percentage === "number" && Number.isFinite(raw.percentage)
-      ? Math.max(0, Math.min(100, raw.percentage))
-      : undefined;
+  const maximumTokens =
+    typeof raw.totalTokens === "number" && Number.isFinite(raw.totalTokens)
+      ? Math.max(0, raw.totalTokens)
+      : typeof raw.maximumTokens === "number" && Number.isFinite(raw.maximumTokens)
+        ? Math.max(0, raw.maximumTokens)
+        : undefined;
+  const percentage =
+    typeof raw.percentUsed === "number" && Number.isFinite(raw.percentUsed)
+      ? Math.max(0, Math.min(100, raw.percentUsed))
+      : typeof raw.percentage === "number" && Number.isFinite(raw.percentage)
+        ? Math.max(0, Math.min(100, raw.percentage))
+        : undefined;
   if (usedTokens === undefined) return undefined;
   const usage: NativeAgentContextUsage = {
     usedTokens,
@@ -152,12 +143,13 @@ export function normalizeProviderContextUsage(
   }
   if (typeof raw.estimated === "boolean") usage.estimated = raw.estimated;
   if (
-    raw.source === "claude"
-    || raw.source === "opencode"
-    || raw.source === "codex"
-    || raw.source === "heuristic"
-    || raw.source === "provider"
-  ) usage.source = raw.source;
+    raw.source === "claude" ||
+    raw.source === "opencode" ||
+    raw.source === "codex" ||
+    raw.source === "heuristic" ||
+    raw.source === "provider"
+  )
+    usage.source = raw.source;
   const rateLimits = normalizeProviderRateLimits(raw.rateLimits);
   if (rateLimits.length > 0) usage.rateLimits = rateLimits;
   const credits = asRecord(raw.credits);
@@ -173,17 +165,20 @@ export function normalizeProviderContextUsage(
     const categories = raw.contextCategories.slice(0, 64).flatMap((candidate) => {
       const category = asRecord(candidate);
       if (
-        !category
-        || typeof category.name !== "string"
-        || typeof category.tokens !== "number"
-        || !Number.isFinite(category.tokens)
-        || category.tokens < 0
-      ) return [];
-      return [{
-        name: category.name.slice(0, 128),
-        tokens: category.tokens,
-        ...(typeof category.color === "string" ? { color: category.color.slice(0, 64) } : {}),
-      }];
+        !category ||
+        typeof category.name !== "string" ||
+        typeof category.tokens !== "number" ||
+        !Number.isFinite(category.tokens) ||
+        category.tokens < 0
+      )
+        return [];
+      return [
+        {
+          name: category.name.slice(0, 128),
+          tokens: category.tokens,
+          ...(typeof category.color === "string" ? { color: category.color.slice(0, 64) } : {}),
+        },
+      ];
     });
     if (categories.length > 0) usage.contextCategories = categories;
   }
@@ -195,27 +190,31 @@ export function normalizeProviderRateLimits(value: unknown): NativeAgentRateLimi
   return value.slice(0, 16).flatMap((candidate) => {
     const limit = asRecord(candidate);
     if (!limit || typeof limit.label !== "string" || limit.label.length === 0) return [];
-    const usedPercent = typeof limit.usedPercent === "number"
-      && Number.isFinite(limit.usedPercent)
-      && limit.usedPercent >= 0
-      && limit.usedPercent <= 100
-      ? limit.usedPercent
-      : undefined;
-    const windowMinutes = typeof limit.windowMinutes === "number"
-      && Number.isFinite(limit.windowMinutes)
-      && limit.windowMinutes >= 0
-      ? limit.windowMinutes
-      : undefined;
-    const resetsAt = typeof limit.resetsAt === "string"
-      && Number.isFinite(Date.parse(limit.resetsAt))
-      ? limit.resetsAt
-      : undefined;
-    return [{
-      label: limit.label.slice(0, 128),
-      ...(usedPercent === undefined ? {} : { usedPercent }),
-      ...(windowMinutes === undefined ? {} : { windowMinutes }),
-      ...(resetsAt === undefined ? {} : { resetsAt }),
-    }];
+    const usedPercent =
+      typeof limit.usedPercent === "number" &&
+      Number.isFinite(limit.usedPercent) &&
+      limit.usedPercent >= 0 &&
+      limit.usedPercent <= 100
+        ? limit.usedPercent
+        : undefined;
+    const windowMinutes =
+      typeof limit.windowMinutes === "number" &&
+      Number.isFinite(limit.windowMinutes) &&
+      limit.windowMinutes >= 0
+        ? limit.windowMinutes
+        : undefined;
+    const resetsAt =
+      typeof limit.resetsAt === "string" && Number.isFinite(Date.parse(limit.resetsAt))
+        ? limit.resetsAt
+        : undefined;
+    return [
+      {
+        label: limit.label.slice(0, 128),
+        ...(usedPercent === undefined ? {} : { usedPercent }),
+        ...(windowMinutes === undefined ? {} : { windowMinutes }),
+        ...(resetsAt === undefined ? {} : { resetsAt }),
+      },
+    ];
   });
 }
 
@@ -259,11 +258,14 @@ export function providerInventoryCount(value: unknown): number {
   if (Array.isArray(value)) return Math.min(value.length, 10_000);
   const data = asRecord(value)?.data;
   if (Array.isArray(data)) {
-    return Math.min(10_000, data.reduce((count, entry) => {
-      const item = asRecord(entry);
-      const nested = item?.skills ?? item?.hooks ?? item?.servers;
-      return count + (Array.isArray(nested) ? nested.length : 1);
-    }, 0));
+    return Math.min(
+      10_000,
+      data.reduce((count, entry) => {
+        const item = asRecord(entry);
+        const nested = item?.skills ?? item?.hooks ?? item?.servers;
+        return count + (Array.isArray(nested) ? nested.length : 1);
+      }, 0),
+    );
   }
   return Math.min(
     10_000,
@@ -357,8 +359,8 @@ export class InteractionSnapshotTracker {
 
   register(sessionId: string, interaction?: ProviderSessionRegistration): void {
     if (
-      !this.registrations.has(sessionId)
-      && this.registrations.size >= MAX_TRACKED_INTERACTION_SESSIONS
+      !this.registrations.has(sessionId) &&
+      this.registrations.size >= MAX_TRACKED_INTERACTION_SESSIONS
     ) {
       const oldest = this.registrations.keys().next().value as string | undefined;
       if (oldest !== undefined) {
@@ -391,9 +393,10 @@ export class InteractionSnapshotTracker {
     // cached provider may reassert the same metadata, but must never switch a
     // live session between interactive and unattended while a request exists.
     if (
-      interaction.origin !== existing.origin
-      || interaction.interactionPolicy.mode !== existing.interactionPolicy.mode
-    ) return;
+      interaction.origin !== existing.origin ||
+      interaction.interactionPolicy.mode !== existing.interactionPolicy.mode
+    )
+      return;
     // Same identity, so fill in metadata the first caller did not have —
     // callers differ in what they know (the activity sweep has no `phase`, the
     // reconciler does) and whichever ran first should not cost the others their
@@ -434,9 +437,10 @@ export class InteractionSnapshotTracker {
     }
     const fingerprint = JSON.stringify(requests);
     const previous = this.fingerprints.get(sessionId);
-    const revision = previous === fingerprint
-      ? this.revisions.get(sessionId) ?? 0
-      : (this.revisions.get(sessionId) ?? 0) + 1;
+    const revision =
+      previous === fingerprint
+        ? (this.revisions.get(sessionId) ?? 0)
+        : (this.revisions.get(sessionId) ?? 0) + 1;
     const normalized = requests.map((request) => ({ ...request, revision }));
     const snapshot: AgentInteractionSnapshot = {
       version: AGENT_INTERACTION_CONTRACT_VERSION,

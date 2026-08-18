@@ -74,7 +74,7 @@ export function FullscreenSettingsLayout({
         aria-label={title}
         className={cn(
           "fixed inset-0 flex flex-col bg-black md:top-[var(--desktop-title-bar-height)] md:flex-row [&_input]:bg-zinc-900 [&_textarea]:bg-zinc-900 [&_[data-slot=select-trigger]]:bg-zinc-900",
-          Z_FULLSCREEN_SURFACE
+          Z_FULLSCREEN_SURFACE,
         )}
       >
         {/* Sidebar */}
@@ -94,7 +94,7 @@ export function FullscreenSettingsLayout({
                   "flex min-h-10 w-full shrink-0 items-center gap-3 rounded-none border-l-2 px-4 py-2 text-sm transition-colors",
                   activeSection === item.id
                     ? "border-blue-500 bg-zinc-900/80 text-foreground"
-                    : "border-transparent text-muted-foreground hover:bg-zinc-900/50 hover:text-foreground"
+                    : "border-transparent text-muted-foreground hover:bg-zinc-900/50 hover:text-foreground",
                 )}
               >
                 {item.icon}
@@ -126,7 +126,12 @@ export function FullscreenSettingsLayout({
                 className={cn(Z_FULLSCREEN_POPOVER, "w-[min(20rem,calc(100vw-2rem))]")}
               >
                 {menuItems.map((item) => (
-                  <SelectItem key={item.id} value={item.id} textValue={item.label} className="min-h-10">
+                  <SelectItem
+                    key={item.id}
+                    value={item.id}
+                    textValue={item.label}
+                    className="min-h-10"
+                  >
                     <span className="flex items-center gap-2">
                       {item.icon}
                       <span>{item.label}</span>
@@ -151,9 +156,7 @@ export function FullscreenSettingsLayout({
 
           {/* Content body */}
           <div className="flex flex-1 flex-col overflow-y-auto px-4 py-4 md:px-8 md:py-6">
-            <div className="flex-1">
-              {children(activeSection)}
-            </div>
+            <div className="flex-1">{children(activeSection)}</div>
             {footer && (
               <div className="flex justify-end gap-2 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
                 {footer}

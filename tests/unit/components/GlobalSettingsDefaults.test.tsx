@@ -17,9 +17,7 @@ mock.module("@/lib/backend", () => ({
   getLogDirectory: mockGetLogDirectory,
 }));
 
-const { GlobalSettings } = await import(
-  "../../../apps/web/src/components/settings/GlobalSettings"
-);
+const { GlobalSettings } = await import("../../../apps/web/src/components/settings/GlobalSettings");
 
 function savedActionDefaults(): ActionDefaults {
   const call = mockUpdateGlobalConfig.mock.calls.at(-1)?.[0] as
@@ -142,15 +140,17 @@ describe("GlobalSettings defaults section", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        enabledAgentPlatforms: ["codex"],
-        defaultAgent: "codex",
-        actionDefaults: {
-          review: { platform: "codex", model: "gpt-5.4" },
-        },
-      }),
-    ));
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enabledAgentPlatforms: ["codex"],
+          defaultAgent: "codex",
+          actionDefaults: {
+            review: { platform: "codex", model: "gpt-5.4" },
+          },
+        }),
+      ),
+    );
   });
 
   test("clears a configured default back to the app default", async () => {
@@ -173,8 +173,7 @@ describe("GlobalSettings defaults section", () => {
 
     fireEvent.click(within(picker.parentElement!).getByRole("button", { name: "Clear" }));
     expect(
-      screen.getByRole("combobox", { name: "Push default agent, model and reasoning" })
-        .textContent,
+      screen.getByRole("combobox", { name: "Push default agent, model and reasoning" }).textContent,
     ).toContain("App default");
 
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -206,9 +205,11 @@ describe("GlobalSettings defaults section", () => {
     expect(saveButton.hasAttribute("disabled")).toBe(false);
     fireEvent.click(saveButton);
 
-    await waitFor(() => expect(savedActionDefaults()).toEqual({
-      review: { platform: "claude", model: "haiku" },
-    }));
+    await waitFor(() =>
+      expect(savedActionDefaults()).toEqual({
+        review: { platform: "claude", model: "haiku" },
+      }),
+    );
   });
 
   test("re-syncs the form when the stored defaults actually change", async () => {
@@ -231,10 +232,12 @@ describe("GlobalSettings defaults section", () => {
       },
     }));
 
-    await waitFor(() => expect(
-      screen.getByRole("combobox", { name: "Review default agent, model and reasoning" })
-        .textContent,
-    ).toContain("gpt-5.4"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("combobox", { name: "Review default agent, model and reasoning" })
+          .textContent,
+      ).toContain("gpt-5.4"),
+    );
   });
 
   test("sets and clears an action's reasoning level", async () => {
@@ -249,9 +252,11 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "High" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() => expect(savedActionDefaults()).toEqual({
-      resolve: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
-    }));
+    await waitFor(() =>
+      expect(savedActionDefaults()).toEqual({
+        resolve: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      }),
+    );
 
     // Back to "Default" means the model's own level, which is an absent value
     // rather than a stored "default" string.
@@ -260,9 +265,11 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.click(screen.getByRole("menuitemradio", { name: "Default" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
-    await waitFor(() => expect(savedActionDefaults()).toEqual({
-      resolve: { platform: "codex", model: "gpt-5.4" },
-    }));
+    await waitFor(() =>
+      expect(savedActionDefaults()).toEqual({
+        resolve: { platform: "codex", model: "gpt-5.4" },
+      }),
+    );
   });
 
   test("warns about a saved model the current catalog no longer lists", () => {
@@ -306,9 +313,11 @@ describe("GlobalSettings defaults section", () => {
     fireEvent.keyDown(document.body, { key: "Escape" });
 
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
-    await waitFor(() => expect(savedActionDefaults()).toEqual({
-      push: { platform: "opencode" },
-    }));
+    await waitFor(() =>
+      expect(savedActionDefaults()).toEqual({
+        push: { platform: "opencode" },
+      }),
+    );
   });
 
   test("carries saved defaults through a save made from another section", async () => {

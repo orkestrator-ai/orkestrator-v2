@@ -7,29 +7,35 @@ import {
 
 describe("persistent terminal redraw helpers", () => {
   it("detects when an environment switch should force a redraw", () => {
-    expect(shouldTriggerEnvironmentVisibilityRedraw({
-      isEnvironmentVisible: true,
-      wasEnvironmentVisible: false,
-      isActive: true,
-      terminalIsOpened: true,
-      isConnected: true,
-    })).toBe(true);
+    expect(
+      shouldTriggerEnvironmentVisibilityRedraw({
+        isEnvironmentVisible: true,
+        wasEnvironmentVisible: false,
+        isActive: true,
+        terminalIsOpened: true,
+        isConnected: true,
+      }),
+    ).toBe(true);
 
-    expect(shouldTriggerEnvironmentVisibilityRedraw({
-      isEnvironmentVisible: true,
-      wasEnvironmentVisible: true,
-      isActive: true,
-      terminalIsOpened: true,
-      isConnected: true,
-    })).toBe(false);
+    expect(
+      shouldTriggerEnvironmentVisibilityRedraw({
+        isEnvironmentVisible: true,
+        wasEnvironmentVisible: true,
+        isActive: true,
+        terminalIsOpened: true,
+        isConnected: true,
+      }),
+    ).toBe(false);
 
-    expect(shouldTriggerEnvironmentVisibilityRedraw({
-      isEnvironmentVisible: true,
-      wasEnvironmentVisible: false,
-      isActive: false,
-      terminalIsOpened: true,
-      isConnected: true,
-    })).toBe(false);
+    expect(
+      shouldTriggerEnvironmentVisibilityRedraw({
+        isEnvironmentVisible: true,
+        wasEnvironmentVisible: false,
+        isActive: false,
+        terminalIsOpened: true,
+        isConnected: true,
+      }),
+    ).toBe(false);
   });
 
   it("nudges rows first when computing a resize bounce", () => {
@@ -61,10 +67,10 @@ describe("persistent terminal redraw helpers", () => {
         callback(0);
         return 1;
       },
-      setTimeoutFn: (((callback: TimerHandler) => {
+      setTimeoutFn: ((callback: TimerHandler) => {
         scheduledTimeouts.push(callback as () => void);
         return 1 as unknown as ReturnType<typeof setTimeout>;
-      }) as unknown) as typeof setTimeout,
+      }) as unknown as typeof setTimeout,
     });
 
     // Bounce and restore should use the *original* 100x30, not the post-fit 110x35
@@ -91,8 +97,11 @@ describe("persistent terminal redraw helpers", () => {
       terminal: { cols: 80, rows: 24, refresh: mock(() => {}) },
       fitAddon: { fit: mock(() => {}) },
       resize: mock(async () => {}),
-      requestAnimationFrameFn: (callback) => { callback(0); return 1; },
-      setTimeoutFn: ((() => timerId) as unknown) as typeof setTimeout,
+      requestAnimationFrameFn: (callback) => {
+        callback(0);
+        return 1;
+      },
+      setTimeoutFn: (() => timerId) as unknown as typeof setTimeout,
       clearTimeoutFn: clearTimeoutMock,
     });
 

@@ -35,7 +35,12 @@ const webRoot = path.join(repositoryRoot, "apps", "web");
 const fixtureTemplateRoot = path.join(repositoryRoot, "test-fixtures", "agent-project");
 const electronExecutable = path.join(packageRoot, "node_modules", ".bin", "electron");
 const MAX_LOG_BYTES = 4 * 1024 * 1024;
-const RUNTIME_PROCESS_NAMES: readonly RuntimeProcessName[] = ["launcher", "vite", "electron", "backend"];
+const RUNTIME_PROCESS_NAMES: readonly RuntimeProcessName[] = [
+  "launcher",
+  "vite",
+  "electron",
+  "backend",
+];
 
 type ElectronReady = {
   type: "orkestrator-electron-ready";
@@ -71,9 +76,8 @@ export function createBoundedLogWriter(
       const source = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       // A single write can itself exceed the cap. Preserve its tail, which is
       // where compilers and process launchers normally put the useful summary.
-      const bounded = source.byteLength > maxBytes
-        ? source.subarray(source.byteLength - maxBytes)
-        : source;
+      const bounded =
+        source.byteLength > maxBytes ? source.subarray(source.byteLength - maxBytes) : source;
       queued = queued.then(async () => {
         size ??= (await stat(filePath).catch(() => null))?.size ?? 0;
         if (size > 0 && size + bounded.byteLength > maxBytes) {
@@ -120,7 +124,10 @@ async function waitForUrl(url: string, timeoutMs = 45_000): Promise<void> {
   throw new Error(`Timed out waiting for ${url}`);
 }
 
-async function resolveStoredProfile(args: DevArguments, flavor: "development" | "agent-test"): Promise<RuntimeProfile> {
+async function resolveStoredProfile(
+  args: DevArguments,
+  flavor: "development" | "agent-test",
+): Promise<RuntimeProfile> {
   const provisional = resolveRuntimeProfile({
     repositoryRoot,
     requestedId: args.profile,
@@ -143,7 +150,9 @@ function killOwnedChild(child: ChildProcess | null, signal: NodeJS.Signals): voi
   try {
     process.kill(-child.pid, signal);
   } catch {
-    try { child.kill(signal); } catch {}
+    try {
+      child.kill(signal);
+    } catch {}
   }
 }
 
@@ -175,10 +184,12 @@ function controlledLiveness(
   status: RuntimeStatusManifest,
   control: Pick<RuntimeProcessControl, "matches">,
 ): Record<RuntimeProcessName, boolean> {
-  return Object.fromEntries(RUNTIME_PROCESS_NAMES.map((name) => [
-    name,
-    control.matches(status.pids[name], status.processStartTimes[name]),
-  ])) as Record<RuntimeProcessName, boolean>;
+  return Object.fromEntries(
+    RUNTIME_PROCESS_NAMES.map((name) => [
+      name,
+      control.matches(status.pids[name], status.processStartTimes[name]),
+    ]),
+  ) as Record<RuntimeProcessName, boolean>;
 }
 
 function signalTrackedRuntimeProcess(
@@ -255,13 +266,15 @@ export function stoppedRuntimeStatusIfUnchanged(
   updatedAt = new Date().toISOString(),
 ): RuntimeStatusManifest | null {
   if (
-    !latest
-    || latest.profile !== original.profile
-    || RUNTIME_PROCESS_NAMES.some((name) => (
-      latest.pids[name] !== original.pids[name]
-      || latest.processStartTimes[name] !== original.processStartTimes[name]
-    ))
-  ) return null;
+    !latest ||
+    latest.profile !== original.profile ||
+    RUNTIME_PROCESS_NAMES.some(
+      (name) =>
+        latest.pids[name] !== original.pids[name] ||
+        latest.processStartTimes[name] !== original.processStartTimes[name],
+    )
+  )
+    return null;
   return { ...latest, status: "stopped", updatedAt };
 }
 
@@ -303,16 +316,19 @@ export async function seedAgentTestProfileState(
   if (toolchains.failed.length > 0) {
     warn(`Could not seed from the host install: ${toolchains.failed.join(", ")}`);
   }
-  const pending = profile.agentPlatforms.filter((platform) => (
-    !toolchains.seeded.some((entry) => entry.startsWith(`${platform}@`))
-  ));
+  const pending = profile.agentPlatforms.filter(
+    (platform) => !toolchains.seeded.some((entry) => entry.startsWith(`${platform}@`)),
+  );
   if (pending.length > 0) {
     // Attributes a long or hung startup before Electron is even launched.
     log(`Electron will download managed toolchains for: ${pending.join(", ")}`);
   }
 }
 
-export async function startDevelopment(args: DevArguments, flavor: "development" | "agent-test"): Promise<void> {
+export async function startDevelopment(
+  args: DevArguments,
+  flavor: "development" | "agent-test",
+): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor);
   const existingStatusPath = statusManifestPath(existingProfile);
   const existingStatus = await readStatus(existingStatusPath);
@@ -329,7 +345,7 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
     );
   }
 
-  const [rendererPort, gatewayPort] = await reserveLoopbackPorts(2) as [number, number];
+  const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   const profile = resolveRuntimeProfile({
     repositoryRoot,
     requestedId: args.profile,
@@ -367,22 +383,36 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
       cwd: packageRoot,
       encoding: "utf8",
     });
-    await createBoundedLogWriter(path.join(profile.logDir, "build.log"))
-      .write(`${build.stdout}${build.stderr}`);
-    if (build.status !== 0) throw new Error(`Electron compilation failed; see ${path.join(profile.logDir, "build.log")}`);
+    await createBoundedLogWriter(path.join(profile.logDir, "build.log")).write(
+      `${build.stdout}${build.stderr}`,
+    );
+    if (build.status !== 0)
+      throw new Error(`Electron compilation failed; see ${path.join(profile.logDir, "build.log")}`);
 
     if (args.fixtureEnvironments.includes("container")) {
-      const inspected = spawnSync("docker", ["image", "inspect", profile.dockerImage], { encoding: "utf8" });
+      const inspected = spawnSync("docker", ["image", "inspect", profile.dockerImage], {
+        encoding: "utf8",
+      });
       if (inspected.status !== 0) {
         const imageBuild = spawnSync(
           "docker",
-          ["build", "-t", profile.dockerImage, "-f", path.join(repositoryRoot, "docker", "Dockerfile"), repositoryRoot],
+          [
+            "build",
+            "-t",
+            profile.dockerImage,
+            "-f",
+            path.join(repositoryRoot, "docker", "Dockerfile"),
+            repositoryRoot,
+          ],
           { encoding: "utf8" },
         );
-        await createBoundedLogWriter(path.join(profile.logDir, "docker-build.log"))
-          .write(`${imageBuild.stdout}${imageBuild.stderr}`);
+        await createBoundedLogWriter(path.join(profile.logDir, "docker-build.log")).write(
+          `${imageBuild.stdout}${imageBuild.stderr}`,
+        );
         if (imageBuild.status !== 0) {
-          throw new Error(`Development Docker image build failed; see ${path.join(profile.logDir, "docker-build.log")}`);
+          throw new Error(
+            `Development Docker image build failed; see ${path.join(profile.logDir, "docker-build.log")}`,
+          );
         }
       }
     }
@@ -407,7 +437,10 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
   const shutdown = async (finalStatus: "stopped" | "failed", error?: unknown) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    await writeStatus({ status: "stopping", ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}) });
+    await writeStatus({
+      status: "stopping",
+      ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}),
+    });
     killOwnedChild(electron, "SIGTERM");
     killOwnedChild(vite, "SIGTERM");
     await Bun.sleep(500);
@@ -462,13 +495,23 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
     });
 
     const ready = await new Promise<ElectronReady>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("Timed out waiting for Electron/backend readiness")), 60_000);
+      const timeout = setTimeout(
+        () => reject(new Error("Timed out waiting for Electron/backend readiness")),
+        60_000,
+      );
       electron!.once("error", reject);
-      electron!.once("exit", (code, signal) => reject(new Error(`Electron exited before readiness (code ${code ?? "unknown"}, signal ${signal ?? "none"})`)));
+      electron!.once("exit", (code, signal) =>
+        reject(
+          new Error(
+            `Electron exited before readiness (code ${code ?? "unknown"}, signal ${signal ?? "none"})`,
+          ),
+        ),
+      );
       attachLog(electron!, path.join(profile.logDir, "electron.log"), (line) => {
         try {
           const message = JSON.parse(line) as Partial<ElectronReady>;
-          if (message.type !== "orkestrator-electron-ready" || message.profile !== profile.id) return;
+          if (message.type !== "orkestrator-electron-ready" || message.profile !== profile.id)
+            return;
           clearTimeout(timeout);
           resolve(message as ElectronReady);
         } catch {}
@@ -501,20 +544,27 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
     printHumanStatus(status, liveness(status));
 
     const termination = await Promise.race([
-      new Promise<{ child: "electron"; code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-        electron!.once("exit", (code, signal) => resolve({ child: "electron", code, signal }));
-      }),
-      new Promise<{ child: "vite"; code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
-        vite!.once("exit", (code, signal) => resolve({ child: "vite", code, signal }));
-      }),
+      new Promise<{ child: "electron"; code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          electron!.once("exit", (code, signal) => resolve({ child: "electron", code, signal }));
+        },
+      ),
+      new Promise<{ child: "vite"; code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          vite!.once("exit", (code, signal) => resolve({ child: "vite", code, signal }));
+        },
+      ),
     ]);
-    const cleanElectronExit = termination.child === "electron"
-      && (termination.code === 0 || termination.signal === "SIGTERM");
+    const cleanElectronExit =
+      termination.child === "electron" &&
+      (termination.code === 0 || termination.signal === "SIGTERM");
     await shutdown(
       cleanElectronExit ? "stopped" : "failed",
       cleanElectronExit
         ? undefined
-        : new Error(`${termination.child} exited unexpectedly (code ${termination.code ?? "unknown"}, signal ${termination.signal ?? "none"})`),
+        : new Error(
+            `${termination.child} exited unexpectedly (code ${termination.code ?? "unknown"}, signal ${termination.signal ?? "none"})`,
+          ),
     );
   } catch (error) {
     await shutdown("failed", error);
@@ -522,7 +572,10 @@ export async function startDevelopment(args: DevArguments, flavor: "development"
   }
 }
 
-export function printHumanStatus(status: RuntimeStatusManifest, live: Record<string, boolean>): void {
+export function printHumanStatus(
+  status: RuntimeStatusManifest,
+  live: Record<string, boolean>,
+): void {
   console.log(`Profile: ${status.profile} (${status.status})`);
   console.log(`Electron: ${status.electronTitle}`);
   console.log(`Renderer: ${status.rendererUrl}`);
@@ -533,14 +586,22 @@ export function printHumanStatus(status: RuntimeStatusManifest, live: Record<str
   if (status.testProject) console.log(`Test project: ${status.testProject}`);
   console.log(`Status: ${status.statusPath}`);
   console.log(`Logs: ${status.logDir}`);
-  console.log(`Live: ${Object.entries(live).filter(([, value]) => value).map(([name]) => name).join(", ") || "none"}`);
+  console.log(
+    `Live: ${
+      Object.entries(live)
+        .filter(([, value]) => value)
+        .map(([name]) => name)
+        .join(", ") || "none"
+    }`,
+  );
 }
 
 export async function showStatus(args: DevArguments): Promise<number> {
   const profile = await resolveStoredProfile(args, "agent-test");
   const status = await readStatus(statusManifestPath(profile));
   if (!status) {
-    if (args.json) console.log(JSON.stringify({ status: "missing", profile: profile.id, live: {} }, null, 2));
+    if (args.json)
+      console.log(JSON.stringify({ status: "missing", profile: profile.id, live: {} }, null, 2));
     else console.log(`Profile ${profile.id} has no runtime status.`);
     return 1;
   }
@@ -548,9 +609,8 @@ export async function showStatus(args: DevArguments): Promise<number> {
   // Derived, never persisted: the manifest names the auth file, and this names
   // the command that turns it into a browser login without anyone reading,
   // echoing, or retyping the token.
-  const loginCommand = status.flavor === "agent-test"
-    ? `bun run dev:login -- --profile ${status.profile}`
-    : undefined;
+  const loginCommand =
+    status.flavor === "agent-test" ? `bun run dev:login -- --profile ${status.profile}` : undefined;
   if (args.json) console.log(JSON.stringify({ ...status, live, loginCommand }, null, 2));
   else printHumanStatus(status, live);
   return status.status === "ready" && live.launcher ? 0 : 1;
@@ -564,15 +624,21 @@ export type LoginProfileDependencies = {
   log?: (message: string) => void;
 };
 
-export async function loginProfile(args: DevArguments, deps: LoginProfileDependencies = {}): Promise<number> {
+export async function loginProfile(
+  args: DevArguments,
+  deps: LoginProfileDependencies = {},
+): Promise<number> {
   const profile = await (deps.resolveProfile ?? resolveStoredProfile)(args, "agent-test");
   const status = await (deps.readStatus ?? readStatus)(statusManifestPath(profile));
-  if (!status) throw new Error(`Profile ${profile.id} has no runtime status. Start it with bun run dev:test.`);
+  if (!status)
+    throw new Error(`Profile ${profile.id} has no runtime status. Start it with bun run dev:test.`);
   if (!(deps.liveness ?? liveness)(status).launcher) {
     throw new Error(`Profile ${profile.id} is not running. Start it with bun run dev:test.`);
   }
   const login = await (deps.mint ?? mintAgentTestLoginUrl)({ status });
-  (deps.log ?? console.log)(args.json ? JSON.stringify(login, null, 2) : formatAgentTestLogin(login));
+  (deps.log ?? console.log)(
+    args.json ? JSON.stringify(login, null, 2) : formatAgentTestLogin(login),
+  );
   return 0;
 }
 
@@ -592,7 +658,9 @@ export async function stopProfile(args: DevArguments): Promise<number> {
     console.log(`Stopped profile ${profile.id}.`);
     return 0;
   }
-  console.error(`Profile ${profile.id} did not stop cleanly. Surviving owned processes: ${survivors.join(", ")}`);
+  console.error(
+    `Profile ${profile.id} did not stop cleanly. Surviving owned processes: ${survivors.join(", ")}`,
+  );
   return 1;
 }
 
@@ -607,17 +675,27 @@ export async function resetProfile(args: DevArguments): Promise<number> {
   await readAndValidateSentinel(profile);
 
   let containersRemoved = 0;
-  const listed = spawnSync("docker", ["ps", "-aq", "--filter", `label=orkestrator-owner=${profile.dockerOwner}`], { encoding: "utf8" });
+  const listed = spawnSync(
+    "docker",
+    ["ps", "-aq", "--filter", `label=orkestrator-owner=${profile.dockerOwner}`],
+    { encoding: "utf8" },
+  );
   if (listed.status === 0) {
-    const ids = listed.stdout.split("\n").map((entry) => entry.trim()).filter(Boolean);
+    const ids = listed.stdout
+      .split("\n")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
     if (ids.length) {
       const removed = spawnSync("docker", ["rm", "-f", ...ids], { encoding: "utf8" });
-      if (removed.status !== 0) throw new Error(removed.stderr.trim() || "Could not remove profile Docker containers");
+      if (removed.status !== 0)
+        throw new Error(removed.stderr.trim() || "Could not remove profile Docker containers");
       containersRemoved = ids.length;
     }
   }
 
   await removeProfileState(profile, args.keepToolchains);
-  console.log(`Reset profile ${profile.id}: removed ${containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with bun run dev:test."}`);
+  console.log(
+    `Reset profile ${profile.id}: removed ${containersRemoved} exact-owner Docker container(s) and disposable profile state.${args.keepToolchains ? " Toolchains were retained." : " It can be recreated with bun run dev:test."}`,
+  );
   return 0;
 }

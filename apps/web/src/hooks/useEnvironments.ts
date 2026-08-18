@@ -3,14 +3,28 @@ import { useCallback, useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, type UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
-import { createSessionKey, useBuildPipelineStore, useClaudeOptionsStore, useConfigStore, useEnvironmentStore, useErrorDialogStore, useTerminalSessionStore } from "@/stores";
+import {
+  createSessionKey,
+  useBuildPipelineStore,
+  useClaudeOptionsStore,
+  useConfigStore,
+  useEnvironmentStore,
+  useErrorDialogStore,
+  useTerminalSessionStore,
+} from "@/stores";
 import { useSessionStore } from "@/stores/sessionStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useOpenCodeStore } from "@/stores/openCodeStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import * as backend from "@/lib/backend";
 import { clearStoredPaneSelection } from "@/lib/pane-selection-storage";
-import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping, PrState } from "@/types";
+import type {
+  Environment,
+  EnvironmentType,
+  NetworkAccessMode,
+  PortMapping,
+  PrState,
+} from "@/types";
 import { rendererDebugLog } from "@/lib/debug-log";
 
 /**
@@ -101,10 +115,12 @@ interface EnvironmentCreationState {
 const environmentCreationStateByProject = new Map<string, EnvironmentCreationState>();
 
 function getEnvironmentCreationState(projectId: string): EnvironmentCreationState {
-  return environmentCreationStateByProject.get(projectId) ?? {
-    generation: 0,
-    activeCreations: 0,
-  };
+  return (
+    environmentCreationStateByProject.get(projectId) ?? {
+      generation: 0,
+      activeCreations: 0,
+    }
+  );
 }
 
 function beginEnvironmentCreation(projectId: string): void {
@@ -232,9 +248,7 @@ function preserveLifecycleAttemptState(
   const attempt = lifecycleAttemptStateByEnvironment.get(snapshot.id);
   const current = useEnvironmentStore.getState().getEnvironmentById(snapshot.id);
   const stale = Boolean(
-    attempt
-    && current
-    && (attempt.pending || attempt.revision !== revisionAtRequest),
+    attempt && current && (attempt.pending || attempt.revision !== revisionAtRequest),
   );
   if (!stale || !current) {
     return { environment: snapshot, stale: false };
@@ -256,10 +270,7 @@ function preserveLifecycleAttemptState(
  * announces it, which drives a list refetch; without this claim the
  * reconciliation below would toast the identical failure a second time.
  */
-function markLifecycleErrorReportedByForeground(
-  environmentId: string,
-  attempt: number,
-): void {
+function markLifecycleErrorReportedByForeground(environmentId: string, attempt: number): void {
   reportedLifecycleErrorByEnvironment.set(environmentId, {
     attempt,
     kind: "foreground",
@@ -275,9 +286,7 @@ function markLifecycleErrorReportedByForeground(
  * full snapshot is authoritative for this field, so make the absence explicit.
  */
 function withAuthoritativeLifecycleError(snapshot: Environment): Environment {
-  return snapshot.lifecycleError === undefined
-    ? { ...snapshot, lifecycleError: null }
-    : snapshot;
+  return snapshot.lifecycleError === undefined ? { ...snapshot, lifecycleError: null } : snapshot;
 }
 
 /**
@@ -291,9 +300,7 @@ function withAuthoritativeLifecycleError(snapshot: Environment): Environment {
  */
 function reconcileEnvironmentLifecycleErrors(): void {
   const store = useEnvironmentStore.getState();
-  const liveEnvironmentIds = new Set(
-    store.environments.map((environment) => environment.id),
-  );
+  const liveEnvironmentIds = new Set(store.environments.map((environment) => environment.id));
   for (const environmentId of reportedLifecycleErrorByEnvironment.keys()) {
     if (!liveEnvironmentIds.has(environmentId)) {
       reportedLifecycleErrorByEnvironment.delete(environmentId);
@@ -328,10 +335,9 @@ function reconcileEnvironmentLifecycleErrors(): void {
     // Record before reporting: the toast action re-enters these stores.
     reportedLifecycleErrorByEnvironment.set(environment.id, message);
     if (
-      typeof reported !== "string"
-      && reported?.kind === "foreground"
-      && reported.attempt
-        === lifecycleAttemptStateByEnvironment.get(environment.id)?.attempt
+      typeof reported !== "string" &&
+      reported?.kind === "foreground" &&
+      reported.attempt === lifecycleAttemptStateByEnvironment.get(environment.id)?.attempt
     ) {
       // Same failure the foreground start already toasted, wearing the
       // backend's sanitized wording. Consume the claim instead of repeating it.
@@ -343,9 +349,7 @@ function reconcileEnvironmentLifecycleErrors(): void {
       action: {
         label: "Details",
         onClick: () =>
-          useErrorDialogStore
-            .getState()
-            .showError("Failed to start environment", message),
+          useErrorDialogStore.getState().showError("Failed to start environment", message),
       },
     });
   }
@@ -368,60 +372,60 @@ export function reconcileEnvironmentSetupSnapshots(): Promise<void> {
   }
 
   const environmentStore = useEnvironmentStore.getState();
-  const targets = environmentStore.environments.filter((environment) =>
-    environment.status === "creating"
-    || Boolean(environment.lifecycleError)
-    || (
-      environment.status === "running"
-      && (
-        environment.setupPhase === "running"
-        || environment.pendingAgentLaunch
-        || environment.startupAgentSession !== undefined
-      )
-    )
+  const targets = environmentStore.environments.filter(
+    (environment) =>
+      environment.status === "creating" ||
+      Boolean(environment.lifecycleError) ||
+      (environment.status === "running" &&
+        (environment.setupPhase === "running" ||
+          environment.pendingAgentLaunch ||
+          environment.startupAgentSession !== undefined)),
   );
 
   if (targets.length === 0) return Promise.resolve();
   const attemptRevisions = lifecycleAttemptRevisions();
 
-  setupSnapshotReconciliation = Promise.all(targets.map(async (environment) => {
-    try {
-      const snapshot = await backend.getEnvironment(environment.id);
-      if (!snapshot) return;
+  setupSnapshotReconciliation = Promise.all(
+    targets.map(async (environment) => {
+      try {
+        const snapshot = await backend.getEnvironment(environment.id);
+        if (!snapshot) return;
 
-      const store = useEnvironmentStore.getState();
-      const protectedSnapshot = preserveLifecycleAttemptState(
-        snapshot,
-        attemptRevisions.get(environment.id),
-      );
-      const safeSnapshot = withAuthoritativeLifecycleError(protectedSnapshot.environment);
-      store.updateEnvironment(environment.id, safeSnapshot);
-      if (protectedSnapshot.stale) return;
+        const store = useEnvironmentStore.getState();
+        const protectedSnapshot = preserveLifecycleAttemptState(
+          snapshot,
+          attemptRevisions.get(environment.id),
+        );
+        const safeSnapshot = withAuthoritativeLifecycleError(protectedSnapshot.environment);
+        store.updateEnvironment(environment.id, safeSnapshot);
+        if (protectedSnapshot.stale) return;
 
-      // A failed start has no setup plan to read; the reconciliation below
-      // resolves its gates once every snapshot has been merged.
-      if (safeSnapshot.lifecycleError) {
-        return;
+        // A failed start has no setup plan to read; the reconciliation below
+        // resolves its gates once every snapshot has been merged.
+        if (safeSnapshot.lifecycleError) {
+          return;
+        }
+      } catch (error) {
+        console.warn(
+          `[useEnvironments] Failed to reconcile setup snapshot for ${environment.id}:`,
+          error,
+        );
       }
-
-    } catch (error) {
-      console.warn(
-        `[useEnvironments] Failed to reconcile setup snapshot for ${environment.id}:`,
-        error,
-      );
-    }
-  })).then(() => {
-    // Once, after every snapshot has been merged. The reconciliation scans the
-    // whole store, so calling it per target was O(targets x environments) work
-    // — and that many store notifications — for one pass.
-    reconcileEnvironmentLifecycleErrors();
-  }).finally(() => {
-    setupSnapshotReconciliation = null;
-    if (setupSnapshotReconcileRequested) {
-      setupSnapshotReconcileRequested = false;
-      void reconcileEnvironmentSetupSnapshots();
-    }
-  });
+    }),
+  )
+    .then(() => {
+      // Once, after every snapshot has been merged. The reconciliation scans the
+      // whole store, so calling it per target was O(targets x environments) work
+      // — and that many store notifications — for one pass.
+      reconcileEnvironmentLifecycleErrors();
+    })
+    .finally(() => {
+      setupSnapshotReconciliation = null;
+      if (setupSnapshotReconcileRequested) {
+        setupSnapshotReconcileRequested = false;
+        void reconcileEnvironmentSetupSnapshots();
+      }
+    });
 
   return setupSnapshotReconciliation;
 }
@@ -451,53 +455,53 @@ export function useEnvironmentLifecycleService(): void {
     let disposed = false;
 
     const setupListeners = async () => {
-      const stopStarted = await listen<EnvironmentSetupStartedPayload>("environment-setup-started", (event) => {
-        const { environment_id, session_id, environment } = event.payload;
-        console.info("[setup-terminal] received environment-setup-started", {
-          environmentId: environment_id,
-          sessionId: session_id,
-          hasEnvironment: !!environment,
-          environmentType: environment?.environmentType ?? null,
-          containerId: environment?.containerId ?? null,
-        });
-        const store = useEnvironmentStore.getState();
-        if (environment) {
-          store.updateEnvironment(
-            environment_id,
-            withAuthoritativeLifecycleError(environment),
-          );
-          reconcileEnvironmentLifecycleErrors();
-          bindSetupTerminalSession(environment, session_id);
-        }
-      });
+      const stopStarted = await listen<EnvironmentSetupStartedPayload>(
+        "environment-setup-started",
+        (event) => {
+          const { environment_id, session_id, environment } = event.payload;
+          console.info("[setup-terminal] received environment-setup-started", {
+            environmentId: environment_id,
+            sessionId: session_id,
+            hasEnvironment: !!environment,
+            environmentType: environment?.environmentType ?? null,
+            containerId: environment?.containerId ?? null,
+          });
+          const store = useEnvironmentStore.getState();
+          if (environment) {
+            store.updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
+            reconcileEnvironmentLifecycleErrors();
+            bindSetupTerminalSession(environment, session_id);
+          }
+        },
+      );
       if (disposed) stopStarted();
       else unlistenStarted = stopStarted;
 
-      const stopComplete = await listen<EnvironmentSetupCompletePayload>("environment-setup-complete", (event) => {
-        const { environment_id, success, environment } = event.payload;
-        console.info("[setup-terminal] received environment-setup-complete", {
-          environmentId: environment_id,
-          success,
-          hasEnvironment: !!environment,
-          setupScriptsComplete: environment?.setupScriptsComplete ?? null,
-          error: event.payload.error ?? null,
-        });
-        const store = useEnvironmentStore.getState();
-        if (environment) {
-          store.updateEnvironment(
-            environment_id,
-            withAuthoritativeLifecycleError(environment),
-          );
-          reconcileEnvironmentLifecycleErrors();
-        }
-        if (!success) {
-          // The backend clears the durable launch intent on failure and sends the
-          // updated environment above. Mirror it locally even when the payload
-          // omitted the environment, so a failed setup cannot leave this renderer
-          // holding a launch it will never be able to perform.
-          store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
-        }
-      });
+      const stopComplete = await listen<EnvironmentSetupCompletePayload>(
+        "environment-setup-complete",
+        (event) => {
+          const { environment_id, success, environment } = event.payload;
+          console.info("[setup-terminal] received environment-setup-complete", {
+            environmentId: environment_id,
+            success,
+            hasEnvironment: !!environment,
+            setupScriptsComplete: environment?.setupScriptsComplete ?? null,
+            error: event.payload.error ?? null,
+          });
+          const store = useEnvironmentStore.getState();
+          if (environment) {
+            store.updateEnvironment(environment_id, withAuthoritativeLifecycleError(environment));
+            reconcileEnvironmentLifecycleErrors();
+          }
+          if (!success) {
+            // The backend clears the durable launch intent on failure and sends the
+            // updated environment above. Mirror it locally even when the payload
+            // omitted the environment, so a failed setup cannot leave this renderer
+            // holding a launch it will never be able to perform.
+            store.updateEnvironment(environment_id, { pendingAgentLaunch: false });
+          }
+        },
+      );
       if (disposed) stopComplete();
       else unlistenComplete = stopComplete;
     };
@@ -544,10 +548,7 @@ export function useEnvironmentLifecycleService(): void {
 
 const EMPTY_ENVIRONMENTS: Environment[] = [];
 
-export function useEnvironments(
-  projectId: string | null,
-  options: UseEnvironmentsOptions = {}
-) {
+export function useEnvironments(projectId: string | null, options: UseEnvironmentsOptions = {}) {
   const { listenForRenameEvents = true } = options;
 
   // Data via narrow selectors: this hook is mounted at several call sites, and
@@ -583,15 +584,13 @@ export function useEnvironments(
       setError: state.setError,
       getEnvironmentsByProjectId: state.getEnvironmentsByProjectId,
       setDeleting: state.setDeleting,
-    }))
+    })),
   );
 
   const disconnectEnvironmentSessions = useSessionStore(
-    (state) => state.disconnectEnvironmentSessions
+    (state) => state.disconnectEnvironmentSessions,
   );
-  const deleteSessionsByEnvironment = useSessionStore(
-    (state) => state.deleteSessionsByEnvironment
-  );
+  const deleteSessionsByEnvironment = useSessionStore((state) => state.deleteSessionsByEnvironment);
 
   const showError = useErrorDialogStore((state) => state.showError);
 
@@ -622,7 +621,7 @@ export function useEnvironments(
         const currentEnv = useEnvironmentStore.getState().getEnvironmentById(environment_id);
         if (currentEnv && currentEnv.branch !== new_branch && currentEnv.prUrl) {
           rendererDebugLog(
-            `[useEnvironments] Branch changed (${currentEnv.branch} -> ${new_branch}), clearing stale PR state`
+            `[useEnvironments] Branch changed (${currentEnv.branch} -> ${new_branch}), clearing stale PR state`,
           );
           backend.clearEnvironmentPr(environment_id).catch((err) => {
             console.warn("[useEnvironments] Failed to clear PR state after branch rename:", err);
@@ -652,10 +651,7 @@ export function useEnvironments(
 
   const loadEnvironments = useCallback(
     async (pid: string, options: LoadEnvironmentsOptions = {}) => {
-      const {
-        silent = false,
-        reconcileStatus = true,
-      } = options;
+      const { silent = false, reconcileStatus = true } = options;
       const creationGeneration = getEnvironmentCreationState(pid).generation;
       if (!silent) {
         setLoading(true);
@@ -668,19 +664,18 @@ export function useEnvironments(
           : await backend.getEnvironmentSnapshots(pid);
         const currentCreationState = getEnvironmentCreationState(pid);
         const snapshotIsCurrent =
-          currentCreationState.activeCreations === 0
-          && currentCreationState.generation === creationGeneration;
+          currentCreationState.activeCreations === 0 &&
+          currentCreationState.generation === creationGeneration;
         // A snapshot requested before or during creation may omit the newly
         // created environment. Do not let it replace newer local state.
         if (snapshotIsCurrent) {
           cleanupSubscriptionsRemovedByProjectSnapshot(pid, envs);
           mergeEnvironmentsForProject(
             pid,
-            envs.map((environment) =>
-              preserveLifecycleAttemptState(
-                environment,
-                attemptRevisions.get(environment.id),
-              ).environment
+            envs.map(
+              (environment) =>
+                preserveLifecycleAttemptState(environment, attemptRevisions.get(environment.id))
+                  .environment,
             ),
           );
           reconcileEnvironmentLifecycleErrors();
@@ -688,7 +683,10 @@ export function useEnvironments(
       } catch (err) {
         const message = getErrorMessage(err, "Failed to load environments");
         if (silent) {
-          console.warn(`[useEnvironments] Failed to refresh environments for project ${pid}:`, message);
+          console.warn(
+            `[useEnvironments] Failed to refresh environments for project ${pid}:`,
+            message,
+          );
         } else {
           setError(message);
         }
@@ -698,18 +696,38 @@ export function useEnvironments(
         }
       }
     },
-    [mergeEnvironmentsForProject, setLoading, setError]
+    [mergeEnvironmentsForProject, setLoading, setError],
   );
 
   const createEnvironment = useCallback(
-    async (pid: string, name?: string, networkAccessMode?: NetworkAccessMode, initialPrompt?: string, portMappings?: PortMapping[], environmentType?: EnvironmentType, namingPrompt?: string, buildPipelineId?: string) => {
+    async (
+      pid: string,
+      name?: string,
+      networkAccessMode?: NetworkAccessMode,
+      initialPrompt?: string,
+      portMappings?: PortMapping[],
+      environmentType?: EnvironmentType,
+      namingPrompt?: string,
+      buildPipelineId?: string,
+    ) => {
       beginEnvironmentCreation(pid);
       setLoading(true);
       setError(null);
       try {
-        const environment = await backend.createEnvironment(pid, name, networkAccessMode, initialPrompt, portMappings, environmentType, namingPrompt, buildPipelineId);
+        const environment = await backend.createEnvironment(
+          pid,
+          name,
+          networkAccessMode,
+          initialPrompt,
+          portMappings,
+          environmentType,
+          namingPrompt,
+          buildPipelineId,
+        );
         addEnvironmentToStore(environment);
-        useConfigStore.getState().setRepositoryLastEnvironmentType(pid, environment.environmentType);
+        useConfigStore
+          .getState()
+          .setRepositoryLastEnvironmentType(pid, environment.environmentType);
         toast.success("Environment created");
         return environment;
       } catch (err) {
@@ -728,7 +746,7 @@ export function useEnvironments(
         setLoading(false);
       }
     },
-    [addEnvironmentToStore, setLoading, setError, showError]
+    [addEnvironmentToStore, setLoading, setError, showError],
   );
 
   const deleteEnvironment = useCallback(
@@ -776,7 +794,7 @@ export function useEnvironments(
         setDeleting(environmentId, false);
       }
     },
-    [removeEnvironmentFromStore, setError, deleteSessionsByEnvironment, setDeleting, showError]
+    [removeEnvironmentFromStore, setError, deleteSessionsByEnvironment, setDeleting, showError],
   );
 
   const startEnvironment = useCallback(
@@ -785,9 +803,14 @@ export function useEnvironments(
       // Read from store directly to avoid stale closure over `environments`.
       // When called from handleCreateEnvironment, the useCallback closure may
       // capture an older environments array that doesn't include the new env.
-      const existingEnv = useEnvironmentStore.getState().environments.find((env) => env.id === environmentId);
+      const existingEnv = useEnvironmentStore
+        .getState()
+        .environments.find((env) => env.id === environmentId);
       if (!existingEnv) {
-        console.warn("[useEnvironments] startEnvironment called for unknown environment:", environmentId);
+        console.warn(
+          "[useEnvironments] startEnvironment called for unknown environment:",
+          environmentId,
+        );
       }
       if (existingEnv) {
         console.info("[useEnvironments] startEnvironment snapshot:", {
@@ -826,10 +849,13 @@ export function useEnvironments(
         rendererDebugLog("[useEnvironments] Calling backend.startEnvironment...");
         const result = await backend.startEnvironment(environmentId);
         finishAttemptAdmission();
-        rendererDebugLog("[useEnvironments] backend.startEnvironment completed, refreshing environment...", {
-          setupStarted: result.setupStarted,
-          setupSessionId: result.setupSessionId,
-        });
+        rendererDebugLog(
+          "[useEnvironments] backend.startEnvironment completed, refreshing environment...",
+          {
+            setupStarted: result.setupStarted,
+            setupSessionId: result.setupSessionId,
+          },
+        );
 
         // Refresh the full environment data (including containerId / worktreePath)
         const updatedEnv = await backend.getEnvironment(environmentId);
@@ -877,7 +903,7 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [updateStatusInStore, updateEnvironmentInStore, setError, showError]
+    [updateStatusInStore, updateEnvironmentInStore, setError, showError],
   );
 
   const stopEnvironment = useCallback(
@@ -915,7 +941,7 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [updateStatusInStore, setError, disconnectEnvironmentSessions, showError]
+    [updateStatusInStore, setError, disconnectEnvironmentSessions, showError],
   );
 
   const setEnvironmentPR = useCallback(
@@ -935,7 +961,7 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [setPRInStore, setError, showError]
+    [setPRInStore, setError, showError],
   );
 
   const syncEnvironmentStatus = useCallback(
@@ -949,7 +975,7 @@ export function useEnvironments(
         // Don't throw - just log the error
       }
     },
-    [updateEnvironmentInStore]
+    [updateEnvironmentInStore],
   );
 
   const reorderEnvironments = useCallback(
@@ -978,7 +1004,13 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [reorderEnvironmentsInStore, mergeEnvironmentsForProject, setError, loadEnvironments, showError]
+    [
+      reorderEnvironmentsInStore,
+      mergeEnvironmentsForProject,
+      setError,
+      loadEnvironments,
+      showError,
+    ],
   );
 
   const updatePortMappings = useCallback(
@@ -1000,7 +1032,7 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [updateEnvironmentInStore, setError, showError]
+    [updateEnvironmentInStore, setError, showError],
   );
 
   const restartEnvironment = useCallback(
@@ -1037,7 +1069,7 @@ export function useEnvironments(
         throw new Error(message);
       }
     },
-    [updateStatusInStore, setError, disconnectEnvironmentSessions, startEnvironment, showError]
+    [updateStatusInStore, setError, disconnectEnvironmentSessions, startEnvironment, showError],
   );
 
   // Get environments for the current project. Memoized so consumers do not
@@ -1045,11 +1077,9 @@ export function useEnvironments(
   const projectEnvironments = useMemo(
     () =>
       projectId
-        ? environments
-            .filter((e) => e.projectId === projectId)
-            .sort((a, b) => a.order - b.order)
+        ? environments.filter((e) => e.projectId === projectId).sort((a, b) => a.order - b.order)
         : EMPTY_ENVIRONMENTS,
-    [environments, projectId]
+    [environments, projectId],
   );
 
   return {

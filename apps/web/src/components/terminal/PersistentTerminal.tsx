@@ -6,10 +6,20 @@ import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { escapePathForTerminalInput, handleTerminalPaste } from "@/lib/terminal-paste";
-import { useTerminalSessionStore, createSessionKey, useConfigStore, usePaneLayoutStore, useEnvironmentStore } from "@/stores";
+import {
+  useTerminalSessionStore,
+  createSessionKey,
+  useConfigStore,
+  usePaneLayoutStore,
+  useEnvironmentStore,
+} from "@/stores";
 import { useAgentActivityStore } from "@/stores/agentActivityStore";
 import { useSessionStore } from "@/stores/sessionStore";
-import { useTerminalPortalStore, createTerminalKey, type PersistentTerminalData } from "@/stores/terminalPortalStore";
+import {
+  useTerminalPortalStore,
+  createTerminalKey,
+  type PersistentTerminalData,
+} from "@/stores/terminalPortalStore";
 import { cn } from "@/lib/utils";
 import { bootstrapTerminalSession } from "@/lib/backend";
 import type { TabType } from "@/contexts";
@@ -44,10 +54,7 @@ import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeB
 import { CheckCircle2 } from "lucide-react";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
-import {
-  MobileTerminalKeyBar,
-  resolveTerminalKeyData,
-} from "./MobileTerminalKeyBar";
+import { MobileTerminalKeyBar, resolveTerminalKeyData } from "./MobileTerminalKeyBar";
 
 // Threshold for detecting intermediate/cleared buffer state during React mount cycles.
 // If new buffer is less than 50% of stored buffer size, it likely represents a cleared
@@ -183,22 +190,20 @@ export function PersistentTerminal({
   }, [clearTabInitialAgentOptions, environmentId, tabId]);
 
   // Get terminal appearance settings from config
-  const terminalAppearance = useConfigStore(
-    (state) => state.config.global.terminalAppearance
-  ) || DEFAULT_TERMINAL_APPEARANCE;
+  const terminalAppearance =
+    useConfigStore((state) => state.config.global.terminalAppearance) ||
+    DEFAULT_TERMINAL_APPEARANCE;
   const terminalBackgroundColor = resolveTerminalBackgroundColor(
     terminalAppearance.backgroundColor,
   );
-  const terminalScrollback = useConfigStore(
-    (state) => state.config.global.terminalScrollback
-  ) ?? DEFAULT_TERMINAL_SCROLLBACK;
+  const terminalScrollback =
+    useConfigStore((state) => state.config.global.terminalScrollback) ??
+    DEFAULT_TERMINAL_SCROLLBACK;
 
   // Create a container-scoped session key
   // For local environments (containerId is null), use environmentId to ensure uniqueness
   const sessionKey = createSessionKey(containerId, tabId, environmentId);
-  const agentActivityState = useAgentActivityStore(
-    (state) => state.tabStates[tabId] ?? "idle",
-  );
+  const agentActivityState = useAgentActivityStore((state) => state.tabStates[tabId] ?? "idle");
 
   // Session persistence
   const existingSession = useTerminalSessionStore((state) => state.sessions.get(sessionKey));
@@ -207,7 +212,8 @@ export function PersistentTerminal({
   const existingSessionId = existingSession?.sessionId;
   const serializedBuffer = existingSession?.serializedBuffer;
   const isReconnecting = !!existingSessionId;
-  const isBackendManagedSetupTab = !!isSetupTab && (!initialCommands || initialCommands.length === 0);
+  const isBackendManagedSetupTab =
+    !!isSetupTab && (!initialCommands || initialCommands.length === 0);
   // Every terminal view asks for the backend-owned transcript. The serialized
   // frontend buffer is retained as a durable fallback when the backend must
   // create a replacement PTY that has no transcript for the previous process.
@@ -232,15 +238,15 @@ export function PersistentTerminal({
   // (props might be stale if store was updated after TerminalPortalHost rendered)
   const terminalKey = createTerminalKey(environmentId, tabId);
   const storedContainerElement = useTerminalPortalStore(
-    (state) => state.terminals.get(terminalKey)?.containerElement ?? null
+    (state) => state.terminals.get(terminalKey)?.containerElement ?? null,
   );
   const terminalIsOpened = useTerminalPortalStore(
-    (state) => state.terminals.get(terminalKey)?.isOpened ?? false
+    (state) => state.terminals.get(terminalKey)?.isOpened ?? false,
   );
 
   // Check if this is a local environment (uses worktree instead of Docker container)
   const isLocalEnvironment = useEnvironmentStore(
-    (state) => state.getEnvironmentById(environmentId)?.environmentType === "local"
+    (state) => state.getEnvironmentById(environmentId)?.environmentType === "local",
   );
 
   // The authoritative record of whether setup already finished. `setupCompleteRef`
@@ -248,7 +254,7 @@ export function PersistentTerminal({
   // a restored setup tab (whose `isSetupTab` marker is now durable) would
   // otherwise re-offer "Mark setup complete" for setup that finished long ago.
   const setupScriptsComplete = useEnvironmentStore(
-    (state) => state.getEnvironmentById(environmentId)?.setupScriptsComplete ?? false
+    (state) => state.getEnvironmentById(environmentId)?.setupScriptsComplete ?? false,
   );
 
   useEffect(() => {
@@ -282,7 +288,7 @@ export function PersistentTerminal({
 
   // Get worktree path for local environments (needed for image paste)
   const worktreePath = useEnvironmentStore(
-    (state) => state.getEnvironmentById(environmentId)?.worktreePath ?? null
+    (state) => state.getEnvironmentById(environmentId)?.worktreePath ?? null,
   );
 
   // Extract terminal and addons from terminalData
@@ -299,11 +305,14 @@ export function PersistentTerminal({
   }, [terminal]);
 
   // Clipboard image paste handler
-  const handleImageSaved = useCallback(async (filePath: string) => {
-    const terminalPath = isLocalEnvironment ? escapePathForTerminalInput(filePath) : filePath;
-    await writeRef.current(terminalPath + " ");
-    terminal.focus();
-  }, [isLocalEnvironment, terminal]);
+  const handleImageSaved = useCallback(
+    async (filePath: string) => {
+      const terminalPath = isLocalEnvironment ? escapePathForTerminalInput(filePath) : filePath;
+      await writeRef.current(terminalPath + " ");
+      terminal.focus();
+    },
+    [isLocalEnvironment, terminal],
+  );
 
   const handleImageError = useCallback((error: string) => {
     console.error("[PersistentTerminal] Clipboard image error:", error);
@@ -361,7 +370,7 @@ export function PersistentTerminal({
       // Delay between sending images to allow Claude Code time to process each input.
       // Claude Code needs time to parse and acknowledge each file path before receiving the next.
       const CLAUDE_CODE_INPUT_DELAY_MS = 200;
-      const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+      const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
       // Send each image one by one with a delay to let Claude Code process each.
       // The img.id contains the saved attachment path (set by ComposeBar.handleSend).
@@ -382,7 +391,7 @@ export function PersistentTerminal({
       // Keep compose bar open but refocus terminal
       terminal.focus();
     },
-    [isLocalEnvironment, terminal]
+    [isLocalEnvironment, terminal],
   );
 
   const handleAddressAll = useCallback(() => {
@@ -464,7 +473,10 @@ export function PersistentTerminal({
             strippedBuffer.length > 500 && /(?:\r?\n)$/.test(strippedBuffer);
 
           if (hasShellPrompt || hasGenericPrompt || hasLengthFallback) {
-            console.log("[PersistentTerminal] Local environment ready detected for first tab:", tabId);
+            console.log(
+              "[PersistentTerminal] Local environment ready detected for first tab:",
+              tabId,
+            );
             setIsEnvironmentReady(true);
             dataBufferRef.current = "";
             onReady?.({ persistSetupComplete: false, workspaceReady: true });
@@ -478,11 +490,17 @@ export function PersistentTerminal({
           // 2. Git clone output contains "workspace", "main", etc.
           // 3. We need to wait for ALL setup scripts in orkestrator-ai.json to complete
           // 4. Reused containers short-circuit setup and emit "Workspace already set up."
-          const { ready: readyDetected, failed: setupFailed } =
-            detectContainerSetupReadiness(dataBufferRef.current);
+          const { ready: readyDetected, failed: setupFailed } = detectContainerSetupReadiness(
+            dataBufferRef.current,
+          );
 
           if (readyDetected) {
-            console.log("[PersistentTerminal] Environment ready detected for tab:", tabId, "isFirstTab:", isFirstTab);
+            console.log(
+              "[PersistentTerminal] Environment ready detected for tab:",
+              tabId,
+              "isFirstTab:",
+              isFirstTab,
+            );
             setIsEnvironmentReady(true);
             dataBufferRef.current = "";
             if (!workspaceReadySignaledRef.current) {
@@ -517,87 +535,83 @@ export function PersistentTerminal({
         }
       }
     },
-    [terminal, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady]
+    [terminal, isFirstTab, isLocalEnvironment, isEnvironmentReady, tabId, onReady],
   );
 
-  const handleReplay = useCallback((
-    data: Uint8Array,
-    metadata: ReplayMetadata,
-  ) => {
-    const { preserveExisting, degraded } = metadata;
-    dataBufferRef.current = "";
+  const handleReplay = useCallback(
+    (data: Uint8Array, metadata: ReplayMetadata) => {
+      const { preserveExisting, degraded } = metadata;
+      dataBufferRef.current = "";
 
-    if (degraded === "snapshot-error") {
-      setReplayWarning(
-        "Terminal history could not be synchronized. Existing history and live output were retained.",
-      );
-    } else if (degraded === "truncated") {
-      setReplayWarning(
-        "Terminal history was truncated. Earlier output may be unavailable.",
-      );
-    } else {
-      setReplayWarning(null);
-    }
+      if (degraded === "snapshot-error") {
+        setReplayWarning(
+          "Terminal history could not be synchronized. Existing history and live output were retained.",
+        );
+      } else if (degraded === "truncated") {
+        setReplayWarning("Terminal history was truncated. Earlier output may be unavailable.");
+      } else {
+        setReplayWarning(null);
+      }
 
-    // A truncated snapshot can begin inside an ANSI escape sequence or UTF-8
-    // character, so it must never be fed to xterm. A failed snapshot likewise
-    // has no authoritative bytes with which to replace the current view. Only
-    // a durable SerializeAddon buffer is safe to reset from; otherwise preserve
-    // the existing parser state and wait for post-cursor live output.
-    if (degraded) {
-      pendingDurableReplayRef.current = null;
-      if (serializedBuffer && !hasRenderedOutputRef.current) {
-        terminal.clear();
-        terminal.reset();
-        handleData(new TextEncoder().encode(serializedBuffer));
-      } else if (persistentBufferLoadPendingRef.current) {
-        // Do not retain a truncated snapshot for the later reset. Only bytes
-        // received after the snapshot cursor are safe to append to the durable
-        // checkpoint when it arrives.
+      // A truncated snapshot can begin inside an ANSI escape sequence or UTF-8
+      // character, so it must never be fed to xterm. A failed snapshot likewise
+      // has no authoritative bytes with which to replace the current view. Only
+      // a durable SerializeAddon buffer is safe to reset from; otherwise preserve
+      // the existing parser state and wait for post-cursor live output.
+      if (degraded) {
+        pendingDurableReplayRef.current = null;
+        if (serializedBuffer && !hasRenderedOutputRef.current) {
+          terminal.clear();
+          terminal.reset();
+          handleData(new TextEncoder().encode(serializedBuffer));
+        } else if (persistentBufferLoadPendingRef.current) {
+          // Do not retain a truncated snapshot for the later reset. Only bytes
+          // received after the snapshot cursor are safe to append to the durable
+          // checkpoint when it arrives.
+          pendingDurableReplayRef.current = {
+            chunks: [],
+            byteLength: 0,
+            overflowed: false,
+          };
+        }
+        terminal.scrollToBottom();
+        return;
+      }
+
+      // A snapshot for a reused session is authoritative, including when it is
+      // empty. A newly-created replacement session has no backend transcript of
+      // the previous PTY, so restore the durable serialized view before showing
+      // output produced by the replacement.
+      let replayData = data;
+      const trackUntilDurableHistoryLoads =
+        preserveExisting && !serializedBuffer && persistentBufferLoadPendingRef.current;
+      if (preserveExisting && serializedBuffer) {
+        pendingDurableReplayRef.current = null;
+        const durableData = new TextEncoder().encode(serializedBuffer);
+        replayData = new Uint8Array(durableData.length + data.length);
+        replayData.set(durableData);
+        replayData.set(data, durableData.length);
+      } else {
+        pendingDurableReplayRef.current = null;
+      }
+
+      terminal.clear();
+      terminal.reset();
+      handleData(replayData);
+      if (trackUntilDurableHistoryLoads) {
+        // Persistent storage can finish loading after the replacement session
+        // attaches. Keep the snapshot and any subsequent live bytes so the
+        // durable view can be prepended later without dropping interim output.
         pendingDurableReplayRef.current = {
-          chunks: [],
-          byteLength: 0,
+          chunks: data.length > 0 ? [data.slice()] : [],
+          byteLength: data.length,
           overflowed: false,
         };
       }
       terminal.scrollToBottom();
-      return;
-    }
-
-    // A snapshot for a reused session is authoritative, including when it is
-    // empty. A newly-created replacement session has no backend transcript of
-    // the previous PTY, so restore the durable serialized view before showing
-    // output produced by the replacement.
-    let replayData = data;
-    const trackUntilDurableHistoryLoads =
-      preserveExisting &&
-      !serializedBuffer &&
-      persistentBufferLoadPendingRef.current;
-    if (preserveExisting && serializedBuffer) {
-      pendingDurableReplayRef.current = null;
-      const durableData = new TextEncoder().encode(serializedBuffer);
-      replayData = new Uint8Array(durableData.length + data.length);
-      replayData.set(durableData);
-      replayData.set(data, durableData.length);
-    } else {
-      pendingDurableReplayRef.current = null;
-    }
-
-    terminal.clear();
-    terminal.reset();
-    handleData(replayData);
-    if (trackUntilDurableHistoryLoads) {
-      // Persistent storage can finish loading after the replacement session
-      // attaches. Keep the snapshot and any subsequent live bytes so the
-      // durable view can be prepended later without dropping interim output.
-      pendingDurableReplayRef.current = {
-        chunks: data.length > 0 ? [data.slice()] : [],
-        byteLength: data.length,
-        overflowed: false,
-      };
-    }
-    terminal.scrollToBottom();
-  }, [handleData, serializedBuffer, terminal]);
+    },
+    [handleData, serializedBuffer, terminal],
+  );
 
   useEffect(() => {
     const pendingReplay = pendingDurableReplayRef.current;
@@ -650,11 +664,11 @@ export function PersistentTerminal({
   // Determine user based on tab type - root tabs connect as orkroot
   const terminalUser = tabType === "root" ? ROOT_TERMINAL_USER : undefined;
   const trackEnvironmentActivity =
-    tabType === "claude"
-    || tabType === "opencode"
-    || tabType === "codex"
-    || tabType === "cursor"
-    || tabType === "grok";
+    tabType === "claude" ||
+    tabType === "opencode" ||
+    tabType === "codex" ||
+    tabType === "cursor" ||
+    tabType === "grok";
 
   const {
     sessionId,
@@ -665,21 +679,20 @@ export function PersistentTerminal({
     markBootstrapped,
     resize,
     write,
-  } =
-    useTerminal({
-      containerId,
-      environmentId,
-      isLocal: isLocalEnvironment,
-      onData: handleData,
-      onReplay: handleReplay,
-      terminalKey: tabId,
-      existingSessionId,
-      persistSession: true,
-      user: terminalUser,
-      replayOutputBuffer: shouldReplayBackendOutputBuffer,
-      attachExistingOnly: isBackendManagedSetupTab,
-      trackEnvironmentActivity,
-    });
+  } = useTerminal({
+    containerId,
+    environmentId,
+    isLocal: isLocalEnvironment,
+    onData: handleData,
+    onReplay: handleReplay,
+    terminalKey: tabId,
+    existingSessionId,
+    persistSession: true,
+    user: terminalUser,
+    replayOutputBuffer: shouldReplayBackendOutputBuffer,
+    attachExistingOnly: isBackendManagedSetupTab,
+    trackEnvironmentActivity,
+  });
 
   // Keep connect ref up to date to avoid stale closures in effects
   const connectRef = useRef(connect);
@@ -774,7 +787,11 @@ export function PersistentTerminal({
   // Store session ID when we get one
   useEffect(() => {
     if (sessionId && sessionId !== existingSessionId) {
-      console.debug("[PersistentTerminal] Storing new session ID for sessionKey:", sessionKey, sessionId);
+      console.debug(
+        "[PersistentTerminal] Storing new session ID for sessionKey:",
+        sessionKey,
+        sessionId,
+      );
       const currentSession = useTerminalSessionStore.getState().sessions.get(sessionKey);
       setSession(sessionKey, {
         ...currentSession,
@@ -793,7 +810,10 @@ export function PersistentTerminal({
     const existingPersistentSession = existingSessions.find((s) => s.tabId === tabId);
 
     if (existingPersistentSession) {
-      console.debug("[PersistentTerminal] Found existing persistent session:", existingPersistentSession.id);
+      console.debug(
+        "[PersistentTerminal] Found existing persistent session:",
+        existingPersistentSession.id,
+      );
       persistentSessionCreatedRef.current = true;
       persistentSessionIdRef.current = existingPersistentSession.id;
       setPersistentSessionId(sessionKey, existingPersistentSession.id);
@@ -827,7 +847,19 @@ export function PersistentTerminal({
           creationInProgressRef.current = false;
         });
     }
-  }, [sessionId, containerId, environmentId, tabId, tabType, sessionKey, createPersistentSession, getSessionsByEnvironment, setPersistentSessionId, updateSessionStatus, isSessionsLoading]);
+  }, [
+    sessionId,
+    containerId,
+    environmentId,
+    tabId,
+    tabType,
+    sessionKey,
+    createPersistentSession,
+    getSessionsByEnvironment,
+    setPersistentSessionId,
+    updateSessionStatus,
+    isSessionsLoading,
+  ]);
 
   // Update session activity on user interaction
   const lastActivityUpdateRef = useRef<number>(0);
@@ -866,25 +898,49 @@ export function PersistentTerminal({
           const { ready, failed } = detectContainerSetupReadiness(serializedBuffer ?? "");
           if (ready) {
             setIsEnvironmentReady(true);
-            console.log("[PersistentTerminal] Reconnection buffer contains setup readiness marker for tab:", tabId);
+            console.log(
+              "[PersistentTerminal] Reconnection buffer contains setup readiness marker for tab:",
+              tabId,
+            );
             if (!workspaceReadySignaledRef.current) {
               workspaceReadySignaledRef.current = true;
               onReady?.({ persistSetupComplete: !failed, workspaceReady: true });
             }
           } else {
-            console.log("[PersistentTerminal] Reconnected first container tab without setup marker, keeping readiness detection active for tab:", tabId);
+            console.log(
+              "[PersistentTerminal] Reconnected first container tab without setup marker, keeping readiness detection active for tab:",
+              tabId,
+            );
           }
         } else {
           setIsEnvironmentReady(true);
-          console.log("[PersistentTerminal] Reconnection complete, calling onReady for tab:", tabId);
+          console.log(
+            "[PersistentTerminal] Reconnection complete, calling onReady for tab:",
+            tabId,
+          );
           onReady?.({ persistSetupComplete: false, workspaceReady: false });
         }
       } else {
         // Leave isEnvironmentReady as false so handleData can detect setup completion
-        console.log("[PersistentTerminal] First tab on new environment, waiting for setup detection before calling onReady, tab:", tabId);
+        console.log(
+          "[PersistentTerminal] First tab on new environment, waiting for setup detection before calling onReady, tab:",
+          tabId,
+        );
       }
     }
-  }, [isReconnecting, isConnected, hasReconnected, tabId, environmentId, onReady, serializedBuffer, terminal, fitAddon, isFirstTab, isLocalEnvironment]);
+  }, [
+    isReconnecting,
+    isConnected,
+    hasReconnected,
+    tabId,
+    environmentId,
+    onReady,
+    serializedBuffer,
+    terminal,
+    fitAddon,
+    isFirstTab,
+    isLocalEnvironment,
+  ]);
 
   // Persistent session buffers can arrive after the PTY reconnection effect has
   // already run. If that restored buffer contains setup completion, rehydrate
@@ -902,7 +958,10 @@ export function PersistentTerminal({
     setIsEnvironmentReady(true);
     if (!workspaceReadySignaledRef.current) {
       workspaceReadySignaledRef.current = true;
-      console.log("[PersistentTerminal] Restored buffer contains setup readiness marker for tab:", tabId);
+      console.log(
+        "[PersistentTerminal] Restored buffer contains setup readiness marker for tab:",
+        tabId,
+      );
       onReady?.({ persistSetupComplete: !failed, workspaceReady: true });
     }
   }, [isFirstTab, isLocalEnvironment, isEnvironmentReady, serializedBuffer, tabId, onReady]);
@@ -977,16 +1036,18 @@ export function PersistentTerminal({
 
       scheduleFit();
       if (document?.fonts?.ready) {
-        document.fonts.ready.then(() => {
-          // Force xterm to re-measure character dimensions by re-setting font options
-          // This is critical: if fonts weren't fully loaded when terminal.open() was called,
-          // xterm measured fallback fonts and cached those cell dimensions.
-          // Re-setting fontSize triggers xterm to recalculate character metrics.
-          if (terminal.options.fontSize) {
-            terminal.options.fontSize = terminal.options.fontSize;
-          }
-          scheduleFit();
-        }).catch(() => {});
+        document.fonts.ready
+          .then(() => {
+            // Force xterm to re-measure character dimensions by re-setting font options
+            // This is critical: if fonts weren't fully loaded when terminal.open() was called,
+            // xterm measured fallback fonts and cached those cell dimensions.
+            // Re-setting fontSize triggers xterm to recalculate character metrics.
+            if (terminal.options.fontSize) {
+              terminal.options.fontSize = terminal.options.fontSize;
+            }
+            scheduleFit();
+          })
+          .catch(() => {});
       }
       setTimeout(() => {
         // Also force font re-measurement in timeout as a fallback
@@ -1026,7 +1087,7 @@ export function PersistentTerminal({
 
       if (needsDOMMove) {
         // Check what's inside the container BEFORE moving
-        const xtermElementBefore = containerElement.querySelector('.xterm');
+        const xtermElementBefore = containerElement.querySelector(".xterm");
         const hasXtermBefore = !!xtermElementBefore;
 
         // CRITICAL: If xterm's DOM structure is already missing, we need to recreate the terminal
@@ -1155,8 +1216,7 @@ export function PersistentTerminal({
 
       // Copy: Cmd+C (Mac) or Ctrl+Shift+C (Linux/Windows)
       // Only intercept when there's a selection to preserve Ctrl+C for SIGINT
-      const isCopyShortcut =
-        (isMeta && key === "c") || (isCtrl && isShift && key === "c");
+      const isCopyShortcut = (isMeta && key === "c") || (isCtrl && isShift && key === "c");
       if (isCopyShortcut && terminal.hasSelection() && !isAlt) {
         void handleCopySelection();
         return false;
@@ -1195,7 +1255,9 @@ export function PersistentTerminal({
       // The effect will decide whether to use this based on whether pane actually changed
       try {
         const bufferContent = serializeAddon.serialize();
-        const currentStoreBuffer = useTerminalSessionStore.getState().sessions.get(sessionKey)?.serializedBuffer;
+        const currentStoreBuffer = useTerminalSessionStore
+          .getState()
+          .sessions.get(sessionKey)?.serializedBuffer;
         const currentStoreLength = currentStoreBuffer?.length ?? 0;
 
         if (bufferContent && bufferContent.length > 0) {
@@ -1212,7 +1274,9 @@ export function PersistentTerminal({
           //
           // Also check that new buffer is meaningful (not significantly smaller than stored)
           // which would indicate we captured an intermediate/cleared state.
-          const newBufferIsMeaningful = bufferContent.length >= currentStoreLength * BUFFER_SIZE_THRESHOLD || currentStoreLength === 0;
+          const newBufferIsMeaningful =
+            bufferContent.length >= currentStoreLength * BUFFER_SIZE_THRESHOLD ||
+            currentStoreLength === 0;
 
           if (restorationComplete && newBufferIsMeaningful) {
             useTerminalSessionStore.getState().setSerializedBuffer(sessionKey, bufferContent);
@@ -1326,7 +1390,14 @@ export function PersistentTerminal({
     terminal.options.scrollback = terminalScrollback;
 
     fitAddon.fit();
-  }, [terminal, fitAddon, terminalAppearance?.fontFamily, terminalAppearance?.fontSize, terminalBackgroundColor, terminalScrollback]);
+  }, [
+    terminal,
+    fitAddon,
+    terminalAppearance?.fontFamily,
+    terminalAppearance?.fontSize,
+    terminalBackgroundColor,
+    terminalScrollback,
+  ]);
 
   // Handle resize
   useEffect(() => {
@@ -1408,8 +1479,7 @@ export function PersistentTerminal({
   useEffect(() => {
     // A plain setup tab's only launch source is its initial commands, so a
     // non-null payload is the same condition as "it has commands to run".
-    const shouldLaunchSetupCommand =
-      isSetupTab && tabType === "plain" && launchData !== null;
+    const shouldLaunchSetupCommand = isSetupTab && tabType === "plain" && launchData !== null;
     const canLaunch = isConnected && (isEnvironmentReady || shouldLaunchSetupCommand);
 
     if (!canLaunch || bootstrapped || !sessionId || !launchData) return;
@@ -1433,35 +1503,37 @@ export function PersistentTerminal({
         if (disposed) return;
         dispatched = true;
 
-        void bootstrapTerminalSession(targetSessionId, launchData).then((result) => {
-          if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
-          if (result.bootstrapped) {
-            if (!markBootstrapped(targetSessionId)) return;
-            setBootstrapWarning(null);
-            acknowledgeInitialLaunchOptions();
-            return;
-          }
+        void bootstrapTerminalSession(targetSessionId, launchData)
+          .then((result) => {
+            if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
+            if (result.bootstrapped) {
+              if (!markBootstrapped(targetSessionId)) return;
+              setBootstrapWarning(null);
+              acknowledgeInitialLaunchOptions();
+              return;
+            }
 
-          bootstrapRequestedForSessionRef.current = null;
-          if (attempt < TERMINAL_BOOTSTRAP_MAX_ATTEMPTS) {
-            scheduleAttempt(attempt + 1);
-            return;
-          }
-          setBootstrapWarning(
-            "The terminal connected, but its launch command could not start. Reopen the terminal to try again.",
-          );
-        }).catch((error) => {
-          if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
-          bootstrapRequestedForSessionRef.current = null;
-          console.error("[PersistentTerminal] Failed to bootstrap terminal:", error);
-          if (attempt < TERMINAL_BOOTSTRAP_MAX_ATTEMPTS) {
-            scheduleAttempt(attempt + 1);
-            return;
-          }
-          setBootstrapWarning(
-            "The terminal connected, but its launch command failed. Reopen the terminal to try again.",
-          );
-        });
+            bootstrapRequestedForSessionRef.current = null;
+            if (attempt < TERMINAL_BOOTSTRAP_MAX_ATTEMPTS) {
+              scheduleAttempt(attempt + 1);
+              return;
+            }
+            setBootstrapWarning(
+              "The terminal connected, but its launch command could not start. Reopen the terminal to try again.",
+            );
+          })
+          .catch((error) => {
+            if (disposed || bootstrapRequestedForSessionRef.current !== targetSessionId) return;
+            bootstrapRequestedForSessionRef.current = null;
+            console.error("[PersistentTerminal] Failed to bootstrap terminal:", error);
+            if (attempt < TERMINAL_BOOTSTRAP_MAX_ATTEMPTS) {
+              scheduleAttempt(attempt + 1);
+              return;
+            }
+            setBootstrapWarning(
+              "The terminal connected, but its launch command failed. Reopen the terminal to try again.",
+            );
+          });
       }, TERMINAL_BOOTSTRAP_DELAY_MS);
     };
 
@@ -1473,14 +1545,22 @@ export function PersistentTerminal({
       // request went out. Once it has been dispatched the backend owns the
       // launch, so clearing here would let the next render send it again while
       // the first is still in flight.
-      if (
-        !dispatched
-        && bootstrapRequestedForSessionRef.current === targetSessionId
-      ) {
+      if (!dispatched && bootstrapRequestedForSessionRef.current === targetSessionId) {
         bootstrapRequestedForSessionRef.current = null;
       }
     };
-  }, [acknowledgeInitialLaunchOptions, bootstrapped, isEnvironmentReady, isConnected, sessionId, tabType, tabId, launchData, isSetupTab, markBootstrapped]);
+  }, [
+    acknowledgeInitialLaunchOptions,
+    bootstrapped,
+    isEnvironmentReady,
+    isConnected,
+    sessionId,
+    tabType,
+    tabId,
+    launchData,
+    isSetupTab,
+    markBootstrapped,
+  ]);
 
   useEffect(() => {
     if (bootstrapped) acknowledgeInitialLaunchOptions();
@@ -1512,12 +1592,13 @@ export function PersistentTerminal({
     }
   }, [environmentId, isActive, terminal, paneId, setActivePane]);
 
-  const handleMobileKeyInput = useCallback((data: string) => {
-    void writeRef.current(
-      resolveTerminalKeyData(data, terminal.modes.applicationCursorKeysMode),
-    );
-    updateActivityThrottledRef.current();
-  }, [terminal]);
+  const handleMobileKeyInput = useCallback(
+    (data: string) => {
+      void writeRef.current(resolveTerminalKeyData(data, terminal.modes.applicationCursorKeysMode));
+      updateActivityThrottledRef.current();
+    },
+    [terminal],
+  );
 
   const [manuallyCompleted, setManuallyCompleted] = useState(false);
   const handleMarkSetupComplete = useCallback(() => {
@@ -1540,17 +1621,21 @@ export function PersistentTerminal({
           {bootstrapWarning || replayWarning}
         </div>
       )}
-      {isSetupTab && isActive && !setupScriptsComplete && !manuallyCompleted && !setupCompleteRef.current && (
-        <div className="absolute top-1 right-2 z-10">
-          <button
-            onClick={handleMarkSetupComplete}
-            className="flex items-center gap-1.5 rounded-md bg-zinc-800/90 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 border border-zinc-700/50 transition-colors shadow-md backdrop-blur-sm"
-          >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Mark setup complete
-          </button>
-        </div>
-      )}
+      {isSetupTab &&
+        isActive &&
+        !setupScriptsComplete &&
+        !manuallyCompleted &&
+        !setupCompleteRef.current && (
+          <div className="absolute top-1 right-2 z-10">
+            <button
+              onClick={handleMarkSetupComplete}
+              className="flex items-center gap-1.5 rounded-md bg-zinc-800/90 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100 border border-zinc-700/50 transition-colors shadow-md backdrop-blur-sm"
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Mark setup complete
+            </button>
+          </div>
+        )}
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
@@ -1558,10 +1643,8 @@ export function PersistentTerminal({
             onClick={handleTerminalClick}
             className={cn(
               "absolute inset-x-0 top-0",
-              isMobile
-                ? "bottom-[calc(3rem+env(safe-area-inset-bottom))]"
-                : "bottom-0",
-              !isActive && "opacity-0 pointer-events-none"
+              isMobile ? "bottom-[calc(3rem+env(safe-area-inset-bottom))]" : "bottom-0",
+              !isActive && "opacity-0 pointer-events-none",
             )}
             style={{ backgroundColor: terminalBackgroundColor }}
           />
@@ -1570,20 +1653,13 @@ export function PersistentTerminal({
           <ContextMenuItem onClick={() => void handleCopySelection()} disabled={!hasSelection}>
             Copy
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => void handlePaste()}>
-            Paste
-          </ContextMenuItem>
+          <ContextMenuItem onClick={() => void handlePaste()}>Paste</ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleSelectAll}>
-            Select All
-          </ContextMenuItem>
+          <ContextMenuItem onClick={handleSelectAll}>Select All</ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
       {isMobile && isActive && (
-        <MobileTerminalKeyBar
-          onInput={handleMobileKeyInput}
-          disabled={!isConnected}
-        />
+        <MobileTerminalKeyBar onInput={handleMobileKeyInput} disabled={!isConnected} />
       )}
       {isActive && (
         <ComposeBar
@@ -1599,9 +1675,7 @@ export function PersistentTerminal({
           worktreePath={worktreePath}
           showAddressAll={isReviewTab && bootstrapped && agentActivityState !== "working"}
           onAddressAll={handleAddressAll}
-          className={isMobile
-            ? "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]"
-            : undefined}
+          className={isMobile ? "bottom-[calc(3.5rem+env(safe-area-inset-bottom))]" : undefined}
         />
       )}
     </>

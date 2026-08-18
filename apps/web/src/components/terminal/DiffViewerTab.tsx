@@ -123,9 +123,7 @@ export function DiffViewerTab({
 
   const [originalContent, setOriginalContent] = useState<string | null>(null);
   const [modifiedContent, setModifiedContent] = useState<string | null>(null);
-  const [detectedLanguage, setDetectedLanguage] = useState<string>(
-    language || "plaintext"
-  );
+  const [detectedLanguage, setDetectedLanguage] = useState<string>(language || "plaintext");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [diffMode, setDiffMode] = useState<DiffMode>("side-by-side");
@@ -195,12 +193,7 @@ export function DiffViewerTab({
       },
       padding: { top: 4, bottom: 24 },
     };
-  }, [
-    effectiveDiffMode,
-    isMobile,
-    terminalAppearance.fontFamily,
-    terminalAppearance.fontSize,
-  ]);
+  }, [effectiveDiffMode, isMobile, terminalAppearance.fontFamily, terminalAppearance.fontSize]);
 
   // Disable linting/diagnostics before editor mounts
   const handleEditorWillMount: BeforeMount = useCallback((monacoInstance) => {
@@ -284,8 +277,7 @@ export function DiffViewerTab({
           }
           if (cancelled) return;
           modified = modifiedResult.content;
-          nextDetectedLanguage =
-            modifiedResult.language || language || "plaintext";
+          nextDetectedLanguage = modifiedResult.language || language || "plaintext";
         }
 
         // Fetch original file content from base branch
@@ -309,8 +301,7 @@ export function DiffViewerTab({
           }
           original = originalResult?.content ?? null;
           if (isDeletedFile) {
-            nextDetectedLanguage =
-              originalResult?.language || language || "plaintext";
+            nextDetectedLanguage = originalResult?.language || language || "plaintext";
           }
         }
 
@@ -380,7 +371,7 @@ export function DiffViewerTab({
       <div
         className={cn(
           "absolute inset-0 flex items-center justify-center",
-          !isActive && "pointer-events-none opacity-0"
+          !isActive && "pointer-events-none opacity-0",
         )}
         style={{ backgroundColor: terminalAppearance.backgroundColor }}
       >
@@ -398,7 +389,7 @@ export function DiffViewerTab({
       <div
         className={cn(
           "absolute inset-0 flex items-center justify-center",
-          !isActive && "pointer-events-none opacity-0"
+          !isActive && "pointer-events-none opacity-0",
         )}
         style={{ backgroundColor: terminalAppearance.backgroundColor }}
       >
@@ -418,7 +409,7 @@ export function DiffViewerTab({
       <div
         className={cn(
           "absolute inset-0 flex flex-col",
-          !isActive && "pointer-events-none opacity-0"
+          !isActive && "pointer-events-none opacity-0",
         )}
         style={{ backgroundColor: terminalAppearance.backgroundColor }}
       >
@@ -453,10 +444,7 @@ export function DiffViewerTab({
   // Normal diff view (including new files)
   return (
     <div
-      className={cn(
-        "absolute inset-0 flex flex-col",
-        !isActive && "pointer-events-none opacity-0"
-      )}
+      className={cn("absolute inset-0 flex flex-col", !isActive && "pointer-events-none opacity-0")}
       style={{ backgroundColor: terminalAppearance.backgroundColor }}
     >
       <DiffHeader
@@ -529,10 +517,7 @@ function DiffHeader({
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
         <span className="shrink-0">{statusIcon}</span>
-        <span
-          className="relative min-w-0 flex-1 overflow-hidden font-mono"
-          title={filePath}
-        >
+        <span className="relative min-w-0 flex-1 overflow-hidden font-mono" title={filePath}>
           <span className="sr-only">{filePath}</span>
           {/* On a phone the directory is dropped entirely: the basename is the only
               part that fits, and the full path is still on the title/sr-only node. */}
@@ -555,12 +540,10 @@ function DiffHeader({
         {/* Keep the status in the accessibility tree when the visual badge is hidden. */}
         <span
           className={cn(
-            isMobile
-              ? "sr-only"
-              : "shrink-0 rounded px-1.5 py-0.5 text-xs",
+            isMobile ? "sr-only" : "shrink-0 rounded px-1.5 py-0.5 text-xs",
             !isMobile && statusText === "New file" && "bg-green-500/20 text-green-400",
             !isMobile && statusText === "Modified" && "bg-yellow-500/20 text-yellow-400",
-            !isMobile && statusText === "Deleted" && "bg-red-500/20 text-red-400"
+            !isMobile && statusText === "Deleted" && "bg-red-500/20 text-red-400",
           )}
         >
           {statusText}

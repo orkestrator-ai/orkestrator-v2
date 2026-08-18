@@ -7,9 +7,6 @@
  * that state on a view failure. Importing the tab module for the key alone
  * would pull the whole review surface into the main bundle.
  */
-export function multiReviewReviewerScrollKey(
-  workflowId: string,
-  reviewerId: string,
-): string {
+export function multiReviewReviewerScrollKey(workflowId: string, reviewerId: string): string {
   return `multi-review:${workflowId}:reviewer:${reviewerId}`;
 }

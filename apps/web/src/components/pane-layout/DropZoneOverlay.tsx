@@ -37,10 +37,7 @@ function EdgeZone({ paneId, direction }: EdgeZoneProps) {
       {/* Invisible drop zone */}
       <div
         ref={setNodeRef}
-        className={cn(
-          "absolute z-[60] pointer-events-auto",
-          positionClasses[direction]
-        )}
+        className={cn("absolute z-[60] pointer-events-auto", positionClasses[direction])}
       />
 
       {/* Visual preview when hovering */}
@@ -48,7 +45,7 @@ function EdgeZone({ paneId, direction }: EdgeZoneProps) {
         <div
           className={cn(
             "absolute z-[55] bg-primary/20 border-2 border-primary/40 pointer-events-none transition-all duration-150",
-            previewClasses[direction]
+            previewClasses[direction],
           )}
         />
       )}

@@ -46,8 +46,7 @@ export async function loadAgentPlatformSelection(dataDir: string): Promise<{
   if (config && typeof config === "object" && !Array.isArray(config)) {
     const global = (config as { global?: unknown }).global;
     if (global && typeof global === "object" && !Array.isArray(global)) {
-      const explicit = (global as { enabledAgentPlatforms?: unknown })
-        .enabledAgentPlatforms;
+      const explicit = (global as { enabledAgentPlatforms?: unknown }).enabledAgentPlatforms;
       if (explicit !== undefined) {
         const enabled = normalizeAgentPlatforms(explicit, []);
         if (enabled.length > 0) return { enabled, needsFirstRunChoice: false };
@@ -63,10 +62,7 @@ export async function loadAgentPlatformSelection(dataDir: string): Promise<{
 
   const sidecar = await readJson(path.join(dataDir, SELECTION_FILE));
   if (sidecar && typeof sidecar === "object" && !Array.isArray(sidecar)) {
-    const enabled = normalizeAgentPlatforms(
-      (sidecar as { enabled?: unknown }).enabled,
-      [],
-    );
+    const enabled = normalizeAgentPlatforms((sidecar as { enabled?: unknown }).enabled, []);
     if (enabled.length > 0) return { enabled, needsFirstRunChoice: false };
   }
 
@@ -112,14 +108,16 @@ export async function applyAgentTestPlatformSelection(
   const config = await readJson(configPath);
   if (!config || typeof config !== "object" || Array.isArray(config)) return;
   const record = config as { global?: unknown };
-  const global = record.global && typeof record.global === "object" && !Array.isArray(record.global)
-    ? record.global as Record<string, unknown>
-    : {};
+  const global =
+    record.global && typeof record.global === "object" && !Array.isArray(record.global)
+      ? (record.global as Record<string, unknown>)
+      : {};
   const current = normalizeAgentPlatforms(global.enabledAgentPlatforms, []);
   if (
-    current.length === enabled.length
-    && current.every((platform, index) => platform === enabled[index])
-  ) return;
+    current.length === enabled.length &&
+    current.every((platform, index) => platform === enabled[index])
+  )
+    return;
   await writeJsonAtomically(configPath, {
     ...record,
     global: {

@@ -2,15 +2,13 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
-import {
-  tryParseStructuredOutputText,
-  } from "@orkestrator/protocol/structured-output";
+import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import {
   parsePromptAttachments,
   PromptAttachmentError,
   readPromptImages,
   type AcpPromptImage,
-  } from "./prompt-attachments.js";
+} from "./prompt-attachments.js";
 import {
   applyComposerPatch,
   createSession,
@@ -19,7 +17,7 @@ import {
   parseComposerPatch,
   recordTurnUsage,
   resumeSession,
-  } from "./acp-session.js";
+} from "./acp-session.js";
 import {
   AcpProcess,
   ACP_TOKEN_HEADER,
@@ -40,10 +38,8 @@ import {
   type BridgeFilePart,
   type JsonObject,
   type SessionState,
-  } from "./acp-context.js";
-import {
-  boundTranscript,
-  } from "./acp-transcript.js";
+} from "./acp-context.js";
+import { boundTranscript } from "./acp-transcript.js";
 import {
   boundTranscriptForRead,
   messageWindow,
@@ -53,20 +49,14 @@ import {
   publicSession,
   setPromptJournal,
   setStructuredResult,
-  } from "./acp-public.js";
-import {
-  listNormalizedModels,
-} from "./acp-persistence.js";
-import {
-  persistState,
-} from "./acp-persist-writer.js";
+} from "./acp-public.js";
+import { listNormalizedModels } from "./acp-persistence.js";
+import { persistState } from "./acp-persist-writer.js";
 import {
   cancelCursorToolMetadataReconcile,
   scheduleCursorToolMetadataReconcile,
 } from "./acp-tools.js";
-import {
-  reconcileStaleToolParts,
-} from "./acp-reconciliation.js";
+import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt } from "./acp-prompt.js";
 import { hydrateCursorChildTranscripts } from "./acp-cursor-background.js";
 import { schedulePersist } from "./acp-persist-writer.js";
@@ -99,16 +89,13 @@ export async function route(
     if (Buffer.byteLength(selectedSessionId) > 1_024) {
       return json(response, 400, { error: "sessionId is too long" });
     }
-    const state = await resumeSession(
-      selectedSessionId,
-      clientSignal,
-      parseComposerPatch(body),
-    );
+    const state = await resumeSession(selectedSessionId, clientSignal, parseComposerPatch(body));
     return json(response, 201, publicSession(state));
   }
   if (url.pathname === "/session/create" && request.method === "POST") {
     const body = await readJson(request);
-    const rawClientSessionKey = typeof body.clientSessionKey === "string" ? body.clientSessionKey.trim() : "";
+    const rawClientSessionKey =
+      typeof body.clientSessionKey === "string" ? body.clientSessionKey.trim() : "";
     if (Buffer.byteLength(rawClientSessionKey) > 512) {
       return json(response, 400, { error: "clientSessionKey is too long" });
     }
@@ -121,7 +108,10 @@ export async function route(
     });
     return json(response, 201, publicSession(state));
   }
-  const match = /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals(?:\/[^/]+)?))?$/.exec(url.pathname);
+  const match =
+    /^\/session\/([^/]+)(?:\/(messages|status|activity|prompt|attach|dispatch|cancel|abort|structured-output|interactions|config|approvals(?:\/[^/]+)?))?$/.exec(
+      url.pathname,
+    );
   if (!match) return json(response, 404, { error: "Not found" });
   const state = sessions.get(match[1]!);
   if (!state) {
@@ -137,7 +127,11 @@ export async function route(
   if (action === "messages" && request.method === "GET") {
     hydrateCursorChildTranscripts(state);
     boundTranscriptForRead(state);
-    return json(response, 200, messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))));
+    return json(
+      response,
+      200,
+      messageWindow(state, parseFromIndex(url.searchParams.get("fromIndex"))),
+    );
   }
   if (action === "status" && request.method === "GET") {
     const contextUsage = publicContextUsage(state);
@@ -174,9 +168,8 @@ export async function route(
   }
   if (action === "activity" && request.method === "GET") {
     return json(response, 200, {
-      activity: state.status === "running" || state.activeSubagentToolIds.size > 0
-        ? "working"
-        : "idle",
+      activity:
+        state.status === "running" || state.activeSubagentToolIds.size > 0 ? "working" : "idle",
     });
   }
   /**
@@ -193,11 +186,11 @@ export async function route(
       // `prepared` means the route owns the id but has not handed the prompt to
       // the agent yet. `ambiguous` means a previous process died without a
       // durable answer. Neither is an explicit positive.
-      dispatch: entry && (
-        entry.state === "accepted"
-        || entry.state === "completed"
-        || entry.state === "failed"
-      ) ? "dispatched" : "unknown",
+      dispatch:
+        entry &&
+        (entry.state === "accepted" || entry.state === "completed" || entry.state === "failed")
+          ? "dispatched"
+          : "unknown",
     });
   }
   /**
@@ -213,20 +206,23 @@ export async function route(
     await ensureSessionProcess(state, clientSignal);
     return json(response, 200, { attached: true });
   }
-  if (action === "approvals" && request.method === "GET") return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
-  if (action === "interactions" && request.method === "GET") return json(response, 200, { interactions: [], revision: state.revision });
+  if (action === "approvals" && request.method === "GET")
+    return json(response, 200, { approvals: publicApprovals(state), revision: state.revision });
+  if (action === "interactions" && request.method === "GET")
+    return json(response, 200, { interactions: [], revision: state.revision });
   if (action?.startsWith("approvals/") && request.method === "POST") {
     const approval = state.approvals.get(decodeURIComponent(action.slice("approvals/".length)));
     if (!approval) return json(response, 404, { error: "Approval not found" });
     const body = await readJson(request);
     const explicitOption = typeof body.optionId === "string" ? body.optionId : undefined;
-    const selectedByDecision = body.decision === "approve"
-      ? approval.options.find((option) => option.kind === "allow_once")?.optionId
-        ?? approval.options.find((option) => option.kind?.startsWith("allow"))?.optionId
-      : body.decision === "deny"
-        ? approval.options.find((option) => option.kind === "reject_once")?.optionId
-          ?? approval.options.find((option) => option.kind?.startsWith("reject"))?.optionId
-        : undefined;
+    const selectedByDecision =
+      body.decision === "approve"
+        ? (approval.options.find((option) => option.kind === "allow_once")?.optionId ??
+          approval.options.find((option) => option.kind?.startsWith("allow"))?.optionId)
+        : body.decision === "deny"
+          ? (approval.options.find((option) => option.kind === "reject_once")?.optionId ??
+            approval.options.find((option) => option.kind?.startsWith("reject"))?.optionId)
+          : undefined;
     approval.respond(explicitOption ?? selectedByDecision);
     return json(response, 200, { resolved: true });
   }
@@ -254,7 +250,8 @@ export async function route(
     if (state.subagentLimitExceeded) {
       return json(response, 409, { error: "Session exceeded the active sub-agent limit" });
     }
-    if (Buffer.byteLength(requestId) > 512) return json(response, 400, { error: "requestId is too long" });
+    if (Buffer.byteLength(requestId) > 512)
+      return json(response, 400, { error: "requestId is too long" });
     if (requestId && state.promptJournal.has(requestId)) {
       const journaled = state.promptJournal.get(requestId)!;
       // A persisted "ambiguous" entry means an earlier bridge process accepted
@@ -281,11 +278,12 @@ export async function route(
     // `dispatching` is separate from `status` because reattaching a detached
     // thread legitimately sets `status` back to "idle" while we hold the claim.
     state.dispatching = true;
-    if (requestId) setPromptJournal(state, {
-      requestId,
-      state: "prepared",
-      acceptedAt: Date.now(),
-    });
+    if (requestId)
+      setPromptJournal(state, {
+        requestId,
+        state: "prepared",
+        acceptedAt: Date.now(),
+      });
     let child: AcpProcess;
     let images: AcpPromptImage[];
     try {
@@ -313,14 +311,20 @@ export async function route(
     }
     const userMessageId = randomBytes(12).toString("hex");
     state.messages.push({
-      id: userMessageId, role: "user", content: prompt,
+      id: userMessageId,
+      role: "user",
+      content: prompt,
       parts: [
-        ...(prompt ? [{
-          type: "text" as const,
-          content: prompt,
-          sourcePartId: `${userMessageId}:0`,
-          sourceMessageId: userMessageId,
-        }] : []),
+        ...(prompt
+          ? [
+              {
+                type: "text" as const,
+                content: prompt,
+                sourcePartId: `${userMessageId}:0`,
+                sourceMessageId: userMessageId,
+              },
+            ]
+          : []),
         ...images.map((image, index): BridgeFilePart => ({
           type: "file",
           content: image.filename || image.path,
@@ -328,7 +332,8 @@ export async function route(
           sourcePartId: `${userMessageId}:${index + 1}`,
           sourceMessageId: userMessageId,
         })),
-      ], createdAt: new Date().toISOString(),
+      ],
+      createdAt: new Date().toISOString(),
     });
     state.status = "running";
     state.error = undefined;
@@ -342,107 +347,129 @@ export async function route(
     boundTranscript(state);
     await persistState();
     const acpPrompt = schema ? `${prompt}\n\n${structuredPromptInstruction(schema)}` : prompt;
-    const promptCompletion = dispatchAcpPrompt(state, child, {
-      sessionId: state.acpSessionId,
-      prompt: [
-        ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),
-        // Inline base64 is the only image form both agents read. Cursor
-        // advertises it; Grok understates its own capability but accepts the
-        // same block, and neither supports ACP embedded resources.
-        ...images.map((image) => ({
-          type: "image",
-          mimeType: image.mimeType,
-          data: image.data,
-        })),
-      ],
-    }, promptSequence, schema);
+    const promptCompletion = dispatchAcpPrompt(
+      state,
+      child,
+      {
+        sessionId: state.acpSessionId,
+        prompt: [
+          ...(acpPrompt ? [{ type: "text", text: acpPrompt }] : []),
+          // Inline base64 is the only image form both agents read. Cursor
+          // advertises it; Grok understates its own capability but accepts the
+          // same block, and neither supports ACP embedded resources.
+          ...images.map((image) => ({
+            type: "image",
+            mimeType: image.mimeType,
+            data: image.data,
+          })),
+        ],
+      },
+      promptSequence,
+      schema,
+    );
     // Calling the async dispatcher above synchronously writes the first
     // `session/prompt` frame before it returns its promise. Only now can the
     // journal answer an acknowledgement-recovery probe positively.
-    if (requestId) setPromptJournal(state, {
-      requestId,
-      state: "accepted",
-      acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
-    });
+    if (requestId)
+      setPromptJournal(state, {
+        requestId,
+        state: "accepted",
+        acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+      });
     // The turn is now dispatched and `status` is "running", so the busy check
     // is authoritative again and the claim can be released.
     state.dispatching = false;
-    void promptCompletion.then((result) => {
-      // PromptResponse.usage is the ACP carrier; Grok still nests the same
-      // numbers under `_meta`. Parse the whole result so either spelling lands
-      // before `turnStartedAt` is cleared and the elapsed time is lost.
-      recordTurnUsage(state, result);
-      state.turnStartedAt = undefined;
-      state.currentTurnUsage = undefined;
-      if (schema && requestId) {
-        const output = state.currentTurnOutput?.trim() ?? "";
-        if (Buffer.byteLength(output) > MAX_STRUCTURED_RESULT_BYTES) {
-          setStructuredResult(state, requestId, {
-            ok: false,
-            provider,
-            requestId,
-            error: { code: "output_too_large", message: `${provider} returned too much structured output`, provider, retryable: true },
-          });
-        } else {
-          // Cursor/Grok dump thinking into the text channel. A raw JSON.parse of
-          // the concatenated turn would reject a valid report that follows that
-          // prefix, a Markdown fence, or a short wrapper. Recover the last
-          // well-formed document; schema validation still happens above this.
-          const value = tryParseStructuredOutputText(output);
-          if (value === undefined) {
+    void promptCompletion.then(
+      (result) => {
+        // PromptResponse.usage is the ACP carrier; Grok still nests the same
+        // numbers under `_meta`. Parse the whole result so either spelling lands
+        // before `turnStartedAt` is cleared and the elapsed time is lost.
+        recordTurnUsage(state, result);
+        state.turnStartedAt = undefined;
+        state.currentTurnUsage = undefined;
+        if (schema && requestId) {
+          const output = state.currentTurnOutput?.trim() ?? "";
+          if (Buffer.byteLength(output) > MAX_STRUCTURED_RESULT_BYTES) {
             setStructuredResult(state, requestId, {
               ok: false,
               provider,
               requestId,
-              error: { code: "malformed_output", message: `${provider} returned malformed JSON`, provider, retryable: true },
+              error: {
+                code: "output_too_large",
+                message: `${provider} returned too much structured output`,
+                provider,
+                retryable: true,
+              },
             });
           } else {
-            setStructuredResult(state, requestId, { ok: true, value, provider, requestId });
+            // Cursor/Grok dump thinking into the text channel. A raw JSON.parse of
+            // the concatenated turn would reject a valid report that follows that
+            // prefix, a Markdown fence, or a short wrapper. Recover the last
+            // well-formed document; schema validation still happens above this.
+            const value = tryParseStructuredOutputText(output);
+            if (value === undefined) {
+              setStructuredResult(state, requestId, {
+                ok: false,
+                provider,
+                requestId,
+                error: {
+                  code: "malformed_output",
+                  message: `${provider} returned malformed JSON`,
+                  provider,
+                  retryable: true,
+                },
+              });
+            } else {
+              setStructuredResult(state, requestId, { ok: true, value, provider, requestId });
+            }
           }
         }
-      }
-      if (requestId) setPromptJournal(state, {
-        requestId,
-        state: state.outputTruncated ? "failed" : "completed",
-        acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
-      });
-      // The turn is over. A tool still in flight here was cancelled or abandoned
-      // by the agent — ACP has no status for that, so settle it explicitly.
-      reconcileStaleToolParts(state);
-      state.currentTurnOutput = null;
-      if (!state.outputTruncated && state.child === child && state.status !== "error") {
-        state.status = "idle";
-      }
-      state.revision += 1;
-      schedulePersist();
-      // The final pass is the safety net for every title a live pass could not
-      // reach: one Cursor had not yet indexed, one skipped because a sibling
-      // was still in flight, and one dropped because the turn spent its live
-      // budget. It remains outside the authoritative turn lifecycle: a slow or
-      // incompatible replay cannot keep the session working, block the next
-      // prompt, or make completion ambiguous. The per-session scheduler also
-      // prevents this pass from racing an in-flight live enrichment.
-      scheduleCursorToolMetadataReconcile(state, { final: true });
-    }, (error: unknown) => {
-      state.status = "error";
-      state.error = error instanceof Error ? error.message : String(error);
-      state.turnStartedAt = undefined;
-      state.currentTurnUsage = undefined;
-      // A turn that failed gets no final pass, so a live timer armed moments
-      // before the failure has nothing left to complete. Drop it here for the
-      // same reason `DELETE` and `shutdown` do: enrichment is display-only
-      // background work, and nothing should outlive the turn that asked for it.
-      cancelCursorToolMetadataReconcile(state);
-      reconcileStaleToolParts(state, true);
-      if (requestId) setPromptJournal(state, {
-        requestId,
-        state: "failed",
-        acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
-      });
-      state.currentTurnOutput = null;
-      state.revision += 1;
-      schedulePersist();
-    });
+        if (requestId)
+          setPromptJournal(state, {
+            requestId,
+            state: state.outputTruncated ? "failed" : "completed",
+            acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+          });
+        // The turn is over. A tool still in flight here was cancelled or abandoned
+        // by the agent — ACP has no status for that, so settle it explicitly.
+        reconcileStaleToolParts(state);
+        state.currentTurnOutput = null;
+        if (!state.outputTruncated && state.child === child && state.status !== "error") {
+          state.status = "idle";
+        }
+        state.revision += 1;
+        schedulePersist();
+        // The final pass is the safety net for every title a live pass could not
+        // reach: one Cursor had not yet indexed, one skipped because a sibling
+        // was still in flight, and one dropped because the turn spent its live
+        // budget. It remains outside the authoritative turn lifecycle: a slow or
+        // incompatible replay cannot keep the session working, block the next
+        // prompt, or make completion ambiguous. The per-session scheduler also
+        // prevents this pass from racing an in-flight live enrichment.
+        scheduleCursorToolMetadataReconcile(state, { final: true });
+      },
+      (error: unknown) => {
+        state.status = "error";
+        state.error = error instanceof Error ? error.message : String(error);
+        state.turnStartedAt = undefined;
+        state.currentTurnUsage = undefined;
+        // A turn that failed gets no final pass, so a live timer armed moments
+        // before the failure has nothing left to complete. Drop it here for the
+        // same reason `DELETE` and `shutdown` do: enrichment is display-only
+        // background work, and nothing should outlive the turn that asked for it.
+        cancelCursorToolMetadataReconcile(state);
+        reconcileStaleToolParts(state, true);
+        if (requestId)
+          setPromptJournal(state, {
+            requestId,
+            state: "failed",
+            acceptedAt: state.promptJournal.get(requestId)?.acceptedAt ?? Date.now(),
+          });
+        state.currentTurnOutput = null;
+        state.revision += 1;
+        schedulePersist();
+      },
+    );
     return json(response, 202, { accepted: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
@@ -492,11 +519,11 @@ export function isTrustedBridgeOrigin(origin: string | undefined): boolean {
   try {
     const parsed = new URL(origin);
     return (
-      (parsed.protocol === "http:" || parsed.protocol === "https:")
-      && (parsed.hostname === "127.0.0.1"
-        || parsed.hostname === "localhost"
-        || parsed.hostname === "::1"
-        || parsed.hostname === "[::1]")
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      (parsed.hostname === "127.0.0.1" ||
+        parsed.hostname === "localhost" ||
+        parsed.hostname === "::1" ||
+        parsed.hostname === "[::1]")
     );
   } catch {
     return false;
@@ -505,19 +532,13 @@ export function isTrustedBridgeOrigin(origin: string | undefined): boolean {
 
 export function requestPathname(request: IncomingMessage): string {
   try {
-    return new URL(
-      request.url || "/",
-      `http://${request.headers.host || "localhost"}`,
-    ).pathname;
+    return new URL(request.url || "/", `http://${request.headers.host || "localhost"}`).pathname;
   } catch {
     return "";
   }
 }
 
-export function applyOriginPolicy(
-  request: IncomingMessage,
-  response: ServerResponse,
-): boolean {
+export function applyOriginPolicy(request: IncomingMessage, response: ServerResponse): boolean {
   const origin = request.headers.origin;
   if (!isTrustedBridgeOrigin(origin)) {
     json(response, 403, { error: "Origin is not allowed" });
@@ -537,11 +558,16 @@ export function applyOriginPolicy(
     response.setHeader("Access-Control-Allow-Origin", origin);
   }
   if (request.method !== "OPTIONS") return true;
-  response.writeHead(204, unauthenticatedRoute ? {} : {
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": `Content-Type, Authorization, ${ACP_TOKEN_HEADER}`,
-    "Access-Control-Allow-Private-Network": "true",
-  });
+  response.writeHead(
+    204,
+    unauthenticatedRoute
+      ? {}
+      : {
+          "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+          "Access-Control-Allow-Headers": `Content-Type, Authorization, ${ACP_TOKEN_HEADER}`,
+          "Access-Control-Allow-Private-Network": "true",
+        },
+  );
   response.end();
   return false;
 }
@@ -568,7 +594,7 @@ export async function readJson(request: IncomingMessage): Promise<JsonObject> {
 export const RESPONSE_ACCEPTS_GZIP = Symbol("responseAcceptsGzip");
 
 export function acceptsGzip(value: string | string[] | undefined): boolean {
-  const header = Array.isArray(value) ? value.join(",") : value ?? "";
+  const header = Array.isArray(value) ? value.join(",") : (value ?? "");
   let wildcardQuality: number | undefined;
   for (const entry of header.split(",")) {
     const [name, ...parameters] = entry.trim().toLowerCase().split(";");
@@ -577,11 +603,12 @@ export function acceptsGzip(value: string | string[] | undefined): boolean {
       .map((parameter) => parameter.trim())
       .find((parameter) => parameter.startsWith("q="));
     const rawQuality = qualityParameter?.slice(2);
-    const quality = rawQuality === undefined
-      ? 1
-      : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(rawQuality)
-        ? Number(rawQuality)
-        : 0;
+    const quality =
+      rawQuality === undefined
+        ? 1
+        : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(rawQuality)
+          ? Number(rawQuality)
+          : 0;
     // An explicit coding always overrides a wildcard, including q=0.
     if (name === "gzip") return quality > 0;
     wildcardQuality = quality;
@@ -597,9 +624,10 @@ export function sendJson(
 ): void {
   if (response.headersSent || response.destroyed) return;
   const existingVary = response.getHeader("Vary");
-  const vary = typeof existingVary === "string" && existingVary.trim()
-    ? `${existingVary}, Accept-Encoding`
-    : "Accept-Encoding";
+  const vary =
+    typeof existingVary === "string" && existingVary.trim()
+      ? `${existingVary}, Accept-Encoding`
+      : "Accept-Encoding";
   response.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
@@ -613,10 +641,10 @@ export function sendJson(
 export function json(response: ServerResponse, status: number, value: unknown): void {
   if (response.headersSent || response.destroyed) return;
   const body = Buffer.from(JSON.stringify(value));
-  const shouldCompress = body.byteLength >= 1024
-    && (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[
-      RESPONSE_ACCEPTS_GZIP
-    ] === true;
+  const shouldCompress =
+    body.byteLength >= 1024 &&
+    (response as ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean })[RESPONSE_ACCEPTS_GZIP] ===
+      true;
   if (!shouldCompress) {
     sendJson(response, status, body, false);
     return;

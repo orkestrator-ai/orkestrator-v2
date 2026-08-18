@@ -91,8 +91,7 @@ html {
 body {
   @apply bg-background text-foreground;
   font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   height: 100%;
@@ -322,7 +321,8 @@ body[data-orkestrator-dev-profile]::before {
 }
 
 @keyframes agent-connecting-pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 0.42;
     filter: brightness(0.7);
   }

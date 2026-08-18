@@ -57,7 +57,6 @@ export interface TranscriptCatalog {
   transcriptPathByThreadId: Map<string, string>;
 }
 
-
 export function getCodexHomeDir(): string {
   return process.env.CODEX_HOME || join(homedir(), ".codex");
 }
@@ -78,7 +77,7 @@ async function walkJsonlFiles(dir: string): Promise<string[]> {
   for (const entry of entries) {
     const absolutePath = join(dir, entry.name);
     if (entry.isDirectory()) {
-      files.push(...await walkJsonlFiles(absolutePath));
+      files.push(...(await walkJsonlFiles(absolutePath)));
       continue;
     }
 
@@ -106,9 +105,7 @@ export async function listTranscriptPaths(): Promise<string[]> {
  * every rollout under the Codex home (thousands of files), and this lookup runs
  * on every render tick of a streaming turn.
  */
-export type TranscriptPathSource =
-  | readonly string[]
-  | (() => Promise<readonly string[]>);
+export type TranscriptPathSource = readonly string[] | (() => Promise<readonly string[]>);
 
 interface CachedTranscriptPath {
   path: string | null;
@@ -181,10 +178,7 @@ export function getTranscriptPathCacheStats(): { entries: number } {
  * — the stem is the id, or ends with `-<id>` — and only fall back to the loose
  * containment check for filename shapes neither this code nor Codex produces.
  */
-function selectTranscriptPath(
-  paths: readonly string[],
-  threadId: string,
-): string | null {
+function selectTranscriptPath(paths: readonly string[], threadId: string): string | null {
   const anchored = paths.find((file) => {
     const stem = basename(file).replace(/\.jsonl$/, "");
     return stem === threadId || stem.endsWith(`-${threadId}`);
@@ -214,8 +208,8 @@ export async function findTranscriptPath(
         cachedTranscriptPaths.delete(key);
       }
     } else if (
-      options?.allowNegativeCache !== false
-      && Date.now() - cached.checkedAt < pathCacheLimits.negativeTtlMs
+      options?.allowNegativeCache !== false &&
+      Date.now() - cached.checkedAt < pathCacheLimits.negativeTtlMs
     ) {
       // Callers resolving one specific thread opt out: the rollout is written by
       // the app-server child asynchronously after this process asks for the
@@ -274,10 +268,7 @@ export async function getSessionMetaFromTranscriptPath(
   }
 
   const payload = sessionMetaRecord.payload;
-  const id =
-    typeof payload.id === "string" && payload.id.length > 0
-      ? payload.id
-      : null;
+  const id = typeof payload.id === "string" && payload.id.length > 0 ? payload.id : null;
 
   if (!id) {
     return null;
@@ -286,23 +277,21 @@ export async function getSessionMetaFromTranscriptPath(
   let firstUserText: string | null = null;
   for (const record of records) {
     if (
-      record.type !== "response_item"
-      || record.payload?.type !== "message"
-      || record.payload?.role !== "user"
+      record.type !== "response_item" ||
+      record.payload?.type !== "message" ||
+      record.payload?.role !== "user"
     ) {
       continue;
     }
     firstUserText = extractPersistedMessageText(record.payload.content, "user");
     if (firstUserText) break;
   }
-  const transcriptTitle = firstUserText
-    ? buildFallbackSessionTitle(firstUserText)
-    : undefined;
+  const transcriptTitle = firstUserText ? buildFallbackSessionTitle(firstUserText) : undefined;
 
   return {
     id,
     title: fallbackTitle ?? transcriptTitle,
-    titleSource: fallbackTitle ? "codex" : (transcriptTitle ? "prompt" : undefined),
+    titleSource: fallbackTitle ? "codex" : transcriptTitle ? "prompt" : undefined,
     updatedAt:
       typeof payload.timestamp === "string"
         ? payload.timestamp
@@ -338,8 +327,7 @@ let cachedTranscriptCatalog: CachedTranscriptCatalog | null = null;
 let catalogTtlMs = TRANSCRIPT_CATALOG_TTL_MS;
 let catalogNow = Date.now;
 let catalogInvalidations = 0;
-let transcriptCatalogBuilder: () => Promise<TranscriptCatalog> =
-  () => buildTranscriptCatalog();
+let transcriptCatalogBuilder: () => Promise<TranscriptCatalog> = () => buildTranscriptCatalog();
 
 export function setTranscriptCatalogTtlForTesting(ttlMs?: number): void {
   catalogTtlMs = ttlMs ?? TRANSCRIPT_CATALOG_TTL_MS;
@@ -371,8 +359,8 @@ export function getTranscriptCatalogInvalidationCountForTesting(): number {
  */
 function catalogKnowsThread(catalog: TranscriptCatalog, threadId: string): boolean {
   return (
-    catalog.transcriptPathByThreadId.has(threadId)
-    || selectTranscriptPath(
+    catalog.transcriptPathByThreadId.has(threadId) ||
+    selectTranscriptPath(
       catalog.metas.flatMap((meta) => meta.transcriptPath ?? []),
       threadId,
     ) !== null
@@ -393,12 +381,9 @@ async function buildTranscriptCatalogCached(
   const codexHome = getCodexHomeDir();
   const cached = cachedTranscriptCatalog;
   if (
-    cached
-    && cached.codexHome === codexHome
-    && (
-      cached.settledAt === undefined
-      || catalogNow() - cached.settledAt < catalogTtlMs
-    )
+    cached &&
+    cached.codexHome === codexHome &&
+    (cached.settledAt === undefined || catalogNow() - cached.settledAt < catalogTtlMs)
   ) {
     if (mustContainThreadId === undefined) return cached.catalog;
     const settled = await cached.catalog.catch(() => null);
@@ -478,11 +463,11 @@ export async function getPersistedSessionMeta(
   transcriptPaths?: TranscriptPathSource,
 ): Promise<PersistedSessionMeta | null> {
   const transcriptPath = transcriptCatalog
-    ? transcriptCatalog.transcriptPathByThreadId.get(threadId) ??
+    ? (transcriptCatalog.transcriptPathByThreadId.get(threadId) ??
       selectTranscriptPath(
         transcriptCatalog.metas.flatMap((meta) => meta.transcriptPath ?? []),
         threadId,
-      )
+      ))
     : await findTranscriptPath(threadId, transcriptPaths);
   if (!transcriptPath) {
     return fallbackUpdatedAt
@@ -500,14 +485,10 @@ export async function getPersistedSessionMeta(
     ? {
         ...cachedMeta,
         title: fallbackTitle ?? cachedMeta.title,
-        titleSource: fallbackTitle ? "codex" as const : cachedMeta.titleSource,
+        titleSource: fallbackTitle ? ("codex" as const) : cachedMeta.titleSource,
         updatedAt: cachedMeta.updatedAt || fallbackUpdatedAt || new Date().toISOString(),
       }
-    : await getSessionMetaFromTranscriptPath(
-        transcriptPath,
-        fallbackTitle,
-        fallbackUpdatedAt,
-      );
+    : await getSessionMetaFromTranscriptPath(transcriptPath, fallbackTitle, fallbackUpdatedAt);
   if (!meta) {
     return {
       id: threadId,
@@ -531,13 +512,7 @@ export function createSharedTranscriptMetaLoader(
     threadId: string,
     transcriptPaths: () => Promise<readonly string[]>,
   ) => Promise<PersistedSessionMeta | null> = (threadId, transcriptPaths) =>
-    getPersistedSessionMeta(
-      threadId,
-      undefined,
-      undefined,
-      undefined,
-      transcriptPaths,
-    ),
+    getPersistedSessionMeta(threadId, undefined, undefined, undefined, transcriptPaths),
 ): (threadId: string) => Promise<PersistedSessionMeta | null> {
   // Lazy on purpose: when every requested thread answers from the path cache,
   // the directory walk never happens at all. The promise is still shared, so
@@ -641,10 +616,12 @@ export function mergePersistedSessionMeta(
 
 function isSyntheticPersistedUserText(text: string): boolean {
   const trimmed = text.trim();
-  return trimmed.startsWith("# AGENTS.md instructions for ")
-    || trimmed.startsWith(
+  return (
+    trimmed.startsWith("# AGENTS.md instructions for ") ||
+    trimmed.startsWith(
       "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
-    );
+    )
+  );
 }
 
 /**
@@ -671,9 +648,7 @@ export function extractPersistedMessageContent(
     .map((item) => {
       if (!item || typeof item !== "object") return null;
       const record = item as Record<string, unknown>;
-      return record.type === key && typeof record.text === "string"
-        ? record.text
-        : null;
+      return record.type === key && typeof record.text === "string" ? record.text : null;
     })
     .filter((segment): segment is string => typeof segment === "string");
 
@@ -686,9 +661,10 @@ export function extractPersistedMessageContent(
     return null;
   }
 
-  const { text, parts } = role === "user"
-    ? extractAttachmentTags(joined)
-    : { text: joined, parts: [] as NormalizedPart[] };
+  const { text, parts } =
+    role === "user"
+      ? extractAttachmentTags(joined)
+      : { text: joined, parts: [] as NormalizedPart[] };
 
   // An attachment-only prompt has no text left after stripping, but it is still
   // a message the user sent.
@@ -703,10 +679,7 @@ export function extractPersistedMessageContent(
   return { text, attachments: parts };
 }
 
-export function extractPersistedMessageText(
-  content: unknown,
-  role: MessageRole,
-): string | null {
+export function extractPersistedMessageText(content: unknown, role: MessageRole): string | null {
   return extractPersistedMessageContent(content, role)?.text || null;
 }
 
@@ -733,9 +706,7 @@ function readTurnModel(payload: unknown): string | undefined {
 }
 
 function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0
-    ? value
-    : undefined;
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 /**
@@ -750,44 +721,41 @@ function asNonEmptyString(value: unknown): string | undefined {
  * Mirrors `parseChildTranscript`, which reads the same records from child rollouts.
  */
 function persistedToolState(value: unknown): ToolState {
-  return value === "failed"
-    ? "failure"
-    : value === "completed"
-      ? "success"
-      : "pending";
+  return value === "failed" ? "failure" : value === "completed" ? "success" : "pending";
 }
 
-function createPersistedToolParts(
-  payload: Record<string, unknown>,
-  cwd: string,
-): NormalizedPart[] {
+function createPersistedToolParts(payload: Record<string, unknown>, cwd: string): NormalizedPart[] {
   const toolName = asNonEmptyString(payload.name) ?? "tool";
-  const rawArgs = payload.type === "custom_tool_call"
-    ? payload.input
-    : payload.arguments;
+  const rawArgs = payload.type === "custom_tool_call" ? payload.input : payload.arguments;
   const toolState = persistedToolState(payload.status);
-  const parsedPatchParts = toolName.trim().toLowerCase() === "apply_patch"
-    ? rawApplyPatchParts(rawArgs, cwd, toolState)
-    : [];
-  const parts: NormalizedPart[] = parsedPatchParts.length > 0
-    ? parsedPatchParts
-    : [{
-        type: "tool-invocation",
-        content: toolName,
-        toolName,
-        toolArgs: normalizeTranscriptToolArgs(toolName, rawArgs),
-        toolState,
-        toolTitle: toolName,
-      }];
+  const parsedPatchParts =
+    toolName.trim().toLowerCase() === "apply_patch"
+      ? rawApplyPatchParts(rawArgs, cwd, toolState)
+      : [];
+  const parts: NormalizedPart[] =
+    parsedPatchParts.length > 0
+      ? parsedPatchParts
+      : [
+          {
+            type: "tool-invocation",
+            content: toolName,
+            toolName,
+            toolArgs: normalizeTranscriptToolArgs(toolName, rawArgs),
+            toolState,
+            toolTitle: toolName,
+          },
+        ];
 
   // Only a `custom_tool_call` can carry both a terminal outcome and an inline
   // result on the call record itself; a `function_call` never does.
   return payload.type === "custom_tool_call" && toolState !== "pending"
-    ? parts.map((part) => applyTranscriptToolOutput(
-        part,
-        payload.output,
-        resolveTranscriptToolOutputState(toolName, payload.output, toolState),
-      ))
+    ? parts.map((part) =>
+        applyTranscriptToolOutput(
+          part,
+          payload.output,
+          resolveTranscriptToolOutputState(toolName, payload.output, toolState),
+        ),
+      )
     : parts;
 }
 
@@ -807,11 +775,7 @@ function persistedOutputState(
   output: unknown,
 ): ToolState | null {
   return payloadType === "custom_tool_call_output"
-    ? resolveTranscriptToolOutputState(
-        part.toolName,
-        output,
-        part.toolState ?? null,
-      )
+    ? resolveTranscriptToolOutputState(part.toolName, output, part.toolState ?? null)
     : null;
 }
 
@@ -882,9 +846,7 @@ async function resolvePersistedSessionMetaForThread(
   return meta;
 }
 
-export async function hydrateMessagesFromPersistedSession(
-  threadId: string,
-): Promise<{
+export async function hydrateMessagesFromPersistedSession(threadId: string): Promise<{
   messages: NormalizedMessage[];
   title?: string;
   titleSource?: PersistedSessionMeta["titleSource"];
@@ -892,11 +854,13 @@ export async function hydrateMessagesFromPersistedSession(
   // Direct per-thread lookup first: hydration runs on every re-attach, and the
   // cwd listing behind the fallback rebuilds the whole transcript catalog — one
   // head read per rollout on disk — to answer for a single thread.
-  const meta = await resolvePersistedSessionMetaForThread(threadId)
-    ?? (await listPersistedSessionsForCwd(getWorkingDirectory(), {
-      mustContainThreadId: threadId,
-    }))
-      .find((session) => session.id === threadId);
+  const meta =
+    (await resolvePersistedSessionMetaForThread(threadId)) ??
+    (
+      await listPersistedSessionsForCwd(getWorkingDirectory(), {
+        mustContainThreadId: threadId,
+      })
+    ).find((session) => session.id === threadId);
   if (!meta?.transcriptPath) {
     return { messages: [], title: meta?.title, titleSource: meta?.titleSource };
   }
@@ -943,9 +907,7 @@ export async function hydrateMessagesFromPersistedSession(
 
     const payload = record.payload;
     const timestamp =
-      typeof record.timestamp === "string"
-        ? record.timestamp
-        : new Date().toISOString();
+      typeof record.timestamp === "string" ? record.timestamp : new Date().toISOString();
 
     const ensureAssistantMessage = (): NormalizedMessage => {
       if (currentAssistantMessage) return currentAssistantMessage;
@@ -978,10 +940,7 @@ export async function hydrateMessagesFromPersistedSession(
       continue;
     }
 
-    if (
-      payload.type === "function_call_output"
-      || payload.type === "custom_tool_call_output"
-    ) {
+    if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
       const callId = asNonEmptyString(payload.call_id);
       // Consume the pairing: a `call_id` is unique to one call, so a second
       // output bearing it must not reach back and rewrite an earlier turn's part.
@@ -1026,10 +985,7 @@ export async function hydrateMessagesFromPersistedSession(
       id: createMessageId(),
       role,
       content: text,
-      parts: [
-        ...(text ? [{ type: "text" as const, content: text }] : []),
-        ...attachments,
-      ],
+      parts: [...(text ? [{ type: "text" as const, content: text }] : []), ...attachments],
       createdAt: timestamp,
       ...(currentTurnId ? { turnId: currentTurnId } : {}),
     });

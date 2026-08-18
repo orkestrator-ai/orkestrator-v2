@@ -10,7 +10,11 @@ import { create } from "zustand";
  * @param environmentId - The environment ID (required for local environments to ensure uniqueness)
  * @returns A unique session key in the format "containerId:tabId" or "local-environmentId:tabId"
  */
-export function createSessionKey(containerId: string | null, tabId: string, environmentId?: string): string {
+export function createSessionKey(
+  containerId: string | null,
+  tabId: string,
+  environmentId?: string,
+): string {
   if (containerId) {
     return `${containerId}:${tabId}`;
   }
@@ -22,7 +26,7 @@ export function createSessionKey(containerId: string | null, tabId: string, envi
   // Warn in development to help catch missing environmentId for local environments
   console.warn(
     `[terminalSessionStore] createSessionKey called for local environment without environmentId. ` +
-    `This may cause session collisions. tabId: ${tabId}`
+      `This may cause session collisions. tabId: ${tabId}`,
   );
   return `local:${tabId}`;
 }
@@ -85,7 +89,6 @@ interface TerminalSessionStore {
   /** Set the persistent session ID for a tab */
   setPersistentSessionId: (tabId: string, persistentSessionId: string) => void;
 
-
   /** Get compose draft text for a tab */
   getComposeDraftText: (tabId: string) => string;
 
@@ -114,144 +117,142 @@ interface TerminalSessionStore {
   clearAllSessions: () => void;
 }
 
-export const useTerminalSessionStore = create<TerminalSessionStore>(
-  (set, get) => ({
-    sessions: new Map(),
-    composeDraftText: new Map(),
-    composeDraftImages: new Map(),
+export const useTerminalSessionStore = create<TerminalSessionStore>((set, get) => ({
+  sessions: new Map(),
+  composeDraftText: new Map(),
+  composeDraftImages: new Map(),
 
-    getSession: (tabId: string) => {
-      return get().sessions.get(tabId);
-    },
+  getSession: (tabId: string) => {
+    return get().sessions.get(tabId);
+  },
 
-    getSessionId: (tabId: string) => {
-      return get().sessions.get(tabId)?.sessionId;
-    },
+  getSessionId: (tabId: string) => {
+    return get().sessions.get(tabId)?.sessionId;
+  },
 
-    getPersistentSessionId: (tabId: string) => {
-      return get().sessions.get(tabId)?.persistentSessionId;
-    },
+  getPersistentSessionId: (tabId: string) => {
+    return get().sessions.get(tabId)?.persistentSessionId;
+  },
 
-    setSession: (tabId: string, data: TerminalSessionData) => {
-      set((state) => {
-        const newSessions = new Map(state.sessions);
-        newSessions.set(tabId, data);
-        return { sessions: newSessions };
-      });
-    },
+  setSession: (tabId: string, data: TerminalSessionData) => {
+    set((state) => {
+      const newSessions = new Map(state.sessions);
+      newSessions.set(tabId, data);
+      return { sessions: newSessions };
+    });
+  },
 
-    setSerializedBuffer: (tabId: string, buffer: string) => {
-      set((state) => {
-        const existing = state.sessions.get(tabId);
-        if (!existing) return state;
+  setSerializedBuffer: (tabId: string, buffer: string) => {
+    set((state) => {
+      const existing = state.sessions.get(tabId);
+      if (!existing) return state;
 
-        const newSessions = new Map(state.sessions);
-        newSessions.set(tabId, { ...existing, serializedBuffer: buffer });
-        return { sessions: newSessions };
-      });
-    },
+      const newSessions = new Map(state.sessions);
+      newSessions.set(tabId, { ...existing, serializedBuffer: buffer });
+      return { sessions: newSessions };
+    });
+  },
 
-    setPersistentSessionId: (tabId: string, persistentSessionId: string) => {
-      set((state) => {
-        const existing = state.sessions.get(tabId);
-        if (!existing) return state;
+  setPersistentSessionId: (tabId: string, persistentSessionId: string) => {
+    set((state) => {
+      const existing = state.sessions.get(tabId);
+      if (!existing) return state;
 
-        const newSessions = new Map(state.sessions);
-        newSessions.set(tabId, { ...existing, persistentSessionId });
-        return { sessions: newSessions };
-      });
-    },
+      const newSessions = new Map(state.sessions);
+      newSessions.set(tabId, { ...existing, persistentSessionId });
+      return { sessions: newSessions };
+    });
+  },
 
-    getComposeDraftText: (tabId: string) => {
-      return get().composeDraftText.get(tabId) || "";
-    },
+  getComposeDraftText: (tabId: string) => {
+    return get().composeDraftText.get(tabId) || "";
+  },
 
-    setComposeDraftText: (tabId: string, text: string) => {
-      set((state) => {
-        const newDraftText = new Map(state.composeDraftText);
-        if (text.length > 0) {
-          newDraftText.set(tabId, text);
-        } else {
-          newDraftText.delete(tabId);
-        }
-        return { composeDraftText: newDraftText };
-      });
-    },
-
-    getComposeDraftImages: (tabId: string) => {
-      return get().composeDraftImages.get(tabId) || [];
-    },
-
-    setComposeDraftImages: (tabId: string, images: TerminalComposeDraftImage[]) => {
-      set((state) => {
-        const newDraftImages = new Map(state.composeDraftImages);
-        if (images.length > 0) {
-          newDraftImages.set(tabId, images);
-        } else {
-          newDraftImages.delete(tabId);
-        }
-        return { composeDraftImages: newDraftImages };
-      });
-    },
-
-    appendComposeDraftImage: (tabId: string, image: TerminalComposeDraftImage) => {
-      set((state) => {
-        const currentImages = state.composeDraftImages.get(tabId) || [];
-        const newDraftImages = new Map(state.composeDraftImages);
-        newDraftImages.set(tabId, [...currentImages, image]);
-        return { composeDraftImages: newDraftImages };
-      });
-    },
-
-    removeComposeDraftImage: (tabId: string, imageId: string) => {
-      set((state) => {
-        const currentImages = state.composeDraftImages.get(tabId) || [];
-        const filteredImages = currentImages.filter((image) => image.id !== imageId);
-        const newDraftImages = new Map(state.composeDraftImages);
-        if (filteredImages.length > 0) {
-          newDraftImages.set(tabId, filteredImages);
-        } else {
-          newDraftImages.delete(tabId);
-        }
-        return { composeDraftImages: newDraftImages };
-      });
-    },
-
-    clearComposeDraft: (tabId: string) => {
-      set((state) => {
-        const newDraftText = new Map(state.composeDraftText);
-        const newDraftImages = new Map(state.composeDraftImages);
+  setComposeDraftText: (tabId: string, text: string) => {
+    set((state) => {
+      const newDraftText = new Map(state.composeDraftText);
+      if (text.length > 0) {
+        newDraftText.set(tabId, text);
+      } else {
         newDraftText.delete(tabId);
-        newDraftImages.delete(tabId);
-        return {
-          composeDraftText: newDraftText,
-          composeDraftImages: newDraftImages,
-        };
-      });
-    },
+      }
+      return { composeDraftText: newDraftText };
+    });
+  },
 
-    removeSession: (tabId: string) => {
-      set((state) => {
-        const newSessions = new Map(state.sessions);
-        const newDraftText = new Map(state.composeDraftText);
-        const newDraftImages = new Map(state.composeDraftImages);
-        newSessions.delete(tabId);
-        newDraftText.delete(tabId);
-        newDraftImages.delete(tabId);
-        return {
-          sessions: newSessions,
-          composeDraftText: newDraftText,
-          composeDraftImages: newDraftImages,
-        };
-      });
-    },
+  getComposeDraftImages: (tabId: string) => {
+    return get().composeDraftImages.get(tabId) || [];
+  },
 
-    clearAllSessions: () => {
-      set({
-        sessions: new Map(),
-        composeDraftText: new Map(),
-        composeDraftImages: new Map(),
-      });
-    },
-  })
-);
+  setComposeDraftImages: (tabId: string, images: TerminalComposeDraftImage[]) => {
+    set((state) => {
+      const newDraftImages = new Map(state.composeDraftImages);
+      if (images.length > 0) {
+        newDraftImages.set(tabId, images);
+      } else {
+        newDraftImages.delete(tabId);
+      }
+      return { composeDraftImages: newDraftImages };
+    });
+  },
+
+  appendComposeDraftImage: (tabId: string, image: TerminalComposeDraftImage) => {
+    set((state) => {
+      const currentImages = state.composeDraftImages.get(tabId) || [];
+      const newDraftImages = new Map(state.composeDraftImages);
+      newDraftImages.set(tabId, [...currentImages, image]);
+      return { composeDraftImages: newDraftImages };
+    });
+  },
+
+  removeComposeDraftImage: (tabId: string, imageId: string) => {
+    set((state) => {
+      const currentImages = state.composeDraftImages.get(tabId) || [];
+      const filteredImages = currentImages.filter((image) => image.id !== imageId);
+      const newDraftImages = new Map(state.composeDraftImages);
+      if (filteredImages.length > 0) {
+        newDraftImages.set(tabId, filteredImages);
+      } else {
+        newDraftImages.delete(tabId);
+      }
+      return { composeDraftImages: newDraftImages };
+    });
+  },
+
+  clearComposeDraft: (tabId: string) => {
+    set((state) => {
+      const newDraftText = new Map(state.composeDraftText);
+      const newDraftImages = new Map(state.composeDraftImages);
+      newDraftText.delete(tabId);
+      newDraftImages.delete(tabId);
+      return {
+        composeDraftText: newDraftText,
+        composeDraftImages: newDraftImages,
+      };
+    });
+  },
+
+  removeSession: (tabId: string) => {
+    set((state) => {
+      const newSessions = new Map(state.sessions);
+      const newDraftText = new Map(state.composeDraftText);
+      const newDraftImages = new Map(state.composeDraftImages);
+      newSessions.delete(tabId);
+      newDraftText.delete(tabId);
+      newDraftImages.delete(tabId);
+      return {
+        sessions: newSessions,
+        composeDraftText: newDraftText,
+        composeDraftImages: newDraftImages,
+      };
+    });
+  },
+
+  clearAllSessions: () => {
+    set({
+      sessions: new Map(),
+      composeDraftText: new Map(),
+      composeDraftImages: new Map(),
+    });
+  },
+}));

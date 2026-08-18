@@ -47,7 +47,8 @@ test("short mobile viewports scroll configuration while keeping actions visible"
   await configuration.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
-  await expect.poll(() => configuration.evaluate((element) => element.scrollTop))
+  await expect
+    .poll(() => configuration.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(0);
   await expect(cancelButton).toBeInViewport();
   await expect(confirmButton).toBeInViewport();
@@ -56,8 +57,9 @@ test("short mobile viewports scroll configuration while keeping actions visible"
   await expect(dialog).toBeHidden();
   // `ReviewTabType` is `AgentPlatform` now; the native mode lives in the option
   // label ("Claude Native"), not in the value, so the tab type is plain `claude`.
-  await expect(page.getByTestId("review-launch-selection"))
-    .toHaveText("claude|claude-sonnet|default");
+  await expect(page.getByTestId("review-launch-selection")).toHaveText(
+    "claude|claude-sonnet|default",
+  );
 });
 test("one picker chooses the provider, the model, and the reasoning effort", async ({
   page,
@@ -78,20 +80,21 @@ test("one picker chooses the provider, the model, and the reasoning effort", asy
   await expect(page.getByRole("button", { name: "cursor models" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "grok models" })).toHaveCount(0);
   await page.getByRole("button", { name: "codex models" }).click();
-  await page.getByRole("group", { name: "Models" })
+  await page
+    .getByRole("group", { name: "Models" })
     .getByRole("menuitemradio", { name: /Codex Review/ })
     .click();
   await expect(trigger).toContainText("Codex Review");
 
   await trigger.click();
-  await page.getByRole("group", { name: "Reasoning" })
+  await page
+    .getByRole("group", { name: "Reasoning" })
     .getByRole("menuitemradio", { name: "High" })
     .click();
   await expect(trigger).toContainText("High");
 
   await page.getByRole("button", { name: "Start review" }).click();
-  await expect(page.getByTestId("review-launch-selection"))
-    .toHaveText("codex|codex-review|high");
+  await expect(page.getByTestId("review-launch-selection")).toHaveText("codex|codex-review|high");
 });
 
 test("the picker trigger stays a comfortable target and names the current choice", async ({
@@ -123,9 +126,7 @@ test("the picker trigger stays a comfortable target and names the current choice
   expect(layout.labelWidth).toBeLessThanOrEqual(layout.width);
 });
 
-test("step and header icon badges render as equally sized circles", async ({
-  page,
-}, testInfo) => {
+test("step and header icon badges render as equally sized circles", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium", "desktop project only");
   await page.goto("/review-launch");
 
@@ -133,18 +134,17 @@ test("step and header icon badges render as equally sized circles", async ({
   await expect(dialog).toBeVisible();
 
   const badges = await dialog.evaluate((element) =>
-    Array.from(element.querySelectorAll<HTMLElement>(".size-8.place-items-center"))
-      .map((badge) => {
-        const rect = badge.getBoundingClientRect();
-        const glyph = badge.querySelector("svg")?.getBoundingClientRect();
-        return {
-          width: rect.width,
-          height: rect.height,
-          radius: Number.parseFloat(getComputedStyle(badge).borderTopLeftRadius),
-          glyphWidth: glyph?.width ?? 0,
-          glyphHeight: glyph?.height ?? 0,
-        };
-      }),
+    Array.from(element.querySelectorAll<HTMLElement>(".size-8.place-items-center")).map((badge) => {
+      const rect = badge.getBoundingClientRect();
+      const glyph = badge.querySelector("svg")?.getBoundingClientRect();
+      return {
+        width: rect.width,
+        height: rect.height,
+        radius: Number.parseFloat(getComputedStyle(badge).borderTopLeftRadius),
+        glyphWidth: glyph?.width ?? 0,
+        glyphHeight: glyph?.height ?? 0,
+      };
+    }),
   );
 
   // The dialog header badge plus the single configuration step.
@@ -172,15 +172,19 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   await page.keyboard.press("Enter");
   // With no saved favourites, opening the picker starts on the selected
   // provider so the model list is immediately usable.
-  await expect(page.getByRole("button", { name: "claude models" }))
-    .toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "claude models" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 
   // A Radix menu is a single tab stop and calls preventDefault on Tab, so the
   // platform rail answers Left/Right instead — the keys the provider radio
   // group this control replaced also used.
   await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("button", { name: "codex models" }))
-    .toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "codex models" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 
   // Focus lands on the new provider's list, which is what announces the switch.
   const codexModel = page.getByRole("menuitemradio", { name: /Codex Review/ });
@@ -191,8 +195,10 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   // Closing and reopening the picker restores the currently selected provider.
   await trigger.focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("button", { name: "codex models" }))
-    .toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: "codex models" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await expect(codexModel).toBeFocused();
 
   // Reasoning shares the menu's roving focus group, so arrows reach it.
@@ -206,8 +212,7 @@ test("chooses a provider, a model and an effort with the keyboard alone", async 
   await expect(trigger).toContainText("High");
 
   await page.getByRole("button", { name: "Start review" }).click();
-  await expect(page.getByTestId("review-launch-selection"))
-    .toHaveText("codex|codex-review|high");
+  await expect(page.getByTestId("review-launch-selection")).toHaveText("codex|codex-review|high");
 });
 
 test("the phone layout reaches every choice through its drill-in views", async ({
@@ -232,6 +237,5 @@ test("the phone layout reaches every choice through its drill-in views", async (
   await expect(trigger).toContainText("High");
 
   await page.getByRole("button", { name: "Start review" }).click();
-  await expect(page.getByTestId("review-launch-selection"))
-    .toHaveText("codex|codex-review|high");
+  await expect(page.getByTestId("review-launch-selection")).toHaveText("codex|codex-review|high");
 });

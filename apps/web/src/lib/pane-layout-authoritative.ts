@@ -11,10 +11,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import type { EnvironmentPaneState } from "@/stores/paneLayoutStore";
-import {
-  LEGACY_PANE_LAYOUT_VERSION,
-  type PersistedPaneLayout,
-} from "@/types/paneLayout";
+import { LEGACY_PANE_LAYOUT_VERSION, type PersistedPaneLayout } from "@/types/paneLayout";
 
 /**
  * The one way a backend-owned pane snapshot becomes renderer state.
@@ -41,10 +38,10 @@ export function collectPaneDependencyIds(root: unknown): {
   const workflowIds = new Set<string>();
   const visit = (value: unknown, depth: number): void => {
     if (
-      depth > MAX_DEPENDENCY_SCAN_DEPTH
-      || !value
-      || typeof value !== "object"
-      || Array.isArray(value)
+      depth > MAX_DEPENDENCY_SCAN_DEPTH ||
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value)
     ) {
       return;
     }
@@ -81,7 +78,13 @@ export function collectPaneDependencyIds(root: unknown): {
 function collectMultiReviewIds(root: unknown): Set<string> {
   const ids = new Set<string>();
   const visit = (value: unknown, depth: number): void => {
-    if (depth > MAX_DEPENDENCY_SCAN_DEPTH || !value || typeof value !== "object" || Array.isArray(value)) return;
+    if (
+      depth > MAX_DEPENDENCY_SCAN_DEPTH ||
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value)
+    )
+      return;
     const record = value as Record<string, unknown>;
     if (record.kind === "leaf" && Array.isArray(record.tabs)) {
       for (const tab of record.tabs) {
@@ -106,9 +109,7 @@ function collectMultiReviewIds(root: unknown): Set<string> {
  * client has never seen, so `reconcilePersistedLayout` does not drop the tab
  * that carries it. Already-present records are not refetched.
  */
-export async function hydratePaneLayoutDependencies(
-  root: unknown,
-): Promise<void> {
+export async function hydratePaneLayoutDependencies(root: unknown): Promise<void> {
   const { pipelineIds, workflowIds } = collectPaneDependencyIds(root);
   const multiReviewIds = collectMultiReviewIds(root);
   const missingPipelineIds = [...pipelineIds].filter(
@@ -120,17 +121,21 @@ export async function hydratePaneLayoutDependencies(
   const missingMultiReviewIds = [...multiReviewIds].filter(
     (workflowId) => !useMultiReviewStore.getState().workflows.has(workflowId),
   );
-  if (missingPipelineIds.length === 0 && missingWorkflowIds.length === 0
-    && missingMultiReviewIds.length === 0) return;
+  if (
+    missingPipelineIds.length === 0 &&
+    missingWorkflowIds.length === 0 &&
+    missingMultiReviewIds.length === 0
+  )
+    return;
   await Promise.all([
     ...missingPipelineIds.map((pipelineId) =>
-      hydrateBuildPipeline(pipelineId).then(() => undefined)
+      hydrateBuildPipeline(pipelineId).then(() => undefined),
     ),
     ...missingWorkflowIds.map((workflowId) =>
-      hydrateLoopedReviewWorkflow(workflowId).then(() => undefined)
+      hydrateLoopedReviewWorkflow(workflowId).then(() => undefined),
     ),
     ...missingMultiReviewIds.map((workflowId) =>
-      hydrateMultiReviewWorkflow(workflowId).then(() => undefined)
+      hydrateMultiReviewWorkflow(workflowId).then(() => undefined),
     ),
   ]);
 }
@@ -149,9 +154,7 @@ export function reconcileAuthoritativePaneLayout(
   saved: PersistedPaneLayout,
   current: EnvironmentPaneState,
 ): EnvironmentPaneState | null {
-  const environment = useEnvironmentStore
-    .getState()
-    .getEnvironmentById(environmentId);
+  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
   if (!environment) return null;
 
   const isLocal = environment.environmentType === "local";
@@ -163,12 +166,9 @@ export function reconcileAuthoritativePaneLayout(
     containerId,
     isLocal,
     worktreePath: environment.worktreePath,
-    hasBuildPipeline: (pipelineId) =>
-      useBuildPipelineStore.getState().pipelines.has(pipelineId),
-    hasLoopedReview: (workflowId) =>
-      useLoopedReviewStore.getState().workflows.has(workflowId),
-    hasMultiReview: (workflowId) =>
-      useMultiReviewStore.getState().workflows.has(workflowId),
+    hasBuildPipeline: (pipelineId) => useBuildPipelineStore.getState().pipelines.has(pipelineId),
+    hasLoopedReview: (workflowId) => useLoopedReviewStore.getState().workflows.has(workflowId),
+    hasMultiReview: (workflowId) => useMultiReviewStore.getState().workflows.has(workflowId),
   });
   if (!restored) return null;
 

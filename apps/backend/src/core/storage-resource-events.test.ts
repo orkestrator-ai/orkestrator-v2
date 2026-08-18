@@ -67,8 +67,8 @@ const RESOURCE_MANIFEST_FILES: Record<ResourceManifestKind, string> = {
   "project-notes": "project-notes.json",
   "feature-plan": "feature-plans.json",
   "pane-layout": "pane-layouts.json",
-      "looped-review": "looped-reviews.json",
-      "multi-review": "multi-reviews.json",
+  "looped-review": "looped-reviews.json",
+  "multi-review": "multi-reviews.json",
   "build-pipeline": "build-pipelines.json",
   "prompt-queue": "prompt-queues.json",
 };
@@ -88,10 +88,7 @@ describe("StorageService resource change announcements", () => {
   test("returns stable manifest revisions and changes only the written store", async () => {
     await withStorage(async (storage) => {
       const first = await storage.getResourceRevisionManifest();
-      const stable = await storage.getResourceRevisionManifest(
-        first.generation,
-        first.revisions,
-      );
+      const stable = await storage.getResourceRevisionManifest(first.generation, first.revisions);
       expect(first.reset).toBe(true);
       expect(stable).toEqual({
         generation: first.generation,
@@ -100,10 +97,7 @@ describe("StorageService resource change announcements", () => {
       });
 
       await storage.addProject(project("p1"));
-      const changed = await storage.getResourceRevisionManifest(
-        first.generation,
-        first.revisions,
-      );
+      const changed = await storage.getResourceRevisionManifest(first.generation, first.revisions);
       expect(changed.reset).toBe(false);
       expect(Object.keys(changed.revisions)).toEqual(["project"]);
     });
@@ -118,10 +112,7 @@ describe("StorageService resource change announcements", () => {
     try {
       const known = await reader.getResourceRevisionManifest();
       await writer.addProject(project("external"));
-      const observed = await reader.getResourceRevisionManifest(
-        known.generation,
-        known.revisions,
-      );
+      const observed = await reader.getResourceRevisionManifest(known.generation, known.revisions);
       expect(Object.keys(observed.revisions)).toEqual(["project"]);
     } finally {
       await fs.rm(dataDir, { recursive: true, force: true });
@@ -186,24 +177,23 @@ describe("StorageService resource change announcements", () => {
         return [{ id: `snapshot-${loads}` }];
       };
 
-      await expect(storage.readConditionalResourceSnapshot(
-        "project",
-        "0".repeat(32),
-        expectedRevision,
-        load,
-      )).resolves.toEqual({
+      await expect(
+        storage.readConditionalResourceSnapshot("project", "0".repeat(32), expectedRevision, load),
+      ).resolves.toEqual({
         status: "changed",
         generation: manifest.generation,
         revision: expectedRevision,
         snapshot: [{ id: "snapshot-1" }],
       });
 
-      await expect(storage.readConditionalResourceSnapshot(
-        "project",
-        manifest.generation,
-        "0".repeat(32),
-        load,
-      )).resolves.toEqual({
+      await expect(
+        storage.readConditionalResourceSnapshot(
+          "project",
+          manifest.generation,
+          "0".repeat(32),
+          load,
+        ),
+      ).resolves.toEqual({
         status: "changed",
         generation: manifest.generation,
         revision: expectedRevision,
@@ -218,14 +208,16 @@ describe("StorageService resource change announcements", () => {
       const manifest = await storage.getResourceRevisionManifest();
       const failure = new Error("snapshot load failed");
 
-      await expect(storage.readConditionalResourceSnapshot(
-        "project",
-        manifest.generation,
-        "0".repeat(32),
-        async () => {
-          throw failure;
-        },
-      )).rejects.toBe(failure);
+      await expect(
+        storage.readConditionalResourceSnapshot(
+          "project",
+          manifest.generation,
+          "0".repeat(32),
+          async () => {
+            throw failure;
+          },
+        ),
+      ).rejects.toBe(failure);
     });
   });
 
@@ -351,7 +343,11 @@ describe("StorageService resource change announcements", () => {
 
       changes.length = 0;
       await storage.setEnvironmentAgentActivity(
-        "e1", "working", new Date(3000).toISOString(), "frontend", "renderer-1",
+        "e1",
+        "working",
+        new Date(3000).toISOString(),
+        "frontend",
+        "renderer-1",
       );
       expect(changes).toEqual([
         expect.objectContaining({
@@ -362,13 +358,9 @@ describe("StorageService resource change announcements", () => {
       ]);
 
       const withLease = await storage.getEnvironment("e1");
-      const lease = Object.values(
-        withLease!.frontendAgentActivityObservers ?? {},
-      )[0]!;
+      const lease = Object.values(withLease!.frontendAgentActivityObservers ?? {})[0]!;
       changes.length = 0;
-      await storage.expireFrontendAgentActivityLeases(
-        Date.parse(lease.leaseExpiresAt) + 1,
-      );
+      await storage.expireFrontendAgentActivityLeases(Date.parse(lease.leaseExpiresAt) + 1);
       expect(changes).toEqual([
         expect.objectContaining({
           resource: "environment",
@@ -380,18 +372,20 @@ describe("StorageService resource change announcements", () => {
       changes.length = 0;
       await storage.reorderEnvironments("p1", ["e2", "e1"]);
       expect(changes).toHaveLength(2);
-      expect(changes).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          resource: "environment",
-          id: "e1",
-          projectId: "p1",
-        }),
-        expect.objectContaining({
-          resource: "environment",
-          id: "e2",
-          projectId: "p1",
-        }),
-      ]));
+      expect(changes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            resource: "environment",
+            id: "e1",
+            projectId: "p1",
+          }),
+          expect.objectContaining({
+            resource: "environment",
+            id: "e2",
+            projectId: "p1",
+          }),
+        ]),
+      );
 
       changes.length = 0;
       await storage.removeEnvironment("e1");
@@ -410,20 +404,12 @@ describe("StorageService resource change announcements", () => {
       await storage.addProject(project("p1"));
       await storage.addEnvironment(environment("e1", "p1"));
       await storage.recordEnvironmentActivity("e1", new Date(5000).toISOString());
-      await storage.setEnvironmentAgentActivity(
-        "e1",
-        "working",
-        new Date(5000).toISOString(),
-      );
+      await storage.setEnvironmentAgentActivity("e1", "working", new Date(5000).toISOString());
 
       changes.length = 0;
       // An older timestamp is discarded without a write, so nothing is announced.
       await storage.recordEnvironmentActivity("e1", new Date(1000).toISOString());
-      await storage.setEnvironmentAgentActivity(
-        "e1",
-        "idle",
-        new Date(1000).toISOString(),
-      );
+      await storage.setEnvironmentAgentActivity("e1", "idle", new Date(1000).toISOString());
       expect(changes).toEqual([]);
     });
   });
@@ -437,7 +423,11 @@ describe("StorageService resource change announcements", () => {
 
       // First observation is a genuine transition and must announce.
       await storage.setEnvironmentAgentActivity(
-        "e1", "working", at(1_000), "frontend", "renderer-token",
+        "e1",
+        "working",
+        at(1_000),
+        "frontend",
+        "renderer-token",
       );
       expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
 
@@ -445,33 +435,35 @@ describe("StorageService resource change announcements", () => {
       // Same observer, same state: a pure renewal refreshes only timestamps
       // and must not fan out a refetch to every connected client.
       await storage.setEnvironmentAgentActivity(
-        "e1", "working", at(2_000), "frontend", "renderer-token",
+        "e1",
+        "working",
+        at(2_000),
+        "frontend",
+        "renderer-token",
       );
       expect(changes).toEqual([]);
       // ...but the lease itself still persisted.
       const renewed = await storage.getEnvironment("e1");
-      const observer = Object.values(
-        renewed!.frontendAgentActivityObservers ?? {},
-      )[0]!;
+      const observer = Object.values(renewed!.frontendAgentActivityObservers ?? {})[0]!;
       expect(observer.updatedAt).toBe(at(2_000));
 
       // A new source appearing is structural and announces.
-      await storage.setEnvironmentAgentActivity(
-        "e1", "working", at(3_000), "claude-terminal",
-      );
+      await storage.setEnvironmentAgentActivity("e1", "working", at(3_000), "claude-terminal");
       expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
 
       changes.length = 0;
       // A same-state terminal refresh is also a pure timestamp refresh.
-      await storage.setEnvironmentAgentActivity(
-        "e1", "working", at(4_000), "claude-terminal",
-      );
+      await storage.setEnvironmentAgentActivity("e1", "working", at(4_000), "claude-terminal");
       expect(changes).toEqual([]);
 
       // A real per-observer state change announces even though the aggregate
       // stays "working" via the terminal source.
       await storage.setEnvironmentAgentActivity(
-        "e1", "idle", at(5_000), "frontend", "renderer-token",
+        "e1",
+        "idle",
+        at(5_000),
+        "frontend",
+        "renderer-token",
       );
       expect(changes.at(-1)).toMatchObject({ resource: "environment", id: "e1" });
     });
@@ -556,8 +548,8 @@ describe("StorageService resource change announcements", () => {
       expect(changes.at(-1)).toMatchObject({ resource: "kanban", id: "p1" });
 
       const onePixelPng = Buffer.from(
-        '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">'
-        + '<rect width="1" height="1"/></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">' +
+          '<rect width="1" height="1"/></svg>',
       ).toString("base64");
       changes.length = 0;
       const imaged = await storage.addKanbanImage(task.id, "pixel.png", onePixelPng);
@@ -632,12 +624,16 @@ describe("StorageService resource change announcements", () => {
       await storage.addEnvironment(environment("e1", "p1"));
 
       changes.length = 0;
-      await storage.savePaneLayout("e1", {
-        version: 1,
-        containerId: null,
-        activePaneId: "pane-1",
-        root: { kind: "leaf", id: "pane-1", tabs: [] },
-      }, 0);
+      await storage.savePaneLayout(
+        "e1",
+        {
+          version: 1,
+          containerId: null,
+          activePaneId: "pane-1",
+          root: { kind: "leaf", id: "pane-1", tabs: [] },
+        },
+        0,
+      );
       expect(changes.at(-1)).toMatchObject({ resource: "pane-layout", id: "e1" });
 
       await storage.saveLoopedReviewWorkflow("w1", "e1", 1, { id: "w1" });
@@ -650,8 +646,7 @@ describe("StorageService resource change announcements", () => {
       await storage.saveLoopedReviewWorkflow("w3", "e1", 1, { id: "w3" });
       changes.length = 0;
       await storage.deleteLoopedReviewWorkflowsByEnvironment("e1");
-      expect(new Set(changes.map((change) => change.id)))
-        .toEqual(new Set(["w2", "w3"]));
+      expect(new Set(changes.map((change) => change.id))).toEqual(new Set(["w2", "w3"]));
       expect(changes.every((change) => change.resource === "looped-review")).toBe(true);
 
       await storage.saveMultiReviewWorkflow("m1", "e1", 1, { id: "m1" });
@@ -669,33 +664,19 @@ describe("StorageService resource change announcements", () => {
       await storage.addEnvironment(environment("e1", "p1"));
       changes.length = 0;
 
-      await storage.savePromptQueue(
-        "claude env-e1:tab-1",
-        "e1",
-        [{ id: "m1" }],
-      );
+      await storage.savePromptQueue("claude env-e1:tab-1", "e1", [{ id: "m1" }]);
       expect(changes.at(-1)).toMatchObject({
         resource: "prompt-queue",
         id: "e1",
       });
 
-      await storage.claimPromptQueueHead(
-        "claude env-e1:tab-1",
-        "e1",
-        "m1",
-      );
+      await storage.claimPromptQueueHead("claude env-e1:tab-1", "e1", "m1");
       expect(changes.at(-1)).toMatchObject({
         resource: "prompt-queue",
         id: "e1",
       });
 
-      await storage.saveBuildPipeline(
-        "pipeline-1",
-        "p1",
-        "e1",
-        1,
-        { id: "pipeline-1" },
-      );
+      await storage.saveBuildPipeline("pipeline-1", "p1", "e1", 1, { id: "pipeline-1" });
       expect(changes.at(-1)).toMatchObject({
         resource: "build-pipeline",
         id: "pipeline-1",
@@ -722,9 +703,7 @@ describe("StorageService resource change announcements", () => {
       await storage.saveProjectNotes("p1", "notes");
       await storage.addKanbanTask("p1", "title", "body");
 
-      expect(kinds(changes)).toEqual([
-        "project", "environment", "project-notes", "kanban",
-      ]);
+      expect(kinds(changes)).toEqual(["project", "environment", "project-notes", "kanban"]);
       const revisions = changes.map((change) => change.revision);
       expect(revisions).toEqual([...revisions].sort((a, b) => a - b));
       expect(new Set(revisions).size).toBe(revisions.length);

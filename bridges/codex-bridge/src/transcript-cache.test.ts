@@ -14,9 +14,7 @@ const tempDirs: string[] = [];
 afterEach(async () => {
   clearTranscriptCache();
   setTranscriptCacheLimitsForTesting();
-  await Promise.all(
-    tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
-  );
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
 async function createTempTranscript(filename = "session.jsonl"): Promise<string> {
@@ -48,13 +46,15 @@ describe("readCachedTranscript", () => {
 
     await appendFile(
       transcriptPath,
-      `${',"payload":{"type":"agent_message","phase":"commentary","message":"working"}}\n'}${JSON.stringify({
-        timestamp: "2026-04-16T11:17:25.000Z",
-        type: "event_msg",
-        payload: {
-          type: "task_complete",
+      `${',"payload":{"type":"agent_message","phase":"commentary","message":"working"}}\n'}${JSON.stringify(
+        {
+          timestamp: "2026-04-16T11:17:25.000Z",
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+          },
         },
-      })}\n`,
+      )}\n`,
       "utf8",
     );
 
@@ -118,11 +118,12 @@ describe("readCachedTranscript", () => {
       hardBudgetBytes: 400,
       activeGraceMs: 60_000,
     });
-    const record = (message: string) => `${JSON.stringify({
-      timestamp: "2026-04-16T11:17:23.623Z",
-      type: "event_msg",
-      payload: { type: "agent_message", message },
-    })}\n`;
+    const record = (message: string) =>
+      `${JSON.stringify({
+        timestamp: "2026-04-16T11:17:23.623Z",
+        type: "event_msg",
+        payload: { type: "agent_message", message },
+      })}\n`;
 
     const first = await createTempTranscript("first.jsonl");
     await writeFile(first, record("a".repeat(200)), "utf8");

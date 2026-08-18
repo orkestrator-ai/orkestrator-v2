@@ -13,7 +13,12 @@ import { BackendHttpClient } from "./backend-process.js";
 
 type LocalBackend = Pick<
   BackendHttpClient,
-  "invoke" | "getWebClientStatus" | "setWebClientEnabled" | "resetWebClientServe" | "getTokenSettings" | "setToken"
+  | "invoke"
+  | "getWebClientStatus"
+  | "setWebClientEnabled"
+  | "resetWebClientServe"
+  | "getTokenSettings"
+  | "setToken"
 >;
 
 export type SecureStorage = {
@@ -52,7 +57,8 @@ function normalizeRemoteAddress(value: string): string {
   if (url.pathname !== "/" || url.search || url.hash) {
     throw new Error("Use the backend origin only, without a path, query, or fragment.");
   }
-  const isLoopback = url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
+  const isLoopback =
+    url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]";
   if (url.protocol !== "https:" && !isLoopback) {
     throw new Error("Remote backends must use HTTPS. Use the HTTPS address exposed by Tailscale.");
   }
@@ -69,8 +75,15 @@ export class ConnectionManager {
   private readonly platform: NodeJS.Platform;
   private readonly onEvent: (event: string, payload: unknown) => void;
   private readonly connectionTimeoutMs: number;
-  private stored: StoredDesktopConnections = { activeConnectionId: LOCAL_CONNECTION_ID, connections: [] };
-  private activeRemote: { record: StoredDesktopConnection; client: BackendHttpClient; token: string } | null = null;
+  private stored: StoredDesktopConnections = {
+    activeConnectionId: LOCAL_CONNECTION_ID,
+    connections: [],
+  };
+  private activeRemote: {
+    record: StoredDesktopConnection;
+    client: BackendHttpClient;
+    token: string;
+  } | null = null;
   private secureStorageAvailable = false;
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
@@ -94,7 +107,10 @@ export class ConnectionManager {
     try {
       await this.activateRemote(this.stored.activeConnectionId, false);
     } catch (error) {
-      console.warn("[Connections] Could not restore the previous remote connection; using Local:", error);
+      console.warn(
+        "[Connections] Could not restore the previous remote connection; using Local:",
+        error,
+      );
       const fallback = { ...this.stored, activeConnectionId: LOCAL_CONNECTION_ID };
       await this.persist(fallback);
       this.stored = fallback;
@@ -149,7 +165,10 @@ export class ConnectionManager {
       };
       const candidate: StoredDesktopConnections = {
         activeConnectionId: record.id,
-        connections: [record, ...this.stored.connections.filter((connection) => connection.id !== record.id)],
+        connections: [
+          record,
+          ...this.stored.connections.filter((connection) => connection.id !== record.id),
+        ],
       };
       await this.persist(candidate);
       this.stored = candidate;
@@ -175,7 +194,8 @@ export class ConnectionManager {
 
   async forget(connectionId: string): Promise<ConnectionList> {
     return this.enqueueMutation(async () => {
-      if (connectionId === LOCAL_CONNECTION_ID) throw new Error("The Local connection cannot be removed.");
+      if (connectionId === LOCAL_CONNECTION_ID)
+        throw new Error("The Local connection cannot be removed.");
       if (!this.stored.connections.some((connection) => connection.id === connectionId)) {
         throw new Error("That saved connection no longer exists.");
       }
@@ -206,7 +226,10 @@ export class ConnectionManager {
     if (!this.activeRemote) return null;
     try {
       const url = new URL(urlValue);
-      if (url.origin !== this.activeRemote.record.address || !url.pathname.startsWith("/__orkestrator/")) {
+      if (
+        url.origin !== this.activeRemote.record.address ||
+        !url.pathname.startsWith("/__orkestrator/")
+      ) {
         return null;
       }
       return `Bearer ${this.activeRemote.token}`;
@@ -272,32 +295,45 @@ export class ConnectionManager {
   }
 
   private async activateRemote(connectionId: string, updateLastConnected: boolean): Promise<void> {
-    const storedRecord = this.stored.connections.find((connection) => connection.id === connectionId);
+    const storedRecord = this.stored.connections.find(
+      (connection) => connection.id === connectionId,
+    );
     if (!storedRecord) throw new Error("That saved connection no longer exists.");
-    if (!storedRecord.encryptedToken) throw new Error("Enter the gateway token to reconnect to this server.");
+    if (!storedRecord.encryptedToken)
+      throw new Error("Enter the gateway token to reconnect to this server.");
     this.secureStorageAvailable = await this.detectSecureStorage();
     if (!this.secureStorageAvailable) {
       throw new Error("Secure credential storage is unavailable. Enter the gateway token again.");
     }
-    const decrypted = await this.secureStorage.decryptStringAsync(Buffer.from(storedRecord.encryptedToken, "base64"));
+    const decrypted = await this.secureStorage.decryptStringAsync(
+      Buffer.from(storedRecord.encryptedToken, "base64"),
+    );
     const token = normalizeGatewayToken(decrypted.result);
     const client = new BackendHttpClient(storedRecord.address, token);
     await this.checkRemote(storedRecord.address, token);
     const record = { ...storedRecord };
     if (decrypted.shouldReEncrypt) {
-      record.encryptedToken = (await this.secureStorage.encryptStringAsync(token)).toString("base64");
+      record.encryptedToken = (await this.secureStorage.encryptStringAsync(token)).toString(
+        "base64",
+      );
     }
     if (updateLastConnected) record.lastConnectedAt = new Date().toISOString();
     const candidate: StoredDesktopConnections = {
       activeConnectionId: record.id,
-      connections: this.stored.connections.map((connection) => connection.id === record.id ? record : connection),
+      connections: this.stored.connections.map((connection) =>
+        connection.id === record.id ? record : connection,
+      ),
     };
     await this.persist(candidate);
     this.stored = candidate;
     this.setActiveRemote(record, client, token);
   }
 
-  private setActiveRemote(record: StoredDesktopConnection, client: BackendHttpClient, token: string): void {
+  private setActiveRemote(
+    record: StoredDesktopConnection,
+    client: BackendHttpClient,
+    token: string,
+  ): void {
     this.activeRemote?.client.stopListening();
     this.activeRemote = { record, client, token };
     client.listen((event, payload) => {
@@ -306,8 +342,10 @@ export class ConnectionManager {
   }
 
   private async detectSecureStorage(): Promise<boolean> {
-    if (!await this.secureStorage.isAsyncEncryptionAvailable()) return false;
-    return this.platform !== "linux" || this.secureStorage.getSelectedStorageBackend?.() !== "basic_text";
+    if (!(await this.secureStorage.isAsyncEncryptionAvailable())) return false;
+    return (
+      this.platform !== "linux" || this.secureStorage.getSelectedStorageBackend?.() !== "basic_text"
+    );
   }
 
   private async checkRemote(address: string, token: string): Promise<void> {
@@ -318,7 +356,7 @@ export class ConnectionManager {
         headers: { authorization: `Bearer ${token}` },
         signal: controller.signal,
       });
-      const payload = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; error?: string };
       if (response.status === 401) throw new Error("The gateway token was rejected.");
       if (!response.ok || payload.ok !== true) {
         throw new Error(payload.error ?? `Backend check failed with HTTP ${response.status}.`);
@@ -326,10 +364,14 @@ export class ConnectionManager {
     } catch (error) {
       if (controller.signal.aborted) {
         const seconds = this.connectionTimeoutMs / 1_000;
-        throw new Error(`The backend did not respond within ${seconds} second${seconds === 1 ? "" : "s"}.`);
+        throw new Error(
+          `The backend did not respond within ${seconds} second${seconds === 1 ? "" : "s"}.`,
+        );
       }
       if (error instanceof TypeError) {
-        throw new Error("Could not reach the backend. Check its HTTPS address and Tailscale connection.");
+        throw new Error(
+          "Could not reach the backend. Check its HTTPS address and Tailscale connection.",
+        );
       }
       throw error;
     } finally {
@@ -340,13 +382,18 @@ export class ConnectionManager {
   private replaceStoredRecord(record: StoredDesktopConnection): StoredDesktopConnections {
     return {
       activeConnectionId: record.id,
-      connections: this.stored.connections.map((connection) => connection.id === record.id ? record : connection),
+      connections: this.stored.connections.map((connection) =>
+        connection.id === record.id ? record : connection,
+      ),
     };
   }
 
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.mutationQueue.then(operation, operation);
-    this.mutationQueue = next.then(() => undefined, () => undefined);
+    this.mutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 

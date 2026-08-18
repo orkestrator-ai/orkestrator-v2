@@ -29,10 +29,21 @@ async function withStorage(run: (storage: StorageService) => Promise<void>): Pro
     const storage = new StorageService(dataDir);
     await storage.init();
     await storage.addEnvironment({
-      id: "env-1", projectId: "project-1", name: "review", branch: "change",
-      containerId: null, status: "running", prUrl: null, prState: null,
-      hasMergeConflicts: null, createdAt: new Date(0).toISOString(), networkAccessMode: "full",
-      order: 0, environmentType: "local", worktreePath: "/tmp/review", setupScriptsComplete: true,
+      id: "env-1",
+      projectId: "project-1",
+      name: "review",
+      branch: "change",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "full",
+      order: 0,
+      environmentType: "local",
+      worktreePath: "/tmp/review",
+      setupScriptsComplete: true,
     });
     await run(storage);
   } finally {
@@ -55,25 +66,35 @@ test("Multi Review storage atomically enforces one active workflow per environme
 test("Multi Review storage fences revisions and controller ownership", async () => {
   await withStorage(async (storage) => {
     const created = await storage.createMultiReviewWorkflowIfNoActive(
-      "multi-1", "env-1", 1, workflow("multi-1"),
+      "multi-1",
+      "env-1",
+      1,
+      workflow("multi-1"),
     );
     expect(created?.revision).toBe(1);
     const claimed = await storage.claimMultiReviewController("multi-1", "owner-1", 2_000);
     expect(claimed.granted).toBe(true);
-    expect(await storage.validateMultiReviewController("multi-1", "owner-1", claimed.token))
-      .toBe(true);
-    expect((await storage.claimMultiReviewController("multi-1", "owner-2", 2_000)).granted)
-      .toBe(false);
+    expect(await storage.validateMultiReviewController("multi-1", "owner-1", claimed.token)).toBe(
+      true,
+    );
+    expect((await storage.claimMultiReviewController("multi-1", "owner-2", 2_000)).granted).toBe(
+      false,
+    );
 
     const current = workflow("multi-1");
     current.backendRevision = 1;
-    await expect(storage.saveMultiReviewWorkflow(
-      "multi-1", "env-1", 1, current, 0, { ownerId: "owner-1", token: claimed.token },
-    )).rejects.toThrow("revision conflict");
+    await expect(
+      storage.saveMultiReviewWorkflow("multi-1", "env-1", 1, current, 0, {
+        ownerId: "owner-1",
+        token: claimed.token,
+      }),
+    ).rejects.toThrow("revision conflict");
     await storage.releaseMultiReviewController("multi-1", "owner-1", claimed.token);
-    expect(await storage.validateMultiReviewController("multi-1", "owner-1", claimed.token))
-      .toBe(false);
-    expect((await storage.claimMultiReviewController("multi-1", "owner-2", 2_000)).granted)
-      .toBe(true);
+    expect(await storage.validateMultiReviewController("multi-1", "owner-1", claimed.token)).toBe(
+      false,
+    );
+    expect((await storage.claimMultiReviewController("multi-1", "owner-2", 2_000)).granted).toBe(
+      true,
+    );
   });
 });

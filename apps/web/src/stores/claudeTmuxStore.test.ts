@@ -87,12 +87,8 @@ describe("state keys", () => {
     expect(migrated.getDraftMentions(scopedKey)).toEqual([
       { id: "mention-1", filename: "a.ts", relativePath: "src/a.ts" },
     ]);
-    expect(migrated.getAttachments(scopedKey).map((item) => item.id)).toEqual([
-      "attachment-1",
-    ]);
-    expect(migrated.getQueuedMessages(scopedKey).map((item) => item.id)).toEqual([
-      "queue-1",
-    ]);
+    expect(migrated.getAttachments(scopedKey).map((item) => item.id)).toEqual(["attachment-1"]);
+    expect(migrated.getQueuedMessages(scopedKey).map((item) => item.id)).toEqual(["queue-1"]);
     expect(migrated.effortLevels.get(scopedKey)).toBe("xhigh");
     expect(migrated.draftText.has("tab-a")).toBe(false);
     expect(migrated.draftMentions.has("tab-a")).toBe(false);
@@ -184,20 +180,14 @@ describe("state keys", () => {
     expect(state.messageQueue.has("tab-a")).toBe(false);
     expect(state.getDraftText(scopedKey)).toBe("bare draft");
     expect(state.getDraftMentions(scopedKey)).toHaveLength(1);
-    expect(state.getAttachments(scopedKey).map((item) => item.id)).toEqual([
-      "attachment-1",
-    ]);
+    expect(state.getAttachments(scopedKey).map((item) => item.id)).toEqual(["attachment-1"]);
     expect(state.effortLevels.get(scopedKey)).toBe("xhigh");
-    expect(state.getQueuedMessages(scopedKey).map((item) => item.id)).toEqual([
-      "queue-1",
-    ]);
+    expect(state.getQueuedMessages(scopedKey).map((item) => item.id)).toEqual(["queue-1"]);
 
     // The bare id reads back through the same resolution.
     expect(state.getDraftText("tab-a")).toBe("bare draft");
     expect(state.getQueueLength("tab-a")).toBe(1);
-    expect(state.getAttachments("tab-a").map((item) => item.id)).toEqual([
-      "attachment-1",
-    ]);
+    expect(state.getAttachments("tab-a").map((item) => item.id)).toEqual(["attachment-1"]);
   });
 
   test("keeps an ambiguous bare tab id on its own key rather than guessing", () => {
@@ -240,9 +230,7 @@ describe("applyTranscriptLine", () => {
       },
     });
 
-    expect(
-      useClaudeTmuxStore.getState().getTab("e").messages[0]?.modelId,
-    ).toBe("claude-opus-4-6");
+    expect(useClaudeTmuxStore.getState().getTab("e").messages[0]?.modelId).toBe("claude-opus-4-6");
   });
 
   test("rejects synthetic, subagent, sidechain, and blank model attribution", () => {
@@ -287,8 +275,12 @@ describe("applyTranscriptLine", () => {
       },
     });
 
-    expect(store.getTab("e").messages.map((message) => message.modelId))
-      .toEqual([undefined, undefined, undefined, undefined]);
+    expect(store.getTab("e").messages.map((message) => message.modelId)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 
   test("adopts model attribution from a later line with the same uuid", () => {
@@ -324,9 +316,7 @@ describe("applyTranscriptLine", () => {
     expect(env.messages[0]!.content).toBe("hello");
     expect(env.messages[0]!.role).toBe("user");
     expect(env.messages[0]!.id).toBe("u1");
-    expect(env.messages[0]!.parts.find((p) => p.type === "text")?.content).toBe(
-      "hello",
-    );
+    expect(env.messages[0]!.parts.find((p) => p.type === "text")?.content).toBe("hello");
   });
 
   test("replaceTranscript removes stale messages without clearing local drafts", () => {
@@ -399,12 +389,8 @@ describe("applyTranscriptLine", () => {
     // message; it merges into the prior assistant message's parts.
     expect(env.messages).toHaveLength(1);
     const parts = env.messages[0]!.parts;
-    const invocation = parts.find(
-      (p) => p.type === "tool-invocation" && p.toolUseId === "tu1",
-    );
-    const result = parts.find(
-      (p) => p.type === "tool-result" && p.toolUseId === "tu1",
-    );
+    const invocation = parts.find((p) => p.type === "tool-invocation" && p.toolUseId === "tu1");
+    const result = parts.find((p) => p.type === "tool-result" && p.toolUseId === "tu1");
     expect(invocation).toBeTruthy();
     expect(invocation!.toolState).toBe("success");
     expect(result).toBeTruthy();
@@ -428,30 +414,28 @@ describe("applyTranscriptLine", () => {
         content: [{ type: "tool_use", id: "tu1", name: "Task", input: {} }],
       },
     };
-    const resultLine = (timestamp?: unknown): TranscriptLine => ({
-      type: "user",
-      uuid: "r1",
-      ...(timestamp === undefined ? {} : { timestamp }),
-      message: {
-        role: "user",
-        content: [{ type: "tool_result", tool_use_id: "tu1", content: "done" }],
-      },
-    } as TranscriptLine);
+    const resultLine = (timestamp?: unknown): TranscriptLine =>
+      ({
+        type: "user",
+        uuid: "r1",
+        ...(timestamp === undefined ? {} : { timestamp }),
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tu1", content: "done" }],
+        },
+      }) as TranscriptLine;
 
     const settleOf = (line: TranscriptLine) => {
       useClaudeTmuxStore.getState().applyTranscriptLine("e", launch);
       useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
       const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
-      const invocation = parts.find(
-        (p) => p.type === "tool-invocation" && p.toolUseId === "tu1",
-      );
+      const invocation = parts.find((p) => p.type === "tool-invocation" && p.toolUseId === "tu1");
       expect(invocation!.toolState).toBe("success");
       return invocation!.settledAt;
     };
 
     test("stamps the card from the record's own clock", () => {
-      expect(settleOf(resultLine("2026-08-17T10:04:30.000Z")))
-        .toBe("2026-08-17T10:04:30.000Z");
+      expect(settleOf(resultLine("2026-08-17T10:04:30.000Z"))).toBe("2026-08-17T10:04:30.000Z");
     });
 
     test.each([
@@ -470,10 +454,9 @@ describe("applyTranscriptLine", () => {
 
     test("keeps the first stamp when a later record repeats the result", () => {
       useClaudeTmuxStore.getState().applyTranscriptLine("e", launch);
-      useClaudeTmuxStore.getState().applyTranscriptLine(
-        "e",
-        resultLine("2026-08-17T10:04:30.000Z"),
-      );
+      useClaudeTmuxStore
+        .getState()
+        .applyTranscriptLine("e", resultLine("2026-08-17T10:04:30.000Z"));
       useClaudeTmuxStore.getState().applyTranscriptLine("e", {
         ...resultLine("2026-08-17T11:00:00.000Z"),
         uuid: "r2",
@@ -482,8 +465,9 @@ describe("applyTranscriptLine", () => {
       const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
       // A tool settles once. Restamping would move a card the reader has
       // already found in its place.
-      expect(parts.find((p) => p.type === "tool-invocation")?.settledAt)
-        .toBe("2026-08-17T10:04:30.000Z");
+      expect(parts.find((p) => p.type === "tool-invocation")?.settledAt).toBe(
+        "2026-08-17T10:04:30.000Z",
+      );
     });
   });
 
@@ -605,9 +589,7 @@ describe("applyTranscriptLine", () => {
     useClaudeTmuxStore.getState().applyTranscriptLine("e", resultLine);
 
     const parts = useClaudeTmuxStore.getState().getTab("e").messages[0]!.parts;
-    expect(
-      parts.find((p) => p.type === "tool-invocation")?.taskSnapshot,
-    ).toBeUndefined();
+    expect(parts.find((p) => p.type === "tool-invocation")?.taskSnapshot).toBeUndefined();
   });
 
   test("ignores non-message line types", () => {
@@ -667,8 +649,7 @@ describe("applyTranscriptLine", () => {
       uuid: "stdout-1",
       message: {
         role: "user",
-        content:
-          "<local-command-stdout>Set model to [1mSonnet 4.6[22m</local-command-stdout>",
+        content: "<local-command-stdout>Set model to [1mSonnet 4.6[22m</local-command-stdout>",
       },
     };
     const store = useClaudeTmuxStore.getState();
@@ -684,8 +665,7 @@ describe("applyTranscriptLine", () => {
       uuid: "mixed-1",
       message: {
         role: "user",
-        content:
-          "Please run this:\n<command-name>/help</command-name>\nand let me know.",
+        content: "Please run this:\n<command-name>/help</command-name>\nand let me know.",
       },
     };
     useClaudeTmuxStore.getState().applyTranscriptLine("e", line);
@@ -721,8 +701,8 @@ describe("applyTranscriptLine", () => {
             name: "Edit",
             input: {
               file_path: "/work/apps/web/package.json",
-              old_string: "\"react\": \"18.0.0\"",
-              new_string: "\"react\": \"19.0.0\"",
+              old_string: '"react": "18.0.0"',
+              new_string: '"react": "19.0.0"',
             },
           },
         ],
@@ -732,8 +712,8 @@ describe("applyTranscriptLine", () => {
     const msg = useClaudeTmuxStore.getState().getTab("e").messages[0]!;
     const tool = msg.parts.find((p) => p.type === "tool-invocation");
     expect(tool?.toolDiff?.filePath).toBe("/work/apps/web/package.json");
-    expect(tool?.toolDiff?.before).toBe("\"react\": \"18.0.0\"");
-    expect(tool?.toolDiff?.after).toBe("\"react\": \"19.0.0\"");
+    expect(tool?.toolDiff?.before).toBe('"react": "18.0.0"');
+    expect(tool?.toolDiff?.after).toBe('"react": "19.0.0"');
     expect(tool?.toolDiff?.additions).toBe(1);
     expect(tool?.toolDiff?.deletions).toBe(1);
   });
@@ -1001,7 +981,11 @@ describe("applyTranscriptLine", () => {
     // What the CLI writes when thinking display is "omitted" — the reasoning is
     // sealed in the signature, so there is nothing to render. The tmux launcher
     // asks for "summarized" precisely so this shape does not reach the UI.
-    const redacted: TranscriptContent = { type: "thinking", thinking: "", signature: "EqQBCkYIBxgC" };
+    const redacted: TranscriptContent = {
+      type: "thinking",
+      thinking: "",
+      signature: "EqQBCkYIBxgC",
+    };
     const line: TranscriptLine = {
       type: "assistant",
       uuid: "a3",
@@ -1055,7 +1039,8 @@ describe("compactConsecutiveAssistantMessages", () => {
         createdAt: "2026-01-01T00:00:01Z",
         parts: [
           {
-            type: "tool-invocation", content: "",
+            type: "tool-invocation",
+            content: "",
             toolName: "Read",
             toolUseId: "tu1",
             toolState: "success",
@@ -1069,7 +1054,8 @@ describe("compactConsecutiveAssistantMessages", () => {
         createdAt: "2026-01-01T00:00:02Z",
         parts: [
           {
-            type: "tool-invocation", content: "",
+            type: "tool-invocation",
+            content: "",
             toolName: "Grep",
             toolUseId: "tu2",
             toolState: "success",
@@ -1117,8 +1103,7 @@ describe("compactConsecutiveAssistantMessages", () => {
       },
     ];
 
-    expect(compactConsecutiveAssistantMessages(messages)[0]?.modelId)
-      .toBe("claude-opus-5");
+    expect(compactConsecutiveAssistantMessages(messages)[0]?.modelId).toBe("claude-opus-5");
   });
 
   test("does not combine assistant messages across a visible user message", () => {
@@ -1190,20 +1175,16 @@ describe("pendingApprovals", () => {
     useClaudeTmuxStore.getState().addPendingApproval("e", a);
     useClaudeTmuxStore.getState().addPendingApproval("e", a);
     useClaudeTmuxStore.getState().addPendingApproval("e", a);
-    expect(
-      useClaudeTmuxStore.getState().getTab("e").pendingApprovals,
-    ).toHaveLength(1);
+    expect(useClaudeTmuxStore.getState().getTab("e").pendingApprovals).toHaveLength(1);
   });
 
   test("removePendingApproval removes by eventId", () => {
-    useClaudeTmuxStore.getState().addPendingApproval(
-      "e",
-      payloadToApproval("evt-1", { tool_name: "Bash", tool_input: {} }),
-    );
-    useClaudeTmuxStore.getState().addPendingApproval(
-      "e",
-      payloadToApproval("evt-2", { tool_name: "Write", tool_input: {} }),
-    );
+    useClaudeTmuxStore
+      .getState()
+      .addPendingApproval("e", payloadToApproval("evt-1", { tool_name: "Bash", tool_input: {} }));
+    useClaudeTmuxStore
+      .getState()
+      .addPendingApproval("e", payloadToApproval("evt-2", { tool_name: "Write", tool_input: {} }));
     useClaudeTmuxStore.getState().removePendingApproval("e", "evt-1");
     const env = useClaudeTmuxStore.getState().getTab("e");
     expect(env.pendingApprovals).toHaveLength(1);
@@ -1256,25 +1237,17 @@ describe("prompt draft clearing", () => {
     const secondKey = createClaudeTmuxStateKey("env-2", "tab-1");
     store.addPendingQuestion(firstKey, payloadToQuestion("shared-event", {}));
     store.addPendingQuestion(secondKey, payloadToQuestion("shared-event", {}));
-    drafts().setDraftValue(
-      tmuxQuestionDraftKey(firstKey, "shared-event"),
-      "answers",
-      [["first"]],
-    );
-    drafts().setDraftValue(
-      tmuxQuestionDraftKey(secondKey, "shared-event"),
-      "answers",
-      [["second"]],
-    );
+    drafts().setDraftValue(tmuxQuestionDraftKey(firstKey, "shared-event"), "answers", [["first"]]);
+    drafts().setDraftValue(tmuxQuestionDraftKey(secondKey, "shared-event"), "answers", [
+      ["second"],
+    ]);
 
     store.removePendingQuestion(firstKey, "shared-event");
 
-    expect(drafts().drafts.has(
-      tmuxQuestionDraftKey(firstKey, "shared-event"),
-    )).toBe(false);
-    expect(drafts().drafts.get(
-      tmuxQuestionDraftKey(secondKey, "shared-event"),
-    )).toEqual({ answers: [["second"]] });
+    expect(drafts().drafts.has(tmuxQuestionDraftKey(firstKey, "shared-event"))).toBe(false);
+    expect(drafts().drafts.get(tmuxQuestionDraftKey(secondKey, "shared-event"))).toEqual({
+      answers: [["second"]],
+    });
   });
 
   test("replacePendingHooks drops drafts for withdrawn prompts and keeps live ones", () => {
@@ -1335,16 +1308,12 @@ describe("payloadToApproval", () => {
       expiresAt: 1_900_000_300_000,
       receivedAt: "2030-03-17T17:46:40.000Z",
     });
-    const withStrayRuntimeFields = payloadToApproval(
-      "e2",
-      {},
-      {
-        requestedAt: 1_900_000_000_000,
-        expiresAt: 1_900_000_300_000,
-        id: "must-not-leak",
-        kind: "PreToolUse",
-      } as { requestedAt: number; expiresAt: number },
-    );
+    const withStrayRuntimeFields = payloadToApproval("e2", {}, {
+      requestedAt: 1_900_000_000_000,
+      expiresAt: 1_900_000_300_000,
+      id: "must-not-leak",
+      kind: "PreToolUse",
+    } as { requestedAt: number; expiresAt: number });
     expect(withStrayRuntimeFields).not.toHaveProperty("id");
     expect(withStrayRuntimeFields).not.toHaveProperty("kind");
     expect(payloadToApproval("legacy", {}).requestedAt).toBeUndefined();
@@ -1457,9 +1426,7 @@ describe("payloadToInfoEvent", () => {
   });
 
   test("falls back to .notification then to kind", () => {
-    expect(payloadToInfoEvent("e1", "Stop", { notification: "n" }).message).toBe(
-      "n",
-    );
+    expect(payloadToInfoEvent("e1", "Stop", { notification: "n" }).message).toBe("n");
     expect(payloadToInfoEvent("e1", "Stop", {}).message).toBe("Stop");
   });
 });
@@ -1566,18 +1533,27 @@ describe("drafts, attachments, and queue helpers", () => {
     ]);
 
     store.removeAttachment(keyA, "att-1");
-    expect(useClaudeTmuxStore.getState().getAttachments(keyA).map((a) => a.id)).toEqual([
-      "att-2",
-    ]);
-    expect(useClaudeTmuxStore.getState().getAttachments(keyB).map((a) => a.id)).toEqual([
-      "att-b",
-    ]);
+    expect(
+      useClaudeTmuxStore
+        .getState()
+        .getAttachments(keyA)
+        .map((a) => a.id),
+    ).toEqual(["att-2"]);
+    expect(
+      useClaudeTmuxStore
+        .getState()
+        .getAttachments(keyB)
+        .map((a) => a.id),
+    ).toEqual(["att-b"]);
 
     useClaudeTmuxStore.getState().clearAttachments(keyA);
     expect(useClaudeTmuxStore.getState().getAttachments(keyA)).toEqual([]);
-    expect(useClaudeTmuxStore.getState().getAttachments(keyB).map((a) => a.id)).toEqual([
-      "att-b",
-    ]);
+    expect(
+      useClaudeTmuxStore
+        .getState()
+        .getAttachments(keyB)
+        .map((a) => a.id),
+    ).toEqual(["att-b"]);
   });
 
   test("projects and replaces queued messages per scoped tab", () => {
@@ -1603,14 +1579,19 @@ describe("drafts, attachments, and queue helpers", () => {
       { id: "q-3", text: "third", attachments: [] },
       { id: "q-2", text: "second", attachments: [] },
     ]);
-    expect(useClaudeTmuxStore.getState().getQueuedMessages(keyA).map((m) => m.id)).toEqual([
-      "q-3",
-      "q-2",
-    ]);
+    expect(
+      useClaudeTmuxStore
+        .getState()
+        .getQueuedMessages(keyA)
+        .map((m) => m.id),
+    ).toEqual(["q-3", "q-2"]);
 
-    expect(useClaudeTmuxStore.getState().getQueuedMessages(keyB).map((m) => m.id)).toEqual([
-      "q-b",
-    ]);
+    expect(
+      useClaudeTmuxStore
+        .getState()
+        .getQueuedMessages(keyB)
+        .map((m) => m.id),
+    ).toEqual(["q-b"]);
     useClaudeTmuxStore.getState().setQueueProjection(keyB, []);
     expect(useClaudeTmuxStore.getState().getQueueLength(keyB)).toBe(0);
   });
@@ -1726,9 +1707,7 @@ describe("session lifecycle", () => {
   });
 
   test("setRunning preserves prior sessionId when called without sessionId", () => {
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("e", true, { sessionId: "sess-1" });
+    useClaudeTmuxStore.getState().setRunning("e", true, { sessionId: "sess-1" });
     // Subsequent setRunning that doesn't pass sessionId leaves it intact.
     useClaudeTmuxStore.getState().setRunning("e", false);
     const tab = useClaudeTmuxStore.getState().getTab("e");
@@ -1737,9 +1716,7 @@ describe("session lifecycle", () => {
   });
 
   test("setRunning with sessionId=null clears it", () => {
-    useClaudeTmuxStore
-      .getState()
-      .setRunning("e", true, { sessionId: "sess-1" });
+    useClaudeTmuxStore.getState().setRunning("e", true, { sessionId: "sess-1" });
     useClaudeTmuxStore.getState().setRunning("e", false, { sessionId: null });
     const tab = useClaudeTmuxStore.getState().getTab("e");
     expect(tab.sessionId).toBeNull();

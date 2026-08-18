@@ -67,20 +67,21 @@ export function applyDiffBudget(
   const additions = metadata.additions ?? derivedStats?.additions;
   const deletions = metadata.deletions ?? derivedStats?.deletions;
   if (
-    before === metadata.before
-    && after === metadata.after
-    && additions === metadata.additions
-    && deletions === metadata.deletions
-  ) return metadata;
+    before === metadata.before &&
+    after === metadata.after &&
+    additions === metadata.additions &&
+    deletions === metadata.deletions
+  )
+    return metadata;
 
   return { ...metadata, before, after, additions, deletions };
 }
 
 /** Bound the text a completed tool result contributes to the transcript. */
-export function applyToolResultBudget(result: {
+export function applyToolResultBudget(result: { output?: string; error?: string }): {
   output?: string;
   error?: string;
-}): { output?: string; error?: string } {
+} {
   return {
     output: capText(result.output, MAX_TOOL_TEXT_BYTES),
     error: capText(result.error, MAX_TOOL_TEXT_BYTES),

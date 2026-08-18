@@ -1,16 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
-import {
-  NativeResumeSessionDialog,
-  type ResumableSession,
-} from "./NativeResumeSessionDialog";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { NativeResumeSessionDialog, type ResumableSession } from "./NativeResumeSessionDialog";
 
 /**
  * The three per-agent wrappers stub this dialog out in their tab suites, so
@@ -128,9 +118,7 @@ describe("NativeResumeSessionDialog", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText("Failed to load sessions")).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText("Failed to load sessions")).toBeTruthy());
   });
 
   test("renders running and error status badges", async () => {
@@ -194,9 +182,7 @@ describe("NativeResumeSessionDialog", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByText("No previous sessions found.")).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText("No previous sessions found.")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);

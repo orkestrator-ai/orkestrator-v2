@@ -34,15 +34,21 @@ describe("tmux observations", () => {
   });
 
   test("parses token-only roster rows with inline roles and durations", () => {
-    expect(parseTmuxAgentUsageSummaries([
-      "● main",
-      "○ Explore  Review db-api test correctness                 1m 6s · ↓ 45.7k tokens",
-    ].join("\n"))).toEqual([{
-      name: "Review db-api test correctness",
-      role: "Explore",
-      tokenCount: 45_700,
-      tokenCountText: "45.7k tokens",
-    }]);
+    expect(
+      parseTmuxAgentUsageSummaries(
+        [
+          "● main",
+          "○ Explore  Review db-api test correctness                 1m 6s · ↓ 45.7k tokens",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        name: "Review db-api test correctness",
+        role: "Explore",
+        tokenCount: 45_700,
+        tokenCountText: "45.7k tokens",
+      },
+    ]);
   });
 
   test("parses the latest selection prompt and its current choice", () => {
@@ -67,15 +73,17 @@ describe("tmux observations", () => {
   });
 
   test("parses wrapped labels even when the final option wraps", () => {
-    const prompt = parseTmuxSelectionPrompt([
-      "Do you want to proceed?",
-      "",
-      "❯ 1. Yes",
-      "  2. No, and tell Claude",
-      "     what to do differently",
-      "",
-      "Enter to confirm · Esc to cancel",
-    ].join("\n"));
+    const prompt = parseTmuxSelectionPrompt(
+      [
+        "Do you want to proceed?",
+        "",
+        "❯ 1. Yes",
+        "  2. No, and tell Claude",
+        "     what to do differently",
+        "",
+        "Enter to confirm · Esc to cancel",
+      ].join("\n"),
+    );
 
     expect(prompt).toEqual({
       question: "Do you want to proceed?",
@@ -94,14 +102,16 @@ describe("tmux observations", () => {
   });
 
   test("keeps an unknown highlighted option distinct from option one", () => {
-    const prompt = parseTmuxSelectionPrompt([
-      "Choose one",
-      "",
-      "  1. First",
-      "  2. Second",
-      "",
-      "Enter to select · Arrow keys to navigate · Esc to cancel",
-    ].join("\n"));
+    const prompt = parseTmuxSelectionPrompt(
+      [
+        "Choose one",
+        "",
+        "  1. First",
+        "  2. Second",
+        "",
+        "Enter to select · Arrow keys to navigate · Esc to cancel",
+      ].join("\n"),
+    );
 
     expect(prompt?.selectedOptionIndex).toBeNull();
     expect(prompt?.options.every((option) => !option.selected)).toBe(true);
@@ -109,65 +119,73 @@ describe("tmux observations", () => {
 
   test("distinguishes numbered confirmation from cursor navigation", () => {
     const options = ["› 1. No", "  2. Yes"];
-    expect(parseTmuxSelectionPrompt([
-      ...options,
-      "",
-      "Enter to confirm · Esc to cancel",
-    ].join("\n"))?.inputMode).toBe("number");
-    expect(parseTmuxSelectionPrompt([
-      ...options,
-      "",
-      "Enter to select · Tab/Arrow keys to navigate · Esc to cancel",
-    ].join("\n"))?.inputMode).toBe("navigate");
-    expect(parseTmuxSelectionPrompt([
-      ...options,
-      "",
-      "Enter to select · Esc to cancel",
-    ].join("\n"))?.inputMode).toBe("navigate");
+    expect(
+      parseTmuxSelectionPrompt([...options, "", "Enter to confirm · Esc to cancel"].join("\n"))
+        ?.inputMode,
+    ).toBe("number");
+    expect(
+      parseTmuxSelectionPrompt(
+        [...options, "", "Enter to select · Tab/Arrow keys to navigate · Esc to cancel"].join("\n"),
+      )?.inputMode,
+    ).toBe("navigate");
+    expect(
+      parseTmuxSelectionPrompt([...options, "", "Enter to select · Esc to cancel"].join("\n"))
+        ?.inputMode,
+    ).toBe("navigate");
   });
 
   test("does not revive a completed prompt when later pane output is present", () => {
-    const prompt = parseTmuxSelectionPrompt([
-      "Choose a deployment target",
-      "",
-      "› 1. Staging",
-      "  2. Production",
-      "",
-      "Enter to select · Arrow keys to navigate · Esc to cancel",
-      "ordinary pane output",
-      "1. This is transcript text, not an adjacent active prompt",
-      "",
-      "",
-      "",
-      "Enter to confirm · Esc to cancel",
-    ].join("\n"));
+    const prompt = parseTmuxSelectionPrompt(
+      [
+        "Choose a deployment target",
+        "",
+        "› 1. Staging",
+        "  2. Production",
+        "",
+        "Enter to select · Arrow keys to navigate · Esc to cancel",
+        "ordinary pane output",
+        "1. This is transcript text, not an adjacent active prompt",
+        "",
+        "",
+        "",
+        "Enter to confirm · Esc to cancel",
+      ].join("\n"),
+    );
 
     expect(prompt).toBeNull();
   });
 
   test("does not let a running-agent header classify later token text", () => {
-    expect(parseTmuxAgentUsageSummaries([
-      "Running 1 Explore agent...",
-      "└ Review api correctness · 2 tool uses · 3k tokens",
-      "context left until auto-compact: 12.0k tokens",
-    ].join("\n"))).toEqual([{
-      name: "Review api correctness",
-      role: "Explore",
-      toolUseCount: 2,
-      tokenCount: 3_000,
-      tokenCountText: "3k tokens",
-    }]);
+    expect(
+      parseTmuxAgentUsageSummaries(
+        [
+          "Running 1 Explore agent...",
+          "└ Review api correctness · 2 tool uses · 3k tokens",
+          "context left until auto-compact: 12.0k tokens",
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        name: "Review api correctness",
+        role: "Explore",
+        toolUseCount: 2,
+        tokenCount: 3_000,
+        tokenCountText: "3k tokens",
+      },
+    ]);
   });
 
   test("fingerprints the complete prompt semantics", () => {
-    const prompt = parseTmuxSelectionPrompt([
-      "Choose one",
-      "",
-      "› 1. First",
-      "  2. Second",
-      "",
-      "Enter to select · Arrow keys to navigate · Esc to cancel",
-    ].join("\n"));
+    const prompt = parseTmuxSelectionPrompt(
+      [
+        "Choose one",
+        "",
+        "› 1. First",
+        "  2. Second",
+        "",
+        "Enter to select · Arrow keys to navigate · Esc to cancel",
+      ].join("\n"),
+    );
     expect(prompt).not.toBeNull();
     expect(tmuxSelectionPromptFingerprint(prompt!)).toBe(
       tmuxSelectionPromptFingerprint({ ...prompt! }),
@@ -181,58 +199,68 @@ describe("tmux observations", () => {
   });
 
   test("rejects non-contiguous transcript lists that resemble options", () => {
-    expect(parseTmuxSelectionPrompt([
-      "Copied instructions",
-      "  2. First copied step",
-      "  4. Another copied step",
-      "",
-      "Enter to confirm · Esc to cancel",
-    ].join("\n"))).toBeNull();
+    expect(
+      parseTmuxSelectionPrompt(
+        [
+          "Copied instructions",
+          "  2. First copied step",
+          "  4. Another copied step",
+          "",
+          "Enter to confirm · Esc to cancel",
+        ].join("\n"),
+      ),
+    ).toBeNull();
   });
 
   test("extracts only the active question instead of stale numbered transcript lines", () => {
-    const prompt = parseTmuxSelectionPrompt([
-      "1. Run git diff",
-      "2. Run git log",
-      "3. Create the PR",
-      "",
-      "Two staged files look wrong. What should I do?",
-      "",
-      "› 1. Unstage them",
-      "     and add them to .gitignore",
-      "  2. Commit them",
-      "",
-      "Enter to select · ↑/↓ to navigate · Esc to cancel",
-    ].join("\n"));
+    const prompt = parseTmuxSelectionPrompt(
+      [
+        "1. Run git diff",
+        "2. Run git log",
+        "3. Create the PR",
+        "",
+        "Two staged files look wrong. What should I do?",
+        "",
+        "› 1. Unstage them",
+        "     and add them to .gitignore",
+        "  2. Commit them",
+        "",
+        "Enter to select · ↑/↓ to navigate · Esc to cancel",
+      ].join("\n"),
+    );
 
     expect(prompt?.question).toBe("Two staged files look wrong. What should I do?");
     expect(prompt?.options[0]?.label).toBe("Unstage them and add them to .gitignore");
   });
 
   test("expands URL-only questions through context but stops at boundaries", () => {
-    const prompt = parseTmuxSelectionPrompt([
-      "Earlier output must stay out.",
-      "",
-      "------------------------------------------------------------",
-      "WARNING: Bypass Permissions mode",
-      "",
-      "Proceeding can run dangerous commands.",
-      "",
-      "https://code.claude.com/docs/en/security",
-      "",
-      "› 1. No, exit",
-      "  2. Yes, I accept",
-      "",
-      "Enter to confirm · Esc to cancel",
-    ].join("\n"));
+    const prompt = parseTmuxSelectionPrompt(
+      [
+        "Earlier output must stay out.",
+        "",
+        "------------------------------------------------------------",
+        "WARNING: Bypass Permissions mode",
+        "",
+        "Proceeding can run dangerous commands.",
+        "",
+        "https://code.claude.com/docs/en/security",
+        "",
+        "› 1. No, exit",
+        "  2. Yes, I accept",
+        "",
+        "Enter to confirm · Esc to cancel",
+      ].join("\n"),
+    );
 
-    expect(prompt?.question).toBe([
-      "WARNING: Bypass Permissions mode",
-      "",
-      "Proceeding can run dangerous commands.",
-      "",
-      "https://code.claude.com/docs/en/security",
-    ].join("\n"));
+    expect(prompt?.question).toBe(
+      [
+        "WARNING: Bypass Permissions mode",
+        "",
+        "Proceeding can run dangerous commands.",
+        "",
+        "https://code.claude.com/docs/en/security",
+      ].join("\n"),
+    );
   });
 
   test.each([
@@ -240,43 +268,48 @@ describe("tmux observations", () => {
     ["bracketed log", "[INFO] background task complete"],
     ["shell prompt", "node@host$"],
   ])("does not absorb a %s before a URL-only question", (_name, context) => {
-    const prompt = parseTmuxSelectionPrompt([
-      context,
-      "",
-      "https://code.claude.com/docs/en/security",
-      "",
-      "› 1. No, exit",
-      "  2. Yes, I accept",
-      "",
-      "Enter to confirm · Esc to cancel",
-    ].join("\n"));
+    const prompt = parseTmuxSelectionPrompt(
+      [
+        context,
+        "",
+        "https://code.claude.com/docs/en/security",
+        "",
+        "› 1. No, exit",
+        "  2. Yes, I accept",
+        "",
+        "Enter to confirm · Esc to cancel",
+      ].join("\n"),
+    );
 
     expect(prompt?.question).toBe("https://code.claude.com/docs/en/security");
   });
 
   test("strips CSI, OSC, DCS, charset, carriage-return, and backspace controls", () => {
-    expect(stripTmuxAnsi([
-      "\u001b[32mgreen\u001b[0m",
-      "\u001b]0;title\u0007visible",
-      "\u001bPprivate payload\u001b\\after",
-      "\u001b(Bplain\r\btext",
-    ].join(" "))).toBe("green visible after plaintext");
+    expect(
+      stripTmuxAnsi(
+        [
+          "\u001b[32mgreen\u001b[0m",
+          "\u001b]0;title\u0007visible",
+          "\u001bPprivate payload\u001b\\after",
+          "\u001b(Bplain\r\btext",
+        ].join(" "),
+      ),
+    ).toBe("green visible after plaintext");
   });
 
   test("detects prompts when ANSI sequences interrupt the hint and options", () => {
-    const prompt = parseTmuxSelectionPrompt([
-      "Which environment?",
-      "",
-      "\u001b(B\u001b[7m› 1. Development\u001b[0m",
-      "  2. Production",
-      "",
-      "Enter\u001b[0m to confirm · Esc to cancel",
-    ].join("\n"));
+    const prompt = parseTmuxSelectionPrompt(
+      [
+        "Which environment?",
+        "",
+        "\u001b(B\u001b[7m› 1. Development\u001b[0m",
+        "  2. Production",
+        "",
+        "Enter\u001b[0m to confirm · Esc to cancel",
+      ].join("\n"),
+    );
 
-    expect(prompt?.options.map((option) => option.label)).toEqual([
-      "Development",
-      "Production",
-    ]);
+    expect(prompt?.options.map((option) => option.label)).toEqual(["Development", "Production"]);
     expect(prompt?.inputMode).toBe("number");
   });
 
@@ -308,13 +341,15 @@ describe("tmux observations", () => {
     expect(observation).toEqual({
       revision: 4,
       observedAt: "2026-08-04T12:00:00.000Z",
-      usage: [{
-        name: "worker",
-        role: "build",
-        toolUseCount: 2,
-        tokenCount: 3_000,
-        tokenCountText: "3k tokens",
-      }],
+      usage: [
+        {
+          name: "worker",
+          role: "build",
+          toolUseCount: 2,
+          tokenCount: 3_000,
+          tokenCountText: "3k tokens",
+        },
+      ],
       prompt: null,
     });
     expect(observation).not.toHaveProperty("snapshot");

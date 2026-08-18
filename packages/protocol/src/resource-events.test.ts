@@ -110,34 +110,42 @@ describe("RESOURCE_CHANGED_EVENT", () => {
 
 describe("resource revision manifests", () => {
   test("accepts a reset manifest containing every broad-sync resource", () => {
-    expect(isResourceRevisionManifest({
-      generation: "a".repeat(32),
-      reset: true,
-      revisions: Object.fromEntries(
-        RESOURCE_MANIFEST_KINDS.map((kind) => [kind, "b".repeat(32)]),
-      ),
-    })).toBe(true);
+    expect(
+      isResourceRevisionManifest({
+        generation: "a".repeat(32),
+        reset: true,
+        revisions: Object.fromEntries(
+          RESOURCE_MANIFEST_KINDS.map((kind) => [kind, "b".repeat(32)]),
+        ),
+      }),
+    ).toBe(true);
   });
 
   test("accepts an unchanged response without resource revisions", () => {
-    expect(isResourceRevisionManifest({
-      generation: "a".repeat(32),
-      reset: false,
-      revisions: {},
-    })).toBe(true);
+    expect(
+      isResourceRevisionManifest({
+        generation: "a".repeat(32),
+        reset: false,
+        revisions: {},
+      }),
+    ).toBe(true);
   });
 
   test("rejects unknown resources and malformed opaque revisions", () => {
-    expect(isResourceRevisionManifest({
-      generation: "a".repeat(32),
-      reset: false,
-      revisions: { secrets: "b".repeat(32) },
-    })).toBe(false);
-    expect(isResourceRevisionManifest({
-      generation: "a".repeat(32),
-      reset: false,
-      revisions: { project: "not-a-revision" },
-    })).toBe(false);
+    expect(
+      isResourceRevisionManifest({
+        generation: "a".repeat(32),
+        reset: false,
+        revisions: { secrets: "b".repeat(32) },
+      }),
+    ).toBe(false);
+    expect(
+      isResourceRevisionManifest({
+        generation: "a".repeat(32),
+        reset: false,
+        revisions: { project: "not-a-revision" },
+      }),
+    ).toBe(false);
   });
 
   test("rejects malformed generations", () => {
@@ -153,31 +161,37 @@ describe("resource revision manifests", () => {
       "A".repeat(32),
       "g".repeat(32),
     ]) {
-      expect(isResourceRevisionManifest({
-        generation,
-        reset: false,
-        revisions: {},
-      })).toBe(false);
+      expect(
+        isResourceRevisionManifest({
+          generation,
+          reset: false,
+          revisions: {},
+        }),
+      ).toBe(false);
     }
   });
 
   test("rejects a missing or non-boolean reset marker", () => {
     for (const reset of [undefined, null, 0, 1, "false", {}, []]) {
-      expect(isResourceRevisionManifest({
-        generation: "a".repeat(32),
-        ...(reset === undefined ? {} : { reset }),
-        revisions: {},
-      })).toBe(false);
+      expect(
+        isResourceRevisionManifest({
+          generation: "a".repeat(32),
+          ...(reset === undefined ? {} : { reset }),
+          revisions: {},
+        }),
+      ).toBe(false);
     }
   });
 
   test("rejects non-object revision maps", () => {
     for (const revisions of [undefined, null, "", 42, true, []]) {
-      expect(isResourceRevisionManifest({
-        generation: "a".repeat(32),
-        reset: false,
-        revisions,
-      })).toBe(false);
+      expect(
+        isResourceRevisionManifest({
+          generation: "a".repeat(32),
+          reset: false,
+          revisions,
+        }),
+      ).toBe(false);
     }
   });
 
@@ -194,11 +208,13 @@ describe("resource revision manifests", () => {
       "B".repeat(32),
       "z".repeat(32),
     ]) {
-      expect(isResourceRevisionManifest({
-        generation: "a".repeat(32),
-        reset: false,
-        revisions: { project: revision },
-      })).toBe(false);
+      expect(
+        isResourceRevisionManifest({
+          generation: "a".repeat(32),
+          reset: false,
+          revisions: { project: revision },
+        }),
+      ).toBe(false);
     }
   });
 });

@@ -128,10 +128,10 @@ function boundedJsonString(
   }
   let end = low;
   if (
-    end > 0
-    && end < value.length
-    && value.charCodeAt(end - 1) >= 0xd800
-    && value.charCodeAt(end - 1) <= 0xdbff
+    end > 0 &&
+    end < value.length &&
+    value.charCodeAt(end - 1) >= 0xd800 &&
+    value.charCodeAt(end - 1) <= 0xdbff
   ) {
     end -= 1;
   }
@@ -144,10 +144,7 @@ function ticketDetail(
   commentLimit: number,
 ): Record<string, unknown> {
   const title = boundedJsonString(task.title, MAX_TITLE_OUTPUT_BYTES);
-  const description = boundedJsonString(
-    task.description,
-    MAX_DESCRIPTION_OUTPUT_BYTES,
-  );
+  const description = boundedJsonString(task.description, MAX_DESCRIPTION_OUTPUT_BYTES);
   const acceptanceCriteria = boundedJsonString(
     task.acceptanceCriteria,
     MAX_DESCRIPTION_OUTPUT_BYTES,
@@ -175,36 +172,24 @@ function ticketDetail(
     hasMoreComments: commentOffset + comments.length < task.comments.length,
     ...(title.truncated ? { titleTruncated: true } : {}),
     ...(description.truncated ? { descriptionTruncated: true } : {}),
-    ...(acceptanceCriteria.truncated
-      ? { acceptanceCriteriaTruncated: true }
-      : {}),
+    ...(acceptanceCriteria.truncated ? { acceptanceCriteriaTruncated: true } : {}),
     ...(task.buildPipelineId ? { buildPipelineId: task.buildPipelineId } : {}),
   };
 }
 
-function toolResult(
-  value: Record<string, unknown>,
-  textSummary: Record<string, unknown> = value,
-) {
+function toolResult(value: Record<string, unknown>, textSummary: Record<string, unknown> = value) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(textSummary) }],
     structuredContent: value,
   };
 }
 
-function ticketResult(
-  task: KanbanTask,
-  commentOffset = 0,
-  commentLimit = DEFAULT_COMMENT_LIMIT,
-) {
+function ticketResult(task: KanbanTask, commentOffset = 0, commentLimit = DEFAULT_COMMENT_LIMIT) {
   return toolResult(
     { ticket: ticketDetail(task, commentOffset, commentLimit) },
     {
       ticket: ticketSummary(task),
-      commentsReturned: Math.min(
-        commentLimit,
-        Math.max(0, task.comments.length - commentOffset),
-      ),
+      commentsReturned: Math.min(commentLimit, Math.max(0, task.comments.length - commentOffset)),
     },
   );
 }
@@ -221,17 +206,14 @@ async function scopedTicket(
   return task;
 }
 
-function createTicketServer(
-  storage: StorageService,
-  scope: AgentToolScope,
-): McpServer {
+function createTicketServer(storage: StorageService, scope: AgentToolScope): McpServer {
   const server = new McpServer(
     { name: "orkestrator-kanban", version: "1.0.0" },
     {
       instructions:
-        "Use these tools to read and maintain the current project's Kanban tickets. "
-        + "Ticket IDs are project-scoped. Update only fields requested by the user, "
-        + "and add a comment when durable implementation context should be preserved.",
+        "Use these tools to read and maintain the current project's Kanban tickets. " +
+        "Ticket IDs are project-scoped. Update only fields requested by the user, " +
+        "and add a comment when durable implementation context should be preserved.",
     },
   );
 
@@ -255,9 +237,7 @@ function createTicketServer(
     },
     async ({ status, offset, limit }) => {
       const all = await storage.getKanbanTasks(scope.projectId);
-      const filtered = status
-        ? all.filter((task) => task.status === status)
-        : all;
+      const filtered = status ? all.filter((task) => task.status === status) : all;
       const tickets = filtered.slice(offset, offset + limit).map(ticketSummary);
       return toolResult({
         tickets,
@@ -278,8 +258,7 @@ function createTicketServer(
       inputSchema: z.object({
         ticketId: z.string().trim().min(1).max(200),
         commentOffset: z.number().int().min(0).default(0),
-        commentLimit: z.number().int().min(1).max(MAX_COMMENT_LIMIT)
-          .default(DEFAULT_COMMENT_LIMIT),
+        commentLimit: z.number().int().min(1).max(MAX_COMMENT_LIMIT).default(DEFAULT_COMMENT_LIMIT),
       }),
       annotations: {
         readOnlyHint: true,
@@ -298,8 +277,7 @@ function createTicketServer(
     "create_ticket",
     {
       title: "Create a Kanban ticket",
-      description:
-        "Create a Kanban ticket in the current project. New tickets default to backlog.",
+      description: "Create a Kanban ticket in the current project. New tickets default to backlog.",
       inputSchema: z.object({
         title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
         description: z.string().max(MAX_DESCRIPTION_LENGTH).default(""),
@@ -314,12 +292,10 @@ function createTicketServer(
       },
     },
     async ({ title, description, acceptanceCriteria, status }) => {
-      const ticket = await storage.addKanbanTask(
-        scope.projectId,
-        title,
-        description,
-        { acceptanceCriteria, status },
-      );
+      const ticket = await storage.addKanbanTask(scope.projectId, title, description, {
+        acceptanceCriteria,
+        status,
+      });
       return ticketResult(ticket);
     },
   );
@@ -355,11 +331,7 @@ function createTicketServer(
       if (Object.keys(updates).length === 0) {
         throw new Error("Provide at least one ticket field to update");
       }
-      const ticket = await storage.updateKanbanTask(
-        ticketId,
-        updates,
-        scope.projectId,
-      );
+      const ticket = await storage.updateKanbanTask(ticketId, updates, scope.projectId);
       return ticketResult(ticket);
     },
   );
@@ -368,8 +340,7 @@ function createTicketServer(
     "add_ticket_comment",
     {
       title: "Comment on a Kanban ticket",
-      description:
-        "Add a durable comment to a Kanban ticket in the current project.",
+      description: "Add a durable comment to a Kanban ticket in the current project.",
       inputSchema: z.object({
         ticketId: z.string().trim().min(1).max(200),
         text: z.string().trim().min(1).max(MAX_COMMENT_LENGTH),
@@ -383,11 +354,7 @@ function createTicketServer(
     },
     async ({ ticketId, text }) => {
       await scopedTicket(storage, scope.projectId, ticketId);
-      const ticket = await storage.addKanbanComment(
-        ticketId,
-        text,
-        scope.projectId,
-      );
+      const ticket = await storage.addKanbanComment(ticketId, text, scope.projectId);
       const commentOffset = Math.max(0, ticket.comments.length - DEFAULT_COMMENT_LIMIT);
       return ticketResult(ticket, commentOffset);
     },
@@ -500,7 +467,7 @@ export class AgentToolsServer {
       this.scopesByDigest.clear();
       if (!server) return;
       await new Promise<void>((resolve, reject) => {
-        server.close((error) => error ? reject(error) : resolve());
+        server.close((error) => (error ? reject(error) : resolve()));
         server.closeAllConnections?.();
       });
     });
@@ -514,10 +481,7 @@ export class AgentToolsServer {
     return this.scopesByDigest.get(credentialDigest(token)) ?? null;
   }
 
-  private async handle(
-    request: IncomingMessage,
-    response: ServerResponse,
-  ): Promise<void> {
+  private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? "/", "http://agent-tools.invalid");
     if (url.pathname !== AGENT_MCP_PATH) {
       jsonResponse(response, 404, { error: "Not found" });
@@ -562,10 +526,9 @@ export class AgentToolsServer {
     // MCP 2026-07-28's per-request envelope, while OpenCode/Claude releases
     // that still speak the 2025 protocol use the handler's stateless legacy
     // fallback. Both paths create an isolated ticket server for this request.
-    const handler = createMcpHandler(
-      () => createTicketServer(this.storage, scope),
-      { legacy: "stateless" },
-    );
+    const handler = createMcpHandler(() => createTicketServer(this.storage, scope), {
+      legacy: "stateless",
+    });
     try {
       await toNodeHandler(handler)(request, response, body);
     } finally {

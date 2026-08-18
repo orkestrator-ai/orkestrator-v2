@@ -20,12 +20,13 @@ const settle = async () => {
   for (let index = 0; index < 25; index += 1) await Promise.resolve();
 };
 
-const rejectionOf = (promise: Promise<unknown>): Promise<unknown> => promise.then(
-  () => {
-    throw new Error("Expected promise to reject");
-  },
-  (error) => error,
-);
+const rejectionOf = (promise: Promise<unknown>): Promise<unknown> =>
+  promise.then(
+    () => {
+      throw new Error("Expected promise to reject");
+    },
+    (error) => error,
+  );
 
 const request = (
   data: string,
@@ -73,8 +74,11 @@ describe("TerminalHttpInputBatcher", () => {
 
     expect(sent.length).toBe(2);
     expect(sent.join("")).toBe(data);
-    expect(sent.every((chunk) => encoder.encode(chunk).byteLength <= TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES))
-      .toBe(true);
+    expect(
+      sent.every(
+        (chunk) => encoder.encode(chunk).byteLength <= TERMINAL_HTTP_INPUT_MAX_BUFFER_BYTES,
+      ),
+    ).toBe(true);
     expect(sent[0]?.endsWith("�")).toBe(false);
     expect(sent[1]?.startsWith("€")).toBe(true);
   });
@@ -99,10 +103,16 @@ describe("TerminalHttpInputBatcher", () => {
   test("preserves per-request completion and cross-request order across chunks", async () => {
     const sent: string[] = [];
     const releases: Array<() => void> = [];
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      return new Promise<void>((resolve) => releases.push(resolve));
-    }, 50, 2, 10, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        return new Promise<void>((resolve) => releases.push(resolve));
+      },
+      50,
+      2,
+      10,
+      1_000,
+    );
 
     let firstCompleted = false;
     const first = batcher.enqueue(request("abcd")).then(() => {
@@ -129,10 +139,16 @@ describe("TerminalHttpInputBatcher", () => {
   test("rejects only input too large to ever fit and backpressures the rest in order", async () => {
     const sent: string[] = [];
     const releases: Array<() => void> = [];
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      return new Promise<void>((resolve) => releases.push(resolve));
-    }, 50, 2, 4, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        return new Promise<void>((resolve) => releases.push(resolve));
+      },
+      50,
+      2,
+      4,
+      1_000,
+    );
 
     const first = batcher.enqueue(request("ab"));
     const pending = batcher.enqueue(request("cd"));
@@ -140,8 +156,9 @@ describe("TerminalHttpInputBatcher", () => {
     expect(sent).toEqual(["ab"]);
 
     // Nine bytes can never fit a four-byte queue, however long the caller waits.
-    await expect(batcher.enqueue(request("oversized")))
-      .rejects.toThrow("exceeds the 4-byte terminal queue limit");
+    await expect(batcher.enqueue(request("oversized"))).rejects.toThrow(
+      "exceeds the 4-byte terminal queue limit",
+    );
 
     // Two bytes fit once there is room, so they wait rather than being dropped.
     let parkedAccepted = false;
@@ -169,10 +186,16 @@ describe("TerminalHttpInputBatcher", () => {
   test("keeps parked input ahead of a later keystroke and behind an explicit flush", async () => {
     const sent: string[] = [];
     const releases: Array<() => void> = [];
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      return new Promise<void>((resolve) => releases.push(resolve));
-    }, 60_000, 4, 4, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        return new Promise<void>((resolve) => releases.push(resolve));
+      },
+      60_000,
+      4,
+      4,
+      1_000,
+    );
 
     const inFlight = batcher.enqueue(request("abcd"));
     await tick();
@@ -207,10 +230,16 @@ describe("TerminalHttpInputBatcher", () => {
   test("preserves issue order across writes that repeatedly hit the ceiling", async () => {
     const sent: string[] = [];
     const releases: Array<() => void> = [];
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      return new Promise<void>((resolve) => releases.push(resolve));
-    }, 60_000, 2, 4, 5_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        return new Promise<void>((resolve) => releases.push(resolve));
+      },
+      60_000,
+      2,
+      4,
+      5_000,
+    );
 
     const issued = ["ab", "cd", "ef", "gh", "ij", "kl"];
     const writes = issued.map((data) => batcher.enqueue(request(data)));
@@ -236,13 +265,18 @@ describe("TerminalHttpInputBatcher", () => {
 
   test("rejects parked input when its queue fails or is reset before admission", async () => {
     let rejectFirst: (error: Error) => void = () => {};
-    const failing = new TerminalHttpInputBatcher(({ data }) => (
-      data === "ab"
-        ? new Promise<void>((_, reject) => {
-          rejectFirst = reject;
-        })
-        : Promise.resolve()
-    ), 60_000, 2, 2, 1_000);
+    const failing = new TerminalHttpInputBatcher(
+      ({ data }) =>
+        data === "ab"
+          ? new Promise<void>((_, reject) => {
+              rejectFirst = reject;
+            })
+          : Promise.resolve(),
+      60_000,
+      2,
+      2,
+      1_000,
+    );
 
     const inFlight = rejectionOf(failing.enqueue(request("ab")));
     const parked = rejectionOf(failing.enqueue(request("cd")));
@@ -268,9 +302,14 @@ describe("TerminalHttpInputBatcher", () => {
 
   test("flushes a non-in-flight full batch and accepts the ordered overflow", async () => {
     const sent: string[] = [];
-    const batcher = new TerminalHttpInputBatcher(async ({ data }) => {
-      sent.push(data);
-    }, 60_000, 2, 4);
+    const batcher = new TerminalHttpInputBatcher(
+      async ({ data }) => {
+        sent.push(data);
+      },
+      60_000,
+      2,
+      4,
+    );
 
     const prefix = batcher.enqueue(request("a"));
     const overflow = batcher.enqueue(request("bc"));
@@ -281,9 +320,14 @@ describe("TerminalHttpInputBatcher", () => {
 
   test("uses exact UTF-8 byte boundaries for multibyte and maximum-sized batches", async () => {
     const sent: string[] = [];
-    const batcher = new TerminalHttpInputBatcher(async ({ data }) => {
-      sent.push(data);
-    }, 50, 4, 12);
+    const batcher = new TerminalHttpInputBatcher(
+      async ({ data }) => {
+        sent.push(data);
+      },
+      50,
+      4,
+      12,
+    );
 
     await batcher.enqueue(request("éé😀"));
 
@@ -300,13 +344,19 @@ describe("TerminalHttpInputBatcher", () => {
     const sent: string[] = [];
     let rejectFirst: (error: Error) => void = () => {};
     let shouldFail = true;
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      if (!shouldFail) return Promise.resolve();
-      return new Promise<void>((_, reject) => {
-        rejectFirst = reject;
-      });
-    }, 50, 2, 10, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        if (!shouldFail) return Promise.resolve();
+        return new Promise<void>((_, reject) => {
+          rejectFirst = reject;
+        });
+      },
+      50,
+      2,
+      10,
+      1_000,
+    );
 
     const first = batcher.enqueue(request("ab"));
     const suffix = batcher.enqueue(request("cd"));
@@ -343,18 +393,26 @@ describe("TerminalHttpInputBatcher", () => {
   test("times out and aborts a stalled send, rejecting its queued suffix", async () => {
     const sent: string[] = [];
     let observedSignal: AbortSignal | undefined;
-    const batcher = new TerminalHttpInputBatcher(({ data }, signal) => {
-      sent.push(data);
-      observedSignal = signal;
-      return new Promise<void>(() => {});
-    }, 50, 2, 10, 5);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }, signal) => {
+        sent.push(data);
+        observedSignal = signal;
+        return new Promise<void>(() => {});
+      },
+      50,
+      2,
+      10,
+      5,
+    );
 
     const first = batcher.enqueue(request("ab"));
     const suffix = batcher.enqueue(request("cd"));
     const firstRejection = rejectionOf(first);
     const suffixRejection = rejectionOf(suffix);
     expect(await firstRejection).toEqual(new Error("Terminal HTTP input send timed out after 5ms"));
-    expect(await suffixRejection).toEqual(new Error("Terminal HTTP input send timed out after 5ms"));
+    expect(await suffixRejection).toEqual(
+      new Error("Terminal HTTP input send timed out after 5ms"),
+    );
 
     expect(sent).toEqual(["ab"]);
     expect(observedSignal?.aborted).toBe(true);
@@ -386,10 +444,16 @@ describe("TerminalHttpInputBatcher", () => {
 
   test("reset and dispose reject pending input, abort in-flight input, and permit a fresh queue", async () => {
     const signals: AbortSignal[] = [];
-    const batcher = new TerminalHttpInputBatcher((_request, signal) => {
-      signals.push(signal);
-      return new Promise<void>(() => {});
-    }, 60_000, 2, 10, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      (_request, signal) => {
+        signals.push(signal);
+        return new Promise<void>(() => {});
+      },
+      60_000,
+      2,
+      10,
+      1_000,
+    );
 
     const inFlight = batcher.enqueue(request("ab"));
     const pending = batcher.enqueue(request("c"));
@@ -431,19 +495,28 @@ describe("TerminalHttpInputBatcher", () => {
     await batcher.enqueue(request(""));
     expect(send).not.toHaveBeenCalled();
 
-    await expect(batcher.enqueue({ command: "invalid", sessionId: "s", data: "x" } as never))
-      .rejects.toThrow("Invalid terminal input request");
-    await expect(batcher.enqueue({ command: "terminal_write", sessionId: 1, data: "x" } as never))
-      .rejects.toThrow("Invalid terminal input request");
-    await expect(batcher.enqueue({ command: "terminal_write", sessionId: "s", data: 1 } as never))
-      .rejects.toThrow("Invalid terminal input request");
+    await expect(
+      batcher.enqueue({ command: "invalid", sessionId: "s", data: "x" } as never),
+    ).rejects.toThrow("Invalid terminal input request");
+    await expect(
+      batcher.enqueue({ command: "terminal_write", sessionId: 1, data: "x" } as never),
+    ).rejects.toThrow("Invalid terminal input request");
+    await expect(
+      batcher.enqueue({ command: "terminal_write", sessionId: "s", data: 1 } as never),
+    ).rejects.toThrow("Invalid terminal input request");
   });
 
   test("ships a printable keystroke that exactly fills a batch without the typing timer", async () => {
     const sent: string[] = [];
-    const batcher = new TerminalHttpInputBatcher(async ({ data }) => {
-      sent.push(data);
-    }, 60_000, 2, 10, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      async ({ data }) => {
+        sent.push(data);
+      },
+      60_000,
+      2,
+      10,
+      1_000,
+    );
 
     const first = batcher.enqueue(request("a"));
     await tick();
@@ -457,9 +530,16 @@ describe("TerminalHttpInputBatcher", () => {
 
   test("flushAll surfaces a queue that already failed closed", async () => {
     let rejectFirst: (error: Error) => void = () => {};
-    const batcher = new TerminalHttpInputBatcher(() => new Promise<void>((_, reject) => {
-      rejectFirst = reject;
-    }), 50, 2, 10, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectFirst = reject;
+        }),
+      50,
+      2,
+      10,
+      1_000,
+    );
 
     const failing = rejectionOf(batcher.enqueue(request("ab", "broken")));
     await tick();
@@ -473,13 +553,19 @@ describe("TerminalHttpInputBatcher", () => {
     const sent: string[] = [];
     let rejectFirst: (error: Error) => void = () => {};
     let shouldFail = true;
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      if (!shouldFail) return Promise.resolve();
-      return new Promise<void>((_, reject) => {
-        rejectFirst = reject;
-      });
-    }, 50, 2, 10, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        if (!shouldFail) return Promise.resolve();
+        return new Promise<void>((_, reject) => {
+          rejectFirst = reject;
+        });
+      },
+      50,
+      2,
+      10,
+      1_000,
+    );
 
     expect(batcher.clearFailure("terminal_write", "never-used")).toBe(false);
 
@@ -534,10 +620,16 @@ describe("TerminalHttpInputBatcher", () => {
   test("ignores a send that settles after its queue was retired", async () => {
     const sent: string[] = [];
     const settlers: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      return new Promise<void>((resolve, reject) => settlers.push({ resolve, reject }));
-    }, 60_000, 4, 20, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        return new Promise<void>((resolve, reject) => settlers.push({ resolve, reject }));
+      },
+      60_000,
+      4,
+      20,
+      1_000,
+    );
 
     const retired = rejectionOf(batcher.enqueue(request("ab")));
     await tick();
@@ -549,11 +641,14 @@ describe("TerminalHttpInputBatcher", () => {
     expect(sent).toEqual(["ab", "cd"]);
 
     let freshSettled = false;
-    void fresh.then(() => {
-      freshSettled = true;
-    }, () => {
-      freshSettled = true;
-    });
+    void fresh.then(
+      () => {
+        freshSettled = true;
+      },
+      () => {
+        freshSettled = true;
+      },
+    );
 
     // The abandoned send belongs to the retired queue and must not complete the
     // fresh one that replaced it under the same key.
@@ -569,11 +664,17 @@ describe("TerminalHttpInputBatcher", () => {
   test("ignores a rejection that arrives after its queue was retired", async () => {
     const sent: string[] = [];
     const settlers: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      if (sent.length > 2) return Promise.resolve();
-      return new Promise<void>((resolve, reject) => settlers.push({ resolve, reject }));
-    }, 60_000, 4, 20, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        if (sent.length > 2) return Promise.resolve();
+        return new Promise<void>((resolve, reject) => settlers.push({ resolve, reject }));
+      },
+      60_000,
+      4,
+      20,
+      1_000,
+    );
 
     const retired = rejectionOf(batcher.enqueue(request("ab")));
     await tick();
@@ -605,13 +706,19 @@ describe("TerminalHttpInputBatcher", () => {
   test("cancels an armed typing timer when the queue fails", async () => {
     const sent: string[] = [];
     let rejectFirst: (error: Error) => void = () => {};
-    const batcher = new TerminalHttpInputBatcher(({ data }) => {
-      sent.push(data);
-      if (sent.length > 1) return Promise.resolve();
-      return new Promise<void>((_, reject) => {
-        rejectFirst = reject;
-      });
-    }, 5, 4, 20, 1_000);
+    const batcher = new TerminalHttpInputBatcher(
+      ({ data }) => {
+        sent.push(data);
+        if (sent.length > 1) return Promise.resolve();
+        return new Promise<void>((_, reject) => {
+          rejectFirst = reject;
+        });
+      },
+      5,
+      4,
+      20,
+      1_000,
+    );
 
     const inFlight = rejectionOf(batcher.enqueue(request("ab")));
     const typed = rejectionOf(batcher.enqueue(request("c")));
@@ -627,7 +734,9 @@ describe("TerminalHttpInputBatcher", () => {
 
   test("validates constructor bounds", () => {
     const send = async () => {};
-    expect(() => new TerminalHttpInputBatcher(undefined as never)).toThrow("send must be a function");
+    expect(() => new TerminalHttpInputBatcher(undefined as never)).toThrow(
+      "send must be a function",
+    );
     for (const delay of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => new TerminalHttpInputBatcher(send, delay)).toThrow("delayMs");
     }
@@ -645,10 +754,14 @@ describe("TerminalHttpInputBatcher", () => {
 
 describe("terminal input request helpers", () => {
   test("recognizes terminal and local terminal requests", () => {
-    expect(parseTerminalInputRequest("terminal_write", { sessionId: "s", data: "x" }))
-      .toEqual({ command: "terminal_write", sessionId: "s", data: "x" });
-    expect(parseTerminalInputRequest("local_terminal_write", { sessionId: "l", data: "y" }))
-      .toEqual({ command: "local_terminal_write", sessionId: "l", data: "y" });
+    expect(parseTerminalInputRequest("terminal_write", { sessionId: "s", data: "x" })).toEqual({
+      command: "terminal_write",
+      sessionId: "s",
+      data: "x",
+    });
+    expect(
+      parseTerminalInputRequest("local_terminal_write", { sessionId: "l", data: "y" }),
+    ).toEqual({ command: "local_terminal_write", sessionId: "l", data: "y" });
   });
 
   test("rejects unrelated and malformed invokes", () => {

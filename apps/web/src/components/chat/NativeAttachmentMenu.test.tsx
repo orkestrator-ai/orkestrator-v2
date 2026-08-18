@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { FileCandidate } from "@/types";
 import {
   createWorkspaceAttachment,
@@ -40,9 +34,7 @@ function createFileSearch(
     searchFiles: (query, limit = 30, options) =>
       workspaceFiles
         .filter((file) => !options?.filesOnly || !file.isDirectory)
-        .filter((file) =>
-          file.relativePath.toLowerCase().includes(query.toLowerCase()),
-        )
+        .filter((file) => file.relativePath.toLowerCase().includes(query.toLowerCase()))
         .slice(0, limit),
     isLoading: false,
     error: null,
@@ -82,18 +74,14 @@ describe("NativeAttachmentMenu", () => {
     fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
 
     const menu = await screen.findByRole("menu");
-    expect(
-      container.querySelector("[data-testid=scroll-toolbar]")!.contains(menu),
-    ).toBe(false);
+    expect(container.querySelector("[data-testid=scroll-toolbar]")!.contains(menu)).toBe(false);
     expect(
       screen
         .getByRole("menuitem", { name: /Paste image into the input/ })
         .getAttribute("aria-disabled"),
     ).toBe("true");
 
-    fireEvent.click(
-      screen.getByRole("menuitem", { name: "Attach file from workspace" }),
-    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Attach file from workspace" }));
 
     expect(await screen.findByRole("dialog")).toBeTruthy();
     expect(screen.queryByRole("menu") === null).toBe(true);
@@ -113,9 +101,7 @@ describe("NativeAttachmentMenu", () => {
   });
 
   test("passes query, cap, and files-only filtering to search", async () => {
-    const searchFiles = mock<
-      NativeAttachmentFileSearch["searchFiles"]
-    >(() => []);
+    const searchFiles = mock<NativeAttachmentFileSearch["searchFiles"]>(() => []);
     render(
       <NativeAttachmentMenu
         fileSearch={createFileSearch({ searchFiles })}
@@ -124,28 +110,18 @@ describe("NativeAttachmentMenu", () => {
     );
 
     await openFilePicker();
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Search workspace files" }),
-      { target: { value: "component" } },
-    );
+    fireEvent.change(screen.getByRole("textbox", { name: "Search workspace files" }), {
+      target: { value: "component" },
+    });
 
     await waitFor(() => {
-      expect(searchFiles).toHaveBeenLastCalledWith(
-        "component",
-        100,
-        { filesOnly: true },
-      );
+      expect(searchFiles).toHaveBeenLastCalledWith("component", 100, { filesOnly: true });
     });
   });
 
   test("uses keyboard navigation with clamped bounds and Enter selection", async () => {
     const onSelectFile = mock(() => {});
-    render(
-      <NativeAttachmentMenu
-        fileSearch={createFileSearch()}
-        onSelectFile={onSelectFile}
-      />,
-    );
+    render(<NativeAttachmentMenu fileSearch={createFileSearch()} onSelectFile={onSelectFile} />);
 
     await openFilePicker();
     const input = screen.getByRole("textbox", {
@@ -170,25 +146,17 @@ describe("NativeAttachmentMenu", () => {
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
 
     try {
-      render(
-        <NativeAttachmentMenu
-          fileSearch={createFileSearch()}
-          onSelectFile={() => {}}
-        />,
-      );
+      render(<NativeAttachmentMenu fileSearch={createFileSearch()} onSelectFile={() => {}} />);
 
       await openFilePicker();
       const callsBeforeNavigation = scrollIntoView.mock.calls.length;
 
-      fireEvent.keyDown(
-        screen.getByRole("textbox", { name: "Search workspace files" }),
-        { key: "ArrowDown" },
-      );
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "Search workspace files" }), {
+        key: "ArrowDown",
+      });
 
       await waitFor(() => {
-        expect(scrollIntoView.mock.calls.length).toBeGreaterThan(
-          callsBeforeNavigation,
-        );
+        expect(scrollIntoView.mock.calls.length).toBeGreaterThan(callsBeforeNavigation);
         expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
       });
     } finally {
@@ -221,12 +189,7 @@ describe("NativeAttachmentMenu", () => {
   test("resets query and selection when closed and refreshes when reopened", async () => {
     const fileSearch = createFileSearch();
     const onSelectFile = mock(() => {});
-    render(
-      <NativeAttachmentMenu
-        fileSearch={fileSearch}
-        onSelectFile={onSelectFile}
-      />,
-    );
+    render(<NativeAttachmentMenu fileSearch={fileSearch} onSelectFile={onSelectFile} />);
 
     await openFilePicker();
     const input = screen.getByRole("textbox", {
@@ -240,16 +203,17 @@ describe("NativeAttachmentMenu", () => {
     await openFilePicker();
 
     expect(
-      (screen.getByRole("textbox", {
-        name: "Search workspace files",
-      }) as HTMLInputElement).value,
+      (
+        screen.getByRole("textbox", {
+          name: "Search workspace files",
+        }) as HTMLInputElement
+      ).value,
     ).toBe("");
     expect(fileSearch.refresh).toHaveBeenCalledTimes(2);
 
-    fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Search workspace files" }),
-      { key: "Enter" },
-    );
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search workspace files" }), {
+      key: "Enter",
+    });
     await waitFor(() => {
       expect(onSelectFile).toHaveBeenCalledWith(workspaceFiles[0]);
       expect(screen.queryByRole("dialog") === null).toBe(true);
@@ -257,14 +221,9 @@ describe("NativeAttachmentMenu", () => {
   });
 
   test("contains a rejected refresh promise and keeps the picker usable", async () => {
-    const refresh = mock(() =>
-      Promise.reject(new Error("Workspace scan failed")),
-    );
+    const refresh = mock(() => Promise.reject(new Error("Workspace scan failed")));
     render(
-      <NativeAttachmentMenu
-        fileSearch={createFileSearch({ refresh })}
-        onSelectFile={() => {}}
-      />,
+      <NativeAttachmentMenu fileSearch={createFileSearch({ refresh })} onSelectFile={() => {}} />,
     );
 
     await openFilePicker();
@@ -286,10 +245,9 @@ describe("NativeAttachmentMenu", () => {
 
     await openFilePicker();
     expect(screen.getByText("Loading files...")).toBeTruthy();
-    fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Search workspace files" }),
-      { key: "Enter" },
-    );
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search workspace files" }), {
+      key: "Enter",
+    });
     expect(onSelectFile).not.toHaveBeenCalled();
 
     rerender(
@@ -301,10 +259,9 @@ describe("NativeAttachmentMenu", () => {
       />,
     );
     expect(screen.getByText("Could not scan workspace")).toBeTruthy();
-    fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Search workspace files" }),
-      { key: "Enter" },
-    );
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search workspace files" }), {
+      key: "Enter",
+    });
     expect(onSelectFile).not.toHaveBeenCalled();
 
     rerender(
@@ -314,10 +271,9 @@ describe("NativeAttachmentMenu", () => {
       />,
     );
     expect(screen.getByText("No files match that search.")).toBeTruthy();
-    fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Search workspace files" }),
-      { key: "Enter" },
-    );
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search workspace files" }), {
+      key: "Enter",
+    });
     expect(onSelectFile).not.toHaveBeenCalled();
   });
 
@@ -331,18 +287,15 @@ describe("NativeAttachmentMenu", () => {
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
     expect(
-      (await screen.findByRole("menuitem", {
-        name: "Attach file from workspace",
-      })).getAttribute("aria-disabled"),
+      (
+        await screen.findByRole("menuitem", {
+          name: "Attach file from workspace",
+        })
+      ).getAttribute("aria-disabled"),
     ).toBe("true");
     fireEvent.keyDown(document, { key: "Escape" });
 
-    rerender(
-      <NativeAttachmentMenu
-        fileSearch={createFileSearch()}
-        onSelectFile={() => {}}
-      />,
-    );
+    rerender(<NativeAttachmentMenu fileSearch={createFileSearch()} onSelectFile={() => {}} />);
     await openFilePicker();
 
     rerender(
@@ -352,28 +305,23 @@ describe("NativeAttachmentMenu", () => {
       />,
     );
 
+    expect(screen.getByText("Start the environment to attach workspace files.")).toBeTruthy();
     expect(
-      screen.getByText("Start the environment to attach workspace files."),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("textbox", {
-        name: "Search workspace files",
-      }).getAttribute("disabled"),
+      screen
+        .getByRole("textbox", {
+          name: "Search workspace files",
+        })
+        .getAttribute("disabled"),
     ).not.toBeNull();
-    fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Search workspace files" }),
-      { key: "Enter" },
-    );
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Search workspace files" }), {
+      key: "Enter",
+    });
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   test("supports disabled trigger, closes when disabled, and uses custom labels", async () => {
     const { rerender } = render(
-      <NativeAttachmentMenu
-        disabled
-        fileSearch={createFileSearch()}
-        onSelectFile={() => {}}
-      />,
+      <NativeAttachmentMenu disabled fileSearch={createFileSearch()} onSelectFile={() => {}} />,
     );
 
     const trigger = screen.getByRole("button", { name: "Add attachment" });
@@ -391,18 +339,12 @@ describe("NativeAttachmentMenu", () => {
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Add attachment" }));
-    fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Choose project file" }),
-    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Choose project file" }));
     expect(await screen.findByText("Choose source")).toBeTruthy();
     expect(screen.getByText("Pick one project file.")).toBeTruthy();
 
     rerender(
-      <NativeAttachmentMenu
-        disabled
-        fileSearch={createFileSearch()}
-        onSelectFile={() => {}}
-      />,
+      <NativeAttachmentMenu disabled fileSearch={createFileSearch()} onSelectFile={() => {}} />,
     );
     await waitFor(() => expect(screen.queryByRole("dialog") === null).toBe(true));
   });
@@ -410,17 +352,13 @@ describe("NativeAttachmentMenu", () => {
 
 describe("createWorkspaceAttachment", () => {
   test("resolves local and container paths and normalizes separators", () => {
-    expect(
-      createWorkspaceAttachment(
-        workspaceFiles[0]!,
-        undefined,
-        "/tmp/worktree///",
-      ),
-    ).toEqual(expect.objectContaining({
-      type: "file",
-      path: "/tmp/worktree/docs/architecture.md",
-      name: "architecture.md",
-    }));
+    expect(createWorkspaceAttachment(workspaceFiles[0]!, undefined, "/tmp/worktree///")).toEqual(
+      expect.objectContaining({
+        type: "file",
+        path: "/tmp/worktree/docs/architecture.md",
+        name: "architecture.md",
+      }),
+    );
 
     expect(
       createWorkspaceAttachment(
@@ -431,11 +369,13 @@ describe("createWorkspaceAttachment", () => {
         },
         "container-1",
       ),
-    ).toEqual(expect.objectContaining({
-      type: "image",
-      path: "/workspace/assets/mockup.PNG",
-      name: "mockup.PNG",
-    }));
+    ).toEqual(
+      expect.objectContaining({
+        type: "image",
+        path: "/workspace/assets/mockup.PNG",
+        name: "mockup.PNG",
+      }),
+    );
 
     expect(
       createWorkspaceAttachment(
@@ -447,9 +387,11 @@ describe("createWorkspaceAttachment", () => {
         undefined,
         "C:\\project\\\\",
       ),
-    ).toEqual(expect.objectContaining({
-      path: "C:/project/src/main.ts",
-    }));
+    ).toEqual(
+      expect.objectContaining({
+        path: "C:/project/src/main.ts",
+      }),
+    );
 
     expect(
       createWorkspaceAttachment(
@@ -472,29 +414,16 @@ describe("createWorkspaceAttachment", () => {
     };
 
     expect(createWorkspaceAttachment(file)).toBeNull();
+    expect(createWorkspaceAttachment({ ...file, relativePath: "" }, "container-1")).toBeNull();
+    expect(createWorkspaceAttachment({ ...file, isDirectory: true }, "container-1")).toBeNull();
     expect(
-      createWorkspaceAttachment({ ...file, relativePath: "" }, "container-1"),
+      createWorkspaceAttachment({ ...file, relativePath: "nested//secret.txt" }, "container-1"),
     ).toBeNull();
     expect(
-      createWorkspaceAttachment({ ...file, isDirectory: true }, "container-1"),
+      createWorkspaceAttachment({ ...file, relativePath: "../secret.txt" }, "container-1"),
     ).toBeNull();
     expect(
-      createWorkspaceAttachment(
-        { ...file, relativePath: "nested//secret.txt" },
-        "container-1",
-      ),
-    ).toBeNull();
-    expect(
-      createWorkspaceAttachment(
-        { ...file, relativePath: "../secret.txt" },
-        "container-1",
-      ),
-    ).toBeNull();
-    expect(
-      createWorkspaceAttachment(
-        { ...file, relativePath: "nested\\..\\secret.txt" },
-        "container-1",
-      ),
+      createWorkspaceAttachment({ ...file, relativePath: "nested\\..\\secret.txt" }, "container-1"),
     ).toBeNull();
   });
 

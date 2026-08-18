@@ -9,10 +9,7 @@ const ZOOM_DEFAULT = 100;
 const RECENT_PROJECT_LIMIT = 5;
 
 const addRecentProject = (recentProjectIds: string[], projectId: string): string[] =>
-  [projectId, ...recentProjectIds.filter((id) => id !== projectId)].slice(
-    0,
-    RECENT_PROJECT_LIMIT,
-  );
+  [projectId, ...recentProjectIds.filter((id) => id !== projectId)].slice(0, RECENT_PROJECT_LIMIT);
 
 export type ProjectBoardTab = "kanban" | "github" | "linear" | "features";
 export type EnvironmentSortMode = "project" | "activity";
@@ -99,14 +96,11 @@ export const useUIStore = create<UIState>()(
             : state.recentProjectIds,
         })),
 
-      selectEnvironment: (environmentId) =>
-        set({ selectedEnvironmentId: environmentId }),
+      selectEnvironment: (environmentId) => set({ selectedEnvironmentId: environmentId }),
 
-      setProjectBoardTab: (tab) =>
-        set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
+      setProjectBoardTab: (tab) => set({ projectBoardTab: tab, projectBoardNotesOpen: false }),
 
-      setProjectBoardNotesOpen: (open) =>
-        set({ projectBoardNotesOpen: open }),
+      setProjectBoardNotesOpen: (open) => set({ projectBoardNotesOpen: open }),
 
       selectProjectAndEnvironment: (projectId, environmentId) =>
         set((state) => ({
@@ -140,11 +134,9 @@ export const useUIStore = create<UIState>()(
             : [...state.selectedEnvironmentIds, environmentId],
         })),
 
-      setMultiSelection: (environmentIds) =>
-        set({ selectedEnvironmentIds: environmentIds }),
+      setMultiSelection: (environmentIds) => set({ selectedEnvironmentIds: environmentIds }),
 
-      clearMultiSelection: () =>
-        set({ selectedEnvironmentIds: [] }),
+      clearMultiSelection: () => set({ selectedEnvironmentIds: [] }),
 
       toggleSessionsExpanded: (environmentId) =>
         set((state) => ({
@@ -153,8 +145,7 @@ export const useUIStore = create<UIState>()(
             : [...state.expandedSessionsEnvironments, environmentId],
         })),
 
-      setEnvironmentSortMode: (mode) =>
-        set({ environmentSortMode: mode }),
+      setEnvironmentSortMode: (mode) => set({ environmentSortMode: mode }),
 
       isSessionsExpanded: (environmentId) =>
         get().expandedSessionsEnvironments.includes(environmentId),
@@ -163,7 +154,7 @@ export const useUIStore = create<UIState>()(
         set((state) => {
           // Find projects that have no environments and aren't already collapsed
           const emptyProjects = projectIds.filter(
-            (id) => !projectsWithEnvironments.has(id) && !state.collapsedProjects.includes(id)
+            (id) => !projectsWithEnvironments.has(id) && !state.collapsedProjects.includes(id),
           );
           if (emptyProjects.length === 0) {
             return state; // No change needed
@@ -173,8 +164,7 @@ export const useUIStore = create<UIState>()(
           };
         }),
 
-      setZoomLevel: (level) =>
-        set({ zoomLevel: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level)) }),
+      setZoomLevel: (level) => set({ zoomLevel: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level)) }),
 
       zoomIn: () =>
         set((state) => ({
@@ -186,8 +176,7 @@ export const useUIStore = create<UIState>()(
           zoomLevel: Math.max(ZOOM_MIN, state.zoomLevel - ZOOM_STEP),
         })),
 
-      resetZoom: () =>
-        set({ zoomLevel: ZOOM_DEFAULT }),
+      resetZoom: () => set({ zoomLevel: ZOOM_DEFAULT }),
     }),
     {
       name: "ui-storage",
@@ -198,6 +187,6 @@ export const useUIStore = create<UIState>()(
         environmentSortMode: state.environmentSortMode,
         zoomLevel: state.zoomLevel,
       }),
-    }
-  )
+    },
+  ),
 );

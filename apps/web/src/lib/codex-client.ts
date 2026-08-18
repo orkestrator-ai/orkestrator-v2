@@ -173,10 +173,10 @@ export function classifyCodexMessagePatch(
     return { outcome: "needs-reconcile" };
   }
   if (
-    patch.messageId !== message.id
-    || !Number.isInteger(patch.partCount)
-    || patch.partCount < 0
-    || !Number.isInteger(patch.revision)
+    patch.messageId !== message.id ||
+    !Number.isInteger(patch.partCount) ||
+    patch.partCount < 0 ||
+    !Number.isInteger(patch.revision)
   ) {
     return { outcome: "needs-reconcile" };
   }
@@ -190,12 +190,12 @@ export function classifyCodexMessagePatch(
   const parts = message.parts.slice();
   for (const change of patch.changedParts) {
     if (
-      !change
-      || !Number.isInteger(change.index)
-      || change.index < 0
-      || change.index >= patch.partCount
-      || !change.part
-      || typeof change.part !== "object"
+      !change ||
+      !Number.isInteger(change.index) ||
+      change.index < 0 ||
+      change.index >= patch.partCount ||
+      !change.part ||
+      typeof change.part !== "object"
     ) {
       return { outcome: "needs-reconcile" };
     }
@@ -211,9 +211,10 @@ export function classifyCodexMessagePatch(
       ...message,
       parts,
       content: typeof patch.content === "string" ? patch.content : message.content,
-      createdAt: typeof patch.createdAt === "string" && patch.createdAt
-        ? patch.createdAt
-        : message.createdAt,
+      createdAt:
+        typeof patch.createdAt === "string" && patch.createdAt
+          ? patch.createdAt
+          : message.createdAt,
       turnId: typeof patch.turnId === "string" ? patch.turnId : message.turnId,
       revision: patch.revision,
     },
@@ -249,10 +250,10 @@ export function preferNewerCodexRevisions(
   const merged = incoming.map((message) => {
     const current = localById.get(message.id);
     if (
-      !current
-      || !Number.isInteger(current.revision)
-      || !Number.isInteger(message.revision)
-      || (current.revision as number) <= (message.revision as number)
+      !current ||
+      !Number.isInteger(current.revision) ||
+      !Number.isInteger(message.revision) ||
+      (current.revision as number) <= (message.revision as number)
     ) {
       return message;
     }
@@ -433,9 +434,9 @@ function parseInteractionQuestion(value: unknown): CodexInteractionQuestion | nu
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   if (
-    typeof raw.id !== "string"
-    || typeof raw.question !== "string"
-    || typeof raw.header !== "string"
+    typeof raw.id !== "string" ||
+    typeof raw.question !== "string" ||
+    typeof raw.header !== "string"
   ) {
     return null;
   }
@@ -444,12 +445,14 @@ function parseInteractionQuestion(value: unknown): CodexInteractionQuestion | nu
         if (!option || typeof option !== "object" || Array.isArray(option)) return [];
         const parsed = option as Record<string, unknown>;
         return typeof parsed.label === "string"
-          ? [{
-              label: parsed.label,
-              ...(typeof parsed.description === "string"
-                ? { description: parsed.description }
-                : {}),
-            }]
+          ? [
+              {
+                label: parsed.label,
+                ...(typeof parsed.description === "string"
+                  ? { description: parsed.description }
+                  : {}),
+              },
+            ]
           : [];
       })
     : undefined;
@@ -470,15 +473,15 @@ export function parseInteraction(value: unknown): CodexInteraction | null {
     // An empty id cannot be routed back to the bridge — it would POST to
     // `/session/:id/interactions/`, which matches no route — so the card would
     // render but never be answerable and the turn would stay blocked.
-    typeof raw.interactionId !== "string"
-    || raw.interactionId.length === 0
-    || (raw.kind !== "question" && raw.kind !== "mcp-form" && raw.kind !== "mcp-url")
-    || typeof raw.method !== "string"
-    || typeof raw.threadId !== "string"
-    || typeof raw.requestedAt !== "number"
-    || !Number.isFinite(raw.requestedAt)
-    || typeof raw.expiresAt !== "number"
-    || !Number.isFinite(raw.expiresAt)
+    typeof raw.interactionId !== "string" ||
+    raw.interactionId.length === 0 ||
+    (raw.kind !== "question" && raw.kind !== "mcp-form" && raw.kind !== "mcp-url") ||
+    typeof raw.method !== "string" ||
+    typeof raw.threadId !== "string" ||
+    typeof raw.requestedAt !== "number" ||
+    !Number.isFinite(raw.requestedAt) ||
+    typeof raw.expiresAt !== "number" ||
+    !Number.isFinite(raw.expiresAt)
   ) {
     return null;
   }
@@ -497,17 +500,13 @@ export function parseInteraction(value: unknown): CodexInteraction | null {
     itemId: typeof raw.itemId === "string" ? raw.itemId : null,
     requestedAt: raw.requestedAt,
     expiresAt: raw.expiresAt,
-    ...(typeof raw.autoResolutionMs === "number"
-      ? { autoResolutionMs: raw.autoResolutionMs }
-      : {}),
+    ...(typeof raw.autoResolutionMs === "number" ? { autoResolutionMs: raw.autoResolutionMs } : {}),
     ...(questions ? { questions } : {}),
     ...(typeof raw.serverName === "string" ? { serverName: raw.serverName } : {}),
     ...(typeof raw.message === "string" ? { message: raw.message } : {}),
     ...("schema" in raw ? { schema: raw.schema } : {}),
     ...(typeof raw.url === "string" ? { url: raw.url } : {}),
-    ...(typeof raw.elicitationId === "string"
-      ? { elicitationId: raw.elicitationId }
-      : {}),
+    ...(typeof raw.elicitationId === "string" ? { elicitationId: raw.elicitationId } : {}),
   };
 }
 
@@ -522,15 +521,14 @@ export function parseInteraction(value: unknown): CodexInteraction | null {
  */
 function rejectApproval(value: unknown, field: string): null {
   const approvalId =
-    value
-    && typeof value === "object"
-    && typeof (value as Record<string, unknown>).approvalId === "string"
-      ? ((value as Record<string, string>).approvalId)
+    value &&
+    typeof value === "object" &&
+    typeof (value as Record<string, unknown>).approvalId === "string"
+      ? (value as Record<string, string>).approvalId
       : undefined;
-  console.warn(
-    `[codex-client] Ignoring unrecognised Codex approval (invalid ${field})`,
-    { approvalId },
-  );
+  console.warn(`[codex-client] Ignoring unrecognised Codex approval (invalid ${field})`, {
+    approvalId,
+  });
   return null;
 }
 
@@ -579,26 +577,24 @@ export function parseApproval(value: unknown): CodexApproval | null {
     ? entry.changes.filter((change): change is CodexApprovalFileChange => {
         if (!change || typeof change !== "object") return false;
         const candidate = change as Record<string, unknown>;
-        return typeof candidate.path === "string"
-          && (
-            candidate.kind === "add"
-            || candidate.kind === "delete"
-            || candidate.kind === "update"
-          );
+        return (
+          typeof candidate.path === "string" &&
+          (candidate.kind === "add" || candidate.kind === "delete" || candidate.kind === "update")
+        );
       })
     : undefined;
   const permissions =
-    entry.permissions
-    && typeof entry.permissions === "object"
-    && typeof (entry.permissions as Record<string, unknown>).network === "boolean"
-    && typeof (entry.permissions as Record<string, unknown>).fileSystem === "boolean"
+    entry.permissions &&
+    typeof entry.permissions === "object" &&
+    typeof (entry.permissions as Record<string, unknown>).network === "boolean" &&
+    typeof (entry.permissions as Record<string, unknown>).fileSystem === "boolean"
       ? {
           network: (entry.permissions as { network: boolean }).network,
           fileSystem: (entry.permissions as { fileSystem: boolean }).fileSystem,
         }
       : undefined;
   const optionalString = (key: string) =>
-    typeof entry[key] === "string" ? entry[key] as string : undefined;
+    typeof entry[key] === "string" ? (entry[key] as string) : undefined;
 
   return {
     approvalId: entry.approvalId,
@@ -647,11 +643,7 @@ function fetchCodex(
   // The desktop gateway consumes its own Authorization header before proxying.
   // Keep bridge authentication in a dedicated header so it survives that hop.
   if (client.authToken) headers.set("X-Orkestrator-Codex-Token", client.authToken);
-  return fetchWithTimeout(
-    `${client.baseUrl}${path}`,
-    { ...options, headers },
-    timeoutMs,
-  );
+  return fetchWithTimeout(`${client.baseUrl}${path}`, { ...options, headers }, timeoutMs);
 }
 
 export function createClient(baseUrl: string, authToken?: string): CodexClient {
@@ -711,14 +703,12 @@ export async function getModels(client: CodexClient): Promise<CodexModelsRespons
     }
 
     const data = (await response.json()) as Partial<CodexModelsResponse>;
-    const models = Array.isArray(data.models) && data.models.length > 0
-      ? data.models
-      : CODEX_MODELS;
+    const models =
+      Array.isArray(data.models) && data.models.length > 0 ? data.models : CODEX_MODELS;
 
     return {
       models,
-      source:
-        data.source === "app-server" || data.source === "cache" ? data.source : "fallback",
+      source: data.source === "app-server" || data.source === "cache" ? data.source : "fallback",
     };
   } catch (error) {
     console.error("[codex-client] Failed to get models:", error);
@@ -833,15 +823,11 @@ export async function updateSessionConfig(
   },
 ): Promise<CodexSessionConfigUpdateOutcome> {
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}/config`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(options),
-      },
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(options),
+    });
     if (!response.ok) {
       return { outcome: "rejected", httpStatus: response.status };
     }
@@ -860,10 +846,7 @@ export async function updateSessionConfig(
     // A timeout or reset after the bridge handled the request is ambiguous.
     // Re-read the authoritative bridge config before asking the UI to roll back.
     try {
-      const reconciliation = await fetchCodex(
-        client,
-        `/session/${sessionId}/config`,
-      );
+      const reconciliation = await fetchCodex(client, `/session/${sessionId}/config`);
       if (reconciliation.ok) {
         const current = (await reconciliation.json()) as {
           model?: unknown;
@@ -873,13 +856,11 @@ export async function updateSessionConfig(
           durable?: unknown;
         };
         const matches =
-          (options.model === undefined || current.model === options.model)
-          && (
-            options.modelReasoningEffort === undefined
-            || current.modelReasoningEffort === options.modelReasoningEffort
-          )
-          && (options.mode === undefined || current.mode === options.mode)
-          && (options.fastMode === undefined || current.fastMode === options.fastMode);
+          (options.model === undefined || current.model === options.model) &&
+          (options.modelReasoningEffort === undefined ||
+            current.modelReasoningEffort === options.modelReasoningEffort) &&
+          (options.mode === undefined || current.mode === options.mode) &&
+          (options.fastMode === undefined || current.fastMode === options.fastMode);
         if (matches) {
           return {
             outcome: "applied",
@@ -905,10 +886,7 @@ export async function getSessionMessages(
   options: { throwOnError?: boolean } = {},
 ): Promise<CodexMessage[]> {
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}/messages`,
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}/messages`);
     if (!response.ok) {
       throw new Error(`Failed to get Codex session messages: HTTP ${response.status}`);
     }
@@ -917,9 +895,7 @@ export async function getSessionMessages(
   } catch (error) {
     console.error("[codex-client] Failed to get session messages:", error);
     if (options.throwOnError) {
-      throw error instanceof Error
-        ? error
-        : new Error("Failed to get Codex session messages");
+      throw error instanceof Error ? error : new Error("Failed to get Codex session messages");
     }
     return [];
   }
@@ -987,11 +963,7 @@ export function parseContextUsage(value: unknown): ContextUsageSnapshot | null {
   const usedTokens = finiteNumber(raw.usedTokens);
   const totalTokens = finiteNumber(raw.totalTokens);
   const percentUsed = finiteNumber(raw.percentUsed);
-  if (
-    usedTokens === undefined
-    || totalTokens === undefined
-    || percentUsed === undefined
-  ) {
+  if (usedTokens === undefined || totalTokens === undefined || percentUsed === undefined) {
     return null;
   }
 
@@ -1001,18 +973,20 @@ export function parseContextUsage(value: unknown): ContextUsageSnapshot | null {
         const entry = window as Record<string, unknown>;
         const label = nonEmptyString(entry.label);
         if (label === undefined) return [];
-        return [{
-          label,
-          ...(finiteNumber(entry.usedPercent) !== undefined
-            ? { usedPercent: finiteNumber(entry.usedPercent) }
-            : {}),
-          ...(nonEmptyString(entry.resetsAt) !== undefined
-            ? { resetsAt: entry.resetsAt as string }
-            : {}),
-          ...(finiteNumber(entry.windowMinutes) !== undefined
-            ? { windowMinutes: finiteNumber(entry.windowMinutes) }
-            : {}),
-        }];
+        return [
+          {
+            label,
+            ...(finiteNumber(entry.usedPercent) !== undefined
+              ? { usedPercent: finiteNumber(entry.usedPercent) }
+              : {}),
+            ...(nonEmptyString(entry.resetsAt) !== undefined
+              ? { resetsAt: entry.resetsAt as string }
+              : {}),
+            ...(finiteNumber(entry.windowMinutes) !== undefined
+              ? { windowMinutes: finiteNumber(entry.windowMinutes) }
+              : {}),
+          },
+        ];
       })
     : undefined;
 
@@ -1023,13 +997,13 @@ export function parseContextUsage(value: unknown): ContextUsageSnapshot | null {
         const name = nonEmptyString(entry.name);
         const tokens = finiteNumber(entry.tokens);
         if (name === undefined || tokens === undefined) return [];
-        return [{
-          name,
-          tokens,
-          ...(nonEmptyString(entry.color) !== undefined
-            ? { color: entry.color as string }
-            : {}),
-        }];
+        return [
+          {
+            name,
+            tokens,
+            ...(nonEmptyString(entry.color) !== undefined ? { color: entry.color as string } : {}),
+          },
+        ];
       })
     : undefined;
 
@@ -1042,9 +1016,7 @@ export function parseContextUsage(value: unknown): ContextUsageSnapshot | null {
         ...(typeof rawCredits.hasCredits === "boolean"
           ? { hasCredits: rawCredits.hasCredits }
           : {}),
-        ...(typeof rawCredits.unlimited === "boolean"
-          ? { unlimited: rawCredits.unlimited }
-          : {}),
+        ...(typeof rawCredits.unlimited === "boolean" ? { unlimited: rawCredits.unlimited } : {}),
         ...(nonEmptyString(rawCredits.balance) !== undefined
           ? { balance: rawCredits.balance as string }
           : {}),
@@ -1056,20 +1028,14 @@ export function parseContextUsage(value: unknown): ContextUsageSnapshot | null {
     totalTokens,
     percentUsed,
     ...pickFiniteNumbers(raw, OPTIONAL_USAGE_NUMBERS),
-    ...(nonEmptyString(raw.modelId) !== undefined
-      ? { modelId: raw.modelId as string }
-      : {}),
-    ...(nonEmptyString(raw.updatedAt) !== undefined
-      ? { updatedAt: raw.updatedAt as string }
-      : {}),
+    ...(nonEmptyString(raw.modelId) !== undefined ? { modelId: raw.modelId as string } : {}),
+    ...(nonEmptyString(raw.updatedAt) !== undefined ? { updatedAt: raw.updatedAt as string } : {}),
     ...(typeof raw.estimated === "boolean" ? { estimated: raw.estimated } : {}),
     ...(typeof raw.source === "string" && CONTEXT_USAGE_SOURCES.has(raw.source)
       ? { source: raw.source as ContextUsageSnapshot["source"] }
       : {}),
     ...(rateLimits && rateLimits.length > 0 ? { rateLimits } : {}),
-    ...(contextCategories && contextCategories.length > 0
-      ? { contextCategories }
-      : {}),
+    ...(contextCategories && contextCategories.length > 0 ? { contextCategories } : {}),
     ...(credits && Object.keys(credits).length > 0 ? { credits } : {}),
   };
 }
@@ -1079,20 +1045,13 @@ export async function lookupSessionStatus(
   sessionId: string,
 ): Promise<CodexSessionStatusLookupResult> {
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}/status`,
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}/status`);
     if (response.status === 404) return { kind: "missing" };
     if (!response.ok) {
       throw new Error(`Failed to get Codex session status: HTTP ${response.status}`);
     }
     const data = (await response.json()) as Partial<CodexSessionStatusResponse>;
-    if (
-      data.status !== "idle"
-      && data.status !== "running"
-      && data.status !== "error"
-    ) {
+    if (data.status !== "idle" && data.status !== "running" && data.status !== "error") {
       throw new Error("Codex session status response was malformed");
     }
     const contextUsage = parseContextUsage(data.contextUsage);
@@ -1113,9 +1072,9 @@ export async function lookupSessionStatus(
         ...(typeof data.engineGeneration === "number"
           ? { engineGeneration: data.engineGeneration }
           : {}),
-        ...(typeof data.messageRevision === "number"
-          && Number.isSafeInteger(data.messageRevision)
-          && data.messageRevision >= 0
+        ...(typeof data.messageRevision === "number" &&
+        Number.isSafeInteger(data.messageRevision) &&
+        data.messageRevision >= 0
           ? { messageRevision: data.messageRevision }
           : {}),
         ...(typeof data.structuredOutputRequestId === "string"
@@ -1125,10 +1084,10 @@ export async function lookupSessionStatus(
           ? { structuredOutput: data.structuredOutput }
           : {}),
         ...(contextUsage ? { contextUsage } : {}),
-        ...(data.unconfirmedDispatch
-          && typeof data.unconfirmedDispatch.requestId === "string"
-          && data.unconfirmedDispatch.requestId.trim().length > 0
-          && data.unconfirmedDispatch.retryable === true
+        ...(data.unconfirmedDispatch &&
+        typeof data.unconfirmedDispatch.requestId === "string" &&
+        data.unconfirmedDispatch.requestId.trim().length > 0 &&
+        data.unconfirmedDispatch.retryable === true
           ? { unconfirmedDispatch: data.unconfirmedDispatch }
           : {}),
       },
@@ -1137,9 +1096,7 @@ export async function lookupSessionStatus(
     console.error("[codex-client] Failed to get session status:", error);
     return {
       kind: "unavailable",
-      error: error instanceof Error
-        ? error
-        : new Error("Failed to get Codex session status"),
+      error: error instanceof Error ? error : new Error("Failed to get Codex session status"),
     };
   }
 }
@@ -1162,8 +1119,9 @@ export async function lookupSessionActivity(
     // is reported as its own kind rather than as `missing`. Callers must not
     // fall back to `/status`: polling that route keeps an idle thread attached.
     if (response.status === 404) return { kind: "unsupported" };
-    if (!response.ok) throw new Error(`Failed to get Codex session activity: HTTP ${response.status}`);
-    const body = await response.json() as { activity?: unknown };
+    if (!response.ok)
+      throw new Error(`Failed to get Codex session activity: HTTP ${response.status}`);
+    const body = (await response.json()) as { activity?: unknown };
     if (body.activity === "missing") return { kind: "missing" };
     if (body.activity === "idle" || body.activity === "working" || body.activity === "waiting") {
       return { kind: "found", activity: body.activity };
@@ -1226,9 +1184,7 @@ export type CodexPromptSendOutcome =
  * the bridge may already be executing the turn, so a caller must reconcile
  * against authoritative state before unlocking, advancing or resending.
  */
-export function classifyCodexPromptOutcome(
-  result: unknown,
-): "accepted" | "rejected" | "unknown" {
+export function classifyCodexPromptOutcome(result: unknown): "accepted" | "rejected" | "unknown" {
   if (result === true) return "accepted";
   if (result === false || result === null || result === undefined) return "rejected";
   if (typeof result === "object") {
@@ -1263,20 +1219,16 @@ export async function sendPrompt(
 ): Promise<CodexPromptSendOutcome> {
   const requestId = options?.requestId ?? crypto.randomUUID();
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}/prompt`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          attachments: options?.attachments,
-          requestId,
-          outputSchema: options?.outputSchema,
-        }),
-      },
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}/prompt`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        prompt,
+        attachments: options?.attachments,
+        requestId,
+        outputSchema: options?.outputSchema,
+      }),
+    });
     if (!response.ok) {
       return { outcome: "rejected", httpStatus: response.status };
     }
@@ -1310,16 +1262,11 @@ export async function getStructuredOutput<T = unknown>(
   let response: Response;
   try {
     const query = requestId ? `?requestId=${encodeURIComponent(requestId)}` : "";
-    response = await fetchCodex(
-      client,
-      `/session/${sessionId}/structured-output${query}`,
-    );
+    response = await fetchCodex(client, `/session/${sessionId}/structured-output${query}`);
   } catch (error) {
     throw new StructuredOutputReadUnavailableError(
       "codex",
-      error instanceof Error
-        ? error.message
-        : "Failed to read Codex structured output.",
+      error instanceof Error ? error.message : "Failed to read Codex structured output.",
       { requestId, cause: error },
     );
   }
@@ -1369,11 +1316,7 @@ export async function abortSession(
   sessionId: string,
 ): Promise<CodexAbortOutcome> {
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}/abort`,
-      { method: "POST" },
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}/abort`, { method: "POST" });
     return response.ok
       ? { status: "accepted" }
       : { status: "rejected", httpStatus: response.status };
@@ -1397,10 +1340,7 @@ export async function fetchPendingApprovals(
   client: CodexClient,
   sessionId: string,
 ): Promise<CodexApproval[]> {
-  const response = await fetchCodex(
-    client,
-    `/session/${sessionId}/approvals`,
-  );
+  const response = await fetchCodex(client, `/session/${sessionId}/approvals`);
   if (!response.ok) {
     throw new Error(`Failed to fetch pending Codex approvals: HTTP ${response.status}`);
   }
@@ -1449,10 +1389,7 @@ export async function fetchPendingInteractions(
   client: CodexClient,
   sessionId: string,
 ): Promise<CodexInteraction[]> {
-  const response = await fetchCodex(
-    client,
-    `/session/${sessionId}/interactions`,
-  );
+  const response = await fetchCodex(client, `/session/${sessionId}/interactions`);
   if (!response.ok) {
     throw new Error(`Failed to fetch pending Codex interactions: HTTP ${response.status}`);
   }
@@ -1526,15 +1463,11 @@ export async function forkCodexSession(
 ): Promise<CodexSession> {
   let response: Response;
   try {
-    response = await fetchCodex(
-      client,
-      `/session/${sessionId}/fork`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lastMessageId }),
-      },
-    );
+    response = await fetchCodex(client, `/session/${sessionId}/fork`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lastMessageId }),
+    });
   } catch (error) {
     throw new CodexForkError(
       0,
@@ -1542,14 +1475,12 @@ export async function forkCodexSession(
     );
   }
   if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as
-      | { error?: unknown }
-      | null;
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
     const message =
       body && typeof body.error === "string" && body.error.length > 0
         ? body.error
-        : CODEX_FORK_ERROR_FALLBACKS[response.status]
-          ?? `Codex fork failed: HTTP ${response.status}`;
+        : (CODEX_FORK_ERROR_FALLBACKS[response.status] ??
+          `Codex fork failed: HTTP ${response.status}`);
     throw new CodexForkError(response.status, message);
   }
   const body = (await response.json().catch(() => ({}))) as {
@@ -1559,10 +1490,7 @@ export async function forkCodexSession(
   // A `200 {}` would otherwise bind the new tab to `sessionId: undefined`,
   // which every subsequent request then addresses as the literal "undefined".
   if (typeof body.sessionId !== "string" || body.sessionId.length === 0) {
-    throw new CodexForkError(
-      response.status,
-      "Codex fork response did not include a session id",
-    );
+    throw new CodexForkError(response.status, "Codex fork response did not include a session id");
   }
   return {
     sessionId: body.sessionId,
@@ -1575,11 +1503,7 @@ export async function compactCodexSession(
   sessionId: string,
 ): Promise<boolean> {
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}/compact`,
-      { method: "POST" },
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}/compact`, { method: "POST" });
     return response.ok;
   } catch (error) {
     console.error("[codex-client] Failed to compact session:", error);
@@ -1630,19 +1554,15 @@ export async function steerCodexSession(
   if (!status.session.turnId) return { outcome: "unknown", requestId };
 
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}/steer`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          input,
-          requestId,
-          expectedTurnId: status.session.turnId,
-        }),
-      },
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}/steer`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        input,
+        requestId,
+        expectedTurnId: status.session.turnId,
+      }),
+    });
     const body = (await response.json().catch(() => ({}))) as {
       error?: unknown;
       outcome?: unknown;
@@ -1675,15 +1595,11 @@ export async function startCodexNativeReview(
     | { type: "custom"; instructions: string } = { type: "uncommittedChanges" },
 ): Promise<boolean> {
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}/review`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(target),
-      },
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}/review`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(target),
+    });
     return response.ok;
   } catch (error) {
     console.error("[codex-client] Failed to start native review:", error);
@@ -1695,24 +1611,14 @@ export async function getCodexRuntimeHealth(
   client: CodexClient,
   sessionId: string,
 ): Promise<unknown> {
-  const response = await fetchCodex(
-    client,
-    `/session/${sessionId}/runtime-health`,
-  );
+  const response = await fetchCodex(client, `/session/${sessionId}/runtime-health`);
   if (!response.ok) throw new Error(`Codex runtime health failed: HTTP ${response.status}`);
   return response.json();
 }
 
-export async function deleteSession(
-  client: CodexClient,
-  sessionId: string,
-): Promise<boolean> {
+export async function deleteSession(client: CodexClient, sessionId: string): Promise<boolean> {
   try {
-    const response = await fetchCodex(
-      client,
-      `/session/${sessionId}`,
-      { method: "DELETE" },
-    );
+    const response = await fetchCodex(client, `/session/${sessionId}`, { method: "DELETE" });
     return response.ok;
   } catch (error) {
     console.error("[codex-client] Failed to delete session:", error);
@@ -1776,9 +1682,9 @@ export function subscribeToEvents(
             ...(Number.isSafeInteger(revision) && revision >= 0 ? { revision } : {}),
           };
           if (
-            codexEvent.revision !== undefined
-            && lastSeenRevision !== undefined
-            && codexEvent.revision > lastSeenRevision + 1
+            codexEvent.revision !== undefined &&
+            lastSeenRevision !== undefined &&
+            codexEvent.revision > lastSeenRevision + 1
           ) {
             // Filtered streams still carry a bridge.cursor frame for every
             // other session, so a jump is always a missed frame. Heartbeats
@@ -1813,8 +1719,8 @@ export function subscribeToEvents(
              * the bound and reconciles.
              */
             if (
-              eventQueue.length + 1 > maxQueuedEvents
-              || (eventQueue.length > 0 && queuedBytes + bytes > maxQueuedBytes)
+              eventQueue.length + 1 > maxQueuedEvents ||
+              (eventQueue.length > 0 && queuedBytes + bytes > maxQueuedBytes)
             ) {
               // A slow consumer cannot retain an unbounded transcript/event
               // backlog. Close this connection and hand the caller one explicit
@@ -1826,9 +1732,7 @@ export function subscribeToEvents(
                 type: "session.reconcile-required",
                 sessionId: sessionId ?? codexEvent.sessionId,
                 data: { reason: "client-event-queue-overflow" },
-                ...(lastSeenRevision === undefined
-                  ? {}
-                  : { revision: lastSeenRevision }),
+                ...(lastSeenRevision === undefined ? {} : { revision: lastSeenRevision }),
               };
               eventQueue.push({ event: reconcile, bytes: 0 });
               endAfterQueue = true;

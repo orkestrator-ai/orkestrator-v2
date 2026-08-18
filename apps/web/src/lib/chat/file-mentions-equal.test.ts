@@ -36,15 +36,9 @@ describe("fileMentionsEqual", () => {
   });
 
   test("compares id, filename and relativePath", () => {
-    expect(
-      fileMentionsEqual([mention()], [mention({ id: "mention-2" })]),
-    ).toBe(false);
-    expect(
-      fileMentionsEqual([mention()], [mention({ filename: "other.ts" })]),
-    ).toBe(false);
-    expect(
-      fileMentionsEqual([mention()], [mention({ relativePath: "lib/app.ts" })]),
-    ).toBe(false);
+    expect(fileMentionsEqual([mention()], [mention({ id: "mention-2" })])).toBe(false);
+    expect(fileMentionsEqual([mention()], [mention({ filename: "other.ts" })])).toBe(false);
+    expect(fileMentionsEqual([mention()], [mention({ relativePath: "lib/app.ts" })])).toBe(false);
   });
 
   test("is order sensitive", () => {

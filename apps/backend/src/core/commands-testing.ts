@@ -1,8 +1,5 @@
 import type { ChildProcessWithoutNullStreams, DiffStatsService } from "./commands-dependencies.js";
-import {
-  spawnCommand,
-  terminateProcessTree,
-} from "./commands-dependencies.js";
+import { spawnCommand, terminateProcessTree } from "./commands-dependencies.js";
 import {
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,
   BRANCH_REF_EXISTS_SENTINEL,
@@ -101,10 +98,7 @@ export const __testing = {
   setOpenCodeAgentToolsRetryDelaysMs(delays: readonly number[]): void {
     setOpenCodeAgentToolsRetryDelays(delays);
   },
-  setOpenCodeAgentToolsMemoWindowsMs(
-    connectedTtlMs: number,
-    unavailableCooldownMs: number,
-  ): void {
+  setOpenCodeAgentToolsMemoWindowsMs(connectedTtlMs: number, unavailableCooldownMs: number): void {
     setOpenCodeAgentToolsMemoWindows(connectedTtlMs, unavailableCooldownMs);
   },
   resetOpenCodeAgentToolsTuning,
@@ -179,10 +173,7 @@ export const __testing = {
   CONTAINER_WORKSPACE_SETUP_CAPABILITY_MARKER,
   CONTAINER_WORKSPACE_PREPARE_SUPPORTED_SENTINEL,
   CONTAINER_WORKSPACE_PREPARE_OK_SENTINEL,
-  setLocalServerProcess(
-    key: string,
-    child: ChildProcessWithoutNullStreams,
-  ): void {
+  setLocalServerProcess(key: string, child: ChildProcessWithoutNullStreams): void {
     localServerProcesses.set(key, child);
   },
   getLocalServerProcess(key: string): ChildProcessWithoutNullStreams | undefined {
@@ -194,14 +185,10 @@ export const __testing = {
   waitForLocalServerHealth,
   waitForHttpServerExit,
   waitForUnhealthy,
-  setTerminateProcessTree(
-    implementation: typeof terminateProcessTree,
-  ): void {
+  setTerminateProcessTree(implementation: typeof terminateProcessTree): void {
     setTerminateProcessTreeImplementation(implementation);
   },
-  setSpawnLocalServerCommand(
-    implementation: typeof spawnCommand,
-  ): void {
+  setSpawnLocalServerCommand(implementation: typeof spawnCommand): void {
     setSpawnLocalServerCommandImplementation(implementation);
   },
   getLocalCodexBridgeToken(environmentId: string): string | undefined {

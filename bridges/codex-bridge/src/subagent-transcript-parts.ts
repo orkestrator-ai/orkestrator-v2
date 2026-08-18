@@ -40,16 +40,14 @@ interface SpawnOutputAgent {
 }
 
 function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0
-    ? value
-    : undefined;
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function parseSpawnOutputAgent(record: TranscriptRecord): SpawnOutputAgent | null {
   if (
-    record.type !== "response_item"
-    || record.payload?.type !== "function_call_output"
-    || typeof record.payload.output !== "string"
+    record.type !== "response_item" ||
+    record.payload?.type !== "function_call_output" ||
+    typeof record.payload.output !== "string"
   ) {
     return null;
   }
@@ -86,9 +84,8 @@ export async function deriveTranscriptSubagentPartsForTurn({
   if (Number.isNaN(turnStartedAt)) {
     return [];
   }
-  const turnEndedAt = currentTurnEndedAt === undefined
-    ? undefined
-    : new Date(currentTurnEndedAt).getTime();
+  const turnEndedAt =
+    currentTurnEndedAt === undefined ? undefined : new Date(currentTurnEndedAt).getTime();
   if (turnEndedAt !== undefined && Number.isNaN(turnEndedAt)) {
     return [];
   }
@@ -105,18 +102,17 @@ export async function deriveTranscriptSubagentPartsForTurn({
 
   // Scoping by the ids this row's items claim is exact, so the timestamp window
   // is used only when they cannot supply one.
-  const owned = ownedSubagentIds && ownedSubagentIds.length > 0
-    ? new Set(ownedSubagentIds)
-    : undefined;
+  const owned =
+    ownedSubagentIds && ownedSubagentIds.length > 0 ? new Set(ownedSubagentIds) : undefined;
   if (parentRecords.length === 0 && !owned) {
     return [];
   }
   const resolvedAgentIdBySpawnCallId = new Map<string, string>();
   const spawnCalls = parentRecords.flatMap((record) => {
     if (
-      record.type !== "response_item"
-      || record.payload?.type !== "function_call"
-      || record.payload.name !== "spawn_agent"
+      record.type !== "response_item" ||
+      record.payload?.type !== "function_call" ||
+      record.payload.name !== "spawn_agent"
     ) {
       return [];
     }
@@ -149,19 +145,22 @@ export async function deriveTranscriptSubagentPartsForTurn({
   // pairing is safe when this row owns every spawn in the window one-for-one;
   // for steered rows spanning other spawns, keep requiring an exact activity
   // or rollout id so a child cannot be attached to the wrong assistant row.
-  const ownedFallbacksAlign = owned !== undefined
-    && fallbackAgentIdsInSpawnOrder.length === spawnCalls.length
-    && fallbackAgentIdsInSpawnOrder.every((agentId) => {
+  const ownedFallbacksAlign =
+    owned !== undefined &&
+    fallbackAgentIdsInSpawnOrder.length === spawnCalls.length &&
+    fallbackAgentIdsInSpawnOrder.every((agentId) => {
       const normalized = asNonEmptyString(agentId);
       return normalized !== undefined && owned.has(normalized);
     });
   for (const [spawnIndex, spawnCallId] of spawnCalls.entries()) {
-    const fallbackAgentId = !owned || ownedFallbacksAlign
-      ? asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex])
-      : undefined;
-    const requestedAgentId = activityAgentIdByCallId.get(spawnCallId)
-      ?? outputAgentIdByCallId.get(spawnCallId)
-      ?? fallbackAgentId;
+    const fallbackAgentId =
+      !owned || ownedFallbacksAlign
+        ? asNonEmptyString(fallbackAgentIdsInSpawnOrder[spawnIndex])
+        : undefined;
+    const requestedAgentId =
+      activityAgentIdByCallId.get(spawnCallId) ??
+      outputAgentIdByCallId.get(spawnCallId) ??
+      fallbackAgentId;
     if (!requestedAgentId) continue;
     if (owned && !owned.has(requestedAgentId)) continue;
 
@@ -178,33 +177,36 @@ export async function deriveTranscriptSubagentPartsForTurn({
     ? new Set(resolvedAgentIdBySpawnCallId.keys())
     : new Set(spawnCalls);
 
-  const childRecordsByAgentId = new Map(await Promise.all(
-    [...requestedAgentIds].map(async (requestedAgentId) => {
-      const childMeta = await loadSessionMeta(requestedAgentId);
-      const childRecords = childMeta?.transcriptPath
-        ? (await loadTranscript(childMeta.transcriptPath)).records
-        : [];
-      return [requestedAgentId, childRecords] as const;
-    }),
-  ));
+  const childRecordsByAgentId = new Map(
+    await Promise.all(
+      [...requestedAgentIds].map(async (requestedAgentId) => {
+        const childMeta = await loadSessionMeta(requestedAgentId);
+        const childRecords = childMeta?.transcriptPath
+          ? (await loadTranscript(childMeta.transcriptPath)).records
+          : [];
+        return [requestedAgentId, childRecords] as const;
+      }),
+    ),
+  );
 
   // Keep lifecycle/output records outside this row's own spawns so a subagent
   // spawned above a steer can still progress to completion there. Only the
   // spawn calls belonging to another row are removed; otherwise they would be
   // rediscovered in every assistant row of the turn.
-  const scopedParentRecords = !owned && turnEndedAt === undefined
-    ? parentRecords
-    : parentRecords.filter((record) => {
-        if (
-          record.type !== "response_item"
-          || record.payload?.type !== "function_call"
-          || record.payload.name !== "spawn_agent"
-        ) {
-          return true;
-        }
-        const callId = asNonEmptyString(record.payload.call_id);
-        return !!callId && selectedSpawnCallIds.has(callId);
-      });
+  const scopedParentRecords =
+    !owned && turnEndedAt === undefined
+      ? parentRecords
+      : parentRecords.filter((record) => {
+          if (
+            record.type !== "response_item" ||
+            record.payload?.type !== "function_call" ||
+            record.payload.name !== "spawn_agent"
+          ) {
+            return true;
+          }
+          const callId = asNonEmptyString(record.payload.call_id);
+          return !!callId && selectedSpawnCallIds.has(callId);
+        });
 
   const derivedParts = deriveSubagentPartsFromTranscriptRecords(
     scopedParentRecords,
@@ -212,14 +214,16 @@ export async function deriveTranscriptSubagentPartsForTurn({
     resolvedAgentIdBySpawnCallId,
   );
   const derivedAgentIds = new Set(
-    derivedParts.flatMap((part) => part.subagentId ? [part.subagentId] : []),
+    derivedParts.flatMap((part) => (part.subagentId ? [part.subagentId] : [])),
   );
   for (const ownedAgentId of owned ?? []) {
     if (derivedAgentIds.has(ownedAgentId)) continue;
-    derivedParts.push(deriveSubagentPartFromChildRecords(
-      ownedAgentId,
-      childRecordsByAgentId.get(ownedAgentId) ?? [],
-    ));
+    derivedParts.push(
+      deriveSubagentPartFromChildRecords(
+        ownedAgentId,
+        childRecordsByAgentId.get(ownedAgentId) ?? [],
+      ),
+    );
   }
   return derivedParts;
 }

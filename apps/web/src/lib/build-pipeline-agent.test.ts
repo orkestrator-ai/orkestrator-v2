@@ -6,7 +6,10 @@ import {
   resolveBuildPipelineAgent,
 } from "./build-pipeline-agent";
 
-function createConfig(defaultAgent: "claude" | "codex" | "opencode" | "cursor" | "grok" | undefined, repositoryAgent?: "claude" | "codex" | "opencode" | "cursor" | "grok") {
+function createConfig(
+  defaultAgent: "claude" | "codex" | "opencode" | "cursor" | "grok" | undefined,
+  repositoryAgent?: "claude" | "codex" | "opencode" | "cursor" | "grok",
+) {
   return {
     version: "1.0",
     global: {
@@ -108,49 +111,59 @@ describe("resolveActiveBuildPipelineAgent — restoring a persisted pipeline", (
   // entirely, so the config chain is the only answer available and must not
   // throw or resolve to undefined.
   test("falls back through config for a persisted environment with no agent recorded", () => {
-    expect(resolveActiveBuildPipelineAgent({
-      environmentDefaultAgent: undefined,
-      config: createConfig("opencode"),
-      projectId: "project-1",
-    })).toBe("opencode");
+    expect(
+      resolveActiveBuildPipelineAgent({
+        environmentDefaultAgent: undefined,
+        config: createConfig("opencode"),
+        projectId: "project-1",
+      }),
+    ).toBe("opencode");
 
-    expect(resolveActiveBuildPipelineAgent({
-      environmentDefaultAgent: undefined,
-      config: createConfig(undefined),
-      projectId: "project-1",
-    })).toBe("claude");
+    expect(
+      resolveActiveBuildPipelineAgent({
+        environmentDefaultAgent: undefined,
+        config: createConfig(undefined),
+        projectId: "project-1",
+      }),
+    ).toBe("claude");
   });
 });
 
 describe("resolveAgentModeSettings", () => {
   test("routes the selected agent's mode and nulls the other two", () => {
-    expect(resolveAgentModeSettings("claude", {
-      claudeMode: "terminal",
-      opencodeMode: "native",
-      codexMode: "native",
-    })).toEqual({
+    expect(
+      resolveAgentModeSettings("claude", {
+        claudeMode: "terminal",
+        opencodeMode: "native",
+        codexMode: "native",
+      }),
+    ).toEqual({
       defaultAgent: "claude",
       claudeMode: "terminal",
       opencodeMode: null,
       codexMode: null,
     });
 
-    expect(resolveAgentModeSettings("opencode", {
-      claudeMode: "native",
-      opencodeMode: "terminal",
-      codexMode: "native",
-    })).toEqual({
+    expect(
+      resolveAgentModeSettings("opencode", {
+        claudeMode: "native",
+        opencodeMode: "terminal",
+        codexMode: "native",
+      }),
+    ).toEqual({
       defaultAgent: "opencode",
       claudeMode: null,
       opencodeMode: "terminal",
       codexMode: null,
     });
 
-    expect(resolveAgentModeSettings("codex", {
-      claudeMode: "native",
-      opencodeMode: "native",
-      codexMode: "terminal",
-    })).toEqual({
+    expect(
+      resolveAgentModeSettings("codex", {
+        claudeMode: "native",
+        opencodeMode: "native",
+        codexMode: "terminal",
+      }),
+    ).toEqual({
       defaultAgent: "codex",
       claudeMode: null,
       opencodeMode: null,

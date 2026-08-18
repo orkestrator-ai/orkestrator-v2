@@ -24,14 +24,7 @@ const {
 } = __testing;
 
 const repoRoot = join(import.meta.dir, "..", "..");
-const generatedDir = join(
-  repoRoot,
-  "bridges",
-  "codex-bridge",
-  "src",
-  "app-server",
-  "generated",
-);
+const generatedDir = join(repoRoot, "bridges", "codex-bridge", "src", "app-server", "generated");
 
 function readGenerated(relativePath: string): string {
   return readFileSync(join(generatedDir, relativePath), "utf8");
@@ -41,9 +34,7 @@ const temporaryDirectories: string[] = [];
 
 afterAll(async () => {
   await Promise.all(
-    temporaryDirectories.map((directory) =>
-      rm(directory, { recursive: true, force: true })
-    ),
+    temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -95,7 +86,7 @@ describe("codex app-server protocol generation", () => {
           generatedFrom: "0.145.0",
           outputDir: EXPECTED_PROTOCOL_OUTPUT_DIR,
         },
-      })
+      }),
     ).not.toThrow();
     expect(() =>
       validateVersionConfig({
@@ -104,7 +95,7 @@ describe("codex app-server protocol generation", () => {
           generatedFrom: "^0.145.0",
           outputDir: EXPECTED_PROTOCOL_OUTPUT_DIR,
         },
-      })
+      }),
     ).toThrow("exact semver");
     expect(() =>
       validateVersionConfig({
@@ -113,7 +104,7 @@ describe("codex app-server protocol generation", () => {
           generatedFrom: "0.146.0",
           outputDir: EXPECTED_PROTOCOL_OUTPUT_DIR,
         },
-      })
+      }),
     ).toThrow("must equal version");
   });
 
@@ -123,8 +114,9 @@ describe("codex app-server protocol generation", () => {
       recursive: true,
     });
 
-    expect(await resolveProtocolOutputDir(EXPECTED_PROTOCOL_OUTPUT_DIR, root))
-      .toBe(resolve(root, EXPECTED_PROTOCOL_OUTPUT_DIR));
+    expect(await resolveProtocolOutputDir(EXPECTED_PROTOCOL_OUTPUT_DIR, root)).toBe(
+      resolve(root, EXPECTED_PROTOCOL_OUTPUT_DIR),
+    );
   });
 
   test("rejects configured output changes and symlink escapes before recursive removal", async () => {
@@ -134,12 +126,10 @@ describe("codex app-server protocol generation", () => {
     await mkdir(parent, { recursive: true });
     await symlink(outside, join(parent, "generated"));
 
-    await expect(
-      resolveProtocolOutputDir(EXPECTED_PROTOCOL_OUTPUT_DIR, root),
-    ).rejects.toThrow("resolves outside the repository");
-    await expect(
-      resolveProtocolOutputDir("../../outside", root),
-    ).rejects.toThrow("must be");
+    await expect(resolveProtocolOutputDir(EXPECTED_PROTOCOL_OUTPUT_DIR, root)).rejects.toThrow(
+      "resolves outside the repository",
+    );
+    await expect(resolveProtocolOutputDir("../../outside", root)).rejects.toThrow("must be");
   });
 
   test("replaces generated leaf symlinks without writing through them", async () => {
@@ -173,10 +163,12 @@ describe("codex app-server protocol generation", () => {
 
     expect(readFileSync(outsideManifest, "utf8")).toBe("do not overwrite");
     expect(readFileSync(outsideReadme, "utf8")).toBe("do not overwrite");
-    expect(JSON.parse(readFileSync(join(output, "protocol-manifest.json"), "utf8")))
-      .toMatchObject({ codexVersion: "0.145.0" });
-    expect(readFileSync(join(output, "README.md"), "utf8"))
-      .toContain("Generated Codex app-server protocol");
+    expect(JSON.parse(readFileSync(join(output, "protocol-manifest.json"), "utf8"))).toMatchObject({
+      codexVersion: "0.145.0",
+    });
+    expect(readFileSync(join(output, "README.md"), "utf8")).toContain(
+      "Generated Codex app-server protocol",
+    );
   });
 
   test("rewrites extensionless relative specifiers so NodeNext can resolve them", () => {
@@ -377,9 +369,7 @@ describe("codex app-server protocol generation", () => {
 
   test("fails when TypeScript generation produces no files", async () => {
     const binary = await fakeGeneratorBinary("empty-ts");
-    await expect(generate(binary, "0.145.0")).rejects.toThrow(
-      "generate-ts produced no files",
-    );
+    await expect(generate(binary, "0.145.0")).rejects.toThrow("generate-ts produced no files");
   });
 
   test("fails when schema generation produces no files", async () => {
@@ -427,13 +417,15 @@ describe("generator binary resolution", () => {
   }
 
   test("a stale CODEX_PATH still falls back to codex on PATH", () => {
-    expect(candidateBinaries("0.145.0", {
-      platform: "linux",
-      architecture: "x64",
-      homeDirectory: "/home/tester",
-      xdgConfigHome: "/config",
-      codexPath: "/stale/codex",
-    })).toEqual([
+    expect(
+      candidateBinaries("0.145.0", {
+        platform: "linux",
+        architecture: "x64",
+        homeDirectory: "/home/tester",
+        xdgConfigHome: "/config",
+        codexPath: "/stale/codex",
+      }),
+    ).toEqual([
       "/config/orkestrator-v2/toolchains/codex/0.145.0/linux-x64/codex",
       "/stale/codex",
       "codex",
@@ -445,7 +437,11 @@ describe("generator binary resolution", () => {
   for (const scenario of [
     {
       name: "darwin resolves the managed root under Application Support",
-      options: { platform: "darwin" as const, architecture: "arm64", homeDirectory: "/Users/tester" },
+      options: {
+        platform: "darwin" as const,
+        architecture: "arm64",
+        homeDirectory: "/Users/tester",
+      },
       expected: [`${DARWIN_ROOT}/codex/0.145.0/darwin-arm64/codex`, "codex"],
     },
     {
@@ -458,12 +454,22 @@ describe("generator binary resolution", () => {
       // to resolve somewhere rather than producing a `codex-ia32` path that can
       // never exist.
       name: "an unknown architecture falls back to the x64 build",
-      options: { platform: "linux" as const, architecture: "ia32", homeDirectory: "/home/t", xdgConfigHome: "/cfg" },
+      options: {
+        platform: "linux" as const,
+        architecture: "ia32",
+        homeDirectory: "/home/t",
+        xdgConfigHome: "/cfg",
+      },
       expected: ["/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-x64/codex", "codex"],
     },
     {
       name: "a non-darwin platform uses the XDG config root",
-      options: { platform: "freebsd" as const, architecture: "arm64", homeDirectory: "/home/t", xdgConfigHome: "/cfg" },
+      options: {
+        platform: "freebsd" as const,
+        architecture: "arm64",
+        homeDirectory: "/home/t",
+        xdgConfigHome: "/cfg",
+      },
       expected: ["/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-arm64/codex", "codex"],
     },
     {
@@ -475,7 +481,11 @@ describe("generator binary resolution", () => {
         xdgConfigHome: "/cfg",
         codexPath: "  /opt/codex  ",
       },
-      expected: ["/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-arm64/codex", "/opt/codex", "codex"],
+      expected: [
+        "/cfg/orkestrator-v2/toolchains/codex/0.145.0/linux-arm64/codex",
+        "/opt/codex",
+        "codex",
+      ],
     },
     {
       // Regression: an exported-but-empty CODEX_PATH used to be pushed verbatim,
@@ -523,12 +533,19 @@ describe("generator binary resolution", () => {
     try {
       const candidates = candidateBinaries("0.145.0");
       const arch = process.arch === "arm64" ? "arm64" : "x64";
-      const expectedRoot = platform() === "darwin"
-        ? join(homedir(), "Library", "Application Support", "orkestrator-v2", "toolchains")
-        : join("/xdg-from-env", "orkestrator-v2", "toolchains");
+      const expectedRoot =
+        platform() === "darwin"
+          ? join(homedir(), "Library", "Application Support", "orkestrator-v2", "toolchains")
+          : join("/xdg-from-env", "orkestrator-v2", "toolchains");
 
       expect(candidates).toEqual([
-        join(expectedRoot, "codex", "0.145.0", `${platform() === "darwin" ? "darwin" : "linux"}-${arch}`, "codex"),
+        join(
+          expectedRoot,
+          "codex",
+          "0.145.0",
+          `${platform() === "darwin" ? "darwin" : "linux"}-${arch}`,
+          "codex",
+        ),
         "/from/env/codex",
         "codex",
       ]);
@@ -588,7 +605,9 @@ describe("committed protocol bindings", () => {
 
   test("the union types the bridge switches on are present", () => {
     expect(readGenerated(join("typescript", "ClientRequest.ts"))).toContain('"thread/start"');
-    expect(readGenerated(join("typescript", "ServerNotification.ts"))).toContain('"turn/completed"');
+    expect(readGenerated(join("typescript", "ServerNotification.ts"))).toContain(
+      '"turn/completed"',
+    );
     expect(readGenerated(join("typescript", "ServerRequest.ts"))).toContain(
       '"item/commandExecution/requestApproval"',
     );

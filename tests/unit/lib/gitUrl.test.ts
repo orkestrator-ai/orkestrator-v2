@@ -50,22 +50,18 @@ describe("gitUrl utilities", () => {
   describe("normalizeGitUrl", () => {
     test("removes .git suffix", () => {
       expect(normalizeGitUrl("https://github.com/user/repo.git")).toBe(
-        "https://github.com/user/repo"
+        "https://github.com/user/repo",
       );
-      expect(normalizeGitUrl("git@github.com:user/repo.git")).toBe(
-        "git@github.com:user/repo"
-      );
+      expect(normalizeGitUrl("git@github.com:user/repo.git")).toBe("git@github.com:user/repo");
     });
 
     test("lowercases the URL", () => {
-      expect(normalizeGitUrl("https://GitHub.com/User/Repo")).toBe(
-        "https://github.com/user/repo"
-      );
+      expect(normalizeGitUrl("https://GitHub.com/User/Repo")).toBe("https://github.com/user/repo");
     });
 
     test("trims whitespace", () => {
       expect(normalizeGitUrl("  https://github.com/user/repo  ")).toBe(
-        "https://github.com/user/repo"
+        "https://github.com/user/repo",
       );
     });
   });

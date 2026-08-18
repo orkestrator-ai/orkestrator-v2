@@ -1,7 +1,4 @@
-import type {
-  BuildPipelineAgent,
-  PipelineSession,
-} from "@orkestrator/protocol/build-pipeline";
+import type { BuildPipelineAgent, PipelineSession } from "@orkestrator/protocol/build-pipeline";
 
 /** Matches the prompt budget used by the interactive "Continue in…" handoff. */
 export const BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET = 180_000;
@@ -46,21 +43,25 @@ function truncate(value: string, limit: number): string {
 function renderMessage(value: unknown): string {
   const ancestors: object[] = [];
   try {
-    const serialized = JSON.stringify(value, function (_key, candidate: unknown) {
-      if (typeof candidate === "string") {
-        return truncate(candidate, MESSAGE_STRING_LIMIT);
-      }
-      if (typeof candidate === "bigint") return `${candidate}n`;
-      if (typeof candidate === "function" || typeof candidate === "symbol") {
-        return String(candidate);
-      }
-      if (candidate && typeof candidate === "object") {
-        while (ancestors.length && ancestors.at(-1) !== this) ancestors.pop();
-        if (ancestors.includes(candidate)) return "[circular]";
-        ancestors.push(candidate);
-      }
-      return candidate;
-    }, 2);
+    const serialized = JSON.stringify(
+      value,
+      function (_key, candidate: unknown) {
+        if (typeof candidate === "string") {
+          return truncate(candidate, MESSAGE_STRING_LIMIT);
+        }
+        if (typeof candidate === "bigint") return `${candidate}n`;
+        if (typeof candidate === "function" || typeof candidate === "symbol") {
+          return String(candidate);
+        }
+        if (candidate && typeof candidate === "object") {
+          while (ancestors.length && ancestors.at(-1) !== this) ancestors.pop();
+          if (ancestors.includes(candidate)) return "[circular]";
+          ancestors.push(candidate);
+        }
+        return candidate;
+      },
+      2,
+    );
     return truncate(serialized ?? String(value), MESSAGE_BODY_LIMIT);
   } catch {
     return "[unserializable provider message]";
@@ -72,31 +73,25 @@ function messageRole(value: unknown): HandoffTranscriptRecord["role"] {
   const direct = value.role;
   const nested = isRecord(value.info) ? value.info.role : undefined;
   const role = direct ?? nested;
-  return role === "user" || role === "assistant" || role === "system"
-    ? role
-    : "system";
+  return role === "user" || role === "assistant" || role === "system" ? role : "system";
 }
 
 function messageId(value: unknown, index: number): string {
   if (!isRecord(value)) return `message-${index}`;
   const info = isRecord(value.info) ? value.info : undefined;
-  return nonBlankString(value.id)
-    ?? nonBlankString(value.uuid)
-    ?? nonBlankString(info?.id)
-    ?? `message-${index}`;
+  return (
+    nonBlankString(value.id) ??
+    nonBlankString(value.uuid) ??
+    nonBlankString(info?.id) ??
+    `message-${index}`
+  );
 }
 
-function messageCreatedAt(
-  value: unknown,
-  fallback: string,
-): string {
+function messageCreatedAt(value: unknown, fallback: string): string {
   if (!isRecord(value)) return fallback;
   const info = isRecord(value.info) ? value.info : undefined;
   const time = isRecord(info?.time) ? info.time : undefined;
-  const candidate = value.createdAt
-    ?? value.timestamp
-    ?? info?.createdAt
-    ?? time?.created;
+  const candidate = value.createdAt ?? value.timestamp ?? info?.createdAt ?? time?.created;
   if (typeof candidate === "number" && Number.isFinite(candidate)) {
     const date = new Date(candidate);
     if (Number.isFinite(date.getTime())) return date.toISOString();
@@ -145,8 +140,7 @@ function selectTranscriptRecords(
   // within a bounded share, then spend the rest from newest to oldest.
   const first = records[0];
   const firstCost = first ? nestedRecordCost(first) : 0;
-  const firstSelected = Boolean(first)
-    && used + firstCost <= availableCharacters / 3;
+  const firstSelected = Boolean(first) && used + firstCost <= availableCharacters / 3;
   if (first && firstSelected) {
     selected.push({ index: 0, record: first });
     used += firstCost;
@@ -195,17 +189,21 @@ export interface BuildReviewHandoffOptions {
  * records are historical evidence, and bounded prior messages are framed as
  * untrusted JSON before the new instruction.
  */
-export function buildReviewHandoffPrompt(
-  options: BuildReviewHandoffOptions,
-): string {
+export function buildReviewHandoffPrompt(options: BuildReviewHandoffOptions): string {
   const createdAt = new Date().toISOString();
   const sourceMessages = options.sourceSession.messages ?? [];
-  const sourceLabel = options.sourceAgent === "opencode"
-    ? "OpenCode"
-    : options.sourceAgent === "codex" ? "Codex" : "Claude";
-  const destinationLabel = options.destinationAgent === "opencode"
-    ? "OpenCode"
-    : options.destinationAgent === "codex" ? "Codex" : "Claude";
+  const sourceLabel =
+    options.sourceAgent === "opencode"
+      ? "OpenCode"
+      : options.sourceAgent === "codex"
+        ? "Codex"
+        : "Claude";
+  const destinationLabel =
+    options.destinationAgent === "opencode"
+      ? "OpenCode"
+      : options.destinationAgent === "codex"
+        ? "Codex"
+        : "Claude";
   const metadata = promptCarrierJson({
     id: `${options.sourceSession.sessionKey}:address-issues`,
     environmentId: options.environmentId,
@@ -233,25 +231,21 @@ ${TRANSCRIPT_OPEN}
 ${TRANSCRIPT_CLOSE}
 </orkestrator-handoff>`;
   const records = sourceMessages.map((message, index) =>
-    recordFor(message, index, options.sourceSession.startedAt));
+    recordFor(message, index, options.sourceSession.startedAt),
+  );
   const transcriptBudget = Math.max(
     0,
-    BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET
-      - header.length
-      - footer.length
-      - OMISSION_NOTICE_RESERVE,
+    BUILD_PIPELINE_HANDOFF_PROMPT_BUDGET - header.length - footer.length - OMISSION_NOTICE_RESERVE,
   );
   const selected = selectTranscriptRecords(records, transcriptBudget);
   const omitted = records.length - selected.length;
-  const omissionNotice = omitted > 0
-    ? `\n${omitted} review ${omitted === 1 ? "message was" : "messages were"} omitted to fit the context budget.`
-    : "";
+  const omissionNotice =
+    omitted > 0
+      ? `\n${omitted} review ${omitted === 1 ? "message was" : "messages were"} omitted to fit the context budget.`
+      : "";
   return `${header}${promptCarrierJson(selected)}${omissionNotice}${footer}`;
 }
 
-export function prependReviewHandoff(
-  handoffPrompt: string,
-  addressInstruction: string,
-): string {
+export function prependReviewHandoff(handoffPrompt: string, addressInstruction: string): string {
   return `${handoffPrompt}\n\nThe handoff above is prior conversation history. Treat the address-issues instruction below as the latest user message in that continued conversation:\n\n${addressInstruction}`;
 }

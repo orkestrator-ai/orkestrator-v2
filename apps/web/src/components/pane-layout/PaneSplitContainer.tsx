@@ -5,11 +5,7 @@ import { usePaneLayoutStore } from "@/stores";
 import { isPaneLeaf, type PaneLeaf, type PaneNode, type PaneSplit } from "@/types/paneLayout";
 import { PaneTree } from "./PaneTree";
 import { MobilePaneSwitcher } from "./MobilePaneSwitcher";
-import {
-  ResizablePanelGroup,
-  ResizablePanel,
-  ResizableHandle,
-} from "@/components/ui/resizable";
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 
 /** Debounce delay for store updates during resize operations (ms) */
 const RESIZE_DEBOUNCE_MS = 100;
@@ -92,7 +88,7 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
         }, RESIZE_DEBOUNCE_MS);
       }
     },
-    [environmentId, split.id, firstPanelId, secondPanelId, updateSizes]
+    [environmentId, split.id, firstPanelId, secondPanelId, updateSizes],
   );
 
   if (isMobile) {
@@ -124,10 +120,7 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
   }
 
   return (
-    <ResizablePanelGroup
-      orientation={split.direction}
-      onLayoutChange={handleLayoutChange}
-    >
+    <ResizablePanelGroup orientation={split.direction} onLayoutChange={handleLayoutChange}>
       <ResizablePanel
         id={firstPanelId}
         defaultSize={split.sizes[0]}

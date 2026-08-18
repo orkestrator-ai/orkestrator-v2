@@ -36,17 +36,11 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
-import {
-  BuildLaunchDialog,
-  type BuildLaunchSelection,
-} from "@/components/build/BuildLaunchDialog";
+import { BuildLaunchDialog, type BuildLaunchSelection } from "@/components/build/BuildLaunchDialog";
 import { useBuildLaunchOptions } from "@/hooks/useBuildLaunchOptions";
 import { useBuildPipeline } from "@/hooks/useBuildPipeline";
 import { useDurableComposeDraft } from "@/hooks/useDurableComposeDraft";
-import {
-  composeDraftKey,
-  discardComposeDraft,
-} from "@/lib/compose-draft-persistence";
+import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
 import {
@@ -59,7 +53,12 @@ import {
   retryBuildPipelineCompletionComment,
 } from "@/lib/backend";
 import { cn } from "@/lib/utils";
-import type { LinearConnectionStatus, LinearIssueComment, LinearIssueDetail, LinearIssueListItem } from "@/types/linear";
+import type {
+  LinearConnectionStatus,
+  LinearIssueComment,
+  LinearIssueDetail,
+  LinearIssueListItem,
+} from "@/types/linear";
 
 interface LinearTicketsViewProps {
   projectId: string;
@@ -91,7 +90,10 @@ function formatUpdatedDate(value: string): string {
   }).format(date);
 }
 
-function getIssuePipeline(pipelines: Map<string, BuildPipeline>, issueId: string): BuildPipeline | undefined {
+function getIssuePipeline(
+  pipelines: Map<string, BuildPipeline>,
+  issueId: string,
+): BuildPipeline | undefined {
   const matches = Array.from(pipelines.values()).filter(
     (pipeline) => pipeline.source?.type === "linear" && pipeline.source.issueId === issueId,
   );
@@ -177,17 +179,19 @@ function compareIssueOrder(
   if (order === "manual") return 0;
 
   if (order === "priority") {
-    const aPriority = a.priority && a.priority > 0
-      ? a.priority
-      : PRIORITY_BY_LABEL[a.priorityLabel?.toLowerCase() ?? ""] ?? 5;
-    const bPriority = b.priority && b.priority > 0
-      ? b.priority
-      : PRIORITY_BY_LABEL[b.priorityLabel?.toLowerCase() ?? ""] ?? 5;
+    const aPriority =
+      a.priority && a.priority > 0
+        ? a.priority
+        : (PRIORITY_BY_LABEL[a.priorityLabel?.toLowerCase() ?? ""] ?? 5);
+    const bPriority =
+      b.priority && b.priority > 0
+        ? b.priority
+        : (PRIORITY_BY_LABEL[b.priorityLabel?.toLowerCase() ?? ""] ?? 5);
     if (aPriority !== bPriority) return aPriority - bPriority;
     if (
-      a.prioritySortOrder !== undefined
-      && b.prioritySortOrder !== undefined
-      && a.prioritySortOrder !== b.prioritySortOrder
+      a.prioritySortOrder !== undefined &&
+      b.prioritySortOrder !== undefined &&
+      a.prioritySortOrder !== b.prioritySortOrder
     ) {
       return a.prioritySortOrder - b.prioritySortOrder;
     }
@@ -224,7 +228,9 @@ function LinearCommentItem({ comment }: { comment: LinearIssueComment }) {
   return (
     <div className="rounded-md border border-border/60 p-3">
       <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span className="font-medium text-foreground">{comment.authorName ?? "Unknown author"}</span>
+        <span className="font-medium text-foreground">
+          {comment.authorName ?? "Unknown author"}
+        </span>
         <span>{formatUpdatedDate(comment.createdAt)}</span>
       </div>
       <div className="min-w-0 text-sm">
@@ -297,8 +303,16 @@ function LinearConnectDialog({
             <ExternalLink className="h-4 w-4" />
             API settings
           </Button>
-          <Button type="button" onClick={() => void handleConnect()} disabled={isConnecting || !apiKey.trim()}>
-            {isConnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+          <Button
+            type="button"
+            onClick={() => void handleConnect()}
+            disabled={isConnecting || !apiKey.trim()}
+          >
+            {isConnecting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
             Connect
           </Button>
         </DialogFooter>
@@ -312,7 +326,10 @@ export function LinearTicketsView({ projectId }: LinearTicketsViewProps) {
   return <LinearTicketsViewContent projectId={projectId} buildPipeline={buildPipeline} />;
 }
 
-export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTicketsViewContentProps) {
+export function LinearTicketsViewContent({
+  projectId,
+  buildPipeline,
+}: LinearTicketsViewContentProps) {
   const [connection, setConnection] = useState<LinearConnectionStatus | null>(null);
   const [connectionState, setConnectionState] = useState<LoadState>("idle");
   const [issues, setIssues] = useState<LinearIssueListItem[]>([]);
@@ -327,8 +344,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const [connectOpen, setConnectOpen] = useState(false);
   const [buildDialogOpen, setBuildDialogOpen] = useState(false);
   const [isBuildStarting, setIsBuildStarting] = useState(false);
-  const [retryingCompletionComment, setRetryingCompletionComment] =
-    useState(false);
+  const [retryingCompletionComment, setRetryingCompletionComment] = useState(false);
   const [commentBody, setCommentBody, clearCommentDraft] = useDurableComposeDraft({
     ownerType: "project",
     ownerId: projectId,
@@ -354,10 +370,10 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const replacePipeline = useBuildPipelineStore((state) => state.replacePipeline);
   const { startBuildFromLinearIssue, navigateToPipeline } = buildPipeline;
-  const {
-    catalog: launchCatalog,
-    defaults: launchDefaults,
-  } = useBuildLaunchOptions(projectId, selectedIssueId !== null);
+  const { catalog: launchCatalog, defaults: launchDefaults } = useBuildLaunchOptions(
+    projectId,
+    selectedIssueId !== null,
+  );
 
   const loadConnection = useCallback(async () => {
     const requestId = connectionRequestRef.current + 1;
@@ -416,8 +432,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     for (const issue of issues) {
       counts.set(issue.status, (counts.get(issue.status) ?? 0) + 1);
     }
-    return Array.from(counts.entries()).sort(([a], [b]) =>
-      compareStatusOrder(a, b, statusOrder));
+    return Array.from(counts.entries()).sort(([a], [b]) => compareStatusOrder(a, b, statusOrder));
   }, [issues, statusOrder]);
 
   const filteredIssues = useMemo(() => {
@@ -427,20 +442,22 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
 
   const groupedIssues = useMemo(() => {
     const groups = new Map<string, LinearIssueListItem[]>();
-    const orderedIssues = [...filteredIssues].sort((a, b) =>
-      compareIssueOrder(a, b, issueOrder));
+    const orderedIssues = [...filteredIssues].sort((a, b) => compareIssueOrder(a, b, issueOrder));
     for (const issue of orderedIssues) {
       const group = groups.get(issue.status) ?? [];
       group.push(issue);
       groups.set(issue.status, group);
     }
-    return Array.from(groups.entries()).sort(([a], [b]) =>
-      compareStatusOrder(a, b, statusOrder));
+    return Array.from(groups.entries()).sort(([a], [b]) => compareStatusOrder(a, b, statusOrder));
   }, [filteredIssues, issueOrder, statusOrder]);
 
-  const selectedPipeline = selectedIssueId ? getIssuePipeline(pipelines, selectedIssueId) : undefined;
+  const selectedPipeline = selectedIssueId
+    ? getIssuePipeline(pipelines, selectedIssueId)
+    : undefined;
   const hasActiveBuild = isActivePipeline(selectedPipeline);
-  const selectedIssueSummary = selectedIssueId ? issues.find((issue) => issue.id === selectedIssueId) : undefined;
+  const selectedIssueSummary = selectedIssueId
+    ? issues.find((issue) => issue.id === selectedIssueId)
+    : undefined;
 
   const loadDetail = useCallback(async (issueId: string) => {
     const requestId = detailRequestRef.current + 1;
@@ -496,10 +513,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     // the authoritative store again at confirmation time so a stale render can
     // never submit configuration that the backend will discard in favour of the
     // already-active admission.
-    const activePipeline = getIssuePipeline(
-      useBuildPipelineStore.getState().pipelines,
-      detail.id,
-    );
+    const activePipeline = getIssuePipeline(useBuildPipelineStore.getState().pipelines, detail.id);
     if (activePipeline && isActivePipeline(activePipeline)) {
       setBuildDialogOpen(false);
       await navigateToPipeline(activePipeline);
@@ -508,15 +522,10 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     setBuildDialogOpen(false);
     setIsBuildStarting(true);
     try {
-      await startBuildFromLinearIssue(
-        detail,
-        projectId,
-        selection.environmentType,
-        {
-          steps: selection.steps,
-          includeComments: selection.includeComments ?? true,
-        },
-      );
+      await startBuildFromLinearIssue(detail, projectId, selection.environmentType, {
+        steps: selection.steps,
+        includeComments: selection.includeComments ?? true,
+      });
     } finally {
       setIsBuildStarting(false);
     }
@@ -527,8 +536,7 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
     if (!detail || !body || commentState === "loading") return;
     const submittedIssueId = detail.id;
     const submittedDraftValue = commentBody;
-    const submittedEditRevision =
-      commentEditRevisionsRef.current.get(submittedIssueId) ?? 0;
+    const submittedEditRevision = commentEditRevisionsRef.current.get(submittedIssueId) ?? 0;
 
     setCommentState("loading");
     setCommentError(null);
@@ -538,44 +546,35 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
         if (!current || current.id !== submittedIssueId) return current;
         return {
           ...current,
-          comments: [...current.comments, comment].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
+          comments: [...current.comments, comment].sort((a, b) =>
+            a.createdAt.localeCompare(b.createdAt),
+          ),
         };
       });
       const submittedDraftGenerationIsCurrent =
-        (commentEditRevisionsRef.current.get(submittedIssueId) ?? 0)
-          === submittedEditRevision;
+        (commentEditRevisionsRef.current.get(submittedIssueId) ?? 0) === submittedEditRevision;
       const submittedDraftIsCurrent =
-        submittedDraftGenerationIsCurrent
-        && (
-          selectedIssueIdRef.current !== submittedIssueId
-          || commentBodyRef.current === submittedDraftValue
-        );
+        submittedDraftGenerationIsCurrent &&
+        (selectedIssueIdRef.current !== submittedIssueId ||
+          commentBodyRef.current === submittedDraftValue);
       if (submittedDraftIsCurrent) {
         const clearSubmittedDraft =
           selectedIssueIdRef.current === submittedIssueId
             ? clearCommentDraft()
-            : discardComposeDraft(composeDraftKey(
-                "linear-comment",
-                projectId,
-                submittedIssueId,
-              ));
+            : discardComposeDraft(composeDraftKey("linear-comment", projectId, submittedIssueId));
         void clearSubmittedDraft.catch((error) => {
           console.warn("[LinearTicketsView] Failed to clear posted comment draft:", error);
         });
       }
-      if (
-        selectedIssueIdRef.current === submittedIssueId
-        && submittedDraftIsCurrent
-      ) {
+      if (selectedIssueIdRef.current === submittedIssueId && submittedDraftIsCurrent) {
         setCommentState("loaded");
       }
       toast.success("Linear comment added");
     } catch (error) {
       if (
-        selectedIssueIdRef.current === submittedIssueId
-        && (commentEditRevisionsRef.current.get(submittedIssueId) ?? 0)
-          === submittedEditRevision
-        && commentBodyRef.current === submittedDraftValue
+        selectedIssueIdRef.current === submittedIssueId &&
+        (commentEditRevisionsRef.current.get(submittedIssueId) ?? 0) === submittedEditRevision &&
+        commentBodyRef.current === submittedDraftValue
       ) {
         setCommentState("error");
         setCommentError(error instanceof Error ? error.message : "Failed to add Linear comment");
@@ -632,7 +631,11 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                   <span>{detailError}</span>
                 </div>
                 <div className="mt-3 flex gap-2">
-                  <Button size="sm" variant="outline" onClick={() => void loadDetail(selectedIssueId)}>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void loadDetail(selectedIssueId)}
+                  >
                     <RefreshCw className="h-3.5 w-3.5" />
                     Retry
                   </Button>
@@ -690,7 +693,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                       <div className="text-xs text-muted-foreground">Labels</div>
                       <div className="mt-1 flex flex-wrap gap-1.5">
                         {detail.labels.map((label) => (
-                          <span key={label} className="rounded bg-muted px-2 py-0.5 text-xs">{label}</span>
+                          <span key={label} className="rounded bg-muted px-2 py-0.5 text-xs">
+                            {label}
+                          </span>
                         ))}
                       </div>
                     </div>
@@ -781,7 +786,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
                       View Build
-                      <span className="text-xs text-muted-foreground">({selectedPipeline.phase})</span>
+                      <span className="text-xs text-muted-foreground">
+                        ({selectedPipeline.phase})
+                      </span>
                     </Button>
                   )}
                   {selectedPipeline?.completionCommentStatus === "failed" && (
@@ -798,16 +805,11 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                           setRetryingCompletionComment(true);
                           try {
                             replacePipeline(
-                              await retryBuildPipelineCompletionComment(
-                                selectedPipeline.id,
-                              ),
+                              await retryBuildPipelineCompletionComment(selectedPipeline.id),
                             );
                           } catch (error) {
                             toast.error("Failed to retry Linear completion comment", {
-                              description:
-                                error instanceof Error
-                                  ? error.message
-                                  : String(error),
+                              description: error instanceof Error ? error.message : String(error),
                             });
                           } finally {
                             setRetryingCompletionComment(false);
@@ -846,9 +848,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
           catalog={launchCatalog}
           busy={isBuildStarting || hasActiveBuild}
           localEnvironmentAvailable={localEnvironmentAvailable}
-          commentContext={detail && detail.comments.length > 0
-            ? { count: detail.comments.length }
-            : undefined}
+          commentContext={
+            detail && detail.comments.length > 0 ? { count: detail.comments.length } : undefined
+          }
           {...launchDefaults}
           onConfirm={(selection) => void handleStartBuild(selection)}
         />
@@ -875,7 +877,12 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
               {connection.viewer.name}
             </span>
           )}
-          <Button variant="outline" size="sm" onClick={() => void loadIssues()} disabled={issuesState === "loading"}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void loadIssues()}
+            disabled={issuesState === "loading"}
+          >
             {issuesState === "loading" || connectionState === "loading" ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
@@ -883,7 +890,11 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
             )}
             Refresh
           </Button>
-          <Button variant={connected ? "outline" : "default"} size="sm" onClick={() => setConnectOpen(true)}>
+          <Button
+            variant={connected ? "outline" : "default"}
+            size="sm"
+            onClick={() => setConnectOpen(true)}
+          >
             <Unplug className="h-3.5 w-3.5" />
             {connected ? "Reconnect" : "Connect"}
           </Button>
@@ -916,7 +927,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                       key={status}
                       className={cn(
                         "inline-flex cursor-pointer items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-colors",
-                        checked ? "border-primary bg-primary/10 text-foreground" : "border-border bg-background text-muted-foreground hover:text-foreground",
+                        checked
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border bg-background text-muted-foreground hover:text-foreground",
                       )}
                     >
                       <Checkbox
@@ -936,11 +949,22 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                 )}
               </div>
               <div className="ml-auto flex items-center gap-2">
-                <label htmlFor="linear-ticket-order" className="text-xs font-medium text-muted-foreground">
+                <label
+                  htmlFor="linear-ticket-order"
+                  className="text-xs font-medium text-muted-foreground"
+                >
                   Order by
                 </label>
-                <Select value={issueOrder} onValueChange={(value) => setIssueOrder(value as IssueOrder)}>
-                  <SelectTrigger id="linear-ticket-order" size="sm" className="min-w-32" aria-label="Order Linear tickets by">
+                <Select
+                  value={issueOrder}
+                  onValueChange={(value) => setIssueOrder(value as IssueOrder)}
+                >
+                  <SelectTrigger
+                    id="linear-ticket-order"
+                    size="sm"
+                    className="min-w-32"
+                    aria-label="Order Linear tickets by"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent align="end">
@@ -969,7 +993,12 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                     <span>{issuesError}</span>
                   </div>
-                  <Button className="mt-3" size="sm" variant="outline" onClick={() => void loadIssues()}>
+                  <Button
+                    className="mt-3"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void loadIssues()}
+                  >
                     <RefreshCw className="h-3.5 w-3.5" />
                     Retry
                   </Button>
@@ -1011,7 +1040,9 @@ export function LinearTicketsViewContent({ projectId, buildPipeline }: LinearTic
                         >
                           <div className="flex items-start justify-between gap-4">
                             <div className="min-w-0 space-y-1">
-                              <div className="truncate text-sm font-medium text-foreground">{issue.title}</div>
+                              <div className="truncate text-sm font-medium text-foreground">
+                                {issue.title}
+                              </div>
                               <IssueMetadata issue={issue} />
                             </div>
                             {pipeline && (

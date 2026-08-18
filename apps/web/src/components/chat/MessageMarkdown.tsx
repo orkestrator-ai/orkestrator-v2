@@ -39,34 +39,21 @@ function TaskListCheckbox({ checked }: TaskListCheckboxProps) {
   );
 }
 
-function isTaskListCheckbox(
-  child: ReactNode,
-): child is ReactElement<TaskListCheckboxProps> {
+function isTaskListCheckbox(child: ReactNode): child is ReactElement<TaskListCheckboxProps> {
   return isValidElement(child) && child.type === TaskListCheckbox;
 }
 
-function MarkdownList({
-  className,
-  children,
-  ...props
-}: HTMLAttributes<HTMLUListElement>) {
+function MarkdownList({ className, children, ...props }: HTMLAttributes<HTMLUListElement>) {
   const isTaskList = className?.includes("contains-task-list");
 
   return (
-    <ul
-      className={cn(className, isTaskList && "list-none space-y-1 pl-0")}
-      {...props}
-    >
+    <ul className={cn(className, isTaskList && "list-none space-y-1 pl-0")} {...props}>
       {children}
     </ul>
   );
 }
 
-function MarkdownListItem({
-  className,
-  children,
-  ...props
-}: HTMLAttributes<HTMLLIElement>) {
+function MarkdownListItem({ className, children, ...props }: HTMLAttributes<HTMLLIElement>) {
   const childNodes = Children.toArray(children);
   const checkbox = childNodes.find(isTaskListCheckbox);
 
@@ -88,10 +75,7 @@ function MarkdownListItem({
   });
 
   return (
-    <li
-      className={cn("my-1 flex list-none items-start gap-2", className)}
-      {...props}
-    >
+    <li className={cn("my-1 flex list-none items-start gap-2", className)} {...props}>
       {checked ? (
         <CheckSquare
           aria-hidden="true"

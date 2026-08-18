@@ -16,11 +16,7 @@ import {
   type ResumableBuildPhase,
 } from "@orkestrator/protocol/build-pipeline";
 
-export {
-  BUILD_PIPELINE_VERSION,
-  isActiveBuildPhase,
-  isBuildPipeline,
-};
+export { BUILD_PIPELINE_VERSION, isActiveBuildPhase, isBuildPipeline };
 export type {
   BuildPhase,
   BuildPipeline,
@@ -55,15 +51,11 @@ interface BuildPipelineState {
     activeOnly?: boolean,
   ) => BuildPipeline | undefined;
   getPipelineById: (id: string) => BuildPipeline | undefined;
-  getActivePipelineForEnvironment: (
-    environmentId: string,
-  ) => BuildPipeline | undefined;
+  getActivePipelineForEnvironment: (environmentId: string) => BuildPipeline | undefined;
   isBuildEnvironment: (environmentId: string) => boolean;
 }
 
-function environmentIds(
-  pipelines: ReadonlyMap<string, BuildPipeline>,
-): Set<string> {
+function environmentIds(pipelines: ReadonlyMap<string, BuildPipeline>): Set<string> {
   const ids = new Set<string>();
   for (const pipeline of pipelines.values()) {
     if (pipeline.environmentId) ids.add(pipeline.environmentId);
@@ -75,9 +67,7 @@ function without(
   pipelines: ReadonlyMap<string, BuildPipeline>,
   predicate: (pipeline: BuildPipeline) => boolean,
 ): Map<string, BuildPipeline> {
-  return new Map(
-    Array.from(pipelines).filter(([, pipeline]) => !predicate(pipeline)),
-  );
+  return new Map(Array.from(pipelines).filter(([, pipeline]) => !predicate(pipeline)));
 }
 
 export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => ({
@@ -115,10 +105,7 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
 
   removePipelinesForTask: (taskId) =>
     set((state) => {
-      const pipelines = without(
-        state.pipelines,
-        (pipeline) => pipeline.taskId === taskId,
-      );
+      const pipelines = without(state.pipelines, (pipeline) => pipeline.taskId === taskId);
       if (pipelines.size === state.pipelines.size) return state;
       return {
         pipelines,
@@ -140,33 +127,24 @@ export const useBuildPipelineStore = create<BuildPipelineState>()((set, get) => 
     }),
 
   getPipelineByTaskId: (taskId) =>
-    Array.from(get().pipelines.values()).find(
-      (pipeline) => pipeline.taskId === taskId,
-    ),
+    Array.from(get().pipelines.values()).find((pipeline) => pipeline.taskId === taskId),
 
-  getPipelineForGitHubIssue: (
-    repositoryOwner,
-    repositoryName,
-    issueNumber,
-    activeOnly = false,
-  ) =>
-    Array.from(get().pipelines.values()).find((pipeline) =>
-      pipeline.source?.type === "github"
-      && pipeline.source.repositoryOwner === repositoryOwner
-      && pipeline.source.repositoryName === repositoryName
-      && pipeline.source.issueNumber === issueNumber
-      && (!activeOnly || isActiveBuildPhase(pipeline.phase))
+  getPipelineForGitHubIssue: (repositoryOwner, repositoryName, issueNumber, activeOnly = false) =>
+    Array.from(get().pipelines.values()).find(
+      (pipeline) =>
+        pipeline.source?.type === "github" &&
+        pipeline.source.repositoryOwner === repositoryOwner &&
+        pipeline.source.repositoryName === repositoryName &&
+        pipeline.source.issueNumber === issueNumber &&
+        (!activeOnly || isActiveBuildPhase(pipeline.phase)),
     ),
 
   getPipelineById: (id) => get().pipelines.get(id),
 
   getActivePipelineForEnvironment: (environmentId) =>
     Array.from(get().pipelines.values()).find(
-      (pipeline) =>
-        pipeline.environmentId === environmentId
-        && isActiveBuildPhase(pipeline.phase),
+      (pipeline) => pipeline.environmentId === environmentId && isActiveBuildPhase(pipeline.phase),
     ),
 
-  isBuildEnvironment: (environmentId) =>
-    get().buildEnvironmentIds.has(environmentId),
+  isBuildEnvironment: (environmentId) => get().buildEnvironmentIds.has(environmentId),
 }));

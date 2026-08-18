@@ -3,7 +3,11 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import type {
+  ImageBlockParam,
+  TextBlockParam,
+  ContentBlockParam,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   ModelInfo,
   SessionState,
@@ -31,10 +35,7 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -72,9 +73,7 @@ import {
   questionResolvers,
   sessions,
 } from "./session-manager-core.js";
-import {
-  isPendingInteractionFor,
-} from "./session-manager-lifecycle.js";
+import { isPendingInteractionFor } from "./session-manager-lifecycle.js";
 type PromptDispatchState = lifecycle.PromptDispatchState;
 type PromptDispatchRecord = lifecycle.PromptDispatchRecord;
 /**
@@ -82,10 +81,7 @@ type PromptDispatchRecord = lifecycle.PromptDispatchRecord;
  * @param requestId - The question request ID
  * @param answers - Record mapping question text to selected answer text
  */
-export function answerQuestion(
-  requestId: string,
-  answers: Record<string, string>
-): boolean {
+export function answerQuestion(requestId: string, answers: Record<string, string>): boolean {
   const question = pendingQuestions.get(requestId);
   if (!question) {
     debugLog("[session-manager] Question not found for requestId:", requestId);
@@ -145,9 +141,7 @@ export function dismissQuestion(requestId: string): boolean {
 /**
  * Get pending questions for a session
  */
-export function getPendingQuestions(
-  sessionId?: string
-): QuestionRequest[] {
+export function getPendingQuestions(sessionId?: string): QuestionRequest[] {
   const questions = Array.from(pendingQuestions.values());
   if (sessionId) {
     return questions.filter((q) => isPendingInteractionFor(q, sessionId));
@@ -164,7 +158,7 @@ export function getPendingQuestions(
 export function respondToPlanApproval(
   requestId: string,
   approved: boolean,
-  feedback?: string
+  feedback?: string,
 ): boolean {
   const approval = pendingPlanApprovals.get(requestId);
   if (!approval) {
@@ -201,9 +195,7 @@ export function respondToPlanApproval(
 /**
  * Get pending plan approvals for a session
  */
-export function getPendingPlanApprovals(
-  sessionId?: string
-): PlanApprovalRequest[] {
+export function getPendingPlanApprovals(sessionId?: string): PlanApprovalRequest[] {
   const approvals = Array.from(pendingPlanApprovals.values());
   if (sessionId) {
     return approvals.filter((a) => isPendingInteractionFor(a, sessionId));
@@ -266,46 +258,46 @@ export async function getAvailableModelCatalog(): Promise<{
     return {
       source: "fallback",
       models: [
-      {
-        id: "default",
-        resolvedModel: "claude-opus-5[1m]",
-        name: "Default (recommended)",
-        description: "Opus 5 with 1M context · Best for everyday, complex tasks",
-        supportsFastMode: true,
-        supportsEffort: true,
-        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-      },
-      {
-        id: "opus[1m]",
-        resolvedModel: "claude-opus-5[1m]",
-        name: "Opus (1M context)",
-        description: "Opus 5 with 1M context · Best for everyday, complex tasks",
-        supportsFastMode: true,
-        supportsEffort: true,
-        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-      },
-      {
-        id: "claude-fable-5[1m]",
-        resolvedModel: "claude-fable-5",
-        name: "Fable",
-        description: "Fable 5 · Most capable for your hardest and longest-running tasks",
-        supportsEffort: true,
-        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-      },
-      {
-        id: "sonnet",
-        resolvedModel: "claude-sonnet-5",
-        name: "Sonnet",
-        description: "Sonnet 5 · Efficient for routine tasks",
-        supportsEffort: true,
-        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-      },
-      {
-        id: "haiku",
-        resolvedModel: "claude-haiku-4-5-20251001",
-        name: "Haiku",
-        description: "Haiku 4.5 · Fastest for quick answers",
-      },
+        {
+          id: "default",
+          resolvedModel: "claude-opus-5[1m]",
+          name: "Default (recommended)",
+          description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+          supportsFastMode: true,
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+        {
+          id: "opus[1m]",
+          resolvedModel: "claude-opus-5[1m]",
+          name: "Opus (1M context)",
+          description: "Opus 5 with 1M context · Best for everyday, complex tasks",
+          supportsFastMode: true,
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+        {
+          id: "claude-fable-5[1m]",
+          resolvedModel: "claude-fable-5",
+          name: "Fable",
+          description: "Fable 5 · Most capable for your hardest and longest-running tasks",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+        {
+          id: "sonnet",
+          resolvedModel: "claude-sonnet-5",
+          name: "Sonnet",
+          description: "Sonnet 5 · Efficient for routine tasks",
+          supportsEffort: true,
+          supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        },
+        {
+          id: "haiku",
+          resolvedModel: "claude-haiku-4-5-20251001",
+          name: "Haiku",
+          description: "Haiku 4.5 · Fastest for quick answers",
+        },
       ],
     };
   } finally {
@@ -331,9 +323,10 @@ export async function getClaudeRuntimeVersions(): Promise<{
   let bundledCliVersion: string | undefined;
   try {
     const sdkEntryUrl = import.meta.resolve("@anthropic-ai/claude-agent-sdk");
-    const manifest = JSON.parse(
-      await readFile(new URL("./package.json", sdkEntryUrl), "utf8"),
-    ) as { version?: string; claudeCodeVersion?: string };
+    const manifest = JSON.parse(await readFile(new URL("./package.json", sdkEntryUrl), "utf8")) as {
+      version?: string;
+      claudeCodeVersion?: string;
+    };
     sdkVersion = manifest.version;
     bundledCliVersion = manifest.claudeCodeVersion;
   } catch (error) {

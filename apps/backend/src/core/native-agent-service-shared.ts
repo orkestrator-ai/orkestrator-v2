@@ -83,10 +83,7 @@ import {
 
 export const PROVIDER_REPORTED_INTERACTION_GRACE_MS = 60_000;
 
-export type CommandInvoker = <T>(
-  command: string,
-  args?: Record<string, unknown>,
-) => Promise<T>;
+export type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 export interface EnsureNativeAgentSessionInput {
   environmentId: string;
@@ -114,8 +111,7 @@ export interface EnsureNativeAgentSessionInput {
   executionProfileId?: string;
 }
 
-export interface DispatchNativeAgentPromptInput
-  extends EnsureNativeAgentSessionInput {
+export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSessionInput {
   prompt: string;
   requestId: string;
   /** Base64 images that still need staging into the workspace. */
@@ -137,8 +133,7 @@ export interface DispatchNativeAgentPromptInput
   promptSuggestions?: boolean;
 }
 
-export interface AdoptNativeAgentSessionInput
-  extends EnsureNativeAgentSessionInput {
+export interface AdoptNativeAgentSessionInput extends EnsureNativeAgentSessionInput {
   providerSessionId: string;
   expectedProviderSessionId?: string;
   controls?: NativeAgentControlUpdate;
@@ -166,9 +161,7 @@ export function controlsFromSessionInput(
     ...(input.reasoningEffort ? { reasoningId: input.reasoningEffort } : {}),
     ...(typeof input.fastMode === "boolean" ? { fastMode: input.fastMode } : {}),
     ...(input.sessionMode ? { mode: input.sessionMode } : {}),
-    ...(input.executionProfileId
-      ? { executionProfileId: input.executionProfileId }
-      : {}),
+    ...(input.executionProfileId ? { executionProfileId: input.executionProfileId } : {}),
   };
   return Object.keys(controls).length > 0 ? controls : undefined;
 }
@@ -184,21 +177,16 @@ export function isValidInteractionMetadata(input: {
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
 }): boolean {
-  if (
-    input.origin !== undefined
-    && !AGENT_INTERACTION_ORIGINS.includes(input.origin)
-  ) return false;
-  if (
-    input.interactionPolicy !== undefined
-    && !isAgentInteractionPolicy(input.interactionPolicy)
-  ) return false;
+  if (input.origin !== undefined && !AGENT_INTERACTION_ORIGINS.includes(input.origin)) return false;
+  if (input.interactionPolicy !== undefined && !isAgentInteractionPolicy(input.interactionPolicy))
+    return false;
   const origin = input.origin ?? "interactive-native";
-  const policyMode = input.interactionPolicy?.mode
-    ?? (origin === "build-pipeline" || origin === "looped-review"
-      ? "unattended"
-      : "interactive");
-  return (origin === "build-pipeline" || origin === "looped-review")
-    === (policyMode === "unattended");
+  const policyMode =
+    input.interactionPolicy?.mode ??
+    (origin === "build-pipeline" || origin === "looped-review" ? "unattended" : "interactive");
+  return (
+    (origin === "build-pipeline" || origin === "looped-review") === (policyMode === "unattended")
+  );
 }
 
 /** One session's observed activity change, as reported to `onActivityTransition`. */
@@ -221,8 +209,10 @@ export interface NativeAgentActivityTransition {
 export function isAgentTurnEndTransition(
   transition: Pick<NativeAgentActivityTransition, "previousState" | "state">,
 ): boolean {
-  return transition.state === "idle"
-    && (transition.previousState === "working" || transition.previousState === "waiting");
+  return (
+    transition.state === "idle" &&
+    (transition.previousState === "working" || transition.previousState === "waiting")
+  );
 }
 
 export interface NativeAgentServiceOptions {
@@ -245,9 +235,7 @@ export interface NativeAgentServiceOptions {
   interactionMonitorMaxSessionsPerEnvironment?: number;
   interactionMonitorRetryBaseMs?: number;
   interactionMonitorMaxRetries?: number;
-  onInteractionObservation?: (
-    observation: AgentInteractionObservation,
-  ) => void | Promise<void>;
+  onInteractionObservation?: (observation: AgentInteractionObservation) => void | Promise<void>;
   onActivityTransition?: (event: NativeAgentActivityTransition) => void;
   /** Test seam for exercising deterministic detail-cache capacity eviction. */
   toolDetailCacheMaxEntries?: number;
@@ -286,8 +274,8 @@ export const OPENCODE_RECOVERY_RETRY_CEILING_MS = 60_000;
  * an internal invariant rather than anything the user could act on.
  */
 export const PARKED_DISPATCH_CONFLICT_MESSAGE =
-  "An earlier message is still awaiting confirmation."
-  + " Retry or discard it before sending another.";
+  "An earlier message is still awaiting confirmation." +
+  " Retry or discard it before sending another.";
 
 export const OPENCODE_RECOVERY_MAX_CANDIDATES = 1_024;
 export const OPENCODE_MANUAL_PROMPT_CLAIM_MS = 2 * 60_000;
@@ -347,9 +335,8 @@ export function nativeComposerControls(
   capabilities: NativeAgentCapabilities,
 ): NativeAgentComposerControl[] {
   if (!composer) return [];
-  const selectedModel = composer.models.find(
-    (model) => model.id === composer.selectedModelId,
-  ) ?? composer.models[0];
+  const selectedModel =
+    composer.models.find((model) => model.id === composer.selectedModelId) ?? composer.models[0];
   const controls: NativeAgentComposerControl[] = [];
   if (composer.models.length > 0) {
     controls.push({
@@ -376,9 +363,9 @@ export function nativeComposerControls(
     });
   }
   if (
-    capabilities.composer.speed
-    && composer.fastModeAvailable
-    && composer.fastModeEnabled !== null
+    capabilities.composer.speed &&
+    composer.fastModeAvailable &&
+    composer.fastModeEnabled !== null
   ) {
     controls.push({
       kind: "toggle",
@@ -398,10 +385,7 @@ export function nativeComposerControls(
       disabled,
     });
   }
-  if (
-    capabilities.composer.executionProfile
-    && (composer.executionProfiles?.length ?? 0) > 0
-  ) {
+  if (capabilities.composer.executionProfile && (composer.executionProfiles?.length ?? 0) > 0) {
     controls.push({
       kind: "select",
       id: "execution-profile",
@@ -415,10 +399,7 @@ export function nativeComposerControls(
       disabled,
     });
   }
-  if (
-    capabilities.composer.localSettings
-    && typeof composer.includeLocalSettings === "boolean"
-  ) {
+  if (capabilities.composer.localSettings && typeof composer.includeLocalSettings === "boolean") {
     controls.push({
       kind: "toggle",
       id: "local-settings",
@@ -428,8 +409,8 @@ export function nativeComposerControls(
     });
   }
   if (
-    capabilities.composer.promptSuggestions
-    && typeof composer.promptSuggestionsEnabled === "boolean"
+    capabilities.composer.promptSuggestions &&
+    typeof composer.promptSuggestionsEnabled === "boolean"
   ) {
     controls.push({
       kind: "toggle",
@@ -455,8 +436,10 @@ export function nonBlank(value: unknown): value is string {
  * the backend spawn bridge servers and attempt dispatch every two seconds.
  */
 export function isEnvironmentReadyForAgents(environment: Environment): boolean {
-  return environment.status === "running"
-    && (environment.setupPhase === "ready" || environment.setupScriptsComplete === true);
+  return (
+    environment.status === "running" &&
+    (environment.setupPhase === "ready" || environment.setupScriptsComplete === true)
+  );
 }
 
 export const LEGACY_TIMESTAMP_ENVIRONMENT_NAME = /^\d{8}-\d{6}$/;
@@ -469,8 +452,9 @@ export const COMPACT_TIMESTAMP_ENVIRONMENT_NAME = /^\d{15}$/;
  * guard on its own send path, and both must agree on which names are renameable.
  */
 export function isGeneratedEnvironmentName(name: string): boolean {
-  return LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name)
-    || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name);
+  return (
+    LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name) || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name)
+  );
 }
 
 export function nativeAgentSessionStorageKey(
@@ -510,7 +494,6 @@ export type PromptDispatchPreparation =
  * (OpenCode), while Claude/Codex also receive the logical key as a second layer
  * of idempotency at their bridges.
  */
-
 
 export {
   createHash,

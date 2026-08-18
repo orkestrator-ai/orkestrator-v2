@@ -113,9 +113,10 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
   ): Promise<NativeAgentDispatchOutcome> {
     let manualOpenCodeSession: PersistedNativeAgentSession | null = null;
     try {
-      const isManualOpenCode = input.agent === "opencode"
-        && input.origin !== "build-pipeline"
-        && input.origin !== "looped-review";
+      const isManualOpenCode =
+        input.agent === "opencode" &&
+        input.origin !== "build-pipeline" &&
+        input.origin !== "looped-review";
       if (isManualOpenCode) {
         manualOpenCodeSession = await this.ensureSession(input);
         await this.claimOpenCodeManualPrompt({
@@ -131,14 +132,12 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       // OpenCode manual claim. A normal send has no earlier record to preserve;
       // an explicit recovery retry does, and must leave it parked on failure.
       if (!preserveExistingPending) {
-        await this.storage.clearPendingNativeAgentDispatch(
-          nativeAgentSessionStorageKey(
-            input.environmentId,
-            input.agent,
-            input.logicalSessionKey,
-          ),
-          input.requestId,
-        ).catch(() => false);
+        await this.storage
+          .clearPendingNativeAgentDispatch(
+            nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
+            input.requestId,
+          )
+          .catch(() => false);
       }
       return {
         outcome: "rejected",
@@ -185,12 +184,8 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         // resolved. If the provider can prove that one landed, the block was
         // stale and this prompt was never in conflict with anything.
         if (
-          allowRecoveryRetry
-          && await this.settleAmbiguousDispatch(
-            input,
-            key,
-            error.pendingRequestId,
-          )
+          allowRecoveryRetry &&
+          (await this.settleAmbiguousDispatch(input, key, error.pendingRequestId))
         ) {
           return this.attemptDispatch(input, false, preserveExistingPending);
         }
@@ -213,10 +208,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         };
       }
       if (!preserveExistingPending) {
-        await this.storage.clearPendingNativeAgentDispatch(
-          key,
-          input.requestId,
-        ).catch(() => false);
+        await this.storage.clearPendingNativeAgentDispatch(key, input.requestId).catch(() => false);
       }
       return {
         outcome: "rejected",
@@ -241,11 +233,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       throw new Error("Recoverable native agent request ID must not be blank");
     }
     const discarded = await this.storage.clearPendingNativeAgentDispatch(
-      nativeAgentSessionStorageKey(
-        input.environmentId,
-        input.agent,
-        input.logicalSessionKey,
-      ),
+      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
       input.requestId,
     );
     if (discarded) {
@@ -278,17 +266,14 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       // Cheapest question first. Projection reads drive this on every refresh,
       // and a provider with no journal to ask must not cost a storage read each
       // time to establish that it still has nothing to say.
-      const provider = resolved ?? await this.provider(input);
+      const provider = resolved ?? (await this.provider(input));
       if (!provider.dispatchStatus) return false;
       // Re-read rather than trusting the caller's snapshot: a real
       // acknowledgement may have landed since, and confirming against a stale
       // record would resurrect a request id that is no longer parked.
       const session = await this.storage.getNativeAgentSession(key);
       if (session?.pendingDispatch?.requestId !== requestId) return false;
-      const status = await provider.dispatchStatus(
-        session.providerSessionId,
-        requestId,
-      );
+      const status = await provider.dispatchStatus(session.providerSessionId, requestId);
       if (status !== "dispatched") return false;
       return await this.storage.confirmNativeAgentDispatch(key, requestId);
     } catch {
@@ -351,26 +336,29 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         error: "The recoverable dispatch changed; refresh before retrying",
       };
     }
-    return this.dispatchIntentInternal({
-      environmentId: session.environmentId,
-      agent: session.agent,
-      logicalSessionKey: session.logicalSessionKey,
-      origin: session.origin,
-      interactionPolicy: session.interactionPolicy,
-      prompt: pending.prompt,
-      requestId: pending.requestId,
-      images: pending.images,
-      attachments: pending.attachments,
-      schema: pending.schema,
-      mode: pending.mode,
-      fastMode: pending.fastMode,
-      subAgent: pending.subAgent,
-      executionAgent: pending.executionAgent,
-      includeLocalSettings: pending.includeLocalSettings,
-      promptSuggestions: pending.promptSuggestions,
-      model: pending.model,
-      reasoningEffort: pending.reasoningEffort,
-    }, true);
+    return this.dispatchIntentInternal(
+      {
+        environmentId: session.environmentId,
+        agent: session.agent,
+        logicalSessionKey: session.logicalSessionKey,
+        origin: session.origin,
+        interactionPolicy: session.interactionPolicy,
+        prompt: pending.prompt,
+        requestId: pending.requestId,
+        images: pending.images,
+        attachments: pending.attachments,
+        schema: pending.schema,
+        mode: pending.mode,
+        fastMode: pending.fastMode,
+        subAgent: pending.subAgent,
+        executionAgent: pending.executionAgent,
+        includeLocalSettings: pending.includeLocalSettings,
+        promptSuggestions: pending.promptSuggestions,
+        model: pending.model,
+        reasoningEffort: pending.reasoningEffort,
+      },
+      true,
+    );
   }
 
   async stopProjectionSession(
@@ -391,10 +379,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (!resolved.provider.stopBackgroundTask) {
       throw new Error(`${input.agent} does not support background tasks`);
     }
-    await resolved.provider.stopBackgroundTask(
-      resolved.session.providerSessionId,
-      input.taskId,
-    );
+    await resolved.provider.stopBackgroundTask(resolved.session.providerSessionId, input.taskId);
     return this.refreshProjection(input, true);
   }
 
@@ -406,9 +391,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (!resolved.provider.dismissSuggestedPrompt) {
       throw new Error(`${input.agent} does not support prompt suggestions`);
     }
-    await resolved.provider.dismissSuggestedPrompt(
-      resolved.session.providerSessionId,
-    );
+    await resolved.provider.dismissSuggestedPrompt(resolved.session.providerSessionId);
     return this.refreshProjection(input, true);
   }
 
@@ -433,9 +416,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
       const parsed = raw ? Date.parse(raw) : Number.NaN;
       return Number.isNaN(parsed) ? 0 : parsed;
     };
-    return [...entries]
-      .sort((left, right) => activityAt(right) - activityAt(left))
-      .slice(0, 512);
+    return [...entries].sort((left, right) => activityAt(right) - activityAt(left)).slice(0, 512);
   }
 
   async resumeProjectionSession(
@@ -462,10 +443,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     );
     const existing = await this.storage.getNativeAgentSession(key);
     this.invalidateProjection(key);
-    const resumedId = await provider.resumeSession(
-      input.providerSessionId,
-      input.controls,
-    );
+    const resumedId = await provider.resumeSession(input.providerSessionId, input.controls);
     await this.adoptSession({
       ...input,
       providerSessionId: resumedId,
@@ -490,10 +468,7 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (!resolved.provider.forkSession) {
       throw new Error(`${input.agent} does not support session forks`);
     }
-    return resolved.provider.forkSession(
-      resolved.session.providerSessionId,
-      input.messageId,
-    );
+    return resolved.provider.forkSession(resolved.session.providerSessionId, input.messageId);
   }
 
   async performProjectionAction(
@@ -533,44 +508,55 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     const current = await this.refreshProjection(input, true);
     const composer = current?.composer;
     if (input.update.modelId !== undefined) {
-      if (!composer?.models.some((model: NativeAgentComposerState["models"][number]) => model.id === input.update.modelId)) {
+      if (
+        !composer?.models.some(
+          (model: NativeAgentComposerState["models"][number]) => model.id === input.update.modelId,
+        )
+      ) {
         throw new Error("Native agent model selection is invalid");
       }
     }
     if (input.update.reasoningId !== undefined) {
       const modelId = input.update.modelId ?? composer?.selectedModelId;
-      const model = composer?.models.find((candidate: NativeAgentComposerState["models"][number]) => candidate.id === modelId);
-      if (!model?.reasoning?.some((option: NonNullable<NativeAgentComposerState["models"][number]["reasoning"]>[number]) => option.id === input.update.reasoningId)) {
+      const model = composer?.models.find(
+        (candidate: NativeAgentComposerState["models"][number]) => candidate.id === modelId,
+      );
+      if (
+        !model?.reasoning?.some(
+          (option: NonNullable<NativeAgentComposerState["models"][number]["reasoning"]>[number]) =>
+            option.id === input.update.reasoningId,
+        )
+      ) {
         throw new Error("Native agent reasoning selection is invalid");
       }
     }
-    if (
-      input.update.fastMode !== undefined
-      && composer?.fastModeAvailable !== true
-    ) {
+    if (input.update.fastMode !== undefined && composer?.fastModeAvailable !== true) {
       throw new Error("Native agent fast mode is unavailable");
     }
     if (
-      input.update.mode !== undefined
-      && !composer?.modes.some((mode: NativeAgentComposerState["modes"][number]) => mode.id === input.update.mode)
+      input.update.mode !== undefined &&
+      !composer?.modes.some(
+        (mode: NativeAgentComposerState["modes"][number]) => mode.id === input.update.mode,
+      )
     ) {
       throw new Error("Native agent conversation mode is invalid");
     }
     if (
-      input.update.executionProfileId !== undefined
-      && input.update.executionProfileId !== null
-      && !composer?.executionProfiles?.some(
-        (profile: NonNullable<NativeAgentComposerState["executionProfiles"]>[number]) => profile.id === input.update.executionProfileId,
-      )
+      input.update.executionProfileId !== undefined &&
+      input.update.executionProfileId !== null &&
+      !composer?.executionProfiles?.some(
+        (profile: NonNullable<NativeAgentComposerState["executionProfiles"]>[number]) =>
+          profile.id === input.update.executionProfileId,
+      ) &&
       // An empty list means the provider's agent listing failed or has not
       // arrived, not that the id is wrong — the compose bar still has to offer
       // Plan/Build there, and a 400 would strand the user on whichever agent
       // the session happened to start with. Only the two built-in ids are
       // exempt: anything else is unverifiable *and* unguessable, and it is
       // forwarded verbatim as the provider's `agent` name.
-      && !(
-        (composer?.executionProfiles?.length ?? 0) === 0
-        && isFallbackExecutionProfileId(input.update.executionProfileId)
+      !(
+        (composer?.executionProfiles?.length ?? 0) === 0 &&
+        isFallbackExecutionProfileId(input.update.executionProfileId)
       )
     ) {
       throw new Error("Native agent execution profile is invalid");
@@ -624,9 +610,9 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
   protected assertProjectionInput(input: NativeAgentProjectionInput): void {
     this.assertAcceptingWork();
     if (
-      !nonBlank(input.environmentId)
-      || !nonBlank(input.logicalSessionKey)
-      || !BUILD_PIPELINE_AGENTS.includes(input.agent)
+      !nonBlank(input.environmentId) ||
+      !nonBlank(input.logicalSessionKey) ||
+      !BUILD_PIPELINE_AGENTS.includes(input.agent)
     ) {
       throw new Error("Invalid native agent projection request");
     }
@@ -649,6 +635,4 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     });
     return { key, session, provider };
   }
-
-
 }

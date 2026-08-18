@@ -39,16 +39,20 @@ const change: GitFileChange = {
   deletions: 1,
 };
 
-const fileTree: FileNode[] = [{
-  name: "src",
-  path: "src",
-  isDirectory: true,
-  children: [{
-    name: "App.tsx",
-    path: "src/App.tsx",
-    isDirectory: false,
-  }],
-}];
+const fileTree: FileNode[] = [
+  {
+    name: "src",
+    path: "src",
+    isDirectory: true,
+    children: [
+      {
+        name: "App.tsx",
+        path: "src/App.tsx",
+        isDirectory: false,
+      },
+    ],
+  },
+];
 
 describe("files panel views", () => {
   beforeEach(() => {
@@ -79,11 +83,13 @@ describe("files panel views", () => {
     act(() => useFilesPanelStore.setState({ isLoadingTree: false, fileTree: [] }));
     expect(screen.getByText("No files found")).toBeTruthy();
 
-    act(() => useFilesPanelStore.setState({
-      fileTree,
-      expandedFolders: ["src"],
-      changes: [change],
-    }));
+    act(() =>
+      useFilesPanelStore.setState({
+        fileTree,
+        expandedFolders: ["src"],
+        changes: [change],
+      }),
+    );
     await waitFor(() => expect(screen.getByText("App.tsx")).toBeTruthy());
     fireEvent.click(screen.getByText("App.tsx"));
     expect(createFileTab).toHaveBeenCalledWith("src/App.tsx");
@@ -151,8 +157,8 @@ describe("files panel views", () => {
     });
     expect(useFilesPanelStore.getState().activeTab).toBe("all-files");
 
-    const iconButtons = Array.from(container.querySelectorAll("button")).filter(
-      (button) => button.querySelector("svg"),
+    const iconButtons = Array.from(container.querySelectorAll("button")).filter((button) =>
+      button.querySelector("svg"),
     );
     fireEvent.click(iconButtons.at(-2)!);
     expect(onRefresh).toHaveBeenCalledTimes(1);

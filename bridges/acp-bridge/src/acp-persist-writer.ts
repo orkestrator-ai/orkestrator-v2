@@ -82,18 +82,13 @@ export function boundPersistedSnapshot(snapshot: PersistedState): PersistedState
     const originalCount = session.messages.length;
     const windowed = boundTranscriptResponse(session.messages, targetBytes, {
       envelopeReserveBytes: 0,
-      contentFallbackBytes: Math.max(0, Math.min(
-        1024 * 1024,
-        targetBytes - 4 * 1024,
-      )),
+      contentFallbackBytes: Math.max(0, Math.min(1024 * 1024, targetBytes - 4 * 1024)),
     });
     session.messages = windowed.overflowed ? [] : windowed.messages;
     const omittedMessages = windowed.overflowed
       ? originalCount
-      : windowed.messageWindow.omittedMessages ?? 0;
-    const omittedParts = windowed.overflowed
-      ? 0
-      : windowed.messageWindow.omittedParts ?? 0;
+      : (windowed.messageWindow.omittedMessages ?? 0);
+    const omittedParts = windowed.overflowed ? 0 : (windowed.messageWindow.omittedParts ?? 0);
     session.droppedMessages = (session.droppedMessages ?? 0) + omittedMessages;
     session.droppedParts = (session.droppedParts ?? 0) + omittedParts;
     session.transcriptTruncated = true;
@@ -134,9 +129,7 @@ export function persistedSnapshot(): PersistedState {
       for (const rawEntry of [...state.promptJournal.values()].reverse()) {
         const isUnfinished = rawEntry.state === "prepared" || rawEntry.state === "accepted";
         if (isUnfinished !== unfinished) continue;
-        const entry = isUnfinished
-          ? { ...rawEntry, state: "ambiguous" as const }
-          : rawEntry;
+        const entry = isUnfinished ? { ...rawEntry, state: "ambiguous" as const } : rawEntry;
         const bytes = Buffer.byteLength(JSON.stringify(entry));
         if (retainedPromptJournalBytes + bytes > MAX_PERSISTED_PROMPT_JOURNAL_BYTES) continue;
         retained.unshift(entry);
@@ -159,7 +152,9 @@ export function persistedSnapshot(): PersistedState {
       status: state.status === "running" ? "error" : state.status,
       ...(state.status === "running"
         ? { error: `${provider} prompt outcome is unknown after bridge restart` }
-        : state.error ? { error: state.error } : {}),
+        : state.error
+          ? { error: state.error }
+          : {}),
       messages: state.messages,
       ...(state.droppedMessages > 0 ? { droppedMessages: state.droppedMessages } : {}),
       ...(state.droppedParts > 0 ? { droppedParts: state.droppedParts } : {}),
@@ -181,22 +176,27 @@ export function persistedSnapshot(): PersistedState {
 export function schedulePersist(): void {
   if (!stateFile || persistenceScheduled) return;
   setPersistenceScheduled(true);
-  const operation = persistenceTail.then(async () => {
-    await new Promise<void>((resolvePromise) => {
-      const timer = setTimeout(resolvePromise, 25);
-      timer.unref();
-    });
-    setPersistenceScheduled(false);
-    await writePersistedState();
-  }, async () => {
-    setPersistenceScheduled(false);
-    await writePersistedState();
-  });
-  setPersistenceTail(operation.catch((error) => {
-    console.warn(
-      `[acp-bridge] Failed to persist bounded state: ${error instanceof Error ? error.message : "unknown error"}`,
-    );
-  }));
+  const operation = persistenceTail.then(
+    async () => {
+      await new Promise<void>((resolvePromise) => {
+        const timer = setTimeout(resolvePromise, 25);
+        timer.unref();
+      });
+      setPersistenceScheduled(false);
+      await writePersistedState();
+    },
+    async () => {
+      setPersistenceScheduled(false);
+      await writePersistedState();
+    },
+  );
+  setPersistenceTail(
+    operation.catch((error) => {
+      console.warn(
+        `[acp-bridge] Failed to persist bounded state: ${error instanceof Error ? error.message : "unknown error"}`,
+      );
+    }),
+  );
 }
 
 export function persistState(): Promise<void> {

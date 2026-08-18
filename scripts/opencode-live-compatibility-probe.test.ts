@@ -92,9 +92,7 @@ describe("local SDK and network discovery", () => {
       await readFile(join(import.meta.dir, "..", "apps", "web", "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
 
-    expect(await readPinnedSdkVersion()).toBe(
-      manifest.dependencies?.["@opencode-ai/sdk"],
-    );
+    expect(await readPinnedSdkVersion()).toBe(manifest.dependencies?.["@opencode-ai/sdk"]);
   });
 
   test("reads the version from the installed SDK package", async () => {
@@ -153,9 +151,9 @@ describe("parseCliVersion", () => {
   });
 
   test("ignores an update notice appended after the version line", () => {
-    expect(
-      parseCliVersion("1.18.11\n\nUpdate available: 1.19.0\nRun `opencode upgrade`\n"),
-    ).toBe("1.18.11");
+    expect(parseCliVersion("1.18.11\n\nUpdate available: 1.19.0\nRun `opencode upgrade`\n")).toBe(
+      "1.18.11",
+    );
   });
 
   test("reads a version from a labelled first line", () => {
@@ -171,38 +169,50 @@ describe("waitForHealth", () => {
   test("gives up after the configured number of attempts", async () => {
     let attempts = 0;
     await expect(
-      waitForHealth("http://127.0.0.1:1", { exitCode: null }, {
-        fetchImpl: async () => {
-          attempts += 1;
-          throw new Error("connection refused");
+      waitForHealth(
+        "http://127.0.0.1:1",
+        { exitCode: null },
+        {
+          fetchImpl: async () => {
+            attempts += 1;
+            throw new Error("connection refused");
+          },
+          sleep: async () => {},
+          attempts: 5,
         },
-        sleep: async () => {},
-        attempts: 5,
-      }),
+      ),
     ).rejects.toThrow("OpenCode did not become healthy");
     expect(attempts).toBe(5);
   });
 
   test("stops as soon as the child has exited", async () => {
     await expect(
-      waitForHealth("http://127.0.0.1:1", { exitCode: 3 }, {
-        fetchImpl: async () => healthResponse({ healthy: true, version: VERSION }),
-        sleep: async () => {},
-      }),
+      waitForHealth(
+        "http://127.0.0.1:1",
+        { exitCode: 3 },
+        {
+          fetchImpl: async () => healthResponse({ healthy: true, version: VERSION }),
+          sleep: async () => {},
+        },
+      ),
     ).rejects.toThrow("OpenCode exited before becoming healthy (3)");
   });
 
   test("retries a non-OK response before succeeding", async () => {
     let attempts = 0;
-    const health = await waitForHealth("http://127.0.0.1:1", { exitCode: null }, {
-      fetchImpl: async () => {
-        attempts += 1;
-        return attempts < 3
-          ? healthResponse({}, 503)
-          : healthResponse({ healthy: true, version: VERSION });
+    const health = await waitForHealth(
+      "http://127.0.0.1:1",
+      { exitCode: null },
+      {
+        fetchImpl: async () => {
+          attempts += 1;
+          return attempts < 3
+            ? healthResponse({}, 503)
+            : healthResponse({ healthy: true, version: VERSION });
+        },
+        sleep: async () => {},
       },
-      sleep: async () => {},
-    });
+    );
     expect(health).toEqual({ healthy: true, version: VERSION });
     expect(attempts).toBe(3);
   });

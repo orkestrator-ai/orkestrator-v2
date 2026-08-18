@@ -15,7 +15,14 @@ try {
   });
   const result = spawnSync(
     "docker",
-    ["build", "-t", profile.dockerImage, "-f", path.join(repositoryRoot, "docker", "Dockerfile"), repositoryRoot],
+    [
+      "build",
+      "-t",
+      profile.dockerImage,
+      "-f",
+      path.join(repositoryRoot, "docker", "Dockerfile"),
+      repositoryRoot,
+    ],
     { stdio: "inherit" },
   );
   if (result.status !== 0) process.exit(result.status ?? 1);

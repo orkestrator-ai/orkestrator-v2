@@ -47,7 +47,9 @@ describe("main-process web client controls", () => {
     });
     await expect(controls.setWebClientEnabled(false)).resolves.toMatchObject({ running: false });
     await expect(controls.getGatewayTokenSettings()).rejects.toThrow("not initialized");
-    await expect(controls.setGatewayToken("replacement-token-123456")).rejects.toThrow("not initialized");
+    await expect(controls.setGatewayToken("replacement-token-123456")).rejects.toThrow(
+      "not initialized",
+    );
   });
 
   test("reads the target lazily so initialization after registration is observed", () => {

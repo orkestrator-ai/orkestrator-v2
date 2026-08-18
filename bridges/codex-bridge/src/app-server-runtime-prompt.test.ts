@@ -15,12 +15,14 @@ import {
   waitUntil,
 } from "./app-server-runtime-test-harness.js";
 
-
 describe("at-most-once dispatch", () => {
   test("a duplicate request id while running attaches to the existing turn", async () => {
-    const h = await harness({}, {
-      now: () => Date.parse("2026-08-01T12:34:56.000Z"),
-    });
+    const h = await harness(
+      {},
+      {
+        now: () => Date.parse("2026-08-01T12:34:56.000Z"),
+      },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "x", requestId: "req-1", attachments: [] });
 
@@ -39,8 +41,7 @@ describe("at-most-once dispatch", () => {
         turnStartedAt: "2026-08-01T12:34:56.000Z",
       },
     });
-    expect(h.runtime.getStatus(sessionId)?.turnStartedAt)
-      .toBe("2026-08-01T12:34:56.000Z");
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt).toBe("2026-08-01T12:34:56.000Z");
     // Exactly one turn was dispatched.
     expect(h.child().requests.filter((r) => r.method === "turn/start")).toHaveLength(1);
   });
@@ -61,7 +62,10 @@ describe("at-most-once dispatch", () => {
       attachments: [],
     });
 
-    expect(again).toMatchObject({ ok: true, result: { status: "already-processed", duplicate: true } });
+    expect(again).toMatchObject({
+      ok: true,
+      result: { status: "already-processed", duplicate: true },
+    });
     expect(h.child().requests.filter((r) => r.method === "turn/start")).toHaveLength(1);
   });
 
@@ -120,17 +124,20 @@ describe("at-most-once dispatch", () => {
 
   test("an initial prompt retries one definite overload inside the bridge", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "turn-after-overload" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "turn-after-overload" } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 0 });
+      { initialPromptRetryDelayMs: 0 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-1";
 
@@ -147,8 +154,7 @@ describe("at-most-once dispatch", () => {
         turnId: "turn-after-overload",
       },
     });
-    expect(h.child().requests.filter((request) => request.method === "turn/start"))
-      .toHaveLength(2);
+    expect(h.child().requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
     expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
       action: "attach",
       record: { turnId: "turn-after-overload" },
@@ -156,24 +162,28 @@ describe("at-most-once dispatch", () => {
   });
 
   test("a second definite initial-prompt rejection becomes durably retryable", async () => {
-    const h = await harness({
-      "turn/start": () => {
-        const error = new Error("ingress queue full");
-        (error as { rpcCode?: number }).rpcCode = -32001;
-        throw error;
+    const h = await harness(
+      {
+        "turn/start": () => {
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        },
       },
-    }, { initialPromptRetryDelayMs: 0 });
+      { initialPromptRetryDelayMs: 0 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-second-failure";
 
-    expect(await h.runtime.prompt(sessionId, {
-      prompt: "start once",
-      requestId,
-      attachments: [],
-    })).toMatchObject({ ok: false, status: 503 });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "start once",
+        requestId,
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: false, status: 503 });
 
-    expect(h.child().requests.filter((request) => request.method === "turn/start"))
-      .toHaveLength(2);
+    expect(h.child().requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
     expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
       action: "dispatch",
       record: { state: "retryable" },
@@ -186,17 +196,20 @@ describe("at-most-once dispatch", () => {
 
   test("a deleted session cannot dispatch its delayed initial-prompt retry", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "must-not-run" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "must-not-run" } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 30 });
+      { initialPromptRetryDelayMs: 30 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-deleted";
     const pending = h.runtime.prompt(sessionId, {
@@ -214,17 +227,20 @@ describe("at-most-once dispatch", () => {
 
   test("shutdown cancels a delayed retry and leaves a durable retry marker", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "must-not-run" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "must-not-run" } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 30 });
+      { initialPromptRetryDelayMs: 30 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-stopping";
     const pending = h.runtime.prompt(sessionId, {
@@ -251,17 +267,20 @@ describe("at-most-once dispatch", () => {
    */
   test("shutdown during the retry window settles the thread instead of leaving it starting", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "must-not-run" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "must-not-run" } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 60 });
+      { initialPromptRetryDelayMs: 60 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const pending = h.runtime.prompt(sessionId, {
       prompt: "start once",
@@ -281,17 +300,20 @@ describe("at-most-once dispatch", () => {
 
   test("a deleted session's retry window does not wedge a thread another tab holds", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: `turn-${attempts}` } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: `turn-${attempts}` } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 250 });
+      { initialPromptRetryDelayMs: 250 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const pending = h.runtime.prompt(sessionId, {
       prompt: "start once",
@@ -322,17 +344,20 @@ describe("at-most-once dispatch", () => {
 
   test("a concurrent retry of the same request id cannot double-dispatch", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "turn-single" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "turn-single" } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 200 });
+      { initialPromptRetryDelayMs: 200 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-concurrent";
     const pending = h.runtime.prompt(sessionId, {
@@ -355,30 +380,32 @@ describe("at-most-once dispatch", () => {
     expect(await pending).toMatchObject({ ok: true, result: { turnId: "turn-single" } });
     // One definite rejection plus one accepted dispatch: never two accepted ones.
     expect(attempts).toBe(2);
-    expect(h.child().requests.filter((request) => request.method === "turn/start"))
-      .toHaveLength(2);
+    expect(h.child().requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
   });
 
   test("a failed retryable journal write during the window still fails closed", async () => {
     let attempts = 0;
     const bridgeDir = join(codexHome, "orkestrator-bridge");
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          // Break the journal after the prepared write landed, so the retryable
-          // marker — which flushes without failing closed — cannot persist.
-          rmSync(join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`), { force: true });
-          mkdirSync(join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`));
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "must-not-run" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            // Break the journal after the prepared write landed, so the retryable
+            // marker — which flushes without failing closed — cannot persist.
+            rmSync(join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`), { force: true });
+            mkdirSync(join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`));
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "must-not-run" } };
+        },
+        // Nothing carries the request id, so the failed retry is provably absent.
+        "thread/read": () => ({ thread: threadPayload("thread-1", { turns: [] }) }),
       },
-      // Nothing carries the request id, so the failed retry is provably absent.
-      "thread/read": () => ({ thread: threadPayload("thread-1", { turns: [] }) }),
-    }, { initialPromptRetryDelayMs: 0 });
+      { initialPromptRetryDelayMs: 0 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
 
     const outcome = await h.runtime.prompt(sessionId, {
@@ -431,17 +458,20 @@ describe("at-most-once dispatch", () => {
 
   test("a delayed retry succeeds and settles the phase after the wait", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "turn-after-wait" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "turn-after-wait" } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 40 });
+      { initialPromptRetryDelayMs: 40 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-delayed-success";
 
@@ -463,17 +493,20 @@ describe("at-most-once dispatch", () => {
 
   test("a retry preserves optimistic messages when restart races the retryable journal write", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "turn-after-restart" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "turn-after-restart" } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 0 });
+      { initialPromptRetryDelayMs: 0 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-restarted-delay";
     const retryableWriteStarted = deferredSignal();
@@ -503,31 +536,38 @@ describe("at-most-once dispatch", () => {
       result: { requestId, turnId: "turn-after-restart" },
     });
     expect(h.children).toHaveLength(2);
-    expect(h.children[0]!.requests.filter((request) => request.method === "turn/start"))
-      .toHaveLength(1);
-    expect(h.children[1]!.requests.filter((request) => request.method === "turn/start"))
-      .toHaveLength(1);
+    expect(
+      h.children[0]!.requests.filter((request) => request.method === "turn/start"),
+    ).toHaveLength(1);
+    expect(
+      h.children[1]!.requests.filter((request) => request.method === "turn/start"),
+    ).toHaveLength(1);
     expect(h.runtime.getJournal().classify(requestId)).toMatchObject({
       action: "attach",
       record: { turnId: "turn-after-restart" },
     });
-    expect((await h.runtime.getMessages(sessionId))?.map((message) => message.role))
-      .toEqual(["user", "assistant"]);
+    expect((await h.runtime.getMessages(sessionId))?.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+    ]);
   });
 
   test("never exposes an idle replacement context while a retry is still dispatching", async () => {
     let attempts = 0;
-    const h = await harness({
-      "turn/start": () => {
-        attempts += 1;
-        if (attempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "turn-after-restart" } };
+    const h = await harness(
+      {
+        "turn/start": () => {
+          attempts += 1;
+          if (attempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "turn-after-restart" } };
+        },
       },
-    }, { initialPromptRetryDelayMs: 80 });
+      { initialPromptRetryDelayMs: 80 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
 
     // The replacement context is attached, then persisted, then dispatched. If
@@ -560,22 +600,25 @@ describe("at-most-once dispatch", () => {
   test("a no-id replacement thread settles the stale retry and remains reusable", async () => {
     let turnAttempts = 0;
     let threadStarts = 0;
-    const h = await harness({
-      "thread/start": () => {
-        threadStarts += 1;
-        if (threadStarts === 2) return { thread: {} };
-        return { thread: threadPayload(`thread-${threadStarts}`) };
+    const h = await harness(
+      {
+        "thread/start": () => {
+          threadStarts += 1;
+          if (threadStarts === 2) return { thread: {} };
+          return { thread: threadPayload(`thread-${threadStarts}`) };
+        },
+        "turn/start": () => {
+          turnAttempts += 1;
+          if (turnAttempts === 1) {
+            const error = new Error("ingress queue full");
+            (error as { rpcCode?: number }).rpcCode = -32001;
+            throw error;
+          }
+          return { turn: { id: "turn-after-no-id" } };
+        },
       },
-      "turn/start": () => {
-        turnAttempts += 1;
-        if (turnAttempts === 1) {
-          const error = new Error("ingress queue full");
-          (error as { rpcCode?: number }).rpcCode = -32001;
-          throw error;
-        }
-        return { turn: { id: "turn-after-no-id" } };
-      },
-    }, { initialPromptRetryDelayMs: 80 });
+      { initialPromptRetryDelayMs: 80 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-no-id-replacement";
 
@@ -600,30 +643,35 @@ describe("at-most-once dispatch", () => {
       record: { state: "retryable" },
     });
 
-    expect(await h.runtime.prompt(sessionId, {
-      prompt: "retry after replacement failure",
-      requestId,
-      attachments: [],
-    })).toMatchObject({ ok: true, result: { turnId: "turn-after-no-id" } });
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "retry after replacement failure",
+        requestId,
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: true, result: { turnId: "turn-after-no-id" } });
     expect(turnAttempts).toBe(2);
   });
 
   test("a thrown replacement thread start settles without dereferencing null context", async () => {
     let turnAttempts = 0;
     let threadStarts = 0;
-    const h = await harness({
-      "thread/start": () => {
-        threadStarts += 1;
-        if (threadStarts === 2) throw new Error("replacement thread unavailable");
-        return { thread: threadPayload(`thread-${threadStarts}`) };
+    const h = await harness(
+      {
+        "thread/start": () => {
+          threadStarts += 1;
+          if (threadStarts === 2) throw new Error("replacement thread unavailable");
+          return { thread: threadPayload(`thread-${threadStarts}`) };
+        },
+        "turn/start": () => {
+          turnAttempts += 1;
+          const error = new Error("ingress queue full");
+          (error as { rpcCode?: number }).rpcCode = -32001;
+          throw error;
+        },
       },
-      "turn/start": () => {
-        turnAttempts += 1;
-        const error = new Error("ingress queue full");
-        (error as { rpcCode?: number }).rpcCode = -32001;
-        throw error;
-      },
-    }, { initialPromptRetryDelayMs: 80 });
+      { initialPromptRetryDelayMs: 80 },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const requestId = "initial-prompt:env-1:tab-thrown-replacement";
 
@@ -658,17 +706,18 @@ describe("at-most-once dispatch", () => {
     });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
 
-    expect(await h.runtime.prompt(sessionId, {
-      prompt: "must not dispatch",
-      requestId: "new-request",
-      attachments: [],
-    })).toMatchObject({
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "must not dispatch",
+        requestId: "new-request",
+        attachments: [],
+      }),
+    ).toMatchObject({
       ok: false,
       status: 503,
       error: "Dispatch journal safety-record limit (1) is exhausted",
     });
-    expect(h.child().requests.some((request) => request.method === "turn/start"))
-      .toBe(false);
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
     expect(h.runtime.getJournal().classify("existing").action).toBe("reconcile");
     expect(await h.runtime.getMessages(sessionId)).toEqual([]);
     expect(
@@ -687,18 +736,24 @@ describe("at-most-once dispatch", () => {
     const h = await harness({}, { dispatchJournalMaxBytes: 256 });
     const { sessionId } = h.runtime.createSession({ mode: "build" });
 
-    expect(await h.runtime.prompt(sessionId, {
-      prompt: "must not dispatch",
-      requestId: "blocked-by-oversized-journal",
-      attachments: [],
-    })).toMatchObject({
+    expect(
+      await h.runtime.prompt(sessionId, {
+        prompt: "must not dispatch",
+        requestId: "blocked-by-oversized-journal",
+        attachments: [],
+      }),
+    ).toMatchObject({
       ok: false,
       status: 503,
       error: "Dispatch journal exceeds its 256-byte read limit",
     });
-    expect(h.child().requests.some((request) =>
-      request.method === "thread/start" || request.method === "turn/start"
-    )).toBe(false);
+    expect(
+      h
+        .child()
+        .requests.some(
+          (request) => request.method === "thread/start" || request.method === "turn/start",
+        ),
+    ).toBe(false);
   });
 
   test("a retryable dispatch remains visible after a bridge restart", async () => {
@@ -711,11 +766,13 @@ describe("at-most-once dispatch", () => {
     });
     const { sessionId } = first.runtime.createSession({ mode: "build" });
     const requestId = "req-restored-retryable";
-    expect(await first.runtime.prompt(sessionId, {
-      prompt: "try once",
-      requestId,
-      attachments: [],
-    })).toMatchObject({ ok: false, status: 503 });
+    expect(
+      await first.runtime.prompt(sessionId, {
+        prompt: "try once",
+        requestId,
+        attachments: [],
+      }),
+    ).toMatchObject({ ok: false, status: 503 });
     expect(first.runtime.getStatus(sessionId)?.unconfirmedDispatch).toEqual({
       requestId,
       retryable: true,
@@ -735,9 +792,7 @@ describe("at-most-once dispatch", () => {
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     const bridgeDir = join(codexHome, "orkestrator-bridge");
     mkdirSync(bridgeDir, { recursive: true });
-    mkdirSync(
-      join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`),
-    );
+    mkdirSync(join(bridgeDir, `dispatch-journal-${hashCwd("/tmp/ws")}.json`));
 
     const outcome = await h.runtime.prompt(sessionId, {
       prompt: "must not execute",
@@ -745,8 +800,7 @@ describe("at-most-once dispatch", () => {
       attachments: [],
     });
     expect(outcome).toMatchObject({ ok: false, status: 503 });
-    expect(h.child().requests.some((request) => request.method === "turn/start"))
-      .toBe(false);
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
   });
 
   /**
@@ -807,10 +861,8 @@ describe("at-most-once dispatch", () => {
      * already retired.
      */
     const survivingMessages = (await h.runtime.getMessages(sessionId))!;
-    expect(survivingMessages.map((message) => message.content))
-      .not.toContain("second");
-    expect(survivingMessages.some((message) => message.content === "first"))
-      .toBe(true);
+    expect(survivingMessages.map((message) => message.content)).not.toContain("second");
+    expect(survivingMessages.some((message) => message.content === "first")).toBe(true);
     expect(
       h.events.filter((event) => typeof event.data?.removedMessageId === "string"),
     ).toHaveLength(2);
@@ -827,21 +879,24 @@ describe("at-most-once dispatch", () => {
   test("an ambiguous dispatch that did run stays running until its terminal event", async () => {
     let hangNextTurn = false;
     let now = Date.parse("2026-08-01T12:00:00.000Z");
-    const h = await harness({
-      "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
-      // The write landed: app-server is executing this request right now.
-      "thread/read": () => ({
-        thread: threadPayload("thread-1", {
-          turns: [
-            {
-              id: "turn-9",
-              status: "inProgress",
-              items: [{ type: "userMessage", clientId: "req-1" }],
-            },
-          ],
+    const h = await harness(
+      {
+        "turn/start": () => (hangNextTurn ? NO_RESPONSE : { turn: { id: "turn-1" } }),
+        // The write landed: app-server is executing this request right now.
+        "thread/read": () => ({
+          thread: threadPayload("thread-1", {
+            turns: [
+              {
+                id: "turn-9",
+                status: "inProgress",
+                items: [{ type: "userMessage", clientId: "req-1" }],
+              },
+            ],
+          }),
         }),
-      }),
-    }, { now: () => now });
+      },
+      { now: () => now },
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, { prompt: "first", requestId: "req-0", attachments: [] });
     const firstTurnIdle = h.waitForEvent(
@@ -876,8 +931,7 @@ describe("at-most-once dispatch", () => {
 
     // Reporting idle here would let the build pipeline advance on a live turn.
     expect(phaseToExternalStatus(h.runtime.getStatus(sessionId)!.phase)).toBe("running");
-    expect(h.runtime.getStatus(sessionId)?.turnStartedAt)
-      .toBe("2026-08-01T12:05:00.000Z");
+    expect(h.runtime.getStatus(sessionId)?.turnStartedAt).toBe("2026-08-01T12:05:00.000Z");
     expect(h.runtime.getJournal().get("req-1")).toMatchObject({ state: "accepted" });
     /*
      * The safety half of retraction. This turn is executing, so withdrawing its
@@ -885,13 +939,9 @@ describe("at-most-once dispatch", () => {
      * output is about to stream into. Only a *proven* non-dispatch retracts.
      */
     expect(
-      (await h.runtime.getMessages(sessionId))!.some(
-        (message) => message.content === "second",
-      ),
+      (await h.runtime.getMessages(sessionId))!.some((message) => message.content === "second"),
     ).toBe(true);
-    expect(
-      h.events.some((event) => typeof event.data?.removedMessageId === "string"),
-    ).toBe(false);
+    expect(h.events.some((event) => typeof event.data?.removedMessageId === "string")).toBe(false);
 
     // The adopted turn is tracked, so its terminal event finalizes normally.
     const adoptedTurnIdle = h.waitForEvent(
@@ -965,16 +1015,12 @@ describe("at-most-once dispatch", () => {
     await h.drain();
 
     expect(
-      h.events.filter((event) =>
-        event.type === "session.structured-output"
-        && event.sessionId === sessionId
+      h.events.filter(
+        (event) => event.type === "session.structured-output" && event.sessionId === sessionId,
       ),
     ).toEqual([]);
     expect(
-      h.events.filter((event) =>
-        event.type === "session.error"
-        && event.sessionId === sessionId
-      ),
+      h.events.filter((event) => event.type === "session.error" && event.sessionId === sessionId),
     ).toEqual([]);
     expect(h.runtime.getStatus(sessionId)).toMatchObject({
       status: "running",
@@ -1001,13 +1047,12 @@ describe("at-most-once dispatch", () => {
     });
     await h.drain();
 
-    expect(h.runtime.getStructuredOutput(sessionId, "structured-lost-response"))
-      .toMatchObject({
-        structuredOutput: {
-          ok: true,
-          value: { summary: "Recovered successfully" },
-        },
-      });
+    expect(h.runtime.getStructuredOutput(sessionId, "structured-lost-response")).toMatchObject({
+      structuredOutput: {
+        ok: true,
+        value: { summary: "Recovered successfully" },
+      },
+    });
   });
 
   test("events emitted while an ambiguous dispatch reconciles are not lost", async () => {
@@ -1145,19 +1190,19 @@ describe("at-most-once dispatch", () => {
      * and a reconciled `absent` retract.
      */
     expect(
-      (await h.runtime.getMessages(sessionId))!.some(
-        (message) => message.content === "second",
-      ),
+      (await h.runtime.getMessages(sessionId))!.some((message) => message.content === "second"),
     ).toBe(true);
-    expect(
-      h.events.some((event) => typeof event.data?.removedMessageId === "string"),
-    ).toBe(false);
+    expect(h.events.some((event) => typeof event.data?.removedMessageId === "string")).toBe(false);
     hangNextTurn = false;
-    expect((await h.runtime.prompt(sessionId, {
-      prompt: "third",
-      requestId: "req-2",
-      attachments: [],
-    })).ok).toBe(true);
+    expect(
+      (
+        await h.runtime.prompt(sessionId, {
+          prompt: "third",
+          requestId: "req-2",
+          attachments: [],
+        })
+      ).ok,
+    ).toBe(true);
   });
 
   test("config for a session with no thread yet is reported durable", async () => {
@@ -1178,10 +1223,11 @@ describe("at-most-once dispatch", () => {
     const h = await harness();
     const { sessionId } = h.runtime.createSession({ mode: "build" });
 
-    expect(await h.runtime.prompt(sessionId, { prompt: "no id", attachments: [] }))
-      .toMatchObject({ ok: false, status: 400 });
-    expect(h.child().requests.some((request) => request.method === "turn/start"))
-      .toBe(false);
+    expect(await h.runtime.prompt(sessionId, { prompt: "no id", attachments: [] })).toMatchObject({
+      ok: false,
+      status: 400,
+    });
+    expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
   });
 
   test("an ambiguous request that did run is reconciled as already-processed", async () => {
@@ -1258,8 +1304,6 @@ describe("at-most-once dispatch", () => {
   });
 });
 
-
-
 describe("slash commands", () => {
   test("/models lists descriptions and marks the configured model", async () => {
     const h = await harness({
@@ -1298,9 +1342,7 @@ describe("slash commands", () => {
 
     expect(outcome).toMatchObject({ ok: true });
     const messages = await h.runtime.getMessages(sessionId);
-    expect(messages?.[1]?.content).toContain(
-      "- model-a (current): Fast general-purpose model",
-    );
+    expect(messages?.[1]?.content).toContain("- model-a (current): Fast general-purpose model");
     expect(messages?.[1]?.content).toContain("- model-b");
     expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
   });
@@ -1329,8 +1371,9 @@ describe("slash commands", () => {
 
     expect(outcome).toMatchObject({ ok: true });
     const turnStart = h.child().requests.find((request) => request.method === "turn/start");
-    expect(JSON.stringify(turnStart?.params.input))
-      .toContain("Review src/parser.ts and report concrete findings.");
+    expect(JSON.stringify(turnStart?.params.input)).toContain(
+      "Review src/parser.ts and report concrete findings.",
+    );
     expect(JSON.stringify(turnStart?.params.input)).not.toContain("/ReViEw");
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages?.[0]?.content).toBe("/ReViEw src/parser.ts");
@@ -1350,16 +1393,17 @@ describe("slash commands", () => {
     expect(outcome).toMatchObject({ ok: true });
     expect(h.child().requests.some((r) => r.method === "turn/start")).toBe(false);
     const messageUpdates = h.events.filter(
-      (event) => event.type === "message.updated"
-        && (event.data?.message as { role?: unknown } | undefined)?.role,
+      (event) =>
+        event.type === "message.updated" &&
+        (event.data?.message as { role?: unknown } | undefined)?.role,
     );
-    expect(messageUpdates.map(
-      (event) => (event.data?.message as { role?: unknown }).role,
-    )).toEqual(["user", "assistant"]);
+    expect(messageUpdates.map((event) => (event.data?.message as { role?: unknown }).role)).toEqual(
+      ["user", "assistant"],
+    );
     const assistant = messageUpdates[1];
-    expect(
-      (assistant?.data?.message as { content: string } | undefined)?.content,
-    ).toContain("Available Codex slash commands");
+    expect((assistant?.data?.message as { content: string } | undefined)?.content).toContain(
+      "Available Codex slash commands",
+    );
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages).toHaveLength(2);
     expect(messages?.[0]?.content).toBe("/help");
@@ -1401,8 +1445,9 @@ describe("slash commands", () => {
       error: "/steer cannot be used with structured output",
     });
     expect(h.child().requests.some((request) => request.method === "turn/start")).toBe(false);
-    expect(h.runtime.getRegistry().getSession(sessionId)?.structuredOutputRequestId)
-      .toBeUndefined();
+    expect(
+      h.runtime.getRegistry().getSession(sessionId)?.structuredOutputRequestId,
+    ).toBeUndefined();
     const messages = await h.runtime.getMessages(sessionId);
     expect(messages).toEqual([]);
   });
@@ -1491,8 +1536,6 @@ describe("slash commands", () => {
   });
 });
 
-
-
 describe("interactive approvals", () => {
   /**
    * Creates a session, materializes its thread, then has the scripted child ask
@@ -1546,10 +1589,9 @@ describe("interactive approvals", () => {
     expect(requested).toHaveLength(1);
     expect(requested[0]!.sessionId).toBe(sessionId);
     expect((requested[0]!.data!.approval as { command?: string }).command).toBe("rm -rf build");
-    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
-      .toBeLessThan(
-        h.events.findIndex((event) => event.type === "session.approval-requested"),
-      );
+    expect(h.events.findLastIndex((event) => event.type === "message.patched")).toBeLessThan(
+      h.events.findIndex((event) => event.type === "session.approval-requested"),
+    );
 
     // The rehydration path: a remounting tab must be able to ask rather than
     // relying on having seen the SSE frame.
@@ -1571,16 +1613,16 @@ describe("interactive approvals", () => {
     const approval = h.runtime.listApprovals(sessionId)[0]!;
     expect(approval.actionable).toBe(false);
 
-    expect(h.runtime.respondToApproval(sessionId, approval.approvalId, "approve"))
-      .toBe("not-actionable");
-    expect(
-      h.runtime.respondToApproval(sessionId, approval.approvalId, "approve-for-session"),
-    ).toBe("not-actionable");
+    expect(h.runtime.respondToApproval(sessionId, approval.approvalId, "approve")).toBe(
+      "not-actionable",
+    );
+    expect(h.runtime.respondToApproval(sessionId, approval.approvalId, "approve-for-session")).toBe(
+      "not-actionable",
+    );
     // Still pending: refusing to approve must not silently drop the request.
     expect(h.runtime.listApprovals(sessionId)).toHaveLength(1);
 
-    expect(h.runtime.respondToApproval(sessionId, approval.approvalId, "deny"))
-      .toBe("applied");
+    expect(h.runtime.respondToApproval(sessionId, approval.approvalId, "deny")).toBe("applied");
   });
 
   test("approving sends accept to app-server and clears the card", async () => {
@@ -1597,7 +1639,11 @@ describe("interactive approvals", () => {
 
     const resolved = h.events.filter((event) => event.type === "session.approval-resolved");
     expect(resolved).toHaveLength(1);
-    expect(resolved[0]!.data).toMatchObject({ approvalId, decision: "approve", resolution: "answered" });
+    expect(resolved[0]!.data).toMatchObject({
+      approvalId,
+      decision: "approve",
+      resolution: "answered",
+    });
   });
 
   test("declining sends decline", async () => {
@@ -1692,8 +1738,7 @@ describe("interactive approvals", () => {
 
     expect(h.runtime.listApprovals(second!.sessionId)).toHaveLength(1);
     await h.runtime.deleteSession(firstSessionId);
-    expect(h.runtime.respondToApproval(second!.sessionId, approvalId, "deny"))
-      .toBe("applied");
+    expect(h.runtime.respondToApproval(second!.sessionId, approvalId, "deny")).toBe("applied");
   });
 
   test("cancel approval interrupts the owning turn", async () => {
@@ -1703,8 +1748,7 @@ describe("interactive approvals", () => {
     expect(h.runtime.respondToApproval(sessionId, approvalId, "cancel")).toBe("applied");
     await h.drain();
 
-    expect(h.child().requests.some((request) => request.method === "turn/interrupt"))
-      .toBe(true);
+    expect(h.child().requests.some((request) => request.method === "turn/interrupt")).toBe(true);
   });
 
   test("an abort rejection after cancelling an approval is contained and reported", async () => {
@@ -1725,12 +1769,14 @@ describe("interactive approvals", () => {
       );
     });
 
-    expect(errors.some(
-      ([message, error]) =>
-        message === "[codex-bridge] Failed to cancel turn after approval response:"
-        && error instanceof Error
-        && error.message === "abort dispatch rejected",
-    )).toBe(true);
+    expect(
+      errors.some(
+        ([message, error]) =>
+          message === "[codex-bridge] Failed to cancel turn after approval response:" &&
+          error instanceof Error &&
+          error.message === "abort dispatch rejected",
+      ),
+    ).toBe(true);
   });
 
   test("a failed interrupt after cancelling an approval surfaces a terminal error", async () => {
@@ -1844,10 +1890,12 @@ describe("interactive approvals", () => {
 
     const warnings = h.events.filter((event) => event.type === "session.warning");
     expect(warnings).toHaveLength(2);
-    expect(h.events.findLastIndex((event) => event.type === "message.patched"))
-      .toBeLessThan(h.events.findIndex((event) => event.type === "session.warning"));
-    expect(warnings.map((event) => event.sessionId).sort())
-      .toEqual([first.sessionId, second!.sessionId].sort());
+    expect(h.events.findLastIndex((event) => event.type === "message.patched")).toBeLessThan(
+      h.events.findIndex((event) => event.type === "session.warning"),
+    );
+    expect(warnings.map((event) => event.sessionId).sort()).toEqual(
+      [first.sessionId, second!.sessionId].sort(),
+    );
     for (const warning of warnings) {
       expect(warning.data).toEqual({
         error: "retry later",
@@ -1889,11 +1937,7 @@ describe("interactive approvals", () => {
     await h.drain();
 
     expect(
-      h.events.filter(
-        (event) =>
-          event.type === "session.warning"
-          && event.sessionId === sessionId,
-      ),
+      h.events.filter((event) => event.type === "session.warning" && event.sessionId === sessionId),
     ).toEqual([
       {
         type: "session.warning",
@@ -1955,8 +1999,8 @@ describe("interactive approvals", () => {
       h.events
         .filter(
           (event) =>
-            event.sessionId === sessionId
-            && (event.type === "session.warning" || event.type === "session.error"),
+            event.sessionId === sessionId &&
+            (event.type === "session.warning" || event.type === "session.error"),
         )
         .map((event) => ({ type: event.type, data: event.data })),
     ).toEqual([
@@ -2029,16 +2073,16 @@ describe("interactive approvals", () => {
   });
 });
 
-
-
 describe("steering", () => {
   test("reports not-found without a session or a thread", async () => {
     const h = await harness();
-    expect(await h.runtime.steerSession("session-nope", "more", "turn-1", "req-steer"))
-      .toBe("not-found");
+    expect(await h.runtime.steerSession("session-nope", "more", "turn-1", "req-steer")).toBe(
+      "not-found",
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
-    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
-      .toBe("not-found");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer")).toBe(
+      "not-found",
+    );
   });
 
   test("reports idle when no turn is running", async () => {
@@ -2051,8 +2095,7 @@ describe("steering", () => {
     });
     await h.drain();
 
-    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
-      .toBe("idle");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer")).toBe("idle");
   });
 
   test("steers the active turn, pinning the turn id the user was looking at", async () => {
@@ -2061,35 +2104,37 @@ describe("steering", () => {
     await h.runtime.prompt(sessionId, { prompt: "go", requestId: "req-1", attachments: [] });
 
     expect(
-      await h.runtime.steerSession(
-        sessionId,
-        "also check the tests",
-        "turn-1",
-        "req-steer",
-      ),
-    )
-      .toBe("accepted");
-    expect(h.child().requests.find((request) => request.method === "turn/steer")?.params)
-      .toMatchObject({
-        threadId: "thread-1",
-        expectedTurnId: "turn-1",
-        input: [{ type: "text", text: "also check the tests" }],
-        clientUserMessageId: "req-steer",
-      });
+      await h.runtime.steerSession(sessionId, "also check the tests", "turn-1", "req-steer"),
+    ).toBe("accepted");
+    expect(
+      h.child().requests.find((request) => request.method === "turn/steer")?.params,
+    ).toMatchObject({
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "also check the tests" }],
+      clientUserMessageId: "req-steer",
+    });
 
     const messages = await h.runtime.getMessages(sessionId);
-    expect(messages?.filter((message) => message.role === "user").map((message) => ({
-      content: message.content,
-      turnId: message.turnId,
-    }))).toEqual([
+    expect(
+      messages
+        ?.filter((message) => message.role === "user")
+        .map((message) => ({
+          content: message.content,
+          turnId: message.turnId,
+        })),
+    ).toEqual([
       { content: "go", turnId: "turn-1" },
       { content: "also check the tests", turnId: "turn-1" },
     ]);
-    expect(h.events.some(
-      (event) => event.type === "message.updated"
-        && (event.data?.message as { content?: unknown } | undefined)?.content
-          === "also check the tests",
-    )).toBe(true);
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "message.updated" &&
+          (event.data?.message as { content?: unknown } | undefined)?.content ===
+            "also check the tests",
+      ),
+    ).toBe(true);
   });
 
   test("places a steer between the assistant activity before and after it", async () => {
@@ -2142,13 +2187,8 @@ describe("steering", () => {
       ["user", "also inspect the tests"],
       ["assistant", "Tests are green"],
     ]);
-    expect(messages[1]?.parts).toEqual([
-      { type: "text", content: "Initial finding" },
-    ]);
-    expect(messages[3]?.parts.map((part) => part.type)).toEqual([
-      "tool-invocation",
-      "text",
-    ]);
+    expect(messages[1]?.parts).toEqual([{ type: "text", content: "Initial finding" }]);
+    expect(messages[3]?.parts.map((part) => part.type)).toEqual(["tool-invocation", "text"]);
   });
 
   /**
@@ -2176,26 +2216,30 @@ describe("steering", () => {
       },
       "thread/read": () => ({
         thread: threadPayload("thread-1", {
-          turns: [{
-            id: "turn-1",
-            status: "inProgress",
-            itemsView: "full",
-            items: items(accepted),
-            ...extra,
-          }],
+          turns: [
+            {
+              id: "turn-1",
+              status: "inProgress",
+              itemsView: "full",
+              items: items(accepted),
+              ...extra,
+            },
+          ],
         }),
       }),
     };
   }
 
   test("keeps updating an item that started in the assistant row before a steer", async () => {
-    const h = await harness(steerScript((accepted) => [
-      { type: "userMessage", clientId: "req-original" },
-      // app-server ordered the running command before the steering message, so
-      // the pre-steer row owns it and must keep receiving its completion.
-      { id: "long-command", type: "commandExecution" },
-      ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
-    ]));
+    const h = await harness(
+      steerScript((accepted) => [
+        { type: "userMessage", clientId: "req-original" },
+        // app-server ordered the running command before the steering message, so
+        // the pre-steer row owns it and must keep receiving its completion.
+        { id: "long-command", type: "commandExecution" },
+        ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
+      ]),
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "investigate",
@@ -2253,14 +2297,16 @@ describe("steering", () => {
   });
 
   test("splits the turn at the item app-server ordered after the steer", async () => {
-    const h = await harness(steerScript((accepted) => [
-      { type: "userMessage", clientId: "req-original" },
-      { id: "above", type: "agentMessage" },
-      ...accepted.flatMap((clientId) => [
-        { type: "userMessage", clientId },
-        { id: "below", type: "agentMessage" },
+    const h = await harness(
+      steerScript((accepted) => [
+        { type: "userMessage", clientId: "req-original" },
+        { id: "above", type: "agentMessage" },
+        ...accepted.flatMap((clientId) => [
+          { type: "userMessage", clientId },
+          { id: "below", type: "agentMessage" },
+        ]),
       ]),
-    ]));
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "investigate",
@@ -2269,7 +2315,10 @@ describe("steering", () => {
     });
     // Both items are already live when the steer is appended, so only the
     // authoritative ordering can say which row each one belongs to.
-    for (const [id, text] of [["above", "before the steer"], ["below", "after the steer"]]) {
+    for (const [id, text] of [
+      ["above", "before the steer"],
+      ["below", "after the steer"],
+    ]) {
       h.child().notify("item/completed", {
         threadId: "thread-1",
         turnId: "turn-1",
@@ -2278,15 +2327,14 @@ describe("steering", () => {
     }
     await h.drain();
 
-    expect(
-      await h.runtime.steerSession(sessionId, "narrow it down", "turn-1", "req-split"),
-    ).toBe("accepted");
+    expect(await h.runtime.steerSession(sessionId, "narrow it down", "turn-1", "req-split")).toBe(
+      "accepted",
+    );
     await h.drain();
 
-    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
-      message.role,
-      message.content,
-    ])).toEqual([
+    expect(
+      (await h.runtime.getMessages(sessionId))?.map((message) => [message.role, message.content]),
+    ).toEqual([
       ["user", "investigate"],
       ["assistant", "before the steer"],
       ["user", "narrow it down"],
@@ -2299,10 +2347,12 @@ describe("steering", () => {
     // still streaming is absent from the prefix. Treating that absence as proof
     // it came after emptied the pre-steer row and pushed the whole in-flight
     // response below the user's own steering message.
-    const h = await harness(steerScript((accepted) => [
-      { type: "userMessage", clientId: "req-original" },
-      ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
-    ]));
+    const h = await harness(
+      steerScript((accepted) => [
+        { type: "userMessage", clientId: "req-original" },
+        ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
+      ]),
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "investigate",
@@ -2322,10 +2372,9 @@ describe("steering", () => {
     ).toBe("accepted");
     await h.drain();
 
-    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
-      message.role,
-      message.content,
-    ])).toEqual([
+    expect(
+      (await h.runtime.getMessages(sessionId))?.map((message) => [message.role, message.content]),
+    ).toEqual([
       ["user", "investigate"],
       ["assistant", "half a thought"],
       ["user", "actually, stop"],
@@ -2336,20 +2385,26 @@ describe("steering", () => {
   test("tolerates a partial itemsView that elides the items before the steer", async () => {
     // A `summary` view drops the prefix but cannot invent a suffix, so the
     // items it does name after the steer are still trustworthy.
-    const h = await harness(steerScript(
-      (accepted) => accepted.flatMap((clientId) => [
-        { type: "userMessage", clientId },
-        { id: "below", type: "agentMessage" },
-      ]),
-      { itemsView: "summary" },
-    ));
+    const h = await harness(
+      steerScript(
+        (accepted) =>
+          accepted.flatMap((clientId) => [
+            { type: "userMessage", clientId },
+            { id: "below", type: "agentMessage" },
+          ]),
+        { itemsView: "summary" },
+      ),
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "investigate",
       requestId: "req-original",
       attachments: [],
     });
-    for (const [id, text] of [["above", "elided by the summary"], ["below", "named"]]) {
+    for (const [id, text] of [
+      ["above", "elided by the summary"],
+      ["below", "named"],
+    ]) {
       h.child().notify("item/completed", {
         threadId: "thread-1",
         turnId: "turn-1",
@@ -2363,10 +2418,9 @@ describe("steering", () => {
     ).toBe("accepted");
     await h.drain();
 
-    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
-      message.role,
-      message.content,
-    ])).toEqual([
+    expect(
+      (await h.runtime.getMessages(sessionId))?.map((message) => [message.role, message.content]),
+    ).toEqual([
       ["user", "investigate"],
       ["assistant", "elided by the summary"],
       ["user", "narrow it down"],
@@ -2401,15 +2455,14 @@ describe("steering", () => {
     });
     await h.drain();
 
-    expect(
-      await h.runtime.steerSession(sessionId, "carry on", "turn-1", "req-read-fails"),
-    ).toBe("accepted");
+    expect(await h.runtime.steerSession(sessionId, "carry on", "turn-1", "req-read-fails")).toBe(
+      "accepted",
+    );
     await h.drain();
 
-    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
-      message.role,
-      message.content,
-    ])).toEqual([
+    expect(
+      (await h.runtime.getMessages(sessionId))?.map((message) => [message.role, message.content]),
+    ).toEqual([
       ["user", "investigate"],
       ["assistant", "before the steer"],
       ["user", "carry on"],
@@ -2419,14 +2472,16 @@ describe("steering", () => {
 
   test("keeps three assistant rows straight across two steers in one turn", async () => {
     const laterItems = ["second", "third"];
-    const h = await harness(steerScript((accepted) => [
-      { type: "userMessage", clientId: "req-original" },
-      { id: "first", type: "agentMessage" },
-      ...accepted.flatMap((clientId, index) => [
-        { type: "userMessage", clientId },
-        { id: laterItems[index]!, type: "agentMessage" },
+    const h = await harness(
+      steerScript((accepted) => [
+        { type: "userMessage", clientId: "req-original" },
+        { id: "first", type: "agentMessage" },
+        ...accepted.flatMap((clientId, index) => [
+          { type: "userMessage", clientId },
+          { id: laterItems[index]!, type: "agentMessage" },
+        ]),
       ]),
-    ]));
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "investigate",
@@ -2443,17 +2498,18 @@ describe("steering", () => {
     };
 
     await complete("first", "one");
-    expect(await h.runtime.steerSession(sessionId, "again", "turn-1", "req-steer-1"))
-      .toBe("accepted");
+    expect(await h.runtime.steerSession(sessionId, "again", "turn-1", "req-steer-1")).toBe(
+      "accepted",
+    );
     await complete("second", "two");
-    expect(await h.runtime.steerSession(sessionId, "once more", "turn-1", "req-steer-2"))
-      .toBe("accepted");
+    expect(await h.runtime.steerSession(sessionId, "once more", "turn-1", "req-steer-2")).toBe(
+      "accepted",
+    );
     await complete("third", "three");
 
-    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
-      message.role,
-      message.content,
-    ])).toEqual([
+    expect(
+      (await h.runtime.getMessages(sessionId))?.map((message) => [message.role, message.content]),
+    ).toEqual([
       ["user", "investigate"],
       ["assistant", "one"],
       ["user", "again"],
@@ -2482,11 +2538,13 @@ describe("steering", () => {
   test("re-renders a frozen row when one of its own items completes late", async () => {
     // The frozen row is skipped while nothing in it moves, so the skip must be
     // keyed on "changed since the last render", not "can still change".
-    const h = await harness(steerScript((accepted) => [
-      { type: "userMessage", clientId: "req-original" },
-      { id: "slow", type: "agentMessage" },
-      ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
-    ]));
+    const h = await harness(
+      steerScript((accepted) => [
+        { type: "userMessage", clientId: "req-original" },
+        { id: "slow", type: "agentMessage" },
+        ...accepted.map((clientId) => ({ type: "userMessage", clientId })),
+      ]),
+    );
     const { sessionId } = h.runtime.createSession({ mode: "build" });
     await h.runtime.prompt(sessionId, {
       prompt: "investigate",
@@ -2500,8 +2558,9 @@ describe("steering", () => {
       delta: "partial",
     });
     await h.drain();
-    expect(await h.runtime.steerSession(sessionId, "keep going", "turn-1", "req-steer-late"))
-      .toBe("accepted");
+    expect(await h.runtime.steerSession(sessionId, "keep going", "turn-1", "req-steer-late")).toBe(
+      "accepted",
+    );
     await h.drain();
 
     // Everything in the frozen row has settled; a further publish must be a
@@ -2538,8 +2597,9 @@ describe("steering", () => {
       attachments: [],
     });
 
-    expect(await h.runtime.steerSession(sessionId, "more", "turn-old", "req-steer"))
-      .toBe("mismatch");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-old", "req-steer")).toBe(
+      "mismatch",
+    );
     expect(h.child().requests.some((request) => request.method === "turn/steer")).toBe(false);
   });
 
@@ -2556,8 +2616,7 @@ describe("steering", () => {
       attachments: [],
     });
 
-    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
-      .toBe("mismatch");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer")).toBe("mismatch");
     expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
   });
 
@@ -2581,13 +2640,15 @@ describe("steering", () => {
       h.engine.steerTurn = async () => {
         throw error;
       };
-      expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
-        .toBe("unknown");
+      expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer")).toBe(
+        "unknown",
+      );
     }
 
     expect(h.runtime.getStatus(sessionId)?.status).toBe("running");
-    expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user"))
-      .toHaveLength(1);
+    expect(
+      (await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user"),
+    ).toHaveLength(1);
   });
 
   test("an ambiguous steer retry reconciles its client id instead of dispatching twice", async () => {
@@ -2596,19 +2657,21 @@ describe("steering", () => {
     const h = await harness({
       "thread/read": () => ({
         thread: threadPayload("thread-1", {
-          turns: [{
-            id: "turn-1",
-            status: "inProgress",
-            items: [
-              { type: "userMessage", clientId: "req-original" },
-              ...(steerAttempted
-                ? [
-                    { type: "userMessage", clientId: "req-steer-retry" },
-                    { id: "after-steer", type: "agentMessage", text: "after steer" },
-                  ]
-                : []),
-            ],
-          }],
+          turns: [
+            {
+              id: "turn-1",
+              status: "inProgress",
+              items: [
+                { type: "userMessage", clientId: "req-original" },
+                ...(steerAttempted
+                  ? [
+                      { type: "userMessage", clientId: "req-steer-retry" },
+                      { id: "after-steer", type: "agentMessage", text: "after steer" },
+                    ]
+                  : []),
+              ],
+            },
+          ],
         }),
       }),
     });
@@ -2624,25 +2687,27 @@ describe("steering", () => {
       throw new AppServerTimeoutError("turn/steer", 100);
     };
 
-    expect(
-      await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry"),
-    ).toBe("unknown");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry")).toBe(
+      "unknown",
+    );
     h.child().notify("item/completed", {
       threadId: "thread-1",
       turnId: "turn-1",
       item: { id: "after-steer", type: "agentMessage", text: "after steer" },
     });
     await h.drain();
-    expect(
-      await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry"),
-    ).toBe("accepted");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry")).toBe(
+      "accepted",
+    );
     expect(steerCalls).toBe(1);
-    expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user")
-      .map((message) => message.content)).toEqual(["go", "more"]);
-    expect((await h.runtime.getMessages(sessionId))?.map((message) => [
-      message.role,
-      message.content,
-    ])).toEqual([
+    expect(
+      (await h.runtime.getMessages(sessionId))
+        ?.filter((message) => message.role === "user")
+        .map((message) => message.content),
+    ).toEqual(["go", "more"]);
+    expect(
+      (await h.runtime.getMessages(sessionId))?.map((message) => [message.role, message.content]),
+    ).toEqual([
       ["user", "go"],
       ["assistant", ""],
       ["user", "more"],
@@ -2651,12 +2716,13 @@ describe("steering", () => {
 
     // A third delivery of the same logical request is served from the bounded
     // accepted cache and cannot append or dispatch it again.
-    expect(
-      await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry"),
-    ).toBe("accepted");
+    expect(await h.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-retry")).toBe(
+      "accepted",
+    );
     expect(steerCalls).toBe(1);
-    expect((await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user"))
-      .toHaveLength(2);
+    expect(
+      (await h.runtime.getMessages(sessionId))?.filter((message) => message.role === "user"),
+    ).toHaveLength(2);
   });
 
   test("a fresh runtime reconciles a retained steer request id before dispatch", async () => {
@@ -2670,9 +2736,9 @@ describe("steering", () => {
     first.engine.steerTurn = async () => {
       throw new AppServerTimeoutError("turn/steer", 100);
     };
-    expect(
-      await first.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-restart"),
-    ).toBe("unknown");
+    expect(await first.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-restart")).toBe(
+      "unknown",
+    );
 
     const sessionsDir = join(codexHome, "sessions");
     mkdirSync(sessionsDir, { recursive: true });
@@ -2704,7 +2770,9 @@ describe("steering", () => {
             content: [{ type: "input_text", text: "more" }],
           },
         },
-      ].map((record) => JSON.stringify(record)).join("\n")}\n`,
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n")}\n`,
       "utf8",
     );
     await first.runtime.stop();
@@ -2712,14 +2780,16 @@ describe("steering", () => {
     const second = await harness({
       "thread/read": () => ({
         thread: threadPayload("thread-1", {
-          turns: [{
-            id: "turn-1",
-            status: "inProgress",
-            items: [
-              { type: "userMessage", clientId: "req-original" },
-              { type: "userMessage", clientId: "req-steer-restart" },
-            ],
-          }],
+          turns: [
+            {
+              id: "turn-1",
+              status: "inProgress",
+              items: [
+                { type: "userMessage", clientId: "req-original" },
+                { type: "userMessage", clientId: "req-steer-restart" },
+              ],
+            },
+          ],
         }),
       }),
     });
@@ -2728,10 +2798,12 @@ describe("steering", () => {
     expect(
       await second.runtime.steerSession(sessionId, "more", "turn-1", "req-steer-restart"),
     ).toBe("accepted");
-    expect(second.child().requests.some((request) => request.method === "turn/steer"))
-      .toBe(false);
-    expect((await second.runtime.getMessages(sessionId))?.filter((message) => message.role === "user")
-      .map((message) => message.content)).toEqual(["go", "more"]);
+    expect(second.child().requests.some((request) => request.method === "turn/steer")).toBe(false);
+    expect(
+      (await second.runtime.getMessages(sessionId))
+        ?.filter((message) => message.role === "user")
+        .map((message) => message.content),
+    ).toEqual(["go", "more"]);
   });
 
   /**
@@ -2752,8 +2824,9 @@ describe("steering", () => {
     await accepting.runtime.abort(sessionId);
     expect(accepting.runtime.getStatus(sessionId)).toMatchObject({ phase: "cancelling" });
 
-    expect(await accepting.runtime.steerSession(sessionId, "more", "turn-1", "req-steer"))
-      .toBe("accepted");
+    expect(await accepting.runtime.steerSession(sessionId, "more", "turn-1", "req-steer")).toBe(
+      "accepted",
+    );
     // The steer is pinned to the turn the user was looking at, interrupt or not.
     expect(
       accepting.child().requests.find((request) => request.method === "turn/steer")?.params,
@@ -2772,8 +2845,9 @@ describe("steering", () => {
     });
     await rejecting.runtime.abort(rejectedId);
 
-    expect(await rejecting.runtime.steerSession(rejectedId, "more", "turn-1", "req-steer"))
-      .toBe("mismatch");
+    expect(await rejecting.runtime.steerSession(rejectedId, "more", "turn-1", "req-steer")).toBe(
+      "mismatch",
+    );
     // Still cancelling: a refused steer neither completes nor resurrects the turn.
     expect(rejecting.runtime.getStatus(rejectedId)).toMatchObject({
       status: "running",

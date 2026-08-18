@@ -7,24 +7,18 @@ import path from "node:path";
  * data directories, so this also separates their global Docker namespaces.
  */
 export function dockerOwnerNamespace(dataDir: string): string {
-  return createHash("sha256")
-    .update(path.resolve(dataDir))
-    .digest("hex")
-    .slice(0, 16);
+  return createHash("sha256").update(path.resolve(dataDir)).digest("hex").slice(0, 16);
 }
 
 /**
  * Docker names are daemon-global. Use the registry owner and environment id
  * rather than the display name so equal names in two registries cannot race.
  */
-export function dockerContainerRuntimeName(
-  owner: string,
-  environmentId: string,
-): string {
-  const safeEnvironmentId = environmentId
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, "-")
-    .replace(/^[.-]+|[.-]+$/g, "")
-    || "environment";
+export function dockerContainerRuntimeName(owner: string, environmentId: string): string {
+  const safeEnvironmentId =
+    environmentId
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]+/g, "-")
+      .replace(/^[.-]+|[.-]+$/g, "") || "environment";
   return `ork-${owner}-${safeEnvironmentId}`.slice(0, 128);
 }

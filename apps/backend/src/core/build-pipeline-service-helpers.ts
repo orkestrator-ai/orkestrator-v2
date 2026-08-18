@@ -1,10 +1,34 @@
 import { createHash } from "node:crypto";
-import type { BuildPhase, BuildPipeline, BuildPipelineAgent, BuildPipelineSource, BuildStepConfigs, PipelineSession, PendingPipelineInteractionResolution, PipelineSessionPhase, ResumableBuildPhase, StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeline";
-import { BUILD_STEP_KEYS, isActiveBuildPhase, VERIFICATION_VERDICT_SCHEMA } from "@orkestrator/protocol/build-pipeline";
+import type {
+  BuildPhase,
+  BuildPipeline,
+  BuildPipelineAgent,
+  BuildPipelineSource,
+  BuildStepConfigs,
+  PipelineSession,
+  PendingPipelineInteractionResolution,
+  PipelineSessionPhase,
+  ResumableBuildPhase,
+  StartBuildPipelineInput,
+} from "@orkestrator/protocol/build-pipeline";
+import {
+  BUILD_STEP_KEYS,
+  isActiveBuildPhase,
+  VERIFICATION_VERDICT_SCHEMA,
+} from "@orkestrator/protocol/build-pipeline";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
-import { AGENT_INTERACTION_LIMITS, AGENT_INTERACTION_SUMMARY_VERSION, type AgentInteractionOutcome, type AgentInteractionRequest, type AgentInteractionWorkflowSummary } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_LIMITS,
+  AGENT_INTERACTION_SUMMARY_VERSION,
+  type AgentInteractionOutcome,
+  type AgentInteractionRequest,
+  type AgentInteractionWorkflowSummary,
+} from "@orkestrator/protocol/agent-interactions";
 import type { AppConfig } from "./models.js";
-import { type BuildPipelineProvider, type ProviderExecutionMode } from "./build-pipeline-provider.js";
+import {
+  type BuildPipelineProvider,
+  type ProviderExecutionMode,
+} from "./build-pipeline-provider.js";
 
 /**
  * How many times the worktree probe is attempted before its result is treated
@@ -20,10 +44,7 @@ export const VALIDATION_STAGE_LABELS = {
   verify: "Verification",
 } as const;
 
-export type CommandInvoker = <T>(
-  command: string,
-  args?: Record<string, unknown>,
-) => Promise<T>;
+export type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 // The transcript renderer recognizes a verification answer by the same contract
 // the turn is constrained to, and the protocol package derives both that schema
@@ -51,7 +72,10 @@ export function errorMessage(error: unknown): string {
  * case, so the terminal failure handler must not attribute the error to it.
  */
 export class PreSessionStageStartError extends Error {
-  constructor(error: unknown, readonly phase: ResumableBuildPhase) {
+  constructor(
+    error: unknown,
+    readonly phase: ResumableBuildPhase,
+  ) {
     super(errorMessage(error));
     this.name = "PreSessionStageStartError";
   }
@@ -83,13 +107,15 @@ export function canonicalAdmissionSource(
 
 export function buildAdmissionKey(input: StartBuildPipelineInput): string {
   return createHash("sha256")
-    .update(JSON.stringify({
-      projectId: input.projectId.trim(),
-      taskId: input.taskId.trim(),
-      source: canonicalAdmissionSource(input.source),
-      existingEnvironmentId: input.existingEnvironmentId?.trim() || null,
-      featurePlanId: input.featurePlanId?.trim() || null,
-    }))
+    .update(
+      JSON.stringify({
+        projectId: input.projectId.trim(),
+        taskId: input.taskId.trim(),
+        source: canonicalAdmissionSource(input.source),
+        existingEnvironmentId: input.existingEnvironmentId?.trim() || null,
+        featurePlanId: input.featurePlanId?.trim() || null,
+      }),
+    )
     .digest("hex");
 }
 
@@ -98,7 +124,7 @@ export function sessionForCurrentPhase(pipeline: BuildPipeline): PipelineSession
 }
 
 export function resumablePhase(phase: BuildPhase): ResumableBuildPhase | null {
-  return isActiveBuildPhase(phase) ? phase as ResumableBuildPhase : null;
+  return isActiveBuildPhase(phase) ? (phase as ResumableBuildPhase) : null;
 }
 
 /**
@@ -133,11 +159,12 @@ export function modelFor(
   repositoryDefault?: string,
 ): string | undefined {
   if (repositoryDefault && repositoryDefault !== "default") return repositoryDefault;
-  const model = agent === "claude"
-    ? global.claudeModel
-    : agent === "codex"
-      ? global.codexModel
-      : global.opencodeModel;
+  const model =
+    agent === "claude"
+      ? global.claudeModel
+      : agent === "codex"
+        ? global.codexModel
+        : global.opencodeModel;
   return model && model !== "default" ? model : undefined;
 }
 
@@ -159,13 +186,10 @@ export function connectionDefaultsFor(
 ): { model?: string; effort?: string } {
   const owns = agent === repositoryAgent(config.global, repository);
   return {
-    model: modelFor(
-      agent,
-      config.global,
-      owns ? repository.defaultModel : undefined,
-    ),
-    effort: (owns ? repository.defaultEffort : undefined)
-      ?? (agent === "codex" ? config.global.codexReasoningEffort : undefined),
+    model: modelFor(agent, config.global, owns ? repository.defaultModel : undefined),
+    effort:
+      (owns ? repository.defaultEffort : undefined) ??
+      (agent === "codex" ? config.global.codexReasoningEffort : undefined),
   };
 }
 
@@ -220,9 +244,7 @@ export function stepModel(
  * Drops empty selections so a step that only pinned a harness does not also pin
  * a placeholder as a model id or the string "default" as a reasoning effort.
  */
-export function normalizeSteps(
-  steps: BuildStepConfigs | undefined,
-): BuildStepConfigs | undefined {
+export function normalizeSteps(steps: BuildStepConfigs | undefined): BuildStepConfigs | undefined {
   if (!steps) return undefined;
   const normalized: BuildStepConfigs = {};
   for (const key of BUILD_STEP_KEYS) {
@@ -233,17 +255,13 @@ export function normalizeSteps(
     normalized[key] = {
       agent: step.agent,
       ...(model ? { model } : {}),
-      ...(reasoningEffort && reasoningEffort !== "default"
-        ? { reasoningEffort }
-        : {}),
+      ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-export function sessionPhaseFor(
-  phase: ResumableBuildPhase,
-): PipelineSessionPhase | null {
+export function sessionPhaseFor(phase: ResumableBuildPhase): PipelineSessionPhase | null {
   switch (phase) {
     case "building":
       return "build";
@@ -346,9 +364,9 @@ export const DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS = 5_000;
 export const DEFAULT_STALL_WARNING_MS = 2 * 5 * 60_000;
 export const DEFAULT_INTERACTION_PROCESSING_LEASE_MS = 2 * 60_000;
 export const UNATTENDED_POLICY_INSTRUCTION =
-  "This is a non-interactive build session: no user can answer a provider input request. "
-  + "If input is unavailable or declined, choose the safest likely assumption yourself, "
-  + "state that assumption, and continue. Never treat the absence of a person as authorization.";
+  "This is a non-interactive build session: no user can answer a provider input request. " +
+  "If input is unavailable or declined, choose the safest likely assumption yourself, " +
+  "state that assumption, and continue. Never treat the absence of a person as authorization.";
 
 export function withUnattendedPolicy(prompt: string): string {
   return `${prompt}\n\n${UNATTENDED_POLICY_INSTRUCTION}`;
@@ -410,7 +428,7 @@ export function elapsedSince(timestamp: string | undefined): number | null {
 
 export function elapsedSinceLatest(...timestamps: Array<string | undefined>): number | null {
   const parsed = timestamps
-    .map((timestamp) => timestamp ? Date.parse(timestamp) : Number.NaN)
+    .map((timestamp) => (timestamp ? Date.parse(timestamp) : Number.NaN))
     .filter(Number.isFinite);
   return parsed.length > 0 ? Date.now() - Math.max(...parsed) : null;
 }
@@ -424,9 +442,7 @@ export function interactionPresentation(
 ): PendingPipelineInteractionResolution {
   const visible = action === "decline-and-continue";
   const truncate = (value: string, maximum: number): string =>
-    value.length <= maximum
-      ? value
-      : `${value.slice(0, Math.max(0, maximum - 1))}…`;
+    value.length <= maximum ? value : `${value.slice(0, Math.max(0, maximum - 1))}…`;
   return {
     journalId,
     sessionKey: session.sessionKey,
@@ -449,14 +465,14 @@ export function interactionPresentation(
     ...(visible && request.presentation.body
       ? { body: truncate(request.presentation.body, 1_024) }
       : {}),
-    questions: visible ? request.presentation.questions.slice(0, 4).map((question) => ({
-      prompt: truncate(question.prompt, 512),
-      // Labels are sufficient for review. Provider values may carry secrets or
-      // executable content and never belong in workflow-owned persistence.
-      options: question.options.slice(0, 8).map((option) =>
-        truncate(option.label, 128)
-      ),
-    })) : [],
+    questions: visible
+      ? request.presentation.questions.slice(0, 4).map((question) => ({
+          prompt: truncate(question.prompt, 512),
+          // Labels are sufficient for review. Provider values may carry secrets or
+          // executable content and never belong in workflow-owned persistence.
+          options: question.options.slice(0, 8).map((option) => truncate(option.label, 128)),
+        }))
+      : [],
   };
 }
 
@@ -473,12 +489,13 @@ export function appendInteractionSummary(
   const next: AgentInteractionWorkflowSummary = summary
     ? structuredClone(summary)
     : { version: AGENT_INTERACTION_SUMMARY_VERSION, entries: [] };
-  const existing = next.entries.find((entry) =>
-    entry.provider === pending.provider
-    && entry.kind === pending.kind
-    && entry.phase === pending.phase
-    && entry.sessionId === pending.sessionId
-    && entry.outcome === outcome
+  const existing = next.entries.find(
+    (entry) =>
+      entry.provider === pending.provider &&
+      entry.kind === pending.kind &&
+      entry.phase === pending.phase &&
+      entry.sessionId === pending.sessionId &&
+      entry.outcome === outcome,
   );
   if (existing) {
     existing.count += 1;
@@ -527,5 +544,3 @@ export function logInteractionOutcome(
     count,
   });
 }
-
-

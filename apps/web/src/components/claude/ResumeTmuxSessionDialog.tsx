@@ -15,10 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import {
-  listPreviousSessions,
-  type PreviousSession,
-} from "@/lib/claude-tmux-client";
+import { listPreviousSessions, type PreviousSession } from "@/lib/claude-tmux-client";
 import { formatRelativeTimeFromUnixSeconds } from "@/lib/format-relative-time";
 
 interface ResumeTmuxSessionDialogProps {
@@ -65,9 +62,8 @@ export function ResumeTmuxSessionDialog({
         <DialogHeader>
           <DialogTitle>Resume Session</DialogTitle>
           <DialogDescription>
-            Pick a previous Claude session recorded for this workspace.
-            Selecting one will reload its full transcript and continue the
-            conversation in this tab.
+            Pick a previous Claude session recorded for this workspace. Selecting one will reload
+            its full transcript and continue the conversation in this tab.
           </DialogDescription>
         </DialogHeader>
 
@@ -77,9 +73,7 @@ export function ResumeTmuxSessionDialog({
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
             </div>
           ) : error ? (
-            <div className="text-center py-8 text-sm text-destructive">
-              {error}
-            </div>
+            <div className="text-center py-8 text-sm text-destructive">{error}</div>
           ) : sessions.length === 0 ? (
             <div className="text-center py-8 text-sm text-muted-foreground">
               No previous sessions recorded for this workspace yet.
@@ -106,14 +100,11 @@ export function ResumeTmuxSessionDialog({
                         <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            {formatRelativeTimeFromUnixSeconds(
-                              s.last_activity_unix,
-                            )}
+                            {formatRelativeTimeFromUnixSeconds(s.last_activity_unix)}
                           </span>
                           <span className="opacity-60">·</span>
                           <span>
-                            {s.message_count}{" "}
-                            {s.message_count === 1 ? "message" : "messages"}
+                            {s.message_count} {s.message_count === 1 ? "message" : "messages"}
                           </span>
                         </div>
                       </div>

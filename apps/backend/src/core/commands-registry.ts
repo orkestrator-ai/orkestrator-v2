@@ -11,10 +11,7 @@ import {
   isResourceSnapshotRevision,
   runCommand,
 } from "./commands-dependencies.js";
-import {
-  assertDockerContainerOwned,
-  renameEnvironmentFromPrompt,
-} from "./commands-helpers.js";
+import { assertDockerContainerOwned, renameEnvironmentFromPrompt } from "./commands-helpers.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type {
   CommandRegistrar,
@@ -47,13 +44,8 @@ export function createCommandRegistry(
   const register: CommandRegistrar = (name, handler) => {
     commands.set(name, (args, context) => {
       const containerId = args.containerId;
-      if (
-        context.strictDockerOwner
-        && typeof containerId === "string"
-        && containerId.trim()
-      ) {
-        return assertDockerContainerOwned(containerId, context)
-          .then(() => handler(args, context));
+      if (context.strictDockerOwner && typeof containerId === "string" && containerId.trim()) {
+        return assertDockerContainerOwned(containerId, context).then(() => handler(args, context));
       }
       return handler(args, context);
     });
@@ -61,10 +53,13 @@ export function createCommandRegistry(
 
   const pendingEnvironmentRenameTasks = new Map<string, Promise<void>>();
   const claudeModelCatalogRefreshes = new Map<string, Promise<ClaudeModelCatalogSnapshot>>();
-  const bridgeReadinessWaits = new Map<string, {
-    deadline: number;
-    promise: Promise<AwaitBridgeReadyResult>;
-  }>();
+  const bridgeReadinessWaits = new Map<
+    string,
+    {
+      deadline: number;
+      promise: Promise<AwaitBridgeReadyResult>;
+    }
+  >();
   const validatedClaudeModelCatalogs = new Set<string>();
   const extensionDiscoveryCache = createExtensionDiscoveryCache();
   const runProjectCreationCommand = options.projectCreation?.runCommand ?? runCommand;
@@ -109,10 +104,7 @@ export function createCommandRegistry(
       .catch((error) => {
         // Keep the persisted prompt so another successful start can retry without
         // relying on renderer state surviving for the lifetime of the operation.
-        console.warn(
-          "[ElectronBackend] Failed to rename environment from pending prompt:",
-          error,
-        );
+        console.warn("[ElectronBackend] Failed to rename environment from pending prompt:", error);
       })
       .finally(() => {
         if (pendingEnvironmentRenameTasks.get(environmentId) === task) {

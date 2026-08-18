@@ -21,11 +21,7 @@ import {
   resetCursorTranscriptReadCache,
 } from "./acp-cursor-background.js";
 import { cursorChildTranscriptPrompt } from "./acp-cursor-transcript-parts.js";
-import {
-  CURSOR_CHILD_DISCOVERY_SKEW_MS,
-  sessions,
-  type SessionState,
-} from "./acp-context.js";
+import { CURSOR_CHILD_DISCOVERY_SKEW_MS, sessions, type SessionState } from "./acp-context.js";
 import { syncActiveSubagentTool } from "./acp-tools.js";
 
 const LAUNCHED_AT = "1970-01-01T00:00:00.000Z";
@@ -33,34 +29,38 @@ const LAUNCHED_AT_MS = Date.parse(LAUNCHED_AT);
 
 function makeState(launches: Array<{ toolUseId: string; createdAt?: string; agentId?: string }>) {
   const state = {
-    messages: [{
-      id: "message-1",
-      role: "assistant" as const,
-      content: "",
-      createdAt: LAUNCHED_AT,
-      parts: launches.map((launch) => ({
-        type: "tool-invocation" as const,
-        content: "Task: Subagent task",
-        sourcePartId: launch.toolUseId,
-        sourceMessageId: "message-1",
-        toolUseId: launch.toolUseId,
-        toolName: "task",
-        toolTitle: "Task: Subagent task",
-        toolArgs: {},
-        toolState: "pending" as const,
-        agentState: "active" as const,
-        createdAt: launch.createdAt ?? LAUNCHED_AT,
-      })),
-    }],
+    messages: [
+      {
+        id: "message-1",
+        role: "assistant" as const,
+        content: "",
+        createdAt: LAUNCHED_AT,
+        parts: launches.map((launch) => ({
+          type: "tool-invocation" as const,
+          content: "Task: Subagent task",
+          sourcePartId: launch.toolUseId,
+          sourceMessageId: "message-1",
+          toolUseId: launch.toolUseId,
+          toolName: "task",
+          toolTitle: "Task: Subagent task",
+          toolArgs: {},
+          toolState: "pending" as const,
+          agentState: "active" as const,
+          createdAt: launch.createdAt ?? LAUNCHED_AT,
+        })),
+      },
+    ],
     revision: 0,
     status: "working" as const,
     outputTruncated: false,
     uncheckedTranscriptBytes: 0,
     activeSubagentToolIds: new Set(launches.map((launch) => launch.toolUseId)),
-    activeSubagentDescriptors: new Map(launches.map((launch) => [
-      launch.toolUseId,
-      launch.agentId ? { agentId: launch.agentId } : {},
-    ])),
+    activeSubagentDescriptors: new Map(
+      launches.map((launch) => [
+        launch.toolUseId,
+        launch.agentId ? { agentId: launch.agentId } : {},
+      ]),
+    ),
     subagentToolIds: new Map(),
   };
   return state;
@@ -113,10 +113,7 @@ function addRawPart(state: ReturnType<typeof makeState>, part: Record<string, un
  * reads every session in that registry, so a leaked entry would follow the
  * suite into unrelated tests.
  */
-function withSessions<T>(
-  entries: Array<[string, ReturnType<typeof makeState>]>,
-  run: () => T,
-): T {
+function withSessions<T>(entries: Array<[string, ReturnType<typeof makeState>]>, run: () => T): T {
   const restore = entries.map(([key]) => [key, sessions.get(key)] as const);
   for (const [key, state] of entries) sessions.set(key, state as unknown as SessionState);
   try {
@@ -129,11 +126,7 @@ function withSessions<T>(
   }
 }
 
-async function writeChildTranscript(
-  root: string,
-  agentId: string,
-  body: string,
-): Promise<number> {
+async function writeChildTranscript(root: string, agentId: string, body: string): Promise<number> {
   const directory = resolve(root, agentId);
   await fs.mkdir(directory, { recursive: true });
   const file = resolve(directory, `${agentId}.jsonl`);
@@ -144,15 +137,17 @@ async function writeChildTranscript(
   return stats.birthtimeMs || stats.ctimeMs || stats.mtimeMs;
 }
 
-const toolRecord = (name: string) => `${JSON.stringify({
-  type: "assistant",
-  message: { content: [{ type: "tool_use", name, input: {} }] },
-})}\n`;
+const toolRecord = (name: string) =>
+  `${JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "tool_use", name, input: {} }] },
+  })}\n`;
 
-const promptRecord = (text: string) => `${JSON.stringify({
-  role: "user",
-  message: { content: [{ type: "text", text }] },
-})}\n`;
+const promptRecord = (text: string) =>
+  `${JSON.stringify({
+    role: "user",
+    message: { content: [{ type: "text", text }] },
+  })}\n`;
 
 async function withTranscriptRoot<T>(run: (root: string) => Promise<T>): Promise<T> {
   const root = resolve(await temporaryDirectory(), "transcripts");
@@ -207,8 +202,10 @@ describe("Cursor child transcript discovery", () => {
       await fs.mkdir(resolve(root, ".hidden"), { recursive: true });
 
       expect(isSafeCursorAgentId(".hidden")).toBe(false);
-      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
-        .toEqual(["child-early", "child-late"]);
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId)).toEqual([
+        "child-early",
+        "child-late",
+      ]);
     });
   });
 
@@ -238,12 +235,14 @@ describe("Cursor child transcript discovery", () => {
   test("never binds a directory older than the launch", async () => {
     await withTranscriptRoot(async (root) => {
       const childCreatedAtMs = await writeChildTranscript(root, "child-old", toolRecord("Read"));
-      const state = makeState([{
-        toolUseId: "task-1",
-        createdAt: new Date(
-          childCreatedAtMs + CURSOR_CHILD_DISCOVERY_SKEW_MS + 1_000,
-        ).toISOString(),
-      }]);
+      const state = makeState([
+        {
+          toolUseId: "task-1",
+          createdAt: new Date(
+            childCreatedAtMs + CURSOR_CHILD_DISCOVERY_SKEW_MS + 1_000,
+          ).toISOString(),
+        },
+      ]);
 
       expect(bindDiscoveredCursorChildren(state as unknown as SessionState)).toBe(false);
       expect(state.activeSubagentDescriptors.get("task-1")).toEqual({});
@@ -354,8 +353,9 @@ describe("Cursor child transcript discovery", () => {
       await writeChildTranscript(
         root,
         "child-a",
-        promptRecord("<timestamp>now</timestamp>\n<user_query>\nAudit the OpenCode surface.\n</user_query>")
-          + toolRecord("Read"),
+        promptRecord(
+          "<timestamp>now</timestamp>\n<user_query>\nAudit the OpenCode surface.\n</user_query>",
+        ) + toolRecord("Read"),
       );
       const state = makeState([{ toolUseId: "task-1" }]);
 
@@ -389,12 +389,12 @@ describe("Cursor child transcript discovery", () => {
       const state = makeState([{ toolUseId: "task-1" }]);
 
       expect(bindDiscoveredCursorChildren(state as unknown as SessionState)).toBe(true);
-      expect(listWatchableCursorChildren(
-        state as unknown as SessionState,
-        { includeDiscovered: false },
-      )).toEqual([]);
-      expect(listWatchableCursorChildren(state as unknown as SessionState)
-        .map((child) => child.agentId)).toEqual(["child-a"]);
+      expect(
+        listWatchableCursorChildren(state as unknown as SessionState, { includeDiscovered: false }),
+      ).toEqual([]);
+      expect(
+        listWatchableCursorChildren(state as unknown as SessionState).map((child) => child.agentId),
+      ).toEqual(["child-a"]);
     });
   });
 
@@ -419,33 +419,38 @@ describe("Cursor child transcript discovery", () => {
       await writeChildTranscript(root, "child-a", toolRecord("Read"));
       await writeChildTranscript(root, "child-b", toolRecord("Grep"));
       const early = makeState([{ toolUseId: "peer-task" }]);
-      const late = makeState([{
-        toolUseId: "task-1",
-        createdAt: new Date(LAUNCHED_AT_MS + 1_000).toISOString(),
-      }]);
+      const late = makeState([
+        {
+          toolUseId: "task-1",
+          createdAt: new Date(LAUNCHED_AT_MS + 1_000).toISOString(),
+        },
+      ]);
 
-      withSessions([
-        [`cursor-discovery-early:${root}`, early],
-        [`cursor-discovery-late:${root}`, late],
-      ], () => {
-        // The later session polls first. The earlier peer launched first, so
-        // the older directory is still its child.
-        expect(bindDiscoveredCursorChildren(late as unknown as SessionState)).toBe(true);
-        expect(late.activeSubagentDescriptors.get("task-1")).toEqual({
-          agentId: "child-b",
-          agentIdDiscovered: true,
-        });
-        // The peer's candidate was reserved, not written: one tab's read must
-        // not mutate another tab's state.
-        expect(early.activeSubagentDescriptors.get("peer-task")).toEqual({});
+      withSessions(
+        [
+          [`cursor-discovery-early:${root}`, early],
+          [`cursor-discovery-late:${root}`, late],
+        ],
+        () => {
+          // The later session polls first. The earlier peer launched first, so
+          // the older directory is still its child.
+          expect(bindDiscoveredCursorChildren(late as unknown as SessionState)).toBe(true);
+          expect(late.activeSubagentDescriptors.get("task-1")).toEqual({
+            agentId: "child-b",
+            agentIdDiscovered: true,
+          });
+          // The peer's candidate was reserved, not written: one tab's read must
+          // not mutate another tab's state.
+          expect(early.activeSubagentDescriptors.get("peer-task")).toEqual({});
 
-        // The peer's own poll re-derives the same pairing.
-        expect(bindDiscoveredCursorChildren(early as unknown as SessionState)).toBe(true);
-        expect(early.activeSubagentDescriptors.get("peer-task")).toEqual({
-          agentId: "child-a",
-          agentIdDiscovered: true,
-        });
-      });
+          // The peer's own poll re-derives the same pairing.
+          expect(bindDiscoveredCursorChildren(early as unknown as SessionState)).toBe(true);
+          expect(early.activeSubagentDescriptors.get("peer-task")).toEqual({
+            agentId: "child-a",
+            agentIdDiscovered: true,
+          });
+        },
+      );
     });
   });
 
@@ -480,8 +485,9 @@ describe("Cursor child transcript discovery", () => {
   test("invalidates the directory cache when a new child appears", async () => {
     await withTranscriptRoot(async (root) => {
       await writeChildTranscript(root, "child-a", toolRecord("Read"));
-      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
-        .toEqual(["child-a"]);
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId)).toEqual([
+        "child-a",
+      ]);
 
       await writeChildTranscript(root, "child-b", toolRecord("Grep"));
       // Filesystems have different timestamp granularity. Force a distinct root
@@ -489,8 +495,10 @@ describe("Cursor child transcript discovery", () => {
       const rootStats = await fs.stat(root);
       await fs.utimes(root, rootStats.atime, new Date(rootStats.mtimeMs + 2_000));
 
-      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
-        .toEqual(["child-a", "child-b"]);
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId)).toEqual([
+        "child-a",
+        "child-b",
+      ]);
     });
   });
 
@@ -505,8 +513,11 @@ describe("Cursor child transcript discovery", () => {
 
       expect(discoverCursorChildTranscriptDirectories(2)).toHaveLength(2);
       // A bounded scan must not be served back to an unbounded one.
-      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
-        .toEqual(["child-a", "child-b", "child-c"]);
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId)).toEqual([
+        "child-a",
+        "child-b",
+        "child-c",
+      ]);
     });
   });
 
@@ -519,8 +530,9 @@ describe("Cursor child transcript discovery", () => {
     }
     await withTranscriptRoot(async (root) => {
       await writeChildTranscript(root, "child-a", toolRecord("Read"));
-      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
-        .toEqual(["child-a"]);
+      expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId)).toEqual([
+        "child-a",
+      ]);
 
       // Change the root's mtime so the cache is invalidated, then take away
       // the read permission the rescan needs.
@@ -529,8 +541,9 @@ describe("Cursor child transcript discovery", () => {
       await fs.utimes(root, rootStats.atime, new Date(rootStats.mtimeMs + 2_000));
       await fs.chmod(root, 0o000);
       try {
-        expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId))
-          .toEqual(["child-a"]);
+        expect(discoverCursorChildTranscriptDirectories().map((child) => child.agentId)).toEqual([
+          "child-a",
+        ]);
       } finally {
         await fs.chmod(root, 0o700);
       }
@@ -550,28 +563,26 @@ describe("Cursor child transcript discovery", () => {
       });
       // A guessed id is good enough to project activity, not to hold the parent
       // turn open. The continuation waiter must not see this child yet.
-      expect(listWatchableCursorChildren(
-        state as unknown as SessionState,
-        { includeDiscovered: false },
-      )).toEqual([]);
-      expect(listWatchableCursorChildren(state as unknown as SessionState)
-        .map((child) => child.agentId)).toEqual(["child-discovered"]);
+      expect(
+        listWatchableCursorChildren(state as unknown as SessionState, { includeDiscovered: false }),
+      ).toEqual([]);
+      expect(
+        listWatchableCursorChildren(state as unknown as SessionState).map((child) => child.agentId),
+      ).toEqual(["child-discovered"]);
 
       const launch = state.messages[0]!.parts[0]!;
       launch.toolArgs = { ...launch.toolArgs, agentId: "child-reported" };
-      syncActiveSubagentTool(
-        state as unknown as SessionState,
-        launch,
-      );
+      syncActiveSubagentTool(state as unknown as SessionState, launch);
 
       expect(state.activeSubagentDescriptors.get("task-1")).toMatchObject({
         agentId: "child-reported",
         agentIdDiscovered: false,
       });
-      expect(listWatchableCursorChildren(
-        state as unknown as SessionState,
-        { includeDiscovered: false },
-      ).map((child) => child.agentId)).toEqual(["child-reported"]);
+      expect(
+        listWatchableCursorChildren(state as unknown as SessionState, {
+          includeDiscovered: false,
+        }).map((child) => child.agentId),
+      ).toEqual(["child-reported"]);
     });
   });
 
@@ -589,9 +600,11 @@ describe("Cursor child transcript discovery", () => {
       const state = makeState([{ toolUseId: "task-1" }]);
 
       hydrateCursorChildTranscripts(state as unknown as SessionState);
-      expect((state.messages[0]!.parts as Array<Record<string, unknown>>)
-        .map((part) => part.sourcePartId))
-        .toEqual(["task-1", "cursor-jsonl:child-a:0:0"]);
+      expect(
+        (state.messages[0]!.parts as Array<Record<string, unknown>>).map(
+          (part) => part.sourcePartId,
+        ),
+      ).toEqual(["task-1", "cursor-jsonl:child-a:0:0"]);
 
       // Cursor reports the real child as the launch settles.
       const launch = state.messages[0]!.parts[0] as Record<string, unknown>;
@@ -636,20 +649,27 @@ describe("Cursor child transcript discovery", () => {
       const parts = state.messages[0]!.parts as Array<Record<string, unknown>>;
       expect(parts[0]).toMatchObject({ toolArgs: { prompt: "The prompt Cursor reported." } });
       // The child's activity still projects; only the label is left alone.
-      expect(parts.map((part) => part.sourcePartId))
-        .toEqual(["task-1", "cursor-jsonl:child-a:0:0"]);
+      expect(parts.map((part) => part.sourcePartId)).toEqual([
+        "task-1",
+        "cursor-jsonl:child-a:0:0",
+      ]);
     });
   });
 
   test("recovers the prompt from a child's opening record", () => {
-    expect(cursorChildTranscriptPrompt(promptRecord(
-      "<timestamp>Sunday</timestamp>\n<user_query>\nInventory the Codex surface.\n</user_query>",
-    ))).toBe("Inventory the Codex surface.");
+    expect(
+      cursorChildTranscriptPrompt(
+        promptRecord(
+          "<timestamp>Sunday</timestamp>\n<user_query>\nInventory the Codex surface.\n</user_query>",
+        ),
+      ),
+    ).toBe("Inventory the Codex surface.");
     // No envelope: the record's own text stands, minus the timestamp.
-    expect(cursorChildTranscriptPrompt(promptRecord("<timestamp>Sunday</timestamp>\nJust do it.")))
-      .toBe("Just do it.");
+    expect(
+      cursorChildTranscriptPrompt(promptRecord("<timestamp>Sunday</timestamp>\nJust do it.")),
+    ).toBe("Just do it.");
     // A tail read that lost the head has no prompt to recover.
     expect(cursorChildTranscriptPrompt(toolRecord("Read"))).toBeUndefined();
-    expect(cursorChildTranscriptPrompt("{\"role\":\"user\",\"mess")).toBeUndefined();
+    expect(cursorChildTranscriptPrompt('{"role":"user","mess')).toBeUndefined();
   });
 });

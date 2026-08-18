@@ -20,9 +20,7 @@ import {
   shellArg,
   shellDq,
 } from "./tmux-shared.js";
-import {
-  TmuxBackend,
-} from "./tmux-backend.js";
+import { TmuxBackend } from "./tmux-backend.js";
 type CommandContext = shared.CommandContext;
 type AgentToolConnection = shared.AgentToolConnection;
 type Environment = shared.Environment;
@@ -102,12 +100,12 @@ export function parseBlockingHookTiming(content: string | undefined): {
     const requestedAt = parsed.requestedAt;
     const expiresAt = parsed.expiresAt;
     if (
-      typeof requestedAt !== "number"
-      || typeof expiresAt !== "number"
-      || !Number.isSafeInteger(requestedAt)
-      || !Number.isSafeInteger(expiresAt)
-      || requestedAt <= 0
-      || expiresAt - requestedAt !== AGENT_INTERACTION_DEFAULT_TIMEOUT_MS
+      typeof requestedAt !== "number" ||
+      typeof expiresAt !== "number" ||
+      !Number.isSafeInteger(requestedAt) ||
+      !Number.isSafeInteger(expiresAt) ||
+      requestedAt <= 0 ||
+      expiresAt - requestedAt !== AGENT_INTERACTION_DEFAULT_TIMEOUT_MS
     ) {
       return null;
     }
@@ -124,10 +122,8 @@ export async function readBlockingHookTiming(
   id: string,
 ): Promise<{ requestedAt: number; expiresAt: number } | null> {
   const authoritative = parseBlockingHookTiming(
-    (await backend.readBoundedFile(
-      `${paths.timingDir}/${filename}`,
-      TMUX_HOOK_TIMING_MAX_BYTES,
-    ))?.content,
+    (await backend.readBoundedFile(`${paths.timingDir}/${filename}`, TMUX_HOOK_TIMING_MAX_BYTES))
+      ?.content,
   );
   // Hooks installed by an older backend do not have a timing sidecar. Keep
   // their pending prompts displayable until the workspace hook is reinstalled.
@@ -144,7 +140,10 @@ export function workspaceHookPaths(runtimeRoot: string, workspace: string): Work
   };
 }
 
-export function sessionHookPaths(workspace: WorkspaceHookPaths, sessionId: string): SessionHookPaths {
+export function sessionHookPaths(
+  workspace: WorkspaceHookPaths,
+  sessionId: string,
+): SessionHookPaths {
   const sessionDir = `${workspace.sessionsDir}/${sessionId}`;
   return {
     sessionDir,
@@ -354,11 +353,15 @@ fi
 }
 
 export async function ensureClaudeSettingsGitIgnored(backend: TmuxBackend): Promise<void> {
-  await backend.exec(["bash", "-lc", gitExcludeSetupScript(CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN)])
+  await backend
+    .exec(["bash", "-lc", gitExcludeSetupScript(CLAUDE_SETTINGS_LOCAL_GIT_EXCLUDE_PATTERN)])
     .catch((error) => console.warn("[tmux] failed to configure git exclude", error));
 }
 
-export async function installWorkspaceHooks(backend: TmuxBackend, paths: WorkspaceHookPaths): Promise<void> {
+export async function installWorkspaceHooks(
+  backend: TmuxBackend,
+  paths: WorkspaceHookPaths,
+): Promise<void> {
   await backend.ensureDir(paths.root);
   await backend.ensureDir(paths.sessionsDir);
   await ensureClaudeSettingsGitIgnored(backend);
@@ -379,13 +382,19 @@ export async function installWorkspaceHooks(backend: TmuxBackend, paths: Workspa
   await backend.writeFile(paths.claudeSettings, mergeSettingsJson(existingSettings, paths.script));
 }
 
-export async function uninstallWorkspaceHooks(backend: TmuxBackend, paths: WorkspaceHookPaths): Promise<void> {
+export async function uninstallWorkspaceHooks(
+  backend: TmuxBackend,
+  paths: WorkspaceHookPaths,
+): Promise<void> {
   await restoreWorkspaceHooks(backend, paths);
   await backend.removeFile(paths.claudeSettingsBackup).catch(() => undefined);
   await backend.removeDir(paths.root).catch(() => undefined);
 }
 
-export async function restoreWorkspaceHooks(backend: TmuxBackend, paths: WorkspaceHookPaths): Promise<void> {
+export async function restoreWorkspaceHooks(
+  backend: TmuxBackend,
+  paths: WorkspaceHookPaths,
+): Promise<void> {
   const backup = await backend.readFile(paths.claudeSettingsBackup);
   if (backup === BACKUP_SENTINEL_NO_ORIGINAL) {
     await backend.removeFile(paths.claudeSettings);
@@ -394,7 +403,10 @@ export async function restoreWorkspaceHooks(backend: TmuxBackend, paths: Workspa
   }
 }
 
-export async function ensureSessionDirs(backend: TmuxBackend, paths: SessionHookPaths): Promise<void> {
+export async function ensureSessionDirs(
+  backend: TmuxBackend,
+  paths: SessionHookPaths,
+): Promise<void> {
   await backend.ensureDir(paths.sessionDir);
   await backend.ensureDir(paths.pendingDir);
   await backend.ensureDir(paths.responseDir);
@@ -474,25 +486,27 @@ export async function drainPending(
       id,
       kind,
       payload,
-      ...(blocking ? await readBlockingHookTiming(backend, paths, name, id) ?? {} : {}),
+      ...(blocking ? ((await readBlockingHookTiming(backend, paths, name, id)) ?? {}) : {}),
     });
   }
   return events;
 }
 
-export async function listPendingBlocking(backend: TmuxBackend, paths: SessionHookPaths): Promise<PendingHookEvent[]> {
-  const names = (await backend.listDir(paths.pendingDir)).filter((name) => name.endsWith(".json")).sort();
+export async function listPendingBlocking(
+  backend: TmuxBackend,
+  paths: SessionHookPaths,
+): Promise<PendingHookEvent[]> {
+  const names = (await backend.listDir(paths.pendingDir))
+    .filter((name) => name.endsWith(".json"))
+    .sort();
   const events: PendingHookEvent[] = [];
   for (const name of names) {
     const { kind, id } = parseEventFilename(name);
     if (!isBlockingHook(kind)) continue;
-    if (await backend.readFile(`${paths.responseDir}/${name}`) !== undefined) continue;
+    if ((await backend.readFile(`${paths.responseDir}/${name}`)) !== undefined) continue;
 
     const pendingPath = `${paths.pendingDir}/${name}`;
-    const read = await backend.readBoundedFile(
-      pendingPath,
-      TMUX_HOOK_PAYLOAD_MAX_BYTES,
-    );
+    const read = await backend.readBoundedFile(pendingPath, TMUX_HOOK_PAYLOAD_MAX_BYTES);
     if (read?.truncated) {
       await replyToHook(
         backend,
@@ -516,7 +530,7 @@ export async function listPendingBlocking(backend: TmuxBackend, paths: SessionHo
       id,
       kind,
       payload,
-      ...(await readBlockingHookTiming(backend, paths, name, id) ?? {}),
+      ...((await readBlockingHookTiming(backend, paths, name, id)) ?? {}),
     });
   }
   return events;
@@ -536,11 +550,12 @@ export async function replyToHook(
 }
 
 export function preToolUseResponse(decision: string, reason?: string): unknown {
-  const permissionDecision = decision === "approve" || decision === "allow"
-    ? "allow"
-    : decision === "block" || decision === "deny"
-      ? "deny"
-      : decision;
+  const permissionDecision =
+    decision === "approve" || decision === "allow"
+      ? "allow"
+      : decision === "block" || decision === "deny"
+        ? "deny"
+        : decision;
   const hookSpecificOutput: Record<string, string> = {
     hookEventName: "PreToolUse",
     permissionDecision,
@@ -584,7 +599,7 @@ export async function findTranscriptPath(
 ): Promise<string | undefined> {
   const projectDir = `${claudeHome}/projects/${encodeCwd(cwd)}`;
   const exact = `${projectDir}/${sessionId}.jsonl`;
-  if (await backend.fileSize(exact) > 0 || await backend.readFile(exact) !== undefined) {
+  if ((await backend.fileSize(exact)) > 0 || (await backend.readFile(exact)) !== undefined) {
     return exact;
   }
   if (minMtimeUnix !== undefined) {
@@ -624,8 +639,9 @@ export async function newestJsonlInDir(
   let candidates: Array<{ path: string; mtime: number }>;
   if (backend.kind === "container") {
     const out = await backend.exec(["sh", "-c", newestJsonlFindCommand(dirPath, minMtimeUnix)]);
-    candidates = parseFreshJsonlFindOutput(out.stdout)
-      .filter((candidate) => isDirectJsonlChild(dirPath, candidate.path));
+    candidates = parseFreshJsonlFindOutput(out.stdout).filter((candidate) =>
+      isDirectJsonlChild(dirPath, candidate.path),
+    );
   } else {
     const names = await backend.listDir(dirPath);
     candidates = [];
@@ -641,7 +657,7 @@ export async function newestJsonlInDir(
 
   const matches: Array<{ path: string; mtime: number }> = [];
   for (const candidate of candidates) {
-    const content = await backend.readFile(candidate.path) ?? "";
+    const content = (await backend.readFile(candidate.path)) ?? "";
     if (transcriptContainsSessionId(content, sessionId)) {
       matches.push(candidate);
     }
@@ -696,7 +712,15 @@ export async function listPreviousSessions(
   backend: TmuxBackend,
   claudeHome: string,
   cwd: string,
-): Promise<Array<{ session_id: string; title: string | null; last_activity_unix: number; message_count: number; transcript_path: string }>> {
+): Promise<
+  Array<{
+    session_id: string;
+    title: string | null;
+    last_activity_unix: number;
+    message_count: number;
+    transcript_path: string;
+  }>
+> {
   const projectDir = `${claudeHome}/projects/${encodeCwd(cwd)}`;
   const candidates = (await backend.listJsonlByMtime(projectDir)).slice(0, MAX_PREVIOUS_SESSIONS);
 
@@ -736,10 +760,16 @@ export function titleFromTranscriptHead(head: string, truncated: boolean): strin
     }
     if (!value || typeof value !== "object") continue;
     const record = value as Record<string, unknown>;
-    const message = record.message && typeof record.message === "object"
-      ? record.message as Record<string, unknown>
-      : undefined;
-    const role = typeof message?.role === "string" ? message.role : typeof record.type === "string" ? record.type : undefined;
+    const message =
+      record.message && typeof record.message === "object"
+        ? (record.message as Record<string, unknown>)
+        : undefined;
+    const role =
+      typeof message?.role === "string"
+        ? message.role
+        : typeof record.type === "string"
+          ? record.type
+          : undefined;
     if (role !== "user") continue;
     const contentField = message?.content ?? record.content;
     const text = extractTextContent(contentField);
@@ -761,7 +791,9 @@ export function extractTextContent(content: unknown): string | undefined {
 
 export function truncateTitle(value: string, maxChars: number): string {
   const singleLine = value.replaceAll("\n", " ");
-  return Array.from(singleLine).length <= maxChars ? singleLine : `${Array.from(singleLine).slice(0, maxChars).join("")}...`;
+  return Array.from(singleLine).length <= maxChars
+    ? singleLine
+    : `${Array.from(singleLine).slice(0, maxChars).join("")}...`;
 }
 
 export class TranscriptTail {
@@ -784,7 +816,7 @@ export class TranscriptTail {
    * transcripts reach many megabytes and this runs every 250ms.
    */
   async readNew(backend: TmuxBackend, knownSize?: number): Promise<unknown[]> {
-    const size = knownSize ?? await backend.fileSize(this.filePath);
+    const size = knownSize ?? (await backend.fileSize(this.filePath));
     // A transcript path may be truncated or replaced when Claude resumes or
     // rotates its writer. The previous byte offset is meaningless for the new
     // shorter file, and carrying its partial line would corrupt the first new
@@ -882,9 +914,11 @@ export function permissionModeFromPane(snapshot: string): string | undefined {
   const normalized = snapshot.toLowerCase().split("\n").slice(-6).join("\n");
   if (normalized.includes("plan mode on")) return "plan";
   if (normalized.includes("bypass permissions on")) return "bypassPermissions";
-  if (normalized.includes("accept edits on") || normalized.includes("edit automatically on")) return "acceptEdits";
+  if (normalized.includes("accept edits on") || normalized.includes("edit automatically on"))
+    return "acceptEdits";
   if (normalized.includes("auto mode on")) return "auto";
-  if (normalized.includes("ask before edits on") || normalized.includes("manual mode on")) return "default";
+  if (normalized.includes("ask before edits on") || normalized.includes("manual mode on"))
+    return "default";
   if (normalized.includes("don't ask on") || normalized.includes("dont ask on")) return "dontAsk";
   return undefined;
 }
@@ -924,11 +958,11 @@ export function thinkingDisplayProbeArgs(claudeCommand: string): string[] {
 export function thinkingDisplayProbeIndicatesSupport(probe: ExecOutput): boolean {
   const output = `${probe.stdout}\n${probe.stderr}`;
   return (
-    probe.status !== 0
-    && output.includes(THINKING_DISPLAY_FLAG)
+    probe.status !== 0 &&
+    output.includes(THINKING_DISPLAY_FLAG) &&
     // A future CLI that rejects an unknown option here would also name the
     // flag; only an argument-validation failure means it is supported.
-    && !output.toLowerCase().includes("unknown option")
+    !output.toLowerCase().includes("unknown option")
   );
 }
 
@@ -953,5 +987,3 @@ export async function probeThinkingDisplaySupport(
     return false;
   }
 }
-
-

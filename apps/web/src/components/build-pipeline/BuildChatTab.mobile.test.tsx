@@ -1,19 +1,5 @@
-import {
-  afterAll,
-  beforeEach,
-  describe,
-  expect,
-  mock,
-  test,
-} from "bun:test";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  within,
-} from "@testing-library/react";
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useBuildPipelineStore, type BuildPipeline } from "@/stores/buildPipelineStore";
 import * as realHooks from "@/hooks";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
@@ -86,10 +72,7 @@ const { BuildChatTab } = await import("./BuildChatTab");
 
 afterAll(() => {
   mock.module("@/hooks", () => realHooksSnapshot);
-  mock.module(
-    "@/components/chat/VirtualizedMessageList",
-    () => realVirtualizedMessageListSnapshot,
-  );
+  mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
   restoreMatchMedia();
 });
 
@@ -110,11 +93,13 @@ const pipeline: BuildPipeline = {
       status: "idle",
       startedAt: "2026-07-29T00:00:00.000Z",
       label: "Build Session",
-      messages: [{
-        id: "answer-1",
-        role: "assistant",
-        parts: [{ type: "text", content: "Implementation complete" }],
-      }],
+      messages: [
+        {
+          id: "answer-1",
+          role: "assistant",
+          parts: [{ type: "text", content: "Implementation complete" }],
+        },
+      ],
     },
     {
       phase: "verify",
@@ -124,11 +109,13 @@ const pipeline: BuildPipeline = {
       status: "running",
       startedAt: "2026-07-29T00:01:00.000Z",
       label: "Verification Session",
-      messages: [{
-        id: "answer-2",
-        role: "assistant",
-        parts: [{ type: "text", content: "All criteria pass" }],
-      }],
+      messages: [
+        {
+          id: "answer-2",
+          role: "assistant",
+          parts: [{ type: "text", content: "All criteria pass" }],
+        },
+      ],
     },
   ],
   currentSessionIndex: 1,
@@ -166,11 +153,13 @@ const reviewed: BuildPipeline = {
       label: "Review Session",
       structuredRequestId: "review-request",
       structuredResultStatus: "accepted",
-      messages: [{
-        id: "review-answer",
-        role: "assistant",
-        parts: [{ type: "text", content: "The review is complete" }],
-      }],
+      messages: [
+        {
+          id: "review-answer",
+          role: "assistant",
+          parts: [{ type: "text", content: "The review is complete" }],
+        },
+      ],
     },
     pipeline.sessions[1]!,
   ],
@@ -185,15 +174,17 @@ function renderPipeline(next: BuildPipeline) {
     pipelines: new Map([[next.id, next]]),
     buildEnvironmentIds: new Set([next.environmentId]),
   });
-  render(<BuildChatTab
-    data={{
-      pipelineId: next.id,
-      environmentId: next.environmentId,
-      taskId: next.taskId,
-      isLocal: true,
-    }}
-    isActive
-  />);
+  render(
+    <BuildChatTab
+      data={{
+        pipelineId: next.id,
+        environmentId: next.environmentId,
+        taskId: next.taskId,
+        isLocal: true,
+      }}
+      isActive
+    />,
+  );
 }
 
 function renderTab() {
@@ -241,11 +232,11 @@ describe("BuildChatTab on a phone", () => {
   test("opens on the transcript with the stage rail folded away", () => {
     renderTab();
 
-    expect(viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected"))
-      .toBe("false");
+    expect(viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected")).toBe(
+      "false",
+    );
     expect(
-      viewTabs().getByRole("tab", { name: "Verification Session" })
-        .getAttribute("aria-selected"),
+      viewTabs().getByRole("tab", { name: "Verification Session" }).getAttribute("aria-selected"),
     ).toBe("true");
     // The rail would otherwise take 240px of a ~390px screen.
     expect(stageTab("Build Session")).toBeNull();
@@ -261,9 +252,11 @@ describe("BuildChatTab on a phone", () => {
     // Still in the DOM, just not on screen: unmounting it would throw away the
     // transcript's scroll position every time the user checked the stage list.
     expect(screen.getByText("All criteria pass")).toBeTruthy();
-    expect(document.getElementById(
-      viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-controls")!,
-    )?.hidden).toBe(false);
+    expect(
+      document.getElementById(
+        viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-controls")!,
+      )?.hidden,
+    ).toBe(false);
     // The composer addresses the transcript, so it travels with it rather than
     // eating a third of the stage list.
     expect(screen.queryByRole("textbox") === null).toBe(true);
@@ -292,8 +285,7 @@ describe("BuildChatTab on a phone", () => {
     fireEvent.click(stageTab("Build Session")!);
 
     expect(
-      viewTabs().getByRole("tab", { name: "Build Session" })
-        .getAttribute("aria-selected"),
+      viewTabs().getByRole("tab", { name: "Build Session" }).getAttribute("aria-selected"),
     ).toBe("true");
     expect(stageTab("Verification Session")).toBeNull();
     expect(screen.getByText("Implementation complete")).toBeTruthy();
@@ -342,8 +334,7 @@ describe("BuildChatTab on a phone", () => {
     // in the stage list does.
     expect(stageTab("Review Session")).toBeNull();
     expect(
-      viewTabs().getByRole("tab", { name: "Review Session" })
-        .getAttribute("aria-selected"),
+      viewTabs().getByRole("tab", { name: "Review Session" }).getAttribute("aria-selected"),
     ).toBe("true");
     expect(screen.getByText("The review is complete")).toBeTruthy();
     // Selecting the report removes the focused hint. Keep keyboard focus on
@@ -360,17 +351,16 @@ describe("BuildChatTab on a phone", () => {
 
     // Arrow keys walk the list; only an explicit pick switches views.
     expect(stageTab("Build Session")?.getAttribute("aria-selected")).toBe("true");
-    expect(
-      viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected"),
-    ).toBe("true");
+    expect(viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
   });
 
   test("moves between the two views with arrow keys", () => {
     renderTab();
-    fireEvent.keyDown(
-      viewTabs().getByRole("tab", { name: "Verification Session" }),
-      { key: "ArrowLeft" },
-    );
+    fireEvent.keyDown(viewTabs().getByRole("tab", { name: "Verification Session" }), {
+      key: "ArrowLeft",
+    });
 
     const stages = viewTabs().getByRole("tab", { name: "Stages" });
     expect(stages.getAttribute("aria-selected")).toBe("true");
@@ -388,8 +378,7 @@ describe("BuildChatTab on a phone", () => {
     fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
     fireEvent.click(viewTabs().getByRole("tab", { name: "Verification Session" }));
 
-    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value)
-      .toBe("check the migration");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("check the migration");
   });
 });
 
@@ -418,9 +407,9 @@ describe("BuildChatTab across the breakpoint", () => {
     act(() => emitViewportChange(false));
     act(() => emitViewportChange(true));
 
-    expect(
-      viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected"),
-    ).toBe("true");
+    expect(viewTabs().getByRole("tab", { name: "Stages" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
     expect(stageTab("Build Session")).toBeTruthy();
     expect(screen.queryByRole("textbox") === null).toBe(true);
     expect(lastScrollState().isActive).toBe(false);

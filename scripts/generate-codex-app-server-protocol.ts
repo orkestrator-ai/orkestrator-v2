@@ -19,15 +19,7 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  realpath,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, platform, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -36,10 +28,8 @@ const execFile = promisify(execFileCallback);
 
 const repoRoot = join(import.meta.dir, "..");
 const versionConfigPath = join(repoRoot, "config", "codex-version.json");
-export const EXPECTED_PROTOCOL_OUTPUT_DIR =
-  "bridges/codex-bridge/src/app-server/generated";
-export const ALLOW_MISSING_PROTOCOL_BINARY_ENV =
-  "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
+export const EXPECTED_PROTOCOL_OUTPUT_DIR = "bridges/codex-bridge/src/app-server/generated";
+export const ALLOW_MISSING_PROTOCOL_BINARY_ENV = "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY";
 
 export interface CodexVersionConfig {
   version: string;
@@ -74,9 +64,7 @@ export interface ProtocolGeneratorArguments {
 export function parseArguments(args: string[]): ProtocolGeneratorArguments {
   if (args.length === 0) return { check: false };
   if (args.length === 1 && args[0] === "--check") return { check: true };
-  throw new Error(
-    "usage: bun scripts/generate-codex-app-server-protocol.ts [--check]",
-  );
+  throw new Error("usage: bun scripts/generate-codex-app-server-protocol.ts [--check]");
 }
 
 export function validateVersionConfig(config: CodexVersionConfig): void {
@@ -94,10 +82,12 @@ export function validateVersionConfig(config: CodexVersionConfig): void {
 
 function isPathInside(parent: string, child: string): boolean {
   const pathFromParent = relative(parent, child);
-  return pathFromParent.length > 0
-    && pathFromParent !== ".."
-    && !pathFromParent.startsWith(`..${sep}`)
-    && !isAbsolute(pathFromParent);
+  return (
+    pathFromParent.length > 0 &&
+    pathFromParent !== ".." &&
+    !pathFromParent.startsWith(`..${sep}`) &&
+    !isAbsolute(pathFromParent)
+  );
 }
 
 /**
@@ -134,10 +124,7 @@ export async function resolveProtocolOutputDir(
     realpath(lexicalRoot),
     realpath(existingAncestor),
   ]);
-  const realTarget = resolve(
-    realAncestor,
-    relative(existingAncestor, lexicalTarget),
-  );
+  const realTarget = resolve(realAncestor, relative(existingAncestor, lexicalTarget));
   if (!isPathInside(realRoot, realTarget)) {
     throw new Error(
       "Refusing protocol output path whose existing ancestor resolves outside the repository",
@@ -180,7 +167,13 @@ export function candidateBinaries(
         ];
   for (const root of managedRoots) {
     candidates.push(
-      join(root, "codex", pinnedVersion, `${currentPlatform === "darwin" ? "darwin" : "linux"}-${arch}`, "codex"),
+      join(
+        root,
+        "codex",
+        pinnedVersion,
+        `${currentPlatform === "darwin" ? "darwin" : "linux"}-${arch}`,
+        "codex",
+      ),
     );
   }
 
@@ -287,7 +280,9 @@ function normalizeGeneratedSource(source: string): string {
     (_match, prefix: string, specifier: string, suffix: string) => {
       if (/\.(js|json)$/.test(specifier)) return `${prefix}${specifier}${suffix}`;
       // `export * as v2 from "./v2"` targets a directory index.
-      const target = /\/(v2|serde_json)$/.test(specifier) ? `${specifier}/index.js` : `${specifier}.js`;
+      const target = /\/(v2|serde_json)$/.test(specifier)
+        ? `${specifier}/index.js`
+        : `${specifier}.js`;
       return `${prefix}${target}${suffix}`;
     },
   );
@@ -437,11 +432,7 @@ async function readCommitted(outputDir: string): Promise<GeneratedProtocol | nul
 
 function describeDifferences(expected: GeneratedProtocol, actual: GeneratedProtocol): string[] {
   const problems: string[] = [];
-  for (const key of [
-    "codexVersion",
-    "typescriptFileCount",
-    "schemaFileCount",
-  ] as const) {
+  for (const key of ["codexVersion", "typescriptFileCount", "schemaFileCount"] as const) {
     if (expected.manifest[key] !== actual.manifest[key]) {
       problems.push(
         `${key} differs (committed ${actual.manifest[key]}, generated ${expected.manifest[key]})`,
@@ -467,17 +458,23 @@ function describeDifferences(expected: GeneratedProtocol, actual: GeneratedProto
     else if (committed !== content) problems.push(`Committed binding is stale: typescript/${path}`);
   }
   for (const path of actualPaths.keys()) {
-    if (!expectedPaths.has(path)) problems.push(`Committed binding no longer generated: typescript/${path}`);
+    if (!expectedPaths.has(path))
+      problems.push(`Committed binding no longer generated: typescript/${path}`);
   }
 
-  for (const key of ["clientRequestMethods", "serverNotificationMethods", "serverRequestMethods"] as const) {
+  for (const key of [
+    "clientRequestMethods",
+    "serverNotificationMethods",
+    "serverRequestMethods",
+  ] as const) {
     const generated = new Set(expected.manifest[key]);
     const committed = new Set(actual.manifest[key]);
     for (const method of generated) {
       if (!committed.has(method)) problems.push(`${key}: new method not in manifest: ${method}`);
     }
     for (const method of committed) {
-      if (!generated.has(method)) problems.push(`${key}: manifest method no longer exists: ${method}`);
+      if (!generated.has(method))
+        problems.push(`${key}: manifest method no longer exists: ${method}`);
     }
   }
 
@@ -507,9 +504,7 @@ function describeCommittedSelfConsistency(
     );
   }
 
-  const byPath = new Map(
-    committed.typescript.map((file) => [file.path, file.content]),
-  );
+  const byPath = new Map(committed.typescript.map((file) => [file.path, file.content]));
   for (const [manifestKey, bindingPath] of [
     ["clientRequestMethods", "ClientRequest.ts"],
     ["serverNotificationMethods", "ServerNotification.ts"],
@@ -523,9 +518,7 @@ function describeCommittedSelfConsistency(
     const actualMethods = extractMethods(source);
     const committedMethods = [...committed.manifest[manifestKey]].sort();
     if (JSON.stringify(actualMethods) !== JSON.stringify(committedMethods)) {
-      problems.push(
-        `${manifestKey} does not describe typescript/${bindingPath}`,
-      );
+      problems.push(`${manifestKey} does not describe typescript/${bindingPath}`);
     }
   }
   return problems;
@@ -550,11 +543,7 @@ async function write(outputDir: string, generated: GeneratedProtocol): Promise<v
   }
 
   await mkdir(outputDir, { recursive: true });
-  await writeFile(
-    manifestPath,
-    `${JSON.stringify(generated.manifest, null, 2)}\n`,
-    "utf8",
-  );
+  await writeFile(manifestPath, `${JSON.stringify(generated.manifest, null, 2)}\n`, "utf8");
   await writeFile(
     readmePath,
     [
@@ -591,9 +580,7 @@ async function main(): Promise<void> {
   const { check } = parseArguments(process.argv.slice(2));
   const config = await readVersionConfig();
   validateVersionConfig(config);
-  const outputDir = await resolveProtocolOutputDir(
-    config.appServerProtocol.outputDir,
-  );
+  const outputDir = await resolveProtocolOutputDir(config.appServerProtocol.outputDir);
 
   let committed: GeneratedProtocol | null = null;
   if (check) {
@@ -603,10 +590,7 @@ async function main(): Promise<void> {
         `No committed protocol artifacts at ${config.appServerProtocol.outputDir}. Run the generator without --check.`,
       );
     }
-    const selfConsistencyProblems = describeCommittedSelfConsistency(
-      committed,
-      config.version,
-    );
+    const selfConsistencyProblems = describeCommittedSelfConsistency(committed, config.version);
     if (selfConsistencyProblems.length > 0) {
       throw new Error(
         [
@@ -622,9 +606,9 @@ async function main(): Promise<void> {
     codexBinary = await resolveCodexBinary(config.version);
   } catch (error) {
     const allowMissing =
-      check
-      && !process.env.CODEX_PROTOCOL_BINARY?.trim()
-      && process.env[ALLOW_MISSING_PROTOCOL_BINARY_ENV] === "1";
+      check &&
+      !process.env.CODEX_PROTOCOL_BINARY?.trim() &&
+      process.env[ALLOW_MISSING_PROTOCOL_BINARY_ENV] === "1";
     if (!allowMissing) throw error;
     /**
      * Say plainly what was *not* checked.
@@ -636,10 +620,10 @@ async function main(): Promise<void> {
      * gate that requires it.
      */
     console.warn(
-      "[codex-protocol] WARNING: the pinned binary is unavailable, so the "
-      + "committed bindings were NOT verified against the protocol. Only "
-      + "internal self-consistency was checked. Run `bun run verify:codex:protocol` "
-      + "on a machine with the pinned Codex toolchain before releasing.",
+      "[codex-protocol] WARNING: the pinned binary is unavailable, so the " +
+        "committed bindings were NOT verified against the protocol. Only " +
+        "internal self-consistency was checked. Run `bun run verify:codex:protocol` " +
+        "on a machine with the pinned Codex toolchain before releasing.",
     );
     return;
   }

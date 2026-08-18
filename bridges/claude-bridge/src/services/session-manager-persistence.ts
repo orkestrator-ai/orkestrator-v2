@@ -3,7 +3,11 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import type {
+  ImageBlockParam,
+  TextBlockParam,
+  ContentBlockParam,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   ModelInfo,
   SessionState,
@@ -31,10 +35,7 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -87,12 +88,8 @@ import {
   sessionHasPendingInteractions,
   waitForPendingPromptDispatchClaim,
 } from "./session-manager-lifecycle.js";
-import {
-  normalizePersistedSessionMessages,
-} from "./session-manager-messages.js";
-import {
-  releaseQueryControls,
-} from "./session-manager-background-tasks.js";
+import { normalizePersistedSessionMessages } from "./session-manager-messages.js";
+import { releaseQueryControls } from "./session-manager-background-tasks.js";
 type OrderedPartEntry = messageParts.OrderedPartEntry;
 type BackgroundTaskSystemMessage = messageParts.BackgroundTaskSystemMessage;
 type BackgroundTaskLaunch = messageParts.BackgroundTaskLaunch;
@@ -204,10 +201,7 @@ export async function reconcilePersistedSessions(): Promise<void> {
       // in-memory title; a summary may only fill a still-default placeholder.
       if (info.customTitle) {
         existing.title = info.customTitle;
-      } else if (
-        info.summary
-        && isDefaultSessionTitle(existing.title, id, info.sessionId)
-      ) {
+      } else if (info.summary && isDefaultSessionTitle(existing.title, id, info.sessionId)) {
         existing.title = info.summary;
       }
       existing.lastActivity = new Date(info.lastModified);
@@ -228,9 +222,7 @@ export async function reconcilePersistedSessions(): Promise<void> {
         : {}),
       ...(storedPreferences?.dispatchedRequestIds?.length
         ? {
-            dispatchedRequestIds: new Set(
-              storedPreferences.dispatchedRequestIds,
-            ),
+            dispatchedRequestIds: new Set(storedPreferences.dispatchedRequestIds),
           }
         : {}),
       ...(sessionPreferencesUnavailable(storedPreferences)
@@ -288,9 +280,7 @@ export async function materializePersistedSessionState(
     ...(preferences?.dispatchedRequestIds?.length
       ? { dispatchedRequestIds: new Set(preferences.dispatchedRequestIds) }
       : {}),
-    ...(sessionPreferencesUnavailable(preferences)
-      ? { dispatchJournalUnavailable: true }
-      : {}),
+    ...(sessionPreferencesUnavailable(preferences) ? { dispatchJournalUnavailable: true } : {}),
   };
   touchSession(state);
   sessions.set(sessionId, state);
@@ -300,9 +290,7 @@ export async function materializePersistedSessionState(
   return state;
 }
 
-export async function ensurePersistedSession(
-  sessionId: string,
-): Promise<SessionState | undefined> {
+export async function ensurePersistedSession(sessionId: string): Promise<SessionState | undefined> {
   const existing = sessions.get(sessionId);
   if (existing) {
     touchSession(existing);
@@ -337,13 +325,14 @@ export async function ensurePersistedSession(
  * the transcript for a session it has *already* marked running, which the
  * public entry point deliberately refuses to do.
  */
-export async function readPersistedSessionMessages(
-  session: SessionState,
-): Promise<{
-  messages: NormalizedMessage[];
-  taskRegistry: TaskRegistry;
-  backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
-} | undefined> {
+export async function readPersistedSessionMessages(session: SessionState): Promise<
+  | {
+      messages: NormalizedMessage[];
+      taskRegistry: TaskRegistry;
+      backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
+    }
+  | undefined
+> {
   if (!session.sdkSessionId) return undefined;
   const sdk = await claudeSdk();
   if (typeof sdk.getSessionMessages !== "function") return undefined;
@@ -354,24 +343,27 @@ export async function readPersistedSessionMessages(
   return normalizePersistedSessionMessages(persisted);
 }
 
-export function readPersistedSessionMessagesOnce(
-  session: SessionState,
-): Promise<{
-  messages: NormalizedMessage[];
-  taskRegistry: TaskRegistry;
-  backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
-} | undefined> {
+export function readPersistedSessionMessagesOnce(session: SessionState): Promise<
+  | {
+      messages: NormalizedMessage[];
+      taskRegistry: TaskRegistry;
+      backgroundTasks?: Record<string, BackgroundTaskSnapshot>;
+    }
+  | undefined
+> {
   if (session.persistedHydration) return session.persistedHydration;
   const hydration = readPersistedSessionMessages(session);
   session.persistedHydration = hydration;
-  void hydration.finally(() => {
-    if (session.persistedHydration === hydration) {
-      session.persistedHydration = undefined;
-    }
-  }).catch(() => {
-    // The caller observes the original rejection. This branch only handles the
-    // promise returned by `finally`, avoiding an unhandled rejection.
-  });
+  void hydration
+    .finally(() => {
+      if (session.persistedHydration === hydration) {
+        session.persistedHydration = undefined;
+      }
+    })
+    .catch(() => {
+      // The caller observes the original rejection. This branch only handles the
+      // promise returned by `finally`, avoiding an unhandled rejection.
+    });
   return hydration;
 }
 
@@ -392,10 +384,10 @@ export async function hydratePersistedSessionMessages(
   // pending. In that case its in-memory state is authoritative; the prompt
   // shares this same read and applies it before appending its live message.
   if (
-    sessions.get(sessionId) === session
-    && (session.status as SessionState["status"]) !== "running"
-    && !session.deleting
-    && session.persistedMessagesLoaded === false
+    sessions.get(sessionId) === session &&
+    (session.status as SessionState["status"]) !== "running" &&
+    !session.deleting &&
+    session.persistedMessagesLoaded === false
   ) {
     if (hydrated) {
       session.messages = hydrated.messages;
@@ -469,19 +461,40 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
     // Only a transcript hydrated from disk can be re-hydrated from disk. This
     // also excludes fresh `createSession` sessions (flag undefined) and
     // sessions whose hydration is pending or previously failed (flag false).
-    if (session.persistedMessagesLoaded !== true) { skip("not-hydrated"); continue; }
-    if (!session.sdkSessionId) { skip("no-rollout"); continue; }
+    if (session.persistedMessagesLoaded !== true) {
+      skip("not-hydrated");
+      continue;
+    }
+    if (!session.sdkSessionId) {
+      skip("no-rollout");
+      continue;
+    }
     // `error` is deliberately included alongside `running`: a failed turn's
     // control handles are torn down, but `status` stays `error` until the next
     // prompt, so excluding it would pin that transcript for the process
     // lifetime. The remaining guards below still cover anything it left live.
-    if (session.status === "running") { skip("running"); continue; }
-    if (session.deleting || session.rewindInProgress) { skip("claimed"); continue; }
-    if (session.abortController) { skip("abort-controller"); continue; }
-    if (session.persistedHydration) { skip("hydrating"); continue; }
+    if (session.status === "running") {
+      skip("running");
+      continue;
+    }
+    if (session.deleting || session.rewindInProgress) {
+      skip("claimed");
+      continue;
+    }
+    if (session.abortController) {
+      skip("abort-controller");
+      continue;
+    }
+    if (session.persistedHydration) {
+      skip("hydrating");
+      continue;
+    }
     // A live or recently completed turn: control handles may still own
     // background work, and the turn holds direct references into `messages`.
-    if (session.queryControl) { skip("query-control"); continue; }
+    if (session.queryControl) {
+      skip("query-control");
+      continue;
+    }
     if (session.backgroundTaskControls && session.backgroundTaskControls.size > 0) {
       skip("background-task-controls");
       continue;
@@ -505,18 +518,25 @@ export function evictIdleHydratedTranscripts(now: number = Date.now()): string[]
     if (
       (Object.values(session.backgroundTasks ?? {}) as BackgroundTaskSnapshot[]).some(
         (task: BackgroundTaskSnapshot) =>
-          task.status === "pending"
-          || task.status === "running"
-          || task.status === "paused",
+          task.status === "pending" || task.status === "running" || task.status === "paused",
       )
     ) {
       skip("background-tasks");
       continue;
     }
-    if (sessionHasPendingInteractions(session.id)) { skip("pending-interaction"); continue; }
-    if (session.messages.length === 0 && !session.taskRegistry) { skip("empty"); continue; }
+    if (sessionHasPendingInteractions(session.id)) {
+      skip("pending-interaction");
+      continue;
+    }
+    if (session.messages.length === 0 && !session.taskRegistry) {
+      skip("empty");
+      continue;
+    }
     const lastAccessedAt = session.lastAccessedAt ?? session.lastActivity.getTime();
-    if (now - lastAccessedAt < IDLE_TRANSCRIPT_EVICTION_MS) { skip("recently-read"); continue; }
+    if (now - lastAccessedAt < IDLE_TRANSCRIPT_EVICTION_MS) {
+      skip("recently-read");
+      continue;
+    }
     // A message with a revision was streamed by this process; see above. With
     // no recorded stream time we cannot tell how stale it is, so keep it.
     if (session.messages.some((message: NormalizedMessage) => message.revision !== undefined)) {
@@ -566,7 +586,7 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
   // Do not introduce an `await` for an already registered session: deletion
   // must claim it synchronously so a prompt cannot slip in on the next
   // microtask before `deleting` is visible.
-  const session = sessions.get(sessionId) ?? await ensurePersistedSession(sessionId);
+  const session = sessions.get(sessionId) ?? (await ensurePersistedSession(sessionId));
   if (!session) {
     // A prior attempt can delete the SDK rollout and then fail while removing
     // bridge-owned metadata. Let a retry finish that cleanup even though the
@@ -591,8 +611,7 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
   await waitForPendingPromptDispatchClaim(sessionId);
   let rolloutDeleted = false;
   try {
-    const preferenceSessionId =
-      session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
+    const preferenceSessionId = session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
     if (session.sdkSessionId) {
       const sdk = await claudeSdk();
       if (typeof sdk.deleteSession === "function") {
@@ -631,10 +650,7 @@ export async function deleteSessionDurably(sessionId: string): Promise<boolean> 
   }
 }
 
-export async function renameSessionDurably(
-  sessionId: string,
-  title: string,
-): Promise<boolean> {
+export async function renameSessionDurably(sessionId: string, title: string): Promise<boolean> {
   const session = await ensurePersistedSession(sessionId);
   if (!session) return false;
   await persistSessionTitle(session, title);
@@ -733,8 +749,7 @@ export async function resolvePersistedMessageId(
   });
   const match = persisted.find(
     (message: { uuid?: string; type?: string }) =>
-      message.uuid === candidate
-      && allowedTypes.has(message.type as "user" | "assistant"),
+      message.uuid === candidate && allowedTypes.has(message.type as "user" | "assistant"),
   );
   return match?.uuid;
 }
@@ -837,16 +852,12 @@ export async function rewindSessionFiles(
     if (typeof liveRewind === "function") {
       result = await liveRewind.call(session.queryControl, persistedMessageId, { dryRun });
     } else {
-      result = await rewindViaTransientQuery(
-        session.sdkSessionId,
-        persistedMessageId,
-        dryRun,
-      );
+      result = await rewindViaTransientQuery(session.sdkSessionId, persistedMessageId, dryRun);
     }
     if (
-      !result
-      || typeof result !== "object"
-      || (result as { canRewind?: unknown }).canRewind !== true
+      !result ||
+      typeof result !== "object" ||
+      (result as { canRewind?: unknown }).canRewind !== true
     ) {
       const providerError =
         typeof (result as { error?: unknown } | null)?.error === "string"
@@ -859,7 +870,6 @@ export async function rewindSessionFiles(
     session.rewindInProgress = false;
   }
 }
-
 
 /**
  * Whether a rebuilt part is indistinguishable from the one already published
@@ -877,10 +887,7 @@ export function isSamePublishedPart(
   if (published === next) return true;
   if (!published || published.type !== next.type) return false;
   if (next.type === "text" || next.type === "thinking") {
-    return (
-      published.content === next.content
-      && published.parentTaskUseId === next.parentTaskUseId
-    );
+    return published.content === next.content && published.parentTaskUseId === next.parentTaskUseId;
   }
   return false;
 }
@@ -895,7 +902,9 @@ export function getMessageTextFromParts(parts: NormalizedPart[]): string {
 /**
  * Detect image media type from file extension.
  */
-export function getImageMediaType(filePath: string): "image/jpeg" | "image/png" | "image/gif" | "image/webp" {
+export function getImageMediaType(
+  filePath: string,
+): "image/jpeg" | "image/png" | "image/gif" | "image/webp" {
   const ext = filePath.split(".").pop()?.toLowerCase();
   switch (ext) {
     case "jpg":
@@ -963,10 +972,10 @@ export function parseBase64ImageData(
 
   const normalized = data.replace(/\s+/g, "");
   if (
-    normalized.length === 0
-    || normalized.length % 4 !== 0
-    || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)
-    || decodedBase64ByteLength(normalized) > MAX_IMAGE_ATTACHMENT_BYTES
+    normalized.length === 0 ||
+    normalized.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized) ||
+    decodedBase64ByteLength(normalized) > MAX_IMAGE_ATTACHMENT_BYTES
   ) {
     return null;
   }
@@ -977,12 +986,8 @@ export function parseBase64ImageData(
 export function isPathWithin(rootPath: string, targetPath: string): boolean {
   const childPath = relative(rootPath, targetPath);
   return (
-    childPath === ""
-    || (
-      childPath !== ".."
-      && !childPath.startsWith(`..${sep}`)
-      && !isAbsolute(childPath)
-    )
+    childPath === "" ||
+    (childPath !== ".." && !childPath.startsWith(`..${sep}`) && !isAbsolute(childPath))
   );
 }
 
@@ -1045,10 +1050,10 @@ export async function assertOpenedWorkspaceFile(
     );
   }
   if (
-    !pathStats.isFile()
-    || !openedStats.isFile()
-    || pathStats.dev !== openedStats.dev
-    || pathStats.ino !== openedStats.ino
+    !pathStats.isFile() ||
+    !openedStats.isFile() ||
+    pathStats.dev !== openedStats.dev ||
+    pathStats.ino !== openedStats.ino
   ) {
     throw new ClaudeAttachmentError(
       "attachment_not_regular_file",
@@ -1071,9 +1076,7 @@ export async function readWorkspaceImageAttachment(
   afterInitialValidation?: (filePath: string) => void | Promise<void>,
 ): Promise<Buffer> {
   const lexicalRoot = resolve(cwd);
-  const targetPath = isAbsolute(filePath)
-    ? resolve(filePath)
-    : resolve(lexicalRoot, filePath);
+  const targetPath = isAbsolute(filePath) ? resolve(filePath) : resolve(lexicalRoot, filePath);
   if (!isPathWithin(lexicalRoot, targetPath)) {
     throw new ClaudeAttachmentError(
       "attachment_outside_workspace",
@@ -1099,11 +1102,9 @@ export async function readWorkspaceImageAttachment(
   await afterCanonicalValidation?.(targetPath);
 
   const noFollow = constants.O_NOFOLLOW ?? 0;
-  const handle = await open(targetPath, constants.O_RDONLY | noFollow).catch(
-    (error: unknown) => {
-      throw attachmentErrorForFsFailure(error);
-    },
-  );
+  const handle = await open(targetPath, constants.O_RDONLY | noFollow).catch((error: unknown) => {
+    throw attachmentErrorForFsFailure(error);
+  });
 
   try {
     const initialStats = await handle.stat();
@@ -1119,7 +1120,7 @@ export async function readWorkspaceImageAttachment(
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     while (totalBytes <= MAX_IMAGE_ATTACHMENT_BYTES) {
-      const remaining = (MAX_IMAGE_ATTACHMENT_BYTES + 1) - totalBytes;
+      const remaining = MAX_IMAGE_ATTACHMENT_BYTES + 1 - totalBytes;
       const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining));
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
@@ -1133,21 +1134,18 @@ export async function readWorkspaceImageAttachment(
       );
     }
     if (totalBytes === 0) {
-      throw new ClaudeAttachmentError(
-        "attachment_invalid_data",
-        "Image attachment file is empty.",
-      );
+      throw new ClaudeAttachmentError("attachment_invalid_data", "Image attachment file is empty.");
     }
 
     const finalStats = await handle.stat();
     await assertOpenedWorkspaceFile(targetPath, canonicalRoot, finalStats);
     if (
-      finalStats.dev !== initialStats.dev
-      || finalStats.ino !== initialStats.ino
-      || finalStats.size !== initialStats.size
-      || finalStats.size !== totalBytes
-      || finalStats.mtimeMs !== initialStats.mtimeMs
-      || finalStats.ctimeMs !== initialStats.ctimeMs
+      finalStats.dev !== initialStats.dev ||
+      finalStats.ino !== initialStats.ino ||
+      finalStats.size !== initialStats.size ||
+      finalStats.size !== totalBytes ||
+      finalStats.mtimeMs !== initialStats.mtimeMs ||
+      finalStats.ctimeMs !== initialStats.ctimeMs
     ) {
       throw new ClaudeAttachmentError(
         "attachment_changed",
@@ -1173,7 +1171,9 @@ export function escapeXmlAttribute(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
-export function attachmentTag(attachment: NonNullable<PromptOptions["attachments"]>[number]): string {
+export function attachmentTag(
+  attachment: NonNullable<PromptOptions["attachments"]>[number],
+): string {
   return `<attachment type="${escapeXmlAttribute(attachment.type)}" path="${escapeXmlAttribute(attachment.path)}" filename="${escapeXmlAttribute(attachment.filename || "")}" />`;
 }
 

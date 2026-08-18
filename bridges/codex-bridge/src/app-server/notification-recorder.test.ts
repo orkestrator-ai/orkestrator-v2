@@ -240,32 +240,38 @@ describe("createRecorderFromEnv", () => {
 
   test("only an exact acknowledgement counts", () => {
     for (const confirm of ["", " ", "0", "true", "yes", "01"]) {
-      expect(createRecorderFromEnv({
+      expect(
+        createRecorderFromEnv({
+          generation: 1,
+          env: {
+            CODEX_BRIDGE_RECORD_NOTIFICATIONS: "/tmp/recordings",
+            [RECORD_CONFIRM_ENV]: confirm,
+          },
+          warn: () => undefined,
+        }),
+      ).toBeNull();
+    }
+    expect(
+      createRecorderFromEnv({
         generation: 1,
         env: {
           CODEX_BRIDGE_RECORD_NOTIFICATIONS: "/tmp/recordings",
-          [RECORD_CONFIRM_ENV]: confirm,
+          [RECORD_CONFIRM_ENV]: " 1 ",
         },
         warn: () => undefined,
-      })).toBeNull();
-    }
-    expect(createRecorderFromEnv({
-      generation: 1,
-      env: {
-        CODEX_BRIDGE_RECORD_NOTIFICATIONS: "/tmp/recordings",
-        [RECORD_CONFIRM_ENV]: " 1 ",
-      },
-      warn: () => undefined,
-    })).not.toBeNull();
+      }),
+    ).not.toBeNull();
   });
 
   test("the acknowledgement alone records nothing and says nothing", () => {
     const warnings: string[] = [];
-    expect(createRecorderFromEnv({
-      generation: 1,
-      env: { [RECORD_CONFIRM_ENV]: "1" },
-      warn: (message) => warnings.push(message),
-    })).toBeNull();
+    expect(
+      createRecorderFromEnv({
+        generation: 1,
+        env: { [RECORD_CONFIRM_ENV]: "1" },
+        warn: (message) => warnings.push(message),
+      }),
+    ).toBeNull();
     expect(warnings).toEqual([]);
   });
 });

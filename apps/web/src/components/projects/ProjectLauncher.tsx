@@ -9,10 +9,7 @@ import type { Project } from "@/types";
 
 const RECENT_PROJECT_LIMIT = 5;
 
-export function resolveRecentProjects(
-  projects: Project[],
-  recentProjectIds: string[],
-): Project[] {
+export function resolveRecentProjects(projects: Project[], recentProjectIds: string[]): Project[] {
   const projectsById = new Map(projects.map((project) => [project.id, project]));
   const resolved: Project[] = [];
   const seen = new Set<string>();
@@ -64,9 +61,7 @@ export function ProjectLauncherContent({
         <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
           Workspace
         </p>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-          Recent projects
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Recent projects</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Open a project or start a new environment.
         </p>
@@ -133,9 +128,7 @@ export function ProjectLauncher(operations: CreateEnvironmentFlowOperations) {
   const { projects, isLoading } = useProjects();
   const recentProjectIds = useUIStore((state) => state.recentProjectIds);
   const selectProject = useUIStore((state) => state.selectProject);
-  const [createEnvironmentProjectId, setCreateEnvironmentProjectId] = useState<
-    string | null
-  >(null);
+  const [createEnvironmentProjectId, setCreateEnvironmentProjectId] = useState<string | null>(null);
 
   const recentProjects = useMemo(
     () => resolveRecentProjects(projects, recentProjectIds),
@@ -157,9 +150,7 @@ export function ProjectLauncher(operations: CreateEnvironmentFlowOperations) {
           if (!open) setCreateEnvironmentProjectId(null);
         }}
         projectId={createEnvironmentProjectId}
-        projectName={
-          projects.find((project) => project.id === createEnvironmentProjectId)?.name
-        }
+        projectName={projects.find((project) => project.id === createEnvironmentProjectId)?.name}
         {...operations}
       />
     </div>

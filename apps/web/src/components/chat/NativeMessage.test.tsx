@@ -86,10 +86,7 @@ describe("NativeMessage assistant attribution", () => {
   test("shows the backend-confirmed model instead of the static provider label", () => {
     render(
       <NativeMessage
-        message={makeMessage(
-          [{ type: "text", content: "Done" }],
-          { modelId: "gpt-5.6-sol" },
-        )}
+        message={makeMessage([{ type: "text", content: "Done" }], { modelId: "gpt-5.6-sol" })}
         assistantLabel="Codex"
       />,
     );
@@ -109,34 +106,29 @@ describe("NativeMessage assistant attribution", () => {
     expect(screen.getByText("Codex")).toBeTruthy();
   });
 
-  test.each(["", "   \n"])(
-    "keeps the provider label for an unusable model id %#",
-    (modelId) => {
-      render(
-        <NativeMessage
-          message={makeMessage([{ type: "text", content: "Done" }], { modelId })}
-          assistantLabel="Codex"
-        />,
-      );
+  test.each(["", "   \n"])("keeps the provider label for an unusable model id %#", (modelId) => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "text", content: "Done" }], { modelId })}
+        assistantLabel="Codex"
+      />,
+    );
 
-      expect(screen.getByText("Codex")).toBeTruthy();
-    },
-  );
+    expect(screen.getByText("Codex")).toBeTruthy();
+  });
 
   test("uses a friendly catalog label when the tab supplies a resolver", () => {
     render(
       <NativeMessage
-        message={makeMessage(
-          [{ type: "text", content: "Done" }],
-          { modelId: "anthropic/claude-sonnet-4" },
-        )}
+        message={makeMessage([{ type: "text", content: "Done" }], {
+          modelId: "anthropic/claude-sonnet-4",
+        })}
         assistantLabel="OpenCode"
         resolveModelLabel={() => "Claude Sonnet 4"}
       />,
     );
 
-    expect(screen.getByText("Claude Sonnet 4").getAttribute("title"))
-      .toBe("Claude Sonnet 4");
+    expect(screen.getByText("Claude Sonnet 4").getAttribute("title")).toBe("Claude Sonnet 4");
     expect(screen.queryByText("anthropic/claude-sonnet-4") === null).toBe(true);
   });
 
@@ -145,10 +137,9 @@ describe("NativeMessage assistant attribution", () => {
     (resolvedLabel) => {
       render(
         <NativeMessage
-          message={makeMessage(
-            [{ type: "text", content: "Done" }],
-            { modelId: "anthropic/claude-sonnet-4" },
-          )}
+          message={makeMessage([{ type: "text", content: "Done" }], {
+            modelId: "anthropic/claude-sonnet-4",
+          })}
           assistantLabel="OpenCode"
           resolveModelLabel={() => resolvedLabel}
         />,
@@ -162,10 +153,10 @@ describe("NativeMessage assistant attribution", () => {
   test("always attributes user messages to You even if they carry a model id", () => {
     render(
       <NativeMessage
-        message={makeMessage(
-          [{ type: "text", content: "Prompt" }],
-          { role: "user", modelId: "gpt-5.6-sol" },
-        )}
+        message={makeMessage([{ type: "text", content: "Prompt" }], {
+          role: "user",
+          modelId: "gpt-5.6-sol",
+        })}
         assistantLabel="Codex"
       />,
     );
@@ -270,8 +261,7 @@ describe("NativeMessage assistant attribution", () => {
           modelId: "sonnet-5",
         })}
         previousMessage={previousContent}
-        resolveModelLabel={(modelId) =>
-          modelId === "opus-5" ? "Opus 5" : "Sonnet 5"}
+        resolveModelLabel={(modelId) => (modelId === "opus-5" ? "Opus 5" : "Sonnet 5")}
       />,
     );
 
@@ -290,14 +280,11 @@ describe("NativeMessage assistant attribution", () => {
     });
     render(
       <NativeMessage
-        message={makeMessage(
-          [{ type: "text", content: "Streamed answer" }],
-          {
-            id: "assistant-content",
-            modelId: "gpt-5.6-sol",
-            createdAt: "2026-03-21T10:00:40.000Z",
-          },
-        )}
+        message={makeMessage([{ type: "text", content: "Streamed answer" }], {
+          id: "assistant-content",
+          modelId: "gpt-5.6-sol",
+          createdAt: "2026-03-21T10:00:40.000Z",
+        })}
         previousMessage={emptyPrevious}
         resolveModelLabel={() => "GPT 5.6 Sol"}
       />,
@@ -339,16 +326,20 @@ describe("NativeMessage assistant attribution", () => {
     render(
       <NativeMessage
         message={makeMessage(
-          [{
-            type: "tool-group",
-            content: "",
-            parts: [{
-              type: "tool-invocation",
-              content: "Read",
-              toolName: "Read",
-              createdAt: "2026-03-21T10:02:15.000Z",
-            }],
-          }],
+          [
+            {
+              type: "tool-group",
+              content: "",
+              parts: [
+                {
+                  type: "tool-invocation",
+                  content: "Read",
+                  toolName: "Read",
+                  createdAt: "2026-03-21T10:02:15.000Z",
+                },
+              ],
+            },
+          ],
           {
             id: "assistant-tool-section",
             createdAt: "2026-03-21T10:02:15.000Z",
@@ -426,9 +417,7 @@ describe("NativeMessage task list rendering", () => {
     const completedTask = screen.getByText("Finished task");
     expect(completedTask.className).toContain("line-through");
 
-    const checkboxIcons = container.querySelectorAll(
-      '[data-task-list-icon="true"]',
-    );
+    const checkboxIcons = container.querySelectorAll('[data-task-list-icon="true"]');
     expect(checkboxIcons).toHaveLength(2);
     expect(checkboxIcons[0]?.getAttribute("data-state")).toBe("checked");
     expect(checkboxIcons[1]?.getAttribute("data-state")).toBe("unchecked");
@@ -445,14 +434,12 @@ describe("NativeMessage task list rendering", () => {
     const { container } = render(<NativeMessage message={message} />);
 
     expect(screen.getByText("Thinking")).toBeTruthy();
-    expect(container.textContent).toContain(
-      "Let me analyze the code structure here",
-    );
+    expect(container.textContent).toContain("Let me analyze the code structure here");
     // Collapsed preview is a single truncated line, not the expanded body
     expect(screen.getByRole("button", { name: /thinking/i })).toBeTruthy();
-    expect(
-      screen.getByText("Let me analyze the code structure here").className,
-    ).toContain("truncate");
+    expect(screen.getByText("Let me analyze the code structure here").className).toContain(
+      "truncate",
+    );
   });
 
   test("expands a long thinking part to show the full text", () => {
@@ -487,9 +474,7 @@ describe("NativeMessage task list rendering", () => {
 
     const { container } = render(<NativeMessage message={message} />);
 
-    const checkboxIcons = container.querySelectorAll(
-      '[data-task-list-icon="true"]',
-    );
+    const checkboxIcons = container.querySelectorAll('[data-task-list-icon="true"]');
     expect(checkboxIcons).toHaveLength(2);
     expect(container.textContent).not.toContain("[x]");
     expect(container.textContent).not.toContain("[ ]");
@@ -597,10 +582,10 @@ describe("NativeMessage task list rendering", () => {
     mockWriteText.mockImplementation(async () => {
       throw clipboardError;
     });
-    const message = makeMessage(
-      [{ type: "text", content: "Prompt that cannot be copied" }],
-      { role: "user", id: "user-copy-error" },
-    );
+    const message = makeMessage([{ type: "text", content: "Prompt that cannot be copied" }], {
+      role: "user",
+      id: "user-copy-error",
+    });
 
     try {
       render(<NativeMessage message={message} />);
@@ -636,18 +621,14 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("shows the response duration for an assistant reply to a user", () => {
-    const previousMessage = makeMessage(
-      [{ type: "text", content: "Question" }],
-      {
-        id: "user-duration-start",
-        role: "user",
-        createdAt: "2026-03-21T10:00:00.000Z",
-      },
-    );
-    const message = makeMessage(
-      [{ type: "text", content: "Answer" }],
-      { createdAt: "2026-03-21T10:00:45.000Z" },
-    );
+    const previousMessage = makeMessage([{ type: "text", content: "Question" }], {
+      id: "user-duration-start",
+      role: "user",
+      createdAt: "2026-03-21T10:00:00.000Z",
+    });
+    const message = makeMessage([{ type: "text", content: "Answer" }], {
+      createdAt: "2026-03-21T10:00:45.000Z",
+    });
 
     render(<NativeMessage message={message} previousMessage={previousMessage} />);
 
@@ -674,8 +655,7 @@ describe("NativeMessage task list rendering", () => {
     );
 
     expect(screen.getByText(modelId).className).toContain("truncate");
-    expect(screen.getByText(/responded in 1m 3s/).className)
-      .toContain("whitespace-nowrap");
+    expect(screen.getByText(/responded in 1m 3s/).className).toContain("whitespace-nowrap");
   });
 
   test("rounds a positive sub-second response duration up to one second", () => {
@@ -836,9 +816,7 @@ describe("NativeMessage task list rendering", () => {
     };
     try {
       render(
-        <NativeMessage
-          message={makeMessage([{ type: "text", content: "Still rendered" }])}
-        />,
+        <NativeMessage message={makeMessage([{ type: "text", content: "Still rendered" }])} />,
       );
       expect(screen.getByText("Still rendered")).toBeTruthy();
     } finally {
@@ -854,14 +832,12 @@ describe("NativeMessage task list rendering", () => {
     try {
       render(
         <NativeMessage
-          message={makeMessage(
-            [{ type: "text", content: "Second answer" }],
-            { id: "assistant-after-date-error" },
-          )}
-          previousMessage={makeMessage(
-            [{ type: "text", content: "First answer" }],
-            { id: "assistant-before-date-error" },
-          )}
+          message={makeMessage([{ type: "text", content: "Second answer" }], {
+            id: "assistant-after-date-error",
+          })}
+          previousMessage={makeMessage([{ type: "text", content: "First answer" }], {
+            id: "assistant-before-date-error",
+          })}
         />,
       );
       expect(screen.getByText(/Assistant/)).toBeTruthy();
@@ -895,15 +871,9 @@ describe("NativeMessage task list rendering", () => {
 
     const text = screen.getByText("Text after tool");
     const markdownWrapper = text.closest(".prose");
-    expect(markdownWrapper?.parentElement?.className).toContain(
-      "[&_.prose>:first-child]:mt-0",
-    );
-    expect(markdownWrapper?.parentElement?.className).toContain(
-      "[&_.prose>:last-child]:mb-0",
-    );
-    expect(markdownWrapper?.parentElement?.parentElement?.className).toContain(
-      "py-1.5",
-    );
+    expect(markdownWrapper?.parentElement?.className).toContain("[&_.prose>:first-child]:mt-0");
+    expect(markdownWrapper?.parentElement?.className).toContain("[&_.prose>:last-child]:mb-0");
+    expect(markdownWrapper?.parentElement?.parentElement?.className).toContain("py-1.5");
     expect(markdownWrapper?.parentElement?.className).not.toContain("pt-2");
   });
 
@@ -931,14 +901,16 @@ describe("NativeMessage task list rendering", () => {
     }));
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "bun test",
-          toolName: "bash",
-          toolArgs: { command: "bun test" },
-          toolState: "success",
-          detailRef: "detail-1",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "bun test",
+            toolName: "bash",
+            toolArgs: { command: "bun test" },
+            toolState: "success",
+            detailRef: "detail-1",
+          },
+        ])}
         loadToolDetails={loadToolDetails}
       />,
     );
@@ -952,14 +924,16 @@ describe("NativeMessage task list rendering", () => {
   test("keeps a deferred row collapsed without parking placeholder prose in it", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "bun test",
-          toolName: "bash",
-          toolArgs: { command: "bun test" },
-          toolState: "success",
-          detailRef: "detail-quiet",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "bun test",
+            toolName: "bash",
+            toolArgs: { command: "bun test" },
+            toolState: "success",
+            detailRef: "detail-quiet",
+          },
+        ])}
         loadToolDetails={mock(async (detailRef: string) => ({ detailRef }))}
       />,
     );
@@ -977,13 +951,15 @@ describe("NativeMessage task list rendering", () => {
     }));
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "cursor_shell",
-          toolName: "cursor_shell",
-          toolState: "success",
-          detailRef: "detail-bare",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "cursor_shell",
+            toolName: "cursor_shell",
+            toolState: "success",
+            detailRef: "detail-bare",
+          },
+        ])}
         loadToolDetails={loadToolDetails}
       />,
     );
@@ -999,13 +975,15 @@ describe("NativeMessage task list rendering", () => {
     }));
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "TodoWrite",
-          toolName: "TodoWrite",
-          toolState: "failure",
-          detailRef: "detail-todo-error",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "TodoWrite",
+            toolName: "TodoWrite",
+            toolState: "failure",
+            detailRef: "detail-todo-error",
+          },
+        ])}
         loadToolDetails={loadToolDetails}
       />,
     );
@@ -1032,19 +1010,21 @@ describe("NativeMessage task list rendering", () => {
     render(
       <TerminalProvider>
         <NativeMessage
-          message={makeMessage([{
-            type: "tool-invocation",
-            content: "src/a.ts",
-            toolName: "cursor_write",
-            toolState: "success",
-            detailRef: "detail-diff",
-            toolDiff: {
-              filePath: "/workspace/src/a.ts",
-              additions: 3,
-              deletions: 2,
-              deferred: true,
+          message={makeMessage([
+            {
+              type: "tool-invocation",
+              content: "src/a.ts",
+              toolName: "cursor_write",
+              toolState: "success",
+              detailRef: "detail-diff",
+              toolDiff: {
+                filePath: "/workspace/src/a.ts",
+                additions: 3,
+                deletions: 2,
+                deferred: true,
+              },
             },
-          }])}
+          ])}
           loadToolDetails={loadToolDetails}
         />
       </TerminalProvider>,
@@ -1069,17 +1049,19 @@ describe("NativeMessage task list rendering", () => {
     render(
       <TerminalProvider>
         <NativeMessage
-          message={makeMessage([{
-            type: "tool-invocation",
-            content: "src/a.ts",
-            toolName: "Edit",
-            toolState: "success",
-            toolDiff: {
-              filePath: "/workspace/src/a.ts",
-              before: "one\ntwo\n",
-              after: "three\n",
+          message={makeMessage([
+            {
+              type: "tool-invocation",
+              content: "src/a.ts",
+              toolName: "Edit",
+              toolState: "success",
+              toolDiff: {
+                filePath: "/workspace/src/a.ts",
+                before: "one\ntwo\n",
+                after: "three\n",
+              },
             },
-          }])}
+          ])}
         />
       </TerminalProvider>,
     );
@@ -1101,19 +1083,21 @@ describe("NativeMessage task list rendering", () => {
     render(
       <TerminalProvider>
         <NativeMessage
-          message={makeMessage([{
-            type: "tool-invocation",
-            content: "src/c.ts",
-            toolName: "MultiEdit",
-            toolState: "success",
-            toolDiff: {
-              filePath: "/workspace/src/c.ts",
-              before: "one\nfour\n",
-              after: "two\nthree\nfive",
-              additions: 3,
-              deletions: 2,
+          message={makeMessage([
+            {
+              type: "tool-invocation",
+              content: "src/c.ts",
+              toolName: "MultiEdit",
+              toolState: "success",
+              toolDiff: {
+                filePath: "/workspace/src/c.ts",
+                before: "one\nfour\n",
+                after: "two\nthree\nfive",
+                additions: 3,
+                deletions: 2,
+              },
             },
-          }])}
+          ])}
         />
       </TerminalProvider>,
     );
@@ -1136,13 +1120,15 @@ describe("NativeMessage task list rendering", () => {
     // just a hint, and must not be dressed up as an edit.
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "src/a.ts",
-          toolName: "cursor_read",
-          toolState: "success",
-          toolDiff: { filePath: "/workspace/src/a.ts" },
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "src/a.ts",
+            toolName: "cursor_read",
+            toolState: "success",
+            toolDiff: { filePath: "/workspace/src/a.ts" },
+          },
+        ])}
       />,
     );
 
@@ -1155,14 +1141,16 @@ describe("NativeMessage task list rendering", () => {
     });
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "bun test",
-          toolName: "bash",
-          toolArgs: { command: "bun test" },
-          toolState: "success",
-          detailRef: "detail-gone",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "bun test",
+            toolName: "bash",
+            toolArgs: { command: "bun test" },
+            toolState: "success",
+            detailRef: "detail-gone",
+          },
+        ])}
         loadToolDetails={loadToolDetails}
       />,
     );
@@ -1174,40 +1162,48 @@ describe("NativeMessage task list rendering", () => {
   test("shows the derived command beside a custom exec tool", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "exec",
-          toolName: "exec",
-          toolArgs: {
-            input: "const r = await tools.exec_command({ cmd: \"git status --short\" });",
-            command: "git status --short",
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "exec",
+            toolName: "exec",
+            toolArgs: {
+              input: 'const r = await tools.exec_command({ cmd: "git status --short" });',
+              command: "git status --short",
+            },
+            toolState: "success",
           },
-          toolState: "success",
-        }])}
+        ])}
       />,
     );
 
-    expect(screen.getByRole("button", {
-      name: /Exec git status --short success/i,
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /Exec git status --short success/i,
+      }),
+    ).toBeTruthy();
   });
 
   test("previews raw custom-tool input when no command can be derived", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "exec",
-          toolName: "exec",
-          toolArgs: { input: "const result = await tools.some_custom_action();" },
-          toolState: "success",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "exec",
+            toolName: "exec",
+            toolArgs: { input: "const result = await tools.some_custom_action();" },
+            toolState: "success",
+          },
+        ])}
       />,
     );
 
-    expect(screen.getByRole("button", {
-      name: /Exec const result = await tools\.some_custom_action\(\); success/i,
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /Exec const result = await tools\.some_custom_action\(\); success/i,
+      }),
+    ).toBeTruthy();
   });
 
   test.each([
@@ -1223,13 +1219,15 @@ describe("NativeMessage task list rendering", () => {
   ])("summarizes %s in the collapsed row", (_label, toolArgs, expected) => {
     const { container } = render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "tool",
-          toolName: "tool",
-          toolArgs,
-          toolState: "success",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "tool",
+            toolName: "tool",
+            toolArgs,
+            toolState: "success",
+          },
+        ])}
       />,
     );
 
@@ -1248,36 +1246,44 @@ describe("NativeMessage task list rendering", () => {
     (_label, toolArgs, expected, notExpected) => {
       const { container } = render(
         <NativeMessage
-          message={makeMessage([{
-            type: "tool-invocation",
-            content: "Glob",
-            toolName: "Glob",
-            toolArgs,
-            toolState: "success",
-          }])}
+          message={makeMessage([
+            {
+              type: "tool-invocation",
+              content: "Glob",
+              toolName: "Glob",
+              toolArgs,
+              toolState: "success",
+            },
+          ])}
         />,
       );
 
       expect(container.textContent).toContain(expected);
-      expect(screen.getByRole("button", { name: new RegExp(`glob ${
-        expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-      } success`, "i") })).toBeTruthy();
-      expect(screen.queryByRole("button", {
-        name: new RegExp(`glob ${notExpected} success`, "i"),
-      }) === null).toBe(true);
+      expect(
+        screen.getByRole("button", {
+          name: new RegExp(`glob ${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} success`, "i"),
+        }),
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("button", {
+          name: new RegExp(`glob ${notExpected} success`, "i"),
+        }) === null,
+      ).toBe(true);
     },
   );
 
   test("prefers a command over every other collapsed-row summary", () => {
     const { container } = render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "tool",
-          toolName: "tool",
-          toolArgs: { command: "ls -la", file_path: "/repo/a.ts", query: "unused" },
-          toolState: "success",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "tool",
+            toolName: "tool",
+            toolArgs: { command: "ls -la", file_path: "/repo/a.ts", query: "unused" },
+            toolState: "success",
+          },
+        ])}
       />,
     );
 
@@ -1291,14 +1297,16 @@ describe("NativeMessage task list rendering", () => {
     // says which server the tool came from.
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "query_docs",
-          toolName: "query_docs",
-          toolTitle: "context7:query_docs",
-          toolArgs: { input: "how do I configure routing" },
-          toolState: "success",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "query_docs",
+            toolName: "query_docs",
+            toolTitle: "context7:query_docs",
+            toolArgs: { input: "how do I configure routing" },
+            toolState: "success",
+          },
+        ])}
       />,
     );
 
@@ -1309,14 +1317,16 @@ describe("NativeMessage task list rendering", () => {
   test("lets a specific command displace the tool title", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "exec",
-          toolName: "exec",
-          toolTitle: "functions:exec",
-          toolArgs: { input: "tools.exec_command({cmd:'ls'})", command: "ls" },
-          toolState: "success",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "exec",
+            toolName: "exec",
+            toolTitle: "functions:exec",
+            toolArgs: { input: "tools.exec_command({cmd:'ls'})", command: "ls" },
+            toolState: "success",
+          },
+        ])}
       />,
     );
 
@@ -1328,13 +1338,15 @@ describe("NativeMessage task list rendering", () => {
     const command = `echo ${"a".repeat(400)}\n\n\tsecond line`;
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "exec",
-          toolName: "exec",
-          toolArgs: { command },
-          toolState: "success",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "exec",
+            toolName: "exec",
+            toolArgs: { command },
+            toolState: "success",
+          },
+        ])}
       />,
     );
 
@@ -1349,33 +1361,39 @@ describe("NativeMessage task list rendering", () => {
   test("collapses interior whitespace in a raw-input preview", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "exec",
-          toolName: "exec",
-          toolArgs: { input: "  const a = 1;\n\n\tconst b = 2;  " },
-          toolState: "success",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "exec",
+            toolName: "exec",
+            toolArgs: { input: "  const a = 1;\n\n\tconst b = 2;  " },
+            toolState: "success",
+          },
+        ])}
       />,
     );
 
-    expect(screen.getByRole("button", {
-      name: /Exec const a = 1; const b = 2; success/i,
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /Exec const a = 1; const b = 2; success/i,
+      }),
+    ).toBeTruthy();
   });
 
   test("keeps the full exec source visible when the row is expanded", () => {
     const input = `const r = await tools.exec_command({ cmd: "${"echo hi; ".repeat(40)}" });`;
     const { container } = render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "exec",
-          toolName: "exec",
-          // `command` is a capped label; the authoritative source is `input`.
-          toolArgs: { input, command: "echo hi; echo hi;…" },
-          toolState: "success",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "exec",
+            toolName: "exec",
+            // `command` is a capped label; the authoritative source is `input`.
+            toolArgs: { input, command: "echo hi; echo hi;…" },
+            toolState: "success",
+          },
+        ])}
       />,
     );
 
@@ -1385,23 +1403,28 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("keeps a failed command expanded when its virtualized row remounts", () => {
-    const message = makeMessage([{
-      type: "tool-group",
-      content: "",
-      parts: [{
-        type: "tool-invocation",
-        content: "",
-        toolName: "Bash",
-        toolState: "failure",
-        toolUseId: "failed-test-run",
-        toolArgs: { command: "bun run test" },
-        toolError: "workspace test group failed",
-      }],
-    }], { id: "assistant-failed-test-run" });
-
-    const first = render(
-      <NativeMessage message={message} agentExpansionScope="environment-1" />,
+    const message = makeMessage(
+      [
+        {
+          type: "tool-group",
+          content: "",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "",
+              toolName: "Bash",
+              toolState: "failure",
+              toolUseId: "failed-test-run",
+              toolArgs: { command: "bun run test" },
+              toolError: "workspace test group failed",
+            },
+          ],
+        },
+      ],
+      { id: "assistant-failed-test-run" },
     );
+
+    const first = render(<NativeMessage message={message} agentExpansionScope="environment-1" />);
     const trigger = screen.getByRole("button", {
       name: /Run Command bun run test failure/i,
     });
@@ -1413,14 +1436,14 @@ describe("NativeMessage task list rendering", () => {
     // recreate that row while reconciling its measurements, so local state
     // would make the disclosure immediately snap shut again.
     first.unmount();
-    render(
-      <NativeMessage message={message} agentExpansionScope="environment-1" />,
-    );
+    render(<NativeMessage message={message} agentExpansionScope="environment-1" />);
 
     expect(
-      screen.getByRole("button", {
-        name: /Run Command bun run test failure/i,
-      }).getAttribute("aria-expanded"),
+      screen
+        .getByRole("button", {
+          name: /Run Command bun run test failure/i,
+        })
+        .getAttribute("aria-expanded"),
     ).toBe("true");
     expect(screen.getByText("workspace test group failed")).toBeTruthy();
   });
@@ -1439,10 +1462,9 @@ describe("NativeMessage task list rendering", () => {
 
     const first = render(
       <NativeMessage
-        message={makeMessage(
-          [{ type: "tool-group", content: "", parts: [command] }],
-          { id: "assistant-durable-command" },
-        )}
+        message={makeMessage([{ type: "tool-group", content: "", parts: [command] }], {
+          id: "assistant-durable-command",
+        })}
         agentExpansionScope="environment-1"
       />,
     );
@@ -1465,28 +1487,32 @@ describe("NativeMessage task list rendering", () => {
       />,
     );
 
-    expect(
-      screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
     expect(screen.getByText("no diagnostics")).toBeTruthy();
   });
 
   test("does not leak expansion to a different tool call at the same position", () => {
     const makeCommandMessage = (toolUseId: string, command: string) =>
       makeMessage(
-        [{
-          type: "tool-group",
-          content: "",
-          parts: [{
-            type: "tool-invocation",
+        [
+          {
+            type: "tool-group",
             content: "",
-            toolName: "Bash",
-            toolState: "success",
-            toolUseId,
-            toolArgs: { command },
-            toolOutput: `${command} finished`,
-          }],
-        }],
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "",
+                toolName: "Bash",
+                toolState: "success",
+                toolUseId,
+                toolArgs: { command },
+                toolOutput: `${command} finished`,
+              },
+            ],
+          },
+        ],
         { id: "assistant-shared-position" },
       );
 
@@ -1496,9 +1522,7 @@ describe("NativeMessage task list rendering", () => {
         agentExpansionScope="environment-1"
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: /Run Command bun run lint success/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /Run Command bun run lint success/i }));
     first.unmount();
 
     // Same message id and same part position, but a different tool call. It
@@ -1519,18 +1543,23 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("keeps an edit diff expanded when its virtualized row remounts", () => {
-    const message = makeMessage([{
-      type: "tool-invocation",
-      content: "",
-      toolName: "Edit",
-      toolState: "success",
-      toolUseId: "durable-edit",
-      toolDiff: {
-        filePath: "/repo/src/index.ts",
-        before: "const a = 1;\n",
-        after: "const a = 2;\n",
-      },
-    }], { id: "assistant-durable-edit" });
+    const message = makeMessage(
+      [
+        {
+          type: "tool-invocation",
+          content: "",
+          toolName: "Edit",
+          toolState: "success",
+          toolUseId: "durable-edit",
+          toolDiff: {
+            filePath: "/repo/src/index.ts",
+            before: "const a = 1;\n",
+            after: "const a = 2;\n",
+          },
+        },
+      ],
+      { id: "assistant-durable-edit" },
+    );
     const triggerName = /Edit index\.ts .*success/i;
 
     // EditToolPart reads the terminal context for its open-diff-in-tab action.
@@ -1549,30 +1578,34 @@ describe("NativeMessage task list rendering", () => {
       </TerminalProvider>,
     );
 
-    expect(
-      screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
     expect(screen.getByText("/repo/src/index.ts")).toBeTruthy();
   });
 
   test("isolates matching message and tool ids between explicit transcript scopes", () => {
     const makeCommandMessage = (command: string) =>
       makeMessage(
-        [{
-          type: "tool-group",
-          content: "",
-          parts: [{
-            type: "tool-invocation",
+        [
+          {
+            type: "tool-group",
             content: "",
-            toolName: "Bash",
-            toolState: "success",
-            // Tool ids come from the provider, so two environments running the
-            // same agent can legitimately collide on one.
-            toolUseId: "shared-scoped-command",
-            toolArgs: { command },
-            toolOutput: "done",
-          }],
-        }],
+            parts: [
+              {
+                type: "tool-invocation",
+                content: "",
+                toolName: "Bash",
+                toolState: "success",
+                // Tool ids come from the provider, so two environments running the
+                // same agent can legitimately collide on one.
+                toolUseId: "shared-scoped-command",
+                toolArgs: { command },
+                toolOutput: "done",
+              },
+            ],
+          },
+        ],
         { id: "shared-scoped-message" },
       );
 
@@ -1653,22 +1686,19 @@ describe("NativeMessage task list rendering", () => {
 
     const { container } = render(<NativeMessage message={message} />);
 
+    expect(screen.getByRole("button", { name: /task list/i }).parentElement?.className).toContain(
+      "my-0",
+    );
     expect(
-      screen.getByRole("button", { name: /task list/i }).parentElement?.className,
+      screen.getByRole("button", { name: /regular thinking wrapper/i }).parentElement?.className,
     ).toContain("my-0");
-    expect(
-      screen.getByRole("button", { name: /regular thinking wrapper/i })
-        .parentElement?.className,
-    ).toContain("my-0");
-    expect(screen.getByRole("button", { name: /screenshot\.png/i }).className)
-      .toContain("my-0");
-    expect(
-      screen.getByRole("button", { name: /lovelace/i }).parentElement?.className,
-    ).toContain("my-0");
+    expect(screen.getByRole("button", { name: /screenshot\.png/i }).className).toContain("my-0");
+    expect(screen.getByRole("button", { name: /lovelace/i }).parentElement?.className).toContain(
+      "my-0",
+    );
     expect(container.innerHTML).toContain("my-0 rounded-lg border border-zinc-700/70");
     expect(
-      screen.getByRole("button", { name: /task wrapper/i }).parentElement
-        ?.parentElement?.className,
+      screen.getByRole("button", { name: /task wrapper/i }).parentElement?.parentElement?.className,
     ).toContain("my-0");
   });
 
@@ -1723,18 +1753,14 @@ describe("NativeMessage task list rendering", () => {
     const { container } = render(<NativeMessage message={message} />);
 
     expect(screen.getByText("Agent")).toBeTruthy();
-    expect(
-      screen.getByText("Review presentation polish (explorer)"),
-    ).toBeTruthy();
+    expect(screen.getByText("Review presentation polish (explorer)")).toBeTruthy();
     expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.getByText("1 tool")).toBeTruthy();
     expect(screen.getByText("1 update")).toBeTruthy();
     expect(container.textContent).not.toContain('"description"');
     expect(container.textContent).not.toContain("Inspect the SwiftUI views");
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /review presentation polish/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /review presentation polish/i }));
 
     expect(
       screen.getByText("Inspect the SwiftUI views for layout and navigation issues."),
@@ -1775,9 +1801,7 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} />);
 
     // Explicit name drives the primary label (with role), description is secondary.
-    expect(
-      screen.getByText("Presentation Reviewer (explorer)"),
-    ).toBeTruthy();
+    expect(screen.getByText("Presentation Reviewer (explorer)")).toBeTruthy();
     expect(screen.getByText("Review presentation polish")).toBeTruthy();
     expect(screen.getByText("Finished")).toBeTruthy();
   });
@@ -1953,8 +1977,7 @@ describe("NativeMessage task list rendering", () => {
     expect(getClassTokens(testerTrigger.parentElement)).not.toContain("rounded-lg");
     expect(screen.getAllByText("gpt-5.6-sol")).toHaveLength(1);
     expect(
-      agentGroup.compareDocumentPosition(modelLabel) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
+      agentGroup.compareDocumentPosition(modelLabel) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -2031,9 +2054,7 @@ describe("NativeMessage task list rendering", () => {
       toolState: "pending",
       subagentActions: [],
     };
-    const { rerender } = render(
-      <NativeMessage message={makeMessage([firstAgent])} />,
-    );
+    const { rerender } = render(<NativeMessage message={makeMessage([firstAgent])} />);
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
     expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
@@ -2056,9 +2077,9 @@ describe("NativeMessage task list rendering", () => {
 
     expect(screen.getByRole("region", { name: "2 agents" })).toBeTruthy();
     expect(screen.getAllByText("Inspect the original task details")).toHaveLength(2);
-    expect(
-      screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
   });
 
   test("keeps an expanded agent open when its virtualized row remounts", () => {
@@ -2076,9 +2097,9 @@ describe("NativeMessage task list rendering", () => {
 
     const first = render(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
-    expect(
-      screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: /reviewer/i }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
 
     first.unmount();
     render(<NativeMessage message={message} />);
@@ -2096,21 +2117,25 @@ describe("NativeMessage task list rendering", () => {
       <>
         <NativeMessage
           message={makeMessage(
-            [makeStandaloneSubagentPart({
-              content: "First reviewer",
-              subagentId: "shared-agent-id",
-              subagentName: "First reviewer",
-            })],
+            [
+              makeStandaloneSubagentPart({
+                content: "First reviewer",
+                subagentId: "shared-agent-id",
+                subagentName: "First reviewer",
+              }),
+            ],
             { id: "assistant-first-agent" },
           )}
         />
         <NativeMessage
           message={makeMessage(
-            [makeStandaloneSubagentPart({
-              content: "Second reviewer",
-              subagentId: "shared-agent-id",
-              subagentName: "Second reviewer",
-            })],
+            [
+              makeStandaloneSubagentPart({
+                content: "Second reviewer",
+                subagentId: "shared-agent-id",
+                subagentName: "Second reviewer",
+              }),
+            ],
             { id: "assistant-second-agent" },
           )}
         />
@@ -2130,22 +2155,26 @@ describe("NativeMessage task list rendering", () => {
       <>
         <NativeMessage
           message={makeMessage(
-            [makeStandaloneSubagentPart({
-              content: "First container reviewer",
-              subagentId: "shared-container-agent",
-              subagentName: "First container reviewer",
-            })],
+            [
+              makeStandaloneSubagentPart({
+                content: "First container reviewer",
+                subagentId: "shared-container-agent",
+                subagentName: "First container reviewer",
+              }),
+            ],
             { id: "shared-container-message" },
           )}
           containerId="container-a"
         />
         <NativeMessage
           message={makeMessage(
-            [makeStandaloneSubagentPart({
-              content: "Second container reviewer",
-              subagentId: "shared-container-agent",
-              subagentName: "Second container reviewer",
-            })],
+            [
+              makeStandaloneSubagentPart({
+                content: "Second container reviewer",
+                subagentId: "shared-container-agent",
+                subagentName: "Second container reviewer",
+              }),
+            ],
             { id: "shared-container-message" },
           )}
           containerId="container-b"
@@ -2170,22 +2199,26 @@ describe("NativeMessage task list rendering", () => {
       <>
         <NativeMessage
           message={makeMessage(
-            [makeStandaloneSubagentPart({
-              content: "First scoped reviewer",
-              subagentId: "shared-scoped-agent",
-              subagentName: "First scoped reviewer",
-            })],
+            [
+              makeStandaloneSubagentPart({
+                content: "First scoped reviewer",
+                subagentId: "shared-scoped-agent",
+                subagentName: "First scoped reviewer",
+              }),
+            ],
             { id: "shared-scoped-message" },
           )}
           agentExpansionScope="transcript-a"
         />
         <NativeMessage
           message={makeMessage(
-            [makeStandaloneSubagentPart({
-              content: "Second scoped reviewer",
-              subagentId: "shared-scoped-agent",
-              subagentName: "Second scoped reviewer",
-            })],
+            [
+              makeStandaloneSubagentPart({
+                content: "Second scoped reviewer",
+                subagentId: "shared-scoped-agent",
+                subagentName: "Second scoped reviewer",
+              }),
+            ],
             { id: "shared-scoped-message" },
           )}
           agentExpansionScope="transcript-b"
@@ -2203,10 +2236,12 @@ describe("NativeMessage task list rendering", () => {
 
   test("keeps agent expansion open when a container id resolves after mount", () => {
     const message = makeMessage(
-      [makeStandaloneSubagentPart({
-        subagentId: "late-container-agent",
-        subagentName: "Late container reviewer",
-      })],
+      [
+        makeStandaloneSubagentPart({
+          subagentId: "late-container-agent",
+          subagentName: "Late container reviewer",
+        }),
+      ],
       { id: "late-container-message" },
     );
     const view = render(<NativeMessage message={message} />);
@@ -2220,7 +2255,8 @@ describe("NativeMessage task list rendering", () => {
     view.rerender(<NativeMessage message={message} containerId="container-1" />);
 
     expect(
-      screen.getByRole("button", { name: /late container reviewer/i })
+      screen
+        .getByRole("button", { name: /late container reviewer/i })
         .getAttribute("aria-expanded"),
     ).toBe("true");
   });
@@ -2230,27 +2266,31 @@ describe("NativeMessage task list rendering", () => {
       <>
         <NativeMessage
           message={makeMessage(
-            [makeAgentTaskGroupPart({
-              task: {
-                toolUseId: undefined,
-                subagentId: undefined,
-                toolName: "Agent",
-                toolArgs: { description: "First task agent" },
-              },
-            })],
+            [
+              makeAgentTaskGroupPart({
+                task: {
+                  toolUseId: undefined,
+                  subagentId: undefined,
+                  toolName: "Agent",
+                  toolArgs: { description: "First task agent" },
+                },
+              }),
+            ],
             { id: "assistant-first-task" },
           )}
         />
         <NativeMessage
           message={makeMessage(
-            [makeAgentTaskGroupPart({
-              task: {
-                toolUseId: undefined,
-                subagentId: undefined,
-                toolName: "Agent",
-                toolArgs: { description: "Second task agent" },
-              },
-            })],
+            [
+              makeAgentTaskGroupPart({
+                task: {
+                  toolUseId: undefined,
+                  subagentId: undefined,
+                  toolName: "Agent",
+                  toolArgs: { description: "Second task agent" },
+                },
+              }),
+            ],
             { id: "assistant-second-task" },
           )}
         />
@@ -2299,15 +2339,17 @@ describe("NativeMessage task list rendering", () => {
 
   test("keeps an expanded task agent open when its virtualized row remounts", () => {
     const message = makeMessage(
-      [makeAgentTaskGroupPart({
-        task: {
-          toolUseId: "task-remount",
-          toolArgs: {
-            description: "Remount reviewer",
-            prompt: "Inspect the task-group transcript",
+      [
+        makeAgentTaskGroupPart({
+          task: {
+            toolUseId: "task-remount",
+            toolArgs: {
+              description: "Remount reviewer",
+              prompt: "Inspect the task-group transcript",
+            },
           },
-        },
-      })],
+        }),
+      ],
       { id: "assistant-task-remount" },
     );
 
@@ -2354,9 +2396,7 @@ describe("NativeMessage task list rendering", () => {
     render(<NativeMessage message={message} containerId="container-1" />);
 
     fireEvent.click(screen.getByRole("button", { name: /reviewer/i }));
-    const previewButton = screen
-      .getAllByRole("button", { name: /relative-preview\.png/i })
-      .at(-1);
+    const previewButton = screen.getAllByRole("button", { name: /relative-preview\.png/i }).at(-1);
     expect(previewButton).toBeTruthy();
     fireEvent.click(previewButton!);
 
@@ -2368,10 +2408,11 @@ describe("NativeMessage task list rendering", () => {
       "Use this screenshot",
       '<attached-files><attachment type="image" path="/tmp/initial-shot.png" filename="initial-shot.png" /></attached-files>',
     ].join("\n");
-    const message = makeMessage(
-      [{ type: "text", content: rawContent }],
-      { id: "initial-prompt-image", role: "user", content: rawContent },
-    );
+    const message = makeMessage([{ type: "text", content: rawContent }], {
+      id: "initial-prompt-image",
+      role: "user",
+      content: rawContent,
+    });
 
     render(<NativeMessage message={message} />);
 
@@ -2379,13 +2420,17 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText(/attached-files/) === null).toBe(true);
     expect(await screen.findByAltText("Thumbnail: initial-shot.png")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", {
-      name: "Open full image: initial-shot.png",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open full image: initial-shot.png",
+      }),
+    );
 
-    expect(screen.getByRole("dialog", {
-      name: "Image preview: initial-shot.png",
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("dialog", {
+        name: "Image preview: initial-shot.png",
+      }),
+    ).toBeTruthy();
     expect(screen.getByAltText("initial-shot.png")).toBeTruthy();
   });
 
@@ -2433,25 +2478,27 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("shows Codex agent identity, counts, and expandable updates", () => {
-    const message = makeMessage([{
-      type: "subagent",
-      content: "Heisenberg",
-      subagentId: "codex-reviewer",
-      subagentName: "Heisenberg",
-      subagentRole: "correctness_review",
-      subagentPrompt: "Review the transcript ordering change.",
-      toolState: "pending",
-      subagentActionCount: 1,
-      subagentActions: [
-        { type: "text", content: "Checking the message ordering." },
-        {
-          type: "tool-invocation",
-          content: "Inspect the renderer",
-          toolName: "read",
-          toolState: "success",
-        },
-      ],
-    }]);
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Heisenberg",
+        subagentId: "codex-reviewer",
+        subagentName: "Heisenberg",
+        subagentRole: "correctness_review",
+        subagentPrompt: "Review the transcript ordering change.",
+        toolState: "pending",
+        subagentActionCount: 1,
+        subagentActions: [
+          { type: "text", content: "Checking the message ordering." },
+          {
+            type: "tool-invocation",
+            content: "Inspect the renderer",
+            toolName: "read",
+            toolState: "success",
+          },
+        ],
+      },
+    ]);
 
     render(<NativeMessage message={message} />);
 
@@ -2474,22 +2521,24 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("previews the spawn prompt once a Codex agent has finished", () => {
-    const message = makeMessage([{
-      type: "subagent",
-      content: "Heisenberg",
-      subagentId: "codex-reviewer-done",
-      subagentName: "Heisenberg",
-      subagentPrompt: "Review the transcript ordering change.",
-      toolState: "success",
-      subagentActions: [
-        {
-          type: "tool-invocation",
-          content: "Inspect the renderer",
-          toolName: "read",
-          toolState: "success",
-        },
-      ],
-    }]);
+    const message = makeMessage([
+      {
+        type: "subagent",
+        content: "Heisenberg",
+        subagentId: "codex-reviewer-done",
+        subagentName: "Heisenberg",
+        subagentPrompt: "Review the transcript ordering change.",
+        toolState: "success",
+        subagentActions: [
+          {
+            type: "tool-invocation",
+            content: "Inspect the renderer",
+            toolName: "read",
+            toolState: "success",
+          },
+        ],
+      },
+    ]);
 
     render(<NativeMessage message={message} />);
 
@@ -2501,13 +2550,19 @@ describe("NativeMessage task list rendering", () => {
   test("collapses a Codex agent label whose role only restates its name", () => {
     // Codex multi-agent v2 derives both the name and the role from the same
     // task path, so rendering both would read "metadata_review (metadata_review)".
-    render(<NativeMessage message={makeMessage([{
-      type: "subagent",
-      content: "metadata_review",
-      subagentId: "codex-task-named",
-      subagentRole: "metadata_review",
-      toolState: "pending",
-    }])} />);
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "metadata_review",
+            subagentId: "codex-task-named",
+            subagentRole: "metadata_review",
+            toolState: "pending",
+          },
+        ])}
+      />,
+    );
 
     // The label is one text node, so an uncollapsed label would read
     // "metadata_review (metadata_review)" here rather than matching exactly.
@@ -2516,24 +2571,28 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("keeps a genuinely different role beside the agent name, ignoring case", () => {
-    render(<NativeMessage message={makeMessage([
-      {
-        type: "subagent",
-        content: "Lovelace",
-        subagentId: "codex-cased",
-        subagentName: "Lovelace",
-        subagentRole: "lovelace",
-        toolState: "pending",
-      },
-      {
-        type: "subagent",
-        content: "Babbage",
-        subagentId: "codex-distinct",
-        subagentName: "Babbage",
-        subagentRole: "explorer",
-        toolState: "pending",
-      },
-    ])} />);
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Lovelace",
+            subagentId: "codex-cased",
+            subagentName: "Lovelace",
+            subagentRole: "lovelace",
+            toolState: "pending",
+          },
+          {
+            type: "subagent",
+            content: "Babbage",
+            subagentId: "codex-distinct",
+            subagentName: "Babbage",
+            subagentRole: "explorer",
+            toolState: "pending",
+          },
+        ])}
+      />,
+    );
 
     // Case alone is not a distinct role, so it collapses like an exact match.
     expect(screen.getByText("Lovelace")).toBeTruthy();
@@ -2696,9 +2755,7 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.queryByText("8 tool uses") === null).toBe(true);
     expect(screen.queryByText("0 tools") === null).toBe(true);
     expect(screen.queryByText("0 updates") === null).toBe(true);
-    expect(
-      screen.getByText("Read docs/upgrade-agents.md and docs/flaky-tests.md."),
-    ).toBeTruthy();
+    expect(screen.getByText("Read docs/upgrade-agents.md and docs/flaky-tests.md.")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: /summarize two docs/i }));
     expect(screen.getByText("Type")).toBeTruthy();
@@ -2716,28 +2773,33 @@ describe("NativeMessage task list rendering", () => {
     const originalNow = Date.now;
     Date.now = () => Date.parse(startedAt) + 125_000;
     try {
-      render(<NativeMessage message={makeMessage([
-        {
-          type: "task-group",
-          content: "Task: Run review validation",
-          task: {
-            type: "tool-invocation",
-            content: "Task: Run review validation",
-            toolName: "task",
-            toolTitle: "Task: Run review validation",
-            toolState: "success",
-            agentState: "active",
-            createdAt: startedAt,
-            toolArgs: {
-              description: "Run review validation",
-              prompt: "You are running validation for a code review.",
-              subagent_type: "generalPurpose",
-              durationMs: 28,
+      render(
+        <NativeMessage
+          message={makeMessage([
+            {
+              type: "task-group",
+              content: "Task: Run review validation",
+              task: {
+                type: "tool-invocation",
+                content: "Task: Run review validation",
+                toolName: "task",
+                toolTitle: "Task: Run review validation",
+                toolState: "success",
+                agentState: "active",
+                createdAt: startedAt,
+                toolArgs: {
+                  description: "Run review validation",
+                  prompt: "You are running validation for a code review.",
+                  subagent_type: "generalPurpose",
+                  durationMs: 28,
+                },
+              },
+              childTools: [],
             },
-          },
-          childTools: [],
-        },
-      ])} platform="cursor" />);
+          ])}
+          platform="cursor"
+        />,
+      );
 
       expect(screen.getByText("Active")).toBeTruthy();
       expect(screen.getByText("2m 5s")).toBeTruthy();
@@ -2748,25 +2810,30 @@ describe("NativeMessage task list rendering", () => {
   });
 
   test("does not show Cursor spawn duration on an active card without a launch clock", () => {
-    render(<NativeMessage message={makeMessage([
-      {
-        type: "task-group",
-        content: "Task: Run review validation",
-        task: {
-          type: "tool-invocation",
-          content: "Task: Run review validation",
-          toolName: "task",
-          toolTitle: "Task: Run review validation",
-          toolState: "success",
-          agentState: "active",
-          toolArgs: {
-            description: "Run review validation",
-            durationMs: 28,
+    render(
+      <NativeMessage
+        message={makeMessage([
+          {
+            type: "task-group",
+            content: "Task: Run review validation",
+            task: {
+              type: "tool-invocation",
+              content: "Task: Run review validation",
+              toolName: "task",
+              toolTitle: "Task: Run review validation",
+              toolState: "success",
+              agentState: "active",
+              toolArgs: {
+                description: "Run review validation",
+                durationMs: 28,
+              },
+            },
+            childTools: [],
           },
-        },
-        childTools: [],
-      },
-    ])} platform="cursor" />);
+        ])}
+        platform="cursor"
+      />,
+    );
 
     expect(screen.getByText("Active")).toBeTruthy();
     expect(screen.queryByText("28ms") === null).toBe(true);
@@ -2882,10 +2949,8 @@ describe("NativeMessage task list rendering", () => {
 
       const label = screen.getByText("Result");
       expect(screen.getByText("Both docs describe the upgrade flow.")).toBeTruthy();
-      expect(getClassTokens(label.parentElement?.lastElementChild))
-        .toContain("max-h-64");
-      expect(getClassTokens(label.parentElement?.lastElementChild))
-        .toContain("overflow-auto");
+      expect(getClassTokens(label.parentElement?.lastElementChild)).toContain("max-h-64");
+      expect(getClassTokens(label.parentElement?.lastElementChild)).toContain("overflow-auto");
     });
 
     test("suppresses the Result section for the bare sub-agent launch acknowledgement", () => {
@@ -2934,8 +2999,7 @@ describe("NativeMessage task list rendering", () => {
 
       const label = screen.getByText("Result");
       expect(screen.getByText("Reviewed 3 files.")).toBeTruthy();
-      expect(getClassTokens(label.parentElement?.lastElementChild))
-        .toContain("max-h-64");
+      expect(getClassTokens(label.parentElement?.lastElementChild)).toContain("max-h-64");
     });
   });
 
@@ -3058,9 +3122,7 @@ describe("NativeMessage task list rendering", () => {
     const { container } = render(<NativeMessage message={message} />);
 
     // Should render without crashing
-    const checkboxIcons = container.querySelectorAll(
-      '[data-task-list-icon="true"]',
-    );
+    const checkboxIcons = container.querySelectorAll('[data-task-list-icon="true"]');
     expect(checkboxIcons.length).toBeGreaterThanOrEqual(1);
   });
 });
@@ -3295,22 +3357,24 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     render(
       <NativeMessage
         stopBackgroundTask={stopBackgroundTask}
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: {
-            command: "bun test",
-            description: "Run the full suite",
-            run_in_background: true,
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: {
+              command: "bun test",
+              description: "Run the full suite",
+              run_in_background: true,
+            },
+            backgroundTask: {
+              id: "bg-suite",
+              description: "Run the full suite",
+              status: "running",
+            },
           },
-          backgroundTask: {
-            id: "bg-suite",
-            description: "Run the full suite",
-            status: "running",
-          },
-        }])}
+        ])}
       />,
     );
 
@@ -3338,25 +3402,26 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
      */
     const stopBackgroundTask = mock(async () => true);
     const rows = rowlessBackgroundTaskMessages(
-      [{
-        id: "orphan-task",
-        description: "Watch the server",
-        status: "running",
-        startedAt: "2026-08-16T09:59:00.000Z",
-      }],
+      [
+        {
+          id: "orphan-task",
+          description: "Watch the server",
+          status: "running",
+          startedAt: "2026-08-16T09:59:00.000Z",
+        },
+      ],
       [],
     );
 
     const view = render(
-      <NativeMessage
-        stopBackgroundTask={stopBackgroundTask}
-        message={rows[0]!}
-      />,
+      <NativeMessage stopBackgroundTask={stopBackgroundTask} message={rows[0]!} />,
     );
 
-    expect(screen.getByRole("button", {
-      name: /Task Watch the server Running/,
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /Task Watch the server Running/,
+      }),
+    ).toBeTruthy();
     /*
      * Nothing was loaded to borrow a clock from, so the card falls back to the
      * task's own launch time — which is what the header then prints. It used to
@@ -3371,150 +3436,164 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
 
   test("keeps a backgrounded subagent as one stoppable Agent card", () => {
     const stopBackgroundTask = mock(async () => true);
-    const message = (status: "running" | "killed") => makeMessage([
-      makeAgentTaskGroupPart({
-        task: {
-          toolUseId: "agent-launch",
-          toolState: "success",
-          agentState: status === "running" ? "active" : "failed",
-          toolArgs: {
-            description: "Review the bridge",
-            run_in_background: true,
+    const message = (status: "running" | "killed") =>
+      makeMessage([
+        makeAgentTaskGroupPart({
+          task: {
+            toolUseId: "agent-launch",
+            toolState: "success",
+            agentState: status === "running" ? "active" : "failed",
+            toolArgs: {
+              description: "Review the bridge",
+              run_in_background: true,
+            },
+            backgroundTask: {
+              id: "child-task",
+              description: "Review the bridge",
+              status,
+            },
           },
-          backgroundTask: {
-            id: "child-task",
-            description: "Review the bridge",
-            status,
-          },
-        },
-      }),
-    ]);
+        }),
+      ]);
     const view = render(
-      <NativeMessage
-        message={message("running")}
-        stopBackgroundTask={stopBackgroundTask}
-      />,
+      <NativeMessage message={message("running")} stopBackgroundTask={stopBackgroundTask} />,
     );
 
-    expect(screen.getByRole("button", {
-      name: /Agent Review the bridge Running/,
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /Agent Review the bridge Running/,
+      }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Stop Review the bridge" }));
     expect(stopBackgroundTask).toHaveBeenCalledWith("child-task");
 
     view.rerender(
-      <NativeMessage
-        message={message("killed")}
-        stopBackgroundTask={stopBackgroundTask}
-      />,
+      <NativeMessage message={message("killed")} stopBackgroundTask={stopBackgroundTask} />,
     );
-    expect(screen.getByRole("button", {
-      name: /Agent Review the bridge Stopped/,
-    })).toBeTruthy();
     expect(
-      screen.queryByRole("button", { name: "Stop Review the bridge" }) === null,
-    ).toBe(true);
+      screen.getByRole("button", {
+        name: /Agent Review the bridge Stopped/,
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Stop Review the bridge" }) === null).toBe(true);
   });
 
   test("offers no stop control when the tab cannot stop background tasks", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: { command: "bun test", run_in_background: true },
-          backgroundTask: { id: "bg-suite", status: "running" },
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "bun test", run_in_background: true },
+            backgroundTask: { id: "bg-suite", status: "running" },
+          },
+        ])}
       />,
     );
 
     expect(screen.queryByRole("button", { name: /^Stop / }) === null).toBe(true);
-    expect(screen.getByRole("button", { name: /Task Background task bg-suite Running/ }))
-      .toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Task Background task bg-suite Running/ }),
+    ).toBeTruthy();
   });
 
   test("shows the task name, id, and stopped state on TaskStop rows", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "TaskStop",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-wait" },
-          toolOutput: JSON.stringify({
-            task_id: "bg-wait",
-            command: "sleep 300; echo waited",
-          }),
-          backgroundTask: {
-            id: "bg-wait",
-            description: "Wait for remaining review thread",
-            status: "killed",
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "TaskStop",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-wait" },
+            toolOutput: JSON.stringify({
+              task_id: "bg-wait",
+              command: "sleep 300; echo waited",
+            }),
+            backgroundTask: {
+              id: "bg-wait",
+              description: "Wait for remaining review thread",
+              status: "killed",
+            },
           },
-        }])}
+        ])}
       />,
     );
 
-    expect(screen.getByRole("button", {
-      name: /TaskStop Wait for remaining review thread bg-wait stopped/,
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /TaskStop Wait for remaining review thread bg-wait stopped/,
+      }),
+    ).toBeTruthy();
   });
 
   test("reads the stopped command from a structured TaskStop result when no name was recovered", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "TaskStop",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-legacy" },
-          toolOutput: JSON.stringify({
-            message: "Successfully stopped task: bg-legacy (sleep 120; echo waited)",
-            task_id: "bg-legacy",
-            task_type: "bash",
-            command: "sleep 120; echo waited",
-          }),
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "TaskStop",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-legacy" },
+            toolOutput: JSON.stringify({
+              message: "Successfully stopped task: bg-legacy (sleep 120; echo waited)",
+              task_id: "bg-legacy",
+              task_type: "bash",
+              command: "sleep 120; echo waited",
+            }),
+          },
+        ])}
       />,
     );
 
-    expect(screen.getByRole("button", {
-      name: /TaskStop sleep 120; echo waited bg-legacy stopped/,
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /TaskStop sleep 120; echo waited bg-legacy stopped/,
+      }),
+    ).toBeTruthy();
   });
 
   test("recovers the stopped command from a legacy plain-text TaskStop result", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "TaskStop",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-legacy" },
-          toolOutput: "Successfully stopped task: bg-legacy (sleep 120; echo waited)",
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "TaskStop",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-legacy" },
+            toolOutput: "Successfully stopped task: bg-legacy (sleep 120; echo waited)",
+          },
+        ])}
       />,
     );
 
-    expect(screen.getByRole("button", {
-      name: /TaskStop sleep 120; echo waited bg-legacy stopped/,
-    })).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: /TaskStop sleep 120; echo waited bg-legacy stopped/,
+      }),
+    ).toBeTruthy();
   });
 
   test("falls back to the task id when nothing names a stopped task", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "TaskStop",
-          toolName: "TaskStop",
-          toolState: "success",
-          toolArgs: { task_id: "bg-orphan" },
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "TaskStop",
+            toolName: "TaskStop",
+            toolState: "success",
+            toolArgs: { task_id: "bg-orphan" },
+          },
+        ])}
       />,
     );
 
@@ -3527,19 +3606,21 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   test("names a TaskOutput row after its task and shows the task's live state", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "TaskOutput",
-          toolName: "TaskOutput",
-          toolState: "success",
-          toolArgs: { task_id: "bg-suite" },
-          toolOutput: "…partial output…",
-          backgroundTask: {
-            id: "bg-suite",
-            description: "Run the full suite",
-            status: "running",
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "TaskOutput",
+            toolName: "TaskOutput",
+            toolState: "success",
+            toolArgs: { task_id: "bg-suite" },
+            toolOutput: "…partial output…",
+            backgroundTask: {
+              id: "bg-suite",
+              description: "Run the full suite",
+              status: "running",
+            },
           },
-        }])}
+        ])}
       />,
     );
 
@@ -3562,18 +3643,20 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       render(
         <NativeMessage
           stopBackgroundTask={async () => true}
-          message={makeMessage([{
-            type: "tool-invocation",
-            content: "Bash",
-            toolName: "Bash",
-            toolState: "success",
-            toolArgs: {
-              command: "bun test",
-              description: "Run the full suite",
-              run_in_background: true,
+          message={makeMessage([
+            {
+              type: "tool-invocation",
+              content: "Bash",
+              toolName: "Bash",
+              toolState: "success",
+              toolArgs: {
+                command: "bun test",
+                description: "Run the full suite",
+                run_in_background: true,
+              },
+              backgroundTask: { id: "bg-suite", description: "Run the full suite", status },
             },
-            backgroundTask: { id: "bg-suite", description: "Run the full suite", status },
-          }])}
+          ])}
         />,
       );
 
@@ -3582,9 +3665,9 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       expect(row.textContent).not.toContain("success");
       // A terminal task cannot be stopped, so the control is absent rather
       // than present-and-disabled: there is nothing left to act on.
-      expect(
-        screen.queryByRole("button", { name: "Stop Run the full suite" }) !== null,
-      ).toBe(stoppable);
+      expect(screen.queryByRole("button", { name: "Stop Run the full suite" }) !== null).toBe(
+        stoppable,
+      );
     },
   );
 
@@ -3592,14 +3675,16 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     render(
       <NativeMessage
         stopBackgroundTask={async () => true}
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: { command: "bun test", run_in_background: true },
-          backgroundTask: { id: "bg-suite", description: "Run the full suite" },
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "bun test", run_in_background: true },
+            backgroundTask: { id: "bg-suite", description: "Run the full suite" },
+          },
+        ])}
       />,
     );
 
@@ -3607,27 +3692,27 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     // unknown and no stop may be offered against an id that may name nothing.
     const row = screen.getByRole("button", { name: /Task Run the full suite Launched/ });
     expect(row).toBeTruthy();
-    expect(
-      screen.queryByRole("button", { name: "Stop Run the full suite" }) === null,
-    ).toBe(true);
+    expect(screen.queryByRole("button", { name: "Stop Run the full suite" }) === null).toBe(true);
   });
 
   test("reports a refused stop on the card that asked for it", async () => {
     render(
       <NativeMessage
         stopBackgroundTask={async () => false}
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: { command: "bun test", run_in_background: true },
-          backgroundTask: {
-            id: "bg-suite",
-            description: "Run the full suite",
-            status: "running",
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "bun test", run_in_background: true },
+            backgroundTask: {
+              id: "bg-suite",
+              description: "Run the full suite",
+              status: "running",
+            },
           },
-        }])}
+        ])}
       />,
     );
 
@@ -3646,14 +3731,17 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     // The backend took the request, so the button holds to prevent a duplicate.
     // If the next authoritative snapshot still shows live work, holding forever
     // would leave the only way to ask again permanently disabled.
-    const message = (status: "running" | "paused") => makeMessage([{
-      type: "tool-invocation",
-      content: "Bash",
-      toolName: "Bash",
-      toolState: "success",
-      toolArgs: { command: "bun run dev", run_in_background: true },
-      backgroundTask: { id: "bg-dev", description: "Run the dev server", status },
-    }]);
+    const message = (status: "running" | "paused") =>
+      makeMessage([
+        {
+          type: "tool-invocation",
+          content: "Bash",
+          toolName: "Bash",
+          toolState: "success",
+          toolArgs: { command: "bun run dev", run_in_background: true },
+          backgroundTask: { id: "bg-dev", description: "Run the dev server", status },
+        },
+      ]);
     const view = render(
       <NativeMessage message={message("running")} stopBackgroundTask={async () => true} />,
     );
@@ -3661,8 +3749,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop Run the dev server" }));
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Stop Run the dev server" })
-          .hasAttribute("disabled"),
+        screen.getByRole("button", { name: "Stop Run the dev server" }).hasAttribute("disabled"),
       ).toBe(true);
     });
 
@@ -3670,8 +3757,7 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       <NativeMessage message={message("paused")} stopBackgroundTask={async () => true} />,
     );
     expect(
-      screen.getByRole("button", { name: "Stop Run the dev server" })
-        .hasAttribute("disabled"),
+      screen.getByRole("button", { name: "Stop Run the dev server" }).hasAttribute("disabled"),
     ).toBe(false);
   });
 
@@ -3681,23 +3767,24 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     render(
       <NativeMessage
         stopBackgroundTask={async () => true}
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: { command: "bun run dev", description: "Run the dev server" },
-          backgroundTask: {
-            id: "bg-dev",
-            description: "Run the dev server",
-            status: "running",
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "bun run dev", description: "Run the dev server" },
+            backgroundTask: {
+              id: "bg-dev",
+              description: "Run the dev server",
+              status: "running",
+            },
           },
-        }])}
+        ])}
       />,
     );
 
-    expect(screen.getByRole("button", { name: /Task Run the dev server Running/ }))
-      .toBeTruthy();
+    expect(screen.getByRole("button", { name: /Task Run the dev server Running/ })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Stop Run the dev server" })).toBeTruthy();
   });
 
@@ -3710,29 +3797,29 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
       <NativeMessage
         loadToolDetails={loadToolDetails}
         stopBackgroundTask={async () => true}
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: { command: "bun test", run_in_background: true },
-          // The projection defers every tool result, so this is the only way
-          // the card can ever reach the launch output.
-          detailRef: "detail-background-launch",
-          backgroundTask: {
-            id: "bg-suite",
-            description: "Run the full suite",
-            status: "running",
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "bun test", run_in_background: true },
+            // The projection defers every tool result, so this is the only way
+            // the card can ever reach the launch output.
+            detailRef: "detail-background-launch",
+            backgroundTask: {
+              id: "bg-suite",
+              description: "Run the full suite",
+              status: "running",
+            },
           },
-        }])}
+        ])}
       />,
     );
 
     expect(loadToolDetails).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /Task Run the full suite/ }));
-    await waitFor(() =>
-      expect(loadToolDetails).toHaveBeenCalledWith("detail-background-launch")
-    );
+    await waitFor(() => expect(loadToolDetails).toHaveBeenCalledWith("detail-background-launch"));
     expect(
       await screen.findByText("Command running in background with ID: bg-suite."),
     ).toBeTruthy();
@@ -3745,19 +3832,21 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
           throw new Error("Tool details expired");
         })}
         stopBackgroundTask={async () => true}
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: { command: "bun test", run_in_background: true },
-          detailRef: "detail-background-launch-error",
-          backgroundTask: {
-            id: "bg-error",
-            description: "Run the failing suite",
-            status: "running",
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "bun test", run_in_background: true },
+            detailRef: "detail-background-launch-error",
+            backgroundTask: {
+              id: "bg-error",
+              description: "Run the failing suite",
+              status: "running",
+            },
           },
-        }])}
+        ])}
       />,
     );
 
@@ -3768,19 +3857,21 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   test("shows a failed task action instead of the task's own lifecycle state", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "TaskStop",
-          toolName: "TaskStop",
-          toolState: "failure",
-          toolArgs: { task_id: "bg-suite" },
-          toolError: "Task bg-suite is not running (status: completed)",
-          backgroundTask: {
-            id: "bg-suite",
-            description: "Run the full suite",
-            status: "completed",
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "TaskStop",
+            toolName: "TaskStop",
+            toolState: "failure",
+            toolArgs: { task_id: "bg-suite" },
+            toolError: "Task bg-suite is not running (status: completed)",
+            backgroundTask: {
+              id: "bg-suite",
+              description: "Run the full suite",
+              status: "completed",
+            },
           },
-        }])}
+        ])}
       />,
     );
 
@@ -3792,13 +3883,15 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   test("labels an in-flight stop as stopping", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "TaskStop",
-          toolName: "TaskStop",
-          toolState: "pending",
-          toolArgs: { task_id: "bg-suite" },
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "TaskStop",
+            toolName: "TaskStop",
+            toolState: "pending",
+            toolArgs: { task_id: "bg-suite" },
+          },
+        ])}
       />,
     );
 
@@ -3809,18 +3902,24 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
   test("renders a task description as prose and a command as code", () => {
     const { unmount } = render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: {
-            command: "bun test",
-            description: "Run the full suite",
-            run_in_background: true,
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: {
+              command: "bun test",
+              description: "Run the full suite",
+              run_in_background: true,
+            },
+            backgroundTask: {
+              id: "bg-suite",
+              description: "Run the full suite",
+              status: "running",
+            },
           },
-          backgroundTask: { id: "bg-suite", description: "Run the full suite", status: "running" },
-        }])}
+        ])}
       />,
     );
 
@@ -3830,13 +3929,15 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
 
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "tool-invocation",
-          content: "Bash",
-          toolName: "Bash",
-          toolState: "success",
-          toolArgs: { command: "bun test", description: "Run the full suite" },
-        }])}
+        message={makeMessage([
+          {
+            type: "tool-invocation",
+            content: "Bash",
+            toolName: "Bash",
+            toolState: "success",
+            toolArgs: { command: "bun test", description: "Run the full suite" },
+          },
+        ])}
       />,
     );
 
@@ -3848,24 +3949,28 @@ describe("NativeMessage tool-invocation routing to TodoToolPart", () => {
     (toolName) => {
       render(
         <NativeMessage
-          message={makeMessage([{
-            type: "tool-invocation",
-            content: toolName,
-            toolName,
-            toolState: "success",
-            toolArgs: { taskId: "bg-suite" },
-            backgroundTask: {
-              id: "bg-suite",
-              description: "Run the full suite",
-              status: "killed",
+          message={makeMessage([
+            {
+              type: "tool-invocation",
+              content: toolName,
+              toolName,
+              toolState: "success",
+              toolArgs: { taskId: "bg-suite" },
+              backgroundTask: {
+                id: "bg-suite",
+                description: "Run the full suite",
+                status: "killed",
+              },
             },
-          }])}
+          ])}
         />,
       );
 
-      expect(screen.getByRole("button", {
-        name: /Run the full suite bg-suite stopped/,
-      })).toBeTruthy();
+      expect(
+        screen.getByRole("button", {
+          name: /Run the full suite bg-suite stopped/,
+        }),
+      ).toBeTruthy();
     },
   );
 });
@@ -3889,9 +3994,7 @@ describe("NativeMessage thinking parts", () => {
 
   test("renders nothing for a thinking part that is only whitespace", () => {
     const { container } = render(
-      <NativeMessage
-        message={makeMessage([{ type: "thinking", content: "   \n\n\t  " }])}
-      />,
+      <NativeMessage message={makeMessage([{ type: "thinking", content: "   \n\n\t  " }])} />,
     );
 
     expect(screen.queryByRole("button", { name: /thinking/i }) === null).toBe(true);
@@ -3910,17 +4013,13 @@ describe("NativeMessage thinking parts", () => {
     );
 
     expect(container.querySelector(".rounded-lg.border")).toBeTruthy();
-    expect(
-      screen.getAllByRole("button", { name: /thinking/i }),
-    ).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /thinking/i })).toHaveLength(1);
   });
 
   test("keeps single newlines as visible line breaks in expanded reasoning", () => {
     const { container } = render(
       <NativeMessage
-        message={makeMessage([
-          { type: "thinking", content: "first line\nsecond line" },
-        ])}
+        message={makeMessage([{ type: "thinking", content: "first line\nsecond line" }])}
       />,
     );
 
@@ -3949,13 +4048,9 @@ describe("NativeMessage thinking parts", () => {
 
     // With remark-breaks on, the newlines would turn the list into one
     // paragraph of text instead of checkbox rows.
-    expect(
-      container.querySelectorAll('[data-task-list-icon="true"]'),
-    ).toHaveLength(2);
+    expect(container.querySelectorAll('[data-task-list-icon="true"]')).toHaveLength(2);
     expect(container.querySelectorAll("br")).toHaveLength(0);
-    expect(screen.getByText("Read the file").className).toContain(
-      "line-through",
-    );
+    expect(screen.getByText("Read the file").className).toContain("line-through");
   });
 
   test("detects numbered task list syntax for the collapsed preview", () => {
@@ -3975,9 +4070,7 @@ describe("NativeMessage thinking parts", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
 
-    expect(
-      container.querySelectorAll('[data-task-list-icon="true"]'),
-    ).toHaveLength(2);
+    expect(container.querySelectorAll('[data-task-list-icon="true"]')).toHaveLength(2);
   });
 
   test("keeps a thinking part expanded when the list unmounts and remounts it", () => {
@@ -3987,18 +4080,18 @@ describe("NativeMessage thinking parts", () => {
 
     const first = render(<NativeMessage message={message} />);
     fireEvent.click(screen.getByRole("button", { name: /thinking/i }));
-    expect(
-      screen.getByRole("button", { name: /thinking/i }).getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: /thinking/i }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
 
     // The virtualized transcript unmounts a message once it scrolls out of the
     // viewport window; scrolling back must not collapse what the user opened.
     first.unmount();
     const { container } = render(<NativeMessage message={message} />);
 
-    expect(
-      screen.getByRole("button", { name: /thinking/i }).getAttribute("aria-expanded"),
-    ).toBe("true");
+    expect(screen.getByRole("button", { name: /thinking/i }).getAttribute("aria-expanded")).toBe(
+      "true",
+    );
     expect(container.querySelectorAll("p")).toHaveLength(1);
   });
 
@@ -4070,9 +4163,9 @@ describe("NativeMessage thinking parts", () => {
     // Both activity parts render as children of the one grouped block.
     expect(group?.textContent).toContain("Deciding what to run");
     expect(group?.textContent).toContain("ls -la");
-    expect(
-      group?.querySelectorAll(":scope > * > button, :scope > button").length,
-    ).toBeGreaterThan(1);
+    expect(group?.querySelectorAll(":scope > * > button, :scope > button").length).toBeGreaterThan(
+      1,
+    );
   });
 
   test("renders a thinking part supplied as a subagent child action", () => {
@@ -4158,10 +4251,10 @@ describe("NativeMessage part routing and message-level fallbacks", () => {
   test("copies assistant message content when the message has no text parts", async () => {
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => {});
-    const message = makeMessage(
-      [{ type: "thinking", content: "internal reasoning" }],
-      { id: "assistant-fallback", content: "Assistant fallback content" },
-    );
+    const message = makeMessage([{ type: "thinking", content: "internal reasoning" }], {
+      id: "assistant-fallback",
+      content: "Assistant fallback content",
+    });
 
     render(<NativeMessage message={message} />);
 
@@ -4260,13 +4353,15 @@ describe("NativeMessage agent status and grouping details", () => {
   test("prefers authoritative agent lifecycle over a successful launch tool", () => {
     render(
       <NativeMessage
-        message={makeMessage([{
-          type: "subagent",
-          content: "Background reviewer",
-          toolState: "success",
-          agentState: "active",
-          subagentActions: [],
-        }])}
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Background reviewer",
+            toolState: "success",
+            agentState: "active",
+            subagentActions: [],
+          },
+        ])}
       />,
     );
 
@@ -4306,14 +4401,17 @@ describe("NativeMessage agent status and grouping details", () => {
   test("expands standalone agents whose identity uses fallback fields", () => {
     const { rerender } = render(
       <NativeMessage
-        message={makeMessage([
-          {
-            type: "subagent",
-            content: "",
-            toolState: "pending",
-            subagentActions: [],
-          },
-        ], { id: "fallback-subagent" })}
+        message={makeMessage(
+          [
+            {
+              type: "subagent",
+              content: "",
+              toolState: "pending",
+              subagentActions: [],
+            },
+          ],
+          { id: "fallback-subagent" },
+        )}
       />,
     );
 
@@ -4328,18 +4426,21 @@ describe("NativeMessage agent status and grouping details", () => {
 
     rerender(
       <NativeMessage
-        message={makeMessage([
-          {
-            type: "task-group",
-            content: "",
-            task: {
-              type: "tool-invocation",
+        message={makeMessage(
+          [
+            {
+              type: "task-group",
               content: "",
-              toolState: "pending",
+              task: {
+                type: "tool-invocation",
+                content: "",
+                toolState: "pending",
+              },
+              childTools: [],
             },
-            childTools: [],
-          },
-        ], { id: "fallback-task-group" })}
+          ],
+          { id: "fallback-task-group" },
+        )}
       />,
     );
 
@@ -4351,11 +4452,7 @@ describe("NativeMessage agent status and grouping details", () => {
     expect(taskTrigger.getAttribute("aria-expanded")).toBe("true");
   });
 
-  const taskExpansionIdentityCases: Array<[
-    string,
-    NativeTaskGroupPart,
-    RegExp,
-  ]> = [
+  const taskExpansionIdentityCases: Array<[string, NativeTaskGroupPart, RegExp]> = [
     [
       "tool-use id",
       makeAgentTaskGroupPart({
@@ -4429,19 +4526,13 @@ describe("NativeMessage agent status and grouping details", () => {
       first.unmount();
       render(<NativeMessage message={message} />);
 
-      expect(
-        screen.getByRole("button", { name: triggerName }).getAttribute(
-          "aria-expanded",
-        ),
-      ).toBe("true");
+      expect(screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded")).toBe(
+        "true",
+      );
     },
   );
 
-  const subagentExpansionIdentityCases: Array<[
-    string,
-    NativeSubagentPart,
-    RegExp,
-  ]> = [
+  const subagentExpansionIdentityCases: Array<[string, NativeSubagentPart, RegExp]> = [
     [
       "subagent id",
       makeStandaloneSubagentPart({
@@ -4504,11 +4595,9 @@ describe("NativeMessage agent status and grouping details", () => {
       first.unmount();
       render(<NativeMessage message={message} />);
 
-      expect(
-        screen.getByRole("button", { name: triggerName }).getAttribute(
-          "aria-expanded",
-        ),
-      ).toBe("true");
+      expect(screen.getByRole("button", { name: triggerName }).getAttribute("aria-expanded")).toBe(
+        "true",
+      );
     },
   );
 
@@ -4540,20 +4629,24 @@ describe("NativeMessage agent status and grouping details", () => {
               toolUseId: "task-thinking-preview",
               toolArgs: { description: "Thinking preview reviewer" },
             },
-            childTools: [{
-              type: "thinking",
-              content: "Inspecting the reducer",
-            }],
+            childTools: [
+              {
+                type: "thinking",
+                content: "Inspecting the reducer",
+              },
+            ],
           }),
           makeAgentTaskGroupPart({
             task: {
               toolUseId: "task-file-preview",
               toolArgs: { description: "File preview reviewer" },
             },
-            childTools: [{
-              type: "file",
-              content: "/workspace/review-summary.md",
-            }],
+            childTools: [
+              {
+                type: "file",
+                content: "/workspace/review-summary.md",
+              },
+            ],
           }),
         ])}
       />,
@@ -4581,22 +4674,18 @@ describe("NativeMessage agent status and grouping details", () => {
           makeStandaloneSubagentPart({
             subagentId: "standalone-file-preview",
             subagentName: "File standalone reviewer",
-            subagentActions: [
-              { type: "file", content: "/workspace/standalone-review.md" },
-            ],
+            subagentActions: [{ type: "file", content: "/workspace/standalone-review.md" }],
           }),
         ])}
       />,
     );
 
     expect(
-      screen.getByRole("button", { name: /thinking standalone reviewer/i })
-        .textContent,
+      screen.getByRole("button", { name: /thinking standalone reviewer/i }).textContent,
     ).toContain("Thinking");
-    expect(
-      screen.getByRole("button", { name: /file standalone reviewer/i })
-        .textContent,
-    ).toContain("/workspace/standalone-review.md");
+    expect(screen.getByRole("button", { name: /file standalone reviewer/i }).textContent).toContain(
+      "/workspace/standalone-review.md",
+    );
   });
 
   test("renders no shell for an empty agent group", () => {
@@ -4738,10 +4827,7 @@ describe("NativeMessage agent status and grouping details", () => {
   });
 
   test("reads an agent role from the subagentType and role argument aliases", () => {
-    const makeTaskGroup = (
-      id: string,
-      toolArgs: Record<string, unknown>,
-    ): NativeMessagePart => ({
+    const makeTaskGroup = (id: string, toolArgs: Record<string, unknown>): NativeMessagePart => ({
       type: "task-group",
       content: "Agent",
       task: {
@@ -4797,9 +4883,7 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     const label = screen.getByText("Presentation Reviewer");
-    expect(label.parentElement?.textContent).toBe(
-      "AgentPresentation ReviewerFinished",
-    );
+    expect(label.parentElement?.textContent).toBe("AgentPresentation ReviewerFinished");
   });
 
   test("treats every casing of the generic Task tool label as a subagent", () => {
@@ -4877,19 +4961,14 @@ describe("NativeMessage actions slot", () => {
     });
 
     render(
-      <NativeMessage
-        message={message}
-        actions={<button type="button">Fork from here</button>}
-      />,
+      <NativeMessage message={message} actions={<button type="button">Fork from here</button>} />,
     );
 
     const fork = screen.getByRole("button", { name: "Fork from here" });
     const copy = screen.getByRole("button", { name: "Copy text" });
     expect(fork).toBeTruthy();
     // Ordering is load-bearing: copy stays the right-most control.
-    expect(
-      fork.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(fork.compareDocumentPosition(copy) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   test("renders actions on an assistant message alongside the copy button", () => {
@@ -4932,8 +5011,8 @@ describe("NativeMessage actions slot", () => {
       />,
     );
 
-    const actionRow = screen.getByRole("button", { name: "Fork from here" })
-      .parentElement?.parentElement;
+    const actionRow = screen.getByRole("button", { name: "Fork from here" }).parentElement
+      ?.parentElement;
     const classTokens = getClassTokens(actionRow);
     expect(classTokens).toContain("opacity-100");
     expect(classTokens).toContain("md:hover-fine:opacity-0");
@@ -4951,10 +5030,7 @@ describe("NativeMessage actions slot", () => {
     ]);
 
     render(
-      <NativeMessage
-        message={message}
-        actions={<button type="button">Fork from here</button>}
-      />,
+      <NativeMessage message={message} actions={<button type="button">Fork from here</button>} />,
     );
 
     expect(screen.getByRole("button", { name: "Fork from here" })).toBeTruthy();

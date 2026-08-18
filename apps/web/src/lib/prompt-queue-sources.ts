@@ -111,10 +111,7 @@ export async function claimAgentPromptQueueHead<TItem extends QueuedItem>(
 ): Promise<ClaimedPrompt<TItem> | null> {
   const source = getSharedSources().find((candidate) => candidate.agent === agent);
   if (!source) return null;
-  return claimPromptQueueHead(
-    source as unknown as PromptQueueSource<TItem>,
-    sessionKey,
-  );
+  return claimPromptQueueHead(source as unknown as PromptQueueSource<TItem>, sessionKey);
 }
 
 export async function retryAgentPromptQueueDispatch(
@@ -149,11 +146,9 @@ export async function clearQueuedLaunchPrompt(
   }
 }
 
-function sourceFor<TItem extends QueuedItem>(
-  agent: string,
-): PromptQueueSource<TItem> | null {
-  return (getSharedSources().find((candidate) => candidate.agent === agent)
-    ?? null) as PromptQueueSource<TItem> | null;
+function sourceFor<TItem extends QueuedItem>(agent: string): PromptQueueSource<TItem> | null {
+  return (getSharedSources().find((candidate) => candidate.agent === agent) ??
+    null) as PromptQueueSource<TItem> | null;
 }
 
 function queueIdentity<TItem extends QueuedItem>(
@@ -270,9 +265,7 @@ export async function removeAgentPrompt<TItem extends QueuedItem>(
   return result.removed;
 }
 
-export async function transferAgentPromptToComposeDraft<
-  TItem extends QueuedItem,
->(
+export async function transferAgentPromptToComposeDraft<TItem extends QueuedItem>(
   agent: "claude" | "codex" | "opencode",
   sessionKey: string,
   messageId: string,
@@ -288,9 +281,7 @@ export async function transferAgentPromptToComposeDraft<
   // looks like an empty one.
   await awaitComposeDraftWrites(draftKey);
 
-  let result: Awaited<
-    ReturnType<typeof backend.transferPromptQueueMessageToComposeDraft<TItem>>
-  >;
+  let result: Awaited<ReturnType<typeof backend.transferPromptQueueMessageToComposeDraft<TItem>>>;
   try {
     result = await backend.transferPromptQueueMessageToComposeDraft<TItem>(
       identity.queueKey,

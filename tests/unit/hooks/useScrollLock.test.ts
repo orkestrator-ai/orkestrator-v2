@@ -1,9 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { renderHook, act } from "@testing-library/react";
-import {
-  useScrollLock,
-  clearPersistedScrollState,
-} from "@/hooks/useScrollLock";
+import { useScrollLock, clearPersistedScrollState } from "@/hooks/useScrollLock";
 import { createRef, type RefObject } from "react";
 
 // Track containers for cleanup (avoids wiping all of document.body)
@@ -14,13 +11,15 @@ const containers: HTMLElement[] = [];
  * a Radix ScrollArea. Returns the container ref and the viewport element
  * for direct manipulation in tests.
  */
-function createMockScrollContainer(opts: {
-  scrollTop?: number;
-  scrollHeight?: number;
-  clientHeight?: number;
-  selector?: string;
-  trackScrollTopSets?: number[];
-} = {}) {
+function createMockScrollContainer(
+  opts: {
+    scrollTop?: number;
+    scrollHeight?: number;
+    clientHeight?: number;
+    selector?: string;
+    trackScrollTopSets?: number[];
+  } = {},
+) {
   const {
     scrollTop = 0,
     scrollHeight = 1000,
@@ -81,7 +80,7 @@ function setScrollPosition(
   viewport: HTMLElement,
   scrollTop: number,
   scrollHeight = 1000,
-  clientHeight = 500
+  clientHeight = 500,
 ) {
   Object.defineProperty(viewport, "scrollTop", {
     get: () => scrollTop,
@@ -155,7 +154,11 @@ describe("useScrollLock", () => {
       viewport.setAttribute("data-slot", "scroll-area-viewport");
       Object.defineProperty(viewport, "scrollHeight", { get: () => 1000, configurable: true });
       Object.defineProperty(viewport, "clientHeight", { get: () => 500, configurable: true });
-      Object.defineProperty(viewport, "scrollTop", { get: () => 500, set: () => {}, configurable: true });
+      Object.defineProperty(viewport, "scrollTop", {
+        get: () => 500,
+        set: () => {},
+        configurable: true,
+      });
 
       container.appendChild(viewport);
       document.body.appendChild(container);
@@ -164,9 +167,7 @@ describe("useScrollLock", () => {
       const ref2 = createRef<HTMLDivElement>() as { current: HTMLDivElement | null };
       ref2.current = container as HTMLDivElement;
 
-      const { result } = renderHook(() =>
-        useScrollLock(ref2 as RefObject<HTMLDivElement | null>)
-      );
+      const { result } = renderHook(() => useScrollLock(ref2 as RefObject<HTMLDivElement | null>));
 
       expect(result.current.isAtBottom).toBe(true);
     });
@@ -191,16 +192,18 @@ describe("useScrollLock", () => {
       root.setAttribute("data-scroll-viewport", "true");
       Object.defineProperty(root, "scrollHeight", { get: () => 1000, configurable: true });
       Object.defineProperty(root, "clientHeight", { get: () => 500, configurable: true });
-      Object.defineProperty(root, "scrollTop", { get: () => 500, set: () => {}, configurable: true });
+      Object.defineProperty(root, "scrollTop", {
+        get: () => 500,
+        set: () => {},
+        configurable: true,
+      });
       document.body.appendChild(root);
       containers.push(root);
 
       const ref = createRef<HTMLDivElement>() as { current: HTMLDivElement | null };
       ref.current = root as HTMLDivElement;
 
-      const { result } = renderHook(() =>
-        useScrollLock(ref as RefObject<HTMLDivElement | null>)
-      );
+      const { result } = renderHook(() => useScrollLock(ref as RefObject<HTMLDivElement | null>));
 
       // Root is treated as the viewport: scrollTop 500 of 1000 with 500 client
       // height is exactly at the bottom.
@@ -220,9 +223,7 @@ describe("useScrollLock", () => {
       const ref = createRef<HTMLDivElement>() as { current: HTMLDivElement | null };
       ref.current = root as HTMLDivElement;
 
-      const { result } = renderHook(() =>
-        useScrollLock(ref as RefObject<HTMLDivElement | null>)
-      );
+      const { result } = renderHook(() => useScrollLock(ref as RefObject<HTMLDivElement | null>));
 
       expect(result.current.isAtBottom).toBe(false);
     });
@@ -487,9 +488,7 @@ describe("useScrollLock", () => {
       const { ref, viewport } = createMockScrollContainer();
       setScrollPosition(viewport, 500, 1000, 500);
 
-      renderHook(() =>
-        useScrollLock(ref, { persistKey: "test-key" })
-      );
+      renderHook(() => useScrollLock(ref, { persistKey: "test-key" }));
 
       // Scroll away to trigger persistence
       act(() => {
@@ -500,9 +499,7 @@ describe("useScrollLock", () => {
       // Mount a new hook instance — it should start with the persisted state.
       // No viewport needed; initial state comes from the persisted Map.
       const ref2 = createRef<HTMLDivElement>() as RefObject<HTMLDivElement | null>;
-      const { result: result2 } = renderHook(() =>
-        useScrollLock(ref2, { persistKey: "test-key" })
-      );
+      const { result: result2 } = renderHook(() => useScrollLock(ref2, { persistKey: "test-key" }));
 
       expect(result2.current.isScrollLocked).toBe(false);
       expect(result2.current.isAtBottom).toBe(false);
@@ -521,9 +518,7 @@ describe("useScrollLock", () => {
 
       // A new hook with a fresh key should not have persisted state
       const ref2 = createRef<HTMLDivElement>() as RefObject<HTMLDivElement | null>;
-      const { result: result2 } = renderHook(() =>
-        useScrollLock(ref2, { persistKey: "no-state" })
-      );
+      const { result: result2 } = renderHook(() => useScrollLock(ref2, { persistKey: "no-state" }));
 
       // Defaults to true when no persisted state exists
       expect(result2.current.isScrollLocked).toBe(true);
@@ -536,9 +531,7 @@ describe("useScrollLock", () => {
       const { ref, viewport } = createMockScrollContainer();
       setScrollPosition(viewport, 500, 1000, 500);
 
-      renderHook(() =>
-        useScrollLock(ref, { persistKey: "test-key" })
-      );
+      renderHook(() => useScrollLock(ref, { persistKey: "test-key" }));
 
       // Scroll away to persist non-default state
       act(() => {
@@ -549,7 +542,7 @@ describe("useScrollLock", () => {
       // Verify it was persisted by mounting a second hook
       const refCheck = createRef<HTMLDivElement>() as RefObject<HTMLDivElement | null>;
       const { result: check } = renderHook(() =>
-        useScrollLock(refCheck, { persistKey: "test-key" })
+        useScrollLock(refCheck, { persistKey: "test-key" }),
       );
       expect(check.current.isScrollLocked).toBe(false);
 
@@ -558,9 +551,7 @@ describe("useScrollLock", () => {
 
       // New hook should get defaults (no viewport needed — testing the Map)
       const ref2 = createRef<HTMLDivElement>() as RefObject<HTMLDivElement | null>;
-      const { result: result2 } = renderHook(() =>
-        useScrollLock(ref2, { persistKey: "test-key" })
-      );
+      const { result: result2 } = renderHook(() => useScrollLock(ref2, { persistKey: "test-key" }));
 
       expect(result2.current.isScrollLocked).toBe(true);
       expect(result2.current.isAtBottom).toBe(true);
@@ -578,9 +569,8 @@ describe("useScrollLock", () => {
       });
 
       const { rerender } = renderHook(
-        ({ isActive, scrollTrigger }) =>
-          useScrollLock(ref, { isActive, scrollTrigger }),
-        { initialProps: { isActive: true, scrollTrigger: 1 } }
+        ({ isActive, scrollTrigger }) => useScrollLock(ref, { isActive, scrollTrigger }),
+        { initialProps: { isActive: true, scrollTrigger: 1 } },
       );
 
       const countBefore = scrollTopSets.length;
@@ -603,9 +593,8 @@ describe("useScrollLock", () => {
       });
 
       const { rerender } = renderHook(
-        ({ scrollTrigger }) =>
-          useScrollLock(ref, { scrollTrigger }),
-        { initialProps: { scrollTrigger: 1 } }
+        ({ scrollTrigger }) => useScrollLock(ref, { scrollTrigger }),
+        { initialProps: { scrollTrigger: 1 } },
       );
 
       const countBefore = scrollTopSets.length;

@@ -45,10 +45,7 @@ const commandDescriptions = new Map<string, CommandDescriptionCacheEntry>();
  */
 export const MAX_COMMAND_DESCRIPTION_CACHE_ENTRIES = 512;
 
-function rememberCommandDescription(
-  filePath: string,
-  entry: CommandDescriptionCacheEntry,
-): void {
+function rememberCommandDescription(filePath: string, entry: CommandDescriptionCacheEntry): void {
   // Re-insert so eviction below drops the least recently *parsed* path.
   commandDescriptions.delete(filePath);
   commandDescriptions.set(filePath, entry);
@@ -67,12 +64,7 @@ function rememberCommandDescription(
 const FRONTMATTER_READ_CHUNK_BYTES = 8 * 1024;
 const MAX_FRONTMATTER_READ_BYTES = 256 * 1024;
 
-function fingerprintOf(stats: {
-  mtimeMs: number;
-  size: number;
-  ino: number;
-  dev: number;
-}): string {
+function fingerprintOf(stats: { mtimeMs: number; size: number; ino: number; dev: number }): string {
   // `ino`/`dev` catch an atomic replace that happens to preserve mtime and
   // size — the common shape of a file written via rename.
   return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
@@ -104,10 +96,10 @@ async function readFileFrontmatter(filePath: string): Promise<string> {
       // Once the first chunk proves there is no frontmatter, the body cannot
       // change that fact. Otherwise continue only until the closing delimiter.
       if (
-        (position >= FRONTMATTER_READ_CHUNK_BYTES
-          && !content.startsWith("---\n")
-          && !content.startsWith("---\r\n"))
-        || hasCompleteFrontmatter(content)
+        (position >= FRONTMATTER_READ_CHUNK_BYTES &&
+          !content.startsWith("---\n") &&
+          !content.startsWith("---\r\n")) ||
+        hasCompleteFrontmatter(content)
       ) {
         break;
       }
@@ -123,9 +115,7 @@ async function readFileFrontmatter(filePath: string): Promise<string> {
  * Resolve a command file's description, serving repeats from the cache until
  * the file changes on disk.
  */
-async function readCommandDescription(
-  filePath: string,
-): Promise<string | undefined> {
+async function readCommandDescription(filePath: string): Promise<string | undefined> {
   const fingerprint = fingerprintOf(await stat(filePath));
   const cached = commandDescriptions.get(filePath);
   if (cached && cached.fingerprint === fingerprint) {
@@ -136,10 +126,7 @@ async function readCommandDescription(
   return description;
 }
 
-function pruneCommandDescriptionCache(
-  commandsDir: string,
-  livePaths: ReadonlySet<string>,
-): void {
+function pruneCommandDescriptionCache(commandsDir: string, livePaths: ReadonlySet<string>): void {
   for (const cachedPath of commandDescriptions.keys()) {
     if (dirname(cachedPath) === commandsDir && !livePaths.has(cachedPath)) {
       commandDescriptions.delete(cachedPath);
@@ -176,9 +163,7 @@ function parseDescription(content: string): string | undefined {
   if (!match?.[1]) return undefined;
 
   const frontmatter = match[1];
-  const descMatch = frontmatter.match(
-    /^description:\s*(?:"([^"]*?)"|'([^']*?)'|(.+?))\s*$/m
-  );
+  const descMatch = frontmatter.match(/^description:\s*(?:"([^"]*?)"|'([^']*?)'|(.+?))\s*$/m);
   if (!descMatch) return undefined;
 
   return (descMatch[1] ?? descMatch[2] ?? descMatch[3])?.trim();
@@ -189,10 +174,7 @@ function parseDescription(content: string): string | undefined {
  * @param commandsDir - Absolute path to the commands directory
  * @param prefix - Optional prefix for the command name (e.g., "superpowers:")
  */
-async function scanCommandsDir(
-  commandsDir: string,
-  prefix: string,
-): Promise<string[]> {
+async function scanCommandsDir(commandsDir: string, prefix: string): Promise<string[]> {
   let entries: string[];
   try {
     entries = await readdir(commandsDir);

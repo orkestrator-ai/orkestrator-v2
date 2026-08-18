@@ -1,5 +1,10 @@
 import { describe, expect, jest, mock, test } from "bun:test";
-import type { MessagePatchEventData, NormalizedPart, SSEEvent, SessionUsageSnapshot } from "../types/index.js";
+import type {
+  MessagePatchEventData,
+  NormalizedPart,
+  SSEEvent,
+  SessionUsageSnapshot,
+} from "../types/index.js";
 import { MAX_DIFF_SIDE_BYTES, MAX_TOOL_TEXT_BYTES, TRUNCATED_NOTICE } from "./part-budget.js";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
@@ -35,7 +40,6 @@ import {
   withWorkspaceCwd,
 } from "./session-manager-test-harness.js";
 
-
 // ---------------------------------------------------------------------------
 // sendPrompt — happy path, errors, abort, init
 // ---------------------------------------------------------------------------
@@ -54,9 +58,7 @@ describe("sendPrompt", () => {
 
     try {
       await writeFile(credentialFile, "managed-query-token");
-      const { call } = await runPromptWithMessages([
-        { type: "result", subtype: "success" },
-      ]);
+      const { call } = await runPromptWithMessages([{ type: "result", subtype: "success" }]);
 
       expect(call.options.env).toMatchObject({
         GITHUB_TOKEN: "managed-query-token",
@@ -212,12 +214,14 @@ describe("sendPrompt", () => {
       const call = await nextQueryCall();
 
       jest.advanceTimersByTime(30_001);
-      expect(warn.mock.calls.some(
-        ([message]) => String(message).includes("has not responded after 5 seconds"),
-      )).toBe(true);
-      expect(warn.mock.calls.some(
-        ([message]) => String(message).includes("No SDK messages yet"),
-      )).toBe(true);
+      expect(
+        warn.mock.calls.some(([message]) =>
+          String(message).includes("has not responded after 5 seconds"),
+        ),
+      ).toBe(true);
+      expect(
+        warn.mock.calls.some(([message]) => String(message).includes("No SDK messages yet")),
+      ).toBe(true);
 
       call.finish();
       await promptPromise;
@@ -283,9 +287,7 @@ describe("sendPrompt", () => {
       });
       expect(streamedEvent).toBeDefined();
       expect(
-        (
-          streamedEvent?.data as { message?: { modelId?: string } } | undefined
-        )?.message?.modelId,
+        (streamedEvent?.data as { message?: { modelId?: string } } | undefined)?.message?.modelId,
       ).toBe("claude-opus-5");
 
       call.push({
@@ -304,13 +306,12 @@ describe("sendPrompt", () => {
       const assistant = getSessionMessages(session.id).find((m) => m.role === "assistant");
       expect(assistant?.content).toBe("Hello final");
       expect(assistant?.modelId).toBe("claude-opus-5");
-      expect(events.some((event) => {
-        const published = (
-          event.data as { message?: { modelId?: string } } | undefined
-        )?.message;
-        return event.type === "message.updated"
-          && published?.modelId === "claude-opus-5";
-      })).toBe(true);
+      expect(
+        events.some((event) => {
+          const published = (event.data as { message?: { modelId?: string } } | undefined)?.message;
+          return event.type === "message.updated" && published?.modelId === "claude-opus-5";
+        }),
+      ).toBe(true);
     } finally {
       stop();
     }
@@ -386,13 +387,12 @@ describe("sendPrompt", () => {
       );
       expect(assistant?.content).toBe("Hello final");
       expect(assistant?.modelId).toBe("claude-sonnet-5");
-      expect(events.some((event) => {
-        const published = (
-          event.data as { message?: { modelId?: string } } | undefined
-        )?.message;
-        return event.type === "message.updated"
-          && published?.modelId === "claude-sonnet-5";
-      })).toBe(true);
+      expect(
+        events.some((event) => {
+          const published = (event.data as { message?: { modelId?: string } } | undefined)?.message;
+          return event.type === "message.updated" && published?.modelId === "claude-sonnet-5";
+        }),
+      ).toBe(true);
     } finally {
       stop();
     }
@@ -533,10 +533,14 @@ describe("sendPrompt", () => {
       expect(thinkingPart?.content).toBe("Reasoning...");
 
       const streamedThinking = events.find((event) => {
-        const message = (event.data as { message?: { parts?: { type: string; content?: string }[] } } | undefined)?.message;
+        const message = (
+          event.data as { message?: { parts?: { type: string; content?: string }[] } } | undefined
+        )?.message;
         return (
           event.type === "message.updated" &&
-          message?.parts?.some((part) => part.type === "thinking" && part.content === "Reasoning...")
+          message?.parts?.some(
+            (part) => part.type === "thinking" && part.content === "Reasoning...",
+          )
         );
       });
       expect(streamedThinking).toBeDefined();
@@ -590,7 +594,9 @@ describe("sendPrompt", () => {
         content_block: { type: "text", text: "First" },
       });
       await waitFor(() => {
-        const parts = getSessionMessages(session.id).find((message) => message.role === "assistant")?.parts;
+        const parts = getSessionMessages(session.id).find(
+          (message) => message.role === "assistant",
+        )?.parts;
         return parts?.[0]?.content === "First";
       });
 
@@ -601,11 +607,15 @@ describe("sendPrompt", () => {
         content_block: { type: "text", text: "Second" },
       });
       await waitFor(() => {
-        const parts = getSessionMessages(session.id).find((message) => message.role === "assistant")?.parts;
+        const parts = getSessionMessages(session.id).find(
+          (message) => message.role === "assistant",
+        )?.parts;
         return parts?.[1]?.content === "Second";
       });
 
-      const parts = getSessionMessages(session.id).find((message) => message.role === "assistant")?.parts;
+      const parts = getSessionMessages(session.id).find(
+        (message) => message.role === "assistant",
+      )?.parts;
       expect(parts?.map((part) => part.createdAt)).toEqual([
         "2026-07-26T10:00:00.000Z",
         "2026-07-26T10:03:00.000Z",
@@ -710,7 +720,9 @@ describe("sendPrompt", () => {
         },
       });
       await waitFor(() => {
-        const assistant = getSessionMessages(session.id).find((message) => message.role === "assistant");
+        const assistant = getSessionMessages(session.id).find(
+          (message) => message.role === "assistant",
+        );
         return assistant?.content === "Recovered text";
       });
 
@@ -886,8 +898,7 @@ describe("sendPrompt", () => {
       });
       const streamedTextTimestamp = getSessionMessages(session.id)
         .find((m) => m.role === "assistant")
-        ?.parts.find((part) => part.type === "text")
-        ?.createdAt;
+        ?.parts.find((part) => part.type === "text")?.createdAt;
       expect(Number.isFinite(new Date(streamedTextTimestamp ?? "").getTime())).toBe(true);
 
       // The SDK emits one assistant message per content block, each with a fresh
@@ -987,9 +998,7 @@ describe("sendPrompt", () => {
         type: "user",
         uuid: "multi-user-1",
         message: {
-          content: [
-            { type: "tool_result", tool_use_id: "tool-multi-1", content: "clean" },
-          ],
+          content: [{ type: "tool_result", tool_use_id: "tool-multi-1", content: "clean" }],
         },
       });
 
@@ -1029,9 +1038,7 @@ describe("sendPrompt", () => {
       ]);
       expect(assistant?.parts[0]?.content).toBe("Need the repo state.");
       expect(assistant?.parts[2]?.content).toBe("Working tree is clean.");
-      expect(
-        Number.isFinite(new Date(assistant?.parts[2]?.createdAt ?? "").getTime()),
-      ).toBe(true);
+      expect(Number.isFinite(new Date(assistant?.parts[2]?.createdAt ?? "").getTime())).toBe(true);
       expect(assistant?.content).toBe("Working tree is clean.");
     } finally {
       stop();
@@ -1072,7 +1079,9 @@ describe("sendPrompt", () => {
       expect(stored.turnStartedAt).toBeUndefined();
       expect(stored.error).toBe("SDK exploded");
 
-      const errorEvent = events.find((e) => e.type === "session.error" && e.sessionId === session.id);
+      const errorEvent = events.find(
+        (e) => e.type === "session.error" && e.sessionId === session.id,
+      );
       expect(errorEvent).toBeDefined();
       expect((errorEvent?.data as { error?: string })?.error).toBe("SDK exploded");
     } finally {
@@ -1127,9 +1136,11 @@ describe("sendPrompt", () => {
 
     const stop = eventEmitter.subscribe((event) => {
       if (event.type === "message.updated") {
-        const message = (event.data as {
-          message?: { role?: string; content?: string; parts?: NormalizedPart[] };
-        }).message;
+        const message = (
+          event.data as {
+            message?: { role?: string; content?: string; parts?: NormalizedPart[] };
+          }
+        ).message;
         if (message?.role !== "assistant") return;
         parts = (message.parts ?? []).slice();
         frames.push(message.content ?? "");
@@ -1148,9 +1159,7 @@ describe("sendPrompt", () => {
 
   /** Frames of either kind — what the client re-renders on. */
   const messageFrames = (events: SSEEvent[]): SSEEvent[] =>
-    events.filter(
-      (event) => event.type === "message.updated" || event.type === "message.patched",
-    );
+    events.filter((event) => event.type === "message.updated" || event.type === "message.patched");
 
   /**
    * Lets the session manager drain the messages already queued on the mock
@@ -1223,7 +1232,9 @@ describe("sendPrompt", () => {
         type: "assistant",
         message: {
           id: "patch-1",
-          content: [{ type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "/a.ts" } }],
+          content: [
+            { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "/a.ts" } },
+          ],
         },
       });
       call.push({
@@ -1276,7 +1287,7 @@ describe("sendPrompt", () => {
       let parts: NormalizedPart[] = [];
       for (const frame of frames) {
         if (frame.type === "message.updated") {
-          parts = ((frame.data as { message: { parts: NormalizedPart[] } }).message.parts).slice();
+          parts = (frame.data as { message: { parts: NormalizedPart[] } }).message.parts.slice();
           continue;
         }
         const patch = frame.data as MessagePatchEventData;
@@ -1299,9 +1310,11 @@ describe("sendPrompt", () => {
     const revisions: (number | undefined)[] = [];
     const stop = eventEmitter.subscribe((event) => {
       if (event.type === "message.updated") {
-        const message = (event.data as {
-          message?: { role?: string; revision?: number };
-        }).message;
+        const message = (
+          event.data as {
+            message?: { role?: string; revision?: number };
+          }
+        ).message;
         if (message?.role !== "assistant") return;
         revisions.push(message.revision);
         return;
@@ -1438,9 +1451,7 @@ describe("sendPrompt", () => {
       // The flush ran before the assistant message was handled, so the streamed
       // text was published in its own frame rather than being skipped over.
       expect(frames).toContain("streamed");
-      expect(frames.indexOf("streamed")).toBeLessThan(
-        frames.lastIndexOf("streamed and final"),
-      );
+      expect(frames.indexOf("streamed")).toBeLessThan(frames.lastIndexOf("streamed and final"));
       expect(assistantContent(session.id)).toBe("streamed and final");
     } finally {
       stop();
@@ -1475,8 +1486,11 @@ describe("sendPrompt", () => {
       expect(assistantContent(session.id)).toBe("half a sentence");
 
       // The completed message is emitted before the terminal error frame.
-      const updateIndex = events.findIndex((event) => event.type === "message.updated"
-        && (event.data as { message?: { role?: string } }).message?.role === "assistant");
+      const updateIndex = events.findIndex(
+        (event) =>
+          event.type === "message.updated" &&
+          (event.data as { message?: { role?: string } }).message?.role === "assistant",
+      );
       const errorIndex = events.findIndex((event) => event.type === "session.error");
       expect(updateIndex).toBeGreaterThanOrEqual(0);
       expect(errorIndex).toBeGreaterThanOrEqual(0);
@@ -1555,8 +1569,9 @@ describe("sendPrompt", () => {
     expect(abortSession(session.id)).toBe(true);
     const secondPrompt = sendPrompt(session.id, "second");
     const secondCall = await nextQueryCall();
-    const secondInput =
-      (secondCall.prompt as AsyncIterable<SDKUserMessage>)[Symbol.asyncIterator]();
+    const secondInput = (secondCall.prompt as AsyncIterable<SDKUserMessage>)[
+      Symbol.asyncIterator
+    ]();
     expect((await secondInput.next()).done).toBe(false);
     const secondInputCompletion = secondInput.next();
     await firstPrompt;
@@ -1659,10 +1674,7 @@ describe("sendPrompt", () => {
         type: "assistant",
         message: {
           id: "final-only",
-          content: [
-            { type: "unknown" },
-            { type: "text", text: "after ignored block" },
-          ],
+          content: [{ type: "unknown" }, { type: "text", text: "after ignored block" }],
         },
       },
       { type: "result", subtype: "success" },
@@ -1723,7 +1735,11 @@ describe("sendPrompt", () => {
         message: {
           content: [
             { type: "tool_result", tool_use_id: "edit-1", content: "ok" },
-            { type: "tool_result", tool_use_id: "write-1", content: [{ type: "text", text: "done" }] },
+            {
+              type: "tool_result",
+              tool_use_id: "write-1",
+              content: [{ type: "text", text: "done" }],
+            },
             { type: "tool_result", tool_use_id: "multi-1", content: "ok" },
             { type: "tool_result", tool_use_id: "notebook-1", content: "ok" },
             { type: "tool_result", tool_use_id: 42, content: "ignored" },
@@ -1733,9 +1749,10 @@ describe("sendPrompt", () => {
       { type: "result", subtype: "success" },
     ]);
 
-    const tools = session.messages
-      .find((message) => message.role === "assistant")
-      ?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+    const tools =
+      session.messages
+        .find((message) => message.role === "assistant")
+        ?.parts.filter((part) => part.type === "tool-invocation") ?? [];
     expect(tools).toHaveLength(4);
     expect(tools[0]).toMatchObject({
       toolUseId: "edit-1",
@@ -1918,9 +1935,10 @@ describe("sendPrompt", () => {
       { type: "result", subtype: "success" },
     ]);
 
-    const tools = session.messages
-      .find((message) => message.role === "assistant")
-      ?.parts.filter((part) => part.type === "tool-invocation") ?? [];
+    const tools =
+      session.messages
+        .find((message) => message.role === "assistant")
+        ?.parts.filter((part) => part.type === "tool-invocation") ?? [];
 
     // Each call carries the list as it stood after that call, so the renderer
     // never has to reconstruct it from neighbouring parts.
@@ -2169,9 +2187,7 @@ describe("sendPrompt", () => {
   });
 
   test("uses explicit Task parents across concurrent tasks and longest MCP server prefixes", async () => {
-    mockGetMcpServerNames.mockImplementationOnce(async () =>
-      new Set(["team", "team_tools"]),
-    );
+    mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["team", "team_tools"]));
     const { session } = await runPromptWithMessages([
       {
         type: "assistant",
@@ -2189,9 +2205,7 @@ describe("sendPrompt", () => {
         message: {
           id: "child",
           model: "claude-subagent",
-          content: [
-            { type: "tool_use", id: "child-a", name: "mcp_team_tools_search", input: {} },
-          ],
+          content: [{ type: "tool_use", id: "child-a", name: "mcp_team_tools_search", input: {} }],
         },
       },
       { type: "result", subtype: "success" },
@@ -2298,7 +2312,7 @@ describe("sendPrompt", () => {
       "",
     );
 
-    const sdkMessages = await readSdkPrompt(call) as Array<{
+    const sdkMessages = (await readSdkPrompt(call)) as Array<{
       message: { content: Array<Record<string, unknown>> };
     }>;
     expect(sdkMessages).toHaveLength(1);
@@ -2317,22 +2331,22 @@ describe("sendPrompt", () => {
     const { call } = await runPromptWithMessages(
       [{ type: "result", subtype: "success" }],
       {
-        attachments: [{
-          type: "image",
-          path: "",
-          filename: "photo.png",
-          dataUrl: "data:image/png;base64,aGVsbG8=",
-        }],
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            filename: "photo.png",
+            dataUrl: "data:image/png;base64,aGVsbG8=",
+          },
+        ],
       },
       "",
     );
 
-    const sdkMessages = await readSdkPrompt(call) as Array<{
+    const sdkMessages = (await readSdkPrompt(call)) as Array<{
       message: { content: Array<Record<string, unknown>> };
     }>;
-    expect(sdkMessages[0].message.content).toEqual([
-      expect.objectContaining({ type: "image" }),
-    ]);
+    expect(sdkMessages[0].message.content).toEqual([expect.objectContaining({ type: "image" })]);
   });
 
   test("rejects malformed inline image data instead of silently omitting it", async () => {
@@ -2340,13 +2354,17 @@ describe("sendPrompt", () => {
     track(session.id);
     const { events, stop } = captureEvents();
     try {
-      await expect(sendPrompt(session.id, "describe this", {
-        attachments: [{
-          type: "image",
-          path: "/definitely/missing/image.png",
-          dataUrl: "data:image/png;base64,not-valid!",
-        }],
-      })).rejects.toMatchObject({
+      await expect(
+        sendPrompt(session.id, "describe this", {
+          attachments: [
+            {
+              type: "image",
+              path: "/definitely/missing/image.png",
+              dataUrl: "data:image/png;base64,not-valid!",
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({
         name: "ClaudeAttachmentError",
         code: "attachment_invalid_data",
       });
@@ -2364,14 +2382,18 @@ describe("sendPrompt", () => {
     const session = createSession("unsupported-inline-image");
     track(session.id);
 
-    await expect(sendPrompt(session.id, "describe this", {
-      attachments: [{
-        type: "image",
-        path: "",
-        filename: "vector.svg",
-        dataUrl: "data:image/svg+xml;base64,PHN2Zy8+",
-      }],
-    })).rejects.toMatchObject({
+    await expect(
+      sendPrompt(session.id, "describe this", {
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            filename: "vector.svg",
+            dataUrl: "data:image/svg+xml;base64,PHN2Zy8+",
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
       name: "ClaudeAttachmentError",
       code: "attachment_invalid_data",
     });
@@ -2382,9 +2404,11 @@ describe("sendPrompt", () => {
     const session = createSession("missing-image-source");
     track(session.id);
 
-    await expect(sendPrompt(session.id, "describe this", {
-      attachments: [{ type: "image", path: "" }],
-    })).rejects.toMatchObject({
+    await expect(
+      sendPrompt(session.id, "describe this", {
+        attachments: [{ type: "image", path: "" }],
+      }),
+    ).rejects.toMatchObject({
       name: "ClaudeAttachmentError",
       code: "attachment_read_failed",
       message: "Image attachment does not contain readable image data.",
@@ -2394,35 +2418,36 @@ describe("sendPrompt", () => {
 
   test("accepts inline image data at exactly 8MB and rejects one byte over", async () => {
     const allowedData = Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES, 1).toString("base64");
-    const { call } = await runPromptWithMessages(
-      [{ type: "result", subtype: "success" }],
-      {
-        attachments: [{
+    const { call } = await runPromptWithMessages([{ type: "result", subtype: "success" }], {
+      attachments: [
+        {
           type: "image",
           path: "",
           filename: "boundary.png",
           dataUrl: `data:image/png;base64,${allowedData}`,
-        }],
-      },
-    );
-    const sdkMessages = await readSdkPrompt(call) as Array<{
+        },
+      ],
+    });
+    const sdkMessages = (await readSdkPrompt(call)) as Array<{
       message: { content: Array<{ source?: { data?: string } }> };
     }>;
-    expect(sdkMessages[0].message.content[1]?.source?.data).toHaveLength(
-      allowedData.length,
-    );
+    expect(sdkMessages[0].message.content[1]?.source?.data).toHaveLength(allowedData.length);
 
     const oversizedSession = createSession("oversized-inline-image");
     track(oversizedSession.id);
     const oversizedData = Buffer.alloc(MAX_IMAGE_ATTACHMENT_BYTES + 1, 1).toString("base64");
-    await expect(sendPrompt(oversizedSession.id, "describe this", {
-      attachments: [{
-        type: "image",
-        path: "",
-        filename: "boundary.png",
-        dataUrl: `data:image/png;base64,${oversizedData}`,
-      }],
-    })).rejects.toMatchObject({
+    await expect(
+      sendPrompt(oversizedSession.id, "describe this", {
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            filename: "boundary.png",
+            dataUrl: `data:image/png;base64,${oversizedData}`,
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
       name: "ClaudeAttachmentError",
       code: "attachment_invalid_data",
     });
@@ -2433,13 +2458,17 @@ describe("sendPrompt", () => {
     const session = createSession("invalid-image-only");
     track(session.id);
 
-    await expect(sendPrompt(session.id, "", {
-      attachments: [{
-        type: "image",
-        path: "",
-        dataUrl: "data:image/png;base64,not-valid!",
-      }],
-    })).rejects.toMatchObject({
+    await expect(
+      sendPrompt(session.id, "", {
+        attachments: [
+          {
+            type: "image",
+            path: "",
+            dataUrl: "data:image/png;base64,not-valid!",
+          },
+        ],
+      }),
+    ).rejects.toMatchObject({
       name: "ClaudeAttachmentError",
       code: "attachment_invalid_data",
     });
@@ -2453,12 +2482,14 @@ describe("sendPrompt", () => {
     await writeFile(imagePath, Buffer.from("gif-data"));
     try {
       const { call } = await withWorkspaceCwd(directory, () =>
-        runPromptWithMessages(
-          [{ type: "result", subtype: "success" }],
-          { attachments: [{ type: "image", path: imagePath }] },
-        ));
-      const sdkMessages = await readSdkPrompt(call) as Array<{
-        message: { content: Array<{ type: string; source?: { media_type: string; data: string } }> };
+        runPromptWithMessages([{ type: "result", subtype: "success" }], {
+          attachments: [{ type: "image", path: imagePath }],
+        }),
+      );
+      const sdkMessages = (await readSdkPrompt(call)) as Array<{
+        message: {
+          content: Array<{ type: string; source?: { media_type: string; data: string } }>;
+        };
       }>;
       expect(sdkMessages[0].message.content[1]?.source).toEqual({
         type: "base64",
@@ -2480,9 +2511,11 @@ describe("sendPrompt", () => {
       const session = createSession("outside-image");
       track(session.id);
       await withWorkspaceCwd(workspace, async () => {
-        await expect(sendPrompt(session.id, "describe", {
-          attachments: [{ type: "image", path: outsideImage }],
-        })).rejects.toMatchObject({
+        await expect(
+          sendPrompt(session.id, "describe", {
+            attachments: [{ type: "image", path: outsideImage }],
+          }),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_outside_workspace",
         });
@@ -2514,9 +2547,11 @@ describe("sendPrompt", () => {
         const session = createSession("symlink-image");
         track(session.id);
         await withWorkspaceCwd(workspace, async () => {
-          await expect(sendPrompt(session.id, "describe", {
-            attachments: [{ type: "image", path: attachmentPath }],
-          })).rejects.toMatchObject({
+          await expect(
+            sendPrompt(session.id, "describe", {
+              attachments: [{ type: "image", path: attachmentPath }],
+            }),
+          ).rejects.toMatchObject({
             name: "ClaudeAttachmentError",
             code: "attachment_symlink_not_allowed",
           });
@@ -2536,9 +2571,11 @@ describe("sendPrompt", () => {
       const session = createSession("directory-image");
       track(session.id);
       await withWorkspaceCwd(directory, async () => {
-        await expect(sendPrompt(session.id, "describe", {
-          attachments: [{ type: "image", path: imageDirectory }],
-        })).rejects.toMatchObject({
+        await expect(
+          sendPrompt(session.id, "describe", {
+            attachments: [{ type: "image", path: imageDirectory }],
+          }),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_not_regular_file",
         });
@@ -2557,9 +2594,11 @@ describe("sendPrompt", () => {
       const session = createSession("empty-image");
       track(session.id);
       await withWorkspaceCwd(directory, async () => {
-        await expect(sendPrompt(session.id, "describe", {
-          attachments: [{ type: "image", path: emptyImage }],
-        })).rejects.toMatchObject({
+        await expect(
+          sendPrompt(session.id, "describe", {
+            attachments: [{ type: "image", path: emptyImage }],
+          }),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_invalid_data",
           message: "Image attachment file is empty.",
@@ -2579,9 +2618,11 @@ describe("sendPrompt", () => {
     const { events, stop } = captureEvents();
     try {
       await withWorkspaceCwd(directory, async () => {
-        await expect(sendPrompt(session.id, "describe", {
-          attachments: [{ type: "image", path: missingImage }],
-        })).rejects.toMatchObject({
+        await expect(
+          sendPrompt(session.id, "describe", {
+            attachments: [{ type: "image", path: missingImage }],
+          }),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_read_failed",
           message: "Image attachment could not be read safely from the workspace.",
@@ -2604,10 +2645,13 @@ describe("sendPrompt", () => {
     const session = createSession("missing-workspace");
     track(session.id);
     try {
-      await expect(withWorkspaceCwd(missingWorkspace, () =>
-        sendPrompt(session.id, "describe", {
-          attachments: [{ type: "image", path: join(missingWorkspace, "image.png") }],
-        }))).rejects.toMatchObject({
+      await expect(
+        withWorkspaceCwd(missingWorkspace, () =>
+          sendPrompt(session.id, "describe", {
+            attachments: [{ type: "image", path: join(missingWorkspace, "image.png") }],
+          }),
+        ),
+      ).rejects.toMatchObject({
         name: "ClaudeAttachmentError",
         code: "attachment_read_failed",
         message: "Image attachment could not be read safely from the workspace.",
@@ -2626,16 +2670,18 @@ describe("sendPrompt", () => {
     track(session.id);
     try {
       await withWorkspaceCwd(directory, async () => {
-        await expect(sendPrompt(
-          session.id,
-          "describe",
-          { attachments: [{ type: "image", path: imagePath }] },
-          {
-            afterAttachmentInitialValidation: async () => {
-              await rm(imagePath);
+        await expect(
+          sendPrompt(
+            session.id,
+            "describe",
+            { attachments: [{ type: "image", path: imagePath }] },
+            {
+              afterAttachmentInitialValidation: async () => {
+                await rm(imagePath);
+              },
             },
-          },
-        )).rejects.toMatchObject({
+          ),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_read_failed",
           message: "Image attachment could not be read safely from the workspace.",
@@ -2655,16 +2701,18 @@ describe("sendPrompt", () => {
     track(session.id);
     try {
       await withWorkspaceCwd(directory, async () => {
-        await expect(sendPrompt(
-          session.id,
-          "describe",
-          { attachments: [{ type: "image", path: imagePath }] },
-          {
-            afterAttachmentSymlinkValidation: async () => {
-              await rm(imagePath);
+        await expect(
+          sendPrompt(
+            session.id,
+            "describe",
+            { attachments: [{ type: "image", path: imagePath }] },
+            {
+              afterAttachmentSymlinkValidation: async () => {
+                await rm(imagePath);
+              },
             },
-          },
-        )).rejects.toMatchObject({
+          ),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_read_failed",
           message: "Image attachment could not be read safely from the workspace.",
@@ -2684,16 +2732,18 @@ describe("sendPrompt", () => {
     track(session.id);
     try {
       await withWorkspaceCwd(directory, async () => {
-        await expect(sendPrompt(
-          session.id,
-          "describe",
-          { attachments: [{ type: "image", path: imagePath }] },
-          {
-            afterAttachmentCanonicalValidation: async () => {
-              await rm(imagePath);
+        await expect(
+          sendPrompt(
+            session.id,
+            "describe",
+            { attachments: [{ type: "image", path: imagePath }] },
+            {
+              afterAttachmentCanonicalValidation: async () => {
+                await rm(imagePath);
+              },
             },
-          },
-        )).rejects.toMatchObject({
+          ),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_read_failed",
           message: "Image attachment could not be read safely from the workspace.",
@@ -2713,14 +2763,16 @@ describe("sendPrompt", () => {
     track(session.id);
     try {
       await withWorkspaceCwd(directory, async () => {
-        await expect(sendPrompt(
-          session.id,
-          "describe",
-          { attachments: [{ type: "image", path: imagePath }] },
-          {
-            afterAttachmentInitialValidation: () => writeFile(imagePath, "changed-image"),
-          },
-        )).rejects.toMatchObject({
+        await expect(
+          sendPrompt(
+            session.id,
+            "describe",
+            { attachments: [{ type: "image", path: imagePath }] },
+            {
+              afterAttachmentInitialValidation: () => writeFile(imagePath, "changed-image"),
+            },
+          ),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_changed",
           message: "Image attachment changed while it was being read; please attach it again.",
@@ -2749,7 +2801,7 @@ describe("sendPrompt", () => {
         call.push({ type: "result", subtype: "success" });
         call.finish();
         await promptPromise;
-        const sdkMessages = await readSdkPrompt(call) as Array<{
+        const sdkMessages = (await readSdkPrompt(call)) as Array<{
           message: { content: Array<{ source?: { data?: string } }> };
         }>;
         expect(sdkMessages[0].message.content[1]?.source?.data).toHaveLength(
@@ -2760,9 +2812,11 @@ describe("sendPrompt", () => {
       const oversizedSession = createSession("oversized-image");
       track(oversizedSession.id);
       await withWorkspaceCwd(directory, async () => {
-        await expect(sendPrompt(oversizedSession.id, "describe", {
-          attachments: [{ type: "image", path: oversizedImage }],
-        })).rejects.toMatchObject({
+        await expect(
+          sendPrompt(oversizedSession.id, "describe", {
+            attachments: [{ type: "image", path: oversizedImage }],
+          }),
+        ).rejects.toMatchObject({
           name: "ClaudeAttachmentError",
           code: "attachment_too_large",
         });
@@ -2804,11 +2858,13 @@ describe("sendPrompt", () => {
     const { events, stop } = captureEvents();
     try {
       const { session, call } = await runPromptWithMessages(
-        [{
-          type: "result",
-          subtype: "success",
-          structured_output: { summary: "Looks good" },
-        }],
+        [
+          {
+            type: "result",
+            subtype: "success",
+            structured_output: { summary: "Looks good" },
+          },
+        ],
         { outputSchema, requestId: "structured-1" },
       );
 
@@ -2824,10 +2880,12 @@ describe("sendPrompt", () => {
         requestId: "structured-1",
         value: { summary: "Looks good" },
       });
-      expect(events).toContainEqual(expect.objectContaining({
-        type: "session.structured-output",
-        sessionId: session.id,
-      }));
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session.structured-output",
+          sessionId: session.id,
+        }),
+      );
     } finally {
       stop();
     }
@@ -2907,10 +2965,11 @@ describe("sendPrompt", () => {
           details: { subtype: "error_during_execution" },
         },
       });
-      expect(events.filter((event) =>
-        event.type === "session.structured-output"
-        && event.sessionId === session.id
-      )).toEqual([
+      expect(
+        events.filter(
+          (event) => event.type === "session.structured-output" && event.sessionId === session.id,
+        ),
+      ).toEqual([
         {
           type: "session.structured-output",
           sessionId: session.id,
@@ -2948,10 +3007,11 @@ describe("sendPrompt", () => {
           details: undefined,
         },
       });
-      expect(events.filter((event) =>
-        event.type === "session.structured-output"
-        && event.sessionId === session.id
-      )).toEqual([
+      expect(
+        events.filter(
+          (event) => event.type === "session.structured-output" && event.sessionId === session.id,
+        ),
+      ).toEqual([
         {
           type: "session.structured-output",
           sessionId: session.id,
@@ -3001,10 +3061,11 @@ describe("sendPrompt", () => {
         requestId: "structured-usage-abort",
         error: { code: "interrupted", retryable: true },
       });
-      expect(events.filter((event) =>
-        event.type === "session.structured-output"
-        && event.sessionId === session.id
-      )).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) => event.type === "session.structured-output" && event.sessionId === session.id,
+        ),
+      ).toHaveLength(1);
     } finally {
       stop();
     }
@@ -3172,10 +3233,8 @@ describe("sendPrompt", () => {
     secondCall.finish();
     await Promise.all([first, second]);
 
-    expect(getPromptDispatchState(firstSession.id, options.requestId))
-      .toBe("already-processed");
-    expect(getPromptDispatchState(secondSession.id, options.requestId))
-      .toBe("already-processed");
+    expect(getPromptDispatchState(firstSession.id, options.requestId)).toBe("already-processed");
+    expect(getPromptDispatchState(secondSession.id, options.requestId)).toBe("already-processed");
   });
 
   test("a prompt without a request id is not deduplicated", async () => {
@@ -3237,14 +3296,14 @@ describe("sendPrompt", () => {
 
       now += 23 * 60 * 60 * 1000;
       await complete("gc-trigger-before-cutoff");
-      expect(getPromptDispatchState(session.id, "retained-request"))
-        .toBe("already-processed");
+      expect(getPromptDispatchState(session.id, "retained-request")).toBe("already-processed");
 
       now += 2 * 60 * 60 * 1000;
       await complete("gc-trigger-after-cutoff");
       expect(getPromptDispatchState(session.id, "retained-request")).toBe("new");
-      expect(getPromptDispatchState(session.id, "gc-trigger-before-cutoff"))
-        .toBe("already-processed");
+      expect(getPromptDispatchState(session.id, "gc-trigger-before-cutoff")).toBe(
+        "already-processed",
+      );
     } finally {
       Date.now = originalNow;
     }
@@ -3262,14 +3321,12 @@ describe("sendPrompt", () => {
     const call = await nextQueryCall();
 
     try {
-      expect(getPromptDispatchState(session.id, "stale-processing-request"))
-        .toBe("processing");
+      expect(getPromptDispatchState(session.id, "stale-processing-request")).toBe("processing");
 
       now += 25 * 60 * 60 * 1000;
       seedSettledPromptDispatchForTesting(session.id, "gc-trigger");
 
-      expect(getPromptDispatchState(session.id, "stale-processing-request"))
-        .toBe("new");
+      expect(getPromptDispatchState(session.id, "stale-processing-request")).toBe("new");
     } finally {
       deleteSession(session.id);
       call.push({ type: "result", subtype: "success", result: "done" });
@@ -3288,8 +3345,7 @@ describe("sendPrompt", () => {
       seedSettledPromptDispatchForTesting(session.id, `later-request-${index}`);
     }
 
-    expect(getPromptDispatchState(session.id, "original-request"))
-      .toBe("already-processed");
+    expect(getPromptDispatchState(session.id, "original-request")).toBe("already-processed");
   });
 
   test("deleting a session removes its prompt-dispatch tombstones", async () => {
@@ -3336,47 +3392,48 @@ describe("sendPrompt", () => {
       local: { command: "safe-command", args: [] },
     }));
     mockGetMcpServerNames.mockImplementationOnce(async () => new Set(["local"]));
-    mockGetPluginsForSdk.mockImplementationOnce(async () => [
-      { type: "local", path: "/plugin" },
-    ]);
+    mockGetPluginsForSdk.mockImplementationOnce(async () => [{ type: "local", path: "/plugin" }]);
     const { events, stop } = captureEvents();
     const previousCwd = process.env.CWD;
     process.env.CWD = "/project";
     try {
-      const { session, call } = await runPromptWithMessages([
-        {
-          type: "system",
-          subtype: "init",
-          session_id: "sdk-init",
-          mcp_servers: [
-            { name: "local", status: "connected", tools: ["search"] },
-            { name: "plugin:extra", status: "failed", error: "offline" },
-          ],
-          plugins: [{ name: "plain", path: "/plain", status: "loaded" }],
-          slash_commands: ["/compact"],
-        },
-        {
-          type: "system",
-          subtype: "compact_boundary",
-          compact_metadata: { pre_tokens: 100, post_tokens: 20, trigger: "manual" },
-        },
-        { type: "system", subtype: "status", detail: "working" },
-        {
-          type: "result",
-          subtype: "success",
-          usage: {
-            input_tokens: 12,
-            output_tokens: 3,
-            context_window_tokens: "200k",
-            model: "claude-test",
+      const { session, call } = await runPromptWithMessages(
+        [
+          {
+            type: "system",
+            subtype: "init",
+            session_id: "sdk-init",
+            mcp_servers: [
+              { name: "local", status: "connected", tools: ["search"] },
+              { name: "plugin:extra", status: "failed", error: "offline" },
+            ],
+            plugins: [{ name: "plain", path: "/plain", status: "loaded" }],
+            slash_commands: ["/compact"],
           },
+          {
+            type: "system",
+            subtype: "compact_boundary",
+            compact_metadata: { pre_tokens: 100, post_tokens: 20, trigger: "manual" },
+          },
+          { type: "system", subtype: "status", detail: "working" },
+          {
+            type: "result",
+            subtype: "success",
+            usage: {
+              input_tokens: 12,
+              output_tokens: 3,
+              context_window_tokens: "200k",
+              model: "claude-test",
+            },
+          },
+        ],
+        {
+          model: "claude-test",
+          effort: "max",
+          fastMode: true,
+          permissionMode: "bypassPermissions",
         },
-      ], {
-        model: "claude-test",
-        effort: "max",
-        fastMode: true,
-        permissionMode: "bypassPermissions",
-      });
+      );
 
       expect(call.options).toMatchObject({
         cwd: "/project",
@@ -3421,8 +3478,8 @@ describe("sendPrompt", () => {
       // regressing — including the cache counters that Issue 12 was about.
       const usageEvent = events.find(
         (event) =>
-          event.type === "session.updated"
-          && (event.data as { contextUsage?: unknown })?.contextUsage !== undefined,
+          event.type === "session.updated" &&
+          (event.data as { contextUsage?: unknown })?.contextUsage !== undefined,
       );
       const contextUsage = (usageEvent?.data as { contextUsage: SessionUsageSnapshot })
         .contextUsage;

@@ -59,14 +59,16 @@ describe("ProjectNotesView", () => {
       currentNotesProjectId: null,
     });
     useProjectStore.setState({
-      projects: [{
-        id: "project-1",
-        name: "Orkestrator",
-        gitUrl: "https://example.invalid/repo.git",
-        localPath: null,
-        addedAt: "2026-08-05T00:00:00.000Z",
-        order: 0,
-      }],
+      projects: [
+        {
+          id: "project-1",
+          name: "Orkestrator",
+          gitUrl: "https://example.invalid/repo.git",
+          localPath: null,
+          addedAt: "2026-08-05T00:00:00.000Z",
+          order: 0,
+        },
+      ],
     });
   });
 
@@ -79,10 +81,9 @@ describe("ProjectNotesView", () => {
     expect(screen.getByText("Unsaved changes")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    await waitFor(() => expect(saveProjectNotesMock).toHaveBeenCalledWith(
-      "project-1",
-      "replacement",
-    ));
+    await waitFor(() =>
+      expect(saveProjectNotesMock).toHaveBeenCalledWith("project-1", "replacement"),
+    );
     await waitFor(() => expect(deleteComposeDraftMock).toHaveBeenCalled());
   });
 
@@ -184,13 +185,15 @@ describe("ProjectNotesView", () => {
     fireEvent.change(editor, { target: { value: "unmounted before the autosave" } });
     view.unmount();
 
-    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalledWith(
-      "project-notes:project-1:editor",
-      "project",
-      "project-1",
-      "unmounted before the autosave",
-      0,
-    ));
+    await waitFor(() =>
+      expect(saveComposeDraftMock).toHaveBeenCalledWith(
+        "project-notes:project-1:editor",
+        "project",
+        "project-1",
+        "unmounted before the autosave",
+        0,
+      ),
+    );
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
     });
@@ -223,7 +226,9 @@ describe("ProjectNotesView", () => {
       .mockResolvedValueOnce({ content: "private project one notes" })
       .mockImplementationOnce(() => secondLoad.promise);
     const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
-    const editor = await screen.findByPlaceholderText(/Write project notes here/) as HTMLTextAreaElement;
+    const editor = (await screen.findByPlaceholderText(
+      /Write project notes here/,
+    )) as HTMLTextAreaElement;
     await waitFor(() => expect(editor.value).toBe("private project one notes"));
 
     view.rerender(<ProjectNotesView projectId="project-2" onBack={() => {}} />);
@@ -247,13 +252,15 @@ describe("ProjectNotesView", () => {
 
     fireEvent.change(editor, { target: { value: "edited after the discard" } });
 
-    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalledWith(
-      "project-notes:project-1:editor",
-      "project",
-      "project-1",
-      "edited after the discard",
-      0,
-    ));
+    await waitFor(() =>
+      expect(saveComposeDraftMock).toHaveBeenCalledWith(
+        "project-notes:project-1:editor",
+        "project",
+        "project-1",
+        "edited after the discard",
+        0,
+      ),
+    );
   });
 
   test("keeps the editor disabled and saves nothing when the load fails", async () => {

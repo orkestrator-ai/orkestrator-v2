@@ -1,7 +1,51 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
-import { isAgentBridgeKind, isStructuredCommandError, isPrMonitorMode, runCommand } from "./commands-dependencies.js";
+import {
+  isAgentBridgeKind,
+  isStructuredCommandError,
+  isPrMonitorMode,
+  runCommand,
+} from "./commands-dependencies.js";
 import type { AwaitBridgeReadyResult, PrMonitorSnapshot } from "./commands-dependencies.js";
-import { LOCAL_SERVER_KINDS, withContainerRuntimeCredential, setPrMonitorRuntime, prMonitorService, environmentToPrMonitorTarget, syncPrMonitorTracking, reconcileConfirmedMerge, asString, asRecord, assertOnlyKeys, asBoolean, asNumber, asStringArray, asNonBlankString, quoteShell, parseMergeMethod, parseReviewPackageId, parseReviewRound, parseReviewPreparationValidation, parseReviewPreparationFileNotes, verifyEnvironmentPullRequest, generateLoopedReviewPackage, mergePullRequestInContainer, runStoredEnvironmentMerge, parsePrDetectionOutput, validatePrDetectionBranch, findEnvironmentByContainerId, deleteMergedEnvironmentRemoteBranch, dockerExec, asLocalServerKind, peekLocalAgentBridge, peekContainerAgentBridge, startLocalServer, stopLocalServer, deleteEnvironmentTask, getLocalServerStatus, conciseError, cleanupErrorMessage } from "./commands-helpers.js";
+import {
+  LOCAL_SERVER_KINDS,
+  withContainerRuntimeCredential,
+  setPrMonitorRuntime,
+  prMonitorService,
+  environmentToPrMonitorTarget,
+  syncPrMonitorTracking,
+  reconcileConfirmedMerge,
+  asString,
+  asRecord,
+  assertOnlyKeys,
+  asBoolean,
+  asNumber,
+  asStringArray,
+  asNonBlankString,
+  quoteShell,
+  parseMergeMethod,
+  parseReviewPackageId,
+  parseReviewRound,
+  parseReviewPreparationValidation,
+  parseReviewPreparationFileNotes,
+  verifyEnvironmentPullRequest,
+  generateLoopedReviewPackage,
+  mergePullRequestInContainer,
+  runStoredEnvironmentMerge,
+  parsePrDetectionOutput,
+  validatePrDetectionBranch,
+  findEnvironmentByContainerId,
+  deleteMergedEnvironmentRemoteBranch,
+  dockerExec,
+  asLocalServerKind,
+  peekLocalAgentBridge,
+  peekContainerAgentBridge,
+  startLocalServer,
+  stopLocalServer,
+  deleteEnvironmentTask,
+  getLocalServerStatus,
+  conciseError,
+  cleanupErrorMessage,
+} from "./commands-helpers.js";
 import type { MergeEnvironmentPrResult } from "./commands-helpers.js";
 
 export function registerPullRequestCommands(
@@ -15,61 +59,57 @@ export function registerPullRequestCommands(
       asString(prUrl, "prUrl"),
       asString(targetBranch, "targetBranch"),
       context,
-    ));
-  register("generate_looped_review_package", async ({
-    environmentId,
-    packageId,
-    round,
-    targetBranch,
-    preparation,
-  }, context) => {
-    const parsedPackageId = parseReviewPackageId(packageId);
-    const prepared = asRecord(preparation, "preparation");
-    assertOnlyKeys(
-      prepared,
-      ["validation", "uncommittedFiles", "limitations"],
-      "preparation",
-    );
-    const limitations = asStringArray(prepared.limitations);
-    if (
-      !Array.isArray(prepared.limitations)
-      || limitations.length !== prepared.limitations.length
-      || limitations.some((limitation) => limitation.trim().length === 0)
-    ) {
-      throw new Error("Expected preparation.limitations to contain only non-empty strings");
-    }
-    return generateLoopedReviewPackage(
-      asString(environmentId, "environmentId"),
-      parsedPackageId,
-      parseReviewRound(round),
-      asString(targetBranch, "targetBranch"),
-      parseReviewPreparationValidation(prepared.validation, parsedPackageId),
-      parseReviewPreparationFileNotes(
-        prepared.uncommittedFiles,
-        "uncommittedFiles",
-      ),
-      limitations,
-      context,
-    );
-  });
+    ),
+  );
+  register(
+    "generate_looped_review_package",
+    async ({ environmentId, packageId, round, targetBranch, preparation }, context) => {
+      const parsedPackageId = parseReviewPackageId(packageId);
+      const prepared = asRecord(preparation, "preparation");
+      assertOnlyKeys(prepared, ["validation", "uncommittedFiles", "limitations"], "preparation");
+      const limitations = asStringArray(prepared.limitations);
+      if (
+        !Array.isArray(prepared.limitations) ||
+        limitations.length !== prepared.limitations.length ||
+        limitations.some((limitation) => limitation.trim().length === 0)
+      ) {
+        throw new Error("Expected preparation.limitations to contain only non-empty strings");
+      }
+      return generateLoopedReviewPackage(
+        asString(environmentId, "environmentId"),
+        parsedPackageId,
+        parseReviewRound(round),
+        asString(targetBranch, "targetBranch"),
+        parseReviewPreparationValidation(prepared.validation, parsedPackageId),
+        parseReviewPreparationFileNotes(prepared.uncommittedFiles, "uncommittedFiles"),
+        limitations,
+        context,
+      );
+    },
+  );
 
   register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {
     const env = await storage.getEnvironment(asString(environmentId, "environmentId"));
     if (!env) throw new Error(`Environment not found: ${environmentId}`);
-    if (!env.worktreePath) throw new Error("Environment is not a local environment (no worktree path)");
+    if (!env.worktreePath)
+      throw new Error("Environment is not a local environment (no worktree path)");
     const headBranch = validatePrDetectionBranch(branch);
-    const { stdout } = await runCommand("gh", [
-      "pr",
-      "list",
-      "--head",
-      headBranch,
-      "--state",
-      "all",
-      "--limit",
-      "30",
-      "--json",
-      "url,state,mergeable,updatedAt",
-    ], { cwd: env.worktreePath, timeoutMs: 30_000 });
+    const { stdout } = await runCommand(
+      "gh",
+      [
+        "pr",
+        "list",
+        "--head",
+        headBranch,
+        "--state",
+        "all",
+        "--limit",
+        "30",
+        "--json",
+        "url,state,mergeable,updatedAt",
+      ],
+      { cwd: env.worktreePath, timeoutMs: 30_000 },
+    );
     return parsePrDetectionOutput(stdout, headBranch);
   });
   register("detect_pr", async ({ containerId, branch }) => {
@@ -116,114 +156,114 @@ export function registerPullRequestCommands(
       async (result) => result,
     );
   });
-  register("merge_environment_pr", async ({
-    environmentId,
-    method,
-    deleteBranch,
-    cleanupAfterMerge,
-  }, context): Promise<MergeEnvironmentPrResult> => {
-    const id = asString(environmentId, "environmentId");
-    const environment = await context.storage.getEnvironment(id);
-    if (!environment) throw new Error(`Environment not found: ${id}`);
+  register(
+    "merge_environment_pr",
+    async (
+      { environmentId, method, deleteBranch, cleanupAfterMerge },
+      context,
+    ): Promise<MergeEnvironmentPrResult> => {
+      const id = asString(environmentId, "environmentId");
+      const environment = await context.storage.getEnvironment(id);
+      if (!environment) throw new Error(`Environment not found: ${id}`);
 
-    const requestedCleanup = asBoolean(cleanupAfterMerge, false);
-    const cleanupRequested = requestedCleanup
-      || Boolean(environment.cleanupAfterMergeRequestedAt);
-    if (requestedCleanup) {
-      await context.storage.updateEnvironment(id, {
-        cleanupAfterMergeRequestedAt: new Date().toISOString(),
-        cleanupAfterMergeError: null,
-      });
-    }
-
-    const armMergeReconciliation = async (): Promise<void> => {
-      await syncPrMonitorTracking(context);
-      const latest = await context.storage.getEnvironment(id);
-      if (latest) {
-        prMonitorService.requestMode(
-          environmentToPrMonitorTarget(latest),
-          "merge-pending",
-        );
+      const requestedCleanup = asBoolean(cleanupAfterMerge, false);
+      const cleanupRequested =
+        requestedCleanup || Boolean(environment.cleanupAfterMergeRequestedAt);
+      if (requestedCleanup) {
+        await context.storage.updateEnvironment(id, {
+          cleanupAfterMergeRequestedAt: new Date().toISOString(),
+          cleanupAfterMergeError: null,
+        });
       }
-    };
 
-    try {
-      return await runStoredEnvironmentMerge(
-        environment,
-        parseMergeMethod(method),
-        cleanupRequested ? false : asBoolean(deleteBranch, true),
-        context,
-        async (result): Promise<MergeEnvironmentPrResult> => {
-          if (result.outcome !== "merged") {
-            await armMergeReconciliation();
-            return {
-              ...result,
-              cleanupOutcome: cleanupRequested ? "pending" : "not-requested",
-            };
-          }
+      const armMergeReconciliation = async (): Promise<void> => {
+        await syncPrMonitorTracking(context);
+        const latest = await context.storage.getEnvironment(id);
+        if (latest) {
+          prMonitorService.requestMode(environmentToPrMonitorTarget(latest), "merge-pending");
+        }
+      };
 
-          let mergedStatePersisted = true;
-          try {
-            await context.storage.updateEnvironment(id, {
-              prState: "merged",
-              hasMergeConflicts: false,
-            });
-          } catch (error) {
-            mergedStatePersisted = false;
-            // GitHub is already authoritative. A storage outage must not strand
-            // a cleanup the user explicitly requested.
-            console.warn(
-              `[backend] Failed to persist merged PR state for ${id}:`,
-              conciseError(error),
-            );
-          }
-
-          if (!cleanupRequested) {
-            await reconcileConfirmedMerge(environment, context);
-            if (!mergedStatePersisted) {
-              // Reconcile the service back to the still-open stored snapshot,
-              // then immediately verify the exact PR URL so persistence can
-              // be retried without another renderer action.
-              await armMergeReconciliation().catch(() => undefined);
+      try {
+        return await runStoredEnvironmentMerge(
+          environment,
+          parseMergeMethod(method),
+          cleanupRequested ? false : asBoolean(deleteBranch, true),
+          context,
+          async (result): Promise<MergeEnvironmentPrResult> => {
+            if (result.outcome !== "merged") {
+              await armMergeReconciliation();
+              return {
+                ...result,
+                cleanupOutcome: cleanupRequested ? "pending" : "not-requested",
+              };
             }
-            return { ...result, cleanupOutcome: "not-requested" };
-          }
 
-          if (!mergedStatePersisted) {
-            await deleteMergedEnvironmentRemoteBranch({
-              ...environment,
-              prState: "merged",
-            }).catch(() => undefined);
-          }
+            let mergedStatePersisted = true;
+            try {
+              await context.storage.updateEnvironment(id, {
+                prState: "merged",
+                hasMergeConflicts: false,
+              });
+            } catch (error) {
+              mergedStatePersisted = false;
+              // GitHub is already authoritative. A storage outage must not strand
+              // a cleanup the user explicitly requested.
+              console.warn(
+                `[backend] Failed to persist merged PR state for ${id}:`,
+                conciseError(error),
+              );
+            }
 
-          // Reconcile the linked task before deletion untracks the environment.
-          // The monitor's task effects are idempotent, so a later authoritative
-          // poll can safely finish a partial reconciliation.
-          await reconcileConfirmedMerge(environment, context);
+            if (!cleanupRequested) {
+              await reconcileConfirmedMerge(environment, context);
+              if (!mergedStatePersisted) {
+                // Reconcile the service back to the still-open stored snapshot,
+                // then immediately verify the exact PR URL so persistence can
+                // be retried without another renderer action.
+                await armMergeReconciliation().catch(() => undefined);
+              }
+              return { ...result, cleanupOutcome: "not-requested" };
+            }
 
-          try {
-            await deleteEnvironmentTask(id, context, { allowWhileMerging: true });
-            return { ...result, cleanupOutcome: "completed" };
-          } catch (error) {
-            const cleanupError = cleanupErrorMessage(error);
-            await context.storage.updateEnvironment(id, {
-              cleanupAfterMergeError: cleanupError,
-            }).catch(() => undefined);
-            return {
-              ...result,
-              cleanupOutcome: "failed",
-              cleanupError,
-            };
-          }
-        },
-      );
-    } catch (error) {
-      if (cleanupRequested) {
-        await armMergeReconciliation().catch(() => undefined);
+            if (!mergedStatePersisted) {
+              await deleteMergedEnvironmentRemoteBranch({
+                ...environment,
+                prState: "merged",
+              }).catch(() => undefined);
+            }
+
+            // Reconcile the linked task before deletion untracks the environment.
+            // The monitor's task effects are idempotent, so a later authoritative
+            // poll can safely finish a partial reconciliation.
+            await reconcileConfirmedMerge(environment, context);
+
+            try {
+              await deleteEnvironmentTask(id, context, { allowWhileMerging: true });
+              return { ...result, cleanupOutcome: "completed" };
+            } catch (error) {
+              const cleanupError = cleanupErrorMessage(error);
+              await context.storage
+                .updateEnvironment(id, {
+                  cleanupAfterMergeError: cleanupError,
+                })
+                .catch(() => undefined);
+              return {
+                ...result,
+                cleanupOutcome: "failed",
+                cleanupError,
+              };
+            }
+          },
+        );
+      } catch (error) {
+        if (cleanupRequested) {
+          await armMergeReconciliation().catch(() => undefined);
+        }
+        throw error;
       }
-      throw error;
-    }
-  });
+    },
+  );
 
   /**
    * Authoritative PR-monitor snapshot.
@@ -319,21 +359,51 @@ export function registerPullRequestCommands(
     prMonitorService.probe(environmentToPrMonitorTarget(environment));
   });
 
-  register("start_local_opencode_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "opencode"));
-  register("stop_local_opencode_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "opencode"));
-  register("get_local_opencode_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "opencode"));
-  register("start_local_claude_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "claude"));
-  register("stop_local_claude_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "claude"));
-  register("get_local_claude_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "claude"));
-  register("start_local_codex_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "codex"));
-  register("stop_local_codex_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "codex"));
-  register("get_local_codex_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "codex"));
-  register("start_local_cursor_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "cursor"));
-  register("stop_local_cursor_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "cursor"));
-  register("get_local_cursor_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "cursor"));
-  register("start_local_grok_server_cmd", ({ environmentId }, context) => startLocalServer(asString(environmentId, "environmentId"), context, "grok"));
-  register("stop_local_grok_server_cmd", ({ environmentId }, context) => stopLocalServer(asString(environmentId, "environmentId"), context, "grok"));
-  register("get_local_grok_server_status", ({ environmentId }, context) => getLocalServerStatus(asString(environmentId, "environmentId"), context, "grok"));
+  register("start_local_opencode_server_cmd", ({ environmentId }, context) =>
+    startLocalServer(asString(environmentId, "environmentId"), context, "opencode"),
+  );
+  register("stop_local_opencode_server_cmd", ({ environmentId }, context) =>
+    stopLocalServer(asString(environmentId, "environmentId"), context, "opencode"),
+  );
+  register("get_local_opencode_server_status", ({ environmentId }, context) =>
+    getLocalServerStatus(asString(environmentId, "environmentId"), context, "opencode"),
+  );
+  register("start_local_claude_server_cmd", ({ environmentId }, context) =>
+    startLocalServer(asString(environmentId, "environmentId"), context, "claude"),
+  );
+  register("stop_local_claude_server_cmd", ({ environmentId }, context) =>
+    stopLocalServer(asString(environmentId, "environmentId"), context, "claude"),
+  );
+  register("get_local_claude_server_status", ({ environmentId }, context) =>
+    getLocalServerStatus(asString(environmentId, "environmentId"), context, "claude"),
+  );
+  register("start_local_codex_server_cmd", ({ environmentId }, context) =>
+    startLocalServer(asString(environmentId, "environmentId"), context, "codex"),
+  );
+  register("stop_local_codex_server_cmd", ({ environmentId }, context) =>
+    stopLocalServer(asString(environmentId, "environmentId"), context, "codex"),
+  );
+  register("get_local_codex_server_status", ({ environmentId }, context) =>
+    getLocalServerStatus(asString(environmentId, "environmentId"), context, "codex"),
+  );
+  register("start_local_cursor_server_cmd", ({ environmentId }, context) =>
+    startLocalServer(asString(environmentId, "environmentId"), context, "cursor"),
+  );
+  register("stop_local_cursor_server_cmd", ({ environmentId }, context) =>
+    stopLocalServer(asString(environmentId, "environmentId"), context, "cursor"),
+  );
+  register("get_local_cursor_server_status", ({ environmentId }, context) =>
+    getLocalServerStatus(asString(environmentId, "environmentId"), context, "cursor"),
+  );
+  register("start_local_grok_server_cmd", ({ environmentId }, context) =>
+    startLocalServer(asString(environmentId, "environmentId"), context, "grok"),
+  );
+  register("stop_local_grok_server_cmd", ({ environmentId }, context) =>
+    stopLocalServer(asString(environmentId, "environmentId"), context, "grok"),
+  );
+  register("get_local_grok_server_status", ({ environmentId }, context) =>
+    getLocalServerStatus(asString(environmentId, "environmentId"), context, "grok"),
+  );
   register("cleanup_stale_local_servers_cmd", () => undefined);
 
   register("await_bridge_ready", (args, context) => {
@@ -362,107 +432,34 @@ export function registerPullRequestCommands(
       // Publish the mutable deadline before starting the async probe so every
       // caller that joins while storage is loading can extend it.
       bridgeReadinessWaits.set(key, created);
-      created.promise = Promise.resolve().then(async (): Promise<AwaitBridgeReadyResult> => {
-        const initial = await context.storage.getEnvironment(environmentId);
-        if (!initial) {
-          return {
-            status: "failed",
-            error: { message: "Environment not found", retryable: false },
-          };
-        }
-
-        let environment = initial;
-        while (
-          environment.status === "creating"
-          || environment.setupPhase === "pending"
-          || environment.setupPhase === "running"
-        ) {
-          const retryAfterMs = Math.min(
-            500,
-            Math.max(0, created.deadline - Date.now()),
-          );
-          if (retryAfterMs <= 0) {
-            return {
-              status: "timed-out",
-              error: {
-                message: `${agent} bridge did not become ready before the environment startup deadline`,
-                retryable: true,
-                retryAfterMs: 1_000,
-              },
-            };
-          }
-          await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
-          const refreshed = await context.storage.getEnvironment(environmentId);
-          if (!refreshed) {
+      created.promise = Promise.resolve()
+        .then(async (): Promise<AwaitBridgeReadyResult> => {
+          const initial = await context.storage.getEnvironment(environmentId);
+          if (!initial) {
             return {
               status: "failed",
-              error: { message: "Environment was deleted", retryable: false },
+              error: { message: "Environment not found", retryable: false },
             };
           }
-          environment = refreshed;
-        }
 
-        if (environment.status !== "running" || environment.setupPhase === "failed") {
-          return {
-            status: "failed",
-            error: {
-              message: environment.setupPhase === "failed"
-                ? "Environment setup failed"
-                : "Environment is not running",
-              retryable: false,
-            },
-          };
-        }
-
-        while (true) {
-          try {
-            const result = environment.environmentType === "local"
-              ? await commands.get(`start_local_${agent}_server_cmd`)?.(
-                  { environmentId },
-                  context,
-                ) as { port?: number; hostPort?: number; authToken?: string } | undefined
-              : await commands.get(`start_${agent}_server`)?.(
-                  { containerId: environment.containerId },
-                  context,
-                ) as { port?: number; hostPort?: number; authToken?: string } | undefined;
-            const port = environment.environmentType === "local"
-              ? result?.port
-              : result?.hostPort;
-            if (!port || !result?.authToken) {
-              return {
-                status: "failed",
-                error: {
-                  message: `${agent} bridge returned an incomplete ready endpoint`,
-                  retryable: false,
-                },
-              };
-            }
-            return { status: "ready", port, authToken: result.authToken };
-          } catch (error) {
-            if (!isStructuredCommandError(error) || !error.retryable) {
-              return {
-                status: "failed",
-                error: {
-                  message: error instanceof Error ? error.message : String(error),
-                  retryable: false,
-                },
-              };
-            }
-            const remainingMs = created.deadline - Date.now();
-            if (remainingMs <= 0) {
+          let environment = initial;
+          while (
+            environment.status === "creating" ||
+            environment.setupPhase === "pending" ||
+            environment.setupPhase === "running"
+          ) {
+            const retryAfterMs = Math.min(500, Math.max(0, created.deadline - Date.now()));
+            if (retryAfterMs <= 0) {
               return {
                 status: "timed-out",
                 error: {
                   message: `${agent} bridge did not become ready before the environment startup deadline`,
                   retryable: true,
-                  retryAfterMs: error.retryAfterMs ?? 1_000,
+                  retryAfterMs: 1_000,
                 },
               };
             }
-            await new Promise((resolve) => setTimeout(
-              resolve,
-              Math.min(error.retryAfterMs ?? 500, remainingMs),
-            ));
+            await new Promise((resolve) => setTimeout(resolve, retryAfterMs));
             const refreshed = await context.storage.getEnvironment(environmentId);
             if (!refreshed) {
               return {
@@ -470,35 +467,107 @@ export function registerPullRequestCommands(
                 error: { message: "Environment was deleted", retryable: false },
               };
             }
-            if (refreshed.setupPhase === "failed") {
-              return {
-                status: "failed",
-                error: {
-                  message: "Environment setup failed",
-                  retryable: false,
-                },
-              };
-            }
-            if (
-              refreshed.status === "creating"
-              || refreshed.setupPhase === "pending"
-              || refreshed.setupPhase === "running"
-            ) {
-              environment = refreshed;
-              continue;
-            }
-            if (refreshed.status !== "running") {
-              return {
-                status: "failed",
-                error: { message: "Environment is not running", retryable: false },
-              };
-            }
             environment = refreshed;
           }
-        }
-      }).finally(() => {
-        if (bridgeReadinessWaits.get(key) === created) bridgeReadinessWaits.delete(key);
-      });
+
+          if (environment.status !== "running" || environment.setupPhase === "failed") {
+            return {
+              status: "failed",
+              error: {
+                message:
+                  environment.setupPhase === "failed"
+                    ? "Environment setup failed"
+                    : "Environment is not running",
+                retryable: false,
+              },
+            };
+          }
+
+          while (true) {
+            try {
+              const result =
+                environment.environmentType === "local"
+                  ? ((await commands.get(`start_local_${agent}_server_cmd`)?.(
+                      { environmentId },
+                      context,
+                    )) as { port?: number; hostPort?: number; authToken?: string } | undefined)
+                  : ((await commands.get(`start_${agent}_server`)?.(
+                      { containerId: environment.containerId },
+                      context,
+                    )) as { port?: number; hostPort?: number; authToken?: string } | undefined);
+              const port =
+                environment.environmentType === "local" ? result?.port : result?.hostPort;
+              if (!port || !result?.authToken) {
+                return {
+                  status: "failed",
+                  error: {
+                    message: `${agent} bridge returned an incomplete ready endpoint`,
+                    retryable: false,
+                  },
+                };
+              }
+              return { status: "ready", port, authToken: result.authToken };
+            } catch (error) {
+              if (!isStructuredCommandError(error) || !error.retryable) {
+                return {
+                  status: "failed",
+                  error: {
+                    message: error instanceof Error ? error.message : String(error),
+                    retryable: false,
+                  },
+                };
+              }
+              const remainingMs = created.deadline - Date.now();
+              if (remainingMs <= 0) {
+                return {
+                  status: "timed-out",
+                  error: {
+                    message: `${agent} bridge did not become ready before the environment startup deadline`,
+                    retryable: true,
+                    retryAfterMs: error.retryAfterMs ?? 1_000,
+                  },
+                };
+              }
+              await new Promise((resolve) =>
+                setTimeout(resolve, Math.min(error.retryAfterMs ?? 500, remainingMs)),
+              );
+              const refreshed = await context.storage.getEnvironment(environmentId);
+              if (!refreshed) {
+                return {
+                  status: "failed",
+                  error: { message: "Environment was deleted", retryable: false },
+                };
+              }
+              if (refreshed.setupPhase === "failed") {
+                return {
+                  status: "failed",
+                  error: {
+                    message: "Environment setup failed",
+                    retryable: false,
+                  },
+                };
+              }
+              if (
+                refreshed.status === "creating" ||
+                refreshed.setupPhase === "pending" ||
+                refreshed.setupPhase === "running"
+              ) {
+                environment = refreshed;
+                continue;
+              }
+              if (refreshed.status !== "running") {
+                return {
+                  status: "failed",
+                  error: { message: "Environment is not running", retryable: false },
+                };
+              }
+              environment = refreshed;
+            }
+          }
+        })
+        .finally(() => {
+          if (bridgeReadinessWaits.get(key) === created) bridgeReadinessWaits.delete(key);
+        });
       shared = created;
     }
     const wait = shared.promise;
@@ -552,6 +621,4 @@ export function registerPullRequestCommands(
       asLocalServerKind(args.agent, "agent"),
     );
   });
-
-
 }

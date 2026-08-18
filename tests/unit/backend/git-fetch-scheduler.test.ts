@@ -15,11 +15,13 @@ interface Harness {
   setCommonDir: (worktreePath: string, commonDir: string) => void;
 }
 
-function createHarness(options: {
-  ttlMs?: number;
-  fetchTimeoutMs?: number;
-  resolveTimeoutMs?: number;
-} = {}): Harness {
+function createHarness(
+  options: {
+    ttlMs?: number;
+    fetchTimeoutMs?: number;
+    resolveTimeoutMs?: number;
+  } = {},
+): Harness {
   const calls: string[][] = [];
   const timeouts: number[] = [];
   const fetches: string[][] = [];

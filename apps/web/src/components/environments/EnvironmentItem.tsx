@@ -1,4 +1,14 @@
-import { lazy, memo, useState, useEffect, useId, useMemo, useRef, type ComponentType, type ReactNode } from "react";
+import {
+  lazy,
+  memo,
+  useState,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { HoverTooltipContent, useHoverTooltip } from "@/components/ui/hover-tooltip";
 import {
@@ -25,22 +35,31 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Bell, Trash2, Play, Square, Container, Laptop, Shield, Globe, Settings2, RotateCw, Loader2, Network, Copy, MoreVertical } from "lucide-react";
+import {
+  Bell,
+  Trash2,
+  Play,
+  Square,
+  Container,
+  Laptop,
+  Shield,
+  Globe,
+  Settings2,
+  RotateCw,
+  Loader2,
+  Network,
+  Copy,
+  MoreVertical,
+} from "lucide-react";
 import { toast } from "sonner";
 import type { AgentActivityState, Environment } from "@/types";
 import { useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
-import {
-  parseUsableAgentActivityTime,
-  useAgentActivityStore,
-} from "@/stores/agentActivityStore";
+import { parseUsableAgentActivityTime, useAgentActivityStore } from "@/stores/agentActivityStore";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
 import { getEnvironmentPortAddress } from "@/lib/environment-address";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
-import {
-  LazyDialogLoadingFallback,
-  LazyLoadBoundary,
-} from "@/components/LazyLoadBoundary";
+import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 const LazyEnvironmentSettingsDialog = lazy(async () => ({
@@ -85,9 +104,9 @@ export function resolveEnvironmentAgentActivity(
   const persistedState = environment.agentActivityState;
   const persistedTime = activityTime(environment.agentActivityUpdatedAt);
   if (
-    persistedState
-    && Number.isFinite(persistedTime)
-    && (!runtimeState || persistedTime >= runtimeTime)
+    persistedState &&
+    Number.isFinite(persistedTime) &&
+    (!runtimeState || persistedTime >= runtimeTime)
   ) {
     return persistedState;
   }
@@ -147,7 +166,7 @@ function EnvironmentMenuItems({
             {item.icon}
             {item.label}
           </Item>
-        )
+        ),
       )}
     </>
   );
@@ -193,11 +212,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   // Resolved inside the selector so this row only rerenders when ITS resolved
   // state changes, not whenever any environment's activity record is touched.
   const agentActivityState = useAgentActivityStore((s) =>
-    resolveEnvironmentAgentActivity(
-      environment,
-      s.containerStates,
-      s.containerStateUpdatedAt,
-    ),
+    resolveEnvironmentAgentActivity(environment, s.containerStates, s.containerStateUpdatedAt),
   );
 
   // Check if this environment is being deleted
@@ -207,7 +222,9 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   const diffStats = useEnvironmentDiffStore((s) => s.stats.get(environment.id));
 
   // Check if this is a build pipeline environment (O(1) Set lookup, stable reference)
-  const isBuildEnvironment = useBuildPipelineStore((s) => s.buildEnvironmentIds.has(environment.id));
+  const isBuildEnvironment = useBuildPipelineStore((s) =>
+    s.buildEnvironmentIds.has(environment.id),
+  );
   // Backend-owned, so the badge agrees across every connected client.
   const hasUnreadActivity = environment.hasUnreadWork === true;
 
@@ -258,7 +275,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
     // metaKey covers Cmd on Mac, ctrlKey covers Ctrl on Windows/Linux
     handleSelect({
       shiftKey: e.shiftKey,
-      metaKey: e.metaKey || e.ctrlKey
+      metaKey: e.metaKey || e.ctrlKey,
     });
   };
 
@@ -269,7 +286,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       // Default behavior is simple selection
       handleSelect({
         shiftKey: e.shiftKey,
-        metaKey: e.metaKey || e.ctrlKey
+        metaKey: e.metaKey || e.ctrlKey,
       });
     }
   };
@@ -279,20 +296,26 @@ export const EnvironmentItem = memo(function EnvironmentItem({
 
   const copyAddress = () => {
     if (!localAddress) return;
-    navigator.clipboard.writeText(localAddress).then(() => {
-      toast.success("Copied address", { description: localAddress });
-    }).catch(() => {
-      toast.error("Failed to copy address");
-    });
+    navigator.clipboard
+      .writeText(localAddress)
+      .then(() => {
+        toast.success("Copied address", { description: localAddress });
+      })
+      .catch(() => {
+        toast.error("Failed to copy address");
+      });
   };
 
   const copyInitialPrompt = () => {
     if (!initialPrompt) return;
-    navigator.clipboard.writeText(initialPrompt).then(() => {
-      toast.success("Initial prompt copied to clipboard");
-    }).catch(() => {
-      toast.error("Failed to copy initial prompt");
-    });
+    navigator.clipboard
+      .writeText(initialPrompt)
+      .then(() => {
+        toast.success("Initial prompt copied to clipboard");
+      })
+      .catch(() => {
+        toast.error("Failed to copy initial prompt");
+      });
   };
 
   const createdDate = useMemo(
@@ -314,20 +337,24 @@ export const EnvironmentItem = memo(function EnvironmentItem({
       onSelect: () => setShowSettingsDialog(true),
     },
     ...(localAddress
-      ? [{
-          key: "copy-address",
-          label: "Copy Address",
-          icon: <Copy className="h-4 w-4 mr-2" />,
-          onSelect: copyAddress,
-        }]
+      ? [
+          {
+            key: "copy-address",
+            label: "Copy Address",
+            icon: <Copy className="h-4 w-4 mr-2" />,
+            onSelect: copyAddress,
+          },
+        ]
       : []),
     ...(initialPrompt
-      ? [{
-          key: "copy-initial-prompt",
-          label: "Copy Initial Prompt",
-          icon: <Copy className="h-4 w-4 mr-2" />,
-          onSelect: copyInitialPrompt,
-        }]
+      ? [
+          {
+            key: "copy-initial-prompt",
+            label: "Copy Initial Prompt",
+            icon: <Copy className="h-4 w-4 mr-2" />,
+            onSelect: copyInitialPrompt,
+          },
+        ]
       : []),
     // Start/Stop/Restart only apply to containerized environments.
     ...(!isLocalEnvironment
@@ -336,10 +363,12 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           {
             key: "power",
             label: isRunning ? "Stop" : "Start",
-            icon: isRunning
-              ? <Square className="h-4 w-4 mr-2" />
-              : <Play className="h-4 w-4 mr-2" />,
-            onSelect: () => isRunning ? onStop(environment.id) : onStart(environment.id),
+            icon: isRunning ? (
+              <Square className="h-4 w-4 mr-2" />
+            ) : (
+              <Play className="h-4 w-4 mr-2" />
+            ),
+            onSelect: () => (isRunning ? onStop(environment.id) : onStart(environment.id)),
             disabled: !dockerAvailable || isTransitioning,
           },
           {
@@ -376,7 +405,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               // Stops a long-press from starting a text selection on touch.
               isMobile && "select-none",
               isChecked && isMultiSelectMode && "bg-zinc-800/50",
-              (isStopping || isEnvironmentDeleting) && "opacity-60"
+              (isStopping || isEnvironmentDeleting) && "opacity-60",
             )}
           >
             {/* A deleting environment shows its spinner instead of a checkbox:
@@ -401,7 +430,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                 "flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left transition-colors",
                 isSelected && !isMultiSelectMode
                   ? "text-foreground"
-                  : "text-muted-foreground group-hover:text-foreground"
+                  : "text-muted-foreground group-hover:text-foreground",
               )}
             >
               {isEnvironmentDeleting ? (
@@ -410,33 +439,40 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               ) : isMultiSelectMode ? null : isTransitioning ? (
                 // Show spinner when creating/stopping
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-amber-500" />
+              ) : // Show Laptop for local environments, Container for containerized
+              environment.environmentType === "local" ? (
+                <Laptop
+                  className={cn(
+                    "h-4 w-4 shrink-0 transition-colors",
+                    !isRunning && "text-muted-foreground",
+                    isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
+                    isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
+                    isRunning && agentActivityState === "idle" && "text-green-500",
+                  )}
+                />
               ) : (
-                // Show Laptop for local environments, Container for containerized
-                environment.environmentType === "local" ? (
-                  <Laptop className={cn(
+                <Container
+                  className={cn(
                     "h-4 w-4 shrink-0 transition-colors",
                     !isRunning && "text-muted-foreground",
                     isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
                     isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                    isRunning && agentActivityState === "idle" && "text-green-500"
-                  )} />
-                ) : (
-                  <Container className={cn(
-                    "h-4 w-4 shrink-0 transition-colors",
-                    !isRunning && "text-muted-foreground",
-                    isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
-                    isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                    isRunning && agentActivityState === "idle" && "text-green-500"
-                  )} />
-                )
+                    isRunning && agentActivityState === "idle" && "text-green-500",
+                  )}
+                />
               )}
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span
                     id={environmentNameId}
-                    className={cn("truncate font-medium leading-4", isBuildEnvironment && "text-yellow-400")}
+                    className={cn(
+                      "truncate font-medium leading-4",
+                      isBuildEnvironment && "text-yellow-400",
+                    )}
                   >
-                    {isBuildEnvironment ? environment.name.replace(/^Build:\s*/, "") : environment.name}
+                    {isBuildEnvironment
+                      ? environment.name.replace(/^Build:\s*/, "")
+                      : environment.name}
                   </span>
                   {hasUnreadActivity && (
                     <Bell
@@ -451,24 +487,31 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   </span>
                 )}
               </span>
-              {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
-                <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
-                  {/* The scan stopped before reading every untracked file, so
+              {diffStats &&
+                (diffStats.additions > 0 ||
+                  diffStats.deletions > 0 ||
+                  diffStats.filesChanged > 0) && (
+                  <span className="ml-1 flex shrink-0 items-center gap-1 font-mono text-[10px] tabular-nums">
+                    {/* The scan stopped before reading every untracked file, so
                       these are a lower bound rather than an exact count. */}
-                  {diffStats.truncated && (
-                    <span className="text-muted-foreground" aria-hidden="true">~</span>
-                  )}
-                  {diffStats.additions > 0 && (
-                    <span className="text-green-500">+{diffStats.additions}</span>
-                  )}
-                  {diffStats.deletions > 0 && (
-                    <span className="text-red-400">-{diffStats.deletions}</span>
-                  )}
-                  {diffStats.additions === 0 && diffStats.deletions === 0 && diffStats.filesChanged > 0 && (
-                    <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
-                  )}
-                </span>
-              )}
+                    {diffStats.truncated && (
+                      <span className="text-muted-foreground" aria-hidden="true">
+                        ~
+                      </span>
+                    )}
+                    {diffStats.additions > 0 && (
+                      <span className="text-green-500">+{diffStats.additions}</span>
+                    )}
+                    {diffStats.deletions > 0 && (
+                      <span className="text-red-400">-{diffStats.deletions}</span>
+                    )}
+                    {diffStats.additions === 0 &&
+                      diffStats.deletions === 0 &&
+                      diffStats.filesChanged > 0 && (
+                        <span className="text-muted-foreground">{diffStats.filesChanged}F</span>
+                      )}
+                  </span>
+                )}
             </div>
             {isMobile && (
               <DropdownMenu>
@@ -509,43 +552,56 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           onMouseEnter={tooltip.show}
           onMouseLeave={tooltip.hide}
         >
-            <div className="space-y-1">
-              <p className="font-medium">{environment.name}</p>
-              <p className="text-xs text-muted-foreground">Created: {createdDate}</p>
-              {isLocalEnvironment ? (
-                <p className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Laptop className="h-3 w-3" />
-                  Local worktree
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground flex items-center gap-1">
-                  {networkMode === "full" ? (
-                    <>
-                      <Globe className="h-3 w-3" />
-                      Full network access
-                    </>
-                  ) : (
-                    <>
-                      <Shield className="h-3 w-3" />
-                      Restricted network
-                    </>
-                  )}
-                </p>
-              )}
-              {!isLocalEnvironment && environment.entryPort && (
-                <p className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Network className="h-3 w-3" />
-                  {environment.hostEntryPort
-                    ? <>Port: <span
-                        role="button"
-                        className="underline decoration-dotted cursor-pointer hover:text-foreground transition-colors"
-                        onClick={(e) => { e.stopPropagation(); copyAddress(); }}
-                      >localhost:{environment.hostEntryPort}</span> → {environment.entryPort}/tcp</>
-                    : <>Port: {environment.entryPort}/tcp (not mapped)</>
-                  }
-                </p>
-              )}
-              {diffStats && (diffStats.additions > 0 || diffStats.deletions > 0 || diffStats.filesChanged > 0) && (
+          <div className="space-y-1">
+            <p className="font-medium">{environment.name}</p>
+            <p className="text-xs text-muted-foreground">Created: {createdDate}</p>
+            {isLocalEnvironment ? (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <Laptop className="h-3 w-3" />
+                Local worktree
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                {networkMode === "full" ? (
+                  <>
+                    <Globe className="h-3 w-3" />
+                    Full network access
+                  </>
+                ) : (
+                  <>
+                    <Shield className="h-3 w-3" />
+                    Restricted network
+                  </>
+                )}
+              </p>
+            )}
+            {!isLocalEnvironment && environment.entryPort && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <Network className="h-3 w-3" />
+                {environment.hostEntryPort ? (
+                  <>
+                    Port:{" "}
+                    <span
+                      role="button"
+                      className="underline decoration-dotted cursor-pointer hover:text-foreground transition-colors"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        copyAddress();
+                      }}
+                    >
+                      localhost:{environment.hostEntryPort}
+                    </span>{" "}
+                    → {environment.entryPort}/tcp
+                  </>
+                ) : (
+                  <>Port: {environment.entryPort}/tcp (not mapped)</>
+                )}
+              </p>
+            )}
+            {diffStats &&
+              (diffStats.additions > 0 ||
+                diffStats.deletions > 0 ||
+                diffStats.filesChanged > 0) && (
                 <div className="border-t border-border/50 pt-1 mt-1">
                   <p className="text-xs text-muted-foreground">
                     {diffStats.filesChanged} file{diffStats.filesChanged !== 1 ? "s" : ""} changed
@@ -565,10 +621,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   </div>
                 </div>
               )}
-              {environment.prUrl && (
-                <p className="text-xs text-blue-400">PR: {environment.prUrl}</p>
-              )}
-            </div>
+            {environment.prUrl && <p className="text-xs text-blue-400">PR: {environment.prUrl}</p>}
+          </div>
         </HoverTooltipContent>
         <ContextMenuContent>
           <EnvironmentMenuItems
@@ -593,7 +647,8 @@ export const EnvironmentItem = memo(function EnvironmentItem({
               ) : (
                 isRunning && (
                   <span className="block mt-2 text-orange-500">
-                    Warning: This environment is currently running. It will be stopped before deletion.
+                    Warning: This environment is currently running. It will be stopped before
+                    deletion.
                   </span>
                 )
               )}
@@ -620,9 +675,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
           with many rows does not pay for a dialog per row. */}
       {showSettingsDialog && (
         <LazyLoadBoundary
-          loadingFallback={
-            <LazyDialogLoadingFallback label="Loading environment settings…" />
-          }
+          loadingFallback={<LazyDialogLoadingFallback label="Loading environment settings…" />}
         >
           <LazyEnvironmentSettingsDialog
             open={showSettingsDialog}

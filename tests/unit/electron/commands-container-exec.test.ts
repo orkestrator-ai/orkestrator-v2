@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -147,8 +142,6 @@ exit 1
     return created;
   }
 
-
-
   test("refuses every foreground lifecycle command once shutdown has begun", async () => {
     const environment = createEnvironment({
       id: "env-foreground-shutdown",
@@ -167,10 +160,9 @@ exit 1
       "recreate_environment",
       "delete_environment",
     ]) {
-      await expect(commands.get(command)?.(
-        { environmentId: environment.id },
-        context,
-      )).rejects.toThrow("Backend is shutting down");
+      await expect(
+        commands.get(command)?.({ environmentId: environment.id }, context),
+      ).rejects.toThrow("Backend is shutting down");
     }
 
     // Refusal is total: nothing was mutated on the way out.
@@ -181,8 +173,6 @@ exit 1
     // starts and merges for this environment.
     expect(commandTesting.isEnvironmentDeleting(environment.id)).toBe(false);
   });
-
-
 
   test("keeps credential sync compatible with repeated workspace Git configuration", async () => {
     const home = await createTempDir("ork-github-config-home-");
@@ -213,12 +203,16 @@ exit 1
       expect(configured.status).toBe(0);
     }
 
-    const values = spawnSync("git", [
-      "config",
-      "--global",
-      "--get-all",
-      "url.https://x-access-token:token-value@github.com/.insteadOf",
-    ], { env, encoding: "utf8" });
+    const values = spawnSync(
+      "git",
+      [
+        "config",
+        "--global",
+        "--get-all",
+        "url.https://x-access-token:token-value@github.com/.insteadOf",
+      ],
+      { env, encoding: "utf8" },
+    );
     expect(values.status).toBe(0);
     expect(values.stdout.trim().split("\n")).toEqual([
       "https://github.com/",
@@ -227,101 +221,101 @@ exit 1
     ]);
   });
 
+  test(
+    "survives a login shell whose logout hook fails",
+    async () => {
+      const workspace = await createTempDir("ork-container-script-nonrepo-");
+      const home = await createTempDir("ork-container-script-home-");
+      // Debian's ~/.bash_logout runs `clear_console -q`, which fails when no console
+      // is attached. Under `set -e` a failing logout hook replaces the script's own
+      // exit status, which turned an empty status into an error for every workspace
+      // that had not been cloned yet.
+      await fs.writeFile(path.join(home, ".bash_logout"), "false\n");
+      const loginEnv = { ...process.env, HOME: home };
+      const script = commandTesting.buildContainerGitStatusScript("main", true);
 
+      const nonRepo = spawnSync("bash", ["-lc", script], {
+        cwd: workspace,
+        encoding: "utf8",
+        env: loginEnv,
+      });
+      expect(nonRepo.status).toBe(0);
+      expect(nonRepo.stdout).toBe("");
+      expect(commandTesting.parseContainerGitStatusResponse(nonRepo.stdout, true)).toEqual([]);
 
-  test("survives a login shell whose logout hook fails", async () => {
-    const workspace = await createTempDir("ork-container-script-nonrepo-");
-    const home = await createTempDir("ork-container-script-home-");
-    // Debian's ~/.bash_logout runs `clear_console -q`, which fails when no console
-    // is attached. Under `set -e` a failing logout hook replaces the script's own
-    // exit status, which turned an empty status into an error for every workspace
-    // that had not been cloned yet.
-    await fs.writeFile(path.join(home, ".bash_logout"), "false\n");
-    const loginEnv = { ...process.env, HOME: home };
-    const script = commandTesting.buildContainerGitStatusScript("main", true);
-
-    const nonRepo = spawnSync("bash", ["-lc", script], {
-      cwd: workspace,
-      encoding: "utf8",
-      env: loginEnv,
-    });
-    expect(nonRepo.status).toBe(0);
-    expect(nonRepo.stdout).toBe("");
-    expect(commandTesting.parseContainerGitStatusResponse(nonRepo.stdout, true)).toEqual([]);
-
-    const repo = await createTempDir("ork-container-script-missing-ref-");
-    await runGit(repo, ["init", "-b", "work", "."]);
-    await fs.writeFile(path.join(repo, "file.txt"), "a\n");
-    await runGit(repo, ["add", "-A"]);
-    await runGit(repo, ["commit", "-m", "base"]);
-    const missingRef = spawnSync("bash", ["-lc", commandTesting.buildContainerGitStatusScript(
-      "0123456789012345678901234567890123456789",
-      true,
-    )], { cwd: repo, encoding: "utf8", env: loginEnv });
-    expect(missingRef.status).toBe(0);
-    expect(commandTesting.isMissingTargetRefResponse(missingRef.stdout)).toBe(true);
-  }, ASYNC_TEST_BUDGET_MS);
-
-
+      const repo = await createTempDir("ork-container-script-missing-ref-");
+      await runGit(repo, ["init", "-b", "work", "."]);
+      await fs.writeFile(path.join(repo, "file.txt"), "a\n");
+      await runGit(repo, ["add", "-A"]);
+      await runGit(repo, ["commit", "-m", "base"]);
+      const missingRef = spawnSync(
+        "bash",
+        [
+          "-lc",
+          commandTesting.buildContainerGitStatusScript(
+            "0123456789012345678901234567890123456789",
+            true,
+          ),
+        ],
+        { cwd: repo, encoding: "utf8", env: loginEnv },
+      );
+      expect(missingRef.status).toBe(0);
+      expect(commandTesting.isMissingTargetRefResponse(missingRef.stdout)).toBe(true);
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("releases local and container merge guards when lifecycle persistence fails", async () => {
     for (const kind of ["local", "container"] as const) {
-      const environment = createEnvironment(kind === "local"
-        ? {
-          id: "env-local-lifecycle-failure",
-          worktreePath: "/tmp/worktree",
-          prUrl: "https://github.com/acme/repo/pull/42",
-        }
-        : {
-          id: "env-container-lifecycle-failure",
-          environmentType: "containerized",
-          worktreePath: undefined,
-          containerId: "container-1",
-          status: "running",
-        });
+      const environment = createEnvironment(
+        kind === "local"
+          ? {
+              id: "env-local-lifecycle-failure",
+              worktreePath: "/tmp/worktree",
+              prUrl: "https://github.com/acme/repo/pull/42",
+            }
+          : {
+              id: "env-container-lifecycle-failure",
+              environmentType: "containerized",
+              worktreePath: undefined,
+              containerId: "container-1",
+              status: "running",
+            },
+      );
       const { context } = createContext(environment);
       const commands = createCommandRegistry();
       const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
       let failLifecycleWrite = true;
-      context.storage.updateEnvironment = mock(async (
-        environmentId: string,
-        updates: Partial<Environment>,
-      ) => {
-        if (updates.lifecycleOperation === "merging" && failLifecycleWrite) {
-          failLifecycleWrite = false;
-          throw new Error("lifecycle storage unavailable");
-        }
-        return updateEnvironment(environmentId, updates);
-      });
+      context.storage.updateEnvironment = mock(
+        async (environmentId: string, updates: Partial<Environment>) => {
+          if (updates.lifecycleOperation === "merging" && failLifecycleWrite) {
+            failLifecycleWrite = false;
+            throw new Error("lifecycle storage unavailable");
+          }
+          return updateEnvironment(environmentId, updates);
+        },
+      );
 
       const command = kind === "local" ? "merge_pr_local" : "merge_pr";
-      const argumentsFor = (method: string) => kind === "local"
-        ? { environmentId: environment.id, method, deleteBranch: false }
-        : { containerId: environment.containerId, method, deleteBranch: false };
+      const argumentsFor = (method: string) =>
+        kind === "local"
+          ? { environmentId: environment.id, method, deleteBranch: false }
+          : { containerId: environment.containerId, method, deleteBranch: false };
 
-      await expect(commands.get(command)?.(
-        argumentsFor("squash"),
-        context,
-      )).rejects.toThrow("lifecycle storage unavailable");
+      await expect(commands.get(command)?.(argumentsFor("squash"), context)).rejects.toThrow(
+        "lifecycle storage unavailable",
+      );
 
       // An invalid method fails after acquiring the guard. If the first call
       // leaked that guard, this would instead report "already being merged".
-      await expect(commands.get(command)?.(
-        argumentsFor("fast-forward"),
-        context,
-      )).rejects.toThrow("Invalid merge method: fast-forward");
+      await expect(commands.get(command)?.(argumentsFor("fast-forward"), context)).rejects.toThrow(
+        "Invalid merge method: fast-forward",
+      );
     }
   });
 
-
-
   test.each([
-    [
-      "Claude",
-      "start_claude_server",
-      "container-claude-redaction",
-      "CLAUDE_BRIDGE_TOKEN",
-    ],
+    ["Claude", "start_claude_server", "container-claude-redaction", "CLAUDE_BRIDGE_TOKEN"],
     [
       "OpenCode",
       "start_opencode_server",
@@ -359,16 +353,16 @@ exit 0
 
       try {
         await withFakeDocker(dockerScript, async (logs) => {
-          const failure = await commands.get(commandName)?.(
-            { containerId },
-            context,
-          ).then(() => null, (error: unknown) => error as Error);
+          const failure = await commands
+            .get(commandName)?.({ containerId }, context)
+            .then(
+              () => null,
+              (error: unknown) => error as Error,
+            );
 
           expect(failure).toBeInstanceOf(Error);
           const execLog = await fs.readFile(logs.exec, "utf8");
-          const token = execLog.match(
-            new RegExp(`${credentialName}='([^']+)'`),
-          )?.[1];
+          const token = execLog.match(new RegExp(`${credentialName}='([^']+)'`))?.[1];
           expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
           expect(failure!.message).not.toContain(token!);
           expect(failure!.message).toContain("[REDACTED]");
@@ -379,5 +373,4 @@ exit 0
       }
     },
   );
-
 });

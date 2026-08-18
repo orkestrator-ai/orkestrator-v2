@@ -1,6 +1,14 @@
 import { describe, expect, mock, test } from "bun:test";
-import { OPEN_CODE_MESSAGE_HISTORY_LIMIT, OpenCodeMessageIdCoordinator } from "@orkestrator/protocol/opencode-message-id";
-import { AmbiguousPromptDispatchError, createNativeAgentProvider, PromptRejectedError, ProviderUnavailableError } from "./native-agent-provider.js";
+import {
+  OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+  OpenCodeMessageIdCoordinator,
+} from "@orkestrator/protocol/opencode-message-id";
+import {
+  AmbiguousPromptDispatchError,
+  createNativeAgentProvider,
+  PromptRejectedError,
+  ProviderUnavailableError,
+} from "./native-agent-provider.js";
 import { openCodeIncompleteTurnRequestId } from "./opencode-turn-recovery.js";
 import {
   deferred,
@@ -50,11 +58,11 @@ describe("OpenCode provider dispatch", () => {
       },
     );
     try {
-      await expect(provider.send("owned-session", "prompt", {
-        requestId: "request-1",
-      })).rejects.toThrow(
-        "The selected OpenCode model is not connected or is no longer available",
-      );
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+        }),
+      ).rejects.toThrow("The selected OpenCode model is not connected or is no longer available");
       expect(fake.messageCalls).toHaveLength(0);
       expect(fake.promptCalls).toHaveLength(0);
       await expect(provider.modelCatalog?.()).resolves.toEqual([
@@ -78,10 +86,7 @@ describe("OpenCode provider dispatch", () => {
       "an error envelope from the provider catalogue",
       async () => ({ error: { message: "provider list failed" } }),
     ],
-    [
-      "a provider catalogue that reports nothing",
-      async () => ({ data: {} }),
-    ],
+    ["a provider catalogue that reports nothing", async () => ({ data: {} })],
   ] as const)("dispatches despite %s", async (_label, list) => {
     const fake = openCodeFake();
     const providerList = mock(list);
@@ -124,10 +129,12 @@ describe("OpenCode provider dispatch", () => {
       config: {
         providers: mock(async () => ({
           data: {
-            providers: [{
-              id: "opencode",
-              models: { "kimi-k2.7": { name: "Kimi K2.7" } },
-            }],
+            providers: [
+              {
+                id: "opencode",
+                models: { "kimi-k2.7": { name: "Kimi K2.7" } },
+              },
+            ],
           },
         })),
       },
@@ -165,13 +172,13 @@ describe("OpenCode provider dispatch", () => {
       fake.setMessagesResponse({
         data: [{ info: { id: "latest", role: "assistant" }, parts: [] }],
       });
-      await expect(provider.messages("owned-session", { limit: 4 })).resolves
-        .toHaveLength(1);
+      await expect(provider.messages("owned-session", { limit: 4 })).resolves.toHaveLength(1);
       expect(fake.messageCalls).toEqual([{ sessionID: "owned-session", limit: 4 }]);
 
       fake.setMessagesResponse({ data: Array.from({ length: 5 }, () => null) });
-      await expect(provider.messages("owned-session", { limit: 4 }))
-        .rejects.toBeInstanceOf(ProviderUnavailableError);
+      await expect(provider.messages("owned-session", { limit: 4 })).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
     } finally {
       await provider.dispose?.();
     }
@@ -182,24 +189,25 @@ describe("OpenCode provider dispatch", () => {
       { error: { message: "history unavailable" } },
       { data: { messages: [] } },
       {
-        data: Array.from(
-          { length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 },
-          () => null,
-        ),
+        data: Array.from({ length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 }, () => null),
       },
     ]) {
       const fake = openCodeFake();
       fake.setMessagesResponse(response);
       const provider = openCodeProvider(fake);
       try {
-        await expect(provider.send("owned-session", "prompt", {
-          requestId: "request-1",
-        })).rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(
+          provider.send("owned-session", "prompt", {
+            requestId: "request-1",
+          }),
+        ).rejects.toBeInstanceOf(ProviderUnavailableError);
         expect(fake.promptCalls).toHaveLength(0);
-        expect(fake.messageCalls).toEqual([{
-          sessionID: "owned-session",
-          limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
-        }]);
+        expect(fake.messageCalls).toEqual([
+          {
+            sessionID: "owned-session",
+            limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT,
+          },
+        ]);
       } finally {
         await provider.dispose?.();
       }
@@ -211,19 +219,23 @@ describe("OpenCode provider dispatch", () => {
     const provider = openCodeProvider(fake);
     try {
       fake.setMessagesResponse({
-        data: [{
-          info: {
-            id: expectedOpenCodeMessageId("request-1"),
-            role: "user",
+        data: [
+          {
+            info: {
+              id: expectedOpenCodeMessageId("request-1"),
+              role: "user",
+            },
+            parts: [],
           },
-          parts: [],
-        }],
+        ],
       });
 
-      await expect(provider.dispatchStatus?.("owned-session", "request-1"))
-        .resolves.toBe("dispatched");
-      await expect(provider.dispatchStatus?.("owned-session", "other-request"))
-        .resolves.toBe("unknown");
+      await expect(provider.dispatchStatus?.("owned-session", "request-1")).resolves.toBe(
+        "dispatched",
+      );
+      await expect(provider.dispatchStatus?.("owned-session", "other-request")).resolves.toBe(
+        "unknown",
+      );
       expect(fake.messageCalls).toEqual([
         { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
         { sessionID: "owned-session", limit: OPEN_CODE_MESSAGE_HISTORY_LIMIT },
@@ -243,27 +255,33 @@ describe("OpenCode provider dispatch", () => {
     const provider = openCodeProvider(fake);
     try {
       fake.setMessagesResponse({
-        data: [{
-          info: { id: expectedOpenCodeMessageId(continuation), role: "user" },
-          parts: [],
-        }],
+        data: [
+          {
+            info: { id: expectedOpenCodeMessageId(continuation), role: "user" },
+            parts: [],
+          },
+        ],
       });
-      await expect(provider.dispatchStatus?.("owned-session", continuation))
-        .resolves.toBe("dispatched");
-      await expect(provider.dispatchStatus?.("owned-session", "manual-1"))
-        .resolves.toBe("unknown");
+      await expect(provider.dispatchStatus?.("owned-session", continuation)).resolves.toBe(
+        "dispatched",
+      );
+      await expect(provider.dispatchStatus?.("owned-session", "manual-1")).resolves.toBe("unknown");
 
       // And the reverse, so neither direction can settle the other.
       fake.setMessagesResponse({
-        data: [{
-          info: { id: expectedOpenCodeMessageId("manual-1"), role: "user" },
-          parts: [],
-        }],
+        data: [
+          {
+            info: { id: expectedOpenCodeMessageId("manual-1"), role: "user" },
+            parts: [],
+          },
+        ],
       });
-      await expect(provider.dispatchStatus?.("owned-session", "manual-1"))
-        .resolves.toBe("dispatched");
-      await expect(provider.dispatchStatus?.("owned-session", continuation))
-        .resolves.toBe("unknown");
+      await expect(provider.dispatchStatus?.("owned-session", "manual-1")).resolves.toBe(
+        "dispatched",
+      );
+      await expect(provider.dispatchStatus?.("owned-session", continuation)).resolves.toBe(
+        "unknown",
+      );
     } finally {
       await provider.dispose?.();
     }
@@ -276,8 +294,7 @@ describe("OpenCode provider dispatch", () => {
       // The marker parser is the same validation `send` performs. Rejecting here
       // means a caller-owned id that could never have been embedded also never
       // gets a chance to match provider history by accident.
-      await expect(provider.dispatchStatus?.("owned-session", "   "))
-        .resolves.toBe("unknown");
+      await expect(provider.dispatchStatus?.("owned-session", "   ")).resolves.toBe("unknown");
       expect(fake.messageCalls).toEqual([]);
     } finally {
       await provider.dispose?.();
@@ -285,16 +302,18 @@ describe("OpenCode provider dispatch", () => {
   });
 
   test.each([
-    ["an SDK failure", async () => { throw new Error("offline"); }],
+    [
+      "an SDK failure",
+      async () => {
+        throw new Error("offline");
+      },
+    ],
     ["an error envelope", async () => ({ error: { message: "unavailable" } })],
     ["a malformed history", async () => ({ data: { messages: [] } })],
     [
       "an oversized history",
       async () => ({
-        data: Array.from(
-          { length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 },
-          () => null,
-        ),
+        data: Array.from({ length: OPEN_CODE_MESSAGE_HISTORY_LIMIT + 1 }, () => null),
       }),
     ],
   ] as const)("returns unknown for %s", async (_label, messages) => {
@@ -302,8 +321,9 @@ describe("OpenCode provider dispatch", () => {
     fake.setMessagesHandler(messages);
     const provider = openCodeProvider(fake);
     try {
-      await expect(provider.dispatchStatus?.("owned-session", "request-1"))
-        .resolves.toBe("unknown");
+      await expect(provider.dispatchStatus?.("owned-session", "request-1")).resolves.toBe(
+        "unknown",
+      );
     } finally {
       await provider.dispose?.();
     }
@@ -316,13 +336,15 @@ describe("OpenCode provider dispatch", () => {
     const gate = deferred();
     sendingFake.setPromptGate(gate.promise);
     probingFake.setMessagesResponse({
-      data: [{
-        info: {
-          id: expectedOpenCodeMessageId("probe-request"),
-          role: "user",
+      data: [
+        {
+          info: {
+            id: expectedOpenCodeMessageId("probe-request"),
+            role: "user",
+          },
+          parts: [],
         },
-        parts: [],
-      }],
+      ],
     });
     const sendingProvider = openCodeProvider(sendingFake, 1, coordinator);
     const probingProvider = openCodeProvider(probingFake, 1, coordinator);
@@ -332,10 +354,7 @@ describe("OpenCode provider dispatch", () => {
       });
       await waitUntil(() => sendingFake.promptCalls.length === 1);
 
-      const probe = probingProvider.dispatchStatus?.(
-        "shared-session",
-        "probe-request",
-      );
+      const probe = probingProvider.dispatchStatus?.("shared-session", "probe-request");
       await waitUntil(() => probingFake.messageCalls.length === 1, 100);
       await expect(probe).resolves.toBe("dispatched");
 
@@ -423,7 +442,7 @@ describe("OpenCode provider dispatch", () => {
     fake.setCommandListResponse({ data: [{ name: "deploy", description: "Ship it" }] });
     const provider = openCodeProvider(fake);
     try {
-      const commands = await provider.slashCommands?.() ?? [];
+      const commands = (await provider.slashCommands?.()) ?? [];
       const names = commands.map((command) => command.name);
       expect(names).toContain("/deploy");
       expect(names).toContain("/init");
@@ -442,12 +461,16 @@ describe("OpenCode provider dispatch", () => {
       // The distinction matters: PromptRejectedError fails the build, while
       // AmbiguousPromptDispatchError keeps the durable attempt and retries the
       // same request id. A dropped connection may already have delivered the turn.
-      await expect(provider.send("owned-session", "prompt", {
-        requestId: "request-1",
-      })).rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
-      await expect(provider.send("owned-session", "prompt", {
-        requestId: "request-1",
-      })).rejects.not.toBeInstanceOf(PromptRejectedError);
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+        }),
+      ).rejects.toBeInstanceOf(AmbiguousPromptDispatchError);
+      await expect(
+        provider.send("owned-session", "prompt", {
+          requestId: "request-1",
+        }),
+      ).rejects.not.toBeInstanceOf(PromptRejectedError);
     } finally {
       await provider.dispose?.();
     }
@@ -561,9 +584,7 @@ describe("OpenCode provider dispatch", () => {
         requestId: "msg_foo",
       });
 
-      const [first, retry, nativeLooking] = fake.promptCalls.map(
-        ({ messageID }) => messageID,
-      );
+      const [first, retry, nativeLooking] = fake.promptCalls.map(({ messageID }) => messageID);
       expect(retry).toBe(first);
       expect(nativeLooking).not.toBe(first);
     } finally {
@@ -571,21 +592,19 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
-  test.each(["", "   "])(
-    "rejects a blank request id before dispatch (%j)",
-    async (requestId) => {
-      const fake = openCodeFake();
-      const provider = openCodeProvider(fake);
-      try {
-        await expect(provider.send("owned-session", "Build it", { requestId }))
-          .rejects.toBeInstanceOf(TypeError);
+  test.each(["", "   "])("rejects a blank request id before dispatch (%j)", async (requestId) => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    try {
+      await expect(
+        provider.send("owned-session", "Build it", { requestId }),
+      ).rejects.toBeInstanceOf(TypeError);
 
-        expect(fake.promptCalls).toHaveLength(0);
-      } finally {
-        await provider.dispose?.();
-      }
-    },
-  );
+      expect(fake.promptCalls).toHaveLength(0);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
 
   test("dispatches queued OpenCode plan turns to the plan agent", async () => {
     const fake = openCodeFake();
@@ -656,18 +675,21 @@ describe("OpenCode provider dispatch", () => {
       });
 
       expect(fake.promptCalls[0]!.format).toBeUndefined();
-      expect(fake.promptCalls[0]!.parts).toEqual([{
-        type: "text",
-        text: expect.stringContaining(JSON.stringify(schema)),
-      }]);
-      const structuredText =
-        String((fake.promptCalls[0]!.parts as Array<{ text?: string }>)[0]?.text);
-      expect(structuredText)
-        .toContain("End your turn with exactly one JSON value matching this JSON Schema");
+      expect(fake.promptCalls[0]!.parts).toEqual([
+        {
+          type: "text",
+          text: expect.stringContaining(JSON.stringify(schema)),
+        },
+      ]);
+      const structuredText = String(
+        (fake.promptCalls[0]!.parts as Array<{ text?: string }>)[0]?.text,
+      );
+      expect(structuredText).toContain(
+        "End your turn with exactly one JSON value matching this JSON Schema",
+      );
       // The schema binds the final message only: a long structured turn must
       // still be able to narrate its progress in the text channel.
-      expect(structuredText)
-        .toContain("you may send ordinary prose progress updates");
+      expect(structuredText).toContain("you may send ordinary prose progress updates");
     } finally {
       await provider.dispose?.();
     }
@@ -691,10 +713,12 @@ describe("OpenCode provider dispatch", () => {
         requestId: "request-attachment",
         model: "anthropic/claude/sonnet",
         effort: "high",
-        attachments: [{
-          type: "file",
-          path: "/workspace/image.gif",
-        }],
+        attachments: [
+          {
+            type: "file",
+            path: "/workspace/image.gif",
+          },
+        ],
       });
 
       expect(fake.promptCalls[0]).toMatchObject({
@@ -734,11 +758,13 @@ describe("OpenCode provider dispatch", () => {
     try {
       await provider.send("owned-session", "", {
         requestId: "request-image-only",
-        attachments: [{
-          type: "image",
-          path: "/workspace/only.png",
-          filename: "only.png",
-        }],
+        attachments: [
+          {
+            type: "image",
+            path: "/workspace/only.png",
+            filename: "only.png",
+          },
+        ],
       });
 
       expect(fake.promptCalls[0]?.parts).toEqual([
@@ -765,9 +791,11 @@ describe("OpenCode provider dispatch", () => {
       });
       const provider = openCodeProvider(fake);
       try {
-        await expect(provider.send("owned-session", "prompt", {
-          requestId: "request-1",
-        })).rejects.toBeInstanceOf(ProviderUnavailableError);
+        await expect(
+          provider.send("owned-session", "prompt", {
+            requestId: "request-1",
+          }),
+        ).rejects.toBeInstanceOf(ProviderUnavailableError);
       } finally {
         await provider.dispose?.();
       }

@@ -45,8 +45,11 @@ describe("mergeAcpMessageWindow", () => {
       window(1, [message("b", "two and a half"), message("c", "three")]),
     );
     expect(merged.baseIndex).toBe(0);
-    expect(merged.messages.map((entry) => entry.content))
-      .toEqual(["one", "two and a half", "three"]);
+    expect(merged.messages.map((entry) => entry.content)).toEqual([
+      "one",
+      "two and a half",
+      "three",
+    ]);
   });
 
   test("takes the window outright when the bridge evicted history the client still held", () => {
@@ -68,7 +71,10 @@ describe("mergeAcpMessageWindow", () => {
 
   test("appends cleanly when the client is exactly caught up", () => {
     const current = { messages: [message("a", "one")], baseIndex: 3 };
-    const merged = mergeAcpMessageWindow(current, window(3, [message("a", "one"), message("b", "two")]));
+    const merged = mergeAcpMessageWindow(
+      current,
+      window(3, [message("a", "one"), message("b", "two")]),
+    );
     expect(merged.baseIndex).toBe(3);
     expect(merged.messages.map((entry) => entry.id)).toEqual(["a", "b"]);
   });
@@ -87,14 +93,17 @@ describe("ACP bridge authentication", () => {
     let request: Request | undefined;
     globalThis.fetch = (async (input, init) => {
       request = new Request(input, init);
-      return new Response(JSON.stringify({
-        id: "session-1",
-        provider: "cursor",
-        status: "idle",
-        messages: [],
-        baseIndex: 0,
-        revision: 0,
-      }), { status: 201, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          id: "session-1",
+          provider: "cursor",
+          status: "idle",
+          messages: [],
+          baseIndex: 0,
+          revision: 0,
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
     }) as typeof fetch;
     try {
       await createAcpSession(createAcpClient("http://127.0.0.1:4099", "bridge-secret"));
@@ -110,7 +119,9 @@ describe("ACP bridge authentication", () => {
 describe("normalizeAcpComposer", () => {
   test("replaces missing or malformed snapshots with the empty composer", () => {
     expect(normalizeAcpComposer(undefined)).toEqual(EMPTY_NATIVE_AGENT_COMPOSER_STATE);
-    expect(normalizeAcpComposer({ models: [] } as never)).toEqual(EMPTY_NATIVE_AGENT_COMPOSER_STATE);
+    expect(normalizeAcpComposer({ models: [] } as never)).toEqual(
+      EMPTY_NATIVE_AGENT_COMPOSER_STATE,
+    );
   });
 
   test("keeps a normalized snapshot intact", () => {
@@ -132,10 +143,11 @@ describe("normalizeAcpComposer", () => {
 
 describe("getAcpMessageWindow", () => {
   async function windowFrom(body: Record<string, unknown>): Promise<AcpMessageWindow> {
-    globalThis.fetch = (async () => new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    })) as unknown as typeof fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
     try {
       return await getAcpMessageWindow(createAcpClient("http://127.0.0.1:4099", "token"), "s1", 0);
     } finally {

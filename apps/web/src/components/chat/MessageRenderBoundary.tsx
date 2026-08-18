@@ -1,9 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { createLazyLoadFailureDiagnostic } from "@/components/LazyLoadBoundary";
-import type {
-  NativeMessage,
-  NativeMessagePart,
-} from "@/lib/chat/native-message-types";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 
 interface MessageRenderBoundaryProps {
   children: ReactNode;
@@ -24,11 +21,12 @@ interface MessageRenderBoundaryProps {
 
 /** Nested part lists, so growth below the top level still counts as a change. */
 function nestedParts(part: NativeMessagePart): NativeMessagePart[] | undefined {
-  const grouped = part.type === "tool-group" || part.type === "agent-group"
-    ? part.parts
-    : part.type === "task-group"
-      ? [part.task, ...part.childTools]
-      : undefined;
+  const grouped =
+    part.type === "tool-group" || part.type === "agent-group"
+      ? part.parts
+      : part.type === "task-group"
+        ? [part.task, ...part.childTools]
+        : undefined;
   // Carried on the base part rather than a variant, so a subagent row's
   // streaming actions are folded in wherever they appear.
   const actions = part.subagentActions;
@@ -50,8 +48,7 @@ function describePart(part: NativeMessagePart, depth: number): string {
   // cost more than the render it guards. Two different bodies of exactly equal
   // length in the same slot are indistinguishable here, which costs one missed
   // retry — the next token to arrive changes the length and heals the row.
-  const base =
-    `${part.type}:${part.content.length}:${part.toolState ?? ""}:${part.agentState ?? ""}`;
+  const base = `${part.type}:${part.content.length}:${part.toolState ?? ""}:${part.agentState ?? ""}`;
   const nested = depth >= MAX_DESCRIPTOR_DEPTH ? undefined : nestedParts(part);
   return nested === undefined
     ? base
@@ -114,10 +111,7 @@ export class MessageRenderBoundary extends Component<
   // would race React's post-error re-render, which runs getDerivedStateFromProps
   // before the catch lifecycle has recorded which key failed.
   componentDidUpdate(previousProps: MessageRenderBoundaryProps): void {
-    if (
-      this.state.failed
-      && !Object.is(previousProps.resetKey, this.props.resetKey)
-    ) {
+    if (this.state.failed && !Object.is(previousProps.resetKey, this.props.resetKey)) {
       this.setState({ failed: false });
     }
   }
@@ -126,8 +120,7 @@ export class MessageRenderBoundary extends Component<
     if (this.state.failed) {
       return (
         <div className="px-6 py-2 text-center text-xs italic text-muted-foreground">
-          One message could not be displayed. It will refresh with the next
-          transcript update.
+          One message could not be displayed. It will refresh with the next transcript update.
         </div>
       );
     }

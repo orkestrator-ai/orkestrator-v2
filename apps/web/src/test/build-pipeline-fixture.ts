@@ -1,8 +1,6 @@
 import type { BuildPipeline } from "@/stores/buildPipelineStore";
 
-export function buildPipelineFixture(
-  overrides: Partial<BuildPipeline> = {},
-): BuildPipeline {
+export function buildPipelineFixture(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
   const id = overrides.id ?? "pipeline-1";
   return {
     id,

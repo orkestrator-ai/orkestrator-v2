@@ -32,9 +32,7 @@ async function withBackend<T>(
   environments: unknown[],
   run: (backend: OrkestratorBackend, dataDir: string) => Promise<T>,
 ): Promise<T> {
-  const dataDir = await fs.mkdtemp(
-    path.join(tmpdir(), "orkestrator-activity-boot-"),
-  );
+  const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-activity-boot-"));
   await fs.writeFile(
     path.join(dataDir, "environments.json"),
     JSON.stringify(environments, null, 2),
@@ -57,48 +55,52 @@ async function withBackend<T>(
 describe("OrkestratorBackend agent activity boot reset", () => {
   test("drops renderer activity left behind by a process that is gone", async () => {
     const stuckAt = new Date(10_000).toISOString();
-    await withBackend([
-      {
-        ...baseEnvironment,
-        id: "e1",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: stuckAt,
-        agentActivitySources: {
-          frontend: { state: "working", updatedAt: stuckAt },
-        },
-        frontendAgentActivityObservers: {
-          "hashed-observer": {
-            state: "working",
-            updatedAt: stuckAt,
-            leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    await withBackend(
+      [
+        {
+          ...baseEnvironment,
+          id: "e1",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: stuckAt,
+          agentActivitySources: {
+            frontend: { state: "working", updatedAt: stuckAt },
+          },
+          frontendAgentActivityObservers: {
+            "hashed-observer": {
+              state: "working",
+              updatedAt: stuckAt,
+              leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+            },
           },
         },
-      },
-    ], async (backend, dataDir) => {
-      await backend.init();
+      ],
+      async (backend, dataDir) => {
+        await backend.init();
 
-      const [environment] = await backend.invoke<ClientEnvironment[]>(
-        "get_environment_snapshots",
-        { projectId: "p1" },
-      );
-      expect(environment).toMatchObject({
-        id: "e1",
-        agentActivityState: "idle",
-      });
-      expect(environment).not.toHaveProperty("agentActivitySources");
-      expect(environment).not.toHaveProperty("frontendAgentActivityObservers");
-      const [persisted] = JSON.parse(
-        await fs.readFile(path.join(dataDir, "environments.json"), "utf8"),
-      ) as Environment[];
-      expect(persisted).toMatchObject({
-        agentActivitySources: {},
-        frontendAgentActivityObservers: {},
-      });
-      // The token moves forward so a client hydrating from this snapshot
-      // prefers it over any observation it held before the restart.
-      expect(Date.parse(environment!.agentActivityUpdatedAt!))
-        .toBeGreaterThan(Date.parse(stuckAt));
-    });
+        const [environment] = await backend.invoke<ClientEnvironment[]>(
+          "get_environment_snapshots",
+          { projectId: "p1" },
+        );
+        expect(environment).toMatchObject({
+          id: "e1",
+          agentActivityState: "idle",
+        });
+        expect(environment).not.toHaveProperty("agentActivitySources");
+        expect(environment).not.toHaveProperty("frontendAgentActivityObservers");
+        const [persisted] = JSON.parse(
+          await fs.readFile(path.join(dataDir, "environments.json"), "utf8"),
+        ) as Environment[];
+        expect(persisted).toMatchObject({
+          agentActivitySources: {},
+          frontendAgentActivityObservers: {},
+        });
+        // The token moves forward so a client hydrating from this snapshot
+        // prefers it over any observation it held before the restart.
+        expect(Date.parse(environment!.agentActivityUpdatedAt!)).toBeGreaterThan(
+          Date.parse(stuckAt),
+        );
+      },
+    );
   });
 
   test("keeps the backend poller's own observation across a restart", async () => {
@@ -106,86 +108,91 @@ describe("OrkestratorBackend agent activity boot reset", () => {
     // poller re-reads its container within a second either way, and dropping
     // its snapshot would flash the sidebar green for a working agent.
     const terminalAt = new Date(20_000).toISOString();
-    await withBackend([
-      {
-        ...baseEnvironment,
-        id: "e1",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: terminalAt,
-        agentActivitySources: {
-          frontend: { state: "working", updatedAt: new Date(10_000).toISOString() },
-          "claude-terminal": { state: "waiting", updatedAt: terminalAt },
+    await withBackend(
+      [
+        {
+          ...baseEnvironment,
+          id: "e1",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: terminalAt,
+          agentActivitySources: {
+            frontend: { state: "working", updatedAt: new Date(10_000).toISOString() },
+            "claude-terminal": { state: "waiting", updatedAt: terminalAt },
+          },
         },
-      },
-    ], async (backend, dataDir) => {
-      await backend.init();
+      ],
+      async (backend, dataDir) => {
+        await backend.init();
 
-      const [environment] = await backend.invoke<ClientEnvironment[]>(
-        "get_environment_snapshots",
-        { projectId: "p1" },
-      );
-      expect(environment).toMatchObject({
-        agentActivityState: "waiting",
-      });
-      expect(environment).not.toHaveProperty("agentActivitySources");
-      const [persisted] = JSON.parse(
-        await fs.readFile(path.join(dataDir, "environments.json"), "utf8"),
-      ) as Environment[];
-      expect(persisted).toMatchObject({
-        agentActivitySources: {
-          "claude-terminal": { state: "waiting", updatedAt: terminalAt },
-        },
-      });
-      expect(persisted!.agentActivitySources)
-        .not.toHaveProperty("frontend");
-    });
+        const [environment] = await backend.invoke<ClientEnvironment[]>(
+          "get_environment_snapshots",
+          { projectId: "p1" },
+        );
+        expect(environment).toMatchObject({
+          agentActivityState: "waiting",
+        });
+        expect(environment).not.toHaveProperty("agentActivitySources");
+        const [persisted] = JSON.parse(
+          await fs.readFile(path.join(dataDir, "environments.json"), "utf8"),
+        ) as Environment[];
+        expect(persisted).toMatchObject({
+          agentActivitySources: {
+            "claude-terminal": { state: "waiting", updatedAt: terminalAt },
+          },
+        });
+        expect(persisted!.agentActivitySources).not.toHaveProperty("frontend");
+      },
+    );
   });
 
   test("leaves environments with no renderer activity untouched", async () => {
-    await withBackend([
-      { ...baseEnvironment, id: "e1" },
-      {
-        ...baseEnvironment,
-        id: "e2",
-        agentActivityState: "idle",
-        agentActivityUpdatedAt: new Date(5_000).toISOString(),
-      },
-    ], async (backend) => {
-      await backend.init();
+    await withBackend(
+      [
+        { ...baseEnvironment, id: "e1" },
+        {
+          ...baseEnvironment,
+          id: "e2",
+          agentActivityState: "idle",
+          agentActivityUpdatedAt: new Date(5_000).toISOString(),
+        },
+      ],
+      async (backend) => {
+        await backend.init();
 
-      const environments = await backend.invoke<Environment[]>(
-        "get_environment_snapshots",
-        { projectId: "p1" },
-      );
-      expect(environments.map((environment) => environment.id))
-        .toEqual(["e1", "e2"]);
-      expect(environments[1]!.agentActivityUpdatedAt)
-        .toBe(new Date(5_000).toISOString());
-    });
+        const environments = await backend.invoke<Environment[]>("get_environment_snapshots", {
+          projectId: "p1",
+        });
+        expect(environments.map((environment) => environment.id)).toEqual(["e1", "e2"]);
+        expect(environments[1]!.agentActivityUpdatedAt).toBe(new Date(5_000).toISOString());
+      },
+    );
   });
 
   test("starts the backend even when the reset cannot be persisted", async () => {
     // A backend that refuses to boot because it could not tidy a UI hint would
     // be a far worse failure than the stale hint itself.
     const stuckAt = new Date(10_000).toISOString();
-    await withBackend([
-      {
-        ...baseEnvironment,
-        id: "e1",
-        agentActivityState: "working",
-        agentActivityUpdatedAt: stuckAt,
-        agentActivitySources: {
-          frontend: { state: "working", updatedAt: stuckAt },
+    await withBackend(
+      [
+        {
+          ...baseEnvironment,
+          id: "e1",
+          agentActivityState: "working",
+          agentActivityUpdatedAt: stuckAt,
+          agentActivitySources: {
+            frontend: { state: "working", updatedAt: stuckAt },
+          },
         },
-      },
-    ], async (backend, dataDir) => {
-      const environmentsFile = path.join(dataDir, "environments.json");
-      await fs.rm(environmentsFile);
-      // A directory where the file belongs makes every write to it fail.
-      await fs.mkdir(environmentsFile);
+      ],
+      async (backend, dataDir) => {
+        const environmentsFile = path.join(dataDir, "environments.json");
+        await fs.rm(environmentsFile);
+        // A directory where the file belongs makes every write to it fail.
+        await fs.mkdir(environmentsFile);
 
-      await expect(backend.init()).resolves.toBeUndefined();
-      await fs.rm(environmentsFile, { recursive: true, force: true });
-    });
+        await expect(backend.init()).resolves.toBeUndefined();
+        await fs.rm(environmentsFile, { recursive: true, force: true });
+      },
+    );
   });
 });

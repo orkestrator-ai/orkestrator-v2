@@ -1,8 +1,35 @@
 import { GatewayAuth } from "./gateway-auth.js";
 import type { IncomingMessage, OutgoingHttpHeaders, ServerResponse } from "node:http";
 import { parseGatewayCursor } from "./gateway-event-replay.js";
-import { AUTH_COOKIE, API_PREFIX, MAX_INVOKE_BODY_BYTES, DROPPABLE_EVENT_PREFIX, SSE_CLIENT_HARD_BUFFER_BYTES, MAX_CLIENT_METRICS_BODY_BYTES, METRIC_UNKNOWN_COMMAND_KEY, METRIC_KEEPALIVE_KEY, InvalidRequestBodyError, RequestBodyTooLargeError, sanitizeClientBootReport, negotiateEncoding, appendHeadersVary, responseCompressionContexts, jsonResponse, serializedJsonResponse, readJsonBody, IdentityEventClientWriter, GzipEventClientWriter, parseEventSubscriptionFilter, getBearerToken, getCookie } from "./gateway-internals.js";
-import type { GatewayRequestMetrics, DrainAwareEventClientWriter, GatewayEventClient } from "./gateway-internals.js";
+import {
+  AUTH_COOKIE,
+  API_PREFIX,
+  MAX_INVOKE_BODY_BYTES,
+  DROPPABLE_EVENT_PREFIX,
+  SSE_CLIENT_HARD_BUFFER_BYTES,
+  MAX_CLIENT_METRICS_BODY_BYTES,
+  METRIC_UNKNOWN_COMMAND_KEY,
+  METRIC_KEEPALIVE_KEY,
+  InvalidRequestBodyError,
+  RequestBodyTooLargeError,
+  sanitizeClientBootReport,
+  negotiateEncoding,
+  appendHeadersVary,
+  responseCompressionContexts,
+  jsonResponse,
+  serializedJsonResponse,
+  readJsonBody,
+  IdentityEventClientWriter,
+  GzipEventClientWriter,
+  parseEventSubscriptionFilter,
+  getBearerToken,
+  getCookie,
+} from "./gateway-internals.js";
+import type {
+  GatewayRequestMetrics,
+  DrainAwareEventClientWriter,
+  GatewayEventClient,
+} from "./gateway-internals.js";
 
 export abstract class GatewayHandlers extends GatewayAuth {
   protected commandIsRegistered(command: string, errorMessage: string): boolean {
@@ -49,9 +76,10 @@ export abstract class GatewayHandlers extends GatewayAuth {
       jsonResponse(response, 400, { error: "Expected command to be a string" });
       return;
     }
-    const safeArgs = args && typeof args === "object" && !Array.isArray(args)
-      ? args as Record<string, unknown>
-      : {};
+    const safeArgs =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
     const startedAt = Date.now();
 
     try {
@@ -96,11 +124,9 @@ export abstract class GatewayHandlers extends GatewayAuth {
 
     this.metrics.recordStreamConnecting();
     const compressionContext = responseCompressionContexts.get(response);
-    const useGzip = compressionContext?.mode === "on"
-      && negotiateEncoding(
-        compressionContext.acceptEncoding,
-        ["gzip", "identity"],
-      ) === "gzip";
+    const useGzip =
+      compressionContext?.mode === "on" &&
+      negotiateEncoding(compressionContext.acceptEncoding, ["gzip", "identity"]) === "gzip";
     const headers: OutgoingHttpHeaders = {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-store, no-transform",
@@ -132,12 +158,8 @@ export abstract class GatewayHandlers extends GatewayAuth {
     }
     const state: GatewayEventClient = {
       prefixes: parseEventSubscriptionFilter(url.searchParams.get("events")),
-      includedPrefixes: parseEventSubscriptionFilter(
-        url.searchParams.get("includeEvents"),
-      ),
-      excludedPrefixes: parseEventSubscriptionFilter(
-        url.searchParams.get("excludeEvents"),
-      ),
+      includedPrefixes: parseEventSubscriptionFilter(url.searchParams.get("includeEvents")),
+      excludedPrefixes: parseEventSubscriptionFilter(url.searchParams.get("excludeEvents")),
       desyncedSessions: new Set(),
       handshake: { events: [], bytes: 0 },
       tracksReplayCursor: false,
@@ -155,9 +177,10 @@ export abstract class GatewayHandlers extends GatewayAuth {
     // Blank in either position means "no cursor", not a malformed one — a
     // client that always appends `since=` must not be forced to reconcile.
     const rawCursor = lastEventId || explicitSince || null;
-    const isTerminalOnly = state.prefixes === null
-      && state.includedPrefixes?.every((prefix) => prefix.startsWith(DROPPABLE_EVENT_PREFIX))
-      && state.excludedPrefixes?.some((prefix) => DROPPABLE_EVENT_PREFIX.startsWith(prefix));
+    const isTerminalOnly =
+      state.prefixes === null &&
+      state.includedPrefixes?.every((prefix) => prefix.startsWith(DROPPABLE_EVENT_PREFIX)) &&
+      state.excludedPrefixes?.some((prefix) => DROPPABLE_EVENT_PREFIX.startsWith(prefix));
     // Subscribe before inspecting the ring. `emit()` buffers into this state
     // until replay drains, closing the replay/live race. Everything from here
     // until the handshake settles is guarded: a throw after the client is in the
@@ -281,11 +304,17 @@ export abstract class GatewayHandlers extends GatewayAuth {
       throw error;
     }
 
-    this.metrics.recordClientBootReport(sanitizeClientBootReport(body, request.httpVersion || "1.1"));
+    this.metrics.recordClientBootReport(
+      sanitizeClientBootReport(body, request.httpVersion || "1.1"),
+    );
     jsonResponse(response, 202, { ok: true });
   }
 
-  protected async handleLoopbackProxy(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+  protected async handleLoopbackProxy(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): Promise<void> {
     const prefix = `${API_PREFIX}/proxy/loopback/`;
     const remaining = url.pathname.slice(prefix.length);
     const slashIndex = remaining.indexOf("/");
@@ -308,7 +337,11 @@ export abstract class GatewayHandlers extends GatewayAuth {
     );
   }
 
-  protected async handleBrowserLoopbackProxy(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+  protected async handleBrowserLoopbackProxy(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): Promise<void> {
     const prefix = `${API_PREFIX}/browser/loopback/`;
     const remaining = url.pathname.slice(prefix.length);
     const slashIndex = remaining.indexOf("/");
@@ -329,5 +362,4 @@ export abstract class GatewayHandlers extends GatewayAuth {
       true,
     );
   }
-
 }

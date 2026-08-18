@@ -2,20 +2,14 @@
 // Environment-level activity and the polling lifecycle remain backend-owned.
 import { useEffect, useRef } from "react";
 import { listen, type UnlistenFn } from "@/lib/native/events";
-import {
-  useAgentActivityStore,
-  type AgentActivityState,
-} from "@/stores/agentActivityStore";
+import { useAgentActivityStore, type AgentActivityState } from "@/stores/agentActivityStore";
 
 interface AgentStateEvent {
   container_id: string;
   state: string;
 }
 
-export function useAgentState(
-  containerId: string | null,
-  tabId: string
-): void {
+export function useAgentState(containerId: string | null, tabId: string): void {
   const setTabState = useAgentActivityStore((state) => state.setTabState);
   const removeTabState = useAgentActivityStore((state) => state.removeTabState);
   const unlistenRef = useRef<UnlistenFn | null>(null);

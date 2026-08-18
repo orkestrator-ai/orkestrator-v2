@@ -78,68 +78,68 @@ import { StorageDrafts } from "./storage-drafts.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export class StorageKanban extends StorageDrafts {
@@ -161,10 +161,7 @@ export class StorageKanban extends StorageDrafts {
    */
   protected enqueueKanbanMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
-      const release = await this.acquireMutationLock(
-        this.kanbanFile(),
-        "Kanban storage",
-      );
+      const release = await this.acquireMutationLock(this.kanbanFile(), "Kanban storage");
       try {
         return await operation();
       } finally {
@@ -172,26 +169,31 @@ export class StorageKanban extends StorageDrafts {
       }
     };
     const next = this.kanbanMutation.then(run, run);
-    this.kanbanMutation = next.then(() => undefined, () => undefined);
+    this.kanbanMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
   protected async removeKanbanImageFilesBestEffort(imageIds: string[]): Promise<void> {
-    await Promise.all(imageIds.map(async (imageId) => {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          await fs.rm(this.kanbanImageFile(imageId), { force: true });
-          return;
-        } catch {
-          if (attempt === 1) {
-            // The authoritative metadata no longer references this image.
-            // Keep the committed mutation successful; after the bounded
-            // retries the remaining orphan is safe to remove later.
-            console.warn("[Storage] Failed to clean up an orphaned Kanban image");
+    await Promise.all(
+      imageIds.map(async (imageId) => {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            await fs.rm(this.kanbanImageFile(imageId), { force: true });
+            return;
+          } catch {
+            if (attempt === 1) {
+              // The authoritative metadata no longer references this image.
+              // Keep the committed mutation successful; after the bounded
+              // retries the remaining orphan is safe to remove later.
+              console.warn("[Storage] Failed to clean up an orphaned Kanban image");
+            }
           }
         }
-      }
-    }));
+      }),
+    );
   }
 
   async addKanbanTask(
@@ -219,7 +221,15 @@ export class StorageKanban extends StorageDrafts {
         comments: [],
         images: [],
         createdAt: nowIso(),
-        order: Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === projectId && candidate.status === status).map((candidate) => candidate.order)) + 1,
+        order:
+          Math.max(
+            -1,
+            ...tasks
+              .filter(
+                (candidate) => candidate.projectId === projectId && candidate.status === status,
+              )
+              .map((candidate) => candidate.order),
+          ) + 1,
         prMergeCommented: false,
       };
       tasks.push(task);
@@ -235,31 +245,36 @@ export class StorageKanban extends StorageDrafts {
     expectedProjectId?: string,
   ): Promise<KanbanTask> {
     if (
-      updates.status !== undefined
-      && !isOneOf(updates.status, ["backlog", "in-progress", "review", "done"])
+      updates.status !== undefined &&
+      !isOneOf(updates.status, ["backlog", "in-progress", "review", "done"])
     ) {
       throw new Error("Kanban task status is invalid");
     }
-    if (
-      updates.prState !== undefined
-      && !isOneOf(updates.prState, ["open", "merged", "closed"])
-    ) {
+    if (updates.prState !== undefined && !isOneOf(updates.prState, ["open", "merged", "closed"])) {
       throw new Error("Kanban task pull request state is invalid");
     }
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
-      if (
-        !task
-        || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)
-      ) {
+      if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
         throw new Error(`Kanban task not found: ${taskId}`);
       }
 
       const oldStatus = task.status;
       Object.assign(task, updates);
       if (updates.status && updates.status !== oldStatus) {
-        task.order = Math.max(-1, ...tasks.filter((candidate) => candidate.projectId === task.projectId && candidate.status === updates.status && candidate.id !== taskId).map((candidate) => candidate.order)) + 1;
+        task.order =
+          Math.max(
+            -1,
+            ...tasks
+              .filter(
+                (candidate) =>
+                  candidate.projectId === task.projectId &&
+                  candidate.status === updates.status &&
+                  candidate.id !== taskId,
+              )
+              .map((candidate) => candidate.order),
+          ) + 1;
       }
       await this.saveJson(this.kanbanFile(), tasks);
       this.announce("kanban", task.projectId);
@@ -272,7 +287,10 @@ export class StorageKanban extends StorageDrafts {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
-      await this.saveJson(this.kanbanFile(), tasks.filter((candidate) => candidate.id !== taskId));
+      await this.saveJson(
+        this.kanbanFile(),
+        tasks.filter((candidate) => candidate.id !== taskId),
+      );
       this.announce("kanban", task.projectId);
       await this.removeKanbanImageFilesBestEffort(task.images.map((image) => image.id));
     });
@@ -286,10 +304,7 @@ export class StorageKanban extends StorageDrafts {
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
-      if (
-        !task
-        || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)
-      ) {
+      if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
         throw new Error(`Kanban task not found: ${taskId}`);
       }
       task.comments.push({ id: randomUUID(), text, createdAt: nowIso() });
@@ -362,7 +377,13 @@ export class StorageKanban extends StorageDrafts {
 
   async getProjectNotes(projectId: string): Promise<ProjectNotes> {
     const notes = await this.loadJson<ProjectNotes[]>(this.projectNotesFile(), () => []);
-    return notes.find((note) => note.projectId === projectId) ?? { projectId, content: "", updatedAt: nowIso() };
+    return (
+      notes.find((note) => note.projectId === projectId) ?? {
+        projectId,
+        content: "",
+        updatedAt: nowIso(),
+      }
+    );
   }
 
   async saveProjectNotes(projectId: string, content: string): Promise<ProjectNotes> {
@@ -382,9 +403,7 @@ export class StorageKanban extends StorageDrafts {
 
   async getFeaturePlans(projectId: string): Promise<FeaturePlan[]> {
     const plans = await this.loadJson<FeaturePlan[]>(this.featurePlansFile(), () => []);
-    return plans
-      .filter((plan) => plan.projectId === projectId)
-      .sort((a, b) => a.order - b.order);
+    return plans.filter((plan) => plan.projectId === projectId).sort((a, b) => a.order - b.order);
   }
 
   // Serializes the entire load -> mutate -> save cycle for feature plans so that
@@ -403,84 +422,104 @@ export class StorageKanban extends StorageDrafts {
       this.announce("feature-plan", affectedProjectId(result));
       return result;
     });
-    this.featurePlanMutation = run.then(() => undefined, () => undefined);
+    this.featurePlanMutation = run.then(
+      () => undefined,
+      () => undefined,
+    );
     return run;
   }
 
   async createFeaturePlan(projectId: string): Promise<FeaturePlan> {
-    return this.mutateFeaturePlans((plans) => {
-      const now = nowIso();
-      const plan: FeaturePlan = {
-        id: randomUUID(),
-        projectId,
-        title: "new feature",
-        status: "collecting",
-        summary: "",
-        messages: [{
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const now = nowIso();
+        const plan: FeaturePlan = {
           id: randomUUID(),
-          role: "assistant",
-          content: "Tell me about the new feature",
+          projectId,
+          title: "new feature",
+          status: "collecting",
+          summary: "",
+          messages: [
+            {
+              id: randomUUID(),
+              role: "assistant",
+              content: "Tell me about the new feature",
+              createdAt: now,
+            },
+          ],
+          stories: [],
           createdAt: now,
-        }],
-        stories: [],
-        createdAt: now,
-        updatedAt: now,
-        order: Math.max(-1, ...plans.filter((candidate) => candidate.projectId === projectId).map((candidate) => candidate.order)) + 1,
-      };
-      plans.push(plan);
-      return plan;
-    }, (plan) => plan.projectId);
+          updatedAt: now,
+          order:
+            Math.max(
+              -1,
+              ...plans
+                .filter((candidate) => candidate.projectId === projectId)
+                .map((candidate) => candidate.order),
+            ) + 1,
+        };
+        plans.push(plan);
+        return plan;
+      },
+      (plan) => plan.projectId,
+    );
   }
 
   async updateFeaturePlan(featureId: string, updates: Partial<FeaturePlan>): Promise<FeaturePlan> {
-    return this.mutateFeaturePlans((plans) => {
-      const plan = plans.find((candidate) => candidate.id === featureId);
-      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
 
-      const originalId = plan.id;
-      const originalProjectId = plan.projectId;
-      const originalCreatedAt = plan.createdAt;
-      const originalOrder = plan.order;
-      const originalPlanning = plan.planning;
-      Object.assign(plan, updates);
-      plan.id = originalId;
-      plan.projectId = originalProjectId;
-      plan.createdAt = originalCreatedAt;
-      plan.order = originalOrder;
-      if (originalPlanning === undefined) {
-        delete plan.planning;
-      } else {
-        plan.planning = originalPlanning;
-      }
-      plan.updatedAt = nowIso();
-      return plan;
-    }, (plan) => plan.projectId);
+        const originalId = plan.id;
+        const originalProjectId = plan.projectId;
+        const originalCreatedAt = plan.createdAt;
+        const originalOrder = plan.order;
+        const originalPlanning = plan.planning;
+        Object.assign(plan, updates);
+        plan.id = originalId;
+        plan.projectId = originalProjectId;
+        plan.createdAt = originalCreatedAt;
+        plan.order = originalOrder;
+        if (originalPlanning === undefined) {
+          delete plan.planning;
+        } else {
+          plan.planning = originalPlanning;
+        }
+        plan.updatedAt = nowIso();
+        return plan;
+      },
+      (plan) => plan.projectId,
+    );
   }
 
   async claimFeaturePlanBuild(
     featureId: string,
     taskId: string,
   ): Promise<{ claimed: boolean; feature: FeaturePlan }> {
-    return this.mutateFeaturePlans((plans) => {
-      const plan = plans.find((candidate) => candidate.id === featureId);
-      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
 
-      if (plan.status === "building" && plan.buildTaskId === taskId) {
+        if (plan.status === "building" && plan.buildTaskId === taskId) {
+          return { claimed: true, feature: plan };
+        }
+        if (
+          plan.status === "building" ||
+          Boolean(plan.buildTaskId) ||
+          Boolean(plan.buildPipelineId)
+        ) {
+          return { claimed: false, feature: plan };
+        }
+
+        plan.status = "building";
+        plan.buildTaskId = taskId;
+        plan.updatedAt = nowIso();
         return { claimed: true, feature: plan };
-      }
-      if (
-        plan.status === "building"
-        || Boolean(plan.buildTaskId)
-        || Boolean(plan.buildPipelineId)
-      ) {
-        return { claimed: false, feature: plan };
-      }
-
-      plan.status = "building";
-      plan.buildTaskId = taskId;
-      plan.updatedAt = nowIso();
-      return { claimed: true, feature: plan };
-    }, (result) => result.feature.projectId);
+      },
+      (result) => result.feature.projectId,
+    );
   }
 
   async appendFeaturePlanMessage(
@@ -490,21 +529,24 @@ export class StorageKanban extends StorageDrafts {
     stateApplication?: FeaturePlanMessage["stateApplication"],
     modelId?: string,
   ): Promise<FeaturePlan> {
-    return this.mutateFeaturePlans((plans) => {
-      const plan = plans.find((candidate) => candidate.id === featureId);
-      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
 
-      plan.messages.push({
-        id: randomUUID(),
-        role,
-        content,
-        createdAt: nowIso(),
-        ...(modelId ? { modelId } : {}),
-        ...(stateApplication ? { stateApplication } : {}),
-      });
-      plan.updatedAt = nowIso();
-      return plan;
-    }, (plan) => plan.projectId);
+        plan.messages.push({
+          id: randomUUID(),
+          role,
+          content,
+          createdAt: nowIso(),
+          ...(modelId ? { modelId } : {}),
+          ...(stateApplication ? { stateApplication } : {}),
+        });
+        plan.updatedAt = nowIso();
+        return plan;
+      },
+      (plan) => plan.projectId,
+    );
   }
 
   async appendFeatureStoryMessage(
@@ -515,24 +557,27 @@ export class StorageKanban extends StorageDrafts {
     stateApplication?: FeaturePlanMessage["stateApplication"],
     modelId?: string,
   ): Promise<FeaturePlan> {
-    return this.mutateFeaturePlans((plans) => {
-      const plan = plans.find((candidate) => candidate.id === featureId);
-      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
-      const story = plan.stories.find((candidate) => candidate.id === storyId);
-      if (!story) throw new Error(`Feature story not found: ${storyId}`);
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+        const story = plan.stories.find((candidate) => candidate.id === storyId);
+        if (!story) throw new Error(`Feature story not found: ${storyId}`);
 
-      story.messages.push({
-        id: randomUUID(),
-        role,
-        content,
-        createdAt: nowIso(),
-        ...(modelId ? { modelId } : {}),
-        ...(stateApplication ? { stateApplication } : {}),
-      });
-      story.updatedAt = nowIso();
-      plan.updatedAt = nowIso();
-      return plan;
-    }, (plan) => plan.projectId);
+        story.messages.push({
+          id: randomUUID(),
+          role,
+          content,
+          createdAt: nowIso(),
+          ...(modelId ? { modelId } : {}),
+          ...(stateApplication ? { stateApplication } : {}),
+        });
+        story.updatedAt = nowIso();
+        plan.updatedAt = nowIso();
+        return plan;
+      },
+      (plan) => plan.projectId,
+    );
   }
 
   /** Every plan across every project, for backend sweeps that are not project-scoped. */
@@ -576,17 +621,20 @@ export class StorageKanban extends StorageDrafts {
     if (!isFeaturePlanningRecord(record)) {
       throw new Error("Feature planning record is invalid");
     }
-    return this.mutateFeaturePlans((plans) => {
-      const plan = plans.find((candidate) => candidate.id === record.featureId);
-      if (!plan) throw new Error(`Feature plan not found: ${record.featureId}`);
-      const existing = plan.planning;
-      if (isFeaturePlanningRecord(existing) && !isTerminalFeaturePlanningPhase(existing.phase)) {
-        return { started: false, feature: plan };
-      }
-      plan.planning = { ...record, projectId: plan.projectId };
-      plan.updatedAt = nowIso();
-      return { started: true, feature: plan };
-    }, (result) => result.feature.projectId);
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === record.featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${record.featureId}`);
+        const existing = plan.planning;
+        if (isFeaturePlanningRecord(existing) && !isTerminalFeaturePlanningPhase(existing.phase)) {
+          return { started: false, feature: plan };
+        }
+        plan.planning = { ...record, projectId: plan.projectId };
+        plan.updatedAt = nowIso();
+        return { started: true, feature: plan };
+      },
+      (result) => result.feature.projectId,
+    );
   }
 
   /**
@@ -602,41 +650,44 @@ export class StorageKanban extends StorageDrafts {
     operationId: string,
     mutator: (plan: FeaturePlan, record: FeaturePlanningRecord) => T,
   ): Promise<{ result: T; feature: FeaturePlan }> {
-    return this.mutateFeaturePlans((plans) => {
-      const plan = plans.find((candidate) => candidate.id === featureId);
-      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
-      const record = plan.planning;
-      if (!isFeaturePlanningRecord(record) || record.operationId !== operationId) {
-        throw new FeaturePlanningFenceError(featureId, operationId);
-      }
-      const result = mutator(plan, record);
-      // Re-read: the mutator may have replaced the record wholesale.
-      const updated = plan.planning;
-      if (isFeaturePlanningRecord(updated) && updated.operationId === operationId) {
-        updated.backendRevision += 1;
-        updated.updatedAt = nowIso();
-      }
-      plan.updatedAt = nowIso();
-      return { result, feature: plan };
-    }, (outcome) => outcome.feature.projectId);
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+        const record = plan.planning;
+        if (!isFeaturePlanningRecord(record) || record.operationId !== operationId) {
+          throw new FeaturePlanningFenceError(featureId, operationId);
+        }
+        const result = mutator(plan, record);
+        // Re-read: the mutator may have replaced the record wholesale.
+        const updated = plan.planning;
+        if (isFeaturePlanningRecord(updated) && updated.operationId === operationId) {
+          updated.backendRevision += 1;
+          updated.updatedAt = nowIso();
+        }
+        plan.updatedAt = nowIso();
+        return { result, feature: plan };
+      },
+      (outcome) => outcome.feature.projectId,
+    );
   }
 
   /**
    * Detaches a finished exchange. A mismatched fence is a no-op, not an error:
    * the exchange it would have cleared has already been replaced.
    */
-  async clearFeaturePlanning(
-    featureId: string,
-    operationId: string,
-  ): Promise<FeaturePlan> {
-    return this.mutateFeaturePlans((plans) => {
-      const plan = plans.find((candidate) => candidate.id === featureId);
-      if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
-      if (plan.planning?.operationId !== operationId) return plan;
-      delete plan.planning;
-      plan.updatedAt = nowIso();
-      return plan;
-    }, (plan) => plan.projectId);
+  async clearFeaturePlanning(featureId: string, operationId: string): Promise<FeaturePlan> {
+    return this.mutateFeaturePlans(
+      (plans) => {
+        const plan = plans.find((candidate) => candidate.id === featureId);
+        if (!plan) throw new Error(`Feature plan not found: ${featureId}`);
+        if (plan.planning?.operationId !== operationId) return plan;
+        delete plan.planning;
+        plan.updatedAt = nowIso();
+        return plan;
+      },
+      (plan) => plan.projectId,
+    );
   }
 
   async getLinearAuth(): Promise<LinearAuth | null> {
@@ -650,7 +701,12 @@ export class StorageKanban extends StorageDrafts {
       connectedAt: nowIso(),
       viewer,
     };
-    await this.writeAtomic(this.linearAuthFile(), `${JSON.stringify(auth, null, 2)}\n`, false, 0o600);
+    await this.writeAtomic(
+      this.linearAuthFile(),
+      `${JSON.stringify(auth, null, 2)}\n`,
+      false,
+      0o600,
+    );
     return auth;
   }
 
@@ -659,14 +715,20 @@ export class StorageKanban extends StorageDrafts {
   }
 
   async getLinearCompletionComment(pipelineId: string): Promise<LinearCompletionComment | null> {
-    const comments = await this.loadJson<LinearCompletionComment[]>(this.linearCompletionCommentsFile(), () => []);
+    const comments = await this.loadJson<LinearCompletionComment[]>(
+      this.linearCompletionCommentsFile(),
+      () => [],
+    );
     return comments.find((comment) => comment.pipelineId === pipelineId) ?? null;
   }
 
   async saveLinearCompletionComment(
     record: Omit<LinearCompletionComment, "updatedAt"> & { updatedAt?: string },
   ): Promise<LinearCompletionComment> {
-    const comments = await this.loadJson<LinearCompletionComment[]>(this.linearCompletionCommentsFile(), () => []);
+    const comments = await this.loadJson<LinearCompletionComment[]>(
+      this.linearCompletionCommentsFile(),
+      () => [],
+    );
     const nextRecord: LinearCompletionComment = {
       ...record,
       updatedAt: record.updatedAt ?? nowIso(),

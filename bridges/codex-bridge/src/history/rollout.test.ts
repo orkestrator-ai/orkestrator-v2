@@ -28,10 +28,7 @@ import {
   readTranscriptLines,
 } from "./rollout.js";
 import { persistSessionTitle } from "../session-titles.js";
-import {
-  clearTranscriptCache,
-  getTranscriptCacheStats,
-} from "../transcript-cache.js";
+import { clearTranscriptCache, getTranscriptCacheStats } from "../transcript-cache.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -135,8 +132,9 @@ describe("rollout public helpers", () => {
   });
 
   test("finds supplied transcript paths without scanning global state", async () => {
-    expect(await findTranscriptPath("thread-2", ["/a/thread-1.jsonl", "/b/thread-2.jsonl"]))
-      .toBe("/b/thread-2.jsonl");
+    expect(await findTranscriptPath("thread-2", ["/a/thread-1.jsonl", "/b/thread-2.jsonl"])).toBe(
+      "/b/thread-2.jsonl",
+    );
     expect(await findTranscriptPath("missing", ["/a/thread-1.jsonl"])).toBeNull();
   });
 
@@ -232,7 +230,6 @@ describe("findTranscriptPath path cache", () => {
 });
 
 describe("rollout public helpers (continued)", () => {
-
   test("reads JSONL lines and extracts defensive metadata", async () => {
     const path = await temporaryRollout("thread-1", [
       {
@@ -293,24 +290,28 @@ describe("rollout public helpers (continued)", () => {
     temporaryDirectories.push(root);
     const transcriptPath = join(root, "sessions", "filename-alias.jsonl");
     await mkdir(dirname(transcriptPath), { recursive: true });
-    await writeFile(transcriptPath, `${[
-      JSON.stringify({
-        type: "session_meta",
-        payload: {
-          id: "canonical-thread",
-          cwd: "/workspace",
-          timestamp: "2026-07-25T12:00:00.000Z",
-        },
-      }),
-      JSON.stringify({
-        type: "response_item",
-        payload: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Prompt title" }],
-        },
-      }),
-    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      transcriptPath,
+      `${[
+        JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: "canonical-thread",
+            cwd: "/workspace",
+            timestamp: "2026-07-25T12:00:00.000Z",
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Prompt title" }],
+          },
+        }),
+      ].join("\n")}\n`,
+      "utf8",
+    );
     await writeFile(
       join(root, "session_index.jsonl"),
       `{malformed\n${JSON.stringify({
@@ -349,10 +350,14 @@ describe("rollout public helpers (continued)", () => {
     const writeRollout = async (threadId: string) => {
       const path = join(root, "sessions", `${threadId}.jsonl`);
       await mkdir(dirname(path), { recursive: true });
-      await writeFile(path, `${JSON.stringify({
-        type: "session_meta",
-        payload: { id: threadId, cwd: "/workspace", timestamp: "2026-07-25T12:00:00.000Z" },
-      })}\n`, "utf8");
+      await writeFile(
+        path,
+        `${JSON.stringify({
+          type: "session_meta",
+          payload: { id: threadId, cwd: "/workspace", timestamp: "2026-07-25T12:00:00.000Z" },
+        })}\n`,
+        "utf8",
+      );
     };
     await writeRollout("cache-thread-1");
 
@@ -361,8 +366,9 @@ describe("rollout public helpers (continued)", () => {
     // Generous TTL so a slow runner cannot expire the cache mid-test.
     setTranscriptCatalogTtlForTesting(60_000);
     try {
-      expect((await listPersistedSessionsForCwd("/workspace")).map((s) => s.id))
-        .toEqual(["cache-thread-1"]);
+      expect((await listPersistedSessionsForCwd("/workspace")).map((s) => s.id)).toEqual([
+        "cache-thread-1",
+      ]);
 
       // Within the TTL the listing reuses the previous scan, so a rollout that
       // appeared afterwards is not visible yet…
@@ -742,10 +748,14 @@ describe("rollout public helpers (continued)", () => {
     temporaryDirectories.push(root);
     const path = join(root, "sessions", "titled-thread.jsonl");
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${JSON.stringify({
-      type: "session_meta",
-      payload: { id: "titled-thread", cwd: "/workspace", timestamp: "2026-07-25T12:00:00.000Z" },
-    })}\n`, "utf8");
+    await writeFile(
+      path,
+      `${JSON.stringify({
+        type: "session_meta",
+        payload: { id: "titled-thread", cwd: "/workspace", timestamp: "2026-07-25T12:00:00.000Z" },
+      })}\n`,
+      "utf8",
+    );
     await persistSessionTitle(root, "titled-thread", "Generated title", { source: "generated" });
 
     const previousHome = process.env.CODEX_HOME;
@@ -794,10 +804,12 @@ describe("rollout public helpers (continued)", () => {
       updatedAt: "2026-07-25T12:00:00.000Z",
     });
 
-    const malformed = await temporaryRollout("malformed-meta-fallback", [{
-      type: "session_meta",
-      payload: { id: "" },
-    }]);
+    const malformed = await temporaryRollout("malformed-meta-fallback", [
+      {
+        type: "session_meta",
+        payload: { id: "" },
+      },
+    ]);
     expect(
       await getPersistedSessionMeta(
         "malformed-meta-fallback",
@@ -817,10 +829,12 @@ describe("rollout public helpers (continued)", () => {
     const noMeta = await temporaryRollout("no-meta", [{ type: "response_item" }]);
     expect(await getSessionMetaFromTranscriptPath(noMeta)).toBeNull();
 
-    const malformedId = await temporaryRollout("bad-id", [{
-      type: "session_meta",
-      payload: { id: "", timestamp: 4 },
-    }]);
+    const malformedId = await temporaryRollout("bad-id", [
+      {
+        type: "session_meta",
+        payload: { id: "", timestamp: 4 },
+      },
+    ]);
     expect(await getSessionMetaFromTranscriptPath(malformedId)).toBeNull();
     expect(
       await getPersistedSessionMeta(
@@ -893,24 +907,29 @@ describe("rollout public helpers (continued)", () => {
 
   test("extracts multipart text and filters synthetic injected user context", () => {
     expect(
-      extractPersistedMessageText([
-        { type: "output_text", text: "one" },
-        null,
-        { type: "output_text", text: 42 },
-        { type: "future_content", text: "hidden" },
-        { type: "output_text", text: "two" },
-      ], "assistant"),
+      extractPersistedMessageText(
+        [
+          { type: "output_text", text: "one" },
+          null,
+          { type: "output_text", text: 42 },
+          { type: "future_content", text: "hidden" },
+          { type: "output_text", text: "two" },
+        ],
+        "assistant",
+      ),
     ).toBe("one\ntwo");
     expect(extractPersistedMessageText("bad", "assistant")).toBeNull();
     expect(extractPersistedMessageText([], "assistant")).toBeNull();
     expect(
       extractPersistedMessageText(
-        [{ type: "input_text", text: "wrong role shape" }, { type: "output_text", text: 42 }],
+        [
+          { type: "input_text", text: "wrong role shape" },
+          { type: "output_text", text: 42 },
+        ],
         "assistant",
       ),
     ).toBeNull();
-    expect(extractPersistedMessageText([{ type: "input_text", text: "  " }], "user"))
-      .toBeNull();
+    expect(extractPersistedMessageText([{ type: "input_text", text: "  " }], "user")).toBeNull();
     expect(
       extractPersistedMessageText(
         [{ type: "input_text", text: "# AGENTS.md instructions for /workspace" }],
@@ -919,10 +938,12 @@ describe("rollout public helpers (continued)", () => {
     ).toBeNull();
     expect(
       extractPersistedMessageText(
-        [{
-          type: "input_text",
-          text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
-        }],
+        [
+          {
+            type: "input_text",
+            text: "<recommended_plugins>\nHere is a list of plugins that are available but not installed.",
+          },
+        ],
         "user",
       ),
     ).toBeNull();
@@ -933,9 +954,10 @@ describe("rollout public helpers (continued)", () => {
       [
         {
           type: "input_text",
-          text: "Inspect the diagram\n\n<attached-files source=\"orkestrator\">\n"
-            + '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png"'
-            + ' filename="shot.png" />\n</attached-files>',
+          text:
+            'Inspect the diagram\n\n<attached-files source="orkestrator">\n' +
+            '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png"' +
+            ' filename="shot.png" />\n</attached-files>',
         },
         // Codex rewrites a local image into an inline base64 data URL. Replaying
         // that would cost megabytes per subscriber per rehydration.
@@ -946,12 +968,14 @@ describe("rollout public helpers (continued)", () => {
 
     expect(persisted).toEqual({
       text: "Inspect the diagram",
-      attachments: [{
-        type: "file",
-        content: "/workspace/.orkestrator/initial-prompt/shot.png",
-        fileUrl: "/workspace/.orkestrator/initial-prompt/shot.png",
-        filename: "shot.png",
-      }],
+      attachments: [
+        {
+          type: "file",
+          content: "/workspace/.orkestrator/initial-prompt/shot.png",
+          fileUrl: "/workspace/.orkestrator/initial-prompt/shot.png",
+          filename: "shot.png",
+        },
+      ],
     });
     expect(JSON.stringify(persisted)).not.toContain("base64");
   });
@@ -959,10 +983,12 @@ describe("rollout public helpers (continued)", () => {
   test("keeps an attachment-only prompt that has no text left after stripping", () => {
     expect(
       extractPersistedMessageContent(
-        [{
-          type: "input_text",
-          text: '<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" /></attached-files>',
-        }],
+        [
+          {
+            type: "input_text",
+            text: '<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" /></attached-files>',
+          },
+        ],
         "user",
       ),
     ).toEqual({
@@ -974,10 +1000,12 @@ describe("rollout public helpers (continued)", () => {
   test("hides the attachment marker from the text used for titles", () => {
     expect(
       extractPersistedMessageText(
-        [{
-          type: "input_text",
-          text: 'Fix the layout\n\n<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" /></attached-files>',
-        }],
+        [
+          {
+            type: "input_text",
+            text: 'Fix the layout\n\n<attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" /></attached-files>',
+          },
+        ],
         "user",
       ),
     ).toBe("Fix the layout");
@@ -1118,11 +1146,13 @@ describe("rollout public helpers (continued)", () => {
     process.env.CWD = "/workspace";
     try {
       const hydrated = await hydrateMessagesFromPersistedSession("thread-hydrate");
-      expect(hydrated.messages.map((message) => ({
-        role: message.role,
-        content: message.content,
-        createdAt: message.createdAt,
-      }))).toEqual([
+      expect(
+        hydrated.messages.map((message) => ({
+          role: message.role,
+          content: message.content,
+          createdAt: message.createdAt,
+        })),
+      ).toEqual([
         {
           role: "user",
           content: "real prompt",
@@ -1153,17 +1183,21 @@ describe("rollout public helpers (continued)", () => {
     temporaryDirectories.push(root);
     const path = join(root, "sessions", "thread-named.jsonl");
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${[
-      JSON.stringify(sessionMeta("thread-named")),
-      JSON.stringify({
-        type: "response_item",
-        payload: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Prompt title" }],
-        },
-      }),
-    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      path,
+      `${[
+        JSON.stringify(sessionMeta("thread-named")),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Prompt title" }],
+          },
+        }),
+      ].join("\n")}\n`,
+      "utf8",
+    );
     await writeFile(
       join(root, "session_index.jsonl"),
       `${JSON.stringify({
@@ -1199,17 +1233,21 @@ describe("rollout public helpers (continued)", () => {
     temporaryDirectories.push(root);
     const path = join(root, "sessions", "thread-generated.jsonl");
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${[
-      JSON.stringify(sessionMeta("thread-generated")),
-      JSON.stringify({
-        type: "response_item",
-        payload: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Prompt title" }],
-        },
-      }),
-    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      path,
+      `${[
+        JSON.stringify(sessionMeta("thread-generated")),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Prompt title" }],
+          },
+        }),
+      ].join("\n")}\n`,
+      "utf8",
+    );
     await persistSessionTitle(root, "thread-generated", "Generated title", {
       source: "generated",
     });
@@ -1235,17 +1273,21 @@ describe("rollout public helpers (continued)", () => {
     temporaryDirectories.push(root);
     const path = join(root, "sessions", "thread-index-defensive.jsonl");
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${[
-      JSON.stringify(sessionMeta("thread-index-defensive")),
-      JSON.stringify({
-        type: "response_item",
-        payload: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Prompt fallback" }],
-        },
-      }),
-    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      path,
+      `${[
+        JSON.stringify(sessionMeta("thread-index-defensive")),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Prompt fallback" }],
+          },
+        }),
+      ].join("\n")}\n`,
+      "utf8",
+    );
     await writeFile(
       join(root, "session_index.jsonl"),
       [
@@ -1285,18 +1327,22 @@ describe("rollout public helpers (continued)", () => {
     temporaryDirectories.push(root);
     const path = join(root, "sessions", "filename-alias.jsonl");
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, `${[
-      JSON.stringify(sessionMeta("canonical-hydrate")),
-      JSON.stringify({
-        timestamp: "2026-07-25T12:01:00.000Z",
-        type: "response_item",
-        payload: {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "aliased prompt" }],
-        },
-      }),
-    ].join("\n")}\n`, "utf8");
+    await writeFile(
+      path,
+      `${[
+        JSON.stringify(sessionMeta("canonical-hydrate")),
+        JSON.stringify({
+          timestamp: "2026-07-25T12:01:00.000Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "aliased prompt" }],
+          },
+        }),
+      ].join("\n")}\n`,
+      "utf8",
+    );
 
     const previousHome = process.env.CODEX_HOME;
     const previousCwd = process.env.CWD;
@@ -1424,7 +1470,7 @@ describe("rollout public helpers (continued)", () => {
           name: "exec",
           call_id: "call-custom-exec",
           input:
-            "const r = await tools.exec_command({\"cmd\":\"bun test --parallel\",\"yield_time_ms\":30000});",
+            'const r = await tools.exec_command({"cmd":"bun test --parallel","yield_time_ms":30000});',
           status: "completed",
         },
       },
@@ -1543,7 +1589,7 @@ describe("rollout public helpers (continued)", () => {
           toolName: "exec",
           toolArgs: {
             input:
-              "const r = await tools.exec_command({\"cmd\":\"bun test --parallel\",\"yield_time_ms\":30000});",
+              'const r = await tools.exec_command({"cmd":"bun test --parallel","yield_time_ms":30000});',
             command: "bun test --parallel",
           },
           toolState: "success",
@@ -1632,11 +1678,13 @@ describe("rollout public helpers (continued)", () => {
       },
     ]);
 
-    expect(hydrated.messages.map((message) => ({
-      role: message.role,
-      turnId: message.turnId,
-      modelId: message.modelId,
-    }))).toEqual([
+    expect(
+      hydrated.messages.map((message) => ({
+        role: message.role,
+        turnId: message.turnId,
+        modelId: message.modelId,
+      })),
+    ).toEqual([
       { role: "user", turnId: "turn-1", modelId: undefined },
       { role: "assistant", turnId: "turn-1", modelId: "gpt-one" },
       { role: "assistant", turnId: "turn-2", modelId: "gpt-two" },
@@ -2041,11 +2089,7 @@ describe("rollout public helpers (continued)", () => {
         },
       },
     ];
-    await writeFile(
-      path,
-      `${records.map((line) => JSON.stringify(line)).join("\n")}\n`,
-      "utf8",
-    );
+    await writeFile(path, `${records.map((line) => JSON.stringify(line)).join("\n")}\n`, "utf8");
     await writeFile(
       join(root, "session_index.jsonl"),
       `${JSON.stringify({ id: "thread-turns", updated_at: "2026-07-25T12:04:00.000Z" })}\n`,
@@ -2114,10 +2158,7 @@ describe("persisted multi-file apply_patch hydration", () => {
 
     const parts = hydrated.messages.flatMap((message) => message.parts);
     expect(parts).toHaveLength(2);
-    expect(parts.map((part) => part.toolTitle)).toEqual([
-      "update: src/a.ts",
-      "add: src/b.ts",
-    ]);
+    expect(parts.map((part) => part.toolTitle)).toEqual(["update: src/a.ts", "add: src/b.ts"]);
     for (const part of parts) {
       expect(part.toolName).toBe("apply_patch");
       expect(part.toolState).toBeUndefined();
@@ -2165,10 +2206,7 @@ describe("persisted multi-file apply_patch hydration", () => {
   test.each([
     ["carries no cwd at all", undefined],
     ["carries a blank cwd", ""],
-  ])("resolves patch paths against the process cwd when the rollout %s", async (
-    _label,
-    cwd,
-  ) => {
+  ])("resolves patch paths against the process cwd when the rollout %s", async (_label, cwd) => {
     const hydrated = await hydrateRollout(
       "thread-nocwd",
       [

@@ -119,9 +119,10 @@ function readUsageCandidate(node: Record<string, unknown>): ContextUsageSnapshot
   }
 
   const usage = node.usage;
-  const usageObject = usage && typeof usage === "object" && !Array.isArray(usage)
-    ? (usage as Record<string, unknown>)
-    : undefined;
+  const usageObject =
+    usage && typeof usage === "object" && !Array.isArray(usage)
+      ? (usage as Record<string, unknown>)
+      : undefined;
 
   const source = usageObject ?? node;
 
@@ -138,10 +139,11 @@ function readUsageCandidate(node: Record<string, unknown>): ContextUsageSnapshot
     }
   }
 
-  const totalTokens = readNumericField(node, TOTAL_KEYS)
-    ?? readNumericField(source, TOTAL_KEYS)
-    ?? parseTokenNumber(source.max_input_tokens)
-    ?? parseTokenNumber(source.maxInputTokens);
+  const totalTokens =
+    readNumericField(node, TOTAL_KEYS) ??
+    readNumericField(source, TOTAL_KEYS) ??
+    parseTokenNumber(source.max_input_tokens) ??
+    parseTokenNumber(source.maxInputTokens);
 
   if (typeof usedTokens !== "number" || typeof totalTokens !== "number") {
     return null;
@@ -179,13 +181,11 @@ export function extractContextUsage(payload: unknown): ContextUsageSnapshot | nu
     const candidate = readUsageCandidate(current);
     if (candidate) {
       const isBetterCandidate =
-        !bestCandidate
-        || candidate.usedTokens > bestCandidate.usedTokens
-        || (
-          candidate.usedTokens === bestCandidate.usedTokens
-          && !bestCandidate.modelId
-          && !!candidate.modelId
-        );
+        !bestCandidate ||
+        candidate.usedTokens > bestCandidate.usedTokens ||
+        (candidate.usedTokens === bestCandidate.usedTokens &&
+          !bestCandidate.modelId &&
+          !!candidate.modelId);
 
       if (isBetterCandidate) {
         bestCandidate = candidate;

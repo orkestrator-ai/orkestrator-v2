@@ -59,9 +59,9 @@ describe("StorageService prompt queues", () => {
       // Both clients believe they are at revision 1 and try to take "m1".
       const first = storage.savePromptQueue(KEY, "e1", [{ id: "m2" }], 1);
       await expect(first).resolves.toMatchObject({ revision: 2 });
-      await expect(
-        storage.savePromptQueue(KEY, "e1", [{ id: "m2" }], 1),
-      ).rejects.toThrow("revision conflict");
+      await expect(storage.savePromptQueue(KEY, "e1", [{ id: "m2" }], 1)).rejects.toThrow(
+        "revision conflict",
+      );
 
       expect(await storage.getPromptQueue(KEY)).toMatchObject({
         messages: [{ id: "m2" }],
@@ -74,7 +74,10 @@ describe("StorageService prompt queues", () => {
     await withStorage(async (storage) => {
       const second = new StorageService(storage.getDataDir());
       await second.init();
-      const candidate = [{ id: "m1", text: "first" }, { id: "m2", text: "second" }];
+      const candidate = [
+        { id: "m1", text: "first" },
+        { id: "m2", text: "second" },
+      ];
       await storage.enqueuePromptQueueMessage(KEY, "e1", candidate[0]);
       await storage.enqueuePromptQueueMessage(KEY, "e1", candidate[1]);
 
@@ -215,18 +218,12 @@ describe("StorageService prompt queues", () => {
       await storage.reservePromptQueueHeadForDispatch(KEY);
       const failed = await storage.failPromptQueueDispatch(KEY, "row-1");
 
-      const equal = await storage.savePromptQueue(
-        KEY,
-        "e1",
-        messages,
-        failed!.revision,
-      );
+      const equal = await storage.savePromptQueue(KEY, "e1", messages, failed!.revision);
       expect(equal.dispatchError).toEqual(failed!.dispatchError);
-      await expect(
-        storage.savePromptQueue(KEY, "e1", messages, failed!.revision),
-      ).rejects.toThrow("revision conflict");
-      expect((await storage.getPromptQueue(KEY))?.dispatchError)
-        .toEqual(failed!.dispatchError);
+      await expect(storage.savePromptQueue(KEY, "e1", messages, failed!.revision)).rejects.toThrow(
+        "revision conflict",
+      );
+      expect((await storage.getPromptQueue(KEY))?.dispatchError).toEqual(failed!.dispatchError);
     });
   });
 
@@ -237,18 +234,17 @@ describe("StorageService prompt queues", () => {
 
       const first = await storage.claimPromptQueueHead(KEY, "e1", "m1");
       expect(first.claimToken).toBeString();
-      await expect(storage.claimPromptQueueHead(KEY, "e1", "m2"))
-        .resolves.toMatchObject({
-          claimed: null,
-          claimToken: null,
-          queue: {
-            messages: [{ id: "m2" }],
-            outstandingClaim: { message: { id: "m1" } },
-          },
-        });
-      await expect(
-        storage.acknowledgePromptQueueClaim(KEY, "e1", "wrong-token"),
-      ).rejects.toThrow("does not match");
+      await expect(storage.claimPromptQueueHead(KEY, "e1", "m2")).resolves.toMatchObject({
+        claimed: null,
+        claimToken: null,
+        queue: {
+          messages: [{ id: "m2" }],
+          outstandingClaim: { message: { id: "m1" } },
+        },
+      });
+      await expect(storage.acknowledgePromptQueueClaim(KEY, "e1", "wrong-token")).rejects.toThrow(
+        "does not match",
+      );
 
       await expect(
         storage.acknowledgePromptQueueClaim(KEY, "e1", first.claimToken!),
@@ -257,8 +253,9 @@ describe("StorageService prompt queues", () => {
         revision: 4,
       });
       expect((await storage.getPromptQueue(KEY))?.outstandingClaim).toBeUndefined();
-      await expect(storage.claimPromptQueueHead(KEY, "e1", "m2"))
-        .resolves.toMatchObject({ claimed: { id: "m2" } });
+      await expect(storage.claimPromptQueueHead(KEY, "e1", "m2")).resolves.toMatchObject({
+        claimed: { id: "m2" },
+      });
     });
   });
 
@@ -280,14 +277,14 @@ describe("StorageService prompt queues", () => {
 
   test("makes ack and nack idempotent only after the matching claim is settled", async () => {
     await withStorage(async (storage) => {
-      await expect(storage.acknowledgePromptQueueClaim(KEY, "e1", "token"))
-        .resolves.toBeNull();
-      await expect(storage.rejectPromptQueueClaim(KEY, "e1", "token"))
-        .resolves.toBeNull();
+      await expect(storage.acknowledgePromptQueueClaim(KEY, "e1", "token")).resolves.toBeNull();
+      await expect(storage.rejectPromptQueueClaim(KEY, "e1", "token")).resolves.toBeNull();
 
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
-      await expect(storage.acknowledgePromptQueueClaim(KEY, "e1", "token"))
-        .resolves.toMatchObject({ messages: [{ id: "m1" }], revision: 1 });
+      await expect(storage.acknowledgePromptQueueClaim(KEY, "e1", "token")).resolves.toMatchObject({
+        messages: [{ id: "m1" }],
+        revision: 1,
+      });
       const claim = await storage.claimPromptQueueHead(KEY, "e1", "m1");
       await storage.acknowledgePromptQueueClaim(KEY, "e1", claim.claimToken!);
       await expect(
@@ -305,8 +302,9 @@ describe("StorageService prompt queues", () => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", message);
       await storage.claimPromptQueueHead(KEY, "e1", "m1");
 
-      await expect(storage.requeuePromptQueueMessage(KEY, "e1", message))
-        .resolves.toMatchObject({ messages: [message] });
+      await expect(storage.requeuePromptQueueMessage(KEY, "e1", message)).resolves.toMatchObject({
+        messages: [message],
+      });
       expect((await storage.getPromptQueue(KEY))?.outstandingClaim).toBeUndefined();
     });
   });
@@ -333,41 +331,45 @@ describe("StorageService prompt queues", () => {
         revision: 3,
       });
       expect((await restarted.getPromptQueue(KEY))?.outstandingClaim).toBeUndefined();
-      expect(events).toContainEqual(expect.objectContaining({
-        resource: "prompt-queue",
-        id: "e1",
-      }));
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          resource: "prompt-queue",
+          id: "e1",
+        }),
+      );
     });
   });
 
   test("live lease timer restores and announces a sole claimed head", async () => {
-    await withStorage(async (storage) => {
-      await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
-      const events: Array<{ resource: string; id: string }> = [];
-      storage.setResourceChangeListener((event) => events.push(event));
-      await storage.claimPromptQueueHead(KEY, "e1", "m1");
-      events.length = 0;
+    await withStorage(
+      async (storage) => {
+        await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
+        const events: Array<{ resource: string; id: string }> = [];
+        storage.setResourceChangeListener((event) => events.push(event));
+        await storage.claimPromptQueueHead(KEY, "e1", "m1");
+        events.length = 0;
 
-      const deadline = Date.now() + 1_000;
-      let recovered = await storage.getPromptQueue(KEY);
-      while (
-        (recovered?.messages.length === 0 || events.length === 0)
-        && Date.now() < deadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 5));
-        recovered = await storage.getPromptQueue(KEY);
-      }
+        const deadline = Date.now() + 1_000;
+        let recovered = await storage.getPromptQueue(KEY);
+        while ((recovered?.messages.length === 0 || events.length === 0) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          recovered = await storage.getPromptQueue(KEY);
+        }
 
-      expect(recovered).toMatchObject({
-        messages: [{ id: "m1" }],
-        revision: 3,
-      });
-      expect(recovered?.outstandingClaim).toBeUndefined();
-      expect(events).toContainEqual(expect.objectContaining({
-        resource: "prompt-queue",
-        id: "e1",
-      }));
-    }, { promptQueueClaimLeaseMs: 25 });
+        expect(recovered).toMatchObject({
+          messages: [{ id: "m1" }],
+          revision: 3,
+        });
+        expect(recovered?.outstandingClaim).toBeUndefined();
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            resource: "prompt-queue",
+            id: "e1",
+          }),
+        );
+      },
+      { promptQueueClaimLeaseMs: 25 },
+    );
   });
 
   test("preserves concurrent appends from different clients", async () => {
@@ -382,13 +384,15 @@ describe("StorageService prompt queues", () => {
 
       const queue = await storage.getPromptQueue(KEY);
       expect(queue?.messages).toHaveLength(2);
-      expect(new Set(
-        queue?.messages.map((message) =>
-          typeof message === "object" && message !== null
-            ? (message as { id?: string }).id
-            : undefined
+      expect(
+        new Set(
+          queue?.messages.map((message) =>
+            typeof message === "object" && message !== null
+              ? (message as { id?: string }).id
+              : undefined,
+          ),
         ),
-      )).toEqual(new Set(["m1", "m2"]));
+      ).toEqual(new Set(["m1", "m2"]));
     });
   });
 
@@ -407,11 +411,10 @@ describe("StorageService prompt queues", () => {
       });
       expect(enqueueClaimed.revision).toBe(claimed.queue!.revision);
       const nacked = await storage.requeuePromptQueueMessage(KEY, "e1", { id: "m1" });
-      const duplicateRequeue = await storage.requeuePromptQueueMessage(
-        KEY,
-        "e1",
-        { id: "m1", text: "replacement must not win" },
-      );
+      const duplicateRequeue = await storage.requeuePromptQueueMessage(KEY, "e1", {
+        id: "m1",
+        text: "replacement must not win",
+      });
       expect(duplicateRequeue).toEqual(nacked);
       expect(duplicateRequeue.messages).toEqual([{ id: "m1" }]);
     });
@@ -423,43 +426,47 @@ describe("StorageService prompt queues", () => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m3" });
 
-      await expect(storage.movePromptQueueMessage(KEY, "e1", "m3", "up"))
-        .resolves.toMatchObject({
-          messages: [{ id: "m1" }, { id: "m3" }, { id: "m2" }],
-        });
-      await expect(storage.removePromptQueueMessage(KEY, "e1", "m3"))
-        .resolves.toMatchObject({
-          removed: { id: "m3" },
-          queue: { messages: [{ id: "m1" }, { id: "m2" }] },
-        });
-      await expect(storage.requeuePromptQueueMessage(KEY, "e1", { id: "m3" }))
-        .resolves.toMatchObject({
-          messages: [{ id: "m3" }, { id: "m1" }, { id: "m2" }],
-        });
-      await expect(storage.movePromptQueueMessage(KEY, "e1", "m1", "down"))
-        .resolves.toMatchObject({
-          messages: [{ id: "m3" }, { id: "m2" }, { id: "m1" }],
-        });
+      await expect(storage.movePromptQueueMessage(KEY, "e1", "m3", "up")).resolves.toMatchObject({
+        messages: [{ id: "m1" }, { id: "m3" }, { id: "m2" }],
+      });
+      await expect(storage.removePromptQueueMessage(KEY, "e1", "m3")).resolves.toMatchObject({
+        removed: { id: "m3" },
+        queue: { messages: [{ id: "m1" }, { id: "m2" }] },
+      });
+      await expect(
+        storage.requeuePromptQueueMessage(KEY, "e1", { id: "m3" }),
+      ).resolves.toMatchObject({
+        messages: [{ id: "m3" }, { id: "m1" }, { id: "m2" }],
+      });
+      await expect(storage.movePromptQueueMessage(KEY, "e1", "m1", "down")).resolves.toMatchObject({
+        messages: [{ id: "m3" }, { id: "m2" }, { id: "m1" }],
+      });
     });
   });
 
   test("makes missing removals and invalid or boundary moves no-ops", async () => {
     await withStorage(async (storage) => {
-      await expect(storage.removePromptQueueMessage(KEY, "e1", "missing"))
-        .resolves.toEqual({ removed: null, queue: null });
-      await expect(storage.movePromptQueueMessage(KEY, "e1", "missing", "up"))
-        .resolves.toBeNull();
+      await expect(storage.removePromptQueueMessage(KEY, "e1", "missing")).resolves.toEqual({
+        removed: null,
+        queue: null,
+      });
+      await expect(storage.movePromptQueueMessage(KEY, "e1", "missing", "up")).resolves.toBeNull();
 
       const queue = await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
-      await expect(storage.removePromptQueueMessage(KEY, "e1", "missing"))
-        .resolves.toMatchObject({ removed: null, queue: { revision: 2 } });
-      await expect(storage.movePromptQueueMessage(KEY, "e1", "missing", "down"))
-        .resolves.toMatchObject({ revision: 2 });
-      await expect(storage.movePromptQueueMessage(KEY, "e1", "m1", "up"))
-        .resolves.toMatchObject({ revision: 2 });
-      await expect(storage.movePromptQueueMessage(KEY, "e1", "m2", "down"))
-        .resolves.toMatchObject({ revision: 2 });
+      await expect(storage.removePromptQueueMessage(KEY, "e1", "missing")).resolves.toMatchObject({
+        removed: null,
+        queue: { revision: 2 },
+      });
+      await expect(
+        storage.movePromptQueueMessage(KEY, "e1", "missing", "down"),
+      ).resolves.toMatchObject({ revision: 2 });
+      await expect(storage.movePromptQueueMessage(KEY, "e1", "m1", "up")).resolves.toMatchObject({
+        revision: 2,
+      });
+      await expect(storage.movePromptQueueMessage(KEY, "e1", "m2", "down")).resolves.toMatchObject({
+        revision: 2,
+      });
       expect(queue.revision).toBe(1);
       await expect(
         storage.movePromptQueueMessage(KEY, "e1", "m1", "sideways" as "up"),
@@ -474,15 +481,17 @@ describe("StorageService prompt queues", () => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", message);
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m2" });
 
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY,
-        "e1",
-        "m1",
-        "compose:e1:tab-1",
-        "environment",
-        "e1",
-        0,
-      )).resolves.toMatchObject({
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "compose:e1:tab-1",
+          "environment",
+          "e1",
+          0,
+        ),
+      ).resolves.toMatchObject({
         removed: message,
         queue: { messages: [{ id: "m2" }], revision: 3 },
         draft: {
@@ -493,8 +502,7 @@ describe("StorageService prompt queues", () => {
           revision: 1,
         },
       });
-      expect(await storage.getComposeDraft("compose:e1:tab-1"))
-        .toMatchObject({ value });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({ value });
     });
   });
 
@@ -505,25 +513,22 @@ describe("StorageService prompt queues", () => {
         text: "replace me",
         attachments: [],
       });
-      await storage.saveComposeDraft(
-        "compose:e1:tab-1",
-        "environment",
-        "e1",
-        { text: "keep me" },
-      );
+      await storage.saveComposeDraft("compose:e1:tab-1", "environment", "e1", { text: "keep me" });
 
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY,
-        "e1",
-        "m1",
-        "compose:e1:tab-1",
-        "environment",
-        "e1",
-      )).rejects.toThrow("already exists");
-      expect(await storage.getPromptQueue(KEY))
-        .toMatchObject({ messages: [{ id: "m1" }] });
-      expect(await storage.getComposeDraft("compose:e1:tab-1"))
-        .toMatchObject({ value: { text: "keep me" } });
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "compose:e1:tab-1",
+          "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("already exists");
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({
+        value: { text: "keep me" },
+      });
     });
   });
 
@@ -547,39 +552,36 @@ describe("StorageService prompt queues", () => {
       const originalSave = mutable.saveSensitiveJson.bind(storage);
       let failPromptQueueWrite = true;
       mutable.saveSensitiveJson = async (filePath, value, options) => {
-        if (
-          failPromptQueueWrite
-          && path.basename(filePath) === "prompt-queues.json"
-        ) {
+        if (failPromptQueueWrite && path.basename(filePath) === "prompt-queues.json") {
           failPromptQueueWrite = false;
           throw new Error("injected prompt queue persistence failure");
         }
         await originalSave(filePath, value, options);
       };
 
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY,
-        "e1",
-        "m1",
-        "compose:e1:tab-1",
-        "environment",
-        "e1",
-      )).rejects.toThrow("injected prompt queue persistence failure");
-      expect(await storage.getPromptQueue(KEY))
-        .toMatchObject({ messages: [message], revision: 1 });
-      expect(await storage.getComposeDraft("compose:e1:tab-1"))
-        .toMatchObject({
-          value: {
-            text: message.text,
-            mentions: [],
-            attachments: message.attachments,
-          },
-          sourcePromptQueue: {
-            queueKey: KEY,
-            messageId: "m1",
-          },
-          revision: 1,
-        });
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "compose:e1:tab-1",
+          "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("injected prompt queue persistence failure");
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [message], revision: 1 });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({
+        value: {
+          text: message.text,
+          mentions: [],
+          attachments: message.attachments,
+        },
+        sourcePromptQueue: {
+          queueKey: KEY,
+          messageId: "m1",
+        },
+        revision: 1,
+      });
       await storage.saveComposeDraft(
         "compose:e1:tab-1",
         "environment",
@@ -591,21 +593,22 @@ describe("StorageService prompt queues", () => {
         },
         1,
       );
-      expect(await storage.getComposeDraft("compose:e1:tab-1"))
-        .toMatchObject({
-          sourcePromptQueue: { queueKey: KEY, messageId: "m1" },
-          revision: 2,
-        });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({
+        sourcePromptQueue: { queueKey: KEY, messageId: "m1" },
+        revision: 2,
+      });
 
       mutable.saveSensitiveJson = originalSave;
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY,
-        "e1",
-        "m1",
-        "compose:e1:tab-1",
-        "environment",
-        "e1",
-      )).resolves.toMatchObject({
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "compose:e1:tab-1",
+          "environment",
+          "e1",
+        ),
+      ).resolves.toMatchObject({
         removed: message,
         queue: { messages: [], revision: 2 },
         draft: {
@@ -613,10 +616,8 @@ describe("StorageService prompt queues", () => {
           revision: 2,
         },
       });
-      expect(await storage.getPromptQueue(KEY))
-        .toMatchObject({ messages: [], revision: 2 });
-      expect(await storage.getComposeDraft("compose:e1:tab-1"))
-        .toMatchObject({ revision: 2 });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [], revision: 2 });
+      expect(await storage.getComposeDraft("compose:e1:tab-1")).toMatchObject({ revision: 2 });
     });
   });
 
@@ -627,63 +628,99 @@ describe("StorageService prompt queues", () => {
         text: "hello",
         attachments: [],
       });
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "missing", "compose:e1:tab", "environment", "e1",
-      )).resolves.toMatchObject({ removed: null, draft: null });
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", "compose:e2:tab", "environment", "e2",
-      )).rejects.toThrow("does not own");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", "compose:other:tab", "project", "other",
-      )).rejects.toThrow("does not own");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", "compose:e1:tab", "environment", "e1", 1,
-      )).rejects.toThrow("revision conflict");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        `claude ${"x".repeat(4 * 1024)}`,
-        "e1",
-        "m1",
-        "compose:e1:tab",
-        "environment",
-        "e1",
-      )).rejects.toThrow("key is too large");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY,
-        "e1",
-        "x".repeat(1025),
-        "compose:e1:tab",
-        "environment",
-        "e1",
-      )).rejects.toThrow("message ID is too large");
-      expect(await storage.getPromptQueue(KEY))
-        .toMatchObject({ messages: [{ id: "m1" }] });
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "missing",
+          "compose:e1:tab",
+          "environment",
+          "e1",
+        ),
+      ).resolves.toMatchObject({ removed: null, draft: null });
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "compose:e2:tab",
+          "environment",
+          "e2",
+        ),
+      ).rejects.toThrow("does not own");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "compose:other:tab",
+          "project",
+          "other",
+        ),
+      ).rejects.toThrow("does not own");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "compose:e1:tab",
+          "environment",
+          "e1",
+          1,
+        ),
+      ).rejects.toThrow("revision conflict");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          `claude ${"x".repeat(4 * 1024)}`,
+          "e1",
+          "m1",
+          "compose:e1:tab",
+          "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("key is too large");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "x".repeat(1025),
+          "compose:e1:tab",
+          "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("message ID is too large");
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
     });
   });
 
   test("refuses to transfer a malformed authoritative queued payload", async () => {
     await withStorage(async (storage) => {
-      await storage.savePromptQueue(KEY, "e1", [{
-        id: "m1",
-        text: 123,
-        attachments: "not-an-array",
-      }]);
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", "compose:e1:tab", "environment", "e1",
-      )).rejects.toThrow("must have text and attachments");
+      await storage.savePromptQueue(KEY, "e1", [
+        {
+          id: "m1",
+          text: 123,
+          attachments: "not-an-array",
+        },
+      ]);
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "compose:e1:tab",
+          "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("must have text and attachments");
       expect(await storage.getComposeDraft("compose:e1:tab")).toBeNull();
-      expect(await storage.getPromptQueue(KEY))
-        .toMatchObject({ messages: [{ id: "m1" }] });
+      expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
     });
   });
 
   test("returns the current queue without mutation when the expected head differs", async () => {
     await withStorage(async (storage) => {
       await storage.savePromptQueue(KEY, "e1", [{ id: "m2" }]);
-      const result = await storage.claimPromptQueueHead(
-        KEY,
-        "e1",
-        "m1",
-      );
+      const result = await storage.claimPromptQueueHead(KEY, "e1", "m1");
       expect(result.claimed).toBeNull();
       expect(result.queue).toMatchObject({ messages: [{ id: "m2" }], revision: 1 });
       expect(await storage.getPromptQueue(KEY)).toMatchObject({ revision: 1 });
@@ -713,8 +750,10 @@ describe("StorageService prompt queues", () => {
       });
 
       await storage.retryPromptQueueDispatch(KEY);
-      expect((await storage.claimPromptQueueHead(KEY, "e1", "m1")).claimed)
-        .toEqual({ id: "m1", text: "invalid" });
+      expect((await storage.claimPromptQueueHead(KEY, "e1", "m1")).claimed).toEqual({
+        id: "m1",
+        text: "invalid",
+      });
     });
   });
 
@@ -742,25 +781,23 @@ describe("StorageService prompt queues", () => {
 
   test("validates claim candidates and environment ownership", async () => {
     await withStorage(async (storage) => {
-      await expect(
-        storage.claimPromptQueueHead(KEY, "missing", "m1"),
-      ).rejects.toThrow("environment not found");
+      await expect(storage.claimPromptQueueHead(KEY, "missing", "m1")).rejects.toThrow(
+        "environment not found",
+      );
 
       await storage.updateEnvironment("e1", {
         deletionRequestedAt: new Date().toISOString(),
       });
-      await expect(
-        storage.claimPromptQueueHead(KEY, "e1", "m1"),
-      ).rejects.toThrow("being deleted");
+      await expect(storage.claimPromptQueueHead(KEY, "e1", "m1")).rejects.toThrow("being deleted");
     });
   });
 
   test("refuses to move a queue between environments", async () => {
     await withStorage(async (storage) => {
       await storage.savePromptQueue(KEY, "e1", [{ id: "m1" }]);
-      await expect(
-        storage.savePromptQueue(KEY, "e2", [{ id: "m1" }]),
-      ).rejects.toThrow("another environment");
+      await expect(storage.savePromptQueue(KEY, "e2", [{ id: "m1" }])).rejects.toThrow(
+        "another environment",
+      );
     });
   });
 
@@ -770,8 +807,10 @@ describe("StorageService prompt queues", () => {
       await storage.savePromptQueue("codex env-e1:t1", "e1", [{ id: "b" }]);
       await storage.savePromptQueue("claude env-e2:t1", "e2", [{ id: "c" }]);
 
-      expect((await storage.listPromptQueues("e1")).map((queue) => queue.queueKey).sort())
-        .toEqual(["claude env-e1:t1", "codex env-e1:t1"]);
+      expect((await storage.listPromptQueues("e1")).map((queue) => queue.queueKey).sort()).toEqual([
+        "claude env-e1:t1",
+        "codex env-e1:t1",
+      ]);
     });
   });
 
@@ -781,8 +820,10 @@ describe("StorageService prompt queues", () => {
       await storage.savePromptQueue("codex env-e1:t1", "e1", [{ id: "b" }]);
       await storage.savePromptQueue("claude env-e2:t1", "e2", [{ id: "c" }]);
 
-      expect((await storage.deletePromptQueuesByEnvironment("e1")).sort())
-        .toEqual(["claude env-e1:t1", "codex env-e1:t1"]);
+      expect((await storage.deletePromptQueuesByEnvironment("e1")).sort()).toEqual([
+        "claude env-e1:t1",
+        "codex env-e1:t1",
+      ]);
       expect(await storage.listPromptQueues("e1")).toEqual([]);
       expect(await storage.listPromptQueues("e2")).toHaveLength(1);
     });
@@ -808,13 +849,18 @@ describe("StorageService prompt queues", () => {
     await withStorage(async (storage) => {
       const circular: Record<string, unknown> = { id: "m1" };
       circular.self = circular;
-      await expect(storage.savePromptQueue(KEY, "e1", [circular]))
-        .rejects.toThrow("JSON serializable");
+      await expect(storage.savePromptQueue(KEY, "e1", [circular])).rejects.toThrow(
+        "JSON serializable",
+      );
 
-      await expect(storage.savePromptQueue(KEY, "e1", [{
-        id: "m1",
-        attachment: "x".repeat(33 * 1024 * 1024),
-      }])).rejects.toThrow("32 MB limit");
+      await expect(
+        storage.savePromptQueue(KEY, "e1", [
+          {
+            id: "m1",
+            attachment: "x".repeat(33 * 1024 * 1024),
+          },
+        ]),
+      ).rejects.toThrow("32 MB limit");
     });
   });
 
@@ -828,12 +874,15 @@ describe("StorageService prompt queues", () => {
       ]) {
         await expect(mutate()).rejects.toThrow("non-blank ID");
       }
-      await expect(storage.enqueuePromptQueueMessage(KEY, "e1", circular))
-        .rejects.toThrow("JSON serializable");
-      await expect(storage.requeuePromptQueueMessage(KEY, "e1", {
-        id: "large",
-        text: "x".repeat(33 * 1024 * 1024),
-      })).rejects.toThrow("32 MB limit");
+      await expect(storage.enqueuePromptQueueMessage(KEY, "e1", circular)).rejects.toThrow(
+        "JSON serializable",
+      );
+      await expect(
+        storage.requeuePromptQueueMessage(KEY, "e1", {
+          id: "large",
+          text: "x".repeat(33 * 1024 * 1024),
+        }),
+      ).rejects.toThrow("32 MB limit");
     });
   });
 
@@ -845,8 +894,7 @@ describe("StorageService prompt queues", () => {
       stored.corrupt = { queueKey: "corrupt", environmentId: "e1", messages: "nope", revision: 1 };
       await fs.writeFile(file, JSON.stringify(stored));
 
-      expect((await storage.listPromptQueues("e1")).map((queue) => queue.queueKey))
-        .toEqual([KEY]);
+      expect((await storage.listPromptQueues("e1")).map((queue) => queue.queueKey)).toEqual([KEY]);
     });
   });
 
@@ -878,8 +926,9 @@ describe("StorageService prompt queues", () => {
           storage.savePromptQueue(KEY, "e1", [{ id: `m${index}` }]),
         ),
       );
-      expect(results.map((result) => result.revision).sort((a, b) => a - b))
-        .toEqual([1, 2, 3, 4, 5, 6]);
+      expect(results.map((result) => result.revision).sort((a, b) => a - b)).toEqual([
+        1, 2, 3, 4, 5, 6,
+      ]);
     });
   });
 
@@ -889,26 +938,25 @@ describe("StorageService prompt queues", () => {
       await second.init();
       const results = await Promise.all(
         Array.from({ length: 6 }, (_, index) =>
-          (index % 2 === 0 ? storage : second)
-            .savePromptQueue(KEY, "e1", [{ id: `m${index}` }]),
+          (index % 2 === 0 ? storage : second).savePromptQueue(KEY, "e1", [{ id: `m${index}` }]),
         ),
       );
-      expect(results.map((result) => result.revision).sort((a, b) => a - b))
-        .toEqual([1, 2, 3, 4, 5, 6]);
+      expect(results.map((result) => result.revision).sort((a, b) => a - b)).toEqual([
+        1, 2, 3, 4, 5, 6,
+      ]);
     });
   });
 
   test("rejects writes for missing or deleting environments", async () => {
     await withStorage(async (storage) => {
-      await expect(
-        storage.savePromptQueue("claude missing:t1", "missing", []),
-      ).rejects.toThrow("environment not found");
+      await expect(storage.savePromptQueue("claude missing:t1", "missing", [])).rejects.toThrow(
+        "environment not found",
+      );
 
       await storage.updateEnvironment("e1", {
         deletionRequestedAt: new Date().toISOString(),
       });
-      await expect(storage.savePromptQueue(KEY, "e1", []))
-        .rejects.toThrow("being deleted");
+      await expect(storage.savePromptQueue(KEY, "e1", [])).rejects.toThrow("being deleted");
     });
   });
 
@@ -934,14 +982,15 @@ describe("StorageService prompt queues", () => {
         () => storage.movePromptQueueMessage(KEY, "e1", "m1", "up"),
         () => storage.acknowledgePromptQueueClaim(KEY, "e1", "token"),
         () => storage.rejectPromptQueueClaim(KEY, "e1", "token"),
-        () => storage.transferPromptQueueMessageToComposeDraft(
-          KEY,
-          "e1",
-          "m1",
-          "compose:e1:tab",
-          "environment",
-          "e1",
-        ),
+        () =>
+          storage.transferPromptQueueMessageToComposeDraft(
+            KEY,
+            "e1",
+            "m1",
+            "compose:e1:tab",
+            "environment",
+            "e1",
+          ),
       ]) {
         await expect(mutate()).rejects.toThrow("being deleted");
       }
@@ -958,14 +1007,15 @@ describe("StorageService prompt queues", () => {
         () => storage.claimPromptQueueHead("claude missing:t", "missing", "m"),
         () => storage.acknowledgePromptQueueClaim("claude missing:t", "missing", "token"),
         () => storage.rejectPromptQueueClaim("claude missing:t", "missing", "token"),
-        () => storage.transferPromptQueueMessageToComposeDraft(
-          "claude missing:t",
-          "missing",
-          "m",
-          "compose:missing:t",
-          "environment",
-          "missing",
-        ),
+        () =>
+          storage.transferPromptQueueMessageToComposeDraft(
+            "claude missing:t",
+            "missing",
+            "m",
+            "compose:missing:t",
+            "environment",
+            "missing",
+          ),
       ]) {
         await expect(mutate()).rejects.toThrow("environment not found");
       }
@@ -978,32 +1028,50 @@ describe("StorageService prompt queues", () => {
       await expect(storage.savePromptQueue("", "e1", [])).rejects.toThrow("must not be blank");
       await expect(storage.savePromptQueue(KEY, "", [])).rejects.toThrow("must not be blank");
       await expect(storage.listPromptQueues("")).rejects.toThrow("must not be blank");
-      await expect(storage.deletePromptQueuesByEnvironment(""))
-        .rejects.toThrow("must not be blank");
-      await expect(storage.claimPromptQueueHead("", "e1", "m1"))
-        .rejects.toThrow("must not be blank");
-      await expect(storage.claimPromptQueueHead(KEY, "", "m1"))
-        .rejects.toThrow("must not be blank");
-      await expect(storage.claimPromptQueueHead(KEY, "e1", ""))
-        .rejects.toThrow("must not be blank");
-      await expect(storage.acknowledgePromptQueueClaim(KEY, "e1", ""))
-        .rejects.toThrow("must not be blank");
-      await expect(storage.rejectPromptQueueClaim(KEY, "e1", ""))
-        .rejects.toThrow("must not be blank");
-      await expect(storage.removePromptQueueMessage(KEY, "e1", ""))
-        .rejects.toThrow("must not be blank");
-      await expect(storage.movePromptQueueMessage(KEY, "e1", "", "up"))
-        .rejects.toThrow("must not be blank");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "", "compose:e1:tab", "environment", "e1",
-      )).rejects.toThrow("must not be blank");
+      await expect(storage.deletePromptQueuesByEnvironment("")).rejects.toThrow(
+        "must not be blank",
+      );
+      await expect(storage.claimPromptQueueHead("", "e1", "m1")).rejects.toThrow(
+        "must not be blank",
+      );
+      await expect(storage.claimPromptQueueHead(KEY, "", "m1")).rejects.toThrow(
+        "must not be blank",
+      );
+      await expect(storage.claimPromptQueueHead(KEY, "e1", "")).rejects.toThrow(
+        "must not be blank",
+      );
+      await expect(storage.acknowledgePromptQueueClaim(KEY, "e1", "")).rejects.toThrow(
+        "must not be blank",
+      );
+      await expect(storage.rejectPromptQueueClaim(KEY, "e1", "")).rejects.toThrow(
+        "must not be blank",
+      );
+      await expect(storage.removePromptQueueMessage(KEY, "e1", "")).rejects.toThrow(
+        "must not be blank",
+      );
+      await expect(storage.movePromptQueueMessage(KEY, "e1", "", "up")).rejects.toThrow(
+        "must not be blank",
+      );
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "",
+          "compose:e1:tab",
+          "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("must not be blank");
     });
   });
 
   test("returns no claim when the authoritative queue does not exist", async () => {
     await withStorage(async (storage) => {
-      await expect(storage.claimPromptQueueHead(KEY, "e1", "m1"))
-        .resolves.toEqual({ claimed: null, claimToken: null, queue: null });
+      await expect(storage.claimPromptQueueHead(KEY, "e1", "m1")).resolves.toEqual({
+        claimed: null,
+        claimToken: null,
+        queue: null,
+      });
       expect(await storage.getPromptQueue(KEY)).toBeNull();
     });
   });
@@ -1078,8 +1146,9 @@ describe("StorageService prompt queues", () => {
 describe("StorageService prompt queue claim leases", () => {
   test("refuses a non-positive or non-finite claim lease", () => {
     for (const promptQueueClaimLeaseMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => new StorageService("/tmp/unused", { promptQueueClaimLeaseMs }))
-        .toThrow("Prompt queue claim lease must be positive");
+      expect(() => new StorageService("/tmp/unused", { promptQueueClaimLeaseMs })).toThrow(
+        "Prompt queue claim lease must be positive",
+      );
     }
   });
 
@@ -1090,10 +1159,12 @@ describe("StorageService prompt queue claim leases", () => {
       await storage.enqueuePromptQueueMessage(KEY, "e1", { id: "m1" });
       await storage.claimPromptQueueHead(KEY, "e1", "m1");
 
-      await expect(storage.rejectPromptQueueClaim(KEY, "e1", "wrong-token"))
-        .rejects.toThrow("does not match");
-      expect((await storage.getPromptQueue(KEY))?.outstandingClaim?.message)
-        .toMatchObject({ id: "m1" });
+      await expect(storage.rejectPromptQueueClaim(KEY, "e1", "wrong-token")).rejects.toThrow(
+        "does not match",
+      );
+      expect((await storage.getPromptQueue(KEY))?.outstandingClaim?.message).toMatchObject({
+        id: "m1",
+      });
     });
   });
 
@@ -1161,23 +1232,41 @@ describe("StorageService prompt queue claim leases", () => {
     // readable while the claim is unusable would let the same prompt be
     // dispatched from the queue and recovered from the claim.
     for (const outstandingClaim of [
-      { token: "  ", message: { id: "m1" }, claimedAt: new Date(0).toISOString(), expiresAt: new Date(1).toISOString() },
-      { token: "t", message: { id: "m1" }, claimedAt: "not-a-date", expiresAt: new Date(1).toISOString() },
-      { token: "t", message: { id: "m1" }, claimedAt: new Date(0).toISOString(), expiresAt: "not-a-date" },
+      {
+        token: "  ",
+        message: { id: "m1" },
+        claimedAt: new Date(0).toISOString(),
+        expiresAt: new Date(1).toISOString(),
+      },
+      {
+        token: "t",
+        message: { id: "m1" },
+        claimedAt: "not-a-date",
+        expiresAt: new Date(1).toISOString(),
+      },
+      {
+        token: "t",
+        message: { id: "m1" },
+        claimedAt: new Date(0).toISOString(),
+        expiresAt: "not-a-date",
+      },
       { token: "t", claimedAt: new Date(0).toISOString(), expiresAt: new Date(1).toISOString() },
     ]) {
       await withStorage(async (storage) => {
         const file = path.join(storage.getDataDir(), "prompt-queues.json");
-        await fs.writeFile(file, JSON.stringify({
-          [KEY]: {
-            queueKey: KEY,
-            environmentId: "e1",
-            messages: [{ id: "m1" }],
-            outstandingClaim,
-            updatedAt: new Date(0).toISOString(),
-            revision: 1,
-          },
-        }));
+        await fs.writeFile(
+          file,
+          JSON.stringify({
+            [KEY]: {
+              queueKey: KEY,
+              environmentId: "e1",
+              messages: [{ id: "m1" }],
+              outstandingClaim,
+              updatedAt: new Date(0).toISOString(),
+              revision: 1,
+            },
+          }),
+        );
 
         expect(await storage.getPromptQueue(KEY)).toBeNull();
       });
@@ -1210,21 +1299,58 @@ describe("StorageService prompt queue transfer validation", () => {
         attachments: [],
       });
 
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", "  ", "environment", "e1",
-      )).rejects.toThrow("Compose draft key must not be blank");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", DRAFT_KEY, "workspace" as "environment", "e1",
-      )).rejects.toThrow("Compose draft owner type is invalid");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", DRAFT_KEY, "environment", "  ",
-      )).rejects.toThrow("Compose draft owner ID must not be blank");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", DRAFT_KEY, "environment", "e1", 1.5,
-      )).rejects.toThrow("Compose draft expected revision must be a non-negative integer");
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", DRAFT_KEY, "environment", "e1", -1,
-      )).rejects.toThrow("Compose draft expected revision must be a non-negative integer");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          "  ",
+          "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("Compose draft key must not be blank");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          DRAFT_KEY,
+          "workspace" as "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("Compose draft owner type is invalid");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          DRAFT_KEY,
+          "environment",
+          "  ",
+        ),
+      ).rejects.toThrow("Compose draft owner ID must not be blank");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          DRAFT_KEY,
+          "environment",
+          "e1",
+          1.5,
+        ),
+      ).rejects.toThrow("Compose draft expected revision must be a non-negative integer");
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          DRAFT_KEY,
+          "environment",
+          "e1",
+          -1,
+        ),
+      ).rejects.toThrow("Compose draft expected revision must be a non-negative integer");
 
       expect(await storage.getPromptQueue(KEY)).toMatchObject({
         messages: [{ id: "m1" }],
@@ -1243,11 +1369,19 @@ describe("StorageService prompt queue transfer validation", () => {
       });
       await storage.saveComposeDraft(DRAFT_KEY, "environment", "e2", { text: "other env draft" });
 
-      await expect(storage.transferPromptQueueMessageToComposeDraft(
-        KEY, "e1", "m1", DRAFT_KEY, "environment", "e1",
-      )).rejects.toThrow("Compose draft belongs to another owner");
-      expect(await storage.getComposeDraft(DRAFT_KEY))
-        .toMatchObject({ value: { text: "other env draft" } });
+      await expect(
+        storage.transferPromptQueueMessageToComposeDraft(
+          KEY,
+          "e1",
+          "m1",
+          DRAFT_KEY,
+          "environment",
+          "e1",
+        ),
+      ).rejects.toThrow("Compose draft belongs to another owner");
+      expect(await storage.getComposeDraft(DRAFT_KEY)).toMatchObject({
+        value: { text: "other env draft" },
+      });
       expect(await storage.getPromptQueue(KEY)).toMatchObject({ messages: [{ id: "m1" }] });
     });
   });
@@ -1262,17 +1396,20 @@ describe("StorageService prompt queue transfer validation", () => {
     ]) {
       await withStorage(async (storage) => {
         const file = path.join(storage.getDataDir(), "compose-drafts.json");
-        await fs.writeFile(file, JSON.stringify({
-          [DRAFT_KEY]: {
-            draftKey: DRAFT_KEY,
-            ownerType: "environment",
-            ownerId: "e1",
-            value: { text: "hi" },
-            sourcePromptQueue,
-            updatedAt: new Date(0).toISOString(),
-            revision: 1,
-          },
-        }));
+        await fs.writeFile(
+          file,
+          JSON.stringify({
+            [DRAFT_KEY]: {
+              draftKey: DRAFT_KEY,
+              ownerType: "environment",
+              ownerId: "e1",
+              value: { text: "hi" },
+              sourcePromptQueue,
+              updatedAt: new Date(0).toISOString(),
+              revision: 1,
+            },
+          }),
+        );
 
         expect(await storage.getComposeDraft(DRAFT_KEY)).toBeNull();
       });

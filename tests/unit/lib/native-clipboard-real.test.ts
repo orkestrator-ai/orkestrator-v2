@@ -13,7 +13,9 @@ function pngBlob(width: number, height: number): Blob {
 }
 
 async function loadNativeClipboard() {
-  return import("../../../apps/web/src/lib/native/clipboard.ts?real") as Promise<typeof import("../../../apps/web/src/lib/native/clipboard")>;
+  return import("../../../apps/web/src/lib/native/clipboard.ts?real") as Promise<
+    typeof import("../../../apps/web/src/lib/native/clipboard")
+  >;
 }
 
 afterEach(() => {
@@ -58,7 +60,8 @@ describe("native clipboard wrapper", () => {
         height: 1,
       })),
     };
-    HTMLCanvasElement.prototype.getContext = (() => context) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = (() =>
+      context) as unknown as typeof HTMLCanvasElement.prototype.getContext;
 
     try {
       const blob = pngBlob(2, 1);
@@ -121,13 +124,7 @@ describe("native clipboard wrapper", () => {
         resizeHeight: 2000,
         resizeQuality: "high",
       });
-      expect(drawImage).toHaveBeenCalledWith(
-        bitmap,
-        0,
-        0,
-        222,
-        2000,
-      );
+      expect(drawImage).toHaveBeenCalledWith(bitmap, 0, 0, 222, 2000);
       expect(getImageData).toHaveBeenCalledWith(0, 0, 222, 2000);
       expect(bitmap.close).toHaveBeenCalledTimes(1);
     } finally {
@@ -185,7 +182,9 @@ describe("native clipboard wrapper", () => {
     Object.defineProperty(globalThis, "createImageBitmap", {
       configurable: true,
       writable: true,
-      value: mock(async () => { throw new Error("bitmap decode failed"); }),
+      value: mock(async () => {
+        throw new Error("bitmap decode failed");
+      }),
     });
     class TestImage {
       naturalWidth = 2;
@@ -294,10 +293,13 @@ describe("native clipboard wrapper", () => {
 
     try {
       await expect((await readImage()).rgba()).resolves.toBeInstanceOf(Uint8Array);
-      expect(createBitmap).toHaveBeenCalledWith(blob, expect.objectContaining({
-        resizeWidth: 2,
-        resizeHeight: 1,
-      }));
+      expect(createBitmap).toHaveBeenCalledWith(
+        blob,
+        expect.objectContaining({
+          resizeWidth: 2,
+          resizeHeight: 1,
+        }),
+      );
       expect(bitmap.close).toHaveBeenCalledTimes(1);
     } finally {
       HTMLCanvasElement.prototype.getContext = originalGetContext;
@@ -306,11 +308,14 @@ describe("native clipboard wrapper", () => {
 
   test("uses native image dimensions and reports an empty native clipboard", async () => {
     const { readImage } = await loadNativeClipboard();
-    const nativeReadImage = mock(async () => ({
-      width: 4,
-      height: 3,
-      dataUrl: "data:image/png;base64,AA==",
-    }) as { width: number; height: number; dataUrl: string } | null);
+    const nativeReadImage = mock(
+      async () =>
+        ({
+          width: 4,
+          height: 3,
+          dataUrl: "data:image/png;base64,AA==",
+        }) as { width: number; height: number; dataUrl: string } | null,
+    );
     window.orkestrator = { clipboard: { readImage: nativeReadImage } } as never;
 
     await expect((await readImage()).size()).resolves.toEqual({ width: 4, height: 3 });
@@ -320,30 +325,42 @@ describe("native clipboard wrapper", () => {
 
   test("rejects invalid native metadata and malformed image payloads", async () => {
     const { readImage } = await loadNativeClipboard();
-    const nativeReadImage = mock(async () => ({
-      width: 0,
-      height: 1,
-      dataUrl: "data:image/png;base64,AA==",
-    }) as never);
+    const nativeReadImage = mock(
+      async () =>
+        ({
+          width: 0,
+          height: 1,
+          dataUrl: "data:image/png;base64,AA==",
+        }) as never,
+    );
     window.orkestrator = { clipboard: { readImage: nativeReadImage } } as never;
 
     await expect(readImage()).rejects.toMatchObject({ code: "invalid" });
-    nativeReadImage.mockImplementation(async () => ({
-      width: 40_000,
-      height: 1,
-      dataUrl: "data:image/png;base64,AA==",
-    }) as never);
+    nativeReadImage.mockImplementation(
+      async () =>
+        ({
+          width: 40_000,
+          height: 1,
+          dataUrl: "data:image/png;base64,AA==",
+        }) as never,
+    );
     await expect(readImage()).rejects.toMatchObject({ code: "too-large" });
-    nativeReadImage.mockImplementation(async () => ({
-      width: 2,
-      height: 1,
-    }) as never);
+    nativeReadImage.mockImplementation(
+      async () =>
+        ({
+          width: 2,
+          height: 1,
+        }) as never,
+    );
     await expect(readImage()).rejects.toThrow("payload is invalid");
-    nativeReadImage.mockImplementation(async () => ({
-      width: 3,
-      height: 1,
-      blob: pngBlob(2, 1),
-    }) as never);
+    nativeReadImage.mockImplementation(
+      async () =>
+        ({
+          width: 3,
+          height: 1,
+          blob: pngBlob(2, 1),
+        }) as never,
+    );
     await expect(readImage()).rejects.toThrow("do not match");
   });
 
@@ -363,7 +380,9 @@ describe("native clipboard wrapper", () => {
         naturalWidth = 2;
         naturalHeight = 1;
         src = "";
-        async decode() { throw new Error("decode failed"); }
+        async decode() {
+          throw new Error("decode failed");
+        }
       }
       globalThis.Image = DecodeFailureImage as unknown as typeof Image;
       await expect((await readImage()).rgba()).rejects.toThrow("decode failed");
@@ -384,7 +403,8 @@ describe("native clipboard wrapper", () => {
         async decode() {}
       }
       globalThis.Image = MatchingImage as unknown as typeof Image;
-      HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = (() =>
+        null) as typeof HTMLCanvasElement.prototype.getContext;
       await expect((await readImage()).rgba()).rejects.toThrow("Canvas 2D context");
     } finally {
       globalThis.Image = originalImage;
@@ -405,12 +425,11 @@ describe("native clipboard wrapper", () => {
       writable: true,
       value: mock(async () => bitmap),
     });
-    HTMLCanvasElement.prototype.getContext = (() => null) as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = (() =>
+      null) as typeof HTMLCanvasElement.prototype.getContext;
 
     try {
-      await expect((await readImage(pngBlob(2, 1))).rgba()).rejects.toThrow(
-        "Canvas 2D context",
-      );
+      await expect((await readImage(pngBlob(2, 1))).rgba()).rejects.toThrow("Canvas 2D context");
       expect(bitmap.close).toHaveBeenCalledTimes(1);
     } finally {
       HTMLCanvasElement.prototype.getContext = originalGetContext;
@@ -443,8 +462,12 @@ describe("native clipboard wrapper", () => {
     const { readText, writeText } = await loadNativeClipboard();
     window.orkestrator = {
       clipboard: {
-        readText: mock(async () => { throw new Error("native read failed"); }),
-        writeText: mock(async () => { throw new Error("native write failed"); }),
+        readText: mock(async () => {
+          throw new Error("native read failed");
+        }),
+        writeText: mock(async () => {
+          throw new Error("native write failed");
+        }),
       },
     } as never;
     await expect(readText()).rejects.toThrow("native read failed");
@@ -455,8 +478,12 @@ describe("native clipboard wrapper", () => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: {
-        readText: mock(async () => { throw new Error("browser read failed"); }),
-        writeText: mock(async () => { throw new Error("browser write failed"); }),
+        readText: mock(async () => {
+          throw new Error("browser read failed");
+        }),
+        writeText: mock(async () => {
+          throw new Error("browser write failed");
+        }),
       },
     });
     try {

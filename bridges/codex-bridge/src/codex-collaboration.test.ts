@@ -25,18 +25,20 @@ function makeAgent(
 
 describe("Codex collaboration payload normalization", () => {
   test("recognizes a complete valid collaboration item", () => {
-    expect(isCodexCollabToolCallItem({
-      id: "spawn-1",
-      type: "collab_tool_call",
-      tool: "spawn_agent",
-      sender_thread_id: "parent-1",
-      receiver_thread_ids: ["agent-1"],
-      prompt: "Review the bridge",
-      agents_states: {
-        "agent-1": { status: "running", message: null },
-      },
-      status: "in_progress",
-    })).toBe(true);
+    expect(
+      isCodexCollabToolCallItem({
+        id: "spawn-1",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        sender_thread_id: "parent-1",
+        receiver_thread_ids: ["agent-1"],
+        prompt: "Review the bridge",
+        agents_states: {
+          "agent-1": { status: "running", message: null },
+        },
+        status: "in_progress",
+      }),
+    ).toBe(true);
   });
 
   test("rejects invalid collaboration field types and statuses", () => {
@@ -53,10 +55,12 @@ describe("Codex collaboration payload normalization", () => {
       { agents_states: { "agent-1": { status: "unknown" } } },
       { status: "unknown" },
     ]) {
-      expect(isCodexCollabToolCallItem({
-        ...valid,
-        ...invalidFields,
-      })).toBe(false);
+      expect(
+        isCodexCollabToolCallItem({
+          ...valid,
+          ...invalidFields,
+        }),
+      ).toBe(false);
     }
   });
 
@@ -74,18 +78,22 @@ describe("Codex collaboration payload normalization", () => {
     }
 
     expect(isCodexCollabToolCallItem(null)).toBe(false);
-    expect(isCodexCollabToolCallItem({
-      id: "spawn",
-      type: "collab_tool_call",
-      tool: "spawn_agent",
-      agents_states: [],
-    })).toBe(false);
-    expect(isCodexCollabToolCallItem({
-      id: "spawn",
-      type: "collab_tool_call",
-      tool: "spawn_agent",
-      agents_states: { child: null },
-    })).toBe(false);
+    expect(
+      isCodexCollabToolCallItem({
+        id: "spawn",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        agents_states: [],
+      }),
+    ).toBe(false);
+    expect(
+      isCodexCollabToolCallItem({
+        id: "spawn",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        agents_states: { child: null },
+      }),
+    ).toBe(false);
   });
 
   test("ignores malformed subagent activity items", () => {
@@ -121,102 +129,115 @@ describe("Codex collaboration payload normalization", () => {
       receiver_thread_ids: ["agent-1"],
       agents_states: { "agent-1": {} },
     });
-    expect(isCodexCollabToolCallItem({
-      id: "spawn-1",
-      type: "collab_tool_call",
-      tool: "spawn_agent",
-      agents_states: { "agent-1": { message: 42 } },
-    })).toBe(false);
+    expect(
+      isCodexCollabToolCallItem({
+        id: "spawn-1",
+        type: "collab_tool_call",
+        tool: "spawn_agent",
+        agents_states: { "agent-1": { message: 42 } },
+      }),
+    ).toBe(false);
     expect(() => applyCodexCollabStateToSubagentParts([], [normalized])).not.toThrow();
   });
 
   test("returns spawned receiver thread IDs in invocation order", () => {
-    expect(getCodexSpawnedAgentIdsInOrder([
-      {
-        id: "spawn-1",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        receiver_thread_ids: ["agent-1"],
-      },
-      {
-        id: "wait-1",
-        type: "collab_tool_call",
-        tool: "wait",
-        receiver_thread_ids: ["agent-1"],
-      },
-      {
-        id: "spawn-2",
-        type: "collab_tool_call",
-        tool: "spawn",
-        agents_states: { "agent-2": { status: "running" } },
-      },
-    ])).toEqual(["agent-1", "agent-2"]);
+    expect(
+      getCodexSpawnedAgentIdsInOrder([
+        {
+          id: "spawn-1",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          receiver_thread_ids: ["agent-1"],
+        },
+        {
+          id: "wait-1",
+          type: "collab_tool_call",
+          tool: "wait",
+          receiver_thread_ids: ["agent-1"],
+        },
+        {
+          id: "spawn-2",
+          type: "collab_tool_call",
+          tool: "spawn",
+          agents_states: { "agent-2": { status: "running" } },
+        },
+      ]),
+    ).toEqual(["agent-1", "agent-2"]);
   });
 
   test("returns no spawned IDs for empty or malformed input", () => {
     expect(getCodexSpawnedAgentIdsInOrder([])).toEqual([]);
-    expect(getCodexSpawnedAgentIdsInOrder([
-      null,
-      [],
-      { type: "collab_tool_call", id: "", tool: "spawn_agent" },
-      { type: "agent_message", id: "spawn-1", tool: "spawn_agent" },
-      { type: "collab_tool_call", id: "wait-1", tool: "wait" },
-    ])).toEqual([]);
+    expect(
+      getCodexSpawnedAgentIdsInOrder([
+        null,
+        [],
+        { type: "collab_tool_call", id: "", tool: "spawn_agent" },
+        { type: "agent_message", id: "spawn-1", tool: "spawn_agent" },
+        { type: "collab_tool_call", id: "wait-1", tool: "wait" },
+      ]),
+    ).toEqual([]);
   });
 
   test("preserves spawn positions when receiver identity is absent or ambiguous", () => {
-    expect(getCodexSpawnedAgentIdsInOrder([
-      {
-        id: "spawn-without-receiver",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        status: "failed",
-      },
-      {
-        id: "spawn-with-overlapping-state",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        receiver_thread_ids: ["agent-1"],
-        agents_states: {
-          "agent-1": { status: "running" },
+    expect(
+      getCodexSpawnedAgentIdsInOrder([
+        {
+          id: "spawn-without-receiver",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          status: "failed",
         },
-      },
-      {
-        id: "spawn-with-multiple-receivers",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        receiver_thread_ids: ["agent-2", "agent-3"],
-        agents_states: {
-          "agent-2": { status: "running" },
-          "agent-3": { status: "pending_init" },
+        {
+          id: "spawn-with-overlapping-state",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: {
+            "agent-1": { status: "running" },
+          },
         },
-      },
-    ])).toEqual([undefined, "agent-1", undefined]);
+        {
+          id: "spawn-with-multiple-receivers",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          receiver_thread_ids: ["agent-2", "agent-3"],
+          agents_states: {
+            "agent-2": { status: "running" },
+            "agent-3": { status: "pending_init" },
+          },
+        },
+      ]),
+    ).toEqual([undefined, "agent-1", undefined]);
   });
 });
 
 describe("Codex collaboration state", () => {
   test("creates all identified running agents before transcripts are available", () => {
-    const parts = applyCodexCollabStateToSubagentParts([], [
-      {
-        id: "spawn-1",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        prompt: "Review the bridge event handling",
-        receiver_thread_ids: ["thread-agent-1", "thread-agent-2"],
-        agents_states: {
-          "thread-agent-1": { status: "running" },
-          "thread-agent-2": { status: "pending_init" },
+    const parts = applyCodexCollabStateToSubagentParts(
+      [],
+      [
+        {
+          id: "spawn-1",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          prompt: "Review the bridge event handling",
+          receiver_thread_ids: ["thread-agent-1", "thread-agent-2"],
+          agents_states: {
+            "thread-agent-1": { status: "running" },
+            "thread-agent-2": { status: "pending_init" },
+          },
+          status: "completed",
         },
-        status: "completed",
-      },
-    ]);
+      ],
+    );
 
-    expect(parts.map((part) => ({
-      id: part.subagentId,
-      prompt: part.subagentPrompt,
-      state: part.toolState,
-    }))).toEqual([
+    expect(
+      parts.map((part) => ({
+        id: part.subagentId,
+        prompt: part.subagentPrompt,
+        state: part.toolState,
+      })),
+    ).toEqual([
       {
         id: "thread-agent-1",
         prompt: "Review the bridge event handling",
@@ -244,14 +265,16 @@ describe("Codex collaboration state", () => {
     for (const [status, expected] of cases) {
       const [part] = applyCodexCollabStateToSubagentParts(
         [makeAgent("agent-1")],
-        [{
-          id: `wait-${status}`,
-          type: "collab_tool_call",
-          tool: "wait",
-          receiver_thread_ids: ["agent-1"],
-          agents_states: { "agent-1": { status } },
-          status: "completed",
-        }],
+        [
+          {
+            id: `wait-${status}`,
+            type: "collab_tool_call",
+            tool: "wait",
+            receiver_thread_ids: ["agent-1"],
+            agents_states: { "agent-1": { status } },
+            status: "completed",
+          },
+        ],
       );
       expect(part?.toolState).toBe(expected);
     }
@@ -277,10 +300,7 @@ describe("Codex collaboration state", () => {
       },
     ];
 
-    const [active] = applyCodexCollabStateToSubagentParts(
-      [makeAgent("agent-1")],
-      items,
-    );
+    const [active] = applyCodexCollabStateToSubagentParts([makeAgent("agent-1")], items);
     expect(active?.toolState).toBe("pending");
 
     // `send_message` emits the same interacted item but does not wake a
@@ -313,33 +333,42 @@ describe("Codex collaboration state", () => {
   test("uses activity as a hint without overriding terminal transcripts", () => {
     const [started] = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1", { toolState: "success" })],
-      [{
-        id: "started",
-        type: "subagent_activity",
-        activity: "started",
-        agent_thread_id: "agent-1",
-      }],
+      [
+        {
+          id: "started",
+          type: "subagent_activity",
+          activity: "started",
+          agent_thread_id: "agent-1",
+        },
+      ],
     );
     expect(started?.toolState).toBe("success");
 
     const [failed] = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1", { toolState: "failure" })],
-      [{
-        id: "started",
-        type: "subagent_activity",
-        activity: "started",
-        agent_thread_id: "agent-1",
-      }],
+      [
+        {
+          id: "started",
+          type: "subagent_activity",
+          activity: "started",
+          agent_thread_id: "agent-1",
+        },
+      ],
     );
     expect(failed?.toolState).toBe("failure");
 
-    const [orphan] = applyCodexCollabStateToSubagentParts([], [{
-      id: "started",
-      type: "subagent_activity",
-      activity: "started",
-      agent_thread_id: "agent-1",
-      agent_path: "/root/fixture_review",
-    }]);
+    const [orphan] = applyCodexCollabStateToSubagentParts(
+      [],
+      [
+        {
+          id: "started",
+          type: "subagent_activity",
+          activity: "started",
+          agent_thread_id: "agent-1",
+          agent_path: "/root/fixture_review",
+        },
+      ],
+    );
     expect(orphan).toMatchObject({
       content: "fixture_review",
       subagentId: "agent-1",
@@ -349,23 +378,27 @@ describe("Codex collaboration state", () => {
 
     const [interrupted] = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1", { toolState: "success" })],
-      [{
-        id: "interrupted",
-        type: "subagent_activity",
-        activity: "interrupted",
-        agent_thread_id: "agent-1",
-      }],
+      [
+        {
+          id: "interrupted",
+          type: "subagent_activity",
+          activity: "interrupted",
+          agent_thread_id: "agent-1",
+        },
+      ],
     );
     expect(interrupted?.toolState).toBe("success");
 
     const [interruptedFailure] = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1", { toolState: "failure" })],
-      [{
-        id: "interrupted",
-        type: "subagent_activity",
-        activity: "interrupted",
-        agent_thread_id: "agent-1",
-      }],
+      [
+        {
+          id: "interrupted",
+          type: "subagent_activity",
+          activity: "interrupted",
+          agent_thread_id: "agent-1",
+        },
+      ],
     );
     expect(interruptedFailure?.toolState).toBe("failure");
   });
@@ -406,13 +439,18 @@ describe("Codex collaboration state", () => {
   });
 
   test("reports an interrupted child with no spawn row in this turn", () => {
-    const [part] = applyCodexCollabStateToSubagentParts([], [{
-      id: "interrupt-1",
-      type: "subagent_activity",
-      activity: "interrupted",
-      agent_thread_id: "agent-1",
-      agent_path: "/root/acp_review",
-    }]);
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [],
+      [
+        {
+          id: "interrupt-1",
+          type: "subagent_activity",
+          activity: "interrupted",
+          agent_thread_id: "agent-1",
+          agent_path: "/root/acp_review",
+        },
+      ],
+    );
 
     expect(part).toMatchObject({
       content: "acp_review",
@@ -435,12 +473,15 @@ describe("Codex collaboration state", () => {
     for (const activity of ["started", "interacted"] as const) {
       const [reopened] = applyCodexCollabStateToSubagentParts(
         [makeAgent("agent-1")],
-        [interrupt, {
-          id: "resume-1",
-          type: "subagent_activity",
-          activity,
-          agent_thread_id: "agent-1",
-        }],
+        [
+          interrupt,
+          {
+            id: "resume-1",
+            type: "subagent_activity",
+            activity,
+            agent_thread_id: "agent-1",
+          },
+        ],
       );
       expect(reopened?.toolState).toBe("pending");
     }
@@ -448,13 +489,16 @@ describe("Codex collaboration state", () => {
     // So does a newer authoritative snapshot.
     const [running] = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1")],
-      [interrupt, {
-        id: "followup-1",
-        type: "collab_tool_call",
-        tool: "followup_task",
-        receiver_thread_ids: ["agent-1"],
-        agents_states: { "agent-1": { status: "running" } },
-      }],
+      [
+        interrupt,
+        {
+          id: "followup-1",
+          type: "collab_tool_call",
+          tool: "followup_task",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: { "agent-1": { status: "running" } },
+        },
+      ],
     );
     expect(running?.toolState).toBe("pending");
   });
@@ -501,9 +545,7 @@ describe("Codex collaboration state", () => {
       [makeAgent("agent-1")],
       [interrupt, silentItems[1]],
     );
-    expect(withMessage?.subagentActions).toEqual([
-      { type: "text", content: "Partial findings" },
-    ]);
+    expect(withMessage?.subagentActions).toEqual([{ type: "text", content: "Partial findings" }]);
   });
 
   test("keeps an interrupt from repainting a child that already finished", () => {
@@ -570,23 +612,26 @@ describe("Codex collaboration state", () => {
   });
 
   test("preserves an earlier-turn final message when an interaction invalidates its status", () => {
-    const [part] = applyCodexCollabStateToSubagentParts([], [
-      {
-        id: "wait-complete",
-        type: "collab_tool_call",
-        tool: "wait",
-        receiver_thread_ids: ["agent-1"],
-        agents_states: {
-          "agent-1": { status: "completed", message: "First task done" },
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [],
+      [
+        {
+          id: "wait-complete",
+          type: "collab_tool_call",
+          tool: "wait",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: {
+            "agent-1": { status: "completed", message: "First task done" },
+          },
         },
-      },
-      {
-        id: "interaction",
-        type: "subagent_activity",
-        activity: "interacted",
-        agent_thread_id: "agent-1",
-      },
-    ]);
+        {
+          id: "interaction",
+          type: "subagent_activity",
+          activity: "interacted",
+          agent_thread_id: "agent-1",
+        },
+      ],
+    );
 
     expect(part).toMatchObject({
       subagentId: "agent-1",
@@ -596,22 +641,25 @@ describe("Codex collaboration state", () => {
   });
 
   test("preserves the original spawn prompt over follow-up messages", () => {
-    const [part] = applyCodexCollabStateToSubagentParts([], [
-      {
-        id: "spawn-1",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        prompt: "Original task",
-        receiver_thread_ids: ["agent-1"],
-      },
-      {
-        id: "send-1",
-        type: "collab_tool_call",
-        tool: "send_message",
-        prompt: "Follow-up detail",
-        receiver_thread_ids: ["agent-1"],
-      },
-    ]);
+    const [part] = applyCodexCollabStateToSubagentParts(
+      [],
+      [
+        {
+          id: "spawn-1",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          prompt: "Original task",
+          receiver_thread_ids: ["agent-1"],
+        },
+        {
+          id: "send-1",
+          type: "collab_tool_call",
+          tool: "send_message",
+          prompt: "Follow-up detail",
+          receiver_thread_ids: ["agent-1"],
+        },
+      ],
+    );
 
     expect(part?.subagentPrompt).toBe("Original task");
   });
@@ -619,13 +667,15 @@ describe("Codex collaboration state", () => {
   test("marks a failed spawn without a receiver as failed", () => {
     const [part] = applyCodexCollabStateToSubagentParts(
       [makeAgent(undefined, { subagentPrompt: "Transcript task" })],
-      [{
-        id: "spawn-failed",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        prompt: "Runtime task",
-        status: "failed",
-      }],
+      [
+        {
+          id: "spawn-failed",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          prompt: "Runtime task",
+          status: "failed",
+        },
+      ],
     );
 
     expect(part?.toolState).toBe("failure");
@@ -635,15 +685,17 @@ describe("Codex collaboration state", () => {
   test("marks a failed spawn with a receiver as failed", () => {
     const [part] = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1")],
-      [{
-        id: "spawn-failed",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        prompt: "Runtime task",
-        receiver_thread_ids: ["agent-1"],
-        agents_states: { "agent-1": { status: "completed" } },
-        status: "failed",
-      }],
+      [
+        {
+          id: "spawn-failed",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          prompt: "Runtime task",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: { "agent-1": { status: "completed" } },
+          status: "failed",
+        },
+      ],
     );
 
     expect(part).toMatchObject({
@@ -659,15 +711,17 @@ describe("Codex collaboration state", () => {
     });
     const parts = applyCodexCollabStateToSubagentParts(
       [makeAgent("agent-1"), duplicate],
-      [{
-        id: "wait-1",
-        type: "collab_tool_call",
-        tool: "wait",
-        receiver_thread_ids: ["agent-1"],
-        agents_states: {
-          "agent-1": { status: "completed", message: "Done" },
+      [
+        {
+          id: "wait-1",
+          type: "collab_tool_call",
+          tool: "wait",
+          receiver_thread_ids: ["agent-1"],
+          agents_states: {
+            "agent-1": { status: "completed", message: "Done" },
+          },
         },
-      }],
+      ],
     );
 
     expect(parts).toHaveLength(2);
@@ -690,13 +744,15 @@ describe("Codex collaboration state", () => {
     });
     const [part] = applyCodexCollabStateToSubagentParts(
       [source],
-      [{
-        id: "spawn-failed",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        prompt: "Unmatched task",
-        status: "failed",
-      }],
+      [
+        {
+          id: "spawn-failed",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          prompt: "Unmatched task",
+          status: "failed",
+        },
+      ],
     );
 
     expect(part).toEqual(source);
@@ -705,13 +761,15 @@ describe("Codex collaboration state", () => {
   test("falls back to an unclaimed anonymous row when the preferred index is occupied", () => {
     const parts = applyCodexCollabStateToSubagentParts(
       [makeAgent("existing"), makeAgent(undefined)],
-      [{
-        id: "spawn",
-        type: "collab_tool_call",
-        tool: "spawn_agent",
-        prompt: "New task",
-        receiver_thread_ids: ["new-agent"],
-      }],
+      [
+        {
+          id: "spawn",
+          type: "collab_tool_call",
+          tool: "spawn_agent",
+          prompt: "New task",
+          receiver_thread_ids: ["new-agent"],
+        },
+      ],
     );
 
     expect(parts[0]?.subagentId).toBe("existing");
@@ -751,11 +809,7 @@ describe("Codex collaboration state", () => {
       ],
     );
 
-    expect(parts.map((part) => part.subagentId)).toEqual([
-      "agent-1",
-      "agent-2",
-      "agent-old",
-    ]);
+    expect(parts.map((part) => part.subagentId)).toEqual(["agent-1", "agent-2", "agent-old"]);
     expect(parts[0]?.subagentPrompt).toBe("First task");
     expect(parts[1]?.subagentPrompt).toBe("Second task");
     expect(parts[2]).toMatchObject({
@@ -793,9 +847,7 @@ describe("Codex collaboration state", () => {
     );
 
     expect(parts[0]?.toolState).toBe("success");
-    expect(parts[0]?.subagentActions).toEqual([
-      { type: "text", content: "Review complete" },
-    ]);
+    expect(parts[0]?.subagentActions).toEqual([{ type: "text", content: "Review complete" }]);
     expect(parts[0]).not.toBe(source);
     expect(source.toolState).toBe("pending");
   });
@@ -887,10 +939,7 @@ describe("Codex subagent timeline reconciliation", () => {
       fingerprints,
     );
 
-    expect(timeline).toEqual([
-      "subagent:id:agent-1",
-      "subagent:id:agent-1:1",
-    ]);
+    expect(timeline).toEqual(["subagent:id:agent-1", "subagent:id:agent-1:1"]);
     expect(currentParts.get(timeline[0]!)?.subagentId).toBe("agent-1");
     expect(currentParts.get(timeline[1]!)?.subagentId).toBe("agent-1");
   });
@@ -913,12 +962,9 @@ describe("Codex subagent timeline reconciliation", () => {
     const fingerprints = new Map<string, string>();
     const id = "agent:💡\uD800";
 
-    expect(() => reconcileCodexSubagentTimeline(
-      [makeAgent(id)],
-      timeline,
-      currentParts,
-      fingerprints,
-    )).not.toThrow();
+    expect(() =>
+      reconcileCodexSubagentTimeline([makeAgent(id)], timeline, currentParts, fingerprints),
+    ).not.toThrow();
     expect(timeline).toHaveLength(1);
     expect(currentParts.get(timeline[0]!)?.subagentId).toBe(id);
   });

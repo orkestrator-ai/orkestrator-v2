@@ -12,14 +12,16 @@ describe("buildAttachmentTagBlock", () => {
   });
 
   test("emits one tag per attachment with type, path and filename", () => {
-    expect(buildAttachmentTagBlock([
-      { path: "/workspace/.orkestrator/initial-prompt/shot.png", filename: "shot.png" },
-      { path: "/workspace/b.jpg" },
-    ])).toBe(
-      "<attached-files source=\"orkestrator\">\n"
-      + '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png" filename="shot.png" />\n'
-      + '<attachment type="image" path="/workspace/b.jpg" filename="" />\n'
-      + "</attached-files>",
+    expect(
+      buildAttachmentTagBlock([
+        { path: "/workspace/.orkestrator/initial-prompt/shot.png", filename: "shot.png" },
+        { path: "/workspace/b.jpg" },
+      ]),
+    ).toBe(
+      '<attached-files source="orkestrator">\n' +
+        '<attachment type="image" path="/workspace/.orkestrator/initial-prompt/shot.png" filename="shot.png" />\n' +
+        '<attachment type="image" path="/workspace/b.jpg" filename="" />\n' +
+        "</attached-files>",
     );
   });
 
@@ -31,8 +33,7 @@ describe("buildAttachmentTagBlock", () => {
   });
 
   test("drops a path long enough to bloat the prompt", () => {
-    expect(buildAttachmentTagBlock([{ path: `/${"a".repeat(2000)}.png` }]))
-      .toBeUndefined();
+    expect(buildAttachmentTagBlock([{ path: `/${"a".repeat(2000)}.png` }])).toBeUndefined();
   });
 });
 
@@ -41,12 +42,13 @@ describe("appendAttachmentTags", () => {
     const text = appendAttachmentTags("Look at this", [
       { path: "/workspace/a.png", filename: "a.png" },
     ]);
-    expect(text).toStartWith("Look at this\n\n<attached-files source=\"orkestrator\">");
+    expect(text).toStartWith('Look at this\n\n<attached-files source="orkestrator">');
   });
 
   test("is the whole text for an attachment-only prompt", () => {
-    expect(appendAttachmentTags("", [{ path: "/workspace/a.png" }]))
-      .toStartWith("<attached-files source=\"orkestrator\">");
+    expect(appendAttachmentTags("", [{ path: "/workspace/a.png" }])).toStartWith(
+      '<attached-files source="orkestrator">',
+    );
   });
 
   test("leaves a prompt without attachments untouched", () => {
@@ -83,9 +85,7 @@ describe("extractAttachmentTags", () => {
 
   test("decodes escaped attribute values", () => {
     const { parts } = extractAttachmentTags(
-      appendAttachmentTags("x", [
-        { path: "/workspace/layout&notes<1>.png", filename: 'a"b.png' },
-      ]),
+      appendAttachmentTags("x", [{ path: "/workspace/layout&notes<1>.png", filename: 'a"b.png' }]),
     );
     expect(parts[0]?.content).toBe("/workspace/layout&notes<1>.png");
     expect(parts[0]?.filename).toBe('a"b.png');
@@ -103,8 +103,7 @@ describe("extractAttachmentTags", () => {
   });
 
   test("leaves text without a block untouched and allocates nothing", () => {
-    expect(extractAttachmentTags("plain prompt"))
-      .toEqual({ text: "plain prompt", parts: [] });
+    expect(extractAttachmentTags("plain prompt")).toEqual({ text: "plain prompt", parts: [] });
   });
 
   test("keeps an empty text when the prompt was attachments only", () => {
@@ -126,24 +125,25 @@ describe("extractAttachmentTags", () => {
     // Rehydration reads the user's own text. Someone asking Codex about this
     // markup — plausible for anyone working on Orkestrator — must get their
     // message back, not an empty bubble and rows for files nobody attached.
-    const typed = 'How do I read <attached-files>\n'
-      + '<attachment type="image" path="/etc/hosts.png" filename="hosts.png" />\n'
-      + "</attached-files> blocks?";
+    const typed =
+      "How do I read <attached-files>\n" +
+      '<attachment type="image" path="/etc/hosts.png" filename="hosts.png" />\n' +
+      "</attached-files> blocks?";
     expect(extractAttachmentTags(typed)).toEqual({ text: typed, parts: [] });
   });
 
   test("ignores a block whose source attribute is not this bridge", () => {
-    const foreign = '<attached-files source="somewhere-else">'
-      + '<attachment type="image" path="/workspace/a.png" /></attached-files>';
+    const foreign =
+      '<attached-files source="somewhere-else">' +
+      '<attachment type="image" path="/workspace/a.png" /></attached-files>';
     expect(extractAttachmentTags(foreign)).toEqual({ text: foreign, parts: [] });
   });
 
   test("recovers its own block from text that also contains a typed one", () => {
     const { text, parts } = extractAttachmentTags(
-      appendAttachmentTags(
-        "Unlike <attached-files> in the docs",
-        [{ path: "/workspace/a.png", filename: "a.png" }],
-      ),
+      appendAttachmentTags("Unlike <attached-files> in the docs", [
+        { path: "/workspace/a.png", filename: "a.png" },
+      ]),
     );
 
     expect(text).toBe("Unlike <attached-files> in the docs");
@@ -152,7 +152,8 @@ describe("extractAttachmentTags", () => {
   });
 
   test("ignores an unterminated block", () => {
-    const raw = 'Keep this <attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" />';
+    const raw =
+      'Keep this <attached-files source="orkestrator"><attachment type="image" path="/workspace/a.png" />';
     expect(extractAttachmentTags(raw)).toEqual({ text: raw, parts: [] });
   });
 
@@ -161,7 +162,9 @@ describe("extractAttachmentTags", () => {
       { length: 40 },
       (_, index) => `<attachment type="image" path="/workspace/${index}.png" />`,
     ).join("\n");
-    const { parts } = extractAttachmentTags(`<attached-files source="orkestrator">\n${tags}\n</attached-files>`);
+    const { parts } = extractAttachmentTags(
+      `<attached-files source="orkestrator">\n${tags}\n</attached-files>`,
+    );
     expect(parts).toHaveLength(20);
   });
 });

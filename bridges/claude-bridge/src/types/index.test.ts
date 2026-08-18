@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import type {
-  SdkCompactBoundaryMessage,
-  SdkMessageBase,
-  SdkResultMessage,
-} from "./index";
+import type { SdkCompactBoundaryMessage, SdkMessageBase, SdkResultMessage } from "./index";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "./index";
 
 // These two guards are the only thing standing between the SDK's untyped
@@ -37,9 +33,7 @@ describe("isSdkCompactBoundaryMessage", () => {
   });
 
   test("accepts a boundary that carries no metadata", () => {
-    expect(
-      isSdkCompactBoundaryMessage({ type: "system", subtype: "compact_boundary" }),
-    ).toBe(true);
+    expect(isSdkCompactBoundaryMessage({ type: "system", subtype: "compact_boundary" })).toBe(true);
   });
 
   const rejected: Array<{ name: string; message: SdkMessageBase }> = [

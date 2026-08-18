@@ -47,23 +47,17 @@ function showOnlyFinalPayloadMessage(
 
   return messages.flatMap((message, messageIndex) => {
     if (message.role !== "assistant") return [message];
-    const parts = message.parts.filter((_part, partIndex) =>
-      !payloadParts.has(`${messageIndex}:${partIndex}`)
-      || (
-        showFinal
-        && final?.messageIndex === messageIndex
-        && final.partIndex === partIndex
-      )
+    const parts = message.parts.filter(
+      (_part, partIndex) =>
+        !payloadParts.has(`${messageIndex}:${partIndex}`) ||
+        (showFinal && final?.messageIndex === messageIndex && final.partIndex === partIndex),
     );
     const contentIsPayload = payloadContentMessages.has(messageIndex);
-    const content = contentIsPayload
-      && !(
-        showFinal
-        && final?.messageIndex === messageIndex
-        && final.partIndex === undefined
-      )
-      ? ""
-      : message.content;
+    const content =
+      contentIsPayload &&
+      !(showFinal && final?.messageIndex === messageIndex && final.partIndex === undefined)
+        ? ""
+        : message.content;
     const filtered = { ...message, content, parts };
     return hasMessageContent(filtered) ? [filtered] : [];
   });
@@ -99,14 +93,11 @@ export function hideMachineOutputText(
   const { retainPayloadKind } = options;
   const isWithheld = (text: string): boolean => {
     if (!isWithheldMachineOutput(text)) return false;
-    return retainPayloadKind === undefined
-      || !isPayloadKind(text, retainPayloadKind);
+    return retainPayloadKind === undefined || !isPayloadKind(text, retainPayloadKind);
   };
   return messages.flatMap((message) => {
     if (message.role !== "assistant") return [message];
-    const parts = message.parts.filter((part) =>
-      part.type !== "text" || !isWithheld(part.content)
-    );
+    const parts = message.parts.filter((part) => part.type !== "text" || !isWithheld(part.content));
     // `content` mirrors the provider's last text part, so it is withheld on the
     // same terms; a message rendered from `content` alone would otherwise put
     // the document straight back on screen.

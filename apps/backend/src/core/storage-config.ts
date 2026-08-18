@@ -90,68 +90,68 @@ import { StorageProjects } from "./storage-projects.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export abstract class StorageConfig extends StorageProjects {
@@ -163,10 +163,7 @@ export abstract class StorageConfig extends StorageProjects {
     const config = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
     const normalized = normalizePersistedConfig(config);
     if (configExists) return normalized;
-    const sidecar = await this.loadJson<unknown>(
-      this.agentPlatformsFile(),
-      () => null,
-    );
+    const sidecar = await this.loadJson<unknown>(this.agentPlatformsFile(), () => null);
     if (!sidecar || !isRecord(sidecar)) return normalized;
     const enabledAgentPlatforms = normalizeAgentPlatforms(sidecar.enabled, []);
     return enabledAgentPlatforms.length === 0
@@ -196,15 +193,11 @@ export abstract class StorageConfig extends StorageProjects {
             ...validated,
             global: {
               ...validated.global,
-              ...(current.global.githubToken
-                ? { githubToken: current.global.githubToken }
-                : {}),
+              ...(current.global.githubToken ? { githubToken: current.global.githubToken } : {}),
               ...(current.global.anthropicApiKey
                 ? { anthropicApiKey: current.global.anthropicApiKey }
                 : {}),
-              ...(current.global.cursorApiKey
-                ? { cursorApiKey: current.global.cursorApiKey }
-                : {}),
+              ...(current.global.cursorApiKey ? { cursorApiKey: current.global.cursorApiKey } : {}),
             },
           }
         : validated;
@@ -214,10 +207,7 @@ export abstract class StorageConfig extends StorageProjects {
   }
 
   async getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
-    const persisted = await this.loadJson<unknown>(
-      this.agentModelCatalogFile(),
-      () => null,
-    );
+    const persisted = await this.loadJson<unknown>(this.agentModelCatalogFile(), () => null);
     return parsePersistedAgentModelCatalogCache(persisted);
   }
 
@@ -237,11 +227,12 @@ export abstract class StorageConfig extends StorageProjects {
     agent: "claude" | "codex" | "cursor" | "grok",
     models: ClaudeModelCatalogEntry[] | CodexModelCatalogEntry[] | AgentModel[],
   ): Promise<AgentModelCatalogCache> {
-    const normalizedModels = agent === "claude"
-      ? normalizeClaudeModelCatalogEntries(models)
-      : agent === "codex"
-        ? normalizeCodexModelCatalogEntries(models)
-        : normalizeAcpModelCatalogEntries(models, agent);
+    const normalizedModels =
+      agent === "claude"
+        ? normalizeClaudeModelCatalogEntries(models)
+        : agent === "codex"
+          ? normalizeCodexModelCatalogEntries(models)
+          : normalizeAcpModelCatalogEntries(models, agent);
     if (normalizedModels.length === 0) {
       throw new Error(`${agent} model catalogue must contain at least one valid model.`);
     }
@@ -279,14 +270,9 @@ export abstract class StorageConfig extends StorageProjects {
     return next;
   }
 
-  async getOpenCodeModelCatalog(
-    projectId: string,
-  ): Promise<OpenCodeModelCatalogSnapshot | null> {
+  async getOpenCodeModelCatalog(projectId: string): Promise<OpenCodeModelCatalogSnapshot | null> {
     const normalizedProjectId = normalizeOpenCodeModelCatalogProjectId(projectId);
-    const store = await this.loadJson<unknown>(
-      this.openCodeModelCatalogFile(),
-      () => null,
-    );
+    const store = await this.loadJson<unknown>(this.openCodeModelCatalogFile(), () => null);
     return parseOpenCodeModelCatalogStore(store)[normalizedProjectId] ?? null;
   }
 
@@ -310,10 +296,7 @@ export abstract class StorageConfig extends StorageProjects {
         "OpenCode model catalogue storage",
       );
       try {
-        const persisted = await this.loadJson<unknown>(
-          this.openCodeModelCatalogFile(),
-          () => null,
-        );
+        const persisted = await this.loadJson<unknown>(this.openCodeModelCatalogFile(), () => null);
         const catalogs = parseOpenCodeModelCatalogStore(persisted);
         const current = catalogs[normalizedProjectId];
         if (current?.catalogVersion === catalogVersion) return current;
@@ -326,14 +309,11 @@ export abstract class StorageConfig extends StorageProjects {
           models: normalizedModels,
         };
         catalogs[normalizedProjectId] = snapshot;
-        const legacyUnscoped =
-          getUnscopedLegacyOpenCodeModelCatalog(persisted);
+        const legacyUnscoped = getUnscopedLegacyOpenCodeModelCatalog(persisted);
         const store: PersistedOpenCodeModelCatalogStore = {
           schemaVersion: 2,
           catalogs,
-          ...(legacyUnscoped === undefined
-            ? {}
-            : { legacyUnscoped }),
+          ...(legacyUnscoped === undefined ? {} : { legacyUnscoped }),
         };
         await this.saveJson(this.openCodeModelCatalogFile(), store);
         return snapshot;
@@ -352,7 +332,8 @@ export abstract class StorageConfig extends StorageProjects {
 
   async getDesktopConnections(): Promise<StoredDesktopConnections> {
     const config = await this.loadConfig();
-    if (config.desktopConnections === undefined) return { activeConnectionId: "local", connections: [] };
+    if (config.desktopConnections === undefined)
+      return { activeConnectionId: "local", connections: [] };
     try {
       return parseStoredDesktopConnections(config.desktopConnections);
     } catch {
@@ -376,7 +357,10 @@ export abstract class StorageConfig extends StorageProjects {
     return config.repositories[projectId] ?? defaultRepositoryConfig();
   }
 
-  async updateRepositoryConfig(projectId: string, repoConfig: RepositoryConfig): Promise<AppConfig> {
+  async updateRepositoryConfig(
+    projectId: string,
+    repoConfig: RepositoryConfig,
+  ): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.repositories[projectId] = { ...defaultRepositoryConfig(), ...repoConfig };
@@ -408,8 +392,7 @@ export abstract class StorageConfig extends StorageProjects {
           : {}),
         ...(current.lastEnvironmentAgentSelection !== undefined
           ? {
-              lastEnvironmentAgentSelection:
-                current.lastEnvironmentAgentSelection,
+              lastEnvironmentAgentSelection: current.lastEnvironmentAgentSelection,
             }
           : {}),
       };
@@ -455,9 +438,7 @@ export abstract class StorageConfig extends StorageProjects {
       enabledAgentPlatforms,
       defaultAgent: firstEnabledAgentPlatform(
         enabledAgentPlatforms,
-        isAgentPlatform(reviewValidated.defaultAgent)
-          ? reviewValidated.defaultAgent
-          : undefined,
+        isAgentPlatform(reviewValidated.defaultAgent) ? reviewValidated.defaultAgent : undefined,
       ),
       // The renderer writes this object wholesale, so a malformed or partial
       // entry must be dropped here rather than persisted and later applied to
@@ -469,15 +450,11 @@ export abstract class StorageConfig extends StorageProjects {
       config.global = options.preserveCredentials
         ? {
             ...validated,
-            ...(config.global.githubToken
-              ? { githubToken: config.global.githubToken }
-              : {}),
+            ...(config.global.githubToken ? { githubToken: config.global.githubToken } : {}),
             ...(config.global.anthropicApiKey
               ? { anthropicApiKey: config.global.anthropicApiKey }
               : {}),
-            ...(config.global.cursorApiKey
-              ? { cursorApiKey: config.global.cursorApiKey }
-              : {}),
+            ...(config.global.cursorApiKey ? { cursorApiKey: config.global.cursorApiKey } : {}),
           }
         : validated;
       await this.saveJson(this.configFile(), config);
@@ -486,10 +463,7 @@ export abstract class StorageConfig extends StorageProjects {
     });
   }
 
-  async updateAgentModelDefault(
-    key: AgentModelConfigKey,
-    modelId: string,
-  ): Promise<AppConfig> {
+  async updateAgentModelDefault(key: AgentModelConfigKey, modelId: string): Promise<AppConfig> {
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
       config.global[key] = modelId;
@@ -534,6 +508,4 @@ export abstract class StorageConfig extends StorageProjects {
       return config;
     });
   }
-
-
 }

@@ -45,26 +45,22 @@ export function OpenFileDialog() {
   const selectedItemRef = useRef<HTMLButtonElement>(null);
 
   const deferredQuery = useDeferredValue(query);
-  const selectedEnvironmentId = useUIStore(
-    (state) => state.selectedEnvironmentId,
-  );
-  const selectedEnvironment = useEnvironmentStore((state) =>
-    state.environments.find((environment) => environment.id === selectedEnvironmentId) ?? null
+  const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
+  const selectedEnvironment = useEnvironmentStore(
+    (state) =>
+      state.environments.find((environment) => environment.id === selectedEnvironmentId) ?? null,
   );
   const { createFileTab } = useTerminalContext();
 
   const { searchFiles, isLoading, error, isAvailable, refresh } = useFileSearch(
     selectedEnvironment?.containerId ?? undefined,
     selectedEnvironment?.worktreePath ?? undefined,
-    open
+    open,
   );
 
   const results = useMemo(
-    () =>
-      searchFiles(deferredQuery, MAX_RESULTS).filter(
-        (file) => !file.isDirectory
-      ),
-    [deferredQuery, searchFiles]
+    () => searchFiles(deferredQuery, MAX_RESULTS).filter((file) => !file.isDirectory),
+    [deferredQuery, searchFiles],
   );
 
   const canOpenFiles = !!selectedEnvironment && !!createFileTab && isAvailable;
@@ -143,9 +139,7 @@ export function OpenFileDialog() {
   const handleInputKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setSelectedIndex((current) =>
-        Math.min(current + 1, Math.max(results.length - 1, 0))
-      );
+      setSelectedIndex((current) => Math.min(current + 1, Math.max(results.length - 1, 0)));
       return;
     }
 
@@ -216,9 +210,7 @@ export function OpenFileDialog() {
           )}
 
           {canOpenFiles && !isLoading && error && (
-            <div className="px-3 py-10 text-center text-sm text-destructive">
-              {error}
-            </div>
+            <div className="px-3 py-10 text-center text-sm text-destructive">{error}</div>
           )}
 
           {canOpenFiles && !isLoading && !error && results.length === 0 && (
@@ -233,9 +225,7 @@ export function OpenFileDialog() {
                 const isSelected = index === selectedIndex;
                 const lastSlashIndex = file.relativePath.lastIndexOf("/");
                 const directory =
-                  lastSlashIndex >= 0
-                    ? file.relativePath.slice(0, lastSlashIndex)
-                    : "";
+                  lastSlashIndex >= 0 ? file.relativePath.slice(0, lastSlashIndex) : "";
 
                 return (
                   <button
@@ -245,9 +235,7 @@ export function OpenFileDialog() {
                     onClick={() => handleSelect(file)}
                     className={cn(
                       "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-                      isSelected
-                        ? "bg-accent text-accent-foreground"
-                        : "hover:bg-accent/50"
+                      isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
                     )}
                   >
                     <FileIcon filename={file.filename} className="h-4 w-4 shrink-0" />

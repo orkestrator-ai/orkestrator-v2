@@ -16,10 +16,8 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.codexMaxConcurrentThreads).toBe(5);
     expect(initialGlobal.useHostGitHubCredentials).toBe(true);
     expect(initialGlobal.claudeMode).toBe("native");
-    expectTypeOf<GlobalConfig["codexMaxConcurrentThreads"]>()
-      .toEqualTypeOf<number | undefined>();
-    expectTypeOf<GlobalConfig["useHostGitHubCredentials"]>()
-      .toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<GlobalConfig["codexMaxConcurrentThreads"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<GlobalConfig["useHostGitHubCredentials"]>().toEqualTypeOf<boolean | undefined>();
   });
 
   test("does not default to any retired model id", () => {
@@ -28,11 +26,7 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
       initialGlobal.claudeModel,
       initialGlobal.codexModel,
     ];
-    for (const retired of [
-      "opencode/grok-code",
-      "claude-sonnet-4-6",
-      "gpt-5.3-codex",
-    ]) {
+    for (const retired of ["opencode/grok-code", "claude-sonnet-4-6", "gpt-5.3-codex"]) {
       expect(selected).not.toContain(retired);
     }
   });
@@ -51,8 +45,7 @@ describe("configStore DEFAULT_CONFIG defaults", () => {
     expect(initialGlobal.claudeMode).toBe(backendGlobal.claudeMode);
     expect(initialGlobal.webClientEnabled).toBe(backendGlobal.webClientEnabled);
     expect(initialGlobal.reviewInstruction).toBe(backendGlobal.reviewInstruction);
-    expect(initialGlobal.useHostGitHubCredentials)
-      .toBe(backendGlobal.useHostGitHubCredentials);
+    expect(initialGlobal.useHostGitHubCredentials).toBe(backendGlobal.useHostGitHubCredentials);
   });
 });
 

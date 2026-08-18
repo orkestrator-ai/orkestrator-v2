@@ -10,11 +10,7 @@ import {
   track,
 } from "./session-manager-test-harness.js";
 
-function sdkMessage(
-  uuid: string,
-  timestamp: string,
-  content: unknown[],
-): Record<string, unknown> {
+function sdkMessage(uuid: string, timestamp: string, content: unknown[]): Record<string, unknown> {
   return { uuid, timestamp, message: { role: "assistant", content } };
 }
 
@@ -26,22 +22,23 @@ describe("settle stamps", () => {
    * process's clock, which would give a different answer every time the same
    * transcript was replayed.
    */
-  const launch = sdkMessage("assistant-1", "2026-08-17T10:00:00.000Z", [{
-    type: "tool_use",
-    id: "task-1",
-    name: "Task",
-    input: { description: "Review the bridge" },
-  }]);
-  const result = (isError = false) => sdkMessage(
-    "user-1",
-    "2026-08-17T10:04:30.000Z",
-    [{
-      type: "tool_result",
-      tool_use_id: "task-1",
-      content: isError ? "boom" : "done",
-      is_error: isError,
-    }],
-  );
+  const launch = sdkMessage("assistant-1", "2026-08-17T10:00:00.000Z", [
+    {
+      type: "tool_use",
+      id: "task-1",
+      name: "Task",
+      input: { description: "Review the bridge" },
+    },
+  ]);
+  const result = (isError = false) =>
+    sdkMessage("user-1", "2026-08-17T10:04:30.000Z", [
+      {
+        type: "tool_result",
+        tool_use_id: "task-1",
+        content: isError ? "boom" : "done",
+        is_error: isError,
+      },
+    ]);
 
   test.each([[false], [true]])(
     "stamps a child's terminal edge from the record that carried it (error: %s)",
@@ -77,12 +74,14 @@ describe("settle stamps", () => {
     parseMessageContent(launch, toolTracker);
     parseMessageContent(result(), toolTracker);
     parseMessageContent(
-      sdkMessage("user-2", "2026-08-17T11:00:00.000Z", [{
-        type: "tool_result",
-        tool_use_id: "task-1",
-        content: "done again",
-        is_error: false,
-      }]),
+      sdkMessage("user-2", "2026-08-17T11:00:00.000Z", [
+        {
+          type: "tool_result",
+          tool_use_id: "task-1",
+          content: "done again",
+          is_error: false,
+        },
+      ]),
       toolTracker,
     );
 
@@ -95,12 +94,21 @@ describe("settle stamps", () => {
     const toolTracker = new ToolTracker();
     parseMessageContent(launch, toolTracker);
     parseMessageContent(
-      { uuid: "user-1", timestamp: "not-a-date", message: { role: "user", content: [{
-        type: "tool_result",
-        tool_use_id: "task-1",
-        content: "done",
-        is_error: false,
-      }] } },
+      {
+        uuid: "user-1",
+        timestamp: "not-a-date",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "task-1",
+              content: "done",
+              is_error: false,
+            },
+          ],
+        },
+      },
       toolTracker,
     );
 
@@ -148,10 +156,10 @@ describe("prompt suggestions", () => {
       expect(getSession(session.id)?.promptSuggestion).toBeUndefined();
       const cleared = events.find(
         (event) =>
-          event.type === "session.updated"
-          && event.sessionId === session.id
-          && (event.data as object | undefined) !== undefined
-          && "promptSuggestion" in (event.data as object),
+          event.type === "session.updated" &&
+          event.sessionId === session.id &&
+          (event.data as object | undefined) !== undefined &&
+          "promptSuggestion" in (event.data as object),
       );
       // JSON preserves null, so it is the explicit wire-level clear signal.
       expect(cleared).toBeDefined();

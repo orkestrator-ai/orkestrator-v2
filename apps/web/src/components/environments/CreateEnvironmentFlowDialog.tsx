@@ -17,23 +17,10 @@ import {
   updateEnvironmentAgentSettings,
   type GitHubCredentialStatus,
 } from "@/lib/backend";
-import {
-  resolveAgentModeSettings,
-  type AgentModeSettings,
-} from "@/lib/build-pipeline-agent";
-import {
-  useClaudeOptionsStore,
-  useConfigStore,
-  useProjectStore,
-  useUIStore,
-} from "@/stores";
+import { resolveAgentModeSettings, type AgentModeSettings } from "@/lib/build-pipeline-agent";
+import { useClaudeOptionsStore, useConfigStore, useProjectStore, useUIStore } from "@/stores";
 import type { StartEnvironmentOptions } from "@/hooks/useEnvironments";
-import type {
-  Environment,
-  EnvironmentType,
-  NetworkAccessMode,
-  PortMapping,
-} from "@/types";
+import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping } from "@/types";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import { useLocalEnvironmentAvailable } from "@/hooks/useLocalEnvironmentAvailable";
@@ -87,9 +74,10 @@ export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
     initialPrompt: options.initialPrompt || undefined,
     portMappings: options.portMappings.length > 0 ? options.portMappings : undefined,
     environmentType: options.environmentType,
-    namingPrompt: !options.environmentName.trim() && initialPromptForNaming
-      ? initialPromptForNaming
-      : undefined,
+    namingPrompt:
+      !options.environmentName.trim() && initialPromptForNaming
+        ? initialPromptForNaming
+        : undefined,
   };
 }
 
@@ -105,12 +93,8 @@ export function resolveEnvironmentAgentLaunchSettings(options: ClaudeOptions) {
   return {
     pendingAgentLaunch: options.launchAgent,
     initialAgentModel: options.launchAgent ? options.model : undefined,
-    initialReasoningEffort: options.launchAgent
-      ? options.reasoningEffort
-      : undefined,
-    initialPromptAttachments: options.launchAgent
-      ? options.initialPromptAttachments
-      : undefined,
+    initialReasoningEffort: options.launchAgent ? options.reasoningEffort : undefined,
+    initialPromptAttachments: options.launchAgent ? options.initialPromptAttachments : undefined,
   };
 }
 
@@ -134,14 +118,11 @@ export function CreateEnvironmentFlowDialog({
   const mountedRef = useRef(true);
   const dockerAvailableRef = useRef(dockerAvailable);
   const activePreflightRef = useRef<PendingGitHubCredentialPreflight | null>(null);
-  const pendingCredentialWarningRef =
-    useRef<PendingGitHubCredentialWarning | null>(null);
+  const pendingCredentialWarningRef = useRef<PendingGitHubCredentialWarning | null>(null);
   const setOptions = useClaudeOptionsStore((state) => state.setOptions);
   const config = useConfigStore((state) => state.config);
   const storedProjectName = useProjectStore((state) =>
-    projectId
-      ? state.projects.find((project) => project.id === projectId)?.name
-      : undefined,
+    projectId ? state.projects.find((project) => project.id === projectId)?.name : undefined,
   );
   const localEnvironmentAvailable = useLocalEnvironmentAvailable(projectId);
   const localEnvironmentAvailableRef = useRef(localEnvironmentAvailable);
@@ -149,15 +130,10 @@ export function CreateEnvironmentFlowDialog({
   localEnvironmentAvailableRef.current = localEnvironmentAvailable;
   const projectName = providedProjectName ?? storedProjectName;
   const setProjectCollapsed = useUIStore((state) => state.setProjectCollapsed);
-  const selectProjectAndEnvironment = useUIStore(
-    (state) => state.selectProjectAndEnvironment,
-  );
+  const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
 
   const settleCredentialWarning = useCallback(
-    (
-      pending: PendingGitHubCredentialWarning,
-      result: { created: boolean },
-    ) => {
+    (pending: PendingGitHubCredentialWarning, result: { created: boolean }) => {
       if (pending.settled) return;
       pending.settled = true;
       if (pendingCredentialWarningRef.current === pending) {
@@ -277,11 +253,10 @@ export function CreateEnvironmentFlowDialog({
       // and prompt-based naming can continue without blocking the UI.
       onOpenChange(false);
 
-      void startEnvironment(
-        configuredEnvironment.id,
-        options.initialPrompt,
-        { background: true, silent: true },
-      ).catch((startError) => {
+      void startEnvironment(configuredEnvironment.id, options.initialPrompt, {
+        background: true,
+        silent: true,
+      }).catch((startError) => {
         console.error("Failed to auto-start environment:", startError);
       });
 
@@ -294,18 +269,18 @@ export function CreateEnvironmentFlowDialog({
           platform: options.agentType,
           mode: selectedAgentMode(options.agentType, options),
           ...(options.model ? { model: options.model } : {}),
-          ...(options.reasoningEffort
-            ? { reasoningEffort: options.reasoningEffort }
-            : {}),
-        }).then((updatedConfig) => {
-          useConfigStore.getState().setConfig(updatedConfig);
-        }).catch((preferenceError) => {
-          console.warn(
-            "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
-            preferenceError,
-          );
-          toast.warning("Environment created, but agent preference was not saved");
-        });
+          ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+        })
+          .then((updatedConfig) => {
+            useConfigStore.getState().setConfig(updatedConfig);
+          })
+          .catch((preferenceError) => {
+            console.warn(
+              "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
+              preferenceError,
+            );
+            toast.warning("Environment created, but agent preference was not saved");
+          });
       }
       return true;
     } finally {
@@ -449,7 +424,9 @@ export function CreateEnvironmentFlowDialog({
               type="button"
               onClick={() => void createWithoutGitHubCredential()}
               disabled={isCreating || !dockerAvailable}
-              title={!dockerAvailable ? "Start Docker to create a container environment" : undefined}
+              title={
+                !dockerAvailable ? "Start Docker to create a container environment" : undefined
+              }
             >
               {isCreating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Create anyway

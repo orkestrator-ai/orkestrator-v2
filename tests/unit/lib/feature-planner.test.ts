@@ -20,7 +20,9 @@ function makeStory(overrides: Partial<FeatureStoryCard> = {}): FeatureStoryCard 
     title: "Save a filtered view",
     description: "A user can save the current filters.",
     acceptanceCriteria: ["Saved filters can be named"],
-    messages: [{ id: "m1", role: "assistant", content: "refine?", createdAt: "2026-01-01T00:00:00.000Z" }],
+    messages: [
+      { id: "m1", role: "assistant", content: "refine?", createdAt: "2026-01-01T00:00:00.000Z" },
+    ],
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -35,8 +37,18 @@ function makeFeature(overrides: Partial<FeaturePlan> = {}): FeaturePlan {
     status: "stories",
     summary: "Users can save and reuse filtered views.",
     messages: [
-      { id: "m1", role: "assistant", content: "Tell me about the new feature", createdAt: "2026-01-01T00:00:00.000Z" },
-      { id: "m2", role: "user", content: "Users can save filters.", createdAt: "2026-01-01T00:00:01.000Z" },
+      {
+        id: "m1",
+        role: "assistant",
+        content: "Tell me about the new feature",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "m2",
+        role: "user",
+        content: "Users can save filters.",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
     ],
     stories: [makeStory()],
     createdAt: "2026-01-01T00:00:00.000Z",
@@ -74,9 +86,7 @@ describe("parseFeaturePlannerState", () => {
   test("rejects null, arrays, and non-object state values", () => {
     for (const value of ["null", "[]", '"collecting"', "42", "true"]) {
       expect(
-        parseFeaturePlannerState(
-          `<feature_planner_state>${value}</feature_planner_state>`,
-        ),
+        parseFeaturePlannerState(`<feature_planner_state>${value}</feature_planner_state>`),
       ).toBeNull();
     }
   });
@@ -166,9 +176,7 @@ describe("parseStoryRefinement", () => {
 
   test("rejects null, arrays, and non-object refinement values", () => {
     for (const value of ["null", "[]", '"refinement"', "42", "true"]) {
-      expect(
-        parseStoryRefinement(`<story_refinement>${value}</story_refinement>`),
-      ).toBeNull();
+      expect(parseStoryRefinement(`<story_refinement>${value}</story_refinement>`)).toBeNull();
     }
   });
 
@@ -183,9 +191,7 @@ describe("parseStoryRefinement", () => {
 
     for (const refinement of invalidRefinements) {
       expect(
-        parseStoryRefinement(
-          `<story_refinement>${JSON.stringify(refinement)}</story_refinement>`,
-        ),
+        parseStoryRefinement(`<story_refinement>${JSON.stringify(refinement)}</story_refinement>`),
       ).toBeNull();
     }
   });
@@ -224,10 +230,18 @@ describe("createStoryCardsFromParsedState", () => {
       stories: [{ title: "New story", description: "d", acceptanceCriteria: ["a"] }],
     });
     expect(cards).toHaveLength(1);
-    expect(cards[0]).toMatchObject({ title: "New story", description: "d", acceptanceCriteria: ["a"] });
-    expect(cards[0]?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(cards[0]).toMatchObject({
+      title: "New story",
+      description: "d",
+      acceptanceCriteria: ["a"],
+    });
+    expect(cards[0]?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
     expect(cards[0]?.messages[0]).toMatchObject({
-      id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+      id: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
       role: "assistant",
     });
   });
@@ -235,7 +249,9 @@ describe("createStoryCardsFromParsedState", () => {
   test("coerces a non-array acceptanceCriteria to an empty array", () => {
     const cards = createStoryCardsFromParsedState({
       phase: "stories",
-      stories: [{ title: "t", description: "d", acceptanceCriteria: "oops" as unknown as string[] }],
+      stories: [
+        { title: "t", description: "d", acceptanceCriteria: "oops" as unknown as string[] },
+      ],
     });
     expect(cards[0]?.acceptanceCriteria).toEqual([]);
   });
@@ -245,7 +261,9 @@ describe("createStoryCardsFromParsedState", () => {
     const cards = createStoryCardsFromParsedState(
       {
         phase: "stories",
-        stories: [{ id: "story-1", title: "Renamed title", description: "d2", acceptanceCriteria: ["a2"] }],
+        stories: [
+          { id: "story-1", title: "Renamed title", description: "d2", acceptanceCriteria: ["a2"] },
+        ],
       },
       [existing],
     );
@@ -332,7 +350,12 @@ describe("selectFeaturePlannerPrompt", () => {
   test("uses the initial prompt for the first user message on a new session", () => {
     const feature = makeFeature({
       messages: [
-        { id: "m1", role: "assistant", content: "Tell me about the new feature", createdAt: "2026-01-01T00:00:00.000Z" },
+        {
+          id: "m1",
+          role: "assistant",
+          content: "Tell me about the new feature",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
         { id: "m2", role: "user", content: "first", createdAt: "2026-01-01T00:00:01.000Z" },
       ],
     });
@@ -370,8 +393,18 @@ describe("formatFeatureStoriesForBuild", () => {
       title: "Saved views",
       summary: "Users can save filters.",
       stories: [
-        makeStory({ id: "s1", title: "Save view", description: "desc one", acceptanceCriteria: ["can name", "can reopen"] }),
-        makeStory({ id: "s2", title: "Delete view", description: "desc two", acceptanceCriteria: ["can delete"] }),
+        makeStory({
+          id: "s1",
+          title: "Save view",
+          description: "desc one",
+          acceptanceCriteria: ["can name", "can reopen"],
+        }),
+        makeStory({
+          id: "s2",
+          title: "Delete view",
+          description: "desc two",
+          acceptanceCriteria: ["can delete"],
+        }),
       ],
     });
     const result = formatFeatureStoriesForBuild(feature);
@@ -379,9 +412,15 @@ describe("formatFeatureStoriesForBuild", () => {
     expect(result.description).toContain("Feature summary:\nUsers can save filters.");
     expect(result.description).toContain("### 1. Save view");
     expect(result.description).toContain("### 2. Delete view");
-    expect(result.description.indexOf("### 1. Save view")).toBeLessThan(result.description.indexOf("- can name"));
-    expect(result.description.indexOf("- can reopen")).toBeLessThan(result.description.indexOf("### 2. Delete view"));
-    expect(result.description.indexOf("### 2. Delete view")).toBeLessThan(result.description.indexOf("- can delete"));
+    expect(result.description.indexOf("### 1. Save view")).toBeLessThan(
+      result.description.indexOf("- can name"),
+    );
+    expect(result.description.indexOf("- can reopen")).toBeLessThan(
+      result.description.indexOf("### 2. Delete view"),
+    );
+    expect(result.description.indexOf("### 2. Delete view")).toBeLessThan(
+      result.description.indexOf("- can delete"),
+    );
     expect(result).not.toHaveProperty("acceptanceCriteria");
   });
 
@@ -398,7 +437,12 @@ describe("formatFeatureStoriesForBuild", () => {
       title: "Saved views",
       summary: "",
       stories: [
-        makeStory({ id: "s1", title: "Save view", description: "", acceptanceCriteria: ["can name"] }),
+        makeStory({
+          id: "s1",
+          title: "Save view",
+          description: "",
+          acceptanceCriteria: ["can name"],
+        }),
       ],
     });
     const result = formatFeatureStoriesForBuild(feature);
@@ -407,6 +451,8 @@ describe("formatFeatureStoriesForBuild", () => {
     expect(result.description).toContain("- can name");
     // The blank description must not leave a doubled blank line between the heading and the criteria label.
     expect(result.description).not.toContain("\n\n\n");
-    expect(result.description.indexOf("### 1. Save view")).toBeLessThan(result.description.indexOf("Acceptance criteria:"));
+    expect(result.description.indexOf("### 1. Save view")).toBeLessThan(
+      result.description.indexOf("Acceptance criteria:"),
+    );
   });
 });

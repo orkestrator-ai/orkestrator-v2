@@ -23,7 +23,7 @@ export interface EncodedPng {
  */
 export function resizeCanvasIfNeeded(
   canvas: HTMLCanvasElement,
-  maxRgbaSize: number
+  maxRgbaSize: number,
 ): HTMLCanvasElement {
   const { width, height } = canvas;
   const rgbaSize = width * height * 4;
@@ -70,7 +70,7 @@ export function resizeCanvasIfNeeded(
  */
 export function resizeCanvasToMaxDimension(
   canvas: HTMLCanvasElement,
-  maxDimension: number
+  maxDimension: number,
 ): HTMLCanvasElement {
   const { width, height } = canvas;
 
@@ -157,10 +157,7 @@ export function encodeCanvasAsPngWithinSize(
     );
     const longestDimension = Math.max(currentCanvas.width, currentCanvas.height);
     const nextMaxDimension = Math.max(1, Math.floor(longestDimension * scale));
-    const resizedCanvas = resizeCanvasToMaxDimension(
-      currentCanvas,
-      nextMaxDimension,
-    );
+    const resizedCanvas = resizeCanvasToMaxDimension(currentCanvas, nextMaxDimension);
     if (resizedCanvas === currentCanvas) {
       releaseCanvas(currentCanvas);
       return null;
@@ -176,18 +173,11 @@ function getBase64DecodedSize(dataUrl: string, base64Start: number): number | nu
   const base64Length = dataUrl.length - base64Start;
   if (base64Length === 0 || base64Length % 4 !== 0) return null;
 
-  const padding = dataUrl.endsWith("==")
-    ? 2
-    : dataUrl.endsWith("=")
-      ? 1
-      : 0;
+  const padding = dataUrl.endsWith("==") ? 2 : dataUrl.endsWith("=") ? 1 : 0;
 
   // Padding is only valid at the end of a base64 payload.
   const firstPaddingIndex = dataUrl.indexOf("=", base64Start);
-  if (
-    firstPaddingIndex >= 0 &&
-    firstPaddingIndex < dataUrl.length - padding
-  ) {
+  if (firstPaddingIndex >= 0 && firstPaddingIndex < dataUrl.length - padding) {
     return null;
   }
 

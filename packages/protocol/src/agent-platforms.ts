@@ -9,18 +9,20 @@ export const AGENT_PLATFORMS = Object.freeze([
 
 export type AgentPlatform = (typeof AGENT_PLATFORMS)[number];
 
-export const AGENT_PLATFORM_LABELS: Readonly<Record<AgentPlatform, string>> =
-  Object.freeze({
-    claude: "Claude Code",
-    codex: "Codex",
-    cursor: "Cursor Agent",
-    grok: "Grok Build",
-    opencode: "OpenCode",
-  });
+export const AGENT_PLATFORM_LABELS: Readonly<Record<AgentPlatform, string>> = Object.freeze({
+  claude: "Claude Code",
+  codex: "Codex",
+  cursor: "Cursor Agent",
+  grok: "Grok Build",
+  opencode: "OpenCode",
+});
 
 /** Existing installations keep their pre-selection behavior after upgrading. */
-export const LEGACY_ENABLED_AGENT_PLATFORMS: readonly AgentPlatform[] =
-  Object.freeze(["claude", "codex", "opencode"]);
+export const LEGACY_ENABLED_AGENT_PLATFORMS: readonly AgentPlatform[] = Object.freeze([
+  "claude",
+  "codex",
+  "opencode",
+]);
 
 export function isAgentPlatform(value: unknown): value is AgentPlatform {
   return AGENT_PLATFORMS.includes(value as AgentPlatform);

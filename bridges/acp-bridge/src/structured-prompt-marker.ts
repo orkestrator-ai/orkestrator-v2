@@ -12,5 +12,4 @@
  * context module. Keeping the marker here is what stops the two from drifting
  * apart the next time the instruction is reworded.
  */
-export const STRUCTURED_PROMPT_INSTRUCTION_PREFIX =
-  "End your turn with exactly one JSON value";
+export const STRUCTURED_PROMPT_INSTRUCTION_PREFIX = "End your turn with exactly one JSON value";

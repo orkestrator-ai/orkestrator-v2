@@ -2,30 +2,37 @@ import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
 import type { CommandContext } from "../../../apps/backend/src/core/commands";
 import type { Environment } from "../../../apps/backend/src/core/models";
-import { CLAUDE_STATE_POLL_INTERVAL_MS, CLAUDE_STATE_READ_TIMEOUT_MS, ClaudeStatePollManager, claudeStateReadCommand, LIVENESS_CHECK_EVERY_TICKS, parsePollSnapshotExecOutput, parsePollSnapshotOutput, pollSnapshotScript, shutdownClaudeStatePolling } from "../../../apps/backend/src/core/tmux";
+import {
+  CLAUDE_STATE_POLL_INTERVAL_MS,
+  CLAUDE_STATE_READ_TIMEOUT_MS,
+  ClaudeStatePollManager,
+  claudeStateReadCommand,
+  LIVENESS_CHECK_EVERY_TICKS,
+  parsePollSnapshotExecOutput,
+  parsePollSnapshotOutput,
+  pollSnapshotScript,
+  shutdownClaudeStatePolling,
+} from "../../../apps/backend/src/core/tmux";
 import { setTimeout as delay } from "node:timers/promises";
 
-import {
-  createEnvironment,
-  deferred,
-  waitFor,
-} from "./tmux-test-harness.js";
-
+import { createEnvironment, deferred, waitFor } from "./tmux-test-harness.js";
 
 describe("ClaudeStatePollManager", () => {
-  function createPollHarness(options: {
-    states?: string[];
-    readState?: (containerId: string) => Promise<string>;
-    environments?: Environment[];
-    loadEnvironments?: () => Promise<Environment[]>;
-    nowMs?: () => number;
-    persist?: (
-      environmentId: string,
-      state: "idle" | "working" | "waiting",
-      occurredAt: string,
-      source: "frontend" | "claude-terminal",
-    ) => Promise<Environment>;
-  } = {}) {
+  function createPollHarness(
+    options: {
+      states?: string[];
+      readState?: (containerId: string) => Promise<string>;
+      environments?: Environment[];
+      loadEnvironments?: () => Promise<Environment[]>;
+      nowMs?: () => number;
+      persist?: (
+        environmentId: string,
+        state: "idle" | "working" | "waiting",
+        occurredAt: string,
+        source: "frontend" | "claude-terminal",
+      ) => Promise<Environment>;
+    } = {},
+  ) {
     const scheduled: Array<() => void> = [];
     const cancelled = new Set<unknown>();
     const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -99,20 +106,24 @@ describe("ClaudeStatePollManager", () => {
     harness.manager.start("container-poll", harness.context);
     await waitFor(() => harness.emitted.length === 1);
 
-    expect(harness.persisted).toEqual([{
-      environmentId: "env-poll",
-      state: "working",
-      occurredAt: "2026-07-27T12:00:00.000Z",
-      source: "claude-terminal",
-    }]);
-    expect(harness.emitted).toEqual([{
-      event: "claude-state-container-poll",
-      payload: {
-        container_id: "container-poll",
+    expect(harness.persisted).toEqual([
+      {
+        environmentId: "env-poll",
         state: "working",
-        occurred_at: "2026-07-27T12:00:00.000Z",
+        occurredAt: "2026-07-27T12:00:00.000Z",
+        source: "claude-terminal",
       },
-    }]);
+    ]);
+    expect(harness.emitted).toEqual([
+      {
+        event: "claude-state-container-poll",
+        payload: {
+          container_id: "container-poll",
+          state: "working",
+          occurred_at: "2026-07-27T12:00:00.000Z",
+        },
+      },
+    ]);
 
     harness.scheduled[0]!();
     await delay(0);
@@ -276,8 +287,14 @@ describe("ClaudeStatePollManager", () => {
     expect(attempts).toBe(3);
     // The renderer still received every state frame, including the ones whose
     // probe failed.
-    expect(harness.emitted.map(({ payload }) => (payload as { state: string }).state))
-      .toEqual(["working", "waiting", "working", "waiting", "working", "waiting"]);
+    expect(harness.emitted.map(({ payload }) => (payload as { state: string }).state)).toEqual([
+      "working",
+      "waiting",
+      "working",
+      "waiting",
+      "working",
+      "waiting",
+    ]);
     harness.manager.shutdown("container-poll");
   });
 
@@ -308,9 +325,8 @@ describe("ClaudeStatePollManager", () => {
     const harness = createPollHarness({
       states: ["working", "idle"],
       persist: async (_environmentId, state) => {
-        const sourceUpdatedAt = persistenceCount++ === 0
-          ? "2026-07-27T12:00:00.000Z"
-          : "2026-07-27T12:00:00.001Z";
+        const sourceUpdatedAt =
+          persistenceCount++ === 0 ? "2026-07-27T12:00:00.000Z" : "2026-07-27T12:00:00.001Z";
         return {
           ...createEnvironment("/worktree", "env-poll"),
           containerId: "container-poll",
@@ -335,12 +351,9 @@ describe("ClaudeStatePollManager", () => {
     harness.scheduled[0]!();
     await waitFor(() => harness.emitted.length === 2);
 
-    expect(harness.emitted.map(({ payload }) => (
-      payload as { occurred_at: string }
-    ).occurred_at)).toEqual([
-      "2026-07-27T12:00:00.000Z",
-      "2026-07-27T12:00:00.001Z",
-    ]);
+    expect(
+      harness.emitted.map(({ payload }) => (payload as { occurred_at: string }).occurred_at),
+    ).toEqual(["2026-07-27T12:00:00.000Z", "2026-07-27T12:00:00.001Z"]);
     harness.manager.shutdown("container-poll");
   });
 
@@ -356,10 +369,7 @@ describe("ClaudeStatePollManager", () => {
     expect(harness.cancelled.size).toBe(0);
     harness.scheduled[0]!();
     await waitFor(() => harness.emitted.length === 2);
-    expect(harness.persisted.map((entry) => entry.state)).toEqual([
-      "working",
-      "idle",
-    ]);
+    expect(harness.persisted.map((entry) => entry.state)).toEqual(["working", "idle"]);
 
     harness.environment.status = "stopped";
     await harness.manager.reconcile(harness.context);
@@ -393,10 +403,7 @@ describe("ClaudeStatePollManager", () => {
 
     second.resolve("idle");
     await waitFor(() => harness.persisted.length === 2);
-    expect(harness.persisted.map((entry) => entry.state)).toEqual([
-      "working",
-      "idle",
-    ]);
+    expect(harness.persisted.map((entry) => entry.state)).toEqual(["working", "idle"]);
     harness.manager.shutdown("container-poll");
   });
 
@@ -512,20 +519,21 @@ describe("ClaudeStatePollManager", () => {
           containerId: "container-poll",
           agentActivityState: "idle",
           agentActivityUpdatedAt: "2026-07-27T12:00:05.000Z",
-          agentActivitySources: persistCount === 1
-            // Rejected: storage kept its own newer observation for this source.
-            ? {
-              "claude-terminal": {
-                state: "idle" as const,
-                updatedAt: "2026-07-27T12:00:05.000Z",
-              },
-            }
-            // A response that lost the source entirely is equally unusable.
-            : persistCount === 2
-              ? {}
-              : {
-                "claude-terminal": { state, updatedAt: occurredAt },
-              },
+          agentActivitySources:
+            persistCount === 1
+              ? // Rejected: storage kept its own newer observation for this source.
+                {
+                  "claude-terminal": {
+                    state: "idle" as const,
+                    updatedAt: "2026-07-27T12:00:05.000Z",
+                  },
+                }
+              : // A response that lost the source entirely is equally unusable.
+                persistCount === 2
+                ? {}
+                : {
+                    "claude-terminal": { state, updatedAt: occurredAt },
+                  },
         };
       },
     });
@@ -559,8 +567,7 @@ describe("ClaudeStatePollManager", () => {
     });
 
     harness.manager.start("container-poll", harness.context);
-    await expect(harness.manager.reconcile(harness.context))
-      .rejects.toThrow("storage unavailable");
+    await expect(harness.manager.reconcile(harness.context)).rejects.toThrow("storage unavailable");
     expect(harness.cancelled.size).toBe(0);
     harness.manager.shutdown("container-poll");
   });
@@ -578,8 +585,7 @@ describe("ClaudeStatePollManager", () => {
     const secondEmitted: Array<{ event: string; payload: unknown }> = [];
     const secondContext = {
       ...harness.context,
-      emit: (event: string, payload: unknown) =>
-        secondEmitted.push({ event, payload }),
+      emit: (event: string, payload: unknown) => secondEmitted.push({ event, payload }),
     } as unknown as CommandContext;
 
     harness.manager.start("container-poll", harness.context);
@@ -774,10 +780,7 @@ describe("ClaudeStatePollManager", () => {
 
     manager.start("container-default-timer", context);
     await waitFor(() => emitted.length === 1);
-    await waitFor(
-      () => readCount >= 2,
-      CLAUDE_STATE_POLL_INTERVAL_MS * 4,
-    );
+    await waitFor(() => readCount >= 2, CLAUDE_STATE_POLL_INTERVAL_MS * 4);
 
     manager.shutdown("container-default-timer");
     const readsAtShutdown = readCount;
@@ -790,8 +793,6 @@ describe("ClaudeStatePollManager", () => {
     expect(() => shutdownClaudeStatePolling("container-never-started")).not.toThrow();
   });
 });
-
-
 
 describe("poll snapshot", () => {
   const paths = { pendingDir: "/tmp/run/pending", timeoutDir: "/tmp/run/timeout" };
@@ -806,21 +807,28 @@ describe("poll snapshot", () => {
   test("reports a zero size before the transcript has been discovered", () => {
     const script = pollSnapshotScript(paths.pendingDir, paths.timeoutDir, undefined);
     expect(script).not.toContain("stat -c %s");
-    expect(parsePollSnapshotOutput("__ork_pending__\n__ork_timeout__\n__ork_size__\n0\n"))
-      .toEqual({ pending: [], timeouts: [], transcriptSize: 0 });
+    expect(parsePollSnapshotOutput("__ork_pending__\n__ork_timeout__\n__ork_size__\n0\n")).toEqual({
+      pending: [],
+      timeouts: [],
+      transcriptSize: 0,
+    });
   });
 
   test("partitions the combined output back into its three sections", () => {
-    expect(parsePollSnapshotOutput([
-      "__ork_pending__",
-      "PreToolUse-1.json",
-      "Stop-2.json",
-      "__ork_timeout__",
-      "PermissionRequest-3.json",
-      "__ork_size__",
-      "4096",
-      "",
-    ].join("\n"))).toEqual({
+    expect(
+      parsePollSnapshotOutput(
+        [
+          "__ork_pending__",
+          "PreToolUse-1.json",
+          "Stop-2.json",
+          "__ork_timeout__",
+          "PermissionRequest-3.json",
+          "__ork_size__",
+          "4096",
+          "",
+        ].join("\n"),
+      ),
+    ).toEqual({
       pending: ["PreToolUse-1.json", "Stop-2.json"],
       timeouts: ["PermissionRequest-3.json"],
       transcriptSize: 4096,
@@ -828,21 +836,23 @@ describe("poll snapshot", () => {
   });
 
   test("rejects malformed or incomplete output instead of inventing an empty snapshot", () => {
-    expect(() => parsePollSnapshotOutput(
-      "__ork_pending__\n__ork_timeout__\n__ork_size__\nnot-a-number\n",
-    )).toThrow("Malformed tmux poll snapshot transcript size");
+    expect(() =>
+      parsePollSnapshotOutput("__ork_pending__\n__ork_timeout__\n__ork_size__\nnot-a-number\n"),
+    ).toThrow("Malformed tmux poll snapshot transcript size");
     expect(() => parsePollSnapshotOutput("")).toThrow("Incomplete tmux poll snapshot");
-    expect(() => parsePollSnapshotOutput(
-      "__ork_pending__\n__ork_timeout__\n__ork_size__\n",
-    )).toThrow("Incomplete tmux poll snapshot");
+    expect(() =>
+      parsePollSnapshotOutput("__ork_pending__\n__ork_timeout__\n__ork_size__\n"),
+    ).toThrow("Incomplete tmux poll snapshot");
   });
 
   test("rejects a failed combined poll before its empty stdout can reset a tail", () => {
-    expect(() => parsePollSnapshotExecOutput({
-      status: 1,
-      stdout: "",
-      stderr: "docker exec failed",
-    })).toThrow("docker exec failed");
+    expect(() =>
+      parsePollSnapshotExecOutput({
+        status: 1,
+        stdout: "",
+        stderr: "docker exec failed",
+      }),
+    ).toThrow("docker exec failed");
   });
 
   test("checks liveness on a slower cadence than the hook and transcript reads", () => {

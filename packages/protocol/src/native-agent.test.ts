@@ -127,18 +127,12 @@ describe("fallback execution profiles", () => {
 
 describe("opencode model provider allowlist", () => {
   test("defaults to the two managed catalogues", () => {
-    expect([...DEFAULT_OPENCODE_MODEL_PROVIDERS]).toEqual([
-      "opencode",
-      "opencode-go",
-    ]);
+    expect([...DEFAULT_OPENCODE_MODEL_PROVIDERS]).toEqual(["opencode", "opencode-go"]);
   });
 
   test("falls back to the default pair when nothing is stored", () => {
     for (const value of [undefined, null, "opencode", {}, 5]) {
-      expect(normalizeOpenCodeModelProviders(value)).toEqual([
-        "opencode",
-        "opencode-go",
-      ]);
+      expect(normalizeOpenCodeModelProviders(value)).toEqual(["opencode", "opencode-go"]);
     }
   });
 
@@ -149,22 +143,21 @@ describe("opencode model provider allowlist", () => {
 
   test("falls back to the managed defaults for a nonempty unusable list", () => {
     for (const value of [[""], ["  ", null], [42, {}]]) {
-      expect(normalizeOpenCodeModelProviders(value)).toEqual([
-        "opencode",
-        "opencode-go",
-      ]);
+      expect(normalizeOpenCodeModelProviders(value)).toEqual(["opencode", "opencode-go"]);
     }
   });
 
   test("lowercases, trims, and dedupes stored ids", () => {
-    expect(normalizeOpenCodeModelProviders([
-      "  OpenCode ",
-      "opencode",
-      "OPENCODE-GO",
-      "",
-      42,
-      "openrouter",
-    ])).toEqual(["opencode", "opencode-go", "openrouter"]);
+    expect(
+      normalizeOpenCodeModelProviders([
+        "  OpenCode ",
+        "opencode",
+        "OPENCODE-GO",
+        "",
+        42,
+        "openrouter",
+      ]),
+    ).toEqual(["opencode", "opencode-go", "openrouter"]);
   });
 
   test("bounds the list so config cannot unbound a scan", () => {
@@ -172,9 +165,7 @@ describe("opencode model provider allowlist", () => {
       { length: MAX_OPENCODE_MODEL_PROVIDERS + 20 },
       (_unused, index) => `provider-${index}`,
     );
-    expect(normalizeOpenCodeModelProviders(providers)).toHaveLength(
-      MAX_OPENCODE_MODEL_PROVIDERS,
-    );
+    expect(normalizeOpenCodeModelProviders(providers)).toHaveLength(MAX_OPENCODE_MODEL_PROVIDERS);
   });
 
   test("selects only the allowed providers", () => {
@@ -194,16 +185,13 @@ describe("opencode model provider allowlist", () => {
   });
 
   test("strips a duplicated provider prefix from the picker label", () => {
-    expect(openCodeModelLocalId("opencode-go/deepseek-v4-flash"))
-      .toBe("deepseek-v4-flash");
-    expect(openCodeModelDisplayLabel(
-      "opencode-go/deepseek-v4-flash",
-      "opencode-go/deepseek-v4-flash",
-    )).toBe("deepseek-v4-flash");
-    expect(openCodeModelDisplayLabel(
-      "opencode-go/deepseek-v4-pro",
+    expect(openCodeModelLocalId("opencode-go/deepseek-v4-flash")).toBe("deepseek-v4-flash");
+    expect(
+      openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", "opencode-go/deepseek-v4-flash"),
+    ).toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-pro", "DeepSeek V4 Pro")).toBe(
       "DeepSeek V4 Pro",
-    )).toBe("DeepSeek V4 Pro");
+    );
     expect(synthesizedOpenCodeAgentModel("opencode-go/deepseek-v4-flash")).toEqual({
       platform: "opencode",
       id: "opencode-go/deepseek-v4-flash",
@@ -218,35 +206,40 @@ describe("opencode model provider allowlist", () => {
   });
 
   test("strips the provider prefix regardless of its casing", () => {
-    expect(openCodeModelDisplayLabel(
-      "opencode-go/deepseek-v4-flash",
-      "OpenCode-Go/deepseek-v4-flash",
-    )).toBe("deepseek-v4-flash");
+    expect(
+      openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", "OpenCode-Go/deepseek-v4-flash"),
+    ).toBe("deepseek-v4-flash");
   });
 
   test("keeps every segment of a model half that contains slashes", () => {
     // The provider is only the first segment, so an OpenRouter-style id must
     // keep `anthropic/` — that belongs to the model, not the provider.
-    expect(openCodeModelLocalId("openrouter/anthropic/claude-3.5"))
-      .toBe("anthropic/claude-3.5");
-    expect(openCodeModelDisplayLabel(
-      "openrouter/anthropic/claude-3.5",
-      "openrouter/anthropic/claude-3.5",
-    )).toBe("anthropic/claude-3.5");
-    expect(openCodeModelDisplayLabel("openrouter/anthropic/claude-3.5"))
-      .toBe("anthropic/claude-3.5");
+    expect(openCodeModelLocalId("openrouter/anthropic/claude-3.5")).toBe("anthropic/claude-3.5");
+    expect(
+      openCodeModelDisplayLabel(
+        "openrouter/anthropic/claude-3.5",
+        "openrouter/anthropic/claude-3.5",
+      ),
+    ).toBe("anthropic/claude-3.5");
+    expect(openCodeModelDisplayLabel("openrouter/anthropic/claude-3.5")).toBe(
+      "anthropic/claude-3.5",
+    );
   });
 
   test("falls back to the model half when the reported name is unusable", () => {
-    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", "   "))
-      .toBe("deepseek-v4-flash");
-    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", null))
-      .toBe("deepseek-v4-flash");
-    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", undefined))
-      .toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", "   ")).toBe(
+      "deepseek-v4-flash",
+    );
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", null)).toBe(
+      "deepseek-v4-flash",
+    );
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", undefined)).toBe(
+      "deepseek-v4-flash",
+    );
     // A name that is exactly the prefix must never strip down to an empty label.
-    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", "opencode-go/"))
-      .toBe("deepseek-v4-flash");
+    expect(openCodeModelDisplayLabel("opencode-go/deepseek-v4-flash", "opencode-go/")).toBe(
+      "deepseek-v4-flash",
+    );
     // An id with no provider half has nothing to strip.
     expect(openCodeModelDisplayLabel("no-separator")).toBe("no-separator");
   });
@@ -261,42 +254,46 @@ describe("opencode model provider allowlist", () => {
   });
 
   test("keys distinct allowlists distinctly", () => {
-    expect(openCodeModelProvidersKey(["opencode", "opencode-go"]))
-      .toBe(openCodeModelProvidersKey(["opencode", "opencode-go"]));
-    expect(openCodeModelProvidersKey(["opencode"]))
-      .not.toBe(openCodeModelProvidersKey(["opencode-go"]));
+    expect(openCodeModelProvidersKey(["opencode", "opencode-go"])).toBe(
+      openCodeModelProvidersKey(["opencode", "opencode-go"]),
+    );
+    expect(openCodeModelProvidersKey(["opencode"])).not.toBe(
+      openCodeModelProvidersKey(["opencode-go"]),
+    );
     // Nothing constrains a stored id's shape, so a separator-joined key would
     // serve one list's cached catalogue to the other.
-    expect(openCodeModelProvidersKey(["a,b"]))
-      .not.toBe(openCodeModelProvidersKey(["a", "b"]));
+    expect(openCodeModelProvidersKey(["a,b"])).not.toBe(openCodeModelProvidersKey(["a", "b"]));
     // Order is part of the identity; re-filtering on a reorder is harmless.
-    expect(openCodeModelProvidersKey(["a", "b"]))
-      .not.toBe(openCodeModelProvidersKey(["b", "a"]));
+    expect(openCodeModelProvidersKey(["a", "b"])).not.toBe(openCodeModelProvidersKey(["b", "a"]));
   });
 });
 
 describe("opencode model provider migration", () => {
   test("returns the managed pair when no stored model names a provider", () => {
-    expect(migrateOpenCodeModelProviders([
-      "opencode/claude-sonnet-5",
-      "claude-opus",
-      "gpt-5.4",
-      "default",
-      undefined,
-      null,
-      42,
-    ])).toEqual(["opencode", "opencode-go"]);
+    expect(
+      migrateOpenCodeModelProviders([
+        "opencode/claude-sonnet-5",
+        "claude-opus",
+        "gpt-5.4",
+        "default",
+        undefined,
+        null,
+        42,
+      ]),
+    ).toEqual(["opencode", "opencode-go"]);
   });
 
   test("preserves providers a pre-existing install already selected from", () => {
-    expect(migrateOpenCodeModelProviders([
-      "openrouter/kimi-k2.5",
-      "hpc-ai/deepseek",
-      // A second model from an already-kept provider adds nothing.
-      "openrouter/other",
-      // Ids are matched lowercased, like a user-edited list.
-      "  OpenRouter/Another  ",
-    ])).toEqual(["opencode", "opencode-go", "openrouter", "hpc-ai"]);
+    expect(
+      migrateOpenCodeModelProviders([
+        "openrouter/kimi-k2.5",
+        "hpc-ai/deepseek",
+        // A second model from an already-kept provider adds nothing.
+        "openrouter/other",
+        // Ids are matched lowercased, like a user-edited list.
+        "  OpenRouter/Another  ",
+      ]),
+    ).toEqual(["opencode", "opencode-go", "openrouter", "hpc-ai"]);
   });
 
   test("bounds the migrated list by the same cap as a user-edited one", () => {
@@ -304,36 +301,35 @@ describe("opencode model provider migration", () => {
       { length: MAX_OPENCODE_MODEL_PROVIDERS + 20 },
       (_unused, index) => `provider-${index}/model`,
     );
-    expect(migrateOpenCodeModelProviders(stored)).toHaveLength(
-      MAX_OPENCODE_MODEL_PROVIDERS,
-    );
+    expect(migrateOpenCodeModelProviders(stored)).toHaveLength(MAX_OPENCODE_MODEL_PROVIDERS);
   });
 
   test("returns the managed pair for an install with nothing stored", () => {
-    expect(migrateOpenCodeModelProviders([])).toEqual([
-      "opencode",
-      "opencode-go",
-    ]);
+    expect(migrateOpenCodeModelProviders([])).toEqual(["opencode", "opencode-go"]);
   });
 });
 
 describe("native agent protocol", () => {
   test("accepts every provider through one tab-data contract", () => {
     for (const platform of AGENT_PLATFORMS) {
-      expect(isNativeAgentTabData({
-        platform,
-        environmentId: "environment-1",
-        sessionId: "session-1",
-        hostPort: 4123,
-        isLocal: true,
-      })).toBe(true);
+      expect(
+        isNativeAgentTabData({
+          platform,
+          environmentId: "environment-1",
+          sessionId: "session-1",
+          hostPort: 4123,
+          isLocal: true,
+        }),
+      ).toBe(true);
     }
   });
 
   test("rejects malformed persisted identities", () => {
     expect(isNativeAgentTabData({ platform: "other", environmentId: "env" })).toBe(false);
     expect(isNativeAgentTabData({ platform: "codex", environmentId: "" })).toBe(false);
-    expect(isNativeAgentTabData({ platform: "codex", environmentId: "env", hostPort: 0 })).toBe(false);
+    expect(isNativeAgentTabData({ platform: "codex", environmentId: "env", hostPort: 0 })).toBe(
+      false,
+    );
   });
 
   test("rejects values that are not identity records at all", () => {
@@ -361,14 +357,16 @@ describe("native agent protocol", () => {
   });
 
   test("accepts an identity whose optional fields are explicitly absent", () => {
-    expect(isNativeAgentTabData({
-      platform: "claude",
-      environmentId: "env",
-      containerId: undefined,
-      hostPort: undefined,
-      sessionId: undefined,
-      isLocal: undefined,
-    })).toBe(true);
+    expect(
+      isNativeAgentTabData({
+        platform: "claude",
+        environmentId: "env",
+        containerId: undefined,
+        hostPort: undefined,
+        sessionId: undefined,
+        isLocal: undefined,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -420,13 +418,15 @@ describe("resolveReasoningId", () => {
   });
 
   test("prefers high over an advertised default the catalog also offers", () => {
-    expect(resolveReasoningId(["low", "medium", "high"], undefined, "medium"))
-      .toBe(FALLBACK_REASONING_ID);
+    expect(resolveReasoningId(["low", "medium", "high"], undefined, "medium")).toBe(
+      FALLBACK_REASONING_ID,
+    );
   });
 
   test("prefers an explicit default option over the advertised default", () => {
-    expect(resolveReasoningId(["default", "low", "medium"], undefined, "medium"))
-      .toBe(DEFAULT_REASONING_ID);
+    expect(resolveReasoningId(["default", "low", "medium"], undefined, "medium")).toBe(
+      DEFAULT_REASONING_ID,
+    );
   });
 
   test("keeps a supported preference ahead of the advertised default", () => {
@@ -467,11 +467,7 @@ describe("background task launch id recovery", () => {
     ],
   ])("recovers the id from %s", (_case, output, args) => {
     expect(recoverBackgroundTaskLaunchId(shellRow(output, args))).toBe(
-      output.includes("bg-suite")
-        ? "bg-suite"
-        : output.includes("bg-dev")
-          ? "bg-dev"
-          : "bg-build",
+      output.includes("bg-suite") ? "bg-suite" : output.includes("bg-dev") ? "bg-dev" : "bg-build",
     );
   });
 
@@ -496,10 +492,12 @@ describe("background task launch id recovery", () => {
   });
 
   test("accepts a non-shell row that declared the launch in its arguments", () => {
-    expect(isBackgroundTaskLaunchCandidate({
-      toolName: "Task",
-      toolArgs: { description: "Review", run_in_background: true },
-    })).toBe(true);
+    expect(
+      isBackgroundTaskLaunchCandidate({
+        toolName: "Task",
+        toolArgs: { description: "Review", run_in_background: true },
+      }),
+    ).toBe(true);
   });
 
   test("treats a shell tool by any supported spelling", () => {
@@ -513,13 +511,15 @@ describe("background task launch id recovery", () => {
 
   test("drops an id longer than the transport bound rather than carrying it", () => {
     const oversized = "x".repeat(BACKGROUND_TASK_ID_MAX_LENGTH + 1);
-    expect(recoverBackgroundTaskLaunchId(
-      shellRow(`Command running in background with ID: ${oversized}.`),
-    )).toBeUndefined();
+    expect(
+      recoverBackgroundTaskLaunchId(
+        shellRow(`Command running in background with ID: ${oversized}.`),
+      ),
+    ).toBeUndefined();
     const atLimit = "y".repeat(BACKGROUND_TASK_ID_MAX_LENGTH);
-    expect(recoverBackgroundTaskLaunchId(
-      shellRow(`Command running in background with ID: ${atLimit}.`),
-    )).toBe(atLimit);
+    expect(
+      recoverBackgroundTaskLaunchId(shellRow(`Command running in background with ID: ${atLimit}.`)),
+    ).toBe(atLimit);
   });
 
   test("never parses a result larger than the scan bound as JSON", () => {
@@ -532,18 +532,13 @@ describe("background task launch id recovery", () => {
   });
 
   test("answers undefined for a row with no result at all", () => {
-    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolArgs: {} }))
-      .toBeUndefined();
-    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolOutput: "" }))
-      .toBeUndefined();
-    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolOutput: 7 }))
-      .toBeUndefined();
+    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolArgs: {} })).toBeUndefined();
+    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolOutput: "" })).toBeUndefined();
+    expect(recoverBackgroundTaskLaunchId({ toolName: "Bash", toolOutput: 7 })).toBeUndefined();
   });
 
   test("tolerates a malformed toolArgs without throwing", () => {
-    expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: [1, 2] }))
-      .toBe(false);
-    expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: null }))
-      .toBe(false);
+    expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: [1, 2] })).toBe(false);
+    expect(isBackgroundTaskLaunchCandidate({ toolName: "Read", toolArgs: null })).toBe(false);
   });
 });

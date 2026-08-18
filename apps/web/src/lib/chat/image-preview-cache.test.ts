@@ -27,13 +27,15 @@ describe("image preview cache", () => {
   });
 
   test("returns null for a key that was never written", () => {
-    expect(readImagePreviewCache(imagePreviewCacheKey(undefined, "/w/missing.png", undefined)))
-      .toBeNull();
+    expect(
+      readImagePreviewCache(imagePreviewCacheKey(undefined, "/w/missing.png", undefined)),
+    ).toBeNull();
   });
 
   test("evicts the least recently used entry beyond the count bound", () => {
     const keys = Array.from({ length: 33 }, (_, index) =>
-      imagePreviewCacheKey(undefined, `/w/${index}.png`, undefined));
+      imagePreviewCacheKey(undefined, `/w/${index}.png`, undefined),
+    );
     for (const key of keys.slice(0, 32)) {
       writeImagePreviewCache(key, "data:image/png;base64,x");
     }
@@ -50,7 +52,8 @@ describe("image preview cache", () => {
   test("evicts on the total size bound before the count bound is reached", () => {
     const big = "d".repeat(7 * 1024 * 1024);
     const keys = Array.from({ length: 4 }, (_, index) =>
-      imagePreviewCacheKey(undefined, `/w/big-${index}.png`, undefined));
+      imagePreviewCacheKey(undefined, `/w/big-${index}.png`, undefined),
+    );
     for (const key of keys) {
       writeImagePreviewCache(key, big);
     }

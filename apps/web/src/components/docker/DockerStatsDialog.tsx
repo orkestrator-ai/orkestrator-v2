@@ -25,7 +25,10 @@ import {
 } from "lucide-react";
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
 import * as backend from "@/lib/backend";
-import { FullscreenSettingsLayout, type SettingsMenuItem } from "@/components/settings/FullscreenSettingsLayout";
+import {
+  FullscreenSettingsLayout,
+  type SettingsMenuItem,
+} from "@/components/settings/FullscreenSettingsLayout";
 import type { DockerSystemStats, ContainerInfo, SystemPruneResult } from "@/lib/backend";
 import { useProjectStore, useEnvironmentStore } from "@/stores";
 import { Label } from "@/components/ui/label";
@@ -75,7 +78,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
   const [isReattaching, setIsReattaching] = useState(false);
 
   // Count orphaned containers
-  const orphanedCount = containers.filter(c => !c.isAssigned).length;
+  const orphanedCount = containers.filter((c) => !c.isAssigned).length;
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -198,7 +201,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       const newEnvironment = await backend.reattachContainer(
         selectedProjectId,
         reattachingContainer.id,
-        reattachName || undefined
+        reattachName || undefined,
       );
       // Add the new environment to the store so sidebar updates immediately
       addEnvironment(newEnvironment);
@@ -226,7 +229,8 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
     if (error) {
       return (
         <div className="flex items-center gap-2 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
-          <AlertCircle className="h-4 w-4 shrink-0" /><span>{error}</span>
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{error}</span>
         </div>
       );
     }
@@ -247,53 +251,129 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-medium">System Resources</h3>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => setShowPruneConfirm(true)} disabled={isPruning}>
-                  {isPruning ? (<><Loader2 className="h-4 w-4 mr-1 animate-spin" />Pruning...</>) : (<><Trash2 className="h-4 w-4 mr-1" />Clean Up</>)}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowPruneConfirm(true)}
+                  disabled={isPruning}
+                >
+                  {isPruning ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                      Pruning...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Clean Up
+                    </>
+                  )}
                 </Button>
                 <Button variant="ghost" size="sm" onClick={loadData} disabled={isLoading}>
-                  <RefreshCw className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`} />Refresh
+                  <RefreshCw className={`h-4 w-4 mr-1 ${isLoading ? "animate-spin" : ""}`} />
+                  Refresh
                 </Button>
               </div>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">CPU</div>
-                <div className="text-lg font-semibold mt-1">{stats.cpuUsagePercent}% <span className="text-xs font-normal text-muted-foreground">({stats.cpus} cores)</span></div>
+                <div className="text-lg font-semibold mt-1">
+                  {stats.cpuUsagePercent}%{" "}
+                  <span className="text-xs font-normal text-muted-foreground">
+                    ({stats.cpus} cores)
+                  </span>
+                </div>
                 <Progress value={Math.min(stats.cpuUsagePercent, 100)} className="mt-2 h-1" />
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">MEMORY</div>
-                <div className="text-lg font-semibold mt-1">{formatBytes(stats.memoryUsed)} / {formatBytes(stats.memoryTotal)}</div>
-                <Progress value={stats.memoryTotal > 0 ? (stats.memoryUsed / stats.memoryTotal) * 100 : 0} className="mt-2 h-1" />
+                <div className="text-lg font-semibold mt-1">
+                  {formatBytes(stats.memoryUsed)} / {formatBytes(stats.memoryTotal)}
+                </div>
+                <Progress
+                  value={stats.memoryTotal > 0 ? (stats.memoryUsed / stats.memoryTotal) * 100 : 0}
+                  className="mt-2 h-1"
+                />
               </div>
               <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">DISK</div>
-                <div className="text-lg font-semibold mt-1">{stats.diskTotal > 0 ? `${formatBytes(stats.diskUsed)} / ${formatBytes(stats.diskTotal)}` : formatBytes(stats.diskUsed)}</div>
-                <Progress value={stats.diskTotal > 0 ? (stats.diskUsed / stats.diskTotal) * 100 : 0} className="mt-2 h-1" />
+                <div className="text-lg font-semibold mt-1">
+                  {stats.diskTotal > 0
+                    ? `${formatBytes(stats.diskUsed)} / ${formatBytes(stats.diskTotal)}`
+                    : formatBytes(stats.diskUsed)}
+                </div>
+                <Progress
+                  value={stats.diskTotal > 0 ? (stats.diskUsed / stats.diskTotal) * 100 : 0}
+                  className="mt-2 h-1"
+                />
               </div>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
-              <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700"><div className="text-lg font-semibold">{stats.containersRunning}</div><div className="text-xs text-muted-foreground">Running</div></div>
-              <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700"><div className="text-lg font-semibold">{stats.containersTotal}</div><div className="text-xs text-muted-foreground">Containers</div></div>
-              <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700"><div className="text-lg font-semibold">{stats.imagesTotal}</div><div className="text-xs text-muted-foreground">Images</div></div>
+              <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
+                <div className="text-lg font-semibold">{stats.containersRunning}</div>
+                <div className="text-xs text-muted-foreground">Running</div>
+              </div>
+              <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
+                <div className="text-lg font-semibold">{stats.containersTotal}</div>
+                <div className="text-xs text-muted-foreground">Containers</div>
+              </div>
+              <div className="text-center p-3 rounded-md bg-zinc-800/50 border border-zinc-700">
+                <div className="text-lg font-semibold">{stats.imagesTotal}</div>
+                <div className="text-xs text-muted-foreground">Images</div>
+              </div>
             </div>
             {pruneResult !== null && (
               <div className="flex items-start gap-2 p-3 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
                 <CheckCircle2 className="h-4 w-4 shrink-0 mt-0.5" />
                 <div className="flex-1">
-                  {pruneResult.containersDeleted === 0 && pruneResult.imagesDeleted === 0 && pruneResult.networksDeleted === 0 && pruneResult.volumesDeleted === 0 ? (
+                  {pruneResult.containersDeleted === 0 &&
+                  pruneResult.imagesDeleted === 0 &&
+                  pruneResult.networksDeleted === 0 &&
+                  pruneResult.volumesDeleted === 0 ? (
                     <div className="font-medium">Nothing to clean up</div>
                   ) : (
-                    <><div className="font-medium">Docker cleanup completed</div><div className="text-xs mt-1 space-y-0.5 opacity-80">
-                      {pruneResult.containersDeleted > 0 && <div>{pruneResult.containersDeleted} container{pruneResult.containersDeleted > 1 ? "s" : ""} removed</div>}
-                      {pruneResult.imagesDeleted > 0 && <div>{pruneResult.imagesDeleted} image{pruneResult.imagesDeleted > 1 ? "s" : ""} removed</div>}
-                      {pruneResult.networksDeleted > 0 && <div>{pruneResult.networksDeleted} network{pruneResult.networksDeleted > 1 ? "s" : ""} removed</div>}
-                      {pruneResult.volumesDeleted > 0 && <div>{pruneResult.volumesDeleted} volume{pruneResult.volumesDeleted > 1 ? "s" : ""} removed</div>}
-                      <div className="font-medium mt-1">{formatBytes(pruneResult.spaceReclaimed)} reclaimed</div>
-                    </div></>
+                    <>
+                      <div className="font-medium">Docker cleanup completed</div>
+                      <div className="text-xs mt-1 space-y-0.5 opacity-80">
+                        {pruneResult.containersDeleted > 0 && (
+                          <div>
+                            {pruneResult.containersDeleted} container
+                            {pruneResult.containersDeleted > 1 ? "s" : ""} removed
+                          </div>
+                        )}
+                        {pruneResult.imagesDeleted > 0 && (
+                          <div>
+                            {pruneResult.imagesDeleted} image
+                            {pruneResult.imagesDeleted > 1 ? "s" : ""} removed
+                          </div>
+                        )}
+                        {pruneResult.networksDeleted > 0 && (
+                          <div>
+                            {pruneResult.networksDeleted} network
+                            {pruneResult.networksDeleted > 1 ? "s" : ""} removed
+                          </div>
+                        )}
+                        {pruneResult.volumesDeleted > 0 && (
+                          <div>
+                            {pruneResult.volumesDeleted} volume
+                            {pruneResult.volumesDeleted > 1 ? "s" : ""} removed
+                          </div>
+                        )}
+                        <div className="font-medium mt-1">
+                          {formatBytes(pruneResult.spaceReclaimed)} reclaimed
+                        </div>
+                      </div>
+                    </>
                   )}
                 </div>
-                <button onClick={() => setPruneResult(null)} className="shrink-0 p-0.5 rounded hover:bg-green-500/20 transition-colors" aria-label="Dismiss"><X className="h-4 w-4" /></button>
+                <button
+                  onClick={() => setPruneResult(null)}
+                  className="shrink-0 p-0.5 rounded hover:bg-green-500/20 transition-colors"
+                  aria-label="Dismiss"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
             )}
           </div>
@@ -304,19 +384,40 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium">Orkestrator Containers</h3>
             {orphanedCount > 0 && (
-              <Button variant="destructive" size="sm" onClick={() => setShowCleanupConfirm(true)} disabled={isCleaningUp}>
-                {isCleaningUp ? (<><Loader2 className="h-4 w-4 mr-1 animate-spin" />Cleaning...</>) : (<><Trash2 className="h-4 w-4 mr-1" />Clean Up ({orphanedCount})</>)}
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setShowCleanupConfirm(true)}
+                disabled={isCleaningUp}
+              >
+                {isCleaningUp ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    Cleaning...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4 mr-1" />
+                    Clean Up ({orphanedCount})
+                  </>
+                )}
               </Button>
             )}
           </div>
           {cleanupResult !== null && (
             <div className="flex items-center gap-2 p-3 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>{cleanupResult === 0 ? "No orphaned containers to remove." : `Successfully removed ${cleanupResult} orphaned container${cleanupResult > 1 ? "s" : ""}.`}</span>
+              <span>
+                {cleanupResult === 0
+                  ? "No orphaned containers to remove."
+                  : `Successfully removed ${cleanupResult} orphaned container${cleanupResult > 1 ? "s" : ""}.`}
+              </span>
             </div>
           )}
           {containers.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">No Orkestrator containers found.</p>
+            <p className="text-sm text-muted-foreground py-4 text-center">
+              No Orkestrator containers found.
+            </p>
           ) : (
             <div className="space-y-2">
               {containers.map((container) => {
@@ -327,27 +428,88 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
                 const isRunning = container.state === "running";
                 const project = container.projectId ? getProjectById(container.projectId) : null;
                 return (
-                  <div key={container.id} className={`flex items-center justify-between p-3 rounded-md ${isOrphaned ? "bg-red-500/10 border border-red-500/30" : "bg-zinc-800/50 border border-zinc-700"}`}>
+                  <div
+                    key={container.id}
+                    className={`flex items-center justify-between p-3 rounded-md ${isOrphaned ? "bg-red-500/10 border border-red-500/30" : "bg-zinc-800/50 border border-zinc-700"}`}
+                  >
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className={`font-medium text-sm truncate ${isOrphaned ? "text-red-700 dark:text-red-400" : ""}`}>
-                          {container.name}{project && <span className="text-muted-foreground font-normal ml-1">({project.name})</span>}
+                        <span
+                          className={`font-medium text-sm truncate ${isOrphaned ? "text-red-700 dark:text-red-400" : ""}`}
+                        >
+                          {container.name}
+                          {project && (
+                            <span className="text-muted-foreground font-normal ml-1">
+                              ({project.name})
+                            </span>
+                          )}
                         </span>
-                        {isOrphaned && <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-400">Orphaned</span>}
+                        {isOrphaned && (
+                          <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-700 dark:text-red-400">
+                            Orphaned
+                          </span>
+                        )}
                       </div>
-                      <div className="text-xs text-muted-foreground">{container.id.substring(0, 12)} · {formatRelativeTime(container.created)}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {container.id.substring(0, 12)} · {formatRelativeTime(container.created)}
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      {isRunning && container.cpuPercent !== null && <span className="text-xs text-muted-foreground">CPU: {container.cpuPercent}%</span>}
+                      {isRunning && container.cpuPercent !== null && (
+                        <span className="text-xs text-muted-foreground">
+                          CPU: {container.cpuPercent}%
+                        </span>
+                      )}
                       <div className="flex items-center gap-1">
-                        {isRunning ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <XCircle className="h-4 w-4 text-muted-foreground" />}
+                        {isRunning ? (
+                          <CheckCircle2 className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <XCircle className="h-4 w-4 text-muted-foreground" />
+                        )}
                         <span className="text-xs capitalize">{container.state}</span>
                       </div>
                       {isOrphaned && (
                         <div className="flex items-center gap-1 ml-2">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-blue-600 hover:text-blue-700 dark:hover:bg-blue-900/30" onClick={() => openReattachDialog(container)} disabled={isOperating || isReattaching} title="Reattach to project"><Link2 className="h-4 w-4" /></Button>
-                          {isRunning && <Button variant="ghost" size="icon" className="h-7 w-7 text-orange-600 hover:text-orange-700 dark:hover:bg-orange-900/30" onClick={() => handleStopContainer(container.id)} disabled={isOperating} title="Stop container">{isStopping ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}</Button>}
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-red-600 hover:text-red-700 dark:hover:bg-red-900/30" onClick={() => handleDeleteContainer(container.id)} disabled={isOperating} title="Delete container">{isDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}</Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-blue-600 hover:text-blue-700 dark:hover:bg-blue-900/30"
+                            onClick={() => openReattachDialog(container)}
+                            disabled={isOperating || isReattaching}
+                            title="Reattach to project"
+                          >
+                            <Link2 className="h-4 w-4" />
+                          </Button>
+                          {isRunning && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-orange-600 hover:text-orange-700 dark:hover:bg-orange-900/30"
+                              onClick={() => handleStopContainer(container.id)}
+                              disabled={isOperating}
+                              title="Stop container"
+                            >
+                              {isStopping ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Square className="h-4 w-4" />
+                              )}
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-red-600 hover:text-red-700 dark:hover:bg-red-900/30"
+                            onClick={() => handleDeleteContainer(container.id)}
+                            disabled={isOperating}
+                            title="Delete container"
+                          >
+                            {isDeleting ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
                         </div>
                       )}
                     </div>
@@ -356,7 +518,12 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
               })}
             </div>
           )}
-          {orphanedCount > 0 && <p className="text-xs text-muted-foreground">Orphaned containers are not assigned to any environment. Cleaning them up will permanently delete them.</p>}
+          {orphanedCount > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Orphaned containers are not assigned to any environment. Cleaning them up will
+              permanently delete them.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -364,26 +531,24 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
   return (
     <>
-    <FullscreenSettingsLayout
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Docker"
-      menuItems={dockerMenuItems}
-    >
-      {() => renderDockerSection()}
-    </FullscreenSettingsLayout>
+      <FullscreenSettingsLayout
+        open={open}
+        onOpenChange={onOpenChange}
+        title="Docker"
+        menuItems={dockerMenuItems}
+      >
+        {() => renderDockerSection()}
+      </FullscreenSettingsLayout>
 
       {/* Cleanup Confirmation Dialog */}
       <AlertDialog open={showCleanupConfirm} onOpenChange={setShowCleanupConfirm}>
-        <AlertDialogContent
-          className={Z_FULLSCREEN_DIALOG}
-          overlayClassName={Z_FULLSCREEN_DIALOG}
-        >
+        <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
             <AlertDialogTitle>Clean Up Orphaned Containers?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete {orphanedCount} container{orphanedCount > 1 ? "s" : ""} that {orphanedCount > 1 ? "are" : "is"} not assigned to any environment.
-              This action cannot be undone.
+              This will permanently delete {orphanedCount} container{orphanedCount > 1 ? "s" : ""}{" "}
+              that {orphanedCount > 1 ? "are" : "is"} not assigned to any environment. This action
+              cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -408,35 +573,27 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
       {/* Stopped Container Prune Confirmation Dialog */}
       <AlertDialog open={showPruneConfirm} onOpenChange={setShowPruneConfirm}>
-        <AlertDialogContent
-          className={Z_FULLSCREEN_DIALOG}
-          overlayClassName={Z_FULLSCREEN_DIALOG}
-        >
+        <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
             <AlertDialogTitle>Remove Stopped Orkestrator Containers?</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-3">
                 <p>
-                  This removes every stopped container belonging to this
-                  Orkestrator instance, including containers for environments you
-                  have stopped but not deleted. Starting such an environment
-                  afterwards rebuilds its container from scratch.
+                  This removes every stopped container belonging to this Orkestrator instance,
+                  including containers for environments you have stopped but not deleted. Starting
+                  such an environment afterwards rebuilds its container from scratch.
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  Containers from other applications and Orkestrator
-                  installations are left untouched. Images, networks and volumes
-                  are also left alone because they cannot be scoped safely to
-                  this installation.
+                  Containers from other applications and Orkestrator installations are left
+                  untouched. Images, networks and volumes are also left alone because they cannot be
+                  scoped safely to this installation.
                 </p>
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={isPruning}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleSystemPrune}
-              disabled={isPruning}
-            >
+            <AlertDialogAction onClick={handleSystemPrune} disabled={isPruning}>
               {isPruning ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -451,25 +608,23 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
       </AlertDialog>
 
       {/* Reattach Container Dialog */}
-      <AlertDialog open={showReattachDialog} onOpenChange={(open) => {
-        setShowReattachDialog(open);
-        if (!open) {
-          setReattachingContainer(null);
-          setSelectedProjectId("");
-          setReattachName("");
-        }
-      }}>
-        <AlertDialogContent
-          className={Z_FULLSCREEN_DIALOG}
-          overlayClassName={Z_FULLSCREEN_DIALOG}
-        >
+      <AlertDialog
+        open={showReattachDialog}
+        onOpenChange={(open) => {
+          setShowReattachDialog(open);
+          if (!open) {
+            setReattachingContainer(null);
+            setSelectedProjectId("");
+            setReattachName("");
+          }
+        }}
+      >
+        <AlertDialogContent className={Z_FULLSCREEN_DIALOG} overlayClassName={Z_FULLSCREEN_DIALOG}>
           <AlertDialogHeader>
             <AlertDialogTitle>Reattach Container to Project</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-4">
-                <p>
-                  Reattach this container to a project by creating a new environment entry.
-                </p>
+                <p>Reattach this container to a project by creating a new environment entry.</p>
                 {reattachingContainer && (
                   <div className="text-sm p-2 rounded bg-muted">
                     <span className="font-medium">{reattachingContainer.name}</span>
@@ -481,10 +636,7 @@ export function DockerStatsDialog({ open, onOpenChange }: DockerStatsDialogProps
 
                 <div className="space-y-2">
                   <Label htmlFor="project-select">Select Project</Label>
-                  <Select
-                    value={selectedProjectId}
-                    onValueChange={setSelectedProjectId}
-                  >
+                  <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
                     <SelectTrigger id="project-select">
                       <SelectValue placeholder="Choose a project..." />
                     </SelectTrigger>

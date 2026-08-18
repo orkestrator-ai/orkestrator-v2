@@ -24,15 +24,33 @@ describe("Electron packaging configuration", () => {
         directories: { buildResources: string; output: string };
         files: string[];
         extraResources: Array<{ from: string; to: string; filter: string[] }>;
-        mac: { icon: string; identity: string | null; hardenedRuntime: boolean; notarize: boolean; target: string[] };
+        mac: {
+          icon: string;
+          identity: string | null;
+          hardenedRuntime: boolean;
+          notarize: boolean;
+          target: string[];
+        };
         win?: { icon: string };
         linux: { icon: string };
       };
     }>("package.json");
-    const electronTsconfig = await readJson<{ compilerOptions: { outDir: string; rootDir: string }; include: string[] }>("apps/desktop/tsconfig.electron.json");
-    const desktopBuildScript = await fs.readFile(path.join(process.cwd(), "apps/desktop/scripts/build.ts"), "utf8");
-    const bootstrapPreload = await fs.readFile(path.join(process.cwd(), "apps/desktop/electron/toolchain-bootstrap-preload.ts"), "utf8");
-    const desktopMain = await fs.readFile(path.join(process.cwd(), "apps/desktop/electron/main.ts"), "utf8");
+    const electronTsconfig = await readJson<{
+      compilerOptions: { outDir: string; rootDir: string };
+      include: string[];
+    }>("apps/desktop/tsconfig.electron.json");
+    const desktopBuildScript = await fs.readFile(
+      path.join(process.cwd(), "apps/desktop/scripts/build.ts"),
+      "utf8",
+    );
+    const bootstrapPreload = await fs.readFile(
+      path.join(process.cwd(), "apps/desktop/electron/toolchain-bootstrap-preload.ts"),
+      "utf8",
+    );
+    const desktopMain = await fs.readFile(
+      path.join(process.cwd(), "apps/desktop/electron/main.ts"),
+      "utf8",
+    );
 
     expect(packageJson.main).toBe("apps/desktop/dist/electron/main.js");
     expect(packageJson.scripts.build).toContain("turbo");
@@ -46,7 +64,10 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.scripts["build:all"]).not.toContain("download:binaries");
     expect(packageJson.scripts["docker:build"]).not.toContain("--no-cache");
     expect(packageJson.devDependencies.electron).toBeDefined();
-    expect(packageJson.build.directories).toMatchObject({ buildResources: "apps/desktop/electron/resources", output: "release" });
+    expect(packageJson.build.directories).toMatchObject({
+      buildResources: "apps/desktop/electron/resources",
+      output: "release",
+    });
     expect(packageJson.build.mac.icon).toBe("icon.icns");
     expect(packageJson.build.mac.identity).toBe("-");
     expect(packageJson.build.mac.hardenedRuntime).toBe(false);
@@ -54,18 +75,24 @@ describe("Electron packaging configuration", () => {
     expect(packageJson.build.mac.target).toEqual(["dmg"]);
     expect(packageJson.build.win).toBeUndefined();
     expect(packageJson.build.linux.icon).toBe("icons");
-    expect(packageJson.build.files).toEqual(expect.arrayContaining(["apps/desktop/dist/**", "package.json"]));
-    expect(packageJson.build.extraResources).toEqual(expect.arrayContaining([
-      expect.objectContaining({ from: "apps/web/dist", to: "web" }),
-      expect.objectContaining({ from: "apps/backend/dist", to: "backend" }),
-      expect.objectContaining({ from: "bridges/claude-bridge", to: "claude-bridge" }),
-      expect.objectContaining({ from: "bridges/codex-bridge", to: "codex-bridge" }),
-      expect.objectContaining({ from: "binaries", to: "bin", filter: ["bun"] }),
-    ]));
+    expect(packageJson.build.files).toEqual(
+      expect.arrayContaining(["apps/desktop/dist/**", "package.json"]),
+    );
+    expect(packageJson.build.extraResources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ from: "apps/web/dist", to: "web" }),
+        expect.objectContaining({ from: "apps/backend/dist", to: "backend" }),
+        expect.objectContaining({ from: "bridges/claude-bridge", to: "claude-bridge" }),
+        expect.objectContaining({ from: "bridges/codex-bridge", to: "codex-bridge" }),
+        expect.objectContaining({ from: "binaries", to: "bin", filter: ["bun"] }),
+      ]),
+    );
     expect(electronTsconfig.compilerOptions.outDir).toBe("dist");
     expect(electronTsconfig.compilerOptions.rootDir).toBe(".");
     expect(electronTsconfig.include).toEqual(["electron/**/*.ts"]);
-    expect(desktopBuildScript).toContain('path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts")');
+    expect(desktopBuildScript).toContain(
+      'path.join(packageRoot, "electron/toolchain-bootstrap-preload.ts")',
+    );
     expect(bootstrapPreload).toContain('ipcRenderer.on("orkestrator:toolchain-progress"');
     expect(bootstrapPreload).toContain('window.addEventListener("DOMContentLoaded"');
     expect(desktopMain).toContain("userDataDirectoryName(isDev)");
@@ -79,7 +106,8 @@ describe("Electron packaging configuration", () => {
   });
 
   test("opts signing and notarization back in only for release packages", async () => {
-    const { createReleaseConfig, hasNotarizationCredentials } = await import("../../../electron-builder.release.config");
+    const { createReleaseConfig, hasNotarizationCredentials } =
+      await import("../../../electron-builder.release.config");
     const notarizationEnvironment = {
       APPLE_API_KEY: "/private/key.p8",
       APPLE_API_KEY_ID: "key-id",
@@ -89,7 +117,9 @@ describe("Electron packaging configuration", () => {
 
     expect(hasNotarizationCredentials({})).toBe(false);
     expect(hasNotarizationCredentials(notarizationEnvironment)).toBe(true);
-    expect(() => createReleaseConfig({})).toThrow("package:release requires Apple notarization credentials");
+    expect(() => createReleaseConfig({})).toThrow(
+      "package:release requires Apple notarization credentials",
+    );
     expect(releaseConfig.forceCodeSigning).toBe(true);
     expect(releaseConfig.mac?.identity).toBeUndefined();
     expect(releaseConfig.mac?.hardenedRuntime).toBe(true);

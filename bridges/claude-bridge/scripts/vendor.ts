@@ -8,7 +8,10 @@ const sdkRoot = await realpath(sdkLink);
 
 await rm(path.join(packageRoot, "dist", "node_modules"), { recursive: true, force: true });
 await mkdir(destination, { recursive: true });
-await cp(sdkRoot, path.join(destination, "claude-agent-sdk"), { recursive: true, dereference: true });
+await cp(sdkRoot, path.join(destination, "claude-agent-sdk"), {
+  recursive: true,
+  dereference: true,
+});
 
 const optionalRoot = path.dirname(sdkRoot);
 for (const name of await readdir(optionalRoot)) {

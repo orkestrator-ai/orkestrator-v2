@@ -1,6 +1,34 @@
 import { describe, expect, mock, test } from "bun:test";
 import path from "node:path";
-import { agentMcpConfigJson, agentToolConnectionTarget, boundedInfoEventMessage, containerExecArgs, fastModeFromPane, fastModeRejectionFromPane, isDirectJsonlChild, isMissingTmuxSessionError, jsonlByMtimeFindCommand, listLocalJsonlByMtime, newestJsonlFindCommand, newestJsonlInDir, parseFreshJsonlFindOutput, parseTmuxSessionNames, parseTranscriptHeadOutput, PREVIOUS_SESSION_STAT_CONCURRENCY, probeThinkingDisplaySupport, selectReapableTmuxSessions, tailFromOffsetCommand, thinkingDisplayProbeArgs, thinkingDisplayProbeIndicatesSupport, TMUX_HOOK_PAYLOAD_MAX_BYTES, tmuxSessionName, tmuxSessionNamePrefix, transcriptContainsSessionId, transcriptHeadCommand, TranscriptTail } from "../../../apps/backend/src/core/tmux";
+import {
+  agentMcpConfigJson,
+  agentToolConnectionTarget,
+  boundedInfoEventMessage,
+  containerExecArgs,
+  fastModeFromPane,
+  fastModeRejectionFromPane,
+  isDirectJsonlChild,
+  isMissingTmuxSessionError,
+  jsonlByMtimeFindCommand,
+  listLocalJsonlByMtime,
+  newestJsonlFindCommand,
+  newestJsonlInDir,
+  parseFreshJsonlFindOutput,
+  parseTmuxSessionNames,
+  parseTranscriptHeadOutput,
+  PREVIOUS_SESSION_STAT_CONCURRENCY,
+  probeThinkingDisplaySupport,
+  selectReapableTmuxSessions,
+  tailFromOffsetCommand,
+  thinkingDisplayProbeArgs,
+  thinkingDisplayProbeIndicatesSupport,
+  TMUX_HOOK_PAYLOAD_MAX_BYTES,
+  tmuxSessionName,
+  tmuxSessionNamePrefix,
+  transcriptContainsSessionId,
+  transcriptHeadCommand,
+  TranscriptTail,
+} from "../../../apps/backend/src/core/tmux";
 import { tmuxSelectionPromptFingerprint } from "../../../packages/protocol/src/tmux-observation";
 import { spawnSync } from "node:child_process";
 import { existsSync, promises as fs } from "node:fs";
@@ -16,7 +44,6 @@ import {
   withFakeTmuxRuntime,
 } from "./tmux-test-harness.js";
 
-
 test("fast-mode pane parsing uses the newest acknowledgement and strips ANSI", () => {
   expect(fastModeFromPane("Fast mode ON\n\u001b[31mFast mode OFF\u001b[0m")).toBe(false);
   expect(fastModeFromPane("Fast mode ON")).toBe(true);
@@ -24,26 +51,29 @@ test("fast-mode pane parsing uses the newest acknowledgement and strips ANSI", (
   expect(fastModeFromPane("fAsT MoDe oN")).toBe(true);
 });
 
-
-
 test("fast-mode pane parsing surfaces visible command rejections", () => {
-  expect(fastModeRejectionFromPane("Fast mode is unavailable for this model"))
-    .toBe("Fast mode is unavailable for this model");
+  expect(fastModeRejectionFromPane("Fast mode is unavailable for this model")).toBe(
+    "Fast mode is unavailable for this model",
+  );
   expect(fastModeRejectionFromPane("Unknown command: /fast")).toBe("Unknown command: /fast");
-  expect(fastModeRejectionFromPane("Fast mode requires an eligible plan"))
-    .toBe("Fast mode requires an eligible plan");
-  expect(fastModeRejectionFromPane("/fast requires Claude Code 2.1"))
-    .toBe("/fast requires Claude Code 2.1");
+  expect(fastModeRejectionFromPane("Fast mode requires an eligible plan")).toBe(
+    "Fast mode requires an eligible plan",
+  );
+  expect(fastModeRejectionFromPane("/fast requires Claude Code 2.1")).toBe(
+    "/fast requires Claude Code 2.1",
+  );
   expect(fastModeRejectionFromPane("Fast mode ON")).toBeUndefined();
 });
 
-
-
 test("Claude tmux agent MCP config uses Claude's mcpServers document shape", () => {
-  expect(JSON.parse(agentMcpConfigJson({
-    url: "http://127.0.0.1:4567/mcp",
-    token: "project-token",
-  }))).toEqual({
+  expect(
+    JSON.parse(
+      agentMcpConfigJson({
+        url: "http://127.0.0.1:4567/mcp",
+        token: "project-token",
+      }),
+    ),
+  ).toEqual({
     mcpServers: {
       orkestrator: {
         type: "http",
@@ -56,20 +86,12 @@ test("Claude tmux agent MCP config uses Claude's mcpServers document shape", () 
   });
 });
 
-
-
 test("Claude's installed parser accepts the generated agent MCP config", async () => {
   const isolatedHome = await createTempDir("ork-claude-mcp-parser-");
   const parse = (config: string) => {
     const result = spawnSync(
       "claude",
-      [
-        "--mcp-config",
-        config,
-        "--strict-mcp-config",
-        "--print",
-        "",
-      ],
+      ["--mcp-config", config, "--strict-mcp-config", "--print", ""],
       {
         encoding: "utf8",
         timeout: 10_000,
@@ -86,31 +108,31 @@ test("Claude's installed parser accepts the generated agent MCP config", async (
     return `${result.stdout}\n${result.stderr}`;
   };
 
-  const rejected = parse(JSON.stringify({
-    orkestrator: {
-      type: "http",
-      url: "http://127.0.0.1:4567/mcp",
-    },
-  }));
+  const rejected = parse(
+    JSON.stringify({
+      orkestrator: {
+        type: "http",
+        url: "http://127.0.0.1:4567/mcp",
+      },
+    }),
+  );
   expect(rejected).toContain("Invalid MCP configuration");
   expect(rejected).toContain("mcpServers");
 
-  const accepted = parse(agentMcpConfigJson({
-    url: "http://127.0.0.1:4567/mcp",
-    token: "project-token",
-  }));
+  const accepted = parse(
+    agentMcpConfigJson({
+      url: "http://127.0.0.1:4567/mcp",
+      token: "project-token",
+    }),
+  );
   expect(accepted).not.toContain("Invalid MCP configuration");
   expect(accepted).toContain("Input must be provided");
 });
-
-
 
 test("Claude tmux selects the agent tool endpoint for its execution backend", () => {
   expect(agentToolConnectionTarget("local")).toBe("host");
   expect(agentToolConnectionTarget("container")).toBe("container");
 });
-
-
 
 describe("tmux session cleanup helpers", () => {
   test("recognizes tmux's ordinary missing-session diagnostics", () => {
@@ -127,32 +149,38 @@ describe("tmux session cleanup helpers", () => {
   });
 
   test("derives stable sanitized prefixes and parses list-sessions output", () => {
-    expect(tmuxSessionNamePrefix("environment/with spaces and a long suffix"))
-      .toBe("orkestrator-environmentwiths-");
+    expect(tmuxSessionNamePrefix("environment/with spaces and a long suffix")).toBe(
+      "orkestrator-environmentwiths-",
+    );
     expect(tmuxSessionNamePrefix("///")).toBe("orkestrator-id-");
-    expect(parseTmuxSessionNames(" first \n\nsecond\r\n  third  \n"))
-      .toEqual(["first", "second", "third"]);
+    expect(parseTmuxSessionNames(" first \n\nsecond\r\n  third  \n")).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
   });
 
   test("selects only an environment's sessions and fails closed on a contested prefix", () => {
     const environmentId = "0123456789abcdef-target";
     const own = tmuxSessionName(environmentId, "tab-own");
     const other = tmuxSessionName("other", "tab-other");
-    expect(selectReapableTmuxSessions({
-      names: [other, own],
-      environmentId,
-      survivingEnvironmentIds: [environmentId, "other"],
-    })).toEqual([own]);
+    expect(
+      selectReapableTmuxSessions({
+        names: [other, own],
+        environmentId,
+        survivingEnvironmentIds: [environmentId, "other"],
+      }),
+    ).toEqual([own]);
 
-    expect(selectReapableTmuxSessions({
-      names: [own],
-      environmentId,
-      survivingEnvironmentIds: ["0123456789abcdef-survivor"],
-    })).toEqual([]);
+    expect(
+      selectReapableTmuxSessions({
+        names: [own],
+        environmentId,
+        survivingEnvironmentIds: ["0123456789abcdef-survivor"],
+      }),
+    ).toEqual([]);
   });
 });
-
-
 
 describe("container transcript discovery helpers", () => {
   test("builds a GNU find query scoped to fresh jsonl files in the project dir", () => {
@@ -174,9 +202,9 @@ describe("container transcript discovery helpers", () => {
   test("returns no records for empty, legacy newline, or unterminated output", () => {
     expect(parseFreshJsonlFindOutput("")).toEqual([]);
     expect(parseFreshJsonlFindOutput("\n  \n")).toEqual([]);
-    expect(parseFreshJsonlFindOutput(
-      "1700000002 /home/node/.claude/projects/p/new.jsonl",
-    )).toEqual([]);
+    expect(parseFreshJsonlFindOutput("1700000002 /home/node/.claude/projects/p/new.jsonl")).toEqual(
+      [],
+    );
   });
 
   test("parses every candidate when output contains multiple NUL records", () => {
@@ -198,8 +226,7 @@ describe("container transcript discovery helpers", () => {
   });
 
   test("preserves newlines inside a filename rather than forging another record", () => {
-    const pathWithNewline =
-      "/home/node/.claude/projects/p/real.jsonl\n1700000999 outside.jsonl";
+    const pathWithNewline = "/home/node/.claude/projects/p/real.jsonl\n1700000999 outside.jsonl";
     expect(parseFreshJsonlFindOutput(`1700000002 ${pathWithNewline}\0`)).toEqual([
       { path: pathWithNewline, mtime: 1700000002 },
     ]);
@@ -207,7 +234,9 @@ describe("container transcript discovery helpers", () => {
 
   test("skips records lacking a path field or with a non-finite mtime", () => {
     expect(parseFreshJsonlFindOutput("1700000002\0")).toEqual([]);
-    expect(parseFreshJsonlFindOutput("notanumber /home/node/.claude/projects/p/x.jsonl\0")).toEqual([]);
+    expect(parseFreshJsonlFindOutput("notanumber /home/node/.claude/projects/p/x.jsonl\0")).toEqual(
+      [],
+    );
     const mixed = `${[
       "1700000003 /home/node/.claude/projects/p/good.jsonl",
       "1700000002", // no path
@@ -233,17 +262,13 @@ describe("container transcript discovery helpers", () => {
     names.push("ignore.txt");
     let inFlight = 0;
     let maxInFlight = 0;
-    const entries = await listLocalJsonlByMtime(
-      "/tmp/transcripts",
-      names,
-      async (filePath) => {
-        inFlight += 1;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        await delay(1);
-        inFlight -= 1;
-        return Number(filePath.match(/(\d+)\.jsonl$/)?.[1] ?? 0);
-      },
-    );
+    const entries = await listLocalJsonlByMtime("/tmp/transcripts", names, async (filePath) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await delay(1);
+      inFlight -= 1;
+      return Number(filePath.match(/(\d+)\.jsonl$/)?.[1] ?? 0);
+    });
 
     expect(maxInFlight).toBeLessThanOrEqual(PREVIOUS_SESSION_STAT_CONCURRENCY);
     expect(entries).toHaveLength(50);
@@ -252,12 +277,12 @@ describe("container transcript discovery helpers", () => {
   });
 });
 
-
-
 describe("boundedInfoEventMessage", () => {
   test("returns short, empty, and exactly-at-the-bound messages unchanged", () => {
     expect(boundedInfoEventMessage("")).toBe("");
-    expect(boundedInfoEventMessage("Claude finished responding")).toBe("Claude finished responding");
+    expect(boundedInfoEventMessage("Claude finished responding")).toBe(
+      "Claude finished responding",
+    );
     const atBound = "a".repeat(2_000);
     expect(boundedInfoEventMessage(atBound)).toBe(atBound);
     expect(boundedInfoEventMessage(`${atBound}b`)).toBe(atBound);
@@ -287,8 +312,6 @@ describe("boundedInfoEventMessage", () => {
     expect(/[\ud800-\udbff]$/.test(bounded)).toBe(false);
   });
 });
-
-
 
 describe("transcriptContainsSessionId", () => {
   test("matches a top-level camelCase sessionId", () => {
@@ -325,7 +348,9 @@ describe("transcriptContainsSessionId", () => {
 
   test("returns false for empty content or empty session id", () => {
     expect(transcriptContainsSessionId("", "abc-123")).toBe(false);
-    expect(transcriptContainsSessionId(`${JSON.stringify({ sessionId: "abc-123" })}\n`, "")).toBe(false);
+    expect(transcriptContainsSessionId(`${JSON.stringify({ sessionId: "abc-123" })}\n`, "")).toBe(
+      false,
+    );
   });
 
   test("parses each line of a non-matching transcript exactly once", () => {
@@ -335,9 +360,8 @@ describe("transcriptContainsSessionId", () => {
     // because the deep walk tests the same top-level keys before it recurses —
     // so running both doubled the JSON.parse cost of every file that does not
     // own the session.
-    const content = Array.from(
-      { length: 20 },
-      (_, index) => JSON.stringify({ sessionId: `other-${index}`, message: { role: "user" } }),
+    const content = Array.from({ length: 20 }, (_, index) =>
+      JSON.stringify({ sessionId: `other-${index}`, message: { role: "user" } }),
     ).join("\n");
 
     const realParse = JSON.parse;
@@ -355,8 +379,6 @@ describe("transcriptContainsSessionId", () => {
     expect(parses).toBe(20);
   });
 });
-
-
 
 describe("newestJsonlInDir container backend", () => {
   type Backend = Parameters<typeof newestJsonlInDir>[0];
@@ -431,9 +453,9 @@ describe("newestJsonlInDir container backend", () => {
       [`${dir}/owned.jsonl`]: `${JSON.stringify({ sessionId: "mine" })}\n`,
     });
 
-    await expect(
-      newestJsonlInDir(backend, dir, 1700000000, "mine"),
-    ).resolves.toBe(`${dir}/owned.jsonl`);
+    await expect(newestJsonlInDir(backend, dir, 1700000000, "mine")).resolves.toBe(
+      `${dir}/owned.jsonl`,
+    );
     expect(readPaths).toEqual([
       `${dir}/safe.jsonl\n1700000999 outside.jsonl`,
       `${dir}/owned.jsonl`,
@@ -443,16 +465,14 @@ describe("newestJsonlInDir container backend", () => {
   });
 });
 
-
-
 describe("thinking display capability probe", () => {
   function result(overrides: Partial<ExecOutput>): ExecOutput {
     return { status: 0, stdout: "", stderr: "", ...overrides };
   }
 
   const invalidDisplayArgument =
-    "error: option '--thinking-display <display>' argument '__orkestrator_probe__' is invalid."
-    + " Allowed choices are summarized, omitted.";
+    "error: option '--thinking-display <display>' argument '__orkestrator_probe__' is invalid." +
+    " Allowed choices are summarized, omitted.";
 
   test("probes both launch flags at once and stays off the API path", () => {
     expect(thinkingDisplayProbeArgs("/opt/toolchains/claude")).toEqual([
@@ -466,39 +486,53 @@ describe("thinking display capability probe", () => {
   });
 
   test("reads an argument-validation failure that names the flag as support", () => {
-    expect(thinkingDisplayProbeIndicatesSupport(result({ status: 1, stderr: invalidDisplayArgument }))).toBe(true);
+    expect(
+      thinkingDisplayProbeIndicatesSupport(result({ status: 1, stderr: invalidDisplayArgument })),
+    ).toBe(true);
     // Some CLIs report usage errors on stdout.
-    expect(thinkingDisplayProbeIndicatesSupport(result({ status: 1, stdout: invalidDisplayArgument }))).toBe(true);
+    expect(
+      thinkingDisplayProbeIndicatesSupport(result({ status: 1, stdout: invalidDisplayArgument })),
+    ).toBe(true);
   });
 
   test("rejects a CLI that does not know --thinking", () => {
-    expect(thinkingDisplayProbeIndicatesSupport(
-      result({ status: 1, stderr: "error: unknown option '--thinking'" }),
-    )).toBe(false);
+    expect(
+      thinkingDisplayProbeIndicatesSupport(
+        result({ status: 1, stderr: "error: unknown option '--thinking'" }),
+      ),
+    ).toBe(false);
   });
 
   test("rejects a CLI that does not know --thinking-display", () => {
-    expect(thinkingDisplayProbeIndicatesSupport(
-      result({ status: 1, stderr: "error: unknown option '--thinking-display'" }),
-    )).toBe(false);
+    expect(
+      thinkingDisplayProbeIndicatesSupport(
+        result({ status: 1, stderr: "error: unknown option '--thinking-display'" }),
+      ),
+    ).toBe(false);
   });
 
   test("rejects an unknown-option report whatever its casing", () => {
-    expect(thinkingDisplayProbeIndicatesSupport(
-      result({ status: 2, stderr: "Unknown option: --thinking-display" }),
-    )).toBe(false);
+    expect(
+      thinkingDisplayProbeIndicatesSupport(
+        result({ status: 2, stderr: "Unknown option: --thinking-display" }),
+      ),
+    ).toBe(false);
   });
 
   test("rejects a CLI that ignores the flags and exits 0", () => {
-    expect(thinkingDisplayProbeIndicatesSupport(
-      result({ status: 0, stdout: "2.1.2", stderr: "ignoring --thinking-display" }),
-    )).toBe(false);
+    expect(
+      thinkingDisplayProbeIndicatesSupport(
+        result({ status: 0, stdout: "2.1.2", stderr: "ignoring --thinking-display" }),
+      ),
+    ).toBe(false);
   });
 
   test("rejects a probe that failed without naming the flag", () => {
     expect(thinkingDisplayProbeIndicatesSupport(result({ status: 1, stderr: "boom" }))).toBe(false);
     // A killed probe: execWithOutput reports -1 and appends this to stderr.
-    expect(thinkingDisplayProbeIndicatesSupport(result({ status: -1, stderr: "Command timed out" }))).toBe(false);
+    expect(
+      thinkingDisplayProbeIndicatesSupport(result({ status: -1, stderr: "Command timed out" })),
+    ).toBe(false);
   });
 
   test("bounds the probe so a hung CLI cannot stall session start", async () => {
@@ -547,13 +581,13 @@ describe("thinking display capability probe", () => {
 
   test("fails closed when the probe cannot be spawned at all", async () => {
     const missingBinary = Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" });
-    await expect(probeThinkingDisplaySupport(async () => {
-      throw missingBinary;
-    }, "claude")).resolves.toBe(false);
+    await expect(
+      probeThinkingDisplaySupport(async () => {
+        throw missingBinary;
+      }, "claude"),
+    ).resolves.toBe(false);
   });
 });
-
-
 
 describe("TranscriptTail incremental reads", () => {
   type Backend = Parameters<TranscriptTail["readNew"]>[0];
@@ -694,22 +728,24 @@ describe("TranscriptTail incremental reads", () => {
     const file = { bytes: Buffer.from(content, "utf8") };
     const { backend } = fakeBackend(file);
 
-    await expect(new TranscriptTail("/transcript.jsonl").readNew(backend))
-      .resolves.toEqual([{ n: 1 }, { n: 2 }]);
+    await expect(new TranscriptTail("/transcript.jsonl").readNew(backend)).resolves.toEqual([
+      { n: 1 },
+      { n: 2 },
+    ]);
   });
 
   test("reads from the byte after the offset in container mode", () => {
     // `tail -c +N` is 1-based: +1 is the whole file, so the first unread byte
     // of a 40-byte prefix is +41. An off-by-one here duplicates or drops a byte
     // of every append.
-    expect(tailFromOffsetCommand("/home/node/.claude/t.jsonl", 0))
-      .toContain("tail -c +1 '/home/node/.claude/t.jsonl'");
-    expect(tailFromOffsetCommand("/home/node/.claude/t.jsonl", 40))
-      .toContain("tail -c +41 '/home/node/.claude/t.jsonl'");
+    expect(tailFromOffsetCommand("/home/node/.claude/t.jsonl", 0)).toContain(
+      "tail -c +1 '/home/node/.claude/t.jsonl'",
+    );
+    expect(tailFromOffsetCommand("/home/node/.claude/t.jsonl", 40)).toContain(
+      "tail -c +41 '/home/node/.claude/t.jsonl'",
+    );
   });
 });
-
-
 
 describe("previous-session metadata reads", () => {
   test("asks for the line count and only the head of a transcript", () => {
@@ -720,9 +756,9 @@ describe("previous-session metadata reads", () => {
   });
 
   test("parses the count and head back out of the combined output", () => {
-    expect(parseTranscriptHeadOutput("  12 \n__ork_head__\n{\"a\":1}\n{\"b\":2}\n")).toEqual({
+    expect(parseTranscriptHeadOutput('  12 \n__ork_head__\n{"a":1}\n{"b":2}\n')).toEqual({
       lineCount: 12,
-      head: "{\"a\":1}\n{\"b\":2}\n",
+      head: '{"a":1}\n{"b":2}\n',
     });
   });
 
@@ -738,10 +774,7 @@ describe("previous-session metadata reads", () => {
   });
 });
 
-
-
 describe("live session read paths", () => {
-
   test("sending prompt keys forces an immediate authoritative observation", async () => {
     const handlers = createHandlers();
 
@@ -785,16 +818,9 @@ describe("live session read paths", () => {
       // emission even though the fake pane deliberately stayed unchanged.
       await waitFor(() => observations.length > before, 1_000);
       expect(observations.at(-1)?.prompt).not.toBeNull();
-      expect(observations.at(-1)?.revision).toBeGreaterThan(
-        observations[before - 1]!.revision,
-      );
+      expect(observations.at(-1)?.revision).toBeGreaterThan(observations[before - 1]!.revision);
 
-      await invoke(
-        handlers,
-        "claude_tmux_stop",
-        { tabId, environmentId: environment.id },
-        context,
-      );
+      await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
   }, 15_000);
 
@@ -810,7 +836,10 @@ describe("live session read paths", () => {
       const context = {
         storage: { getEnvironment: async () => environment },
         emit: (event: string, payload: unknown) => {
-          const candidate = payload as { kind?: string; observation?: typeof observations[number] };
+          const candidate = payload as {
+            kind?: string;
+            observation?: (typeof observations)[number];
+          };
           if (event === "claude-tmux:event" && candidate.kind === "observation") {
             observations.push(candidate.observation!);
           }
@@ -820,7 +849,12 @@ describe("live session read paths", () => {
       };
       const tabId = "tab-bound-prompt";
       const session = tmuxSessionName(environment.id, tabId);
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      );
       await fs.writeFile(path.join(alive, `${session}.mode`), "selection");
       await waitFor(() => observations.some((entry) => entry.prompt !== null), 5_000);
       const observed = observations.findLast((entry) => entry.prompt !== null)!;
@@ -832,43 +866,71 @@ describe("live session read paths", () => {
       };
       const logBefore = await fs.readFile(log, "utf8");
 
-      await expect(invoke(handlers, "claude_tmux_answer_selection_prompt", {
-        tabId,
-        environmentId: environment.id,
-        ...input,
-        expectedRevision: input.expectedRevision - 1,
-      }, context)).rejects.toThrow("no longer current");
-      await expect(invoke(handlers, "claude_tmux_answer_selection_prompt", {
-        tabId,
-        environmentId: environment.id,
-        ...input,
-        expectedPromptFingerprint: `${input.expectedPromptFingerprint}-spoofed`,
-      }, context)).rejects.toThrow("no longer current");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_answer_selection_prompt",
+          {
+            tabId,
+            environmentId: environment.id,
+            ...input,
+            expectedRevision: input.expectedRevision - 1,
+          },
+          context,
+        ),
+      ).rejects.toThrow("no longer current");
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_answer_selection_prompt",
+          {
+            tabId,
+            environmentId: environment.id,
+            ...input,
+            expectedPromptFingerprint: `${input.expectedPromptFingerprint}-spoofed`,
+          },
+          context,
+        ),
+      ).rejects.toThrow("no longer current");
 
       await fs.writeFile(path.join(alive, `${session}.mode`), "bypassPermissions");
-      await expect(invoke(handlers, "claude_tmux_answer_selection_prompt", {
-        tabId,
-        environmentId: environment.id,
-        ...input,
-      }, context)).rejects.toThrow("no longer current");
-      expect((await fs.readFile(log, "utf8")).match(/send-keys/g)?.length ?? 0)
-        .toBe(logBefore.match(/send-keys/g)?.length ?? 0);
+      await expect(
+        invoke(
+          handlers,
+          "claude_tmux_answer_selection_prompt",
+          {
+            tabId,
+            environmentId: environment.id,
+            ...input,
+          },
+          context,
+        ),
+      ).rejects.toThrow("no longer current");
+      expect((await fs.readFile(log, "utf8")).match(/send-keys/g)?.length ?? 0).toBe(
+        logBefore.match(/send-keys/g)?.length ?? 0,
+      );
 
       await fs.writeFile(path.join(alive, `${session}.mode`), "selection");
-      await waitFor(() => observations.some((entry) =>
-        entry.prompt !== null && entry.revision > observed.revision), 5_000);
-      const current = observations.findLast((entry) => entry.prompt !== null)!;
-      await invoke(handlers, "claude_tmux_answer_selection_prompt", {
-        tabId,
-        environmentId: environment.id,
-        expectedGeneration: current.generation,
-        expectedRevision: current.revision,
-        expectedPromptFingerprint: tmuxSelectionPromptFingerprint(current.prompt!),
-        optionIndex: 1,
-      }, context);
-      expect(await fs.readFile(log, "utf8")).toContain(
-        `send-keys -t ${session} -- 2`,
+      await waitFor(
+        () =>
+          observations.some((entry) => entry.prompt !== null && entry.revision > observed.revision),
+        5_000,
       );
+      const current = observations.findLast((entry) => entry.prompt !== null)!;
+      await invoke(
+        handlers,
+        "claude_tmux_answer_selection_prompt",
+        {
+          tabId,
+          environmentId: environment.id,
+          expectedGeneration: current.generation,
+          expectedRevision: current.revision,
+          expectedPromptFingerprint: tmuxSelectionPromptFingerprint(current.prompt!),
+          optionIndex: 1,
+        },
+        context,
+      );
+      expect(await fs.readFile(log, "utf8")).toContain(`send-keys -t ${session} -- 2`);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -886,12 +948,12 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const tabId = "tab-poll-failure";
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       await fs.mkdir(pendingDir, { recursive: true });
 
@@ -906,10 +968,20 @@ describe("live session read paths", () => {
         await fs.chmod(pendingDir, 0o755);
       }
 
-      await fs.writeFile(path.join(pendingDir, "Stop-after-failure.json"), JSON.stringify({ ok: true }));
-      await waitFor(() => emitted.some((item) => item.event === "claude-tmux:event"
-        && (item.payload as { kind?: string }).kind === "hook"
-        && (item.payload as { event_id?: string }).event_id === "after-failure"), 5_000);
+      await fs.writeFile(
+        path.join(pendingDir, "Stop-after-failure.json"),
+        JSON.stringify({ ok: true }),
+      );
+      await waitFor(
+        () =>
+          emitted.some(
+            (item) =>
+              item.event === "claude-tmux:event" &&
+              (item.payload as { kind?: string }).kind === "hook" &&
+              (item.payload as { event_id?: string }).event_id === "after-failure",
+          ),
+        5_000,
+      );
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -927,32 +999,44 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const tabId = "tab-info-events";
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       // Much larger than the retained bound: truncation must not make a
       // code-point array proportional to this untrusted hook payload.
       const longMessage = `${"😀".repeat(250_000)}tail`;
-      await Promise.all(Array.from({ length: 22 }, async (_, index) => {
-        const id = `info-${String(index).padStart(2, "0")}`;
-        await fs.writeFile(
-          path.join(pendingDir, `Notification-${id}.json`),
-          JSON.stringify({ message: index === 21 ? longMessage : `message-${index}` }),
-        );
-      }));
-      await waitFor(() => emitted.some((entry) =>
-        entry.event === "claude-tmux:event"
-        && (entry.payload as { event_id?: string }).event_id === "info-21"
-      ), 5_000);
+      await Promise.all(
+        Array.from({ length: 22 }, async (_, index) => {
+          const id = `info-${String(index).padStart(2, "0")}`;
+          await fs.writeFile(
+            path.join(pendingDir, `Notification-${id}.json`),
+            JSON.stringify({ message: index === 21 ? longMessage : `message-${index}` }),
+          );
+        }),
+      );
+      await waitFor(
+        () =>
+          emitted.some(
+            (entry) =>
+              entry.event === "claude-tmux:event" &&
+              (entry.payload as { event_id?: string }).event_id === "info-21",
+          ),
+        5_000,
+      );
 
-      const bounded = await invoke(handlers, "claude_tmux_status", {
-        tabId,
-        environmentId: environment.id,
-      }, context) as {
+      const bounded = (await invoke(
+        handlers,
+        "claude_tmux_status",
+        {
+          tabId,
+          environmentId: environment.id,
+        },
+        context,
+      )) as {
         info_events: Array<{ id: string; kind: string; message: string; receivedAt: string }>;
       };
       expect(bounded.info_events).toHaveLength(20);
@@ -965,48 +1049,69 @@ describe("live session read paths", () => {
       expect(bounded.info_events.at(-1)!.message).toHaveLength(2_000);
       expect(Array.from(bounded.info_events.at(-1)!.message)).toHaveLength(1_000);
       expect(bounded.info_events.at(-1)!.message.endsWith("\ud83d")).toBe(false);
-      expect(bounded.info_events.every(({ receivedAt }) =>
-        Number.isFinite(Date.parse(receivedAt))
-      )).toBe(true);
+      expect(
+        bounded.info_events.every(({ receivedAt }) => Number.isFinite(Date.parse(receivedAt))),
+      ).toBe(true);
 
       await fs.writeFile(
         path.join(pendingDir, "Notification-info-21.json"),
         JSON.stringify({ message: "updated duplicate" }),
       );
       await waitFor(async () => {
-        const snapshot = await invoke(handlers, "claude_tmux_status", {
-          tabId,
-          environmentId: environment.id,
-        }, context) as { info_events: Array<{ id: string; message: string }> };
+        const snapshot = (await invoke(
+          handlers,
+          "claude_tmux_status",
+          {
+            tabId,
+            environmentId: environment.id,
+          },
+          context,
+        )) as { info_events: Array<{ id: string; message: string }> };
         return snapshot.info_events.at(-1)?.message === "updated duplicate";
       }, 5_000);
-      const deduplicated = await invoke(handlers, "claude_tmux_status", {
-        tabId,
-        environmentId: environment.id,
-      }, context) as { info_events: Array<{ id: string; message: string }> };
-      expect(deduplicated.info_events.filter(({ id }) => id === "info-21")).toEqual([expect.objectContaining({
-        id: "info-21",
-        message: "updated duplicate",
-      })]);
+      const deduplicated = (await invoke(
+        handlers,
+        "claude_tmux_status",
+        {
+          tabId,
+          environmentId: environment.id,
+        },
+        context,
+      )) as { info_events: Array<{ id: string; message: string }> };
+      expect(deduplicated.info_events.filter(({ id }) => id === "info-21")).toEqual([
+        expect.objectContaining({
+          id: "info-21",
+          message: "updated duplicate",
+        }),
+      ]);
       expect(deduplicated.info_events).toHaveLength(20);
 
-      await fs.writeFile(
-        path.join(pendingDir, "Notification-default-message.json"),
-        "{}",
+      await fs.writeFile(path.join(pendingDir, "Notification-default-message.json"), "{}");
+      await waitFor(
+        () =>
+          emitted.some(
+            (entry) =>
+              entry.event === "claude-tmux:event" &&
+              (entry.payload as { event_id?: string }).event_id === "default-message",
+          ),
+        5_000,
       );
-      await waitFor(() => emitted.some((entry) =>
-        entry.event === "claude-tmux:event"
-        && (entry.payload as { event_id?: string }).event_id === "default-message"
-      ), 5_000);
-      const rehydrated = await invoke(handlers, "claude_tmux_status", {
-        tabId,
-        environmentId: environment.id,
-      }, context) as { info_events: Array<{ id: string; message: string }> };
+      const rehydrated = (await invoke(
+        handlers,
+        "claude_tmux_status",
+        {
+          tabId,
+          environmentId: environment.id,
+        },
+        context,
+      )) as { info_events: Array<{ id: string; message: string }> };
       expect(rehydrated.info_events).toHaveLength(20);
-      expect(rehydrated.info_events.at(-1)).toEqual(expect.objectContaining({
-        id: "default-message",
-        message: "Claude sent a notification",
-      }));
+      expect(rehydrated.info_events.at(-1)).toEqual(
+        expect.objectContaining({
+          id: "default-message",
+          message: "Claude sent a notification",
+        }),
+      );
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1024,25 +1129,38 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const tabId = "tab-info-dedup";
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
-      const snapshot = async () => await invoke(handlers, "claude_tmux_status", {
-        tabId,
-        environmentId: environment.id,
-      }, context) as { info_events: Array<{ id: string; kind: string; message: string }> };
+      const snapshot = async () =>
+        (await invoke(
+          handlers,
+          "claude_tmux_status",
+          {
+            tabId,
+            environmentId: environment.id,
+          },
+          context,
+        )) as { info_events: Array<{ id: string; kind: string; message: string }> };
       const deliver = async (kind: string, id: string, body: string) => {
         const seen = emitted.length;
         await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), body);
-        await waitFor(() => emitted.slice(seen).some((entry) =>
-          entry.event === "claude-tmux:event"
-          && (entry.payload as { event_id?: string }).event_id === id
-          && (entry.payload as { event_kind?: string }).event_kind === kind
-        ), 5_000);
+        await waitFor(
+          () =>
+            emitted
+              .slice(seen)
+              .some(
+                (entry) =>
+                  entry.event === "claude-tmux:event" &&
+                  (entry.payload as { event_id?: string }).event_id === id &&
+                  (entry.payload as { event_kind?: string }).event_kind === kind,
+              ),
+          5_000,
+        );
       };
 
       // Deduplication keys on id *and* kind. A Notification and a Stop that
@@ -1095,17 +1213,19 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const tabId = "tab-info-bounds";
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
-      const payloadFor = (eventId: string) => emitted.find((entry) =>
-        entry.event === "claude-tmux:event"
-        && (entry.payload as { event_id?: string }).event_id === eventId
-      )?.payload as { payload?: unknown } | undefined;
+      const payloadFor = (eventId: string) =>
+        emitted.find(
+          (entry) =>
+            entry.event === "claude-tmux:event" &&
+            (entry.payload as { event_id?: string }).event_id === eventId,
+        )?.payload as { payload?: unknown } | undefined;
 
       // Retaining a trimmed copy while broadcasting the original would move the
       // cost to every SSE subscriber rather than remove it.
@@ -1144,30 +1264,35 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const tabId = "tab-oversized-blocking";
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
       const sessionRoot = path.join(runtimeRoot, "sessions", status.session_id);
       const pending = path.join(sessionRoot, "pending", "PreToolUse-too-large.json");
       const response = path.join(sessionRoot, "response", "PreToolUse-too-large.json");
       await fs.writeFile(pending, "x".repeat(TMUX_HOOK_PAYLOAD_MAX_BYTES + 1));
 
       await waitFor(() => existsSync(response), 10_000);
-      await expect(fs.readFile(response, "utf8")).resolves.toBe(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: "Approval payload exceeded the safe size limit.",
-        },
-      }));
+      await expect(fs.readFile(response, "utf8")).resolves.toBe(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: "Approval payload exceeded the safe size limit.",
+          },
+        }),
+      );
       expect(existsSync(pending)).toBe(false);
-      expect(emitted.some((entry) =>
-        entry.event === "claude-tmux:event"
-        && (entry.payload as { event_id?: string }).event_id === "too-large"
-      )).toBe(false);
+      expect(
+        emitted.some(
+          (entry) =>
+            entry.event === "claude-tmux:event" &&
+            (entry.payload as { event_id?: string }).event_id === "too-large",
+        ),
+      ).toBe(false);
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1188,16 +1313,19 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const args = { tabId: "tab-completion", environmentId: environment.id };
-      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+      const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
         session_id: string;
       };
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       const writeHook = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
         await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
-        await waitFor(() => emitted.some((entry) =>
-          entry.event === "claude-tmux:event"
-          && (entry.payload as { event_id?: string }).event_id === id
-        ));
+        await waitFor(() =>
+          emitted.some(
+            (entry) =>
+              entry.event === "claude-tmux:event" &&
+              (entry.payload as { event_id?: string }).event_id === id,
+          ),
+        );
       };
 
       await writeHook("UserPromptSubmit", "turn-1-start");
@@ -1210,10 +1338,7 @@ describe("live session read paths", () => {
       await writeHook("UserPromptSubmit", "turn-2-start");
       await writeHook("Stop", "turn-2-stop");
       await waitFor(() => notifyAgentTurnCompleted.mock.calls.length === 2);
-      expect(notifyAgentTurnCompleted.mock.calls).toEqual([
-        [environment.id],
-        [environment.id],
-      ]);
+      expect(notifyAgentTurnCompleted.mock.calls).toEqual([[environment.id], [environment.id]]);
 
       await invoke(handlers, "claude_tmux_stop", args, context);
     });
@@ -1234,7 +1359,7 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const args = { tabId: "tab-reattached", environmentId: environment.id };
-      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+      const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
         session_id: string;
       };
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
@@ -1265,15 +1390,15 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const args = { tabId: "tab-overlap", environmentId: environment.id };
-      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+      const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
         session_id: string;
       };
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       const writeAndObserve = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
         await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
-        await waitFor(() => emitted.some((entry) =>
-          (entry.payload as { event_id?: string }).event_id === id
-        ));
+        await waitFor(() =>
+          emitted.some((entry) => (entry.payload as { event_id?: string }).event_id === id),
+        );
       };
 
       await writeAndObserve("UserPromptSubmit", "overlap-start-1");
@@ -1294,11 +1419,15 @@ describe("live session read paths", () => {
     await withFakeTmuxRuntime(async ({ environment, runtimeRoot }) => {
       environment.prRecheckAfterAgentCompletionArmedAt = "2026-08-01T12:00:00.000Z";
       let rejectFirst!: (error: Error) => void;
-      const first = new Promise<void>((_resolve, reject) => { rejectFirst = reject; });
+      const first = new Promise<void>((_resolve, reject) => {
+        rejectFirst = reject;
+      });
       let resolveSecond!: () => void;
-      const second = new Promise<void>((resolve) => { resolveSecond = resolve; });
+      const second = new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      });
       const notifyAgentTurnCompleted = mock(() =>
-        notifyAgentTurnCompleted.mock.calls.length === 1 ? first : second
+        notifyAgentTurnCompleted.mock.calls.length === 1 ? first : second,
       );
       const emitted: Array<{ event: string; payload: unknown }> = [];
       const context = {
@@ -1309,15 +1438,15 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const args = { tabId: "tab-generation-rejection", environmentId: environment.id };
-      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+      const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
         session_id: string;
       };
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       const writeAndObserve = async (kind: "UserPromptSubmit" | "Stop", id: string) => {
         await fs.writeFile(path.join(pendingDir, `${kind}-${id}.json`), "{}");
-        await waitFor(() => emitted.some((entry) =>
-          (entry.payload as { event_id?: string }).event_id === id
-        ));
+        await waitFor(() =>
+          emitted.some((entry) => (entry.payload as { event_id?: string }).event_id === id),
+        );
       };
 
       await writeAndObserve("UserPromptSubmit", "generation-1-start");
@@ -1361,16 +1490,16 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const args = { tabId: "tab-arm-read-retry", environmentId: environment.id };
-      const status = await invoke(handlers, "claude_tmux_start", args, context) as {
+      const status = (await invoke(handlers, "claude_tmux_start", args, context)) as {
         session_id: string;
       };
       observeCompletionReads = true;
       const pendingDir = path.join(runtimeRoot, "sessions", status.session_id, "pending");
       for (const id of ["failed-read", "missing-read", "successful-read"]) {
         await fs.writeFile(path.join(pendingDir, `Stop-${id}.json`), "{}");
-        await waitFor(() => emitted.some((entry) =>
-          (entry.payload as { event_id?: string }).event_id === id
-        ));
+        await waitFor(() =>
+          emitted.some((entry) => (entry.payload as { event_id?: string }).event_id === id),
+        );
         await delay(25);
       }
 
@@ -1394,14 +1523,14 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const unarmedArgs = { tabId: "tab-unarmed", environmentId: environment.id };
-      const unarmed = await invoke(handlers, "claude_tmux_start", unarmedArgs, context) as {
+      const unarmed = (await invoke(handlers, "claude_tmux_start", unarmedArgs, context)) as {
         session_id: string;
       };
       const unarmedPending = path.join(runtimeRoot, "sessions", unarmed.session_id, "pending");
       await fs.writeFile(path.join(unarmedPending, "Stop-unarmed.json"), "{}");
-      await waitFor(() => emitted.some((entry) =>
-        (entry.payload as { event_id?: string }).event_id === "unarmed"
-      ));
+      await waitFor(() =>
+        emitted.some((entry) => (entry.payload as { event_id?: string }).event_id === "unarmed"),
+      );
       await delay(25);
       expect(notifyAgentTurnCompleted).not.toHaveBeenCalled();
       await invoke(handlers, "claude_tmux_stop", unarmedArgs, context);
@@ -1413,7 +1542,7 @@ describe("live session read paths", () => {
         if (attempts === 1) throw new Error("temporary reconciliation failure");
       });
       const retryArgs = { tabId: "tab-retry", environmentId: environment.id };
-      const retry = await invoke(handlers, "claude_tmux_start", retryArgs, context) as {
+      const retry = (await invoke(handlers, "claude_tmux_start", retryArgs, context)) as {
         session_id: string;
       };
       const retryPending = path.join(runtimeRoot, "sessions", retry.session_id, "pending");
@@ -1439,13 +1568,18 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const tabId = "tab-liveness-cadence";
-      await invoke(handlers, "claude_tmux_start", { tabId, environmentId: environment.id }, context);
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        { tabId, environmentId: environment.id },
+        context,
+      );
       const session = tmuxSessionName(environment.id, tabId);
 
-      const livenessChecks = async () => (await fs.readFile(log, "utf8"))
-        .split("\n")
-        .filter((line) => line.startsWith(`has-session -t ${session}`))
-        .length;
+      const livenessChecks = async () =>
+        (await fs.readFile(log, "utf8"))
+          .split("\n")
+          .filter((line) => line.startsWith(`has-session -t ${session}`)).length;
       const before = await livenessChecks();
 
       // The loop ticks every POLL_INTERVAL_MS (250ms), so this window covers
@@ -1453,7 +1587,7 @@ describe("live session read paths", () => {
       // `docker exec` in container mode — and can only report a session that
       // has already ended, which is why it must not run per tick.
       await delay(3_000);
-      const spawned = await livenessChecks() - before;
+      const spawned = (await livenessChecks()) - before;
 
       expect(spawned).toBeGreaterThanOrEqual(1);
       expect(spawned).toBeLessThanOrEqual(3);
@@ -1489,12 +1623,12 @@ describe("live session read paths", () => {
         resourceRoot: "",
       };
       const tabId = "tab-liveness";
-      const status = await invoke(
+      const status = (await invoke(
         handlers,
         "claude_tmux_start",
         { tabId, environmentId: environment.id },
         context,
-      ) as { session_id: string };
+      )) as { session_id: string };
 
       // Make the dead session busy first. The liveness path must not leave
       // that process-local state contributing "working" forever.
@@ -1506,18 +1640,20 @@ describe("live session read paths", () => {
       // poll loop, so the periodic has-session check is the only signal.
       await fs.rm(path.join(alive, tmuxSessionName(environment.id, tabId)), { force: true });
 
-      await waitFor(() => emitted.some((item) =>
-        item.event === "claude-tmux:event"
-        && (item.payload as { kind?: string }).kind === "stopped"
-      ), 8_000);
+      await waitFor(
+        () =>
+          emitted.some(
+            (item) =>
+              item.event === "claude-tmux:event" &&
+              (item.payload as { kind?: string }).kind === "stopped",
+          ),
+        8_000,
+      );
 
       await waitFor(() => persistedStates.at(-1) === "idle");
-      await expect(invoke(
-        handlers,
-        "claude_tmux_status",
-        { tabId, environmentId: environment.id },
-        context,
-      )).resolves.toBeNull();
+      await expect(
+        invoke(handlers, "claude_tmux_status", { tabId, environmentId: environment.id }, context),
+      ).resolves.toBeNull();
 
       await invoke(handlers, "claude_tmux_stop", { tabId, environmentId: environment.id }, context);
     });
@@ -1541,20 +1677,28 @@ describe("live session read paths", () => {
       // the head the listing is allowed to read.
       await fs.writeFile(
         path.join(transcriptDir, "session-a.jsonl"),
-        jsonl({ type: "user", message: { role: "user", content: "First prompt" } })
-          + jsonl({ type: "assistant", message: { role: "assistant", content: "x".repeat(200_000) } }),
+        jsonl({ type: "user", message: { role: "user", content: "First prompt" } }) +
+          jsonl({
+            type: "assistant",
+            message: { role: "assistant", content: "x".repeat(200_000) },
+          }),
       );
       await fs.writeFile(
         path.join(transcriptDir, "session-b.jsonl"),
         jsonl({ type: "summary", summary: "no user message" }),
       );
 
-      const sessions = await invoke(
+      const sessions = (await invoke(
         handlers,
         "claude_tmux_list_previous_sessions",
         { environmentId: environment.id },
         context,
-      ) as Array<{ session_id: string; title: string | null; message_count: number; transcript_path: string }>;
+      )) as Array<{
+        session_id: string;
+        title: string | null;
+        message_count: number;
+        transcript_path: string;
+      }>;
 
       const byId = new Map(sessions.map((session) => [session.session_id, session]));
       expect(byId.get("session-a")).toMatchObject({

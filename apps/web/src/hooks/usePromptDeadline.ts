@@ -23,9 +23,7 @@ export function usePromptDeadline(expiresAt?: number): {
   const [, setTick] = useState(0);
   const invalid = expiresAt !== undefined && !Number.isFinite(expiresAt);
   const remaining =
-    expiresAt === undefined || invalid
-      ? null
-      : formatPromptDeadline(expiresAt - Date.now());
+    expiresAt === undefined || invalid ? null : formatPromptDeadline(expiresAt - Date.now());
 
   useEffect(() => {
     if (expiresAt === undefined || invalid || remaining === null) return;

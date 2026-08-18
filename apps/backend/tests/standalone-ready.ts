@@ -95,9 +95,9 @@ export const waitForStandaloneBackendReady = async (
           continue;
         }
         if (
-          message.type !== "orkestrator-backend-ready"
-          || typeof message.url !== "string"
-          || typeof message.authFile !== "string"
+          message.type !== "orkestrator-backend-ready" ||
+          typeof message.url !== "string" ||
+          typeof message.authFile !== "string"
         ) {
           continue;
         }

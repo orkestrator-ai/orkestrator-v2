@@ -112,9 +112,9 @@ function createHarness() {
         if (task) {
           if (typeof updates.prUrl === "string") task.prUrl = updates.prUrl;
           if (
-            updates.prState === "open"
-            || updates.prState === "merged"
-            || updates.prState === "closed"
+            updates.prState === "open" ||
+            updates.prState === "merged" ||
+            updates.prState === "closed"
           ) {
             task.prState = updates.prState;
           }
@@ -136,10 +136,18 @@ function createHarness() {
     warnings,
     calls,
     clock,
-    setDetect: (fn: typeof detect) => { detect = fn; },
-    failPersistOnce: (error: Error) => { persistError = error; },
-    failClearOnce: (error: Error) => { clearError = error; },
-    failTaskLookupOnce: (error: Error) => { taskLookupError = error; },
+    setDetect: (fn: typeof detect) => {
+      detect = fn;
+    },
+    failPersistOnce: (error: Error) => {
+      persistError = error;
+    },
+    failClearOnce: (error: Error) => {
+      clearError = error;
+    },
+    failTaskLookupOnce: (error: Error) => {
+      taskLookupError = error;
+    },
     blockNextComment: () => {
       let release!: () => void;
       commentBlocker = new Promise<void>((resolve) => {
@@ -147,7 +155,9 @@ function createHarness() {
       });
       return release;
     },
-    setTask: (value: HarnessTask | null) => { task = value; },
+    setTask: (value: HarnessTask | null) => {
+      task = value;
+    },
     getTask: () => task,
     pendingDelays: () => [...timers.values()].map((timer) => timer.delayMs),
     /** Fires the oldest pending timer and lets the async check settle. */
@@ -159,15 +169,18 @@ function createHarness() {
       await flush();
     },
     flush,
-    stateEvents: () => emitted
-      .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && !e.payload.removed)
-      .map((e) => e.payload),
-    removalEvents: () => emitted
-      .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && e.payload.removed === true)
-      .map((e) => e.payload),
-    transitions: () => emitted
-      .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && e.payload.transition)
-      .map((e) => e.payload.transition),
+    stateEvents: () =>
+      emitted
+        .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && !e.payload.removed)
+        .map((e) => e.payload),
+    removalEvents: () =>
+      emitted
+        .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && e.payload.removed === true)
+        .map((e) => e.payload),
+    transitions: () =>
+      emitted
+        .filter((e) => e.event === PR_MONITOR_CHANGED_EVENT && e.payload.transition)
+        .map((e) => e.payload.transition),
   };
 }
 
@@ -276,18 +289,22 @@ describe("PrMonitorService", () => {
     harness.setDetect(async () => detection({ url: "https://github.com/org/repo/pull/3" }));
     await harness.fireNext();
 
-    expect(harness.calls.persist).toEqual([{
-      environmentId: "env-1",
-      detection: detection({ url: "https://github.com/org/repo/pull/3" }),
-    }]);
+    expect(harness.calls.persist).toEqual([
+      {
+        environmentId: "env-1",
+        detection: detection({ url: "https://github.com/org/repo/pull/3" }),
+      },
+    ]);
     expect(harness.getTask()?.prUrl).toBe("https://github.com/org/repo/pull/3");
     expect(harness.service.snapshot()[0]).toMatchObject({ mode: "normal", prState: "open" });
     expect(harness.pendingDelays()).toEqual([20_000]);
-    expect(harness.transitions()).toEqual([{
-      url: "https://github.com/org/repo/pull/3",
-      state: "open",
-      previousState: null,
-    }]);
+    expect(harness.transitions()).toEqual([
+      {
+        url: "https://github.com/org/repo/pull/3",
+        state: "open",
+        previousState: null,
+      },
+    ]);
   });
 
   test("merge-pending reverts to normal after its timeout", async () => {
@@ -320,7 +337,9 @@ describe("PrMonitorService", () => {
 
   test("consecutive errors back the interval off exponentially and cap at five minutes", async () => {
     const harness = createHarness();
-    harness.setDetect(async () => { throw new Error("gh unavailable"); });
+    harness.setDetect(async () => {
+      throw new Error("gh unavailable");
+    });
     harness.service.sync([openPr()]);
 
     const observed: number[] = [];
@@ -346,15 +365,19 @@ describe("PrMonitorService", () => {
 
     await harness.fireNext();
 
-    expect(harness.calls.persist).toEqual([{
-      environmentId: "env-1",
-      detection: detection({ state: "merged" }),
-    }]);
+    expect(harness.calls.persist).toEqual([
+      {
+        environmentId: "env-1",
+        detection: detection({ state: "merged" }),
+      },
+    ]);
     expect(harness.calls.review).toEqual(["task-1"]);
-    expect(harness.calls.comments).toEqual([{
-      taskId: "task-1",
-      text: terminalComment(PR_MERGED_COMMENT),
-    }]);
+    expect(harness.calls.comments).toEqual([
+      {
+        taskId: "task-1",
+        text: terminalComment(PR_MERGED_COMMENT),
+      },
+    ]);
     expect(harness.calls.metadata).toEqual([
       {
         taskId: "task-1",
@@ -373,11 +396,13 @@ describe("PrMonitorService", () => {
         },
       },
     ]);
-    expect(harness.transitions()).toEqual([{
-      url: "https://github.com/org/repo/pull/1",
-      state: "merged",
-      previousState: "open",
-    }]);
+    expect(harness.transitions()).toEqual([
+      {
+        url: "https://github.com/org/repo/pull/1",
+        state: "merged",
+        previousState: "open",
+      },
+    ]);
 
     // The next check confirms the same merged state: no repeated side effects,
     // no second transition.
@@ -426,9 +451,7 @@ describe("PrMonitorService", () => {
   test("clears pending persistence after a missing PR is durably removed", async () => {
     const harness = createHarness();
     let exists = true;
-    harness.setDetect(async () => exists
-      ? detection({ hasMergeConflicts: true })
-      : null);
+    harness.setDetect(async () => (exists ? detection({ hasMergeConflicts: true }) : null));
     harness.failPersistOnce(new Error("persistence unavailable"));
     harness.service.sync([openPr()]);
 
@@ -444,13 +467,15 @@ describe("PrMonitorService", () => {
     // A fresh service instance simulates a backend restart: the in-memory
     // progress is gone and only the persisted metadata remains.
     const harness = createHarness();
-    harness.setTask(inProgressTask({
-      status: "review",
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "merged",
-      prMergeCommented: true,
-      comments: [terminalComment(PR_MERGED_COMMENT)],
-    }));
+    harness.setTask(
+      inProgressTask({
+        status: "review",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+        prMergeCommented: true,
+        comments: [terminalComment(PR_MERGED_COMMENT)],
+      }),
+    );
     harness.setDetect(async () => detection({ state: "merged" }));
     harness.service.sync([openPr({ prState: "merged" })]);
 
@@ -463,11 +488,13 @@ describe("PrMonitorService", () => {
 
   test("an existing comment without the flag skips the comment but completes the metadata", async () => {
     const harness = createHarness();
-    harness.setTask(inProgressTask({
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "closed",
-      comments: [terminalComment(PR_CLOSED_COMMENT)],
-    }));
+    harness.setTask(
+      inProgressTask({
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "closed",
+        comments: [terminalComment(PR_CLOSED_COMMENT)],
+      }),
+    );
     harness.setDetect(async () => detection({ state: "closed" }));
     harness.service.sync([openPr()]);
 
@@ -500,15 +527,13 @@ describe("PrMonitorService", () => {
     const original = harness.calls.metadata;
     let failMetadata = true;
     const service = harness.service as unknown as {
-      options: { effects: { updateTaskPrMetadata: (taskId: string, updates: object) => Promise<void> } };
+      options: {
+        effects: { updateTaskPrMetadata: (taskId: string, updates: object) => Promise<void> };
+      };
     };
     const realUpdate = service.options.effects.updateTaskPrMetadata;
     service.options.effects.updateTaskPrMetadata = async (taskId, updates) => {
-      if (
-        failMetadata
-        && "prMergeCommented" in updates
-        && updates.prMergeCommented === true
-      ) {
+      if (failMetadata && "prMergeCommented" in updates && updates.prMergeCommented === true) {
         failMetadata = false;
         throw new Error("metadata write failed");
       }
@@ -518,14 +543,16 @@ describe("PrMonitorService", () => {
     await harness.fireNext();
     expect(harness.calls.review).toHaveLength(1);
     expect(harness.calls.comments).toHaveLength(1);
-    expect(original).toEqual([{
-      taskId: "task-1",
-      updates: {
-        prUrl: "https://github.com/org/repo/pull/1",
-        prState: "merged",
-        prMergeCommented: false,
+    expect(original).toEqual([
+      {
+        taskId: "task-1",
+        updates: {
+          prUrl: "https://github.com/org/repo/pull/1",
+          prState: "merged",
+          prMergeCommented: false,
+        },
       },
-    }]);
+    ]);
     expect(harness.warnings.some((w) => w.message.includes("reconcile"))).toBe(true);
 
     await harness.fireNext();
@@ -553,17 +580,21 @@ describe("PrMonitorService", () => {
 
   test("a replacement PR is reconciled even when the task has a terminal flag for the old PR", async () => {
     const harness = createHarness();
-    harness.setTask(inProgressTask({
-      status: "review",
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "merged",
-      prMergeCommented: true,
-      comments: [terminalComment(PR_MERGED_COMMENT)],
-    }));
-    harness.setDetect(async () => detection({
-      url: "https://github.com/org/repo/pull/2",
-      state: "merged",
-    }));
+    harness.setTask(
+      inProgressTask({
+        status: "review",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+        prMergeCommented: true,
+        comments: [terminalComment(PR_MERGED_COMMENT)],
+      }),
+    );
+    harness.setDetect(async () =>
+      detection({
+        url: "https://github.com/org/repo/pull/2",
+        state: "merged",
+      }),
+    );
     harness.service.sync([openPr()]);
 
     await harness.fireNext();
@@ -574,40 +605,42 @@ describe("PrMonitorService", () => {
         text: terminalComment(PR_MERGED_COMMENT, "https://github.com/org/repo/pull/2"),
       },
     ]);
-    expect(harness.calls.metadata).toEqual([{
-      taskId: "task-1",
-      updates: {
-        prUrl: "https://github.com/org/repo/pull/2",
-        prState: "merged",
-        prMergeCommented: false,
+    expect(harness.calls.metadata).toEqual([
+      {
+        taskId: "task-1",
+        updates: {
+          prUrl: "https://github.com/org/repo/pull/2",
+          prState: "merged",
+          prMergeCommented: false,
+        },
       },
-    }, {
-      taskId: "task-1",
-      updates: {
-        prUrl: "https://github.com/org/repo/pull/2",
-        prState: "merged",
-        prMergeCommented: true,
+      {
+        taskId: "task-1",
+        updates: {
+          prUrl: "https://github.com/org/repo/pull/2",
+          prState: "merged",
+          prMergeCommented: true,
+        },
       },
-    }]);
+    ]);
   });
 
   test("reconciles an externally confirmed merge before an environment is untracked", async () => {
     const harness = createHarness();
     harness.setTask(inProgressTask());
 
-    await harness.service.reconcileTerminal(
-      openPr(),
-      detection({ state: "merged" }),
-    );
+    await harness.service.reconcileTerminal(openPr(), detection({ state: "merged" }));
     harness.service.untrack("env-1");
 
     expect(harness.calls.detect).toEqual([]);
     expect(harness.calls.persist).toEqual([]);
     expect(harness.calls.review).toEqual(["task-1"]);
-    expect(harness.calls.comments).toEqual([{
-      taskId: "task-1",
-      text: terminalComment(PR_MERGED_COMMENT),
-    }]);
+    expect(harness.calls.comments).toEqual([
+      {
+        taskId: "task-1",
+        text: terminalComment(PR_MERGED_COMMENT),
+      },
+    ]);
     expect(harness.calls.metadata).toEqual([
       {
         taskId: "task-1",
@@ -638,10 +671,7 @@ describe("PrMonitorService", () => {
     await harness.fireNext();
     expect(harness.calls.comments).toHaveLength(1);
 
-    const external = harness.service.reconcileTerminal(
-      openPr(),
-      detection({ state: "merged" }),
-    );
+    const external = harness.service.reconcileTerminal(openPr(), detection({ state: "merged" }));
     await harness.flush();
     expect(harness.calls.comments).toHaveLength(1);
 
@@ -662,10 +692,12 @@ describe("PrMonitorService", () => {
     });
     const first = createHarness();
     first.setTask(persistedTask);
-    first.setDetect(async () => detection({
-      url: replacementUrl,
-      state: "merged",
-    }));
+    first.setDetect(async () =>
+      detection({
+        url: replacementUrl,
+        state: "merged",
+      }),
+    );
     const firstInternals = first.service as unknown as {
       options: {
         effects: {
@@ -692,21 +724,27 @@ describe("PrMonitorService", () => {
     // URL-specific comment must not satisfy the replacement's marker.
     const restarted = createHarness();
     restarted.setTask(persistedTask);
-    restarted.setDetect(async () => detection({
-      url: replacementUrl,
-      state: "merged",
-    }));
-    restarted.service.sync([openPr({
-      prUrl: replacementUrl,
-      prState: "merged",
-    })]);
+    restarted.setDetect(async () =>
+      detection({
+        url: replacementUrl,
+        state: "merged",
+      }),
+    );
+    restarted.service.sync([
+      openPr({
+        prUrl: replacementUrl,
+        prState: "merged",
+      }),
+    ]);
 
     await restarted.fireNext();
 
-    expect(restarted.calls.comments).toEqual([{
-      taskId: "task-1",
-      text: terminalComment(PR_MERGED_COMMENT, replacementUrl),
-    }]);
+    expect(restarted.calls.comments).toEqual([
+      {
+        taskId: "task-1",
+        text: terminalComment(PR_MERGED_COMMENT, replacementUrl),
+      },
+    ]);
     expect(persistedTask).toMatchObject({
       prUrl: replacementUrl,
       prState: "merged",
@@ -747,7 +785,7 @@ describe("PrMonitorService", () => {
   test("a failed provisional persistence is retired if the PR disappears before retry", async () => {
     const harness = createHarness();
     let exists = true;
-    harness.setDetect(async () => exists ? detection() : null);
+    harness.setDetect(async () => (exists ? detection() : null));
     harness.failPersistOnce(new Error("storage unavailable"));
     harness.service.probe(target());
 
@@ -798,14 +836,16 @@ describe("PrMonitorService", () => {
 
     await harness.fireNext();
     expect(harness.service.snapshot()[0]?.mode).toBe("normal");
-    expect(harness.calls.metadata).toEqual([{
-      taskId: "task-1",
-      updates: {
-        prUrl: "https://github.com/org/repo/pull/1",
-        prState: "open",
-        prMergeCommented: false,
+    expect(harness.calls.metadata).toEqual([
+      {
+        taskId: "task-1",
+        updates: {
+          prUrl: "https://github.com/org/repo/pull/1",
+          prState: "open",
+          prMergeCommented: false,
+        },
       },
-    }]);
+    ]);
   });
 
   test("merge-pending remains durable until a terminal PR state is persisted", async () => {
@@ -863,17 +903,21 @@ describe("PrMonitorService", () => {
 
   test("a replacement open PR replaces terminal task metadata and resets comment idempotency", async () => {
     const harness = createHarness();
-    harness.setTask(inProgressTask({
-      status: "review",
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "merged",
-      prMergeCommented: true,
-      comments: [terminalComment(PR_MERGED_COMMENT)],
-    }));
-    harness.setDetect(async () => detection({
-      url: "https://github.com/org/repo/pull/2",
-      state: "open",
-    }));
+    harness.setTask(
+      inProgressTask({
+        status: "review",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+        prMergeCommented: true,
+        comments: [terminalComment(PR_MERGED_COMMENT)],
+      }),
+    );
+    harness.setDetect(async () =>
+      detection({
+        url: "https://github.com/org/repo/pull/2",
+        state: "open",
+      }),
+    );
     harness.service.requestMode(target(), "create-pending");
 
     await harness.fireNext();
@@ -883,32 +927,40 @@ describe("PrMonitorService", () => {
       prState: "open",
       prMergeCommented: false,
     });
-    expect(harness.calls.metadata).toEqual([{
-      taskId: "task-1",
-      updates: {
-        prUrl: "https://github.com/org/repo/pull/2",
-        prState: "open",
-        prMergeCommented: false,
+    expect(harness.calls.metadata).toEqual([
+      {
+        taskId: "task-1",
+        updates: {
+          prUrl: "https://github.com/org/repo/pull/2",
+          prState: "open",
+          prMergeCommented: false,
+        },
       },
-    }]);
+    ]);
   });
 
   test("normal monitoring repairs stale task metadata for an already-persisted replacement PR", async () => {
     const harness = createHarness();
-    harness.setTask(inProgressTask({
-      status: "review",
-      prUrl: "https://github.com/org/repo/pull/1",
-      prState: "merged",
-      prMergeCommented: true,
-      comments: [terminalComment(PR_MERGED_COMMENT)],
-    }));
-    harness.setDetect(async () => detection({
-      url: "https://github.com/org/repo/pull/2",
-      state: "open",
-    }));
-    harness.service.sync([openPr({
-      prUrl: "https://github.com/org/repo/pull/2",
-    })]);
+    harness.setTask(
+      inProgressTask({
+        status: "review",
+        prUrl: "https://github.com/org/repo/pull/1",
+        prState: "merged",
+        prMergeCommented: true,
+        comments: [terminalComment(PR_MERGED_COMMENT)],
+      }),
+    );
+    harness.setDetect(async () =>
+      detection({
+        url: "https://github.com/org/repo/pull/2",
+        state: "open",
+      }),
+    );
+    harness.service.sync([
+      openPr({
+        prUrl: "https://github.com/org/repo/pull/2",
+      }),
+    ]);
 
     await harness.fireNext();
 
@@ -930,11 +982,13 @@ describe("PrMonitorService", () => {
     expect(harness.calls.persist).toHaveLength(1);
     expect(harness.service.trackedIds()).toEqual(["env-1"]);
     expect(harness.pendingDelays()).toEqual([20_000]);
-    expect(harness.transitions()).toEqual([{
-      url: "https://github.com/org/repo/pull/1",
-      state: "open",
-      previousState: null,
-    }]);
+    expect(harness.transitions()).toEqual([
+      {
+        url: "https://github.com/org/repo/pull/1",
+        state: "open",
+        previousState: null,
+      },
+    ]);
   });
 
   test("a probe that finds nothing vanishes without a trace", async () => {
@@ -993,17 +1047,22 @@ describe("PrMonitorService", () => {
   test("a stale in-flight result cannot mutate an entry that was untracked and recreated", async () => {
     const harness = createHarness();
     let resolveDetection!: (value: PrDetection | null) => void;
-    harness.setDetect(async () => await new Promise<PrDetection | null>((resolve) => {
-      resolveDetection = resolve;
-    }));
+    harness.setDetect(
+      async () =>
+        await new Promise<PrDetection | null>((resolve) => {
+          resolveDetection = resolve;
+        }),
+    );
     harness.service.sync([openPr()]);
 
     await harness.fireNext();
     harness.service.untrack("env-1");
-    harness.service.sync([openPr({
-      prUrl: "https://github.com/org/repo/pull/2",
-      prState: "open",
-    })]);
+    harness.service.sync([
+      openPr({
+        prUrl: "https://github.com/org/repo/pull/2",
+        prState: "open",
+      }),
+    ]);
 
     resolveDetection(detection({ state: "merged" }));
     await harness.flush();
@@ -1020,16 +1079,21 @@ describe("PrMonitorService", () => {
   test("a result for an old target is discarded when sync changes the branch in flight", async () => {
     const harness = createHarness();
     let resolveDetection!: (value: PrDetection | null) => void;
-    harness.setDetect(async () => await new Promise<PrDetection | null>((resolve) => {
-      resolveDetection = resolve;
-    }));
+    harness.setDetect(
+      async () =>
+        await new Promise<PrDetection | null>((resolve) => {
+          resolveDetection = resolve;
+        }),
+    );
     harness.service.sync([openPr()]);
 
     await harness.fireNext();
-    harness.service.sync([openPr({
-      branch: "feature/replacement",
-      prUrl: "https://github.com/org/repo/pull/2",
-    })]);
+    harness.service.sync([
+      openPr({
+        branch: "feature/replacement",
+        prUrl: "https://github.com/org/repo/pull/2",
+      }),
+    ]);
     resolveDetection(detection({ state: "merged" }));
     await harness.flush();
 
@@ -1102,11 +1166,13 @@ describe("PrMonitorService", () => {
     await harness.fireNext();
     await harness.fireNext();
 
-    expect(harness.transitions()).toEqual([{
-      url: "https://github.com/org/repo/pull/1",
-      state: "merged",
-      previousState: "open",
-    }]);
+    expect(harness.transitions()).toEqual([
+      {
+        url: "https://github.com/org/repo/pull/1",
+        state: "merged",
+        previousState: "open",
+      },
+    ]);
   });
 
   test("pausing after a task comment lands does not append it again on resume", async () => {
@@ -1138,14 +1204,16 @@ describe("PrMonitorService", () => {
     harness.service.pause("env-1");
     releaseComment();
     await harness.flush();
-    expect(harness.calls.metadata).toEqual([{
-      taskId: "task-1",
-      updates: {
-        prUrl: "https://github.com/org/repo/pull/1",
-        prState: "merged",
-        prMergeCommented: false,
+    expect(harness.calls.metadata).toEqual([
+      {
+        taskId: "task-1",
+        updates: {
+          prUrl: "https://github.com/org/repo/pull/1",
+          prState: "merged",
+          prMergeCommented: false,
+        },
       },
-    }]);
+    ]);
 
     harness.service.sync([openPr({ prState: "merged" })]);
     await harness.fireNext();
@@ -1153,26 +1221,31 @@ describe("PrMonitorService", () => {
     expect(harness.calls.comments).toEqual([
       { taskId: "task-1", text: terminalComment(PR_MERGED_COMMENT) },
     ]);
-    expect(harness.calls.metadata).toEqual([{
-      taskId: "task-1",
-      updates: {
-        prUrl: "https://github.com/org/repo/pull/1",
-        prState: "merged",
-        prMergeCommented: false,
+    expect(harness.calls.metadata).toEqual([
+      {
+        taskId: "task-1",
+        updates: {
+          prUrl: "https://github.com/org/repo/pull/1",
+          prState: "merged",
+          prMergeCommented: false,
+        },
       },
-    }, {
-      taskId: "task-1",
-      updates: {
-        prUrl: "https://github.com/org/repo/pull/1",
-        prState: "merged",
-        prMergeCommented: true,
+      {
+        taskId: "task-1",
+        updates: {
+          prUrl: "https://github.com/org/repo/pull/1",
+          prState: "merged",
+          prMergeCommented: true,
+        },
       },
-    }]);
-    expect(harness.transitions()).toEqual([{
-      url: "https://github.com/org/repo/pull/1",
-      state: "merged",
-      previousState: "open",
-    }]);
+    ]);
+    expect(harness.transitions()).toEqual([
+      {
+        url: "https://github.com/org/repo/pull/1",
+        state: "merged",
+        previousState: "open",
+      },
+    ]);
   });
 
   test("shutdown during persistence cannot resurrect state or run reconciliation", async () => {
@@ -1291,6 +1364,8 @@ describe("PrMonitorService", () => {
     await harness.fireNext();
 
     expect(harness.stateEvents()).toHaveLength(eventsAfterTracking);
-    expect(harness.service.snapshot()[0]?.lastCheckAt).toBe(new Date(harness.clock.value).toISOString());
+    expect(harness.service.snapshot()[0]?.lastCheckAt).toBe(
+      new Date(harness.clock.value).toISOString(),
+    );
   });
 });

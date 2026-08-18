@@ -9,10 +9,12 @@ describe("renderReactRoot", () => {
     document.body.append(rootElement);
     const children = { type: "application-tree" } as unknown as ReactNode;
     const render = mock((_children: ReactNode) => {});
-    const createRoot = mock((
-      _container: Element | DocumentFragment,
-      _options?: Parameters<typeof renderReactRoot>[0]["rootOptions"],
-    ) => ({ render }));
+    const createRoot = mock(
+      (
+        _container: Element | DocumentFragment,
+        _options?: Parameters<typeof renderReactRoot>[0]["rootOptions"],
+      ) => ({ render }),
+    );
     const rootOptions = {
       onCaughtError: mock((_error: unknown) => {}),
     };

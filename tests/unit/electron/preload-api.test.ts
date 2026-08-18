@@ -8,9 +8,11 @@ import {
 function createIpcMock() {
   const listeners = new Map<string, (event: unknown, name: string, payload: unknown) => void>();
   const invoke = mock(async (channel: string, ...args: unknown[]) => ({ channel, args }));
-  const on = mock((channel: string, listener: (event: unknown, name: string, payload: unknown) => void) => {
-    listeners.set(channel, listener);
-  });
+  const on = mock(
+    (channel: string, listener: (event: unknown, name: string, payload: unknown) => void) => {
+      listeners.set(channel, listener);
+    },
+  );
   const ipc = { invoke, on } as IpcRendererLike;
   return {
     ipc,
@@ -28,8 +30,22 @@ describe("preload API factory", () => {
     const sendSync = mock(() => ({
       activeConnectionId: "remote-1",
       connections: [
-        { id: "local", name: "Local", address: null, kind: "local", active: false, requiresToken: false },
-        { id: "remote-1", name: "Desk", address: "https://desk.example", kind: "remote", active: true, requiresToken: false },
+        {
+          id: "local",
+          name: "Local",
+          address: null,
+          kind: "local",
+          active: false,
+          requiresToken: false,
+        },
+        {
+          id: "remote-1",
+          name: "Desk",
+          address: "https://desk.example",
+          kind: "remote",
+          active: true,
+          requiresToken: false,
+        },
       ],
     }));
     expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync })).toBe(true);
@@ -43,11 +59,32 @@ describe("preload API factory", () => {
 
   test("does not expose a gateway for Local or malformed bootstrap snapshots", () => {
     const exposeInMainWorld = mock(() => undefined);
-    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync: () => ({
-      activeConnectionId: "local",
-      connections: [{ id: "local", name: "Local", address: null, kind: "local", active: true, requiresToken: false }],
-    }) })).toBe(false);
-    expect(exposeActiveConnectionGateway({ exposeInMainWorld }, { sendSync: () => ({ activeConnectionId: "local" }) })).toBe(false);
+    expect(
+      exposeActiveConnectionGateway(
+        { exposeInMainWorld },
+        {
+          sendSync: () => ({
+            activeConnectionId: "local",
+            connections: [
+              {
+                id: "local",
+                name: "Local",
+                address: null,
+                kind: "local",
+                active: true,
+                requiresToken: false,
+              },
+            ],
+          }),
+        },
+      ),
+    ).toBe(false);
+    expect(
+      exposeActiveConnectionGateway(
+        { exposeInMainWorld },
+        { sendSync: () => ({ activeConnectionId: "local" }) },
+      ),
+    ).toBe(false);
     expect(exposeInMainWorld).not.toHaveBeenCalled();
   });
 
@@ -55,7 +92,10 @@ describe("preload API factory", () => {
     const { ipc, invoke } = createIpcMock();
     const api = createOrkestratorElectronApi(ipc);
 
-    await expect(api.invoke("get_projects")).resolves.toEqual({ channel: "orkestrator:invoke", args: ["get_projects", {}] });
+    await expect(api.invoke("get_projects")).resolves.toEqual({
+      channel: "orkestrator:invoke",
+      args: ["get_projects", {}],
+    });
     await expect(api.invoke("get_environment", { environmentId: "env-1" })).resolves.toEqual({
       channel: "orkestrator:invoke",
       args: ["get_environment", { environmentId: "env-1" }],
@@ -88,42 +128,85 @@ describe("preload API factory", () => {
     const { ipc } = createIpcMock();
     const api = createOrkestratorElectronApi(ipc);
 
-    await expect(api.clipboard.readText()).resolves.toEqual({ channel: "orkestrator:clipboard:read-text", args: [] });
-    await expect(api.clipboard.writeText("copy")).resolves.toEqual({ channel: "orkestrator:clipboard:write-text", args: ["copy"] });
-    await expect(api.clipboard.readImage()).resolves.toEqual({ channel: "orkestrator:clipboard:read-image", args: [] });
+    await expect(api.clipboard.readText()).resolves.toEqual({
+      channel: "orkestrator:clipboard:read-text",
+      args: [],
+    });
+    await expect(api.clipboard.writeText("copy")).resolves.toEqual({
+      channel: "orkestrator:clipboard:write-text",
+      args: ["copy"],
+    });
+    await expect(api.clipboard.readImage()).resolves.toEqual({
+      channel: "orkestrator:clipboard:read-image",
+      args: [],
+    });
     await expect(api.clipboard.writeImage("data:image/png;base64,abc")).resolves.toEqual({
       channel: "orkestrator:clipboard:write-image",
       args: ["data:image/png;base64,abc"],
     });
-    await expect(api.dialog.open({ directory: true })).resolves.toEqual({ channel: "orkestrator:dialog:open", args: [{ directory: true }] });
-    await expect(api.webClient.getStatus()).resolves.toEqual({ channel: "orkestrator:web-client:get-status", args: [] });
-    await expect(api.webClient.setEnabled(false)).resolves.toEqual({ channel: "orkestrator:web-client:set-enabled", args: [false] });
-    await expect(api.webClient.resetServe()).resolves.toEqual({ channel: "orkestrator:web-client:reset-serve", args: [] });
-    await expect(api.webClient.getTokenSettings()).resolves.toEqual({ channel: "orkestrator:web-client:get-token-settings", args: [] });
+    await expect(api.dialog.open({ directory: true })).resolves.toEqual({
+      channel: "orkestrator:dialog:open",
+      args: [{ directory: true }],
+    });
+    await expect(api.webClient.getStatus()).resolves.toEqual({
+      channel: "orkestrator:web-client:get-status",
+      args: [],
+    });
+    await expect(api.webClient.setEnabled(false)).resolves.toEqual({
+      channel: "orkestrator:web-client:set-enabled",
+      args: [false],
+    });
+    await expect(api.webClient.resetServe()).resolves.toEqual({
+      channel: "orkestrator:web-client:reset-serve",
+      args: [],
+    });
+    await expect(api.webClient.getTokenSettings()).resolves.toEqual({
+      channel: "orkestrator:web-client:get-token-settings",
+      args: [],
+    });
     await expect(api.webClient.setToken("replacement-token-123456")).resolves.toEqual({
       channel: "orkestrator:web-client:set-token",
       args: ["replacement-token-123456"],
     });
-    await expect(api.connections.list()).resolves.toEqual({ channel: "orkestrator:connections:list", args: [] });
-    await expect(api.connections.connect({ address: "https://desk.example", token: "gateway-token-123456" })).resolves.toEqual({
+    await expect(api.connections.list()).resolves.toEqual({
+      channel: "orkestrator:connections:list",
+      args: [],
+    });
+    await expect(
+      api.connections.connect({ address: "https://desk.example", token: "gateway-token-123456" }),
+    ).resolves.toEqual({
       channel: "orkestrator:connections:connect",
       args: [{ address: "https://desk.example", token: "gateway-token-123456" }],
     });
-    await expect(api.connections.use("remote-1")).resolves.toEqual({ channel: "orkestrator:connections:use", args: ["remote-1"] });
-    await expect(api.connections.forget("remote-1")).resolves.toEqual({ channel: "orkestrator:connections:forget", args: ["remote-1"] });
-    await expect(api.process.exit(7)).resolves.toEqual({ channel: "orkestrator:process:exit", args: [7] });
-    await expect(api.window.startDragging()).resolves.toEqual({ channel: "orkestrator:window:start-dragging", args: [] });
+    await expect(api.connections.use("remote-1")).resolves.toEqual({
+      channel: "orkestrator:connections:use",
+      args: ["remote-1"],
+    });
+    await expect(api.connections.forget("remote-1")).resolves.toEqual({
+      channel: "orkestrator:connections:forget",
+      args: ["remote-1"],
+    });
+    await expect(api.process.exit(7)).resolves.toEqual({
+      channel: "orkestrator:process:exit",
+      args: [7],
+    });
+    await expect(api.window.startDragging()).resolves.toEqual({
+      channel: "orkestrator:window:start-dragging",
+      args: [],
+    });
     await expect(api.window.setZoomFactor(1.5)).resolves.toEqual({
       channel: "orkestrator:window:set-zoom-factor",
       args: [1.5],
     });
     const bounds = { x: 10, y: 20, width: 640, height: 480 };
-    await expect(api.browserPreview.attach({
-      tabId: "browser-1",
-      url: "http://localhost:3000/",
-      bounds,
-      visible: true,
-    })).resolves.toEqual({
+    await expect(
+      api.browserPreview.attach({
+        tabId: "browser-1",
+        url: "http://localhost:3000/",
+        bounds,
+        visible: true,
+      }),
+    ).resolves.toEqual({
       channel: "orkestrator:browser-preview:attach",
       args: [{ tabId: "browser-1", url: "http://localhost:3000/", bounds, visible: true }],
     });
@@ -135,7 +218,9 @@ describe("preload API factory", () => {
       channel: "orkestrator:browser-preview:set-visible",
       args: ["browser-1", false],
     });
-    await expect(api.browserPreview.navigate("browser-1", "http://localhost:4000/")).resolves.toEqual({
+    await expect(
+      api.browserPreview.navigate("browser-1", "http://localhost:4000/"),
+    ).resolves.toEqual({
       channel: "orkestrator:browser-preview:navigate",
       args: ["browser-1", "http://localhost:4000/"],
     });

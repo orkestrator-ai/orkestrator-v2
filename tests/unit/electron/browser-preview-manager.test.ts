@@ -48,9 +48,11 @@ class FakeWebContents extends EventEmitter {
   }
 }
 
-function createHarness(options: {
-  loadURLImplementation?: (url: string) => Promise<void>;
-} = {}) {
+function createHarness(
+  options: {
+    loadURLImplementation?: (url: string) => Promise<void>;
+  } = {},
+) {
   const createHarnessOptions = options;
   const views: FakeView[] = [];
   class FakeView {
@@ -293,23 +295,23 @@ describe("BrowserPreviewManager", () => {
     await harness.manager.attach(input);
     const contents = harness.views[0]!.webContents;
 
-    contents.emit("context-menu", {}, createContextMenuParams({
-      isEditable: true,
-      misspelledWord: "mispelled",
-      dictionarySuggestions: ["misspelled"],
-    }));
+    contents.emit(
+      "context-menu",
+      {},
+      createContextMenuParams({
+        isEditable: true,
+        misspelledWord: "mispelled",
+        dictionarySuggestions: ["misspelled"],
+      }),
+    );
 
     const template = harness.menuTemplates[0]!;
-    template.find((item) => item.label === "misspelled")?.click?.(
-      undefined as never,
-      undefined as never,
-      undefined as never,
-    );
-    template.find((item) => item.label === "Add to Dictionary")?.click?.(
-      undefined as never,
-      undefined as never,
-      undefined as never,
-    );
+    template
+      .find((item) => item.label === "misspelled")
+      ?.click?.(undefined as never, undefined as never, undefined as never);
+    template
+      .find((item) => item.label === "Add to Dictionary")
+      ?.click?.(undefined as never, undefined as never, undefined as never);
 
     expect(contents.replaceMisspelling).toHaveBeenCalledWith("misspelled");
     expect(contents.session.addWordToSpellCheckerDictionary).toHaveBeenCalledWith("mispelled");
@@ -460,14 +462,9 @@ describe("BrowserPreviewManager", () => {
       url: "https://desk.example/__orkestrator/browser/loopback/3000/",
     });
     const gatewayContents = gatewayHarness.views[0]!.webContents;
-    const mismatchedLink =
-      "https://other.example/__orkestrator/browser/loopback/3000/docs";
+    const mismatchedLink = "https://other.example/__orkestrator/browser/loopback/3000/docs";
 
-    gatewayContents.emit(
-      "context-menu",
-      {},
-      createContextMenuParams({ linkURL: mismatchedLink }),
-    );
+    gatewayContents.emit("context-menu", {}, createContextMenuParams({ linkURL: mismatchedLink }));
 
     expect(
       gatewayHarness.menuTemplates[0]!.find((item) => item.label === "Open Link in New Tab")
@@ -573,24 +570,20 @@ describe("BrowserPreviewManager", () => {
       createContextMenuParams({ linkURL: "https://example.com/docs" }),
     );
     const externalTemplate = harness.menuTemplates[0]!;
-    expect(
-      externalTemplate.find((item) => item.label === "Open Link in New Tab")?.enabled,
-    ).toBe(false);
+    expect(externalTemplate.find((item) => item.label === "Open Link in New Tab")?.enabled).toBe(
+      false,
+    );
     expect(
       externalTemplate.find((item) => item.label === "Open in External Browser")?.enabled,
     ).toBe(true);
 
     expect(() => {
-      contents.emit(
-        "context-menu",
-        {},
-        createContextMenuParams({ linkURL: "this is not a URL" }),
-      );
+      contents.emit("context-menu", {}, createContextMenuParams({ linkURL: "this is not a URL" }));
     }).not.toThrow();
     const malformedTemplate = harness.menuTemplates[1]!;
-    expect(
-      malformedTemplate.find((item) => item.label === "Open Link in New Tab")?.enabled,
-    ).toBe(false);
+    expect(malformedTemplate.find((item) => item.label === "Open Link in New Tab")?.enabled).toBe(
+      false,
+    );
     expect(
       malformedTemplate.find((item) => item.label === "Open in External Browser")?.enabled,
     ).toBe(false);
@@ -606,7 +599,8 @@ describe("BrowserPreviewManager", () => {
     const template = harness.menuTemplates[0]!;
     expect(template.find((item) => item.label === "Open Link in New Tab")?.enabled).toBe(false);
     expect(template.find((item) => item.label === "Open in External Browser")?.enabled).toBe(false);
-    template.find((item) => item.label === "Copy Link Address")
+    template
+      .find((item) => item.label === "Copy Link Address")
       ?.click?.(undefined as never, undefined as never, undefined as never);
 
     expect(harness.emitOpenLink).not.toHaveBeenCalled();
@@ -662,9 +656,7 @@ describe("BrowserPreviewManager", () => {
     );
 
     const template = harness.menuTemplates[0]!;
-    expect(
-      template.map((item) => item.label ?? item.role ?? item.type),
-    ).toEqual([
+    expect(template.map((item) => item.label ?? item.role ?? item.type)).toEqual([
       "Open Link in New Tab",
       "Open in External Browser",
       "Copy Link Address",
@@ -984,10 +976,7 @@ describe("BrowserPreviewManager", () => {
 
       harness.manager.setBounds(input.tabId, input.bounds);
       contents.emit("input-event", {}, { type: "mouseDown" });
-      await harness.manager.navigate(
-        input.tabId,
-        "http://localhost:3000/after-navigation",
-      );
+      await harness.manager.navigate(input.tabId, "http://localhost:3000/after-navigation");
       expect(
         harness.manager.consumeClipboardWriteUserActivation(
           contents as never,
@@ -1154,7 +1143,9 @@ describe("BrowserPreviewManager", () => {
     harness.emitState.mockClear();
 
     contents.emit("did-start-loading");
-    expect(harness.emitState).toHaveBeenLastCalledWith(expect.objectContaining({ loading: true, error: null }));
+    expect(harness.emitState).toHaveBeenLastCalledWith(
+      expect.objectContaining({ loading: true, error: null }),
+    );
     contents.emit("did-stop-loading");
     expect(harness.emitState).toHaveBeenLastCalledWith(expect.objectContaining({ loading: false }));
 
@@ -1185,7 +1176,9 @@ describe("BrowserPreviewManager", () => {
     contents.emit("did-navigate", {}, contents.currentUrl);
     contents.emit("did-navigate-in-page", {}, contents.currentUrl, true);
 
-    expect(harness.emitState).toHaveBeenLastCalledWith(expect.objectContaining({ url: contents.currentUrl }));
+    expect(harness.emitState).toHaveBeenLastCalledWith(
+      expect.objectContaining({ url: contents.currentUrl }),
+    );
     const pageAttempt = {
       url: "http://localhost:4000/escape",
       preventDefault: mock(() => undefined),
@@ -1239,7 +1232,9 @@ describe("BrowserPreviewManager", () => {
     const state = await harness.manager.navigate(input.tabId, "http://localhost:3000/failure");
 
     expect(state).toMatchObject({ loading: false, error: "plain failure" });
-    expect(harness.emitState).toHaveBeenLastCalledWith(expect.objectContaining({ error: "plain failure" }));
+    expect(harness.emitState).toHaveBeenLastCalledWith(
+      expect.objectContaining({ error: "plain failure" }),
+    );
   });
 
   test("records an initial fire-and-forget load rejection", async () => {
@@ -1267,14 +1262,17 @@ describe("BrowserPreviewManager", () => {
     const contents = harness.views[0]!.webContents;
     const first = deferred();
     const second = deferred();
-    contents.loadURLImplementation = (url) => (url.endsWith("/first") ? first.promise : second.promise);
+    contents.loadURLImplementation = (url) =>
+      url.endsWith("/first") ? first.promise : second.promise;
 
     const firstNavigation = harness.manager.navigate(input.tabId, "http://localhost:3000/first");
     const secondNavigation = harness.manager.navigate(input.tabId, "http://localhost:3000/second");
     first.reject(new Error("ERR_ABORTED (-3)"));
     await flushPromises();
 
-    expect(harness.emitState).not.toHaveBeenLastCalledWith(expect.objectContaining({ error: "ERR_ABORTED (-3)" }));
+    expect(harness.emitState).not.toHaveBeenLastCalledWith(
+      expect.objectContaining({ error: "ERR_ABORTED (-3)" }),
+    );
     second.resolve();
     const [firstState, secondState] = await Promise.all([firstNavigation, secondNavigation]);
     expect(firstState.error).toBeNull();

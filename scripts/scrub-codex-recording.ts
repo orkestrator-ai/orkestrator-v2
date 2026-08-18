@@ -63,14 +63,38 @@ export function buildRedactions(identity: ScrubIdentity = {}): Redaction[] {
     // `sk-ant-` must precede `sk-`, or the broader pattern consumes it first and
     // the Anthropic rule never fires (still redacted, but mislabelled in the
     // report — which matters when you are reading the diff to decide if it is safe).
-    { name: "anthropic-key", pattern: /\bsk-ant-[A-Za-z0-9_-]{16,}/g, replacement: "sk-ant-«redacted»" },
+    {
+      name: "anthropic-key",
+      pattern: /\bsk-ant-[A-Za-z0-9_-]{16,}/g,
+      replacement: "sk-ant-«redacted»",
+    },
     { name: "openai-key", pattern: /\bsk-[A-Za-z0-9_-]{16,}/g, replacement: "sk-«redacted»" },
-    { name: "github-token", pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g, replacement: "ghp_«redacted»" },
-    { name: "aws-access-key", pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, replacement: "AKIA«redacted»" },
-    { name: "slack-token", pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g, replacement: "xoxb-«redacted»" },
+    {
+      name: "github-token",
+      pattern: /\bgh[pousr]_[A-Za-z0-9]{16,}/g,
+      replacement: "ghp_«redacted»",
+    },
+    {
+      name: "aws-access-key",
+      pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
+      replacement: "AKIA«redacted»",
+    },
+    {
+      name: "slack-token",
+      pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+      replacement: "xoxb-«redacted»",
+    },
     { name: "google-key", pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g, replacement: "AIza«redacted»" },
-    { name: "bearer-token", pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/g, replacement: `Bearer ${REDACTED}` },
-    { name: "jwt", pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, replacement: REDACTED },
+    {
+      name: "bearer-token",
+      pattern: /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/g,
+      replacement: `Bearer ${REDACTED}`,
+    },
+    {
+      name: "jwt",
+      pattern: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+      replacement: REDACTED,
+    },
     // PEM blocks, which JSON-escape to a single line with \n sequences.
     {
       name: "private-key",
@@ -80,12 +104,14 @@ export function buildRedactions(identity: ScrubIdentity = {}): Redaction[] {
     // `KEY=value` / `"token": "value"` shapes, which catch the long tail.
     {
       name: "env-assignment",
-      pattern: /\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY)[A-Z0-9_]*)\s*=\s*[^\s"',;]{6,}/g,
+      pattern:
+        /\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|APIKEY|API_KEY|CREDENTIAL|PRIVATE_KEY)[A-Z0-9_]*)\s*=\s*[^\s"',;]{6,}/g,
       replacement: `$1=${REDACTED}`,
     },
     {
       name: "json-secret-field",
-      pattern: /("(?:[a-zA-Z_]*(?:secret|token|password|apiKey|api_key|credential|authorization)[a-zA-Z_]*)"\s*:\s*")[^"]{6,}(")/gi,
+      pattern:
+        /("(?:[a-zA-Z_]*(?:secret|token|password|apiKey|api_key|credential|authorization)[a-zA-Z_]*)"\s*:\s*")[^"]{6,}(")/gi,
       replacement: `$1${REDACTED}$2`,
     },
     // Identity. Home first, so the more specific path wins over the bare username.
@@ -94,11 +120,13 @@ export function buildRedactions(identity: ScrubIdentity = {}): Redaction[] {
     // hits forever on a file it had already cleaned.
     ...(user === "user"
       ? []
-      : [{
-        name: "username",
-        pattern: new RegExp(`\\b${escapeRegExp(user)}\\b`, "g"),
-        replacement: "user",
-      }]),
+      : [
+          {
+            name: "username",
+            pattern: new RegExp(`\\b${escapeRegExp(user)}\\b`, "g"),
+            replacement: "user",
+          },
+        ]),
     // Any home-shaped path, whoever it belongs to. The two rules above key off
     // the *scrubbing* machine, so a recording made in the container (everything
     // under /home/node) or by another developer would otherwise sail through
@@ -119,7 +147,8 @@ export function buildRedactions(identity: ScrubIdentity = {}): Redaction[] {
     // Private-range IPs, which identify an internal network.
     {
       name: "private-ip",
-      pattern: /\b(?!10\.0\.0\.1\b)(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b/g,
+      pattern:
+        /\b(?!10\.0\.0\.1\b)(?:10\.\d{1,3}|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\b/g,
       replacement: "10.0.0.1",
     },
   ];
@@ -265,8 +294,9 @@ function validateJsonl(text: string): { lines: number; invalid: number } {
   return { lines, invalid };
 }
 
-const USAGE = "usage: bun scripts/scrub-codex-recording.ts <input.jsonl> [output.jsonl] "
-  + "[--check] [--strip-content] [--home=<path>] [--user=<name>]";
+const USAGE =
+  "usage: bun scripts/scrub-codex-recording.ts <input.jsonl> [output.jsonl] " +
+  "[--check] [--strip-content] [--home=<path>] [--user=<name>]";
 
 export interface ScrubArguments {
   inputPath: string;
@@ -324,9 +354,7 @@ async function main(): Promise<void> {
 
   console.log(`Read ${validation.lines} JSONL records from ${args.inputPath}`);
   if (args.stripContent) {
-    console.log(
-      `Blanked ${stripped.stripped} content field(s) (${CONTENT_FIELDS.join(", ")}).`,
-    );
+    console.log(`Blanked ${stripped.stripped} content field(s) (${CONTENT_FIELDS.join(", ")}).`);
   }
   if (result.totalHits === 0) {
     console.log("No redactions matched.");
@@ -348,7 +376,9 @@ async function main(): Promise<void> {
     // knowing *which* records are in the file is the only way to judge how much
     // prompt and file content a fixture is about to carry into the repository.
     console.log("\nRecords by method:");
-    for (const [method, count] of Object.entries(census).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))) {
+    for (const [method, count] of Object.entries(census).sort(
+      (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    )) {
       console.log(`  ${method.padEnd(44)} ${count}`);
     }
     if (result.totalHits > 0) {
@@ -357,9 +387,9 @@ async function main(): Promise<void> {
     }
     console.log("\n--check: no redaction pattern matched.");
     console.log(
-      "This is not a clean bill of health: no pattern covers prompts, command "
-      + "output or diffs. Re-run with --strip-content, or read the census above "
-      + "and the file itself.",
+      "This is not a clean bill of health: no pattern covers prompts, command " +
+        "output or diffs. Re-run with --strip-content, or read the census above " +
+        "and the file itself.",
     );
     return;
   }

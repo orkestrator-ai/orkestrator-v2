@@ -43,11 +43,7 @@ describe("structured verification prompt", () => {
   });
 
   test("includes ticket acceptance context and project notes", () => {
-    const prompt = verificationPrompt(
-      pipeline(),
-      "Run the gateway integration suite.",
-      "release",
-    );
+    const prompt = verificationPrompt(pipeline(), "Run the gateway integration suite.", "release");
 
     expect(prompt).toContain("**Title**: Upload retry");
     expect(prompt).toContain("A failed upload can be retried.");

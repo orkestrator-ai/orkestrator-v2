@@ -51,12 +51,14 @@ lines.on("line", (line) => {
         tool_name: "AskUserQuestion",
         tool_use_id: "contract-question-tool",
         input: {
-          questions: [{
-            question: "Choose a deterministic answer",
-            header: "Contract",
-            options: [{ label: "Continue", description: "Continue the probe" }],
-            multiSelect: false,
-          }],
+          questions: [
+            {
+              question: "Choose a deterministic answer",
+              header: "Contract",
+              options: [{ label: "Continue", description: "Continue the probe" }],
+              multiSelect: false,
+            },
+          ],
         },
         permission_suggestions: [],
       },
@@ -69,10 +71,13 @@ lines.on("line", (line) => {
     if (response?.request_id !== "contract-question-request") return;
     if (responseRecorded) return;
     responseRecorded = true;
-    writeFileSync(responseFile, JSON.stringify({
-      argv: process.argv.slice(2),
-      response,
-    }));
+    writeFileSync(
+      responseFile,
+      JSON.stringify({
+        argv: process.argv.slice(2),
+        response,
+      }),
+    );
     write({
       type: "result",
       subtype: "success",

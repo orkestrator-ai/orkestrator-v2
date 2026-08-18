@@ -4,11 +4,15 @@ import path from "node:path";
 
 const packageRoot = path.resolve(import.meta.dir, "..");
 const read = (name: string) => readFileSync(path.join(packageRoot, name), "utf8");
-const readSharedWeb = (name: string) => readFileSync(path.join(packageRoot, "../web", name), "utf8");
+const readSharedWeb = (name: string) =>
+  readFileSync(path.join(packageRoot, "../web", name), "utf8");
 
 describe("public client deployment configuration", () => {
   test("builds and tests as an isolated Bun workspace", () => {
-    const manifest = JSON.parse(read("package.json")) as { name: string; scripts: Record<string, string> };
+    const manifest = JSON.parse(read("package.json")) as {
+      name: string;
+      scripts: Record<string, string>;
+    };
     expect(manifest.name).toBe("@orkestrator/web-public");
     expect(manifest.scripts.build).toContain("tsc");
     expect(manifest.scripts.build).toContain("vite build");
@@ -20,7 +24,9 @@ describe("public client deployment configuration", () => {
       "bun test src --only-failures --parallel=${ORKESTRATOR_TEST_WORKERS:-2}",
     );
 
-    const tsconfig = JSON.parse(read("tsconfig.json")) as { compilerOptions: { strict: boolean; paths: unknown } };
+    const tsconfig = JSON.parse(read("tsconfig.json")) as {
+      compilerOptions: { strict: boolean; paths: unknown };
+    };
     expect(tsconfig.compilerOptions.strict).toBe(true);
     expect(tsconfig.compilerOptions.paths).toBeDefined();
     expect(read("vite.config.ts")).toContain('"@": path.resolve(__dirname, "../web/src")');

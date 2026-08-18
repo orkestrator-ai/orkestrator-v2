@@ -108,9 +108,18 @@ describe("loopedReviewStore backend projection", () => {
   test("exposes no renderer phase-advancement methods", () => {
     const state = useLoopedReviewStore.getState() as unknown as Record<string, unknown>;
     for (const method of [
-      "createWorkflow", "setPhase", "addSession", "recordReport",
-      "recordReconciliation", "completeFix", "claimDispatch", "completePr",
-      "pauseWorkflow", "resumeWorkflow", "retryWorkflow", "cancelWorkflow",
+      "createWorkflow",
+      "setPhase",
+      "addSession",
+      "recordReport",
+      "recordReconciliation",
+      "completeFix",
+      "claimDispatch",
+      "completePr",
+      "pauseWorkflow",
+      "resumeWorkflow",
+      "retryWorkflow",
+      "cancelWorkflow",
     ]) {
       expect(state[method]).toBeUndefined();
     }
@@ -172,62 +181,86 @@ describe("looped review contract re-exports", () => {
     // Without a parseable start time the abort deadline never fires.
     expect(isLoopedReviewWorkflow({ ...cancelling, cancellingSince: undefined })).toBe(false);
     expect(isLoopedReviewWorkflow({ ...cancelling, cancellingSince: "soon" })).toBe(false);
-    expect(isLoopedReviewWorkflow({ ...loopedReviewFixture(), cancellingFromPhase: "fixing" })).toBe(false);
+    expect(
+      isLoopedReviewWorkflow({ ...loopedReviewFixture(), cancellingFromPhase: "fixing" }),
+    ).toBe(false);
   });
 
   test("validates nested session and round invariants", () => {
-    const withSession = loopedReviewFixture({ sessions: [{ ...session, phase: "discovery", pass: 1 }] });
+    const withSession = loopedReviewFixture({
+      sessions: [{ ...session, phase: "discovery", pass: 1 }],
+    });
     expect(isLoopedReviewWorkflow(withSession)).toBe(true);
-    expect(isLoopedReviewWorkflow({
-      ...withSession,
-      sessions: [{ ...withSession.sessions[0]!, sessionKey: "" }],
-    })).toBe(false);
-    expect(isLoopedReviewWorkflow({
-      ...withSession,
-      rounds: [{ ...withSession.rounds[0]!, round: 0 }],
-    })).toBe(false);
+    expect(
+      isLoopedReviewWorkflow({
+        ...withSession,
+        sessions: [{ ...withSession.sessions[0]!, sessionKey: "" }],
+      }),
+    ).toBe(false);
+    expect(
+      isLoopedReviewWorkflow({
+        ...withSession,
+        rounds: [{ ...withSession.rounds[0]!, round: 0 }],
+      }),
+    ).toBe(false);
     // Duplicate session ids would make dispatch resolution ambiguous.
-    expect(isLoopedReviewWorkflow({
-      ...withSession,
-      sessions: [withSession.sessions[0]!, withSession.sessions[0]!],
-    })).toBe(false);
+    expect(
+      isLoopedReviewWorkflow({
+        ...withSession,
+        sessions: [withSession.sessions[0]!, withSession.sessions[0]!],
+      }),
+    ).toBe(false);
   });
 
   test("ties a dispatch to its kind and to the workflow's own phase", () => {
     const dispatch = {
-      id: "dispatch-1", requestId: "request-1", sessionId: "session-1",
-      phase: "preparing" as const, kind: "prepare" as const, state: "sent" as const,
+      id: "dispatch-1",
+      requestId: "request-1",
+      sessionId: "session-1",
+      phase: "preparing" as const,
+      kind: "prepare" as const,
+      state: "sent" as const,
       createdAt: "2026-08-01T00:00:00.000Z",
     };
     const withDispatch = loopedReviewFixture({ dispatch, sessions: [session] });
     expect(isLoopedReviewWorkflow(withDispatch)).toBe(true);
-    expect(isLoopedReviewWorkflow({
-      ...withDispatch,
-      dispatch: { ...dispatch, kind: "discover" },
-    })).toBe(false);
-    expect(isLoopedReviewWorkflow({
-      ...withDispatch,
-      dispatch: { ...dispatch, state: "queued" },
-    })).toBe(false);
+    expect(
+      isLoopedReviewWorkflow({
+        ...withDispatch,
+        dispatch: { ...dispatch, kind: "discover" },
+      }),
+    ).toBe(false);
+    expect(
+      isLoopedReviewWorkflow({
+        ...withDispatch,
+        dispatch: { ...dispatch, state: "queued" },
+      }),
+    ).toBe(false);
     // The result handler branches on kind alone, so a dispatch left over from
     // an earlier phase would drive the wrong completion branch.
-    expect(isLoopedReviewWorkflow({
-      ...withDispatch,
-      phase: "fixing",
-      dispatch: { ...dispatch, phase: "fixing", kind: "fix" },
-    })).toBe(true);
-    expect(isLoopedReviewWorkflow({
-      ...withDispatch,
-      phase: "fixing",
-    })).toBe(false);
+    expect(
+      isLoopedReviewWorkflow({
+        ...withDispatch,
+        phase: "fixing",
+        dispatch: { ...dispatch, phase: "fixing", kind: "fix" },
+      }),
+    ).toBe(true);
+    expect(
+      isLoopedReviewWorkflow({
+        ...withDispatch,
+        phase: "fixing",
+      }),
+    ).toBe(false);
     // A dispatch pointing at no session at all is unresolvable.
     expect(isLoopedReviewWorkflow({ ...withDispatch, sessions: [] })).toBe(false);
   });
 
   test("requires a failed workflow to carry its failure", () => {
     const failure = {
-      code: "provider" as const, message: "boom",
-      retryPhase: "discovering" as const, occurredAt: "2026-08-01T00:00:00.000Z",
+      code: "provider" as const,
+      message: "boom",
+      retryPhase: "discovering" as const,
+      occurredAt: "2026-08-01T00:00:00.000Z",
     };
     expect(isLoopedReviewWorkflow(loopedReviewFixture({ phase: "failed", failure }))).toBe(true);
     expect(isLoopedReviewWorkflow(loopedReviewFixture({ phase: "failed" }))).toBe(false);
@@ -236,7 +269,11 @@ describe("looped review contract re-exports", () => {
 
   test("detects both kinds of pooled finding", () => {
     expect(hasReviewFindings({ issues: [], coverageGaps: [] })).toBe(false);
-    expect(hasReviewFindings({ issues: [{ poolId: "issue-1", ...issue }], coverageGaps: [] })).toBe(true);
-    expect(hasReviewFindings({ issues: [], coverageGaps: [{ poolId: "gap-1", ...coverageGap }] })).toBe(true);
+    expect(hasReviewFindings({ issues: [{ poolId: "issue-1", ...issue }], coverageGaps: [] })).toBe(
+      true,
+    );
+    expect(
+      hasReviewFindings({ issues: [], coverageGaps: [{ poolId: "gap-1", ...coverageGap }] }),
+    ).toBe(true);
   });
 });

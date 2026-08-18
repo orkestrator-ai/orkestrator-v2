@@ -114,17 +114,8 @@ export class DispatchJournalIntegrityError extends DispatchJournalAdmissionError
   }
 }
 
-const DISPATCH_STATES = new Set<DispatchState>([
-  "prepared",
-  "accepted",
-  "retryable",
-  "terminal",
-]);
-const TERMINAL_STATUSES = new Set<DispatchTerminalStatus>([
-  "completed",
-  "interrupted",
-  "failed",
-]);
+const DISPATCH_STATES = new Set<DispatchState>(["prepared", "accepted", "retryable", "terminal"]);
+const TERMINAL_STATUSES = new Set<DispatchTerminalStatus>(["completed", "interrupted", "failed"]);
 
 function isTimestamp(value: unknown): value is string {
   return typeof value === "string" && Number.isFinite(Date.parse(value));
@@ -138,32 +129,38 @@ function isPersistedRecord(value: unknown): value is PromptDispatchRecord {
   if (!value || typeof value !== "object") return false;
   const record = value as Partial<PromptDispatchRecord>;
   if (
-    typeof record.requestId !== "string"
-    || record.requestId.length === 0
-    || typeof record.bridgeSessionId !== "string"
-    || (record.threadId !== null && typeof record.threadId !== "string")
-    || !isOptionalString(record.turnId)
-    || !DISPATCH_STATES.has(record.state as DispatchState)
-    || !isTimestamp(record.createdAt)
-    || !isTimestamp(record.updatedAt)
-    || (record.quarantined !== undefined && record.quarantined !== true)
+    typeof record.requestId !== "string" ||
+    record.requestId.length === 0 ||
+    typeof record.bridgeSessionId !== "string" ||
+    (record.threadId !== null && typeof record.threadId !== "string") ||
+    !isOptionalString(record.turnId) ||
+    !DISPATCH_STATES.has(record.state as DispatchState) ||
+    !isTimestamp(record.createdAt) ||
+    !isTimestamp(record.updatedAt) ||
+    (record.quarantined !== undefined && record.quarantined !== true)
   ) {
     return false;
   }
   if (record.state === "accepted") {
-    return typeof record.threadId === "string"
-      && record.threadId.length > 0
-      && typeof record.turnId === "string"
-      && record.turnId.length > 0
-      && record.terminalStatus === undefined;
+    return (
+      typeof record.threadId === "string" &&
+      record.threadId.length > 0 &&
+      typeof record.turnId === "string" &&
+      record.turnId.length > 0 &&
+      record.terminalStatus === undefined
+    );
   }
   if (record.state === "terminal") {
-    return TERMINAL_STATUSES.has(record.terminalStatus as DispatchTerminalStatus)
-      && (!record.quarantined || record.terminalStatus === "failed");
+    return (
+      TERMINAL_STATUSES.has(record.terminalStatus as DispatchTerminalStatus) &&
+      (!record.quarantined || record.terminalStatus === "failed")
+    );
   }
-  return (record.threadId === null || record.threadId.length > 0)
-    && record.turnId === undefined
-    && record.terminalStatus === undefined;
+  return (
+    (record.threadId === null || record.threadId.length > 0) &&
+    record.turnId === undefined &&
+    record.terminalStatus === undefined
+  );
 }
 
 export class DispatchJournal {
@@ -207,16 +204,16 @@ export class DispatchJournal {
         return;
       }
       for (const persisted of parsed.records) {
-        const candidate = persisted && typeof persisted === "object"
-          ? persisted as Record<string, unknown>
-          : undefined;
-        const requestId = typeof candidate?.requestId === "string"
-          ? candidate.requestId
-          : "";
+        const candidate =
+          persisted && typeof persisted === "object"
+            ? (persisted as Record<string, unknown>)
+            : undefined;
+        const requestId = typeof candidate?.requestId === "string" ? candidate.requestId : "";
         if (!requestId) continue;
-        const sequence = Number.isSafeInteger(candidate?.sequence) && Number(candidate?.sequence) > 0
-          ? Number(candidate!.sequence)
-          : this.nextSequence + 1;
+        const sequence =
+          Number.isSafeInteger(candidate?.sequence) && Number(candidate?.sequence) > 0
+            ? Number(candidate!.sequence)
+            : this.nextSequence + 1;
         this.nextSequence = Math.max(this.nextSequence, sequence);
         const timestamp = new Date(this.now()).toISOString();
         const record: PromptDispatchRecord = isPersistedRecord(persisted)
@@ -245,9 +242,10 @@ export class DispatchJournal {
       this.refreshCapacityError();
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return;
-      this.integrityError = error instanceof DispatchJournalIntegrityError
-        ? error.message
-        : "Dispatch journal could not be safely decoded";
+      this.integrityError =
+        error instanceof DispatchJournalIntegrityError
+          ? error.message
+          : "Dispatch journal could not be safely decoded";
     }
   }
 
@@ -263,12 +261,7 @@ export class DispatchJournal {
       const buffer = Buffer.alloc(this.maxBytes + 1);
       let total = 0;
       while (total <= this.maxBytes) {
-        const { bytesRead } = await handle.read(
-          buffer,
-          total,
-          buffer.length - total,
-          total,
-        );
+        const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
         if (bytesRead === 0) break;
         total += bytesRead;
       }
@@ -471,10 +464,7 @@ export class DispatchJournal {
     }
     for (const [requestId, record] of this.records) {
       if (!record.bridgeSessionId) continue;
-      if (
-        record.state === "retryable"
-        && latestBySession.get(record.bridgeSessionId) !== record
-      ) {
+      if (record.state === "retryable" && latestBySession.get(record.bridgeSessionId) !== record) {
         this.records.delete(requestId);
       }
     }
@@ -483,9 +473,9 @@ export class DispatchJournal {
     for (const [requestId, record] of this.records) {
       const updatedAt = Date.parse(record.updatedAt);
       if (
-        ((record.state === "terminal" && !record.quarantined) || record.state === "retryable")
-        && Number.isFinite(updatedAt)
-        && updatedAt < cutoff
+        ((record.state === "terminal" && !record.quarantined) || record.state === "retryable") &&
+        Number.isFinite(updatedAt) &&
+        updatedAt < cutoff
       ) {
         this.records.delete(requestId);
       }
@@ -493,15 +483,17 @@ export class DispatchJournal {
 
     // Over either cap: shed the oldest safe records, never an unresolved one.
     const safeToForget = [...this.records.values()]
-      .filter((record) =>
-        (record.state === "terminal" && !record.quarantined) || record.state === "retryable"
+      .filter(
+        (record) =>
+          (record.state === "terminal" && !record.quarantined) || record.state === "retryable",
       )
       .sort((left, right) => compareDispatchRecordsNewestFirst(right, left));
     for (const record of safeToForget) {
       if (
-        this.records.size <= this.maxRecords
-        && this.serializedBytes(this.records) <= this.maxBytes
-      ) break;
+        this.records.size <= this.maxRecords &&
+        this.serializedBytes(this.records) <= this.maxBytes
+      )
+        break;
       this.records.delete(record.requestId);
     }
   }
@@ -516,15 +508,14 @@ export class DispatchJournal {
     candidate.set(record.requestId, record);
 
     const safeOldestFirst = [...candidate.values()]
-      .filter((entry) =>
-        (entry.state === "terminal" && !entry.quarantined) || entry.state === "retryable"
+      .filter(
+        (entry) =>
+          (entry.state === "terminal" && !entry.quarantined) || entry.state === "retryable",
       )
       .sort((left, right) => compareDispatchRecordsNewestFirst(right, left));
     for (const safe of safeOldestFirst) {
-      if (
-        candidate.size <= this.maxRecords
-        && this.serializedBytes(candidate) <= this.maxBytes
-      ) break;
+      if (candidate.size <= this.maxRecords && this.serializedBytes(candidate) <= this.maxBytes)
+        break;
       candidate.delete(safe.requestId);
     }
 
@@ -545,22 +536,27 @@ export class DispatchJournal {
   }
 
   private serializedBytes(records: ReadonlyMap<string, PromptDispatchRecord>): number {
-    return Buffer.byteLength(`${JSON.stringify({
-      version: DISPATCH_JOURNAL_VERSION,
-      records: [...records.values()],
-    }, null, 2)}\n`, "utf8");
+    return Buffer.byteLength(
+      `${JSON.stringify(
+        {
+          version: DISPATCH_JOURNAL_VERSION,
+          records: [...records.values()],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
   }
 
   /** Capacity is recoverable: startup reconciliation may settle enough safety state. */
   private refreshCapacityError(): void {
     if (this.records.size > this.maxRecords) {
-      this.capacityError =
-        `Dispatch journal safety state exceeds its ${this.maxRecords}-record limit`;
+      this.capacityError = `Dispatch journal safety state exceeds its ${this.maxRecords}-record limit`;
       return;
     }
     if (this.serializedBytes(this.records) > this.maxBytes) {
-      this.capacityError =
-        `Dispatch journal normalized safety state exceeds its ${this.maxBytes}-byte limit`;
+      this.capacityError = `Dispatch journal normalized safety state exceeds its ${this.maxBytes}-byte limit`;
       return;
     }
     this.capacityError = null;
@@ -649,10 +645,11 @@ export function reconcileFromThreadTurns(
       (item) => item?.type === "userMessage" && item.clientId === requestId,
     );
     if (matchIndex < 0) continue;
-    const renderableIds = (from: number, to?: number) => items
-      .slice(from, to)
-      .filter((item) => item?.type !== "userMessage" && typeof item?.id === "string")
-      .map((item) => item.id!);
+    const renderableIds = (from: number, to?: number) =>
+      items
+        .slice(from, to)
+        .filter((item) => item?.type !== "userMessage" && typeof item?.id === "string")
+        .map((item) => item.id!);
     const precedingItemIds = renderableIds(0, matchIndex);
     const followingItemIds = renderableIds(matchIndex + 1);
 

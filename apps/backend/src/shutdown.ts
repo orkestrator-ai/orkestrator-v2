@@ -53,13 +53,7 @@ export function createBackendShutdownHandler(
         dependencies.warn(`[Backend] Failed to stop local servers: ${errorMessage(error)}`);
       }
 
-      dependencies.exit(
-        fatalErrors.length > 0
-          ? 1
-          : signal === "SIGINT"
-            ? 130
-            : 0,
-      );
+      dependencies.exit(fatalErrors.length > 0 ? 1 : signal === "SIGINT" ? 130 : 0);
     })();
     return shutdownPromise;
   };

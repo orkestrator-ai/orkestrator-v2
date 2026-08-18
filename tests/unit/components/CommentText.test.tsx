@@ -26,14 +26,17 @@ function CommentText({ text }: { text: string }) {
           <button
             key={i}
             className="text-blue-400 hover:underline cursor-pointer inline"
-            onClick={(e) => { e.preventDefault(); void mockOpenInBrowser(part); }}
+            onClick={(e) => {
+              e.preventDefault();
+              void mockOpenInBrowser(part);
+            }}
             data-testid={`url-link-${i}`}
           >
             {part}
           </button>
         ) : (
           <span key={i}>{part}</span>
-        )
+        ),
       )}
     </>
   );
@@ -67,9 +70,7 @@ describe("CommentText", () => {
   });
 
   test("renders multiple URLs correctly", () => {
-    render(
-      <CommentText text="Link1: https://a.com and link2: https://b.com end" />
-    );
+    render(<CommentText text="Link1: https://a.com and link2: https://b.com end" />);
     const buttons = screen.getAllByRole("button");
     expect(buttons).toHaveLength(2);
     expect(buttons[0]!.textContent).toBe("https://a.com");

@@ -46,12 +46,7 @@ const inFlightParses = new Map<string, Promise<unknown>>();
 /** Parses performed (not served from cache). Test-only instrumentation. */
 let parseCount = 0;
 
-function fingerprintOf(stats: {
-  mtimeMs: number;
-  size: number;
-  ino: number;
-  dev: number;
-}): string {
+function fingerprintOf(stats: { mtimeMs: number; size: number; ino: number; dev: number }): string {
   // `ino`/`dev` catch an atomic replace that happens to preserve mtime and
   // size — the common shape of a config file written via rename.
   return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;

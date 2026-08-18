@@ -36,7 +36,6 @@ import {
 } from "./session-manager-test-harness.js";
 import type { SdkSessionInfo } from "./session-manager-test-harness.js";
 
-
 // ---------------------------------------------------------------------------
 // Pure session-state CRUD
 // ---------------------------------------------------------------------------
@@ -66,7 +65,9 @@ describe("session lifecycle", () => {
       expect(session.messages).toEqual([]);
       expect(session.createdAt).toBeInstanceOf(Date);
 
-      const updated = events.find((e) => e.type === "session.updated" && e.sessionId === session.id);
+      const updated = events.find(
+        (e) => e.type === "session.updated" && e.sessionId === session.id,
+      );
       expect(updated).toBeDefined();
       expect((updated?.data as { status?: string })?.status).toBe("idle");
     } finally {
@@ -88,9 +89,7 @@ describe("session lifecycle", () => {
     expect(first.id).toMatch(/^session-client-/);
     expect(second).toBe(first);
     expect(second.title).toBe("First title");
-    expect(
-      listSessions().filter((session) => session.id === first.id),
-    ).toHaveLength(1);
+    expect(listSessions().filter((session) => session.id === first.id)).toHaveLength(1);
   });
 
   test("recovers a client-key session onto the same SDK rollout after restart", async () => {
@@ -102,10 +101,7 @@ describe("session lifecycle", () => {
     try {
       const sdkSessionId = sessionIdForClientKey(clientSessionKey)
         ?.slice("session-client-".length)
-        .replace(
-          /^(.{8})(.{4})(.{4})(.{4})(.{12})$/,
-          "$1-$2-$3-$4-$5",
-        );
+        .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "$1-$2-$3-$4-$5");
       expect(sdkSessionId).toMatch(
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
@@ -140,12 +136,10 @@ describe("session lifecycle", () => {
               sessionId: sdkSessionId,
               customTitle: "Recovered startup agent",
             })
-          : undefined);
-
-      const recovered = await createOrRecoverSession(
-        "Ignored retry title",
-        clientSessionKey,
+          : undefined,
       );
+
+      const recovered = await createOrRecoverSession("Ignored retry title", clientSessionKey);
       expect(recovered).toMatchObject({
         id: first.id,
         sdkSessionId,
@@ -176,9 +170,7 @@ describe("session lifecycle", () => {
 
     // The boundary length is accepted, and its payload must still be a valid v4
     // UUID or the SDK id could not be recovered from the bridge id.
-    expect(sessionIdForClientKey("x".repeat(512))).toMatch(
-      /^session-client-[0-9a-f]{32}$/,
-    );
+    expect(sessionIdForClientKey("x".repeat(512))).toMatch(/^session-client-[0-9a-f]{32}$/);
     expect(sdkIdForClientKey("x".repeat(512))).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
@@ -202,10 +194,7 @@ describe("session lifecycle", () => {
       // Nothing on disk yet — the ordinary first launch of a startup agent.
       mockSdkGetSessionInfo.mockImplementation(async () => undefined);
 
-      const session = await createOrRecoverSession(
-        "Startup agent",
-        clientSessionKey,
-      );
+      const session = await createOrRecoverSession("Startup agent", clientSessionKey);
       track(session.id);
 
       expect(session.id).toBe(sessionIdForClientKey(clientSessionKey));
@@ -213,17 +202,11 @@ describe("session lifecycle", () => {
       expect(session.status).toBe("idle");
       // No rollout, so no durable identity yet and nothing to persist under it.
       expect(session.sdkSessionId).toBeUndefined();
-      expect(
-        await readSessionPreferences(sdkIdForClientKey(clientSessionKey)),
-      ).toBeUndefined();
+      expect(await readSessionPreferences(sdkIdForClientKey(clientSessionKey))).toBeUndefined();
 
       // A retried launch must join the same conversation, not mint a second.
-      expect(
-        await createOrRecoverSession("Ignored retry title", clientSessionKey),
-      ).toBe(session);
-      expect(
-        listSessions().filter((entry) => entry.id === session.id),
-      ).toHaveLength(1);
+      expect(await createOrRecoverSession("Ignored retry title", clientSessionKey)).toBe(session);
+      expect(listSessions().filter((entry) => entry.id === session.id)).toHaveLength(1);
     });
   });
 
@@ -234,9 +217,10 @@ describe("session lifecycle", () => {
       const sdkSessionId = sdkIdForClientKey(clientSessionKey);
       let releaseInfo: ((info: SdkSessionInfo) => void) | undefined;
       mockSdkGetSessionInfo.mockImplementation(
-        async () => new Promise<SdkSessionInfo>((resolve) => {
-          releaseInfo = resolve;
-        }),
+        async () =>
+          new Promise<SdkSessionInfo>((resolve) => {
+            releaseInfo = resolve;
+          }),
       );
 
       // Two tabs mounting at once, or a launch retried before the first read
@@ -244,19 +228,19 @@ describe("session lifecycle", () => {
       const first = createOrRecoverSession("First", clientSessionKey);
       const second = createOrRecoverSession("Second", clientSessionKey);
       await waitFor(() => releaseInfo !== undefined);
-      releaseInfo!(sdkSessionInfo({
-        sessionId: sdkSessionId,
-        customTitle: "From disk",
-      }));
+      releaseInfo!(
+        sdkSessionInfo({
+          sessionId: sdkSessionId,
+          customTitle: "From disk",
+        }),
+      );
 
       const [a, b] = await Promise.all([first, second]);
       expect(a).toBe(b);
       expect(a.id).toBe(alias);
       expect(getSession(alias)).toBe(a);
       expect(mockSdkGetSessionInfo).toHaveBeenCalledTimes(1);
-      expect(
-        listSessions().filter((entry) => entry.sdkSessionId === sdkSessionId),
-      ).toHaveLength(1);
+      expect(listSessions().filter((entry) => entry.sdkSessionId === sdkSessionId)).toHaveLength(1);
     });
   });
 
@@ -294,18 +278,9 @@ describe("session lifecycle", () => {
       const sdkSessionId = sdkIdForClientKey(clientSessionKey);
       const session = createSession("Startup agent", clientSessionKey);
       track(session.id);
-      const preferencesDirectory = join(
-        directory,
-        ".claude",
-        "orkestrator",
-        "session-preferences",
-      );
+      const preferencesDirectory = join(directory, ".claude", "orkestrator", "session-preferences");
       await mkdir(preferencesDirectory, { recursive: true });
-      await writeFile(
-        join(preferencesDirectory, `${sdkSessionId}.json`),
-        "{",
-        "utf-8",
-      );
+      await writeFile(join(preferencesDirectory, `${sdkSessionId}.json`), "{", "utf-8");
 
       const promptPromise = sendPrompt(session.id, "Inspect the workspace");
       const call = await nextQueryCall();
@@ -390,11 +365,14 @@ describe("session lifecycle", () => {
       } as const;
       expect(events).toContainEqual(removalEvent);
       expect(clearPromptSuggestion(session.id)).toBe(true);
-      expect(events.filter((event) =>
-        event.type === removalEvent.type
-        && event.sessionId === removalEvent.sessionId
-        && (event.data as { promptSuggestion?: string | null }).promptSuggestion === null
-      )).toHaveLength(1);
+      expect(
+        events.filter(
+          (event) =>
+            event.type === removalEvent.type &&
+            event.sessionId === removalEvent.sessionId &&
+            (event.data as { promptSuggestion?: string | null }).promptSuggestion === null,
+        ),
+      ).toHaveLength(1);
       expect(clearPromptSuggestion("session-missing")).toBe(false);
     } finally {
       stop();
@@ -411,29 +389,19 @@ describe("session lifecycle", () => {
       let promptTask: Promise<void> | undefined;
 
       expect(
-        await claimPromptDispatch(
-          session.id,
-          "initial-prompt:env-1:tab-1",
-          () => {
-            promptTask = sendPrompt(session.id, "Launch once", {
-              requestId: "initial-prompt:env-1:tab-1",
-            });
-            return promptTask;
-          },
-        ),
+        await claimPromptDispatch(session.id, "initial-prompt:env-1:tab-1", () => {
+          promptTask = sendPrompt(session.id, "Launch once", {
+            requestId: "initial-prompt:env-1:tab-1",
+          });
+          return promptTask;
+        }),
       ).toBe("claimed");
       expect(
-        await claimPromptDispatch(
-          session.id,
-          "initial-prompt:env-1:tab-1",
-          async () => {
-            throw new Error("duplicate dispatch must not start");
-          },
-        ),
+        await claimPromptDispatch(session.id, "initial-prompt:env-1:tab-1", async () => {
+          throw new Error("duplicate dispatch must not start");
+        }),
       ).toBe("duplicate");
-      expect(
-        await readSessionPreferences(sdkSessionId),
-      ).toMatchObject({
+      expect(await readSessionPreferences(sdkSessionId)).toMatchObject({
         dispatchedRequestIds: ["initial-prompt:env-1:tab-1"],
       });
 
@@ -479,26 +447,24 @@ describe("session lifecycle", () => {
       },
       message: "Session is restoring files from a checkpoint",
     },
-  ])("claimPromptDispatch rejects a $name session before persisting", async ({
-    prepare,
-    message,
-  }) => {
-    await withTemporaryClaudeHome("claude-dispatch-guard-", async () => {
-      const session = createSession("guarded dispatch");
-      track(session.id);
-      prepare(session);
-      const dispatch = mock(async () => {});
+  ])(
+    "claimPromptDispatch rejects a $name session before persisting",
+    async ({ prepare, message }) => {
+      await withTemporaryClaudeHome("claude-dispatch-guard-", async () => {
+        const session = createSession("guarded dispatch");
+        track(session.id);
+        prepare(session);
+        const dispatch = mock(async () => {});
 
-      await expect(
-        claimPromptDispatch(session.id, "request-guarded", dispatch),
-      ).rejects.toMatchObject({ code: "conflict", message });
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(session.dispatchedRequestIds?.has("request-guarded")).not.toBe(true);
-      expect(
-        await readSessionPreferences(session.id.slice("session-".length)),
-      ).toBeUndefined();
-    });
-  });
+        await expect(
+          claimPromptDispatch(session.id, "request-guarded", dispatch),
+        ).rejects.toMatchObject({ code: "conflict", message });
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(session.dispatchedRequestIds?.has("request-guarded")).not.toBe(true);
+        expect(await readSessionPreferences(session.id.slice("session-".length))).toBeUndefined();
+      });
+    },
+  );
 
   test("reserves a stable-id turn before its durable claim yields", async () => {
     const directory = await mkdtemp(join(tmpdir(), "claude-dispatch-race-"));
@@ -508,21 +474,17 @@ describe("session lifecycle", () => {
       track(session.id);
       let promptTask: Promise<void> | undefined;
 
-      const claim = claimPromptDispatch(
-        session.id,
-        "initial-prompt:env-1:tab-race",
-        () => {
-          promptTask = sendPrompt(session.id, "Launch once", {
-            requestId: "initial-prompt:env-1:tab-race",
-          });
-          return promptTask;
-        },
-      );
+      const claim = claimPromptDispatch(session.id, "initial-prompt:env-1:tab-race", () => {
+        promptTask = sendPrompt(session.id, "Launch once", {
+          requestId: "initial-prompt:env-1:tab-race",
+        });
+        return promptTask;
+      });
 
       expect(getSession(session.id)?.status).toBe("running");
-      await expect(
-        sendPrompt(session.id, "Competing prompt"),
-      ).rejects.toThrow("already processing");
+      await expect(sendPrompt(session.id, "Competing prompt")).rejects.toThrow(
+        "already processing",
+      );
       await expect(claim).resolves.toBe("claimed");
 
       const call = await nextQueryCall();
@@ -614,19 +576,16 @@ describe("session lifecycle", () => {
       );
 
       releasePersistence!();
-      const [firstResult, duplicateResult] = await Promise.allSettled([
-        first,
-        duplicate,
-      ]);
+      const [firstResult, duplicateResult] = await Promise.allSettled([first, duplicate]);
       expect(firstResult.status).toBe("rejected");
       expect(duplicateResult.status).toBe("rejected");
       expect(firstDispatch).not.toHaveBeenCalled();
       expect(duplicateDispatch).not.toHaveBeenCalled();
       expect(session.turnStartedAt).toBeUndefined();
       expect(session.status).toBe("idle");
-      expect(session.dispatchedRequestIds?.has(
-        "initial-prompt:env-1:tab-join-failure",
-      )).toBe(false);
+      expect(session.dispatchedRequestIds?.has("initial-prompt:env-1:tab-join-failure")).toBe(
+        false,
+      );
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
@@ -646,12 +605,9 @@ describe("session lifecycle", () => {
       });
       const dispatch = mock(async () => {});
 
-      const claim = claimPromptDispatch(
-        session.id,
-        "initial-prompt:env-1:tab-delete",
-        dispatch,
-        { beforePersistence: () => persistenceGate },
-      );
+      const claim = claimPromptDispatch(session.id, "initial-prompt:env-1:tab-delete", dispatch, {
+        beforePersistence: () => persistenceGate,
+      });
       const deletion = deleteSessionDurably(session.id);
       expect(session.deleting).toBe(true);
 
@@ -707,18 +663,14 @@ describe("session lifecycle", () => {
       await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
 
       await expect(
-        claimPromptDispatch(
-          session.id,
-          "initial-prompt:env-1:tab-failure",
-          async () => {},
-        ),
+        claimPromptDispatch(session.id, "initial-prompt:env-1:tab-failure", async () => {}),
       ).rejects.toBeTruthy();
 
       expect(getSession(session.id)?.status).toBe("idle");
       expect(getSession(session.id)?.turnStartedAt).toBeUndefined();
-      expect(getSession(session.id)?.dispatchedRequestIds?.has(
-        "initial-prompt:env-1:tab-failure",
-      )).toBe(false);
+      expect(
+        getSession(session.id)?.dispatchedRequestIds?.has("initial-prompt:env-1:tab-failure"),
+      ).toBe(false);
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
       await rm(directory, { recursive: true, force: true });
@@ -736,20 +688,14 @@ describe("session lifecycle", () => {
       const sdkSessionId = session.id.slice("session-".length);
 
       await expect(
-        claimPromptDispatch(
-          session.id,
-          "initial-prompt:env-1:tab-start",
-          () => {
-            throw new Error("dispatch refused");
-          },
-        ),
+        claimPromptDispatch(session.id, "initial-prompt:env-1:tab-start", () => {
+          throw new Error("dispatch refused");
+        }),
       ).rejects.toThrow("dispatch refused");
 
       expect(session.status).toBe("error");
       expect(session.turnStartedAt).toBe("2026-01-01T00:00:00.000Z");
-      expect(session.dispatchedRequestIds?.has(
-        "initial-prompt:env-1:tab-start",
-      )).toBe(false);
+      expect(session.dispatchedRequestIds?.has("initial-prompt:env-1:tab-start")).toBe(false);
       expect(await readSessionPreferences(sdkSessionId)).toEqual({});
     } finally {
       setClaudeHomeForTesting(sessionManagerTestHome);
@@ -821,9 +767,9 @@ describe("session lifecycle", () => {
         stop();
       }
 
-      expect(await readSessionPreferences(
-        session.id.slice("session-".length),
-      )).toEqual({ planMode: true });
+      expect(await readSessionPreferences(session.id.slice("session-".length))).toEqual({
+        planMode: true,
+      });
       expect(events).toContainEqual({
         type: "session.updated",
         sessionId: session.id,
@@ -845,9 +791,7 @@ describe("session lifecycle", () => {
       await writeFile(join(directory, ".claude"), "not a directory", "utf-8");
       const { events, stop } = captureEvents();
       try {
-        await expect(
-          setSessionPreferences(session.id, { planMode: true }),
-        ).rejects.toBeTruthy();
+        await expect(setSessionPreferences(session.id, { planMode: true })).rejects.toBeTruthy();
       } finally {
         stop();
       }

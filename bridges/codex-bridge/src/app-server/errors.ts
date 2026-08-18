@@ -176,10 +176,11 @@ export function isUnmaterializedThreadError(error: unknown): boolean {
  * never for a transient process error.
  */
 export function isMissingRolloutError(error: unknown): boolean {
-  const message =
-    error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   const normalized = message.toLowerCase();
-  return normalized.includes("thread/resume") && normalized.includes("no rollout found for thread id");
+  return (
+    normalized.includes("thread/resume") && normalized.includes("no rollout found for thread id")
+  );
 }
 
 export function toEngineError(error: unknown): EngineError {

@@ -14,7 +14,9 @@ function readBackendCommandSources(): string {
     "apps/backend/src/core/commands.ts",
     "apps/backend/src/core/commands-registry-servers.ts",
     "apps/backend/src/core/commands-servers.ts",
-  ].map(read).join("\n");
+  ]
+    .map(read)
+    .join("\n");
 }
 
 describe("codex bridge process environment", () => {
@@ -45,7 +47,9 @@ describe("codex bridge process environment", () => {
   test("both spawn paths forward the configured concurrent thread limit", () => {
     const commands = readBackendCommandSources();
     expect(commands).toContain("env[CODEX_MAX_CONCURRENT_THREADS_ENV] = String(");
-    expect(commands).toContain("export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}");
+    expect(commands).toContain(
+      "export ${CODEX_MAX_CONCURRENT_THREADS_ENV}=${maxConcurrentThreads}",
+    );
   });
 
   /**
@@ -86,26 +90,22 @@ describe("codex bridge process environment", () => {
   });
 
   test("the exported constant sanitizes a hostile child-process environment", async () => {
-    const constantsPath = join(
-      repoRoot,
-      "apps",
-      "backend",
-      "src",
-      "core",
-      "constants.ts",
-    );
-    const child = Bun.spawn([
-      process.execPath,
-      "-e",
-      `import { APP_VERSION } from ${JSON.stringify(constantsPath)}; process.stdout.write(APP_VERSION);`,
-    ], {
-      env: {
-        ...process.env,
-        ORKESTRATOR_VERSION: '"$(untrusted-command)"',
+    const constantsPath = join(repoRoot, "apps", "backend", "src", "core", "constants.ts");
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `import { APP_VERSION } from ${JSON.stringify(constantsPath)}; process.stdout.write(APP_VERSION);`,
+      ],
+      {
+        env: {
+          ...process.env,
+          ORKESTRATOR_VERSION: '"$(untrusted-command)"',
+        },
+        stdout: "pipe",
+        stderr: "pipe",
       },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    );
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),

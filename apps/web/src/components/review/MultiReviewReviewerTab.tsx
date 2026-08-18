@@ -46,8 +46,10 @@ const AGENT_LABELS = {
  */
 function isGoneError(reason: unknown): boolean {
   const message = reason instanceof Error ? reason.message : String(reason);
-  return message.includes("Multi review workflow not found")
-    || message.includes("Multi review reviewer not found");
+  return (
+    message.includes("Multi review workflow not found") ||
+    message.includes("Multi review reviewer not found")
+  );
 }
 
 interface MultiReviewReviewerTabProps {
@@ -76,9 +78,7 @@ export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTrans
   // half-written drafts a provider streams while composing its answer, which
   // validate as nothing and would otherwise render verbatim. Whatever survives
   // is prose: the reviewer's actual commentary.
-  return hideMachineOutputText(
-    showOnlyFinalStructuredReviewMessage(output, false),
-  );
+  return hideMachineOutputText(showOnlyFinalStructuredReviewMessage(output, false));
 }
 
 export function MultiReviewReviewerTab({
@@ -93,9 +93,9 @@ export function MultiReviewReviewerTab({
   const [stopping, setStopping] = useState(false);
   const requestGeneration = useRef(0);
   const inFlightGeneration = useRef<number | null>(null);
-  const containerId = useEnvironmentStore(
-    (state) => state.getEnvironmentById(data.environmentId)?.containerId,
-  ) ?? undefined;
+  const containerId =
+    useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId)?.containerId) ??
+    undefined;
 
   const refresh = useCallback(async () => {
     const generation = requestGeneration.current;
@@ -152,7 +152,8 @@ export function MultiReviewReviewerTab({
     if (!isActive) return;
     void refresh();
     const gone = transcriptError !== null && isGoneError(transcriptError);
-    if (gone || (snapshot && snapshot.status !== "running" && snapshot.status !== "pending")) return;
+    if (gone || (snapshot && snapshot.status !== "running" && snapshot.status !== "pending"))
+      return;
     const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
@@ -178,9 +179,10 @@ export function MultiReviewReviewerTab({
   // transcript failure must not displace it. A gone workflow or reviewer is the
   // exception: it makes the action failure moot and is terminal for this view,
   // so reporting the stale action error instead would hide why polling stopped.
-  const error = transcriptError !== null && isGoneError(transcriptError)
-    ? transcriptError
-    : actionError ?? transcriptError;
+  const error =
+    transcriptError !== null && isGoneError(transcriptError)
+      ? transcriptError
+      : (actionError ?? transcriptError);
   const label = snapshot ? AGENT_LABELS[snapshot.agent] : "Reviewer";
   const stoppable = snapshot?.status === "running" || snapshot?.status === "pending";
   const statusLine = snapshot
@@ -203,10 +205,13 @@ export function MultiReviewReviewerTab({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {running ? <Loader2 className="size-4 animate-spin text-cyan-400" />
-            : snapshot?.status === "completed" ? <CheckCircle2 className="size-4 text-emerald-500" />
-              : snapshot?.status === "failed" ? <AlertCircle className="size-4 text-destructive" />
-                : null}
+          {running ? (
+            <Loader2 className="size-4 animate-spin text-cyan-400" />
+          ) : snapshot?.status === "completed" ? (
+            <CheckCircle2 className="size-4 text-emerald-500" />
+          ) : snapshot?.status === "failed" ? (
+            <AlertCircle className="size-4 text-destructive" />
+          ) : null}
           {stoppable && (
             <Button
               variant="outline"
@@ -216,9 +221,11 @@ export function MultiReviewReviewerTab({
               title="Stop this reviewer; the Multi Review continues without it"
               onClick={() => void stop()}
             >
-              {stopping
-                ? <Loader2 className="mr-2 size-3.5 animate-spin" />
-                : <Square className="mr-2 size-3.5" />}
+              {stopping ? (
+                <Loader2 className="mr-2 size-3.5 animate-spin" />
+              ) : (
+                <Square className="mr-2 size-3.5" />
+              )}
               Stop
             </Button>
           )}
@@ -273,21 +280,23 @@ export function MultiReviewReviewerTab({
                     : "Loading reviewer transcript…"}
             </div>
           }
-          footer={snapshot?.report ? (
-            <div className="px-3 py-3 @sm:px-6">
-              <StructuredReviewReportView
-                className="mx-auto max-w-3xl"
-                report={snapshot.report}
-                heading="Reviewer report"
-                collapsibleSections
-                showRawJson={false}
-              />
-            </div>
-          ) : error && messages.length > 0 ? (
-            <div className="mx-3 mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive @sm:mx-6">
-              {error}
-            </div>
-          ) : undefined}
+          footer={
+            snapshot?.report ? (
+              <div className="px-3 py-3 @sm:px-6">
+                <StructuredReviewReportView
+                  className="mx-auto max-w-3xl"
+                  report={snapshot.report}
+                  heading="Reviewer report"
+                  collapsibleSections
+                  showRawJson={false}
+                />
+              </div>
+            ) : error && messages.length > 0 ? (
+              <div className="mx-3 mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive @sm:mx-6">
+                {error}
+              </div>
+            ) : undefined
+          }
           scrollProps={scrollProps}
           virtuosoRef={virtuosoRef}
           find={{

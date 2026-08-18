@@ -35,10 +35,13 @@ export type RegistryDependencies = {
   options: CommandRegistryOptions;
   pendingEnvironmentRenameTasks: Map<string, Promise<void>>;
   claudeModelCatalogRefreshes: Map<string, Promise<ClaudeModelCatalogSnapshot>>;
-  bridgeReadinessWaits: Map<string, {
-    deadline: number;
-    promise: Promise<AwaitBridgeReadyResult>;
-  }>;
+  bridgeReadinessWaits: Map<
+    string,
+    {
+      deadline: number;
+      promise: Promise<AwaitBridgeReadyResult>;
+    }
+  >;
   validatedClaudeModelCatalogs: Set<string>;
   extensionDiscoveryCache: ReturnType<typeof createExtensionDiscoveryCache>;
   runProjectCreationCommand: typeof runCommand;
@@ -48,8 +51,5 @@ export type RegistryDependencies = {
     resource: ResourceManifestKind,
     load: () => Promise<T> | T,
   ) => Promise<T | ConditionalResourceSnapshot<T>>;
-  schedulePendingEnvironmentRename: (
-    environmentId: string,
-    context: CommandContext,
-  ) => void;
+  schedulePendingEnvironmentRename: (environmentId: string, context: CommandContext) => void;
 };

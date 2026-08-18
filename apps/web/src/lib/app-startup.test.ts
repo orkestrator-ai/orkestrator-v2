@@ -61,10 +61,7 @@ describe("startApp", () => {
       warn,
     });
 
-    expect(warn).toHaveBeenCalledWith(
-      "[App] Failed to restore the model catalogue cache:",
-      error,
-    );
+    expect(warn).toHaveBeenCalledWith("[App] Failed to restore the model catalogue cache:", error);
     expect(timer.clear).toHaveBeenCalledWith(timer.handle);
     expect(render).toHaveBeenCalledTimes(1);
   });

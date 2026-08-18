@@ -65,9 +65,7 @@ describe("jsonPayloadSource", () => {
     const filler = "x".repeat(MAX_JSON_PAYLOAD_LENGTH - '{"a":""}'.length);
     const atLimit = `{"a":"${filler}"}`;
     expect(atLimit).toHaveLength(MAX_JSON_PAYLOAD_LENGTH);
-    expect(jsonPayloadSource(atLimit)?.source).toHaveLength(
-      MAX_JSON_PAYLOAD_LENGTH,
-    );
+    expect(jsonPayloadSource(atLimit)?.source).toHaveLength(MAX_JSON_PAYLOAD_LENGTH);
   });
 
   test("rejects a payload one character past the parse budget", () => {
@@ -80,9 +78,7 @@ describe("jsonPayloadSource", () => {
 
 describe("parseJsonPayload", () => {
   test("recognizes a structured review report", () => {
-    const payload = parseJsonPayload(
-      JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT),
-    );
+    const payload = parseJsonPayload(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT));
     expect(payload?.kind).toBe("structured-review");
   });
 
@@ -94,19 +90,18 @@ describe("parseJsonPayload", () => {
   });
 
   test("recognizes a fenced verification verdict", () => {
-    const payload = parseJsonPayload(
-      '```json\n{"complete":true,"rationale":"Clean."}\n```',
-    );
+    const payload = parseJsonPayload('```json\n{"complete":true,"rationale":"Clean."}\n```');
     expect(payload?.kind).toBe("verification");
   });
 
   test("materializes notRun on a report persisted before the field existed", () => {
-    const { notRun: _notRun, ...legacyTestResults } =
-      TEST_STRUCTURED_REVIEW_REPORT.testResults;
-    const payload = parseJsonPayload(JSON.stringify({
-      ...TEST_STRUCTURED_REVIEW_REPORT,
-      testResults: legacyTestResults,
-    }));
+    const { notRun: _notRun, ...legacyTestResults } = TEST_STRUCTURED_REVIEW_REPORT.testResults;
+    const payload = parseJsonPayload(
+      JSON.stringify({
+        ...TEST_STRUCTURED_REVIEW_REPORT,
+        testResults: legacyTestResults,
+      }),
+    );
 
     expect(payload?.kind).toBe("structured-review");
     // Validation runs against a backfilled copy, so the report carried out of
@@ -115,18 +110,18 @@ describe("parseJsonPayload", () => {
     if (payload?.kind !== "structured-review") throw new Error("unreachable");
     expect(typeof payload.report.testResults.notRun).toBe("number");
     expect(payload.report.testResults.notRun).toBe(
-      legacyTestResults.total
-        - legacyTestResults.passed
-        - legacyTestResults.failed,
+      legacyTestResults.total - legacyTestResults.passed - legacyTestResults.failed,
     );
   });
 
   test("strips the null alternativeFixes sentinel the contract permits", () => {
     const [firstIssue, ...restIssues] = TEST_STRUCTURED_REVIEW_REPORT.issues;
-    const payload = parseJsonPayload(JSON.stringify({
-      ...TEST_STRUCTURED_REVIEW_REPORT,
-      issues: [{ ...firstIssue, alternativeFixes: null }, ...restIssues],
-    }));
+    const payload = parseJsonPayload(
+      JSON.stringify({
+        ...TEST_STRUCTURED_REVIEW_REPORT,
+        issues: [{ ...firstIssue, alternativeFixes: null }, ...restIssues],
+      }),
+    );
 
     expect(payload?.kind).toBe("structured-review");
     if (payload?.kind !== "structured-review") throw new Error("unreachable");
@@ -136,9 +131,7 @@ describe("parseJsonPayload", () => {
   });
 
   test("recognizes a verification verdict", () => {
-    const payload = parseJsonPayload(
-      '{"complete":true,"rationale":"Working tree is clean."}',
-    );
+    const payload = parseJsonPayload('{"complete":true,"rationale":"Working tree is clean."}');
     expect(payload).toEqual({
       kind: "verification",
       verdict: { complete: true, rationale: "Working tree is clean." },
@@ -149,12 +142,9 @@ describe("parseJsonPayload", () => {
   test("does not mistake a wider payload for a verification verdict", () => {
     // `additionalProperties: false` is part of the contract, so a third field
     // means this was never a verdict.
-    const payload = parseJsonPayload(
-      '{"complete":true,"rationale":"Done.","stage":"verify"}',
-    );
+    const payload = parseJsonPayload('{"complete":true,"rationale":"Done.","stage":"verify"}');
     expect(payload?.kind).toBe("json");
-    expect(parseJsonPayload('{"complete":"yes","rationale":"Done."}')?.kind)
-      .toBe("json");
+    expect(parseJsonPayload('{"complete":"yes","rationale":"Done."}')?.kind).toBe("json");
   });
 
   test("falls back to a generic payload for other bare JSON", () => {
@@ -167,8 +157,7 @@ describe("parseJsonPayload", () => {
   });
 
   test("retains the exact source instead of reconstructing it from parsed data", () => {
-    const source =
-      '{"duplicate":1,"duplicate":2,"exponent":1e3,"escaped":"\\u0041"}';
+    const source = '{"duplicate":1,"duplicate":2,"exponent":1e3,"escaped":"\\u0041"}';
     const payload = parseJsonPayload(source);
 
     expect(payload?.kind).toBe("json");
@@ -183,17 +172,15 @@ describe("parseJsonPayload", () => {
 
   test("retains the document inside a recognized Markdown fence", () => {
     const source = '{"complete":true,"rationale":"Clean."}';
-    expect(parseJsonPayload(`\`\`\`json\n${source}\n\`\`\``)?.source)
-      .toBe(source);
+    expect(parseJsonPayload(`\`\`\`json\n${source}\n\`\`\``)?.source).toBe(source);
   });
 
   test("leaves a fenced block of unrecognized JSON to the markdown renderer", () => {
     // The tree humanizes keys, so it cannot show the document the agent wrote.
     // An agent that fenced its JSON meant it to be read as source, and
     // Markdown already renders that verbatim.
-    expect(parseJsonPayload('```json\n{"compilerOptions":{"strict":true}}\n```'))
-      .toBeNull();
-    expect(parseJsonPayload('```\n[1, 2, 3]\n```')).toBeNull();
+    expect(parseJsonPayload('```json\n{"compilerOptions":{"strict":true}}\n```')).toBeNull();
+    expect(parseJsonPayload("```\n[1, 2, 3]\n```")).toBeNull();
   });
 
   test("leaves prose, scalars and malformed JSON to the text renderer", () => {
@@ -234,13 +221,11 @@ describe("jsonPayloadTitle and jsonPayloadSummary", () => {
   test("distinguish a list from an object payload", () => {
     expect(jsonPayloadTitle(parseJsonPayload('[{"a":1}]')!)).toBe("JSON list");
     expect(jsonPayloadTitle(parseJsonPayload('{"a":1}')!)).toBe("JSON payload");
-    expect(jsonPayloadSummary(parseJsonPayload('[1,2,3]')!)).toBe("3 items");
+    expect(jsonPayloadSummary(parseJsonPayload("[1,2,3]")!)).toBe("3 items");
   });
 
   test("summarize a structured review report by its verdict", () => {
-    const payload = parseJsonPayload(
-      JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT),
-    )!;
+    const payload = parseJsonPayload(JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT))!;
     expect(jsonPayloadTitle(payload)).toBe("Structured review report");
     expect(jsonPayloadSummary(payload)).toContain("Ready: ");
     expect(jsonPayloadSummary(payload)).toContain(" risk");
@@ -266,9 +251,7 @@ describe("jsonPayloadSearchText", () => {
 describe("humanizeJsonKey", () => {
   test("reads camelCase as a sentence", () => {
     expect(humanizeJsonKey("reviewScope")).toBe("Review scope");
-    expect(humanizeJsonKey("filesLeftUncommitted")).toBe(
-      "Files left uncommitted",
-    );
+    expect(humanizeJsonKey("filesLeftUncommitted")).toBe("Files left uncommitted");
   });
 
   test("splits snake_case and kebab-case", () => {
@@ -314,10 +297,10 @@ describe("isEmptyJsonContainer", () => {
 
 describe("jsonEntryLabel", () => {
   test("names a record by its most descriptive field", () => {
-    expect(jsonEntryLabel({ id: "1", title: "Retry is not persisted" }))
-      .toBe("Retry is not persisted");
-    expect(jsonEntryLabel({ command: "bun test", result: "passed" }))
-      .toBe("bun test");
+    expect(jsonEntryLabel({ id: "1", title: "Retry is not persisted" })).toBe(
+      "Retry is not persisted",
+    );
+    expect(jsonEntryLabel({ command: "bun test", result: "passed" })).toBe("bun test");
   });
 
   test("prefers the earliest label key over a later one", () => {

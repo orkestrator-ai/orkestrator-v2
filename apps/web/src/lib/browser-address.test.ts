@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { resolveBrowserAddress } from "./browser-address";
 
-const happyDOM = (window as unknown as Window & {
-  happyDOM: { setURL(url: string): void };
-}).happyDOM;
+const happyDOM = (
+  window as unknown as Window & {
+    happyDOM: { setURL(url: string): void };
+  }
+).happyDOM;
 const originalHref = window.location.href;
 
 afterEach(() => {
@@ -31,7 +33,8 @@ describe("resolveBrowserAddress", () => {
 
     expect(resolveBrowserAddress("127.0.0.1:3000/dashboard?mode=dark")).toEqual({
       displayUrl: "http://127.0.0.1:3000/dashboard?mode=dark",
-      iframeUrl: "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/dashboard?mode=dark",
+      iframeUrl:
+        "https://workstation.tailnet.ts.net/__orkestrator/browser/loopback/3000/dashboard?mode=dark",
     });
   });
 
@@ -45,12 +48,8 @@ describe("resolveBrowserAddress", () => {
   });
 
   test("rejects non-loopback and non-HTTP addresses", () => {
-    expect(() => resolveBrowserAddress("https://localhost:3000")).toThrow(
-      "backend-local HTTP",
-    );
-    expect(() => resolveBrowserAddress("example.com:3000")).toThrow(
-      "Use localhost or 127.0.0.1",
-    );
+    expect(() => resolveBrowserAddress("https://localhost:3000")).toThrow("backend-local HTTP");
+    expect(() => resolveBrowserAddress("example.com:3000")).toThrow("Use localhost or 127.0.0.1");
     expect(() => resolveBrowserAddress(" ")).toThrow("Enter a backend-local address");
   });
 
@@ -63,7 +62,9 @@ describe("resolveBrowserAddress", () => {
     happyDOM.setURL("http://127.0.0.1:5173/");
 
     expect(() => resolveBrowserAddress("127.0.0.1:5173")).toThrow("Orkestrator app itself");
-    expect(() => resolveBrowserAddress("localhost:5173/settings")).toThrow("Orkestrator app itself");
+    expect(() => resolveBrowserAddress("localhost:5173/settings")).toThrow(
+      "Orkestrator app itself",
+    );
     expect(() => resolveBrowserAddress("[::1]:5173")).toThrow("Orkestrator app itself");
     expect(resolveBrowserAddress("localhost:3000").displayUrl).toBe("http://localhost:3000/");
   });

@@ -1,9 +1,6 @@
 import type { StateCreator } from "zustand";
 import { preserveMessageIdentities } from "@/lib/chat/message-identity";
-import {
-  reconcileTimedSession,
-  updateTimedSessionLoading,
-} from "@/lib/session-timer";
+import { reconcileTimedSession, updateTimedSessionLoading } from "@/lib/session-timer";
 import type { FileMention } from "@/types";
 
 /**
@@ -38,10 +35,7 @@ export interface NativeSessionState<TMessage> {
  * merge; Codex/OpenCode use `mergeNativeMessagesPreservingClientOnly`. When
  * not provided, incoming messages fully replace existing ones.
  */
-type MergeMessages<TMessage> = (
-  existing: TMessage[],
-  incoming: TMessage[],
-) => TMessage[];
+type MergeMessages<TMessage> = (existing: TMessage[], incoming: TMessage[]) => TMessage[];
 
 /**
  * Shape of the slice returned by `createNativeChatStoreSlice`. Agent-specific
@@ -77,10 +71,7 @@ export interface NativeChatStoreSlice<TClient, TMessage, TAttachment, TQueued> {
   getClient: (environmentId: string) => TClient | undefined;
 
   // Actions — session-keyed
-  setSession: (
-    sessionKey: string,
-    session: NativeSessionState<TMessage> | null,
-  ) => void;
+  setSession: (sessionKey: string, session: NativeSessionState<TMessage> | null) => void;
   getSession: (sessionKey: string) => NativeSessionState<TMessage> | undefined;
   addMessage: (sessionKey: string, message: TMessage) => void;
   upsertMessage: (sessionKey: string, message: TMessage) => void;
@@ -219,10 +210,7 @@ export function createNativeChatStoreSlice<
         } else {
           next.delete(sessionKey);
         }
-        revisions.set(
-          sessionKey,
-          (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,
-        );
+        revisions.set(sessionKey, (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1);
         return {
           sessions: next,
           sessionLoadingRevisions: revisions,
@@ -248,13 +236,11 @@ export function createNativeChatStoreSlice<
         const session = state.sessions.get(sessionKey);
         if (!session) return state;
         const existingIndex = session.messages.findIndex((m) => m.id === message.id);
-        const existing = existingIndex === -1
-          ? undefined
-          : session.messages[existingIndex];
+        const existing = existingIndex === -1 ? undefined : session.messages[existingIndex];
         if (
-          existing !== undefined
-          && options.shouldReplaceMessage
-          && !options.shouldReplaceMessage(existing, message)
+          existing !== undefined &&
+          options.shouldReplaceMessage &&
+          !options.shouldReplaceMessage(existing, message)
         ) {
           return state;
         }
@@ -262,7 +248,7 @@ export function createNativeChatStoreSlice<
           existingIndex === -1
             ? [...session.messages, message]
             : session.messages.map((existing, index) =>
-                index === existingIndex ? message : existing
+                index === existingIndex ? message : existing,
               );
         const next = new Map(state.sessions);
         next.set(sessionKey, {
@@ -310,37 +296,27 @@ export function createNativeChatStoreSlice<
         if (!session) return state;
         const next = new Map(state.sessions);
         const timed = updateTimedSessionLoading(session, isLoading, Date.now(), startedAt);
-        const nextTurnId = isLoading ? turnId ?? session.turnId : undefined;
+        const nextTurnId = isLoading ? (turnId ?? session.turnId) : undefined;
         if (
-          timed.isLoading === session.isLoading
-          && timed.loadingStartedAt === session.loadingStartedAt
-          && timed.lastCompletedElapsedSeconds
-            === session.lastCompletedElapsedSeconds
-          && nextTurnId === session.turnId
+          timed.isLoading === session.isLoading &&
+          timed.loadingStartedAt === session.loadingStartedAt &&
+          timed.lastCompletedElapsedSeconds === session.lastCompletedElapsedSeconds &&
+          nextTurnId === session.turnId
         ) {
           // A repeated lifecycle edge is still an ordering event even when it
           // carries no new session fields. Preserve the session/map identity
           // used by render guards, but advance the dedicated generation token
           // so an older in-flight snapshot cannot land after this edge.
           const revisions = new Map(state.sessionLoadingRevisions);
-          revisions.set(
-            sessionKey,
-            (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,
-          );
+          revisions.set(sessionKey, (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1);
           return { sessionLoadingRevisions: revisions };
         }
         const revisions = new Map(state.sessionLoadingRevisions);
-        next.set(
-          sessionKey,
-          {
-            ...timed,
-            turnId: nextTurnId,
-          },
-        );
-        revisions.set(
-          sessionKey,
-          (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1,
-        );
+        next.set(sessionKey, {
+          ...timed,
+          turnId: nextTurnId,
+        });
+        revisions.set(sessionKey, (state.sessionLoadingRevisions.get(sessionKey) ?? 0) + 1);
         return {
           sessions: next,
           sessionLoadingRevisions: revisions,
@@ -391,8 +367,7 @@ export function createNativeChatStoreSlice<
         return { attachments: next };
       }),
 
-    getAttachments: (sessionKey) =>
-      get().attachments.get(sessionKey) ?? EMPTY_ATTACHMENTS,
+    getAttachments: (sessionKey) => get().attachments.get(sessionKey) ?? EMPTY_ATTACHMENTS,
 
     setDraftText: (sessionKey, text) =>
       set((state) => {
@@ -418,8 +393,7 @@ export function createNativeChatStoreSlice<
         return { draftMentions: next };
       }),
 
-    getDraftMentions: (sessionKey) =>
-      get().draftMentions.get(sessionKey) ?? EMPTY_MENTIONS,
+    getDraftMentions: (sessionKey) => get().draftMentions.get(sessionKey) ?? EMPTY_MENTIONS,
 
     setQueueProjection: (sessionKey, messages) =>
       set((state) => {
@@ -428,11 +402,9 @@ export function createNativeChatStoreSlice<
         return { messageQueue: next };
       }),
 
-    getQueueLength: (sessionKey) =>
-      get().messageQueue.get(sessionKey)?.length ?? 0,
+    getQueueLength: (sessionKey) => get().messageQueue.get(sessionKey)?.length ?? 0,
 
-    getQueuedMessages: (sessionKey) =>
-      get().messageQueue.get(sessionKey) ?? EMPTY_QUEUE,
+    getQueuedMessages: (sessionKey) => get().messageQueue.get(sessionKey) ?? EMPTY_QUEUE,
   });
 }
 
@@ -552,9 +524,7 @@ export interface NativeEventSubscriptionState<TEvent> {
 
 export interface NativeEventSubscriptionSlice<TEvent> {
   eventSubscriptions: Map<string, NativeEventSubscriptionState<TEvent>>;
-  getOrCreateEventSubscription: (
-    environmentId: string,
-  ) => NativeEventSubscriptionState<TEvent>;
+  getOrCreateEventSubscription: (environmentId: string) => NativeEventSubscriptionState<TEvent>;
   /**
    * Publish (or clear) the stream for an environment's subscription.
    *
@@ -574,20 +544,16 @@ export interface NativeEventSubscriptionSlice<TEvent> {
   hasActiveEventSubscription: (environmentId: string) => boolean;
   setEventReconnectState: (
     environmentId: string,
-    update: Partial<Pick<
-      NativeEventSubscriptionState<TEvent>,
-      "reconnectAttempts" | "reconnectTimer" | "desynced"
-    >>,
+    update: Partial<
+      Pick<
+        NativeEventSubscriptionState<TEvent>,
+        "reconnectAttempts" | "reconnectTimer" | "desynced"
+      >
+    >,
     owner?: AbortController,
   ) => void;
-  markEventSubscriptionHealthy: (
-    environmentId: string,
-    owner: AbortController,
-  ) => void;
-  markEventSubscriptionResynced: (
-    environmentId: string,
-    owner: AbortController,
-  ) => void;
+  markEventSubscriptionHealthy: (environmentId: string, owner: AbortController) => void;
+  markEventSubscriptionResynced: (environmentId: string, owner: AbortController) => void;
 }
 
 /**
@@ -662,10 +628,7 @@ export function createEventSubscriptionSlice<TEvent>(
         return existing;
       }
 
-      console.log(
-        `[${logPrefix}] Creating new event subscription for environment:`,
-        environmentId,
-      );
+      console.log(`[${logPrefix}] Creating new event subscription for environment:`, environmentId);
       const newSubscription: NativeEventSubscriptionState<TEvent> = {
         abortController: new AbortController(),
         stream: null,
@@ -703,10 +666,7 @@ export function createEventSubscriptionSlice<TEvent>(
       const subscription = state.eventSubscriptions.get(environmentId);
       if (!subscription) return;
 
-      console.log(
-        `[${logPrefix}] Closing event subscription for environment:`,
-        environmentId,
-      );
+      console.log(`[${logPrefix}] Closing event subscription for environment:`, environmentId);
       teardownEventSubscription(subscription);
 
       const next = new Map(state.eventSubscriptions);
@@ -723,9 +683,9 @@ export function createEventSubscriptionSlice<TEvent>(
         if (!subscription) return state;
         if (owner && subscription.abortController !== owner) return state;
         if (
-          update.reconnectTimer !== undefined
-          && subscription.reconnectTimer
-          && subscription.reconnectTimer !== update.reconnectTimer
+          update.reconnectTimer !== undefined &&
+          subscription.reconnectTimer &&
+          subscription.reconnectTimer !== update.reconnectTimer
         ) {
           clearTimeout(subscription.reconnectTimer);
         }
@@ -751,9 +711,7 @@ export function createEventSubscriptionSlice<TEvent>(
         next.set(environmentId, {
           ...subscription,
           reconnectAttempts: 0,
-          reconnectTimer: subscription.desynced
-            ? subscription.reconnectTimer
-            : null,
+          reconnectTimer: subscription.desynced ? subscription.reconnectTimer : null,
         });
         return { eventSubscriptions: next };
       }),
@@ -761,11 +719,8 @@ export function createEventSubscriptionSlice<TEvent>(
     markEventSubscriptionResynced: (environmentId, owner) =>
       set((state) => {
         const subscription = state.eventSubscriptions.get(environmentId);
-        if (
-          !subscription
-          || subscription.abortController !== owner
-          || !subscription.desynced
-        ) return state;
+        if (!subscription || subscription.abortController !== owner || !subscription.desynced)
+          return state;
         if (subscription.reconnectTimer) {
           clearTimeout(subscription.reconnectTimer);
         }

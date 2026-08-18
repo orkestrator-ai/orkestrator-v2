@@ -14,13 +14,20 @@ describe("MobilePaneSwitcher", () => {
       const [activePaneId, setActivePaneId] = useState("left");
       return (
         <MobilePaneSwitcher
-          panes={[{ id: "left", label: "Terminal" }, { id: "right", label: "Codex" }]}
+          panes={[
+            { id: "left", label: "Terminal" },
+            { id: "right", label: "Codex" },
+          ]}
           activePaneId={activePaneId}
           onSelect={(paneId) => {
             onSelect(paneId);
             setActivePaneId(paneId);
           }}
-          renderPane={(paneId, active) => <div>{paneId}:{String(active)}</div>}
+          renderPane={(paneId, active) => (
+            <div>
+              {paneId}:{String(active)}
+            </div>
+          )}
         />
       );
     }
@@ -40,14 +47,19 @@ describe("MobilePaneSwitcher", () => {
   test("falls back to the first pane when the stored active id is stale", () => {
     render(
       <MobilePaneSwitcher
-        panes={[{ id: "first", label: "First" }, { id: "second", label: "Second" }]}
+        panes={[
+          { id: "first", label: "First" },
+          { id: "second", label: "Second" },
+        ]}
         activePaneId="removed"
         onSelect={() => undefined}
         renderPane={(paneId) => <div>{paneId}</div>}
       />,
     );
 
-    expect(screen.getByRole("tab", { name: "1. First" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "1. First" }).getAttribute("aria-selected")).toBe(
+      "true",
+    );
   });
 
   test("collects nested pane leaves in visual order", () => {

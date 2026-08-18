@@ -13,40 +13,49 @@ describe("showOnlyFinalStructuredReviewMessage", () => {
       verdict: { ready: "no", reasoning: "Review is still running." },
     });
     const final = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
-    const messages = showOnlyFinalStructuredReviewMessage([{
-      id: "review",
-      role: "assistant",
-      content: final,
-      parts: [
-        { type: "text", content: provisional },
+    const messages = showOnlyFinalStructuredReviewMessage(
+      [
         {
-          type: "tool-invocation",
-          content: "git diff --stat",
-          toolName: "shell",
-          toolState: "success",
+          id: "review",
+          role: "assistant",
+          content: final,
+          parts: [
+            { type: "text", content: provisional },
+            {
+              type: "tool-invocation",
+              content: "git diff --stat",
+              toolName: "shell",
+              toolState: "success",
+            },
+            { type: "text", content: final },
+          ],
+          createdAt: "2026-08-07T22:00:00.000Z",
         },
-        { type: "text", content: final },
       ],
-      createdAt: "2026-08-07T22:00:00.000Z",
-    }], true);
+      true,
+    );
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe("");
-    expect(messages[0]?.parts.map((part) => part.content)).toEqual([
-      "git diff --stat",
-      final,
-    ]);
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual(["git diff --stat", final]);
   });
 
   test("hides every report until the backend accepts one", () => {
     const report = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
-    expect(showOnlyFinalStructuredReviewMessage([{
-      id: "review",
-      role: "assistant",
-      content: report,
-      parts: [{ type: "text", content: report }],
-      createdAt: "2026-08-07T22:00:00.000Z",
-    }], false)).toEqual([]);
+    expect(
+      showOnlyFinalStructuredReviewMessage(
+        [
+          {
+            id: "review",
+            role: "assistant",
+            content: report,
+            parts: [{ type: "text", content: report }],
+            createdAt: "2026-08-07T22:00:00.000Z",
+          },
+        ],
+        false,
+      ),
+    ).toEqual([]);
   });
 
   test("keeps only the final report across multiple assistant messages", () => {
@@ -59,38 +68,39 @@ describe("showOnlyFinalStructuredReviewMessage", () => {
       verdict: { ready: "no", reasoning: "Second pass after tooling." },
     });
     const final = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
-    const messages = showOnlyFinalStructuredReviewMessage([
-      {
-        id: "review-1",
-        role: "assistant",
-        content: "",
-        parts: [{ type: "text", content: first }],
-        createdAt: "2026-08-07T21:00:00.000Z",
-      },
-      {
-        id: "review-2",
-        role: "assistant",
-        content: "",
-        parts: [
-          { type: "text", content: second },
-          { type: "text", content: "More investigation" },
-        ],
-        createdAt: "2026-08-07T22:00:00.000Z",
-      },
-      {
-        id: "review-3",
-        role: "assistant",
-        content: final,
-        parts: [{ type: "text", content: final }],
-        createdAt: "2026-08-07T23:00:00.000Z",
-      },
-    ], true);
+    const messages = showOnlyFinalStructuredReviewMessage(
+      [
+        {
+          id: "review-1",
+          role: "assistant",
+          content: "",
+          parts: [{ type: "text", content: first }],
+          createdAt: "2026-08-07T21:00:00.000Z",
+        },
+        {
+          id: "review-2",
+          role: "assistant",
+          content: "",
+          parts: [
+            { type: "text", content: second },
+            { type: "text", content: "More investigation" },
+          ],
+          createdAt: "2026-08-07T22:00:00.000Z",
+        },
+        {
+          id: "review-3",
+          role: "assistant",
+          content: final,
+          parts: [{ type: "text", content: final }],
+          createdAt: "2026-08-07T23:00:00.000Z",
+        },
+      ],
+      true,
+    );
 
     expect(messages).toHaveLength(2);
     expect(messages[0]?.id).toBe("review-2");
-    expect(messages[0]?.parts.map((part) => part.content)).toEqual([
-      "More investigation",
-    ]);
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual(["More investigation"]);
     expect(messages[1]?.id).toBe("review-3");
     expect(messages[1]?.content).toBe("");
     expect(messages[1]?.parts.map((part) => part.content)).toEqual([final]);
@@ -114,29 +124,34 @@ describe("showOnlyFinalVerificationMessage", () => {
   });
 
   test("keeps only the final verdict after a completed tool-using turn", () => {
-    const messages = showOnlyFinalVerificationMessage([{
-      id: "verification",
-      role: "assistant",
-      content: final,
-      parts: [
-        { type: "text", content: checking },
+    const messages = showOnlyFinalVerificationMessage(
+      [
         {
-          type: "tool-invocation",
-          content: "bun test",
-          toolName: "bash",
-          toolState: "success",
+          id: "verification",
+          role: "assistant",
+          content: final,
+          parts: [
+            { type: "text", content: checking },
+            {
+              type: "tool-invocation",
+              content: "bun test",
+              toolName: "bash",
+              toolState: "success",
+            },
+            { type: "text", content: testing },
+            {
+              type: "tool-invocation",
+              content: "bun run build",
+              toolName: "bash",
+              toolState: "success",
+            },
+            { type: "text", content: final },
+          ],
+          createdAt: "2026-08-07T22:00:00.000Z",
         },
-        { type: "text", content: testing },
-        {
-          type: "tool-invocation",
-          content: "bun run build",
-          toolName: "bash",
-          toolState: "success",
-        },
-        { type: "text", content: final },
       ],
-      createdAt: "2026-08-07T22:00:00.000Z",
-    }], true);
+      true,
+    );
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.parts.map((part) => part.content)).toEqual([
@@ -150,22 +165,27 @@ describe("showOnlyFinalVerificationMessage", () => {
   });
 
   test("hides every provisional verdict while the stage is running", () => {
-    const messages = showOnlyFinalVerificationMessage([{
-      id: "verification",
-      role: "assistant",
-      content: testing,
-      parts: [
-        { type: "text", content: checking },
+    const messages = showOnlyFinalVerificationMessage(
+      [
         {
-          type: "tool-invocation",
-          content: "bun test",
-          toolName: "bash",
-          toolState: "pending",
+          id: "verification",
+          role: "assistant",
+          content: testing,
+          parts: [
+            { type: "text", content: checking },
+            {
+              type: "tool-invocation",
+              content: "bun test",
+              toolName: "bash",
+              toolState: "pending",
+            },
+            { type: "text", content: testing },
+          ],
+          createdAt: "2026-08-07T22:00:00.000Z",
         },
-        { type: "text", content: testing },
       ],
-      createdAt: "2026-08-07T22:00:00.000Z",
-    }], false);
+      false,
+    );
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe("");
@@ -173,13 +193,18 @@ describe("showOnlyFinalVerificationMessage", () => {
   });
 
   test("keeps a final verdict stored only in message content", () => {
-    const messages = showOnlyFinalVerificationMessage([{
-      id: "verification",
-      role: "assistant",
-      content: final,
-      parts: [],
-      createdAt: "2026-08-07T22:00:00.000Z",
-    }], true);
+    const messages = showOnlyFinalVerificationMessage(
+      [
+        {
+          id: "verification",
+          role: "assistant",
+          content: final,
+          parts: [],
+          createdAt: "2026-08-07T22:00:00.000Z",
+        },
+      ],
+      true,
+    );
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe(final);
@@ -191,22 +216,24 @@ describe("hideMachineOutputText", () => {
     // The exact shape a reviewer streams while composing its report: a JSON
     // document that has not closed yet, so nothing can validate or fold it.
     const draft = '{"reviewScope":{"targetBranch":"main","filesReviewed":["a.ts"';
-    const messages = hideMachineOutputText([{
-      id: "progress",
-      role: "assistant",
-      content: draft,
-      parts: [
-        { type: "text", content: "Reviewing the uncommitted changes." },
-        {
-          type: "tool-invocation",
-          content: "git diff HEAD",
-          toolName: "shell",
-          toolState: "success",
-        },
-        { type: "text", content: draft },
-      ],
-      createdAt: "2026-08-17T13:00:00.000Z",
-    }]);
+    const messages = hideMachineOutputText([
+      {
+        id: "progress",
+        role: "assistant",
+        content: draft,
+        parts: [
+          { type: "text", content: "Reviewing the uncommitted changes." },
+          {
+            type: "tool-invocation",
+            content: "git diff HEAD",
+            toolName: "shell",
+            toolState: "success",
+          },
+          { type: "text", content: draft },
+        ],
+        createdAt: "2026-08-17T13:00:00.000Z",
+      },
+    ]);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe("");
@@ -218,24 +245,30 @@ describe("hideMachineOutputText", () => {
 
   test("withholds a finished JSON document that validates as nothing", () => {
     const provisional = '{"reviewScope":{"targetBranch":"main"},"issues":[]}';
-    expect(hideMachineOutputText([{
-      id: "draft",
-      role: "assistant",
-      content: provisional,
-      parts: [{ type: "text", content: provisional }],
-      createdAt: "2026-08-17T13:00:00.000Z",
-    }])).toHaveLength(0);
+    expect(
+      hideMachineOutputText([
+        {
+          id: "draft",
+          role: "assistant",
+          content: provisional,
+          parts: [{ type: "text", content: provisional }],
+          createdAt: "2026-08-17T13:00:00.000Z",
+        },
+      ]),
+    ).toHaveLength(0);
   });
 
   test("keeps prose that merely contains or follows JSON", () => {
     const commentary = 'The config `{"strict":true}` is already covered by tests.';
-    const messages = hideMachineOutputText([{
-      id: "prose",
-      role: "assistant",
-      content: commentary,
-      parts: [{ type: "text", content: commentary }],
-      createdAt: "2026-08-17T13:00:00.000Z",
-    }]);
+    const messages = hideMachineOutputText([
+      {
+        id: "prose",
+        role: "assistant",
+        content: commentary,
+        parts: [{ type: "text", content: commentary }],
+        createdAt: "2026-08-17T13:00:00.000Z",
+      },
+    ]);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.parts.map((part) => part.content)).toEqual([commentary]);
@@ -243,13 +276,15 @@ describe("hideMachineOutputText", () => {
 
   test("never withholds the user's own text", () => {
     const prompt = '{"instruction":"review this"}';
-    const messages = hideMachineOutputText([{
-      id: "prompt",
-      role: "user",
-      content: prompt,
-      parts: [{ type: "text", content: prompt }],
-      createdAt: "2026-08-17T13:00:00.000Z",
-    }]);
+    const messages = hideMachineOutputText([
+      {
+        id: "prompt",
+        role: "user",
+        content: prompt,
+        parts: [{ type: "text", content: prompt }],
+        createdAt: "2026-08-17T13:00:00.000Z",
+      },
+    ]);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe(prompt);
@@ -271,16 +306,18 @@ describe("hideMachineOutputText", () => {
     // Withholding the text must not take the whole row with it: the thinking
     // trace beside it is still the evidence that the reviewer is working.
     const draft = '{"issues":[{"title":"partial"';
-    const messages = hideMachineOutputText([{
-      id: "thinking",
-      role: "assistant",
-      content: draft,
-      parts: [
-        { type: "thinking", content: "Weighing whether this is a real bug." },
-        { type: "text", content: draft },
-      ],
-      createdAt: "2026-08-17T13:00:00.000Z",
-    }]);
+    const messages = hideMachineOutputText([
+      {
+        id: "thinking",
+        role: "assistant",
+        content: draft,
+        parts: [
+          { type: "thinking", content: "Weighing whether this is a real bug." },
+          { type: "text", content: draft },
+        ],
+        createdAt: "2026-08-17T13:00:00.000Z",
+      },
+    ]);
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe("");
@@ -290,19 +327,25 @@ describe("hideMachineOutputText", () => {
   test("retains the payload kind a preceding filter deliberately kept", () => {
     const accepted = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
     const draft = '{"reviewScope":{"targetBranch":"main"},"issues":[]}';
-    const messages = hideMachineOutputText([{
-      id: "draft",
-      role: "assistant",
-      content: draft,
-      parts: [{ type: "text", content: draft }],
-      createdAt: "2026-08-17T13:00:00.000Z",
-    }, {
-      id: "accepted",
-      role: "assistant",
-      content: accepted,
-      parts: [{ type: "text", content: accepted }],
-      createdAt: "2026-08-17T13:01:00.000Z",
-    }], { retainPayloadKind: "structured-review" });
+    const messages = hideMachineOutputText(
+      [
+        {
+          id: "draft",
+          role: "assistant",
+          content: draft,
+          parts: [{ type: "text", content: draft }],
+          createdAt: "2026-08-17T13:00:00.000Z",
+        },
+        {
+          id: "accepted",
+          role: "assistant",
+          content: accepted,
+          parts: [{ type: "text", content: accepted }],
+          createdAt: "2026-08-17T13:01:00.000Z",
+        },
+      ],
+      { retainPayloadKind: "structured-review" },
+    );
 
     // The draft validates as nothing, so no filter owns it and it is withheld.
     // The accepted report is a structured-review payload that the preceding
@@ -315,12 +358,16 @@ describe("hideMachineOutputText", () => {
     const accepted = JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT);
     // Without the option — the Multi Review viewer, which passes showFinal
     // false, so nothing of that kind was meant to survive.
-    expect(hideMachineOutputText([{
-      id: "accepted",
-      role: "assistant",
-      content: accepted,
-      parts: [{ type: "text", content: accepted }],
-      createdAt: "2026-08-17T13:01:00.000Z",
-    }])).toHaveLength(0);
+    expect(
+      hideMachineOutputText([
+        {
+          id: "accepted",
+          role: "assistant",
+          content: accepted,
+          parts: [{ type: "text", content: accepted }],
+          createdAt: "2026-08-17T13:01:00.000Z",
+        },
+      ]),
+    ).toHaveLength(0);
   });
 });

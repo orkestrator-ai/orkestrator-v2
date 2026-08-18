@@ -17,10 +17,7 @@ describe("AgentThinkingIndicator", () => {
 
   test("merges a caller-provided class name with the shared shimmer classes", () => {
     const { container } = render(
-      <AgentThinkingIndicator
-        agentName="Claude"
-        className="justify-self-start text-sm"
-      />,
+      <AgentThinkingIndicator agentName="Claude" className="justify-self-start text-sm" />,
     );
 
     const indicator = container.querySelector('[role="status"]');

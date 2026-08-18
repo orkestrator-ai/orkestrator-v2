@@ -93,7 +93,8 @@ export class NotificationRecorder {
     this.warnIntervalMs = options.warnIntervalMs ?? DEFAULT_WARN_INTERVAL_MS;
     this.appendFileImpl =
       options.appendFileImpl ?? ((path, contents) => appendFile(path, contents, "utf8"));
-    this.ensureDirImpl = options.ensureDirImpl ?? ((path) => mkdir(path, { recursive: true }).then(() => undefined));
+    this.ensureDirImpl =
+      options.ensureDirImpl ?? ((path) => mkdir(path, { recursive: true }).then(() => undefined));
     this.warnImpl = options.warnImpl ?? ((message) => console.error(message));
     this.now = options.now ?? Date.now;
     this.stats = {
@@ -175,9 +176,9 @@ export class NotificationRecorder {
     if (this.lastWarnedAt !== null && now - this.lastWarnedAt < this.warnIntervalMs) return;
     this.lastWarnedAt = now;
     this.warnImpl(
-      `[codex-bridge] RECORDING app-server notifications to ${this.path} `
-      + `(${this.stats.linesRecorded} lines). Prompts, file contents and absolute paths `
-      + "are written verbatim. Unset CODEX_BRIDGE_RECORD_NOTIFICATIONS to stop.",
+      `[codex-bridge] RECORDING app-server notifications to ${this.path} ` +
+        `(${this.stats.linesRecorded} lines). Prompts, file contents and absolute paths ` +
+        "are written verbatim. Unset CODEX_BRIDGE_RECORD_NOTIFICATIONS to stop.",
     );
   }
 
@@ -240,16 +241,14 @@ export function createRecorderFromEnv(options: {
   if (env[RECORD_CONFIRM_ENV]?.trim() !== "1") {
     // Loud, because the user asked for something and is not getting it.
     warn(
-      `[codex-bridge] Ignoring CODEX_BRIDGE_RECORD_NOTIFICATIONS=${directory}: recordings `
-      + "capture every prompt, file content and absolute path verbatim, so they also "
-      + `require ${RECORD_CONFIRM_ENV}=1. Not recording.`,
+      `[codex-bridge] Ignoring CODEX_BRIDGE_RECORD_NOTIFICATIONS=${directory}: recordings ` +
+        "capture every prompt, file content and absolute path verbatim, so they also " +
+        `require ${RECORD_CONFIRM_ENV}=1. Not recording.`,
     );
     return null;
   }
 
-  const stamp = new Date(options.now?.() ?? Date.now())
-    .toISOString()
-    .replace(/[:.]/g, "-");
+  const stamp = new Date(options.now?.() ?? Date.now()).toISOString().replace(/[:.]/g, "-");
   return new NotificationRecorder({
     directory,
     fileName: `codex-app-server-${stamp}-gen${options.generation}.jsonl`,

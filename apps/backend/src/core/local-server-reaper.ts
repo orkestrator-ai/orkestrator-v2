@@ -86,12 +86,14 @@ export interface ReapOrphanedClaudeTmuxRuntimesOptions {
 async function readRuntimeRoots(prefix: string): Promise<string[]> {
   try {
     const entries = await fs.readdir(prefix, { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      // A name that is not a plain path segment cannot be an environment id and
-      // must never be joined onto the prefix and removed recursively.
-      .filter((name) => name.length > 0 && name !== "." && name !== ".." && !name.includes("/"));
+    return (
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        // A name that is not a plain path segment cannot be an environment id and
+        // must never be joined onto the prefix and removed recursively.
+        .filter((name) => name.length > 0 && name !== "." && name !== ".." && !name.includes("/"))
+    );
   } catch {
     // The prefix does not exist: tmux mode has never run on this host.
     return [];
@@ -100,18 +102,16 @@ async function readRuntimeRoots(prefix: string): Promise<string[]> {
 
 async function readHostTmuxSessions(): Promise<string[]> {
   try {
-    const { stdout } = await runCommand(
-      "tmux",
-      ["list-sessions", "-F", "#{session_name}"],
-      { timeoutMs: 5_000 },
-    );
+    const { stdout } = await runCommand("tmux", ["list-sessions", "-F", "#{session_name}"], {
+      timeoutMs: 5_000,
+    });
     return parseTmuxSessionNames(stdout);
   } catch (error) {
     const message = String(error);
     if (
-      /no server running/i.test(message)
-      || /failed to connect to server/i.test(message)
-      || /no sessions/i.test(message)
+      /no server running/i.test(message) ||
+      /failed to connect to server/i.test(message) ||
+      /no sessions/i.test(message)
     ) {
       return [];
     }
@@ -136,7 +136,8 @@ export async function reapOrphanedClaudeTmuxRuntimes(
   const prefix = options.runtimeRootPrefix ?? RUNTIME_ROOT_PREFIX;
   const listRuntimeRoots = options.listRuntimeRoots ?? readRuntimeRoots;
   const listTmuxSessions = options.listTmuxSessions ?? readHostTmuxSessions;
-  const killTmuxSession = options.killTmuxSession ??
+  const killTmuxSession =
+    options.killTmuxSession ??
     (async (sessionName: string) => {
       try {
         await runCommand("tmux", ["kill-session", "-t", sessionName], { timeoutMs: 5_000 });
@@ -144,7 +145,8 @@ export async function reapOrphanedClaudeTmuxRuntimes(
         if (!isMissingTmuxSessionError(error)) throw error;
       }
     });
-  const removeRuntimeRoot = options.removeRuntimeRoot ??
+  const removeRuntimeRoot =
+    options.removeRuntimeRoot ??
     ((rootPath: string) => fs.rm(rootPath, { recursive: true, force: true }));
   const log = options.log ?? ((message) => console.warn(message));
 
@@ -222,7 +224,9 @@ export async function reapOrphanedClaudeTmuxRuntimes(
       await removeRuntimeRoot(path.join(prefix, environmentId));
       reaped.push({ environmentId, outcome: "reaped", killedSessions });
     } catch (error) {
-      log(`[backend] Failed to remove claude-tmux runtime root for ${environmentId}: ${String(error)}`);
+      log(
+        `[backend] Failed to remove claude-tmux runtime root for ${environmentId}: ${String(error)}`,
+      );
       reaped.push({ environmentId, outcome: "retry-pending", killedSessions });
     }
   }
@@ -381,10 +385,7 @@ export interface ReapedLocalServer {
 export interface ReapOrphanedLocalServersOptions {
   storage: {
     loadEnvironments: () => Promise<Environment[]>;
-    updateEnvironment: (
-      environmentId: string,
-      fields: Partial<Environment>,
-    ) => Promise<unknown>;
+    updateEnvironment: (environmentId: string, fields: Partial<Environment>) => Promise<unknown>;
   };
   /** Injected in tests. */
   readIdentity?: (pid: number) => Promise<ProcessIdentity | null>;
@@ -400,88 +401,90 @@ export async function reapOrphanedLocalServers(
   const log = options.log ?? ((message) => console.warn(message));
   const environments = await options.storage.loadEnvironments();
 
-  const results = await Promise.all(environments.map(async (environment) => {
-    const reaped: ReapedLocalServer[] = [];
-    for (const server of REAPABLE_SERVERS) {
-      const pid = environment[server.pidField];
-      if (typeof pid !== "number" || !Number.isInteger(pid)) continue;
+  const results = await Promise.all(
+    environments.map(async (environment) => {
+      const reaped: ReapedLocalServer[] = [];
+      for (const server of REAPABLE_SERVERS) {
+        const pid = environment[server.pidField];
+        if (typeof pid !== "number" || !Number.isInteger(pid)) continue;
 
-      const record = (outcome: ReapedLocalServer["outcome"]): void => {
-        reaped.push({ environmentId: environment.id, kind: server.kind, pid, outcome });
-      };
-      const clearRecord = () =>
-        options.storage
-          .updateEnvironment(environment.id, {
-            [server.pidField]: null,
-            [server.portField]: null,
-          })
-          .catch(() => undefined);
+        const record = (outcome: ReapedLocalServer["outcome"]): void => {
+          reaped.push({ environmentId: environment.id, kind: server.kind, pid, outcome });
+        };
+        const clearRecord = () =>
+          options.storage
+            .updateEnvironment(environment.id, {
+              [server.pidField]: null,
+              [server.portField]: null,
+            })
+            .catch(() => undefined);
 
-      // Our own PID or an init-range PID can never be a bridge we spawned.
-      if (pid <= 1 || pid === process.pid) {
-        await clearRecord();
-        record("cleared");
-        continue;
-      }
+        // Our own PID or an init-range PID can never be a bridge we spawned.
+        if (pid <= 1 || pid === process.pid) {
+          await clearRecord();
+          record("cleared");
+          continue;
+        }
 
-      let identity: ProcessIdentity | null;
-      try {
-        identity = await readIdentity(pid);
-      } catch (error) {
+        let identity: ProcessIdentity | null;
+        try {
+          identity = await readIdentity(pid);
+        } catch (error) {
+          log(
+            `[backend] Unable to identify ${server.kind} pid ${pid}; preserving its record: ${String(error)}`,
+          );
+          record("skipped-unreadable");
+          continue;
+        }
+        if (
+          identity === null ||
+          !server.markers.every((marker) => identity.commandLine.includes(marker))
+        ) {
+          // Dead, or a recycled PID now owned by a stranger. Either way the
+          // record is stale and must not be trusted again.
+          await clearRecord();
+          record("cleared");
+          continue;
+        }
+
+        if (identity.parentPid > 1 && isPidAlive(identity.parentPid)) {
+          // Still parented to a live process: another backend instance sharing
+          // this data dir owns it. Not ours to kill, not stale to clear.
+          record("skipped-live-owner");
+          continue;
+        }
+
+        if (identity.processGroupId !== pid) {
+          // Termination signals the process *group*. A PID that does not lead its
+          // own group cannot be a bridge we spawned (`detached` makes them group
+          // leaders), and signalling `-pid` would hit an unrelated group. Keep the
+          // record: clearing it would hide the anomaly from the next startup.
+          log(
+            `[backend] Refusing to reap ${server.kind} pid ${pid}: it leads no process group (pgid ${identity.processGroupId})`,
+          );
+          record("skipped-not-group-leader");
+          continue;
+        }
+
         log(
-          `[backend] Unable to identify ${server.kind} pid ${pid}; preserving its record: ${String(error)}`,
+          `[backend] Reaping orphaned ${server.kind} server pid ${pid} for environment ${environment.id}`,
         );
-        record("skipped-unreadable");
-        continue;
-      }
-      if (
-        identity === null
-        || !server.markers.every((marker) => identity.commandLine.includes(marker))
-      ) {
-        // Dead, or a recycled PID now owned by a stranger. Either way the
-        // record is stale and must not be trusted again.
+        const exited = await terminate(detachedProcessHandle(pid), {
+          graceMs: REAP_GRACE_MS,
+          killWaitMs: REAP_KILL_WAIT_MS,
+        });
+        if (!exited) {
+          // Keep the record so the next startup retries this exact process.
+          log(`[backend] Orphaned ${server.kind} server pid ${pid} did not exit`);
+          record("kill-failed");
+          continue;
+        }
         await clearRecord();
-        record("cleared");
-        continue;
+        record("reaped");
       }
-
-      if (identity.parentPid > 1 && isPidAlive(identity.parentPid)) {
-        // Still parented to a live process: another backend instance sharing
-        // this data dir owns it. Not ours to kill, not stale to clear.
-        record("skipped-live-owner");
-        continue;
-      }
-
-      if (identity.processGroupId !== pid) {
-        // Termination signals the process *group*. A PID that does not lead its
-        // own group cannot be a bridge we spawned (`detached` makes them group
-        // leaders), and signalling `-pid` would hit an unrelated group. Keep the
-        // record: clearing it would hide the anomaly from the next startup.
-        log(
-          `[backend] Refusing to reap ${server.kind} pid ${pid}: it leads no process group (pgid ${identity.processGroupId})`,
-        );
-        record("skipped-not-group-leader");
-        continue;
-      }
-
-      log(
-        `[backend] Reaping orphaned ${server.kind} server pid ${pid} for environment ${environment.id}`,
-      );
-      const exited = await terminate(detachedProcessHandle(pid), {
-        graceMs: REAP_GRACE_MS,
-        killWaitMs: REAP_KILL_WAIT_MS,
-      });
-      if (!exited) {
-        // Keep the record so the next startup retries this exact process.
-        log(`[backend] Orphaned ${server.kind} server pid ${pid} did not exit`);
-        record("kill-failed");
-        continue;
-      }
-      await clearRecord();
-      record("reaped");
-    }
-    return reaped;
-  }));
+      return reaped;
+    }),
+  );
 
   return results.flat();
 }

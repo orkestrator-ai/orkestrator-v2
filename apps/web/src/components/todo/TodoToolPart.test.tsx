@@ -26,9 +26,9 @@ describe("TodoToolPart", () => {
     expect(container.textContent).toContain("Todo Write");
     expect(container.textContent).toContain("1/3 complete");
     expect(container.textContent).toContain("success");
-    expect(
-      screen.getByRole("button", { name: /todo write/i }).parentElement?.className,
-    ).toContain("my-0");
+    expect(screen.getByRole("button", { name: /todo write/i }).parentElement?.className).toContain(
+      "my-0",
+    );
   });
 
   test("displays 'Todo List' label for codex todo_list tool", () => {
@@ -225,11 +225,7 @@ describe("TodoToolPart", () => {
 
   test("shows toolError in error section when provided", () => {
     const { container } = render(
-      <TodoToolPart
-        toolName="TodoWrite"
-        toolState="failure"
-        toolError="Something went wrong"
-      />,
+      <TodoToolPart toolName="TodoWrite" toolState="failure" toolError="Something went wrong" />,
     );
 
     fireEvent.click(container.querySelector("button")!);
@@ -240,11 +236,7 @@ describe("TodoToolPart", () => {
 
   test("shows raw toolOutput when no structured todos are available", () => {
     const { container } = render(
-      <TodoToolPart
-        toolName="TodoWrite"
-        toolState="success"
-        toolOutput="plain text output"
-      />,
+      <TodoToolPart toolName="TodoWrite" toolState="success" toolOutput="plain text output" />,
     );
 
     fireEvent.click(container.querySelector("button")!);
@@ -267,9 +259,7 @@ describe("TodoToolPart", () => {
   });
 
   test("disables trigger when there is no expandable content", () => {
-    const { container } = render(
-      <TodoToolPart toolName="TodoWrite" toolState="success" />,
-    );
+    const { container } = render(<TodoToolPart toolName="TodoWrite" toolState="success" />);
 
     const trigger = container.querySelector("button");
     expect(trigger).not.toBeNull();

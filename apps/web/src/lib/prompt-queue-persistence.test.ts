@@ -34,10 +34,7 @@ function persisted(
   };
 }
 
-function dispatchError(
-  message = "Rejected",
-  messageId = "m1",
-): PromptQueueDispatchError {
+function dispatchError(message = "Rejected", messageId = "m1"): PromptQueueDispatchError {
   return {
     requestId: messageId,
     messageId,
@@ -101,12 +98,7 @@ describe("backend-owned prompt queue projections", () => {
       source,
       persisted(
         key,
-        [
-          { id: "replacement" },
-          null,
-          "bad",
-          { missingId: true },
-        ] as unknown as QueuedItem[],
+        [{ id: "replacement" }, null, "bad", { missingId: true }] as unknown as QueuedItem[],
         3,
       ),
     );
@@ -127,30 +119,22 @@ describe("backend-owned prompt queue projections", () => {
   test("hydrates all queues for an environment", async () => {
     const claude = createSource("claude");
     const codex = createSource("codex");
-    await hydratePromptQueuesForEnvironment(
-      "env-1",
-      [claude, codex],
-      async () => [
-        persisted(promptQueueKey("claude", SESSION), [{ id: "c1" }], 1),
-        persisted(promptQueueKey("codex", SESSION), [{ id: "x1" }], 1),
-      ],
-    );
+    await hydratePromptQueuesForEnvironment("env-1", [claude, codex], async () => [
+      persisted(promptQueueKey("claude", SESSION), [{ id: "c1" }], 1),
+      persisted(promptQueueKey("codex", SESSION), [{ id: "x1" }], 1),
+    ]);
     expect(claude.read()).toEqual([{ id: "c1" }]);
     expect(codex.read()).toEqual([{ id: "x1" }]);
   });
 
   test("filters unrelated, malformed, and unknown-agent environment entries", async () => {
     const source = createSource();
-    await hydratePromptQueuesForEnvironment(
-      "env-1",
-      [source],
-      async () => [
-        persisted(promptQueueKey("claude", SESSION), [{ id: "valid" }], 1),
-        persisted(promptQueueKey("claude", "other"), [{ id: "other-env" }], 1, "env-2"),
-        persisted(promptQueueKey("unknown", SESSION), [{ id: "unknown" }], 1),
-        persisted("malformed", [{ id: "malformed" }], 1),
-      ],
-    );
+    await hydratePromptQueuesForEnvironment("env-1", [source], async () => [
+      persisted(promptQueueKey("claude", SESSION), [{ id: "valid" }], 1),
+      persisted(promptQueueKey("claude", "other"), [{ id: "other-env" }], 1, "env-2"),
+      persisted(promptQueueKey("unknown", SESSION), [{ id: "unknown" }], 1),
+      persisted("malformed", [{ id: "malformed" }], 1),
+    ]);
     expect(source.read()).toEqual([{ id: "valid" }]);
   });
 
@@ -168,32 +152,22 @@ describe("backend-owned prompt queue projections", () => {
   test("clears the projection when the backend record is gone", async () => {
     const source = createSource();
     source.setQueue(SESSION, [{ id: "ghost" }]);
-    await hydratePromptQueue(
-      promptQueueKey("claude", SESSION),
-      [source],
-      async () => null,
-    );
+    await hydratePromptQueue(promptQueueKey("claude", SESSION), [source], async () => null);
     expect(source.read()).toEqual([]);
   });
 
   test("hydrates one matching queue and ignores malformed or unknown queue keys", async () => {
     const source = createSource();
     const key = promptQueueKey("claude", SESSION);
-    await hydratePromptQueue(key, [source], async () =>
-      persisted(key, [{ id: "restored" }], 1)
-    );
+    await hydratePromptQueue(key, [source], async () => persisted(key, [{ id: "restored" }], 1));
     expect(source.read()).toEqual([{ id: "restored" }]);
 
     await hydratePromptQueue("malformed", [source], async () => {
       throw new Error("loader must not run");
     });
-    await hydratePromptQueue(
-      promptQueueKey("codex", SESSION),
-      [source],
-      async () => {
-        throw new Error("loader must not run");
-      },
-    );
+    await hydratePromptQueue(promptQueueKey("codex", SESSION), [source], async () => {
+      throw new Error("loader must not run");
+    });
     expect(source.read()).toEqual([{ id: "restored" }]);
   });
 
@@ -267,11 +241,7 @@ describe("backend-owned prompt queue projections", () => {
 
     let backendQueue: QueuedItem[] = [{ id: "m1" }, { id: "m2" }];
     let revision = 1;
-    const claim = async (
-      key: string,
-      environmentId: string,
-      expectedId: string,
-    ) => {
+    const claim = async (key: string, environmentId: string, expectedId: string) => {
       const head = backendQueue[0];
       if (!head || head.id !== expectedId) {
         return {
@@ -306,11 +276,11 @@ describe("backend-owned prompt queue projections", () => {
     const source = createSource();
     source.push(SESSION, [{ id: "m1" }]);
 
-    const claimed = await claimPromptQueueHead(
-      source,
-      SESSION,
-      async () => ({ claimed: null, claimToken: null, queue: null }),
-    );
+    const claimed = await claimPromptQueueHead(source, SESSION, async () => ({
+      claimed: null,
+      claimToken: null,
+      queue: null,
+    }));
 
     expect(claimed).toBeNull();
     expect(source.read(SESSION)).toEqual([]);
@@ -341,14 +311,17 @@ describe("subscribePromptQueueDispatchErrors", () => {
     const source = createSource();
     let first = 0;
     let second = 0;
-    const detachFirst = subscribePromptQueueDispatchErrors(() => { first += 1; });
-    const detachSecond = subscribePromptQueueDispatchErrors(() => { second += 1; });
+    const detachFirst = subscribePromptQueueDispatchErrors(() => {
+      first += 1;
+    });
+    const detachSecond = subscribePromptQueueDispatchErrors(() => {
+      second += 1;
+    });
     try {
       await publish(source, 1, dispatchError("Provider rejected this prompt."));
       expect(first).toBe(1);
       expect(second).toBe(1);
-      expect(getPromptQueueDispatchError(KEY)?.message)
-        .toBe("Provider rejected this prompt.");
+      expect(getPromptQueueDispatchError(KEY)?.message).toBe("Provider rejected this prompt.");
 
       await publish(source, 2, undefined);
       expect(first).toBe(2);
@@ -364,7 +337,9 @@ describe("subscribePromptQueueDispatchErrors", () => {
     // useSyncExternalStore consumer re-renders forever.
     const source = createSource();
     let notifications = 0;
-    const detach = subscribePromptQueueDispatchErrors(() => { notifications += 1; });
+    const detach = subscribePromptQueueDispatchErrors(() => {
+      notifications += 1;
+    });
     try {
       await publish(source, 1, dispatchError("Provider rejected this prompt."));
       expect(notifications).toBe(1);
@@ -383,7 +358,9 @@ describe("subscribePromptQueueDispatchErrors", () => {
   test("stops notifying once the returned unsubscribe runs", async () => {
     const source = createSource();
     let notifications = 0;
-    const detach = subscribePromptQueueDispatchErrors(() => { notifications += 1; });
+    const detach = subscribePromptQueueDispatchErrors(() => {
+      notifications += 1;
+    });
     await publish(source, 1, dispatchError("Provider rejected this prompt."));
     expect(notifications).toBe(1);
 

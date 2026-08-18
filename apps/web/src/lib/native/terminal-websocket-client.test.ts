@@ -29,7 +29,10 @@ class MockWebSocket {
   closes: Array<{ code: number; reason: string }> = [];
   throwOnSend = false;
 
-  constructor(readonly url: string, readonly protocols: string | string[]) {}
+  constructor(
+    readonly url: string,
+    readonly protocols: string | string[],
+  ) {}
 
   open(): void {
     this.readyState = MockWebSocket.OPEN;
@@ -128,17 +131,19 @@ function acceptSubscription(
   recovery: "current" | "snapshot-required" = "current",
 ): void {
   const requestId = subscribeFrame(socket, sessionId).requestId as number;
-  socket.receive(JSON.stringify({
-    type: "subscribed",
-    requestId,
-    sessionId,
-    channelId,
-    baseGeneration: recovery === "current" ? generation : null,
-    baseRevision: recovery === "current" ? revision : null,
-    targetGeneration: generation,
-    targetRevision: revision,
-    recovery,
-  }));
+  socket.receive(
+    JSON.stringify({
+      type: "subscribed",
+      requestId,
+      sessionId,
+      channelId,
+      baseGeneration: recovery === "current" ? generation : null,
+      baseRevision: recovery === "current" ? revision : null,
+      targetGeneration: generation,
+      targetRevision: revision,
+      recovery,
+    }),
+  );
 }
 
 async function tick(): Promise<void> {
@@ -162,41 +167,66 @@ describe("TerminalWebSocketClient", () => {
     acceptSubscription(first, "session-a", 11, 1, 0);
     acceptSubscription(first, "session-b", 22, 3, 0);
     await Promise.all([client.ready("session-a"), client.ready("session-b")]);
-    expect(channelReady.mock.calls.map((call) => call[0]).sort()).toEqual(["session-a", "session-b"]);
+    expect(channelReady.mock.calls.map((call) => call[0]).sort()).toEqual([
+      "session-a",
+      "session-b",
+    ]);
 
-    first.receive(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.output,
-      channelId: 11,
-      generation: 1,
-      revision: 1,
-      bytes: new TextEncoder().encode("alpha"),
-    }));
-    first.receive(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.output,
-      channelId: 22,
-      generation: 3,
-      revision: 1,
-      bytes: new TextEncoder().encode("beta"),
-    }));
+    first.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 11,
+        generation: 1,
+        revision: 1,
+        bytes: new TextEncoder().encode("alpha"),
+      }),
+    );
+    first.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.output,
+        channelId: 22,
+        generation: 3,
+        revision: 1,
+        bytes: new TextEncoder().encode("beta"),
+      }),
+    );
     await tick();
     expect(new TextDecoder().decode(outputA.mock.calls.at(-1)?.[0].bytes)).toBe("alpha");
     expect(new TextDecoder().decode(outputB.mock.calls.at(-1)?.[0].bytes)).toBe("beta");
-    expect(sentControls(first)).toContainEqual({ type: "ack", channelId: 11, generation: 1, revision: 1 });
+    expect(sentControls(first)).toContainEqual({
+      type: "ack",
+      channelId: 11,
+      generation: 1,
+      revision: 1,
+    });
 
     const inputResult = client.sendInput("session-a", "pwd\r");
-    const input = sentBinaries(first).find((frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input)!;
-    first.receive(JSON.stringify({
-      type: "operation-result", channelId: 11, operationId: input.revision, operation: "input", ok: true,
-    }));
+    const input = sentBinaries(first).find(
+      (frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input,
+    )!;
+    first.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId: 11,
+        operationId: input.revision,
+        operation: "input",
+        ok: true,
+      }),
+    );
     expect(await inputResult).toBe(true);
 
     const resizeResult = client.resize("session-b", 120, 40);
     const resize = sentControls(first).findLast((frame) => frame.type === "resize")!;
     expect(resize).toMatchObject({ type: "resize", channelId: 22, cols: 120, rows: 40 });
-    first.receive(JSON.stringify({
-      type: "operation-result", channelId: 22, operationId: resize.operationId,
-      operation: "resize", ok: true,
-    }));
+    first.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId: 22,
+        operationId: resize.operationId,
+        operation: "resize",
+        ok: true,
+      }),
+    );
     expect(await resizeResult).toBe(true);
 
     first.close(1006, "network lost");
@@ -206,8 +236,20 @@ describe("TerminalWebSocketClient", () => {
     const second = sockets[1]!;
     openAndReady(second, "socket-two");
     expect(sentControls(second).filter((frame) => frame.type === "subscribe")).toEqual([
-      { type: "subscribe", requestId: 3, sessionId: "session-a", knownGeneration: 1, knownRevision: 1 },
-      { type: "subscribe", requestId: 4, sessionId: "session-b", knownGeneration: 3, knownRevision: 1 },
+      {
+        type: "subscribe",
+        requestId: 3,
+        sessionId: "session-a",
+        knownGeneration: 1,
+        knownRevision: 1,
+      },
+      {
+        type: "subscribe",
+        requestId: 4,
+        sessionId: "session-b",
+        knownGeneration: 3,
+        knownRevision: 1,
+      },
     ]);
     expect(socketReady).toHaveBeenCalledTimes(2);
 
@@ -220,9 +262,13 @@ describe("TerminalWebSocketClient", () => {
     client.subscribe("session-a", () => undefined);
     const first = sockets[0]!;
     first.open();
-    expect(sentControls(first)).toEqual([{
-      type: "authenticate", version: 1, token: "old-token",
-    }]);
+    expect(sentControls(first)).toEqual([
+      {
+        type: "authenticate",
+        version: 1,
+        token: "old-token",
+      },
+    ]);
     // A second desired channel added before server readiness must not overtake authentication.
     client.subscribe("session-b", () => undefined);
     expect(sentControls(first).filter((frame) => frame.type === "subscribe")).toHaveLength(0);
@@ -234,7 +280,11 @@ describe("TerminalWebSocketClient", () => {
     expect(first.closes.at(-1)?.reason).toBe("Gateway credential changed");
     const second = sockets[1]!;
     second.open();
-    expect(sentControls(second)[0]).toEqual({ type: "authenticate", version: 1, token: "new-token" });
+    expect(sentControls(second)[0]).toEqual({
+      type: "authenticate",
+      version: 1,
+      token: "new-token",
+    });
 
     Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
     document.dispatchEvent(new Event("visibilitychange"));
@@ -272,9 +322,14 @@ describe("TerminalWebSocketClient", () => {
     expect(fallback).toHaveBeenCalledTimes(1);
     openAndReady(sockets[0]!);
     const requestId = subscribeFrame(sockets[0]!, "session-a").requestId;
-    sockets[0]!.receive(JSON.stringify({
-      type: "error", code: "terminal-unavailable", message: "not yet", requestId,
-    }));
+    sockets[0]!.receive(
+      JSON.stringify({
+        type: "error",
+        code: "terminal-unavailable",
+        message: "not yet",
+        requestId,
+      }),
+    );
     await client.ready("session-a");
     await tick();
     expect(unavailable).toHaveBeenCalledWith("session-a");
@@ -300,10 +355,19 @@ describe("TerminalWebSocketClient", () => {
     openAndReady(secondSocket, "two");
     const requestId = subscribeFrame(secondSocket, "session-b").requestId;
     unlisten();
-    secondSocket.receive(JSON.stringify({
-      type: "subscribed", requestId, sessionId: "session-b", channelId: 9,
-      baseGeneration: 1, baseRevision: 0, targetGeneration: 1, targetRevision: 0, recovery: "current",
-    }));
+    secondSocket.receive(
+      JSON.stringify({
+        type: "subscribed",
+        requestId,
+        sessionId: "session-b",
+        channelId: 9,
+        baseGeneration: 1,
+        baseRevision: 0,
+        targetGeneration: 1,
+        targetRevision: 0,
+        recovery: "current",
+      }),
+    );
     // The reply belongs to a removed desired subscription, so its server channel is closed.
     expect(sentControls(secondSocket)).toContainEqual({ type: "unsubscribe", channelId: 9 });
     keepAlive();
@@ -321,19 +385,24 @@ describe("TerminalWebSocketClient", () => {
     acceptSubscription(socket, "session-a", 10, 2, 5, "snapshot-required");
     expect(channelUnavailable).toHaveBeenCalledWith("session-a");
     for (const revision of [6, 7]) {
-      socket.receive(encodeTerminalBinaryFrame({
-        type: TERMINAL_BINARY_FRAME_TYPE.output,
-        channelId: 10,
-        generation: 2,
-        revision,
-        bytes: new Uint8Array([revision]),
-      }));
+      socket.receive(
+        encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.output,
+          channelId: 10,
+          generation: 2,
+          revision,
+          bytes: new Uint8Array([revision]),
+        }),
+      );
     }
     await tick();
     client.observeSnapshot("session-a", { generation: 2, revision: 5 });
     await tick();
     expect(sentControls(socket)).toContainEqual({ type: "unsubscribe", channelId: 10 });
-    expect(subscribeFrame(socket, "session-a")).toMatchObject({ knownGeneration: 2, knownRevision: 5 });
+    expect(subscribeFrame(socket, "session-a")).toMatchObject({
+      knownGeneration: 2,
+      knownRevision: 5,
+    });
     expect(channelReady).not.toHaveBeenCalled();
 
     acceptSubscription(socket, "session-a", 11, 2, 5);
@@ -355,14 +424,27 @@ describe("TerminalWebSocketClient", () => {
     await tick();
     expect(channelReady).toHaveBeenCalledWith("session-a");
 
-    socket.receive(JSON.stringify({
-      type: "desync", channelId: 11, generation: 1, revision: 3, reason: "revision-gap",
-    }));
-    expect(outputs.mock.calls.at(-1)?.[0]).toMatchObject({ desynced: true, generation: 1, revision: 3 });
+    socket.receive(
+      JSON.stringify({
+        type: "desync",
+        channelId: 11,
+        generation: 1,
+        revision: 3,
+        reason: "revision-gap",
+      }),
+    );
+    expect(outputs.mock.calls.at(-1)?.[0]).toMatchObject({
+      desynced: true,
+      generation: 1,
+      revision: 3,
+    });
     expect(channelUnavailable.mock.calls.length).toBeGreaterThanOrEqual(2);
     client.observeSnapshot("session-a", { generation: 1, revision: 3 });
     await tick();
-    expect(subscribeFrame(socket, "session-a")).toMatchObject({ knownGeneration: 1, knownRevision: 3 });
+    expect(subscribeFrame(socket, "session-a")).toMatchObject({
+      knownGeneration: 1,
+      knownRevision: 3,
+    });
   });
 
   test("rejects failed or mismatched operations and all pending work on close", async () => {
@@ -374,18 +456,29 @@ describe("TerminalWebSocketClient", () => {
 
     const failedInput = client.sendInput("session-a", "x");
     const input = sentBinaries(socket).at(-1)!;
-    socket.receive(JSON.stringify({
-      type: "operation-result", channelId: 4, operationId: input.revision,
-      operation: "input", ok: false, message: "write rejected",
-    }));
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId: 4,
+        operationId: input.revision,
+        operation: "input",
+        ok: false,
+        message: "write rejected",
+      }),
+    );
     await expect(failedInput).rejects.toThrow("write rejected");
 
     const mismatchedResize = client.resize("session-a", 80, 24);
     const resize = sentControls(socket).findLast((frame) => frame.type === "resize")!;
-    socket.receive(JSON.stringify({
-      type: "operation-result", channelId: 99, operationId: resize.operationId,
-      operation: "resize", ok: true,
-    }));
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId: 99,
+        operationId: resize.operationId,
+        operation: "resize",
+        ok: true,
+      }),
+    );
     expect(socket.closes.at(-1)?.reason).toBe("Mismatched operation response");
     await expect(mismatchedResize).rejects.toThrow("closed before the operation completed");
 
@@ -401,9 +494,10 @@ describe("TerminalWebSocketClient", () => {
       openAndReady(socket);
       acceptSubscription(socket, "session-a", 4);
       socket.throwOnSend = true;
-      const result = operation === "input"
-        ? client.sendInput("session-a", "x")
-        : client.resize("session-a", 80, 24);
+      const result =
+        operation === "input"
+          ? client.sendInput("session-a", "x")
+          : client.resize("session-a", 80, 24);
       await expect(result).rejects.toThrow("mock send failure");
       expect(channelUnavailable).toHaveBeenCalledWith("session-a");
       client.dispose();
@@ -431,10 +525,18 @@ describe("TerminalWebSocketClient", () => {
     expect(sentControls(socket)).not.toContainEqual({ type: "unsubscribe", channelId: 4 });
     expect(sentControls(socket).filter((frame) => frame.type === "subscribe")).toHaveLength(1);
 
-    const input = sentBinaries(socket).find((frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input)!;
-    socket.receive(JSON.stringify({
-      type: "operation-result", channelId: 4, operationId: input.revision, operation: "input", ok: true,
-    }));
+    const input = sentBinaries(socket).find(
+      (frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input,
+    )!;
+    socket.receive(
+      JSON.stringify({
+        type: "operation-result",
+        channelId: 4,
+        operationId: input.revision,
+        operation: "input",
+        ok: true,
+      }),
+    );
     expect(await pending).toBe(true);
   });
 
@@ -469,15 +571,17 @@ describe("TerminalWebSocketClient", () => {
     openAndReady(socket);
     acceptSubscription(socket, "session-a", 4, 1, 5);
 
-    socket.onmessage?.(new MessageEvent("message", {
-      data: encodeTerminalBinaryFrame({
-        type: TERMINAL_BINARY_FRAME_TYPE.output,
-        channelId: 4,
-        generation: 1,
-        revision: 6,
-        bytes: new TextEncoder().encode("six"),
-      }).buffer as ArrayBuffer,
-    }));
+    socket.onmessage?.(
+      new MessageEvent("message", {
+        data: encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.output,
+          channelId: 4,
+          generation: 1,
+          revision: 6,
+          bytes: new TextEncoder().encode("six"),
+        }).buffer as ArrayBuffer,
+      }),
+    );
     await tick();
     expect(payloads.map((payload) => payload.revision)).toEqual([6]);
 
@@ -485,15 +589,17 @@ describe("TerminalWebSocketClient", () => {
     // Adopting it would make revision 7 look non-contiguous.
     client.observeSnapshot("session-a", { generation: 1, revision: 5 });
     await tick();
-    socket.onmessage?.(new MessageEvent("message", {
-      data: encodeTerminalBinaryFrame({
-        type: TERMINAL_BINARY_FRAME_TYPE.output,
-        channelId: 4,
-        generation: 1,
-        revision: 7,
-        bytes: new TextEncoder().encode("seven"),
-      }).buffer as ArrayBuffer,
-    }));
+    socket.onmessage?.(
+      new MessageEvent("message", {
+        data: encodeTerminalBinaryFrame({
+          type: TERMINAL_BINARY_FRAME_TYPE.output,
+          channelId: 4,
+          generation: 1,
+          revision: 7,
+          bytes: new TextEncoder().encode("seven"),
+        }).buffer as ArrayBuffer,
+      }),
+    );
     await tick();
 
     expect(payloads.map((payload) => payload.revision)).toEqual([6, 7]);
@@ -537,12 +643,14 @@ describe("TerminalWebSocketClient", () => {
       openAndReady(socket);
       for (let attempt = 0; attempt < 5; attempt += 1) {
         const requestId = subscribeFrame(socket, "session-a").requestId as number;
-        socket.receive(JSON.stringify({
-          type: "error",
-          code: "subscription-denied",
-          message: "Terminal session is unavailable",
-          requestId,
-        }));
+        socket.receive(
+          JSON.stringify({
+            type: "error",
+            code: "subscription-denied",
+            message: "Terminal session is unavailable",
+            requestId,
+          }),
+        );
         await tick();
       }
       // Each denial costs the backend two command invocations, so a session the
@@ -554,7 +662,9 @@ describe("TerminalWebSocketClient", () => {
   });
 
   test("times out missing operation acknowledgements and reconnects through fallback", async () => {
-    const { client, sockets, fallback, channelUnavailable } = createHarness({ operationTimeoutMs: 1 });
+    const { client, sockets, fallback, channelUnavailable } = createHarness({
+      operationTimeoutMs: 1,
+    });
     client.subscribe("session-a", () => undefined);
     const socket = sockets[0]!;
     openAndReady(socket);
@@ -579,15 +689,26 @@ describe("TerminalWebSocketClient", () => {
     const maxPayload = TERMINAL_WEBSOCKET_MAX_BINARY_BYTES - TERMINAL_WEBSOCKET_BINARY_HEADER_BYTES;
     const value = `${"a".repeat(maxPayload - 1)}🙂tail`;
     const result = client.sendInput("session-a", value);
-    const frames = sentBinaries(socket).filter((frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input);
+    const frames = sentBinaries(socket).filter(
+      (frame) => frame.type === TERMINAL_BINARY_FRAME_TYPE.input,
+    );
     expect(frames).toHaveLength(2);
     expect(frames[0]!.bytes.byteLength).toBe(maxPayload - 1);
-    expect(frames.map((frame) => new TextDecoder(undefined, { fatal: true }).decode(frame.bytes)).join(""))
-      .toBe(value);
+    expect(
+      frames
+        .map((frame) => new TextDecoder(undefined, { fatal: true }).decode(frame.bytes))
+        .join(""),
+    ).toBe(value);
     for (const frame of frames) {
-      socket.receive(JSON.stringify({
-        type: "operation-result", channelId: 4, operationId: frame.revision, operation: "input", ok: true,
-      }));
+      socket.receive(
+        JSON.stringify({
+          type: "operation-result",
+          channelId: 4,
+          operationId: frame.revision,
+          operation: "input",
+          ok: true,
+        }),
+      );
     }
     expect(await result).toBe(true);
   });
@@ -609,13 +730,15 @@ describe("TerminalWebSocketClient", () => {
     const socket = sockets[0]!;
     openAndReady(socket);
     acceptSubscription(socket, "session-a", 5);
-    socket.receive(encodeTerminalBinaryFrame({
-      type: TERMINAL_BINARY_FRAME_TYPE.input,
-      channelId: 5,
-      generation: 1,
-      revision: 1,
-      bytes: new Uint8Array(),
-    }));
+    socket.receive(
+      encodeTerminalBinaryFrame({
+        type: TERMINAL_BINARY_FRAME_TYPE.input,
+        channelId: 5,
+        generation: 1,
+        revision: 1,
+        bytes: new Uint8Array(),
+      }),
+    );
     await tick();
     expect(socket.closes.at(-1)?.reason).toBe("Server sent an input frame");
   });
@@ -627,7 +750,9 @@ describe("TerminalWebSocketClient", () => {
     expect(terminalWebSocketUrl("http://example.test:8080")).toBe(
       "ws://example.test:8080/__orkestrator/terminal",
     );
-    (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM.setURL("https://app.test/page");
+    (window as unknown as { happyDOM: { setURL(url: string): void } }).happyDOM.setURL(
+      "https://app.test/page",
+    );
     expect(terminalWebSocketUrl()).toBe("wss://app.test/__orkestrator/terminal");
   });
 });

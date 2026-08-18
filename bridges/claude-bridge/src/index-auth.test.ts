@@ -47,9 +47,7 @@ async function requestBridge(
   });
 }
 
-async function withLiveBridge<T>(
-  run: (baseUrl: string) => Promise<T>,
-): Promise<T> {
+async function withLiveBridge<T>(run: (baseUrl: string) => Promise<T>): Promise<T> {
   const server = __testing.startBridgeServerForTesting({
     PORT: "0",
     HOSTNAME: "127.0.0.1",
@@ -69,7 +67,7 @@ async function withLiveBridge<T>(
     return await run(`http://127.0.0.1:${address.port}`);
   } finally {
     await new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
+      server.close((error) => (error ? reject(error) : resolve()));
     });
   }
 }
@@ -77,24 +75,40 @@ async function withLiveBridge<T>(
 describe("bridge authentication and origin policy", () => {
   test("captures the token once and removes it from the environment inherited by children", async () => {
     expect(process.env.CLAUDE_BRIDGE_TOKEN).toBeUndefined();
-    expect((await app.request("/global/auth-check", {
-      headers: { "X-Orkestrator-Claude-Token": AUTH_TOKEN },
-    })).status).toBe(200);
+    expect(
+      (
+        await app.request("/global/auth-check", {
+          headers: { "X-Orkestrator-Claude-Token": AUTH_TOKEN },
+        })
+      ).status,
+    ).toBe(200);
   });
 
   test("protects data routes while leaving only the minimal process health public", async () => {
     __testing.setBridgeAuthForTesting(AUTH_TOKEN);
     try {
       expect((await app.request("/global/auth-check")).status).toBe(401);
-      expect((await app.request("/global/auth-check", {
-        headers: { Authorization: "Bearer wrong" },
-      })).status).toBe(401);
-      expect((await app.request("/global/auth-check", {
-        headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
-      })).status).toBe(200);
-      expect((await app.request("/global/auth-check", {
-        headers: { "X-Orkestrator-Claude-Token": AUTH_TOKEN },
-      })).status).toBe(200);
+      expect(
+        (
+          await app.request("/global/auth-check", {
+            headers: { Authorization: "Bearer wrong" },
+          })
+        ).status,
+      ).toBe(401);
+      expect(
+        (
+          await app.request("/global/auth-check", {
+            headers: { Authorization: `Bearer ${AUTH_TOKEN}` },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await app.request("/global/auth-check", {
+            headers: { "X-Orkestrator-Claude-Token": AUTH_TOKEN },
+          })
+        ).status,
+      ).toBe(200);
       expect((await app.request("/session/list")).status).toBe(401);
       expect((await app.request("/")).status).toBe(401);
 
@@ -186,10 +200,8 @@ describe("bridge authentication and origin policy", () => {
   });
 
   test("allows only local, file, and explicitly configured origins", () => {
-    expect(__testing.isTrustedBridgeOriginForTesting("https://attacker.example"))
-      .toBe(false);
-    expect(__testing.isTrustedBridgeOriginForTesting("http://127.0.0.1:5173"))
-      .toBe(true);
+    expect(__testing.isTrustedBridgeOriginForTesting("https://attacker.example")).toBe(false);
+    expect(__testing.isTrustedBridgeOriginForTesting("http://127.0.0.1:5173")).toBe(true);
     expect(__testing.isTrustedBridgeOriginForTesting("http://[::1]:5173")).toBe(true);
     expect(__testing.isTrustedBridgeOriginForTesting("file://")).toBe(true);
     expect(__testing.isTrustedBridgeOriginForTesting("null")).toBe(true);

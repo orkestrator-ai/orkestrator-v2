@@ -4,21 +4,31 @@ import { registerMainIpc } from "../../../apps/desktop/electron/ipc";
 type IpcEvent = { senderFrame: { url: string } | null };
 type Handler = (event: IpcEvent, ...args: unknown[]) => unknown;
 
-function createHarness(options: {
-  backend?: { invoke: ReturnType<typeof mock> } | null;
-  window?: unknown;
-  browserPreviews?: boolean;
-} = {}) {
+function createHarness(
+  options: {
+    backend?: { invoke: ReturnType<typeof mock> } | null;
+    window?: unknown;
+    browserPreviews?: boolean;
+  } = {},
+) {
   const trustedRendererUrl = "file:///app/web/index.html";
   const handlers = new Map<string, Handler>();
-  const syncHandlers = new Map<string, (event: IpcEvent & { returnValue: unknown }, ...args: unknown[]) => void>();
-  const backend = options.backend === undefined
-    ? { invoke: mock(async (_command: string, args: Record<string, unknown>) => ({ ok: true, args })) }
-    : options.backend;
+  const syncHandlers = new Map<
+    string,
+    (event: IpcEvent & { returnValue: unknown }, ...args: unknown[]) => void
+  >();
+  const backend =
+    options.backend === undefined
+      ? {
+          invoke: mock(async (_command: string, args: Record<string, unknown>) => ({
+            ok: true,
+            args,
+          })),
+        }
+      : options.backend;
   const setZoomFactor = mock(() => undefined);
-  const window = options.window === undefined
-    ? { id: 1, webContents: { setZoomFactor } }
-    : options.window;
+  const window =
+    options.window === undefined ? { id: 1, webContents: { setZoomFactor } } : options.window;
   const resizedClipboardImage = {
     isEmpty: mock(() => false),
     getSize: mock(() => ({ width: 2000, height: 1000 })),
@@ -44,7 +54,12 @@ function createHarness(options: {
   const dialogApi = {
     showOpenDialog: mock(async () => ({ canceled: false, filePaths: ["/tmp/a", "/tmp/b"] })),
   };
-  const webClientStatus = { enabled: true, running: true, url: "http://100.88.12.3:34121/", error: null };
+  const webClientStatus = {
+    enabled: true,
+    running: true,
+    url: "http://100.88.12.3:34121/",
+    error: null,
+  };
   const getWebClientStatus = mock(() => webClientStatus);
   const setWebClientEnabled = mock(async (enabled: boolean) => ({
     ...webClientStatus,
@@ -53,12 +68,25 @@ function createHarness(options: {
     url: enabled ? webClientStatus.url : null,
   }));
   const resetWebClientServe = mock(async () => webClientStatus);
-  const gatewayTokenSettings = { token: "test-token-123456", editable: true, source: "file" as const };
+  const gatewayTokenSettings = {
+    token: "test-token-123456",
+    editable: true,
+    source: "file" as const,
+  };
   const getGatewayTokenSettings = mock(async () => gatewayTokenSettings);
   const setGatewayToken = mock(async (token: string) => ({ ...gatewayTokenSettings, token }));
   const connectionList = {
     activeConnectionId: "local",
-    connections: [{ id: "local", name: "Local", address: null, kind: "local" as const, active: true, requiresToken: false }],
+    connections: [
+      {
+        id: "local",
+        name: "Local",
+        address: null,
+        kind: "local" as const,
+        active: true,
+        requiresToken: false,
+      },
+    ],
   };
   const listConnections = mock(() => connectionList);
   const connectToRemote = mock(async () => connectionList);
@@ -111,9 +139,7 @@ function createHarness(options: {
   const invokeFrom = (senderUrl: string, channel: string, ...args: unknown[]) => {
     const handler = handlers.get(channel);
     if (!handler) throw new Error(`missing handler: ${channel}`);
-    return Promise.resolve().then(() =>
-      handler({ senderFrame: { url: senderUrl } }, ...args),
-    );
+    return Promise.resolve().then(() => handler({ senderFrame: { url: senderUrl } }, ...args));
   };
   const invoke = (channel: string, ...args: unknown[]) =>
     invokeFrom(trustedRendererUrl, channel, ...args);
@@ -131,18 +157,48 @@ function createHarness(options: {
   const invokeSync = (channel: string, ...args: unknown[]) =>
     invokeSyncFrom(trustedRendererUrl, channel, ...args);
 
-  return { invoke, invokeFrom, invokeSync, invokeSyncFrom, handlers, syncHandlers, backend, window, setZoomFactor, clipboardApi, clipboardImage, resizedClipboardImage, nativeImage, appApi, dialogApi, getWebClientStatus, setWebClientEnabled, resetWebClientServe, getGatewayTokenSettings, setGatewayToken, listConnections, connectToRemote, useConnection, forgetConnection, browserPreviews };
+  return {
+    invoke,
+    invokeFrom,
+    invokeSync,
+    invokeSyncFrom,
+    handlers,
+    syncHandlers,
+    backend,
+    window,
+    setZoomFactor,
+    clipboardApi,
+    clipboardImage,
+    resizedClipboardImage,
+    nativeImage,
+    appApi,
+    dialogApi,
+    getWebClientStatus,
+    setWebClientEnabled,
+    resetWebClientServe,
+    getGatewayTokenSettings,
+    setGatewayToken,
+    listConnections,
+    connectToRemote,
+    useConnection,
+    forgetConnection,
+    browserPreviews,
+  };
 }
 
 describe("main IPC registration", () => {
   test("registers backend, clipboard, process, and window handlers", async () => {
     const harness = createHarness();
 
-    await expect(harness.invoke("orkestrator:invoke", "get_projects", { projectId: "project-1" })).resolves.toEqual({
+    await expect(
+      harness.invoke("orkestrator:invoke", "get_projects", { projectId: "project-1" }),
+    ).resolves.toEqual({
       ok: true,
       args: { projectId: "project-1" },
     });
-    expect(harness.backend?.invoke).toHaveBeenCalledWith("get_projects", { projectId: "project-1" });
+    expect(harness.backend?.invoke).toHaveBeenCalledWith("get_projects", {
+      projectId: "project-1",
+    });
 
     await expect(harness.invoke("orkestrator:clipboard:read-text")).resolves.toBe("copied");
     await harness.invoke("orkestrator:clipboard:write-text", "paste");
@@ -155,7 +211,9 @@ describe("main IPC registration", () => {
     });
     await harness.invoke("orkestrator:clipboard:write-image", "data:image/png;base64,def");
     expect(harness.nativeImage.createFromDataURL).toHaveBeenCalledWith("data:image/png;base64,def");
-    expect(harness.clipboardApi.writeImage).toHaveBeenCalledWith({ dataUrl: "data:image/png;base64,def" });
+    expect(harness.clipboardApi.writeImage).toHaveBeenCalledWith({
+      dataUrl: "data:image/png;base64,def",
+    });
 
     await harness.invoke("orkestrator:process:exit", 7);
     expect(harness.appApi.exit).toHaveBeenCalledWith(7);
@@ -167,7 +225,9 @@ describe("main IPC registration", () => {
       enabled: true,
       running: true,
     });
-    await expect(harness.invoke("orkestrator:web-client:set-enabled", false)).resolves.toMatchObject({
+    await expect(
+      harness.invoke("orkestrator:web-client:set-enabled", false),
+    ).resolves.toMatchObject({
       enabled: false,
       running: false,
     });
@@ -176,11 +236,15 @@ describe("main IPC registration", () => {
       running: true,
     });
     expect(harness.resetWebClientServe).toHaveBeenCalledTimes(1);
-    await expect(harness.invoke("orkestrator:web-client:get-token-settings")).resolves.toMatchObject({
+    await expect(
+      harness.invoke("orkestrator:web-client:get-token-settings"),
+    ).resolves.toMatchObject({
       token: "test-token-123456",
       editable: true,
     });
-    await expect(harness.invoke("orkestrator:web-client:set-token", "replacement-token-123456")).resolves.toMatchObject({
+    await expect(
+      harness.invoke("orkestrator:web-client:set-token", "replacement-token-123456"),
+    ).resolves.toMatchObject({
       token: "replacement-token-123456",
     });
     expect(harness.setGatewayToken).toHaveBeenCalledWith("replacement-token-123456");
@@ -201,15 +265,15 @@ describe("main IPC registration", () => {
     const harness = createHarness();
 
     for (const factor of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1.5"]) {
-      await expect(
-        harness.invoke("orkestrator:window:set-zoom-factor", factor),
-      ).rejects.toThrow("Expected zoom factor");
+      await expect(harness.invoke("orkestrator:window:set-zoom-factor", factor)).rejects.toThrow(
+        "Expected zoom factor",
+      );
     }
 
     const withoutWindow = createHarness({ window: null });
-    await expect(
-      withoutWindow.invoke("orkestrator:window:set-zoom-factor", 1.1),
-    ).resolves.toBe(false);
+    await expect(withoutWindow.invoke("orkestrator:window:set-zoom-factor", 1.1)).resolves.toBe(
+      false,
+    );
   });
 
   test("validates and routes native browser preview operations", async () => {
@@ -224,7 +288,11 @@ describe("main IPC registration", () => {
     });
     await harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", bounds);
     await harness.invoke("orkestrator:browser-preview:set-visible", "browser-1", false);
-    await harness.invoke("orkestrator:browser-preview:navigate", "browser-1", "http://localhost:4000/");
+    await harness.invoke(
+      "orkestrator:browser-preview:navigate",
+      "browser-1",
+      "http://localhost:4000/",
+    );
     await harness.invoke("orkestrator:browser-preview:go-back", "browser-1");
     await harness.invoke("orkestrator:browser-preview:go-forward", "browser-1");
     await harness.invoke("orkestrator:browser-preview:reload", "browser-1");
@@ -239,16 +307,21 @@ describe("main IPC registration", () => {
     });
     expect(harness.browserPreviews.setBounds).toHaveBeenCalledWith("browser-1", bounds);
     expect(harness.browserPreviews.setVisible).toHaveBeenCalledWith("browser-1", false);
-    expect(harness.browserPreviews.navigate).toHaveBeenCalledWith("browser-1", "http://localhost:4000/");
+    expect(harness.browserPreviews.navigate).toHaveBeenCalledWith(
+      "browser-1",
+      "http://localhost:4000/",
+    );
     expect(harness.browserPreviews.goBack).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.goForward).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.reload).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.openDevTools).toHaveBeenCalledWith("browser-1");
     expect(harness.browserPreviews.destroy).toHaveBeenCalledWith("browser-1");
-    await expect(harness.invoke("orkestrator:browser-preview:attach", { tabId: "", url: 42 })).rejects.toThrow();
-    await expect(harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", { x: 0 })).rejects.toThrow(
-      "finite browser preview bounds",
-    );
+    await expect(
+      harness.invoke("orkestrator:browser-preview:attach", { tabId: "", url: 42 }),
+    ).rejects.toThrow();
+    await expect(
+      harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", { x: 0 }),
+    ).rejects.toThrow("finite browser preview bounds");
   });
 
   test("validates browser preview IPC boundary values", async () => {
@@ -257,9 +330,9 @@ describe("main IPC registration", () => {
     const oneCharacterId = "x";
     const maximumId = "x".repeat(256);
 
-    await expect(harness.invoke("orkestrator:browser-preview:set-bounds", oneCharacterId, bounds)).resolves.toEqual(
-      expect.objectContaining({ tabId: "browser-1" }),
-    );
+    await expect(
+      harness.invoke("orkestrator:browser-preview:set-bounds", oneCharacterId, bounds),
+    ).resolves.toEqual(expect.objectContaining({ tabId: "browser-1" }));
     expect(harness.browserPreviews.setBounds).toHaveBeenLastCalledWith(oneCharacterId, bounds);
     await expect(harness.invoke("orkestrator:browser-preview:reload", maximumId)).resolves.toEqual(
       expect.objectContaining({ tabId: "browser-1" }),
@@ -271,33 +344,43 @@ describe("main IPC registration", () => {
         "Expected a browser preview tab ID",
       );
     }
-    for (const invalidBounds of [null, [], { x: 0 }, { x: 0, y: 0, width: Infinity, height: 1 }, {
-      x: 0,
-      y: Number.NaN,
-      width: 1,
-      height: 1,
-    }]) {
-      await expect(harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", invalidBounds)).rejects.toThrow();
+    for (const invalidBounds of [
+      null,
+      [],
+      { x: 0 },
+      { x: 0, y: 0, width: Infinity, height: 1 },
+      {
+        x: 0,
+        y: Number.NaN,
+        width: 1,
+        height: 1,
+      },
+    ]) {
+      await expect(
+        harness.invoke("orkestrator:browser-preview:set-bounds", "browser-1", invalidBounds),
+      ).rejects.toThrow();
     }
     for (const visible of [null, 0, "false"]) {
-      await expect(harness.invoke("orkestrator:browser-preview:set-visible", "browser-1", visible)).rejects.toThrow(
-        "Expected browser preview visibility",
-      );
+      await expect(
+        harness.invoke("orkestrator:browser-preview:set-visible", "browser-1", visible),
+      ).rejects.toThrow("Expected browser preview visibility");
     }
     for (const url of ["", null, 42]) {
-      await expect(harness.invoke("orkestrator:browser-preview:navigate", "browser-1", url)).rejects.toThrow(
-        "Expected a browser preview URL",
-      );
+      await expect(
+        harness.invoke("orkestrator:browser-preview:navigate", "browser-1", url),
+      ).rejects.toThrow("Expected a browser preview URL");
     }
     await expect(harness.invoke("orkestrator:browser-preview:attach", null)).rejects.toThrow(
       "Expected browser preview attachment details",
     );
-    await expect(harness.invoke("orkestrator:browser-preview:attach", {
-      tabId: "browser-1",
-      url: "http://localhost:3000/",
-      bounds: { x: 0, y: 0, width: 1, height: 1 },
-      visible: "true",
-    })).rejects.toThrow("Expected a browser preview URL and visibility");
+    await expect(
+      harness.invoke("orkestrator:browser-preview:attach", {
+        tabId: "browser-1",
+        url: "http://localhost:3000/",
+        bounds: { x: 0, y: 0, width: 1, height: 1 },
+        visible: "true",
+      }),
+    ).rejects.toThrow("Expected a browser preview URL and visibility");
   });
 
   test("reports unavailable native browser preview controllers", async () => {
@@ -313,9 +396,14 @@ describe("main IPC registration", () => {
     await expect(harness.invoke("orkestrator:connections:list")).resolves.toMatchObject({
       activeConnectionId: "local",
     });
-    expect(harness.invokeSync("orkestrator:connections:list-sync")).toMatchObject({ activeConnectionId: "local" });
+    expect(harness.invokeSync("orkestrator:connections:list-sync")).toMatchObject({
+      activeConnectionId: "local",
+    });
     expect(harness.listConnections).toHaveBeenCalledTimes(2);
-    await harness.invoke("orkestrator:connections:connect", { address: "https://desk.example", token: "gateway-token-123456" });
+    await harness.invoke("orkestrator:connections:connect", {
+      address: "https://desk.example",
+      token: "gateway-token-123456",
+    });
     expect(harness.connectToRemote).toHaveBeenCalledWith({
       address: "https://desk.example",
       token: "gateway-token-123456",
@@ -328,27 +416,38 @@ describe("main IPC registration", () => {
 
   test("validates connection IPC input", async () => {
     const harness = createHarness();
-    await expect(harness.invoke("orkestrator:connections:connect", null)).rejects.toThrow("connection details");
-    await expect(harness.invoke("orkestrator:connections:connect", { address: 42, token: "token" })).rejects.toThrow("address and gateway token");
-    await expect(harness.invoke("orkestrator:connections:use", 42)).rejects.toThrow("connection ID");
-    await expect(harness.invoke("orkestrator:connections:forget", null)).rejects.toThrow("connection ID");
+    await expect(harness.invoke("orkestrator:connections:connect", null)).rejects.toThrow(
+      "connection details",
+    );
+    await expect(
+      harness.invoke("orkestrator:connections:connect", { address: 42, token: "token" }),
+    ).rejects.toThrow("address and gateway token");
+    await expect(harness.invoke("orkestrator:connections:use", 42)).rejects.toThrow(
+      "connection ID",
+    );
+    await expect(harness.invoke("orkestrator:connections:forget", null)).rejects.toThrow(
+      "connection ID",
+    );
   });
 
   test("forwards asynchronous web client status results and failures", async () => {
     const harness = createHarness();
-    harness.getWebClientStatus.mockImplementationOnce(() => Promise.resolve({
-      enabled: false,
-      running: false,
-      url: null,
-      error: null,
-    }) as never);
+    harness.getWebClientStatus.mockImplementationOnce(
+      () =>
+        Promise.resolve({
+          enabled: false,
+          running: false,
+          url: null,
+          error: null,
+        }) as never,
+    );
     await expect(harness.invoke("orkestrator:web-client:get-status")).resolves.toMatchObject({
       enabled: false,
     });
 
-    harness.getWebClientStatus.mockImplementationOnce(() => Promise.reject(
-      new Error("status unavailable"),
-    ) as never);
+    harness.getWebClientStatus.mockImplementationOnce(
+      () => Promise.reject(new Error("status unavailable")) as never,
+    );
     await expect(harness.invoke("orkestrator:web-client:get-status")).rejects.toThrow(
       "status unavailable",
     );
@@ -357,7 +456,9 @@ describe("main IPC registration", () => {
   test("throws for backend commands before the backend is initialized", async () => {
     const harness = createHarness({ backend: null });
 
-    await expect(harness.invoke("orkestrator:invoke", "get_projects", {})).rejects.toThrow("Backend is not initialized");
+    await expect(harness.invoke("orkestrator:invoke", "get_projects", {})).rejects.toThrow(
+      "Backend is not initialized",
+    );
   });
 
   test("validates backend command names and normalizes malformed arguments", async () => {
@@ -401,10 +502,14 @@ describe("main IPC registration", () => {
   test("maps dialog options through the main window and supports canceled dialogs", async () => {
     const harness = createHarness();
 
-    await expect(harness.invoke("orkestrator:dialog:open", { directory: true, multiple: true, title: "Pick", defaultPath: "/tmp" })).resolves.toEqual([
-      "/tmp/a",
-      "/tmp/b",
-    ]);
+    await expect(
+      harness.invoke("orkestrator:dialog:open", {
+        directory: true,
+        multiple: true,
+        title: "Pick",
+        defaultPath: "/tmp",
+      }),
+    ).resolves.toEqual(["/tmp/a", "/tmp/b"]);
     expect(harness.dialogApi.showOpenDialog).toHaveBeenCalledWith(harness.window, {
       title: "Pick",
       defaultPath: "/tmp",
@@ -412,7 +517,9 @@ describe("main IPC registration", () => {
     });
 
     harness.dialogApi.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
-    await expect(harness.invoke("orkestrator:dialog:open", { directory: false })).resolves.toBeNull();
+    await expect(
+      harness.invoke("orkestrator:dialog:open", { directory: false }),
+    ).resolves.toBeNull();
   });
 
   test("returns null when the clipboard image is empty", async () => {
@@ -429,9 +536,7 @@ describe("main IPC registration", () => {
       height: 3000,
     });
 
-    await expect(
-      harness.invoke("orkestrator:clipboard:read-image"),
-    ).resolves.toEqual({
+    await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toEqual({
       width: 2000,
       height: 1000,
       dataUrl: "data:image/png;base64,resized",
@@ -455,9 +560,7 @@ describe("main IPC registration", () => {
       height: 2000,
     });
 
-    await expect(
-      harness.invoke("orkestrator:clipboard:read-image"),
-    ).resolves.toEqual({
+    await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toEqual({
       width: 1000,
       height: 2000,
       dataUrl: "data:image/png;base64,resized",
@@ -477,9 +580,7 @@ describe("main IPC registration", () => {
       height: 2000,
     });
 
-    await expect(
-      harness.invoke("orkestrator:clipboard:read-image"),
-    ).resolves.toEqual({
+    await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toEqual({
       width: 2000,
       height: 2000,
       dataUrl: "data:image/png;base64,abc",
@@ -499,9 +600,7 @@ describe("main IPC registration", () => {
       height: 1999,
     });
 
-    await expect(
-      harness.invoke("orkestrator:clipboard:read-image"),
-    ).resolves.toEqual({
+    await expect(harness.invoke("orkestrator:clipboard:read-image")).resolves.toEqual({
       width: 2000,
       height: 1999,
       dataUrl: "data:image/png;base64,resized",

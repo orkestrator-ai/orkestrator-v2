@@ -69,9 +69,10 @@ export class WebClientController {
     try {
       this.startInfo = await this.gateway.start();
       if (!this.startInfo) {
-        this.error = this.env.ORKESTRATOR_GATEWAY_DISABLED === "1"
-          ? "The web client is disabled by ORKESTRATOR_GATEWAY_DISABLED."
-          : "No Tailscale connection was found. Connect Tailscale, then save again to retry.";
+        this.error =
+          this.env.ORKESTRATOR_GATEWAY_DISABLED === "1"
+            ? "The web client is disabled by ORKESTRATOR_GATEWAY_DISABLED."
+            : "No Tailscale connection was found. Connect Tailscale, then save again to retry.";
       }
     } catch (error) {
       this.startInfo = null;

@@ -47,7 +47,7 @@ export function ProjectItem({ project, isSelected, onSelect, onDelete }: Project
               "group flex w-full items-center rounded-md text-left text-sm transition-colors",
               isSelected
                 ? "bg-accent text-accent-foreground"
-                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
             )}
           >
             <button
@@ -57,17 +57,19 @@ export function ProjectItem({ project, isSelected, onSelect, onDelete }: Project
             >
               <FolderGit2 className="h-4 w-4 shrink-0" />
               <span className="flex-1 truncate">{project.name}</span>
-              <ChevronRight className={cn(
-                "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
-                isSelected && "rotate-90"
-              )} />
+              <ChevronRight
+                className={cn(
+                  "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                  isSelected && "rotate-90",
+                )}
+              />
             </button>
 
             {/* Delete button - shown on hover */}
             <div
               className={cn(
                 "flex items-center gap-1 transition-opacity",
-                isHovered || isSelected ? "opacity-100" : "opacity-0"
+                isHovered || isSelected ? "opacity-100" : "opacity-0",
               )}
             >
               <Button

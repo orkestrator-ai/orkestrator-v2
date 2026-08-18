@@ -9,7 +9,9 @@ const validImageBase64 = Buffer.from(
   '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>',
 ).toString("base64");
 
-async function createStorage(prefix: string): Promise<{ dataDir: string; storage: StorageService }> {
+async function createStorage(
+  prefix: string,
+): Promise<{ dataDir: string; storage: StorageService }> {
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   tempDirs.push(dataDir);
   const storage = new StorageService(dataDir);
@@ -45,20 +47,24 @@ afterEach(async () => {
 describe("StorageService feature edge cases", () => {
   test("caps an environment at 20 sessions by evicting its oldest disconnected session and buffer", async () => {
     const { dataDir, storage } = await createStorage("ork-storage-session-cap-");
-    const sessions = Array.from({ length: 20 }, (_, index) => persistedSession(
-      `session-${index}`,
-      "env-1",
-      index === 2 || index === 7 ? "disconnected" : "connected",
-      new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
-      index,
-    ));
-    sessions.push(persistedSession(
-      "other-environment-session",
-      "env-2",
-      "disconnected",
-      "2025-01-01T00:00:00.000Z",
-      0,
-    ));
+    const sessions = Array.from({ length: 20 }, (_, index) =>
+      persistedSession(
+        `session-${index}`,
+        "env-1",
+        index === 2 || index === 7 ? "disconnected" : "connected",
+        new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+        index,
+      ),
+    );
+    sessions.push(
+      persistedSession(
+        "other-environment-session",
+        "env-2",
+        "disconnected",
+        "2025-01-01T00:00:00.000Z",
+        0,
+      ),
+    );
     await fs.writeFile(path.join(dataDir, "sessions.json"), JSON.stringify(sessions));
     await storage.saveSessionBuffer("session-2", "evict me");
     await storage.saveSessionBuffer("session-7", "keep me");
@@ -79,13 +85,15 @@ describe("StorageService feature edge cases", () => {
 
   test("does not evict connected sessions when all 20 existing sessions are active", async () => {
     const { dataDir, storage } = await createStorage("ork-storage-session-active-cap-");
-    const sessions = Array.from({ length: 20 }, (_, index) => persistedSession(
-      `connected-${index}`,
-      "env-1",
-      "connected",
-      new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
-      index,
-    ));
+    const sessions = Array.from({ length: 20 }, (_, index) =>
+      persistedSession(
+        `connected-${index}`,
+        "env-1",
+        "connected",
+        new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+        index,
+      ),
+    );
     await fs.writeFile(path.join(dataDir, "sessions.json"), JSON.stringify(sessions));
 
     const created = await storage.createSession("env-1", "container-1", "new-tab", "plain");
@@ -163,7 +171,9 @@ describe("StorageService feature edge cases", () => {
     ]);
     expect(projectTasks).not.toContainEqual(expect.objectContaining({ id: otherProject.id }));
     expect(transitioned).toMatchObject({ status: "review", order: 2 });
-    expect(projectTasks.filter((task) => task.status === "review").map((task) => task.order)).toEqual([0, 1, 2]);
+    expect(
+      projectTasks.filter((task) => task.status === "review").map((task) => task.order),
+    ).toEqual([0, 1, 2]);
   });
 
   test("rejects task and image deletion for a missing Kanban task", async () => {
@@ -186,7 +196,9 @@ describe("StorageService feature edge cases", () => {
     }) as typeof fs.writeFile;
 
     try {
-      await expect(storage.addKanbanImage(task.id, "pixel.svg", validImageBase64)).rejects.toMatchObject({
+      await expect(
+        storage.addKanbanImage(task.id, "pixel.svg", validImageBase64),
+      ).rejects.toMatchObject({
         code: "ENOSPC",
       });
     } finally {
@@ -207,7 +219,9 @@ describe("StorageService feature edge cases", () => {
 
     await expect(storage.getKanbanTasks("project-1")).resolves.toEqual([]);
     for (const imageId of imageIds) {
-      await expect(fs.access(path.join(dataDir, "kanban-images", `${imageId}.webp`))).rejects.toThrow();
+      await expect(
+        fs.access(path.join(dataDir, "kanban-images", `${imageId}.webp`)),
+      ).rejects.toThrow();
     }
   });
 });

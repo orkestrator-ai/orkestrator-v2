@@ -59,7 +59,10 @@ export function parseStoredDesktopConnections(value: unknown): StoredDesktopConn
       name: asString(connection.name, `connections[${index}].name`),
       address: asString(connection.address, `connections[${index}].address`),
       encryptedToken: asString(connection.encryptedToken, `connections[${index}].encryptedToken`),
-      lastConnectedAt: asString(connection.lastConnectedAt, `connections[${index}].lastConnectedAt`),
+      lastConnectedAt: asString(
+        connection.lastConnectedAt,
+        `connections[${index}].lastConnectedAt`,
+      ),
     };
   });
   return { activeConnectionId, connections };
@@ -70,20 +73,28 @@ export function parseConnectionList(value: unknown): ConnectionList {
   const activeConnectionId = asString(root.activeConnectionId, "activeConnectionId");
   if (!Array.isArray(root.connections)) throw new Error("Expected connections to be an array.");
   const credentialStorage = root.credentialStorage;
-  if (credentialStorage !== undefined && credentialStorage !== "secure" && credentialStorage !== "session-only") {
+  if (
+    credentialStorage !== undefined &&
+    credentialStorage !== "secure" &&
+    credentialStorage !== "session-only"
+  ) {
     throw new Error("Expected credentialStorage to be secure or session-only.");
   }
   const connections = root.connections.map((value, index): ConnectionSummary => {
     const connection = asRecord(value, `connections[${index}]`);
     const kind = connection.kind;
-    if (kind !== "local" && kind !== "remote") throw new Error(`Expected connections[${index}].kind to be local or remote.`);
+    if (kind !== "local" && kind !== "remote")
+      throw new Error(`Expected connections[${index}].kind to be local or remote.`);
     if (connection.address !== null && typeof connection.address !== "string") {
       throw new Error(`Expected connections[${index}].address to be a string or null.`);
     }
     if (typeof connection.active !== "boolean" || typeof connection.requiresToken !== "boolean") {
       throw new Error(`Expected connections[${index}] activity fields to be booleans.`);
     }
-    if (connection.lastConnectedAt !== undefined && typeof connection.lastConnectedAt !== "string") {
+    if (
+      connection.lastConnectedAt !== undefined &&
+      typeof connection.lastConnectedAt !== "string"
+    ) {
       throw new Error(`Expected connections[${index}].lastConnectedAt to be a string.`);
     }
     return {
@@ -93,7 +104,9 @@ export function parseConnectionList(value: unknown): ConnectionList {
       kind,
       active: connection.active,
       requiresToken: connection.requiresToken,
-      ...(connection.lastConnectedAt === undefined ? {} : { lastConnectedAt: connection.lastConnectedAt }),
+      ...(connection.lastConnectedAt === undefined
+        ? {}
+        : { lastConnectedAt: connection.lastConnectedAt }),
     };
   });
   return {

@@ -58,7 +58,13 @@ describe("SetupPendingOverlay", () => {
   });
 
   test("renders the waiting copy and agent-specific subtext", () => {
-    render(<SetupPendingOverlay environmentId="env-1" setupPhase="running" subtext="Claude will connect automatically" />);
+    render(
+      <SetupPendingOverlay
+        environmentId="env-1"
+        setupPhase="running"
+        subtext="Claude will connect automatically"
+      />,
+    );
     expect(screen.getByText("Waiting for setup scripts to complete...")).toBeTruthy();
     expect(screen.getByText("Claude will connect automatically")).toBeTruthy();
   });
@@ -68,8 +74,7 @@ describe("SetupPendingOverlay", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /skip setup wait/i }));
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
-      .toBe("running");
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("running");
     expect(screen.getByRole("button", { name: /skip anyway/i })).toBeTruthy();
   });
 
@@ -78,8 +83,7 @@ describe("SetupPendingOverlay", () => {
     fireEvent.click(screen.getByRole("button", { name: /skip setup wait/i }));
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase)
-      .toBe("running");
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.setupPhase).toBe("running");
     expect(screen.getByRole("button", { name: /skip setup wait/i })).toBeTruthy();
   });
 
@@ -94,20 +98,25 @@ describe("SetupPendingOverlay", () => {
 
   test("retries a failed setup and disables duplicate submissions", async () => {
     let resolveRetry!: () => void;
-    retrySetupRuntime.mockImplementationOnce(() => new Promise<undefined>((resolve) => {
-      resolveRetry = () => resolve(undefined);
-    }));
+    retrySetupRuntime.mockImplementationOnce(
+      () =>
+        new Promise<undefined>((resolve) => {
+          resolveRetry = () => resolve(undefined);
+        }),
+    );
     render(<SetupPendingOverlay environmentId="env-1" setupPhase="failed" subtext="x" />);
 
     fireEvent.click(screen.getByRole("button", { name: /^retry setup$/i }));
 
     expect(retrySetupRuntime).toHaveBeenCalledWith("env-1");
-    expect((screen.getByRole("button", { name: /retrying setup/i }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      (screen.getByRole("button", { name: /retrying setup/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     resolveRetry();
     await waitFor(() => {
-      expect((screen.getByRole("button", { name: /^retry setup$/i }) as HTMLButtonElement).disabled)
-        .toBe(false);
+      expect(
+        (screen.getByRole("button", { name: /^retry setup$/i }) as HTMLButtonElement).disabled,
+      ).toBe(false);
     });
   });
 
@@ -119,7 +128,8 @@ describe("SetupPendingOverlay", () => {
 
     expect(forceResolveSetupRuntime).toHaveBeenCalledWith("env-1");
     expect((await screen.findByRole("alert")).textContent).toContain("Backend unavailable");
-    expect((screen.getByRole("button", { name: /^skip anyway$/i }) as HTMLButtonElement).disabled)
-      .toBe(false);
+    expect(
+      (screen.getByRole("button", { name: /^skip anyway$/i }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 });

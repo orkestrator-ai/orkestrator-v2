@@ -42,10 +42,7 @@ function snapshot(id = "pipeline-1"): BuildPipeline {
   };
 }
 
-function record(
-  pipeline: BuildPipeline,
-  revision: number,
-): PersistedBuildPipeline<BuildPipeline> {
+function record(pipeline: BuildPipeline, revision: number): PersistedBuildPipeline<BuildPipeline> {
   return {
     version: BUILD_PIPELINE_VERSION,
     id: pipeline.id,
@@ -78,10 +75,7 @@ describe("build pipeline read model", () => {
   });
 
   test("hydrates an authoritative backend snapshot", async () => {
-    const restored = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => record(snapshot(), 7),
-    );
+    const restored = await hydrateBuildPipeline("pipeline-1", async () => record(snapshot(), 7));
     expect(restored).toMatchObject({
       id: "pipeline-1",
       backendRevision: 7,
@@ -90,10 +84,10 @@ describe("build pipeline read model", () => {
   });
 
   test("hydrates every project pipeline", async () => {
-    const restored = await hydrateBuildPipelinesForProject(
-      "project-1",
-      async () => [record(snapshot("one"), 1), record(snapshot("two"), 2)],
-    );
+    const restored = await hydrateBuildPipelinesForProject("project-1", async () => [
+      record(snapshot("one"), 1),
+      record(snapshot("two"), 2),
+    ]);
     expect(restored.map((pipeline) => pipeline.id)).toEqual(["one", "two"]);
   });
 
@@ -101,17 +95,19 @@ describe("build pipeline read model", () => {
     const local = {
       ...snapshot(),
       currentSessionIndex: 0,
-      sessions: [{
-        phase: "build" as const,
-        iteration: 0,
-        sessionKey: "session-1",
-        sdkSessionId: "sdk-1",
-        status: "idle" as const,
-        startedAt: "2026-07-29T00:00:00.000Z",
-        label: "Build",
-        messages: [{ id: "message-1" }],
-        messageRevision: 4,
-      }],
+      sessions: [
+        {
+          phase: "build" as const,
+          iteration: 0,
+          sessionKey: "session-1",
+          sdkSessionId: "sdk-1",
+          status: "idle" as const,
+          startedAt: "2026-07-29T00:00:00.000Z",
+          label: "Build",
+          messages: [{ id: "message-1" }],
+          messageRevision: 4,
+        },
+      ],
       backendRevision: 7,
     };
     useBuildPipelineStore.getState().replacePipeline(local);
@@ -171,14 +167,16 @@ describe("build pipeline read model", () => {
     invokeMock.mockResolvedValueOnce({
       unchanged: false,
       record: record(remote, 8),
-      messagePatches: [{
-        sessionKey: "patched-session",
-        baseRevision: 3,
-        baseCount: 2,
-        startIndex: 1,
-        revision: 4,
-        messages: [{ id: "new-2" }, { id: "new-3" }],
-      }],
+      messagePatches: [
+        {
+          sessionKey: "patched-session",
+          baseRevision: 3,
+          baseCount: 2,
+          startIndex: 1,
+          revision: 4,
+          messages: [{ id: "new-2" }, { id: "new-3" }],
+        },
+      ],
     });
 
     const restored = await hydrateBuildPipeline("pipeline-1");
@@ -197,17 +195,19 @@ describe("build pipeline read model", () => {
     const local = {
       ...snapshot(),
       currentSessionIndex: 0,
-      sessions: [{
-        phase: "build" as const,
-        iteration: 0,
-        sessionKey: "session-1",
-        sdkSessionId: "sdk-1",
-        status: "idle" as const,
-        startedAt: "2026-07-29T00:00:00.000Z",
-        label: "Build",
-        messages: [{ id: "old" }],
-        messageRevision: 5,
-      }],
+      sessions: [
+        {
+          phase: "build" as const,
+          iteration: 0,
+          sessionKey: "session-1",
+          sdkSessionId: "sdk-1",
+          status: "idle" as const,
+          startedAt: "2026-07-29T00:00:00.000Z",
+          label: "Build",
+          messages: [{ id: "old" }],
+          messageRevision: 5,
+        },
+      ],
       backendRevision: 7,
     };
     useBuildPipelineStore.getState().replacePipeline(local);
@@ -216,28 +216,35 @@ describe("build pipeline read model", () => {
       backendRevision: 0,
       sessions: local.sessions.map(({ messages: _messages, ...session }) => session),
     };
-    const full = record({
-      ...local,
-      phase: "verifying",
-      backendRevision: 0,
-      sessions: [{
-        ...local.sessions[0]!,
-        messages: [{ id: "authoritative" }],
-        messageRevision: 6,
-      }],
-    }, 8);
+    const full = record(
+      {
+        ...local,
+        phase: "verifying",
+        backendRevision: 0,
+        sessions: [
+          {
+            ...local.sessions[0]!,
+            messages: [{ id: "authoritative" }],
+            messageRevision: 6,
+          },
+        ],
+      },
+      8,
+    );
     invokeMock
       .mockResolvedValueOnce({
         unchanged: false,
         record: record(remote, 8),
-        messagePatches: [{
-          sessionKey: "session-1",
-          baseRevision: 4,
-          baseCount: 1,
-          startIndex: 1,
-          revision: 6,
-          messages: [{ id: "cannot-apply" }],
-        }],
+        messagePatches: [
+          {
+            sessionKey: "session-1",
+            baseRevision: 4,
+            baseCount: 1,
+            startIndex: 1,
+            revision: 6,
+            messages: [{ id: "cannot-apply" }],
+          },
+        ],
       })
       .mockResolvedValueOnce(full);
 
@@ -259,10 +266,15 @@ describe("build pipeline read model", () => {
     useBuildPipelineStore.getState().replacePipeline(deleted);
     invokeMock.mockResolvedValueOnce({
       ids: ["unchanged", "changed"],
-      records: [record({
-        ...snapshot("changed"),
-        phase: "reviewing",
-      }, 5)],
+      records: [
+        record(
+          {
+            ...snapshot("changed"),
+            phase: "reviewing",
+          },
+          5,
+        ),
+      ],
     });
 
     const restored = await hydrateBuildPipelinesForProject("project-1");
@@ -298,9 +310,7 @@ describe("build pipeline read model", () => {
         pipelines: new Map(),
         buildEnvironmentIds: new Set(),
       });
-      expect(
-        await hydrateBuildPipeline("pipeline-1", async () => invalid),
-      ).toBeNull();
+      expect(await hydrateBuildPipeline("pipeline-1", async () => invalid)).toBeNull();
       expect(useBuildPipelineStore.getState().pipelines.size).toBe(0);
     }
   });
@@ -312,9 +322,8 @@ describe("build pipeline read model", () => {
       backendRevision: 9,
     });
 
-    const restored = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => record({ ...snapshot(), phase: "building" }, 4),
+    const restored = await hydrateBuildPipeline("pipeline-1", async () =>
+      record({ ...snapshot(), phase: "building" }, 4),
     );
 
     expect(restored?.phase).toBe("reviewing");
@@ -328,9 +337,7 @@ describe("build pipeline read model", () => {
       async () => listing.promise,
     );
 
-    expect(
-      await hydrateBuildPipeline("pipeline-1", async () => null),
-    ).toBeNull();
+    expect(await hydrateBuildPipeline("pipeline-1", async () => null)).toBeNull();
     useBuildPipelineStore.getState().removePipeline("pipeline-1");
     listing.resolve([record(snapshot(), 3)]);
 
@@ -340,14 +347,10 @@ describe("build pipeline read model", () => {
 
   test("ignores an older project response that finishes after a newer response", async () => {
     const older = deferred<Array<PersistedBuildPipeline<BuildPipeline>>>();
-    const first = hydrateBuildPipelinesForProject(
-      "project-1",
-      async () => older.promise,
-    );
-    const second = await hydrateBuildPipelinesForProject(
-      "project-1",
-      async () => [record({ ...snapshot("new"), phase: "reviewing" }, 7)],
-    );
+    const first = hydrateBuildPipelinesForProject("project-1", async () => older.promise);
+    const second = await hydrateBuildPipelinesForProject("project-1", async () => [
+      record({ ...snapshot("new"), phase: "reviewing" }, 7),
+    ]);
 
     older.resolve([record({ ...snapshot("old"), phase: "building" }, 1)]);
     const staleResult = await first;
@@ -360,9 +363,8 @@ describe("build pipeline read model", () => {
   test("a superseded point read cannot remove a newer point-read result", async () => {
     const older = deferred<PersistedBuildPipeline<BuildPipeline> | null>();
     const first = hydrateBuildPipeline("pipeline-1", async () => older.promise);
-    const second = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => record({ ...snapshot(), phase: "verifying" }, 8),
+    const second = await hydrateBuildPipeline("pipeline-1", async () =>
+      record({ ...snapshot(), phase: "verifying" }, 8),
     );
 
     older.resolve(null);
@@ -370,20 +372,13 @@ describe("build pipeline read model", () => {
 
     expect(second?.phase).toBe("verifying");
     expect(staleResult?.phase).toBe("verifying");
-    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.phase)
-      .toBe("verifying");
+    expect(useBuildPipelineStore.getState().pipelines.get("pipeline-1")?.phase).toBe("verifying");
   });
 });
 
 describe("legacy build pipeline migration", () => {
-  function legacySnapshot(
-    overrides: Record<string, unknown> = {},
-  ): Record<string, unknown> {
-    const {
-      backendRevision: _backendRevision,
-      controller: _controller,
-      ...legacy
-    } = snapshot();
+  function legacySnapshot(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    const { backendRevision: _backendRevision, controller: _controller, ...legacy } = snapshot();
     return { ...legacy, ...overrides };
   }
 
@@ -418,10 +413,12 @@ describe("legacy build pipeline migration", () => {
       async () => record(snapshot(), 1),
     );
 
-    expect(imports).toEqual([{
-      projectId: "project-1",
-      snapshots: [legacy],
-    }]);
+    expect(imports).toEqual([
+      {
+        projectId: "project-1",
+        snapshots: [legacy],
+      },
+    ]);
     expect(result).toEqual({ importedIds: ["pipeline-1"], skipped: 0 });
     expect(storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY)).toBeNull();
     expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(true);
@@ -433,15 +430,21 @@ describe("legacy build pipeline migration", () => {
       state: {
         pipelines: [
           ["pipeline-1", legacySnapshot()],
-          ["pipeline-2", legacySnapshot({
-            id: "pipeline-2",
-            projectId: "project-2",
-          })],
+          [
+            "pipeline-2",
+            legacySnapshot({
+              id: "pipeline-2",
+              projectId: "project-2",
+            }),
+          ],
           ["wrong-id", legacySnapshot()],
-          ["missing-project", legacySnapshot({
-            id: "missing-project",
-            projectId: "",
-          })],
+          [
+            "missing-project",
+            legacySnapshot({
+              id: "missing-project",
+              projectId: "",
+            }),
+          ],
           null,
         ],
       },
@@ -453,8 +456,7 @@ describe("legacy build pipeline migration", () => {
       async (projectId, snapshots) => {
         projects.push(projectId);
         return {
-          importedIds: snapshots.map((entry) =>
-            (entry as { id: string }).id),
+          importedIds: snapshots.map((entry) => (entry as { id: string }).id),
           skipped: 0,
         };
       },
@@ -472,12 +474,11 @@ describe("legacy build pipeline migration", () => {
       state: { pipelines: [["pipeline-1", legacySnapshot()]] },
     });
 
-    await expect(migrateLegacyBuildPipelines(
-      storage,
-      async () => {
+    await expect(
+      migrateLegacyBuildPipelines(storage, async () => {
         throw new Error("backend unavailable");
-      },
-    )).rejects.toThrow("backend unavailable");
+      }),
+    ).rejects.toThrow("backend unavailable");
     expect(storage.getItem(LEGACY_BUILD_PIPELINE_STORAGE_KEY)).not.toBeNull();
   });
 
@@ -516,14 +517,16 @@ describe("legacy build pipeline migration", () => {
       importedIds: [],
       skipped: 0,
     });
-    expect(await migrateLegacyBuildPipelines({
-      getItem: () => {
-        throw new Error("blocked");
-      },
-      removeItem: () => {
-        throw new Error("blocked");
-      },
-    })).toEqual({ importedIds: [], skipped: 0 });
+    expect(
+      await migrateLegacyBuildPipelines({
+        getItem: () => {
+          throw new Error("blocked");
+        },
+        removeItem: () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).toEqual({ importedIds: [], skipped: 0 });
   });
 });
 
@@ -577,10 +580,7 @@ describe("structured review normalization on hydrate", () => {
       structuredReview: legacyReport,
     } as unknown as BuildPipeline;
 
-    const hydrated = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => record(stored, 4),
-    );
+    const hydrated = await hydrateBuildPipeline("pipeline-1", async () => record(stored, 4));
 
     // Without normalization the guard rejects the legacy report and the whole
     // pipeline silently disappears from the UI with no error anywhere.
@@ -589,10 +589,7 @@ describe("structured review normalization on hydrate", () => {
   });
 
   test("passes through a snapshot that carries no review at all", async () => {
-    const hydrated = await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => record(snapshot(), 2),
-    );
+    const hydrated = await hydrateBuildPipeline("pipeline-1", async () => record(snapshot(), 2));
 
     expect(hydrated?.structuredReview).toBeUndefined();
     expect(hydrated?.backendRevision).toBe(2);
@@ -606,10 +603,7 @@ describe("structured review normalization on hydrate", () => {
 
     // The unrepaired value fails isBuildPipeline, so the record is treated as
     // unusable. Installing it half-parsed would put an invalid report on screen.
-    expect(await hydrateBuildPipeline(
-      "pipeline-1",
-      async () => record(stored, 3),
-    )).toBeNull();
+    expect(await hydrateBuildPipeline("pipeline-1", async () => record(stored, 3))).toBeNull();
   });
 });
 
@@ -626,16 +620,12 @@ describe("hydration generation bookkeeping", () => {
     // resurrect-a-deleted-pipeline case the markers exist to prevent. Prove the
     // most recent deletion still wins after a burst of unrelated hydrations.
     const listResult = deferred<Array<ReturnType<typeof record>>>();
-    const projectHydration = hydrateBuildPipelinesForProject(
-      "project-1",
-      () => listResult.promise,
-    );
+    const projectHydration = hydrateBuildPipelinesForProject("project-1", () => listResult.promise);
 
     for (let index = 0; index < 50; index += 1) {
-      await hydrateBuildPipeline(`filler-${index}`, async () => record(
-        { ...snapshot(`filler-${index}`) },
-        1,
-      ));
+      await hydrateBuildPipeline(`filler-${index}`, async () =>
+        record({ ...snapshot(`filler-${index}`) }, 1),
+      );
     }
     expect(await hydrateBuildPipeline("pipeline-1", async () => null)).toBeNull();
 
@@ -643,7 +633,6 @@ describe("hydration generation bookkeeping", () => {
     const restored = await projectHydration;
 
     expect(restored.map((pipeline) => pipeline.id)).not.toContain("pipeline-1");
-    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1"))
-      .toBe(false);
+    expect(useBuildPipelineStore.getState().pipelines.has("pipeline-1")).toBe(false);
   });
 });

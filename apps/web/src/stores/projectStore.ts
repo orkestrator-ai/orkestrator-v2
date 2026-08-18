@@ -63,9 +63,7 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
     advanceProjectMutationVersion();
     set((state) => ({
       projects: sortByOrder(
-        state.projects.map((p) =>
-          p.id === projectId ? { ...p, ...updates } : p
-        )
+        state.projects.map((p) => (p.id === projectId ? { ...p, ...updates } : p)),
       ),
     }));
   },
@@ -104,7 +102,7 @@ export const invalidateProjectSnapshots = (): void => {
  */
 export const applyProjectSnapshot = (
   projects: Project[],
-  expectedMutationVersion: number
+  expectedMutationVersion: number,
 ): boolean => {
   if (expectedMutationVersion !== projectMutationVersion) {
     return false;

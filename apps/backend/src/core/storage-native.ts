@@ -82,78 +82,74 @@ import { StorageReviews } from "./storage-reviews.ts";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
-    AgentInteractionPolicy,
-    AgentInteractionResolutionJournal,
-    StoredDesktopConnections,
-    FeaturePlanningRecord,
-    BuildPipelineAgent,
-    PaneLayoutMergeInput,
-    PaneLayoutSelectionIntent,
-    ConditionalResourceSnapshot<unknown>,
-    ResourceChange,
-    ResourceKind,
-    ResourceManifestKind,
-    ResourceRevisionManifest,
-    ResourceRevisionMap,
-    ResourceSnapshotRevision,
-    AgentModel,
-    AgentActivityState,
-    AgentActivitySource,
-    AgentModelCatalogCache,
-    AgentModelConfigKey,
-    AppConfig,
-    ClaudeModelCatalogSnapshot,
-    ClaudeModelCatalogEntry,
-    CodexModelCatalogEntry,
-    CodexReasoningEffort,
-    Environment,
-    EnvironmentStatus,
-    EnvironmentType,
-    OpenCodeModelCatalogEntry,
-    OpenCodeModelCatalogSnapshot,
-    PortMapping,
-    PrState,
-    Project,
-    PersistedPaneLayout,
-    PersistedLoopedReviewWorkflow,
-    PersistedMultiReviewWorkflow,
-    PersistedBuildPipeline,
-    PersistedNativeAgentSession,
-    PersistedNativeAgentPendingDispatch,
-    PersistedComposeDraft,
-    PersistedFileDraft,
-    PersistedPromptQueue,
-    PersistedAgentHandoff,
-    RepositoryConfig,
-    Session,
-    SessionType,
-    JsonRecord,
-    KanbanComment,
-    KanbanImage,
-    KanbanStatus,
-    MutablePaneLayoutLeaf,
-    KanbanTask,
-    ProjectNotes,
-    FeaturePlanStatus,
-    FeaturePlanMessage,
-    FeatureStoryCard,
-    FeaturePlan,
-    LinearAuth,
-    LinearCompletionComment,
-    GitHubCompletionComment,
-    LoadedNativeAgentSessions,
-    PersistedOpenCodeModelCatalogStore,
-    ResourceChangeListener
+  AgentInteractionPolicy,
+  AgentInteractionResolutionJournal,
+  StoredDesktopConnections,
+  FeaturePlanningRecord,
+  BuildPipelineAgent,
+  PaneLayoutMergeInput,
+  PaneLayoutSelectionIntent,
+  ConditionalResourceSnapshot<unknown>,
+  ResourceChange,
+  ResourceKind,
+  ResourceManifestKind,
+  ResourceRevisionManifest,
+  ResourceRevisionMap,
+  ResourceSnapshotRevision,
+  AgentModel,
+  AgentActivityState,
+  AgentActivitySource,
+  AgentModelCatalogCache,
+  AgentModelConfigKey,
+  AppConfig,
+  ClaudeModelCatalogSnapshot,
+  ClaudeModelCatalogEntry,
+  CodexModelCatalogEntry,
+  CodexReasoningEffort,
+  Environment,
+  EnvironmentStatus,
+  EnvironmentType,
+  OpenCodeModelCatalogEntry,
+  OpenCodeModelCatalogSnapshot,
+  PortMapping,
+  PrState,
+  Project,
+  PersistedPaneLayout,
+  PersistedLoopedReviewWorkflow,
+  PersistedMultiReviewWorkflow,
+  PersistedBuildPipeline,
+  PersistedNativeAgentSession,
+  PersistedNativeAgentPendingDispatch,
+  PersistedComposeDraft,
+  PersistedFileDraft,
+  PersistedPromptQueue,
+  PersistedAgentHandoff,
+  RepositoryConfig,
+  Session,
+  SessionType,
+  JsonRecord,
+  KanbanComment,
+  KanbanImage,
+  KanbanStatus,
+  MutablePaneLayoutLeaf,
+  KanbanTask,
+  ProjectNotes,
+  FeaturePlanStatus,
+  FeaturePlanMessage,
+  FeatureStoryCard,
+  FeaturePlan,
+  LinearAuth,
+  LinearCompletionComment,
+  GitHubCompletionComment,
+  LoadedNativeAgentSessions,
+  PersistedOpenCodeModelCatalogStore,
+  ResourceChangeListener,
 ];
 
 export abstract class StorageNative extends StorageReviews {
-  async getAgentInteractionResolutionJournal(): Promise<
-    AgentInteractionResolutionJournal
-  > {
+  async getAgentInteractionResolutionJournal(): Promise<AgentInteractionResolutionJournal> {
     return this.enqueueAgentInteractionJournalMutation(async () =>
-      pruneAgentInteractionResolutionJournal(
-        await this.loadAgentInteractionResolutionJournal(),
-      )
+      pruneAgentInteractionResolutionJournal(await this.loadAgentInteractionResolutionJournal()),
     );
   }
 
@@ -163,9 +159,7 @@ export abstract class StorageNative extends StorageReviews {
    * only bounded identities, fences, timestamps, states, and outcomes.
    */
   async updateAgentInteractionResolutionJournal(
-    update: (
-      journal: AgentInteractionResolutionJournal,
-    ) => AgentInteractionResolutionJournal,
+    update: (journal: AgentInteractionResolutionJournal) => AgentInteractionResolutionJournal,
   ): Promise<AgentInteractionResolutionJournal> {
     return this.enqueueAgentInteractionJournalMutation(async () => {
       const current = pruneAgentInteractionResolutionJournal(
@@ -191,10 +185,7 @@ export abstract class StorageNative extends StorageReviews {
    * the user's only way to clear it. So the refusal is scoped to the key.
    */
   protected async loadNativeAgentSessions(): Promise<LoadedNativeAgentSessions> {
-    const stored = await this.loadJson<unknown>(
-      this.nativeAgentSessionsFile(),
-      () => ({}),
-    );
+    const stored = await this.loadJson<unknown>(this.nativeAgentSessionsFile(), () => ({}));
     if (!isRecord(stored)) {
       throw new Error("Stored native agent sessions are invalid");
     }
@@ -227,10 +218,7 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
-  protected assertReadableNativeAgentSession(
-    loaded: LoadedNativeAgentSessions,
-    key: string,
-  ): void {
+  protected assertReadableNativeAgentSession(loaded: LoadedNativeAgentSessions, key: string): void {
     if (key in loaded.opaque) {
       throw new Error(
         "Stored native agent session metadata is invalid or uses an unsupported version",
@@ -238,9 +226,7 @@ export abstract class StorageNative extends StorageReviews {
     }
   }
 
-  async getNativeAgentSession(
-    key: string,
-  ): Promise<PersistedNativeAgentSession | null> {
+  async getNativeAgentSession(key: string): Promise<PersistedNativeAgentSession | null> {
     if (!isNonBlankString(key)) {
       throw new Error("Native agent session key must not be blank");
     }
@@ -283,19 +269,17 @@ export abstract class StorageNative extends StorageReviews {
     input: Pick<
       PersistedNativeAgentSession,
       "key" | "environmentId" | "agent" | "logicalSessionKey"
-    > & Partial<Pick<
-      PersistedNativeAgentSession,
-      "origin" | "interactionPolicy" | "controls"
-    >>,
+    > &
+      Partial<Pick<PersistedNativeAgentSession, "origin" | "interactionPolicy" | "controls">>,
     createProviderSession: () => Promise<string>,
   ): Promise<PersistedNativeAgentSession> {
     const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
     if (
-      !isNonBlankString(input.key)
-      || !isNonBlankString(input.environmentId)
-      || !isNonBlankString(input.logicalSessionKey)
-      || !isAgentPlatform(input.agent)
-      || !interactionMetadata
+      !isNonBlankString(input.key) ||
+      !isNonBlankString(input.environmentId) ||
+      !isNonBlankString(input.logicalSessionKey) ||
+      !isAgentPlatform(input.agent) ||
+      !interactionMetadata
     ) {
       throw new Error("Native agent session input is invalid");
     }
@@ -311,14 +295,12 @@ export abstract class StorageNative extends StorageReviews {
       const existing = sessions[input.key];
       if (existing) {
         if (
-          existing.environmentId !== input.environmentId
-          || existing.agent !== input.agent
-          || existing.logicalSessionKey !== input.logicalSessionKey
-          || (input.origin !== undefined && existing.origin !== input.origin)
-          || (
-            input.interactionPolicy !== undefined
-            && existing.interactionPolicy.mode !== input.interactionPolicy.mode
-          )
+          existing.environmentId !== input.environmentId ||
+          existing.agent !== input.agent ||
+          existing.logicalSessionKey !== input.logicalSessionKey ||
+          (input.origin !== undefined && existing.origin !== input.origin) ||
+          (input.interactionPolicy !== undefined &&
+            existing.interactionPolicy.mode !== input.interactionPolicy.mode)
         ) {
           throw new Error("Native agent session key collision");
         }
@@ -353,28 +335,22 @@ export abstract class StorageNative extends StorageReviews {
   async adoptNativeAgentSession(
     input: Pick<
       PersistedNativeAgentSession,
-      | "key"
-      | "environmentId"
-      | "agent"
-      | "logicalSessionKey"
-      | "providerSessionId"
-    > & Partial<Pick<
-      PersistedNativeAgentSession,
-      "origin" | "interactionPolicy" | "controls"
-    >> & { expectedProviderSessionId?: string },
+      "key" | "environmentId" | "agent" | "logicalSessionKey" | "providerSessionId"
+    > &
+      Partial<Pick<PersistedNativeAgentSession, "origin" | "interactionPolicy" | "controls">> & {
+        expectedProviderSessionId?: string;
+      },
   ): Promise<PersistedNativeAgentSession> {
     const interactionMetadata = resolveNativeAgentInteractionMetadata(input);
     if (
-      !isNonBlankString(input.key)
-      || !isNonBlankString(input.environmentId)
-      || !isNonBlankString(input.logicalSessionKey)
-      || !isNonBlankString(input.providerSessionId)
-      || !isAgentPlatform(input.agent)
-      || !interactionMetadata
-      || (
-        input.expectedProviderSessionId !== undefined
-        && !isNonBlankString(input.expectedProviderSessionId)
-      )
+      !isNonBlankString(input.key) ||
+      !isNonBlankString(input.environmentId) ||
+      !isNonBlankString(input.logicalSessionKey) ||
+      !isNonBlankString(input.providerSessionId) ||
+      !isAgentPlatform(input.agent) ||
+      !interactionMetadata ||
+      (input.expectedProviderSessionId !== undefined &&
+        !isNonBlankString(input.expectedProviderSessionId))
     ) {
       throw new Error("Native agent session adoption input is invalid");
     }
@@ -389,14 +365,12 @@ export abstract class StorageNative extends StorageReviews {
       const existing = sessions[input.key];
       if (existing) {
         if (
-          existing.environmentId !== input.environmentId
-          || existing.agent !== input.agent
-          || existing.logicalSessionKey !== input.logicalSessionKey
-          || (input.origin !== undefined && existing.origin !== input.origin)
-          || (
-            input.interactionPolicy !== undefined
-            && existing.interactionPolicy.mode !== input.interactionPolicy.mode
-          )
+          existing.environmentId !== input.environmentId ||
+          existing.agent !== input.agent ||
+          existing.logicalSessionKey !== input.logicalSessionKey ||
+          (input.origin !== undefined && existing.origin !== input.origin) ||
+          (input.interactionPolicy !== undefined &&
+            existing.interactionPolicy.mode !== input.interactionPolicy.mode)
         ) {
           throw new Error("Native agent session key collision");
         }
@@ -411,10 +385,7 @@ export abstract class StorageNative extends StorageReviews {
           const controls = input.controls
             ? { ...existing.controls, ...input.controls }
             : existing.controls;
-          if (
-            input.controls
-            && JSON.stringify(controls) !== JSON.stringify(existing.controls)
-          ) {
+          if (input.controls && JSON.stringify(controls) !== JSON.stringify(existing.controls)) {
             const updated: PersistedNativeAgentSession = {
               ...existing,
               controls,
@@ -436,10 +407,7 @@ export abstract class StorageNative extends StorageReviews {
       }
 
       const now = nowIso();
-      const {
-        expectedProviderSessionId: _expectedProviderSessionId,
-        ...identity
-      } = input;
+      const { expectedProviderSessionId: _expectedProviderSessionId, ...identity } = input;
       const saved: PersistedNativeAgentSession = {
         ...identity,
         ...(existing
@@ -497,10 +465,7 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
-  async invalidateNativeAgentSession(
-    key: string,
-    providerSessionId: string,
-  ): Promise<boolean> {
+  async invalidateNativeAgentSession(key: string, providerSessionId: string): Promise<boolean> {
     if (!isNonBlankString(key) || !isNonBlankString(providerSessionId)) {
       throw new Error("Native agent session identity must not be blank");
     }
@@ -524,9 +489,7 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
-  async deleteNativeAgentSessionsByEnvironment(
-    environmentId: string,
-  ): Promise<void> {
+  async deleteNativeAgentSessionsByEnvironment(environmentId: string): Promise<void> {
     if (!isNonBlankString(environmentId)) return;
     await this.enqueueNativeAgentSessionMutation(async () => {
       // Deliberately does not refuse an unreadable record. This is the path a
@@ -535,12 +498,9 @@ export abstract class StorageNative extends StorageReviews {
       // environment they belong to.
       const { sessions, opaque, migrated } = await this.loadNativeAgentSessions();
       const retained = Object.fromEntries(
-        Object.entries(sessions).filter(
-          ([, session]) => session.environmentId !== environmentId,
-        ),
+        Object.entries(sessions).filter(([, session]) => session.environmentId !== environmentId),
       );
-      const removed =
-        Object.keys(retained).length !== Object.keys(sessions).length;
+      const removed = Object.keys(retained).length !== Object.keys(sessions).length;
       if (migrated || removed) {
         await this.saveNativeAgentSessions(retained, opaque);
       }
@@ -551,32 +511,30 @@ export abstract class StorageNative extends StorageReviews {
       // provider session ids and dispatch journal readable in its backups. Scrub
       // unconditionally, as every sibling delete-by-environment does: a prior
       // failed delete may have removed the primary record while leaving a backup.
-      await this.scrubSensitiveJsonBackups(
-        this.nativeAgentSessionsFile(),
-        (storedKey, session) => {
-          const readable = migratePersistedNativeAgentSession(session, storedKey);
-          if (readable) return readable.environmentId !== environmentId;
-          // An unreadable backup record still names its environment in the
-          // clear often enough to attribute. Keep the ones that provably belong
-          // elsewhere; drop the rest, because a backup that cannot be proven
-          // free of the deleted environment's content is not safe to retain.
-          return isRecord(session)
-            && isNonBlankString(session.environmentId)
-            && session.environmentId !== environmentId;
-        },
-      );
+      await this.scrubSensitiveJsonBackups(this.nativeAgentSessionsFile(), (storedKey, session) => {
+        const readable = migratePersistedNativeAgentSession(session, storedKey);
+        if (readable) return readable.environmentId !== environmentId;
+        // An unreadable backup record still names its environment in the
+        // clear often enough to attribute. Keep the ones that provably belong
+        // elsewhere; drop the rest, because a backup that cannot be proven
+        // free of the deleted environment's content is not safe to retain.
+        return (
+          isRecord(session) &&
+          isNonBlankString(session.environmentId) &&
+          session.environmentId !== environmentId
+        );
+      });
     });
   }
 
   async dispatchNativeAgentPromptOnce(
     key: string,
     requestId: string,
-    dispatch: (
-      session: PersistedNativeAgentSession,
-    ) => Promise<void | {
+    dispatch: (session: PersistedNativeAgentSession) => Promise<void | {
       dispatched: false;
       openCodeIncompleteTurnNotice?:
-        PersistedNativeAgentSession["openCodeIncompleteTurnNotice"] | null;
+        | PersistedNativeAgentSession["openCodeIncompleteTurnNotice"]
+        | null;
     }>,
     pendingDispatch?: PersistedNativeAgentPendingDispatch,
   ): Promise<{
@@ -594,8 +552,7 @@ export abstract class StorageNative extends StorageReviews {
         throw new Error("Pending native agent dispatch must be JSON serializable");
       }
       if (
-        Buffer.byteLength(serialized, "utf8")
-          > MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES
+        Buffer.byteLength(serialized, "utf8") > MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES
       ) {
         throw new Error("Pending native agent dispatch exceeds the 32 MB limit");
       }
@@ -606,13 +563,8 @@ export abstract class StorageNative extends StorageReviews {
       this.assertReadableNativeAgentSession(loaded, key);
       let session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
-      if (
-        session.pendingDispatch
-        && session.pendingDispatch.requestId !== requestId
-      ) {
-        throw new PendingNativeAgentDispatchError(
-          session.pendingDispatch.requestId,
-        );
+      if (session.pendingDispatch && session.pendingDispatch.requestId !== requestId) {
+        throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
       }
       if (session.dispatchedRequestIds?.includes(requestId)) {
         if (session.pendingDispatch?.requestId === requestId) {
@@ -656,8 +608,7 @@ export abstract class StorageNative extends StorageReviews {
           ...(outcome.openCodeIncompleteTurnNotice === null
             ? { openCodeIncompleteTurnNotice: undefined }
             : {
-                openCodeIncompleteTurnNotice:
-                  outcome.openCodeIncompleteTurnNotice,
+                openCodeIncompleteTurnNotice: outcome.openCodeIncompleteTurnNotice,
               }),
           updatedAt: nowIso(),
         };
@@ -672,10 +623,7 @@ export abstract class StorageNative extends StorageReviews {
         // Any successfully accepted prompt supersedes a prior recovery notice.
         openCodeIncompleteTurnNotice: undefined,
         pendingDispatch: undefined,
-        dispatchedRequestIds: [
-          ...(session.dispatchedRequestIds ?? []).slice(-999),
-          requestId,
-        ],
+        dispatchedRequestIds: [...(session.dispatchedRequestIds ?? []).slice(-999), requestId],
         updatedAt: nowIso(),
       };
       sessions[key] = updated;
@@ -699,10 +647,7 @@ export abstract class StorageNative extends StorageReviews {
    * Returns false when this key has no pending record for `requestId`, so a
    * caller racing a real acknowledgement cannot resurrect one.
    */
-  async confirmNativeAgentDispatch(
-    key: string,
-    requestId: string,
-  ): Promise<boolean> {
+  async confirmNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Native agent dispatch identity must not be blank");
     }
@@ -730,10 +675,7 @@ export abstract class StorageNative extends StorageReviews {
     });
   }
 
-  async clearPendingNativeAgentDispatch(
-    key: string,
-    requestId: string,
-  ): Promise<boolean> {
+  async clearPendingNativeAgentDispatch(key: string, requestId: string): Promise<boolean> {
     if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
       throw new Error("Pending native agent dispatch identity must not be blank");
     }
@@ -764,17 +706,13 @@ export abstract class StorageNative extends StorageReviews {
     notice: PersistedNativeAgentSession["openCodeIncompleteTurnNotice"] | null,
   ): Promise<boolean> {
     if (
-      !isNonBlankString(key)
-      || !isNonBlankString(providerSessionId)
-      || (
-        notice !== null
-        && (
-          !notice
-          || !isNonBlankString(notice.assistantMessageId)
-          || !["failed", "exhausted"].includes(notice.kind)
-          || !Number.isFinite(Date.parse(notice.updatedAt))
-        )
-      )
+      !isNonBlankString(key) ||
+      !isNonBlankString(providerSessionId) ||
+      (notice !== null &&
+        (!notice ||
+          !isNonBlankString(notice.assistantMessageId) ||
+          !["failed", "exhausted"].includes(notice.kind) ||
+          !Number.isFinite(Date.parse(notice.updatedAt))))
     ) {
       throw new Error("OpenCode incomplete-turn notice is invalid");
     }
@@ -828,9 +766,7 @@ export abstract class StorageNative extends StorageReviews {
     }
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
-      const environment = environments.find(
-        (candidate) => candidate.id === environmentId,
-      );
+      const environment = environments.find((candidate) => candidate.id === environmentId);
       if (!environment) {
         throw new Error(`${label} environment not found: ${environmentId}`);
       }
@@ -854,7 +790,10 @@ export abstract class StorageNative extends StorageReviews {
       }
     };
     const next = this.promptQueueMutation.then(run, run);
-    this.promptQueueMutation = next.then(() => undefined, () => undefined);
+    this.promptQueueMutation = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }
 
@@ -878,7 +817,9 @@ export abstract class StorageNative extends StorageReviews {
     }
   }
 
-  protected validatePromptQueueMessage(message: unknown): asserts message is Record<string, unknown> {
+  protected validatePromptQueueMessage(
+    message: unknown,
+  ): asserts message is Record<string, unknown> {
     if (!isRecord(message) || !isNonBlankString(message.id)) {
       throw new Error("Prompt queue message must have a non-blank ID");
     }
@@ -891,25 +832,26 @@ export abstract class StorageNative extends StorageReviews {
     environmentId: string,
     messages: unknown[],
     previous?: PersistedPromptQueue,
-    outstandingClaim: PersistedPromptQueue["outstandingClaim"] | null
-      = previous?.outstandingClaim ?? null,
+    outstandingClaim:
+      | PersistedPromptQueue["outstandingClaim"]
+      | null = previous?.outstandingClaim ?? null,
   ): Promise<PersistedPromptQueue> {
     this.validatePromptQueueMessages(messages);
-    const failedMessageStillUnchanged = previous?.dispatchError !== undefined
-      && messages.some((candidate) =>
-        isRecord(candidate)
-        && candidate.id === previous.dispatchError?.messageId
-        && this.promptQueueMessageFingerprint(candidate)
-          === previous.dispatchError?.messageFingerprint
+    const failedMessageStillUnchanged =
+      previous?.dispatchError !== undefined &&
+      messages.some(
+        (candidate) =>
+          isRecord(candidate) &&
+          candidate.id === previous.dispatchError?.messageId &&
+          this.promptQueueMessageFingerprint(candidate) ===
+            previous.dispatchError?.messageFingerprint,
       );
     const saved: PersistedPromptQueue = {
       queueKey,
       environmentId,
       messages,
       ...(previous?.inFlight ? { inFlight: previous.inFlight } : {}),
-      ...(failedMessageStillUnchanged
-        ? { dispatchError: previous!.dispatchError }
-        : {}),
+      ...(failedMessageStillUnchanged ? { dispatchError: previous!.dispatchError } : {}),
       ...(outstandingClaim ? { outstandingClaim } : {}),
       updatedAt: nowIso(),
       revision: (previous?.revision ?? 0) + 1,
@@ -921,9 +863,7 @@ export abstract class StorageNative extends StorageReviews {
     return saved;
   }
 
-  protected schedulePromptQueueClaimRecovery(
-    queues: Record<string, PersistedPromptQueue>,
-  ): void {
+  protected schedulePromptQueueClaimRecovery(queues: Record<string, PersistedPromptQueue>): void {
     if (this.promptQueueClaimRecoveryTimer) {
       clearTimeout(this.promptQueueClaimRecoveryTimer);
       this.promptQueueClaimRecoveryTimer = null;
@@ -935,13 +875,16 @@ export abstract class StorageNative extends StorageReviews {
       return soonest === null || expiry < soonest ? expiry : soonest;
     }, null);
     if (nextExpiry === null) return;
-    this.promptQueueClaimRecoveryTimer = setTimeout(() => {
-      this.promptQueueClaimRecoveryTimer = null;
-      void this.recoverExpiredPromptQueueClaims().catch(() => {
-        // A future read, mutation, or backend restart retries recovery. Avoid
-        // logging queue errors because their values may contain prompt data.
-      });
-    }, Math.max(0, nextExpiry - Date.now()));
+    this.promptQueueClaimRecoveryTimer = setTimeout(
+      () => {
+        this.promptQueueClaimRecoveryTimer = null;
+        void this.recoverExpiredPromptQueueClaims().catch(() => {
+          // A future read, mutation, or backend restart retries recovery. Avoid
+          // logging queue errors because their values may contain prompt data.
+        });
+      },
+      Math.max(0, nextExpiry - Date.now()),
+    );
     this.promptQueueClaimRecoveryTimer.unref?.();
   }
 
@@ -957,10 +900,9 @@ export abstract class StorageNative extends StorageReviews {
         const messageId = isRecord(claim.message) ? claim.message.id : undefined;
         queue.messages = [
           claim.message,
-          ...queue.messages.filter((candidate) =>
-            messageId === undefined
-            || !isRecord(candidate)
-            || candidate.id !== messageId
+          ...queue.messages.filter(
+            (candidate) =>
+              messageId === undefined || !isRecord(candidate) || candidate.id !== messageId,
           ),
         ];
         delete queue.outstandingClaim;
@@ -1002,11 +944,9 @@ export abstract class StorageNative extends StorageReviews {
       Object.entries(stored).flatMap(([storedKey, queue]) => {
         if (!isPersistedPromptQueue(queue, storedKey)) return [];
         if (
-          !queue.dispatchError
-          || (
-            isNonBlankString(queue.dispatchError.messageId)
-            && isNonBlankString(queue.dispatchError.messageFingerprint)
-          )
+          !queue.dispatchError ||
+          (isNonBlankString(queue.dispatchError.messageId) &&
+            isNonBlankString(queue.dispatchError.messageFingerprint))
         ) {
           return [[storedKey, queue]];
         }
@@ -1015,25 +955,27 @@ export abstract class StorageNative extends StorageReviews {
         // identify the rejected queue item. Upgrade those in memory from the
         // restored message so the first subsequent mutation gets the same
         // edit/removal semantics as a newly written record.
-        const failedMessage = queue.messages.find((candidate) =>
-          isRecord(candidate)
-          && candidate.id === queue.dispatchError?.requestId
+        const failedMessage = queue.messages.find(
+          (candidate) => isRecord(candidate) && candidate.id === queue.dispatchError?.requestId,
         );
         if (!isRecord(failedMessage) || !isNonBlankString(failedMessage.id)) {
           const { dispatchError: _dispatchError, ...withoutError } = queue;
           return [[storedKey, withoutError as PersistedPromptQueue]];
         }
-        return [[storedKey, {
-          ...queue,
-          dispatchError: {
-            ...queue.dispatchError,
-            messageId: failedMessage.id,
-            messageFingerprint: this.promptQueueMessageFingerprint(failedMessage),
-          },
-        }]];
+        return [
+          [
+            storedKey,
+            {
+              ...queue,
+              dispatchError: {
+                ...queue.dispatchError,
+                messageId: failedMessage.id,
+                messageFingerprint: this.promptQueueMessageFingerprint(failedMessage),
+              },
+            },
+          ],
+        ];
       }),
     ) as Record<string, PersistedPromptQueue>;
   }
-
-
 }

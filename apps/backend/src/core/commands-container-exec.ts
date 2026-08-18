@@ -17,7 +17,10 @@ export async function dockerExec(
   timeoutMs = 120_000,
   redactValues?: ReadonlyArray<string | null | undefined>,
 ): Promise<string> {
-  const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], { timeoutMs, redactValues });
+  const { stdout } = await runCommand("docker", ["exec", containerId, "bash", "-lc", command], {
+    timeoutMs,
+    redactValues,
+  });
   return stdout;
 }
 
@@ -38,21 +41,33 @@ export function parseDockerStatus(status: string): EnvironmentStatus {
 }
 
 export async function getDockerStatus(containerId: string): Promise<EnvironmentStatus> {
-  const { stdout } = await runCommand("docker", ["inspect", "-f", "{{.State.Status}}", containerId], { timeoutMs: 10_000 });
+  const { stdout } = await runCommand(
+    "docker",
+    ["inspect", "-f", "{{.State.Status}}", containerId],
+    { timeoutMs: 10_000 },
+  );
   return parseDockerStatus(stdout);
 }
 
 export async function isContainerRunning(containerId: string): Promise<boolean> {
   try {
-    return await getDockerStatus(containerId) === "running";
+    return (await getDockerStatus(containerId)) === "running";
   } catch {
     return false;
   }
 }
 
-export async function getHostPort(containerId: string, containerPort: number, protocol = "tcp"): Promise<number | null> {
+export async function getHostPort(
+  containerId: string,
+  containerPort: number,
+  protocol = "tcp",
+): Promise<number | null> {
   try {
-    const { stdout } = await runCommand("docker", ["port", containerId, `${containerPort}/${protocol}`], { timeoutMs: 10_000 });
+    const { stdout } = await runCommand(
+      "docker",
+      ["port", containerId, `${containerPort}/${protocol}`],
+      { timeoutMs: 10_000 },
+    );
     const line = stdout.split("\n").find(Boolean);
     if (!line) return null;
     const rawPort = line.split(":").at(-1);

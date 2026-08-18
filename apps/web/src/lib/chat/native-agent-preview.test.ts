@@ -1,16 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type {
-  NativeSubagentPart,
-  NativeTaskGroupPart,
-} from "./native-message-types";
-import {
-  nativeAgentLatestActivity,
-  summarizeNativeAgentAction,
-} from "./native-agent-preview";
+import type { NativeSubagentPart, NativeTaskGroupPart } from "./native-message-types";
+import { nativeAgentLatestActivity, summarizeNativeAgentAction } from "./native-agent-preview";
 
-function taskGroup(
-  overrides: Partial<NativeTaskGroupPart> = {},
-): NativeTaskGroupPart {
+function taskGroup(overrides: Partial<NativeTaskGroupPart> = {}): NativeTaskGroupPart {
   return {
     type: "task-group",
     content: "Task: Subagent task",
@@ -27,9 +19,7 @@ function taskGroup(
   };
 }
 
-function subagent(
-  overrides: Partial<NativeSubagentPart> = {},
-): NativeSubagentPart {
+function subagent(overrides: Partial<NativeSubagentPart> = {}): NativeSubagentPart {
   return {
     type: "subagent",
     content: "Lovelace",
@@ -45,34 +35,45 @@ describe("nativeAgentLatestActivity", () => {
   });
 
   test("prefers the latest child command, title, or type label", () => {
-    expect(nativeAgentLatestActivity(taskGroup({
-      childTools: [
-        { type: "thinking", content: "planning the search" },
-        {
-          type: "tool-invocation",
-          content: "Search Find",
-          toolName: "grep",
-          toolTitle: "Search Find",
-          toolArgs: { pattern: "ActiveSubagentRail" },
-        },
-      ],
-    }))).toBe("Search Find");
+    expect(
+      nativeAgentLatestActivity(
+        taskGroup({
+          childTools: [
+            { type: "thinking", content: "planning the search" },
+            {
+              type: "tool-invocation",
+              content: "Search Find",
+              toolName: "grep",
+              toolTitle: "Search Find",
+              toolArgs: { pattern: "ActiveSubagentRail" },
+            },
+          ],
+        }),
+      ),
+    ).toBe("Search Find");
 
-    expect(nativeAgentLatestActivity(subagent({
-      subagentActions: [{
-        type: "tool-invocation",
-        content: "exec_command",
-        toolName: "exec_command",
-        toolArgs: { command: "rg -n codex src" },
-      }],
-    }))).toBe("rg -n codex src");
+    expect(
+      nativeAgentLatestActivity(
+        subagent({
+          subagentActions: [
+            {
+              type: "tool-invocation",
+              content: "exec_command",
+              toolName: "exec_command",
+              toolArgs: { command: "rg -n codex src" },
+            },
+          ],
+        }),
+      ),
+    ).toBe("rg -n codex src");
   });
 });
 
 describe("summarizeNativeAgentAction", () => {
   test("uses compact labels for thinking, empty text, and unnamed files", () => {
-    expect(summarizeNativeAgentAction({ type: "thinking", content: "secret plan" }))
-      .toBe("Thinking");
+    expect(summarizeNativeAgentAction({ type: "thinking", content: "secret plan" })).toBe(
+      "Thinking",
+    );
     expect(summarizeNativeAgentAction({ type: "text", content: "  \n" })).toBe("Response");
     expect(summarizeNativeAgentAction({ type: "file", content: "" })).toBe("File");
   });

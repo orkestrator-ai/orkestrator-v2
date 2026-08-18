@@ -249,10 +249,10 @@ function readInteger(
   const value = object[key];
   if (value === undefined && optional) return undefined;
   if (
-    typeof value !== "number"
-    || !Number.isSafeInteger(value)
-    || value < minimum
-    || value > maximum
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < minimum ||
+    value > maximum
   ) {
     return malformed(`${key} must be an integer from ${minimum} through ${maximum}`);
   }
@@ -295,10 +295,18 @@ export function parseTerminalWebSocketClientControlFrame(
   text: string,
 ): TerminalWebSocketClientControlFrame {
   const object = parseControlObject(text);
-  const type = readLiteral(object, "type", ["authenticate", "subscribe", "unsubscribe", "resize", "ack"]);
+  const type = readLiteral(object, "type", [
+    "authenticate",
+    "subscribe",
+    "unsubscribe",
+    "resize",
+    "ack",
+  ]);
   switch (type) {
     case "authenticate": {
-      const token = readString(object, "token", TERMINAL_WEBSOCKET_MAX_TOKEN_BYTES, { optional: true });
+      const token = readString(object, "token", TERMINAL_WEBSOCKET_MAX_TOKEN_BYTES, {
+        optional: true,
+      });
       return {
         type,
         version: readVersion(object),
@@ -307,7 +315,11 @@ export function parseTerminalWebSocketClientControlFrame(
     }
     case "subscribe": {
       const requestId = readRequestId(object);
-      const sessionId = readString(object, "sessionId", TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES) as string;
+      const sessionId = readString(
+        object,
+        "sessionId",
+        TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES,
+      ) as string;
       const hasGeneration = object.knownGeneration !== undefined;
       const hasRevision = object.knownRevision !== undefined;
       if (hasGeneration !== hasRevision) {
@@ -358,11 +370,15 @@ export function parseTerminalWebSocketServerControlFrame(
   text: string,
 ): TerminalWebSocketServerControlFrame {
   const object = parseControlObject(text);
-  const type = readLiteral(
-    object,
-    "type",
-    ["ready", "subscribed", "unsubscribed", "operation-result", "lifecycle", "desync", "error"],
-  );
+  const type = readLiteral(object, "type", [
+    "ready",
+    "subscribed",
+    "unsubscribed",
+    "operation-result",
+    "lifecycle",
+    "desync",
+    "error",
+  ]);
   switch (type) {
     case "ready":
       return {
@@ -374,7 +390,11 @@ export function parseTerminalWebSocketServerControlFrame(
       const common: TerminalSubscribedFrameBase = {
         type,
         requestId: readRequestId(object),
-        sessionId: readString(object, "sessionId", TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES) as string,
+        sessionId: readString(
+          object,
+          "sessionId",
+          TERMINAL_WEBSOCKET_MAX_SESSION_ID_BYTES,
+        ) as string,
         channelId: readChannelId(object),
         targetGeneration: readGeneration(object, "targetGeneration"),
         targetRevision: readRevision(object, "targetRevision"),
@@ -417,12 +437,9 @@ export function parseTerminalWebSocketServerControlFrame(
       return {
         ...common,
         ok,
-        message: readString(
-          object,
-          "message",
-          TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES,
-          { allowEmpty: true },
-        ) as string,
+        message: readString(object, "message", TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES, {
+          allowEmpty: true,
+        }) as string,
       };
     }
     case "lifecycle": {
@@ -445,11 +462,12 @@ export function parseTerminalWebSocketServerControlFrame(
         channelId: readChannelId(object),
         generation: readGeneration(object),
         revision: readRevision(object),
-        reason: readLiteral(
-          object,
-          "reason",
-          ["revision-gap", "generation-changed", "slow-consumer", "reconnect"],
-        ),
+        reason: readLiteral(object, "reason", [
+          "revision-gap",
+          "generation-changed",
+          "slow-consumer",
+          "reconnect",
+        ]),
       };
     case "error": {
       const requestId = readInteger(object, "requestId", 0, Number.MAX_SAFE_INTEGER, true);
@@ -458,12 +476,9 @@ export function parseTerminalWebSocketServerControlFrame(
       return {
         type,
         code: readLiteral(object, "code", ERROR_CODES),
-        message: readString(
-          object,
-          "message",
-          TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES,
-          { allowEmpty: true },
-        ) as string,
+        message: readString(object, "message", TERMINAL_WEBSOCKET_MAX_ERROR_MESSAGE_BYTES, {
+          allowEmpty: true,
+        }) as string,
         ...(requestId === undefined ? {} : { requestId }),
         ...(channelId === undefined ? {} : { channelId }),
         ...(fatal === undefined ? {} : { fatal }),
@@ -481,8 +496,8 @@ function assertUnsignedInteger(value: number, max: number, label: string): void 
 /** Encode a raw terminal frame. All multi-byte integers use network byte order. */
 export function encodeTerminalBinaryFrame(frame: TerminalBinaryFrame): Uint8Array {
   if (
-    frame.type !== TERMINAL_BINARY_FRAME_TYPE.input
-    && frame.type !== TERMINAL_BINARY_FRAME_TYPE.output
+    frame.type !== TERMINAL_BINARY_FRAME_TYPE.input &&
+    frame.type !== TERMINAL_BINARY_FRAME_TYPE.output
   ) {
     throw new RangeError("Unknown terminal binary frame type");
   }
@@ -516,10 +531,7 @@ export function decodeTerminalBinaryFrame(data: ArrayBuffer | Uint8Array): Termi
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const type = view.getUint8(0);
-  if (
-    type !== TERMINAL_BINARY_FRAME_TYPE.input
-    && type !== TERMINAL_BINARY_FRAME_TYPE.output
-  ) {
+  if (type !== TERMINAL_BINARY_FRAME_TYPE.input && type !== TERMINAL_BINARY_FRAME_TYPE.output) {
     throw new RangeError("Unknown terminal binary frame type");
   }
   if (view.getUint8(1) !== 0) {

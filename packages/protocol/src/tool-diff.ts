@@ -61,20 +61,12 @@ export function lineChangeStatsFromSides(
 }
 
 /** Tool names whose input carries a single old/new replacement pair. */
-const EDIT_LIKE_TOOLS = new Set([
-  "edit",
-  "file_edit",
-  "str_replace_editor",
-  "replace",
-]);
+const EDIT_LIKE_TOOLS = new Set(["edit", "file_edit", "str_replace_editor", "replace"]);
 
 /** Tool names whose input carries whole-file content with no prior state. */
 const WRITE_LIKE_TOOLS = new Set(["write", "create_file"]);
 
-function stringField(
-  input: Record<string, unknown>,
-  ...keys: string[]
-): string | undefined {
+function stringField(input: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const key of keys) {
     const value = input[key];
     if (typeof value === "string") return value;
@@ -89,9 +81,7 @@ function stringField(
  * location, and returning it would render a nameless file row that the
  * "no path at all" branch would otherwise have handled correctly.
  */
-export function filePathFromToolInput(
-  input: Record<string, unknown>,
-): string | undefined {
+export function filePathFromToolInput(input: Record<string, unknown>): string | undefined {
   for (const key of ["file_path", "filePath", "notebook_path", "path"]) {
     const value = input[key];
     if (typeof value === "string" && value.length > 0) return value;

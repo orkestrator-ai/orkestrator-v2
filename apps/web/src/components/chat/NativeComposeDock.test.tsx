@@ -19,8 +19,12 @@ describe("NativeComposeDock", () => {
     const dock = container.firstElementChild as HTMLElement;
     expect(dock.className).toContain("top-1/2");
     expect(dock.className).toContain("-translate-y-1/2");
-    expect(screen.getByRole("heading", { name: "Ready" }).parentElement?.className).toContain("opacity-100");
-    expect(screen.getByRole("button", { name: "Resume" }).parentElement?.className).toContain("opacity-100");
+    expect(screen.getByRole("heading", { name: "Ready" }).parentElement?.className).toContain(
+      "opacity-100",
+    );
+    expect(screen.getByRole("button", { name: "Resume" }).parentElement?.className).toContain(
+      "opacity-100",
+    );
   });
 
   test("docks at the bottom and hides title and actions when not centered", () => {
@@ -33,16 +37,17 @@ describe("NativeComposeDock", () => {
     const dock = container.firstElementChild as HTMLElement;
     expect(dock.className).toContain("top-full");
     expect(dock.className).toContain("-translate-y-full");
-    expect(screen.getByRole("heading", { name: "Ready to build!" }).parentElement?.className).toContain("opacity-0");
-    expect(screen.getByRole("button", { name: "Resume" }).parentElement?.className).toContain("max-h-0");
+    expect(
+      screen.getByRole("heading", { name: "Ready to build!" }).parentElement?.className,
+    ).toContain("opacity-0");
+    expect(screen.getByRole("button", { name: "Resume" }).parentElement?.className).toContain(
+      "max-h-0",
+    );
   });
 
   test("shows the top accessory only when bottom docked", () => {
     const { rerender } = render(
-      <NativeComposeDock
-        centered={false}
-        topAccessory={<button type="button">Scroll down</button>}
-      >
+      <NativeComposeDock centered={false} topAccessory={<button type="button">Scroll down</button>}>
         <textarea aria-label="Prompt" />
       </NativeComposeDock>,
     );
@@ -50,10 +55,7 @@ describe("NativeComposeDock", () => {
     expect(screen.getByRole("button", { name: "Scroll down" })).toBeTruthy();
 
     rerender(
-      <NativeComposeDock
-        centered={true}
-        topAccessory={<button type="button">Scroll down</button>}
-      >
+      <NativeComposeDock centered={true} topAccessory={<button type="button">Scroll down</button>}>
         <textarea aria-label="Prompt" />
       </NativeComposeDock>,
     );
@@ -68,10 +70,7 @@ describe("NativeComposeDock", () => {
      * precisely the state a desynced tab is in.
      */
     const { rerender } = render(
-      <NativeComposeDock
-        centered={false}
-        notice={<div>Live updates disconnected</div>}
-      >
+      <NativeComposeDock centered={false} notice={<div>Live updates disconnected</div>}>
         <textarea aria-label="Prompt" />
       </NativeComposeDock>,
     );
@@ -79,10 +78,7 @@ describe("NativeComposeDock", () => {
     expect(screen.getByText("Live updates disconnected")).toBeTruthy();
 
     rerender(
-      <NativeComposeDock
-        centered={true}
-        notice={<div>Live updates disconnected</div>}
-      >
+      <NativeComposeDock centered={true} notice={<div>Live updates disconnected</div>}>
         <textarea aria-label="Prompt" />
       </NativeComposeDock>,
     );
@@ -108,10 +104,7 @@ describe("NativeComposeDock", () => {
      * hide the prompt the turn is blocked on.
      */
     const { rerender } = render(
-      <NativeComposeDock
-        centered={false}
-        pinnedContent={<div>Approve this command?</div>}
-      >
+      <NativeComposeDock centered={false} pinnedContent={<div>Approve this command?</div>}>
         <textarea aria-label="Prompt" />
       </NativeComposeDock>,
     );
@@ -119,10 +112,7 @@ describe("NativeComposeDock", () => {
     expect(screen.getByText("Approve this command?")).toBeTruthy();
 
     rerender(
-      <NativeComposeDock
-        centered={true}
-        pinnedContent={<div>Approve this command?</div>}
-      >
+      <NativeComposeDock centered={true} pinnedContent={<div>Approve this command?</div>}>
         <textarea aria-label="Prompt" />
       </NativeComposeDock>,
     );
@@ -138,16 +128,12 @@ describe("NativeComposeDock", () => {
      * on the prompt inside.
      */
     render(
-      <NativeComposeDock
-        centered={false}
-        pinnedContent={<div>Approve this command?</div>}
-      >
+      <NativeComposeDock centered={false} pinnedContent={<div>Approve this command?</div>}>
         <textarea aria-label="Prompt" />
       </NativeComposeDock>,
     );
 
-    const pinned = screen.getByText("Approve this command?")
-      .parentElement as HTMLElement;
+    const pinned = screen.getByText("Approve this command?").parentElement as HTMLElement;
     expect(pinned.className).toContain("overflow-y-auto");
     expect(pinned.className).toContain("max-h-[60vh]");
   });

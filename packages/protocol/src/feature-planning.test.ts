@@ -34,12 +34,14 @@ function story(overrides: Partial<FeaturePlannerStory> = {}): FeaturePlannerStor
     title: "Existing story",
     description: "Existing description",
     acceptanceCriteria: ["Existing criterion"],
-    messages: [{
-      id: "message-1",
-      role: "assistant",
-      content: "Earlier answer\n<story_refinement>{\"title\":\"old\"}</story_refinement>",
-      createdAt: AT,
-    }],
+    messages: [
+      {
+        id: "message-1",
+        role: "assistant",
+        content: 'Earlier answer\n<story_refinement>{"title":"old"}</story_refinement>',
+        createdAt: AT,
+      },
+    ],
     createdAt: AT,
     updatedAt: AT,
     ...overrides,
@@ -51,12 +53,14 @@ function feature(overrides: Partial<FeaturePlannerFeature> = {}): FeaturePlanner
     id: "feature-1",
     title: "Feature title",
     summary: "Feature summary",
-    messages: [{
-      id: "message-1",
-      role: "user",
-      content: "First message",
-      createdAt: AT,
-    }],
+    messages: [
+      {
+        id: "message-1",
+        role: "user",
+        content: "First message",
+        createdAt: AT,
+      },
+    ],
     stories: [story()],
     ...overrides,
   };
@@ -80,56 +84,67 @@ function record(overrides: Partial<FeaturePlanningRecord> = {}): FeaturePlanning
 
 describe("feature-planning prompts", () => {
   test("builds initial and resumed prompts without replaying machine state blocks", () => {
-    expect(createFeaturePlannerInitialPrompt("Make uploads retryable"))
-      .toContain("User message:\nMake uploads retryable");
+    expect(createFeaturePlannerInitialPrompt("Make uploads retryable")).toContain(
+      "User message:\nMake uploads retryable",
+    );
 
-    const resumed = createFeaturePlannerResumePrompt(feature({
-      messages: [
-        {
-          id: "user-1",
-          role: "user",
-          content: "Make uploads retryable",
-          createdAt: AT,
-        },
-        {
-          id: "assistant-1",
-          role: "assistant",
-          content: "Which failures?\n<feature_planner_state>{\"phase\":\"collecting\"}</feature_planner_state>",
-          createdAt: AT,
-        },
-      ],
-    }), "Only network failures");
+    const resumed = createFeaturePlannerResumePrompt(
+      feature({
+        messages: [
+          {
+            id: "user-1",
+            role: "user",
+            content: "Make uploads retryable",
+            createdAt: AT,
+          },
+          {
+            id: "assistant-1",
+            role: "assistant",
+            content:
+              'Which failures?\n<feature_planner_state>{"phase":"collecting"}</feature_planner_state>',
+            createdAt: AT,
+          },
+        ],
+      }),
+      "Only network failures",
+    );
     expect(resumed).toContain("ASSISTANT: Which failures?");
-    expect(resumed).not.toContain('ASSISTANT: Which failures?\n<feature_planner_state>');
+    expect(resumed).not.toContain("ASSISTANT: Which failures?\n<feature_planner_state>");
     expect(resumed).toContain("id: story-1 | title: Existing story");
     expect(resumed).toContain("Latest user message:\nOnly network failures");
   });
 
   test("selects raw, initial, and resumed prompts from session continuity", () => {
     const base = feature();
-    expect(selectFeaturePlannerPrompt({
-      feature: base,
-      userMessage: "continue",
-      previousSessionId: "session-1",
-      sessionId: "session-1",
-    })).toBe("continue");
-    expect(selectFeaturePlannerPrompt({
-      feature: base,
-      userMessage: "start",
-      previousSessionId: null,
-      sessionId: "session-1",
-    })).toContain("The user has started describing a new feature");
-    expect(selectFeaturePlannerPrompt({
-      feature: feature({
-        messages: [
-          ...base.messages,
-          { id: "user-2", role: "user", content: "Again", createdAt: AT },
-        ],
+    expect(
+      selectFeaturePlannerPrompt({
+        feature: base,
+        userMessage: "continue",
+        previousSessionId: "session-1",
+        sessionId: "session-1",
       }),
-      userMessage: "resume",
-      previousSessionId: "old-session",
-      sessionId: "new-session",
-    })).toContain("This is a resumed planning session");
+    ).toBe("continue");
+    expect(
+      selectFeaturePlannerPrompt({
+        feature: base,
+        userMessage: "start",
+        previousSessionId: null,
+        sessionId: "session-1",
+      }),
+    ).toContain("The user has started describing a new feature");
+    expect(
+      selectFeaturePlannerPrompt({
+        feature: feature({
+          messages: [
+            ...base.messages,
+            { id: "user-2", role: "user", content: "Again", createdAt: AT },
+          ],
+        }),
+        userMessage: "resume",
+        previousSessionId: "old-session",
+        sessionId: "new-session",
+      }),
+    ).toContain("This is a resumed planning session");
   });
 
   test("builds refinement prompts with current state and a clean transcript", () => {
@@ -137,7 +152,7 @@ describe("feature-planning prompts", () => {
     expect(prompt).toContain("Title: Existing story");
     expect(prompt).toContain("- Existing criterion");
     expect(prompt).toContain("ASSISTANT: Earlier answer");
-    expect(prompt).not.toContain('ASSISTANT: Earlier answer\n<story_refinement>');
+    expect(prompt).not.toContain("ASSISTANT: Earlier answer\n<story_refinement>");
     expect(prompt).toContain('"storyId":"story-1"');
     expect(prompt).toContain("User message:\nRename it");
   });
@@ -145,19 +160,23 @@ describe("feature-planning prompts", () => {
 
 describe("state block parsing", () => {
   test("parses a valid feature state block and all story fields", () => {
-    expect(parseFeaturePlannerState(`Answer
+    expect(
+      parseFeaturePlannerState(`Answer
       <FEATURE_PLANNER_STATE>
       {"phase":"stories","title":"Uploads","summary":"Retry failures","stories":[{"id":"story-1","title":"Retry","description":"Try again","acceptanceCriteria":["Keeps the file"]}]}
-      </FEATURE_PLANNER_STATE>`)).toEqual({
+      </FEATURE_PLANNER_STATE>`),
+    ).toEqual({
       phase: "stories",
       title: "Uploads",
       summary: "Retry failures",
-      stories: [{
-        id: "story-1",
-        title: "Retry",
-        description: "Try again",
-        acceptanceCriteria: ["Keeps the file"],
-      }],
+      stories: [
+        {
+          id: "story-1",
+          title: "Retry",
+          description: "Try again",
+          acceptanceCriteria: ["Keeps the file"],
+        },
+      ],
     });
   });
 
@@ -185,17 +204,21 @@ describe("state block parsing", () => {
   });
 
   test("parses partial story refinements and rejects malformed fields", () => {
-    expect(parseStoryRefinement(
-      'Done\n<story_refinement>{"storyId":"story-1","title":"New","description":"Updated","acceptanceCriteria":["One"]}</story_refinement>',
-    )).toEqual({
+    expect(
+      parseStoryRefinement(
+        'Done\n<story_refinement>{"storyId":"story-1","title":"New","description":"Updated","acceptanceCriteria":["One"]}</story_refinement>',
+      ),
+    ).toEqual({
       storyId: "story-1",
       title: "New",
       description: "Updated",
       acceptanceCriteria: ["One"],
     });
-    expect(parseStoryRefinement(
-      '<story_refinement>{"description":"Only this changed"}</story_refinement>',
-    )).toEqual({ description: "Only this changed" });
+    expect(
+      parseStoryRefinement(
+        '<story_refinement>{"description":"Only this changed"}</story_refinement>',
+      ),
+    ).toEqual({ description: "Only this changed" });
 
     const invalid = [
       "no block",
@@ -214,16 +237,22 @@ describe("state block parsing", () => {
   });
 
   test("strips machine blocks while retaining conversational text", () => {
-    expect(stripFeaturePlannerStateBlocks(
-      '  Keep this\n<feature_planner_state>{"phase":"collecting"}</feature_planner_state>  ',
-    )).toBe("Keep this");
-    expect(stripStoryRefinementStateBlocks(
-      '  Updated\n<story_refinement>{"title":"New"}</story_refinement>  ',
-    )).toBe("Updated");
+    expect(
+      stripFeaturePlannerStateBlocks(
+        '  Keep this\n<feature_planner_state>{"phase":"collecting"}</feature_planner_state>  ',
+      ),
+    ).toBe("Keep this");
+    expect(
+      stripStoryRefinementStateBlocks(
+        '  Updated\n<story_refinement>{"title":"New"}</story_refinement>  ',
+      ),
+    ).toBe("Updated");
     expect(stripFeaturePlannerStateBlocks("ordinary text")).toBe("ordinary text");
-    expect(stripFeaturePlannerStateBlocks(
-      '<feature_planner_state>{}</feature_planner_state>text<feature_planner_state>{}</feature_planner_state>',
-    )).toBe("text");
+    expect(
+      stripFeaturePlannerStateBlocks(
+        "<feature_planner_state>{}</feature_planner_state>text<feature_planner_state>{}</feature_planner_state>",
+      ),
+    ).toBe("text");
   });
 });
 
@@ -231,27 +260,33 @@ describe("story reconciliation and build formatting", () => {
   test("preserves existing identity and history by id or case-insensitive title", () => {
     let nextId = 0;
     const existing = story();
-    const cards = createStoryCardsFromParsedState({ stories: [
+    const cards = createStoryCardsFromParsedState(
       {
-        id: existing.id,
-        title: "Renamed",
-        description: "By id",
-        acceptanceCriteria: ["A"],
+        stories: [
+          {
+            id: existing.id,
+            title: "Renamed",
+            description: "By id",
+            acceptanceCriteria: ["A"],
+          },
+          {
+            title: "EXISTING STORY",
+            description: "By title",
+            acceptanceCriteria: ["B"],
+          },
+          {
+            title: "Brand new",
+            description: "New card",
+            acceptanceCriteria: [],
+          },
+        ],
       },
+      [existing],
       {
-        title: "EXISTING STORY",
-        description: "By title",
-        acceptanceCriteria: ["B"],
+        now: "2026-08-05T00:00:00.000Z",
+        newStoryId: () => `generated-${++nextId}`,
       },
-      {
-        title: "Brand new",
-        description: "New card",
-        acceptanceCriteria: [],
-      },
-    ] }, [existing], {
-      now: "2026-08-05T00:00:00.000Z",
-      newStoryId: () => `generated-${++nextId}`,
-    });
+    );
 
     expect(cards[0]).toMatchObject({
       id: existing.id,
@@ -265,10 +300,12 @@ describe("story reconciliation and build formatting", () => {
       messages: [{ id: "generated-2", role: "assistant" }],
       createdAt: "2026-08-05T00:00:00.000Z",
     });
-    expect(createStoryCardsFromParsedState({}, [existing], {
-      now: AT,
-      newStoryId: () => "unused",
-    })).toEqual([]);
+    expect(
+      createStoryCardsFromParsedState({}, [existing], {
+        now: AT,
+        newStoryId: () => "unused",
+      }),
+    ).toEqual([]);
   });
 
   test("formats all stories and supplies a blank-title fallback", () => {
@@ -277,8 +314,9 @@ describe("story reconciliation and build formatting", () => {
     expect(formatted.description).toContain("Feature summary:\nFeature summary");
     expect(formatted.description).toContain("### 1. Existing story");
     expect(formatted.description).toContain("- Existing criterion");
-    expect(formatFeatureStoriesForBuild(feature({ summary: "", stories: [] })).description)
-      .not.toContain("Feature summary:");
+    expect(
+      formatFeatureStoriesForBuild(feature({ summary: "", stories: [] })).description,
+    ).not.toContain("Feature summary:");
   });
 });
 
@@ -303,30 +341,34 @@ describe("planning phases", () => {
 describe("isFeaturePlanningRecord", () => {
   test("accepts minimal and fully populated feature and story records", () => {
     expect(isFeaturePlanningRecord(record())).toBe(true);
-    expect(isFeaturePlanningRecord(record({
-      kind: "story",
-      storyId: "story-1",
-      userMessageId: "user-message-1",
-      environmentId: "environment-1",
-      providerSessionId: "session-1",
-      dispatchId: "dispatch-1",
-      requestId: "request-1",
-      dispatchState: "sent",
-      baselineAssistantIds: ["assistant-1", "assistant-2"],
-      phase: "failed",
-      rawResponse: "raw",
-      responseModelId: "model-1",
-      responseMessageId: "assistant-3",
-      failure: {
-        code: "provider",
-        message: "Provider disconnected",
-        occurredAt: AT,
-        retryPhase: "running",
-      },
-      attemptStartedAt: AT,
-      dispatchedAt: AT,
-      backendRevision: Number.MAX_SAFE_INTEGER,
-    }))).toBe(true);
+    expect(
+      isFeaturePlanningRecord(
+        record({
+          kind: "story",
+          storyId: "story-1",
+          userMessageId: "user-message-1",
+          environmentId: "environment-1",
+          providerSessionId: "session-1",
+          dispatchId: "dispatch-1",
+          requestId: "request-1",
+          dispatchState: "sent",
+          baselineAssistantIds: ["assistant-1", "assistant-2"],
+          phase: "failed",
+          rawResponse: "raw",
+          responseModelId: "model-1",
+          responseMessageId: "assistant-3",
+          failure: {
+            code: "provider",
+            message: "Provider disconnected",
+            occurredAt: AT,
+            retryPhase: "running",
+          },
+          attemptStartedAt: AT,
+          dispatchedAt: AT,
+          backendRevision: Number.MAX_SAFE_INTEGER,
+        }),
+      ),
+    ).toBe(true);
   });
 
   test("rejects non-records, wrong versions, invalid ids, and kind/story mismatches", () => {
@@ -337,10 +379,12 @@ describe("isFeaturePlanningRecord", () => {
     for (const key of ["operationId", "featureId", "projectId"] as const) {
       expect(isFeaturePlanningRecord({ ...record(), [key]: 1 })).toBe(false);
       expect(isFeaturePlanningRecord({ ...record(), [key]: "" })).toBe(false);
-      expect(isFeaturePlanningRecord({
-        ...record(),
-        [key]: "x".repeat(FEATURE_PLANNING_LIMITS.maxIdLength + 1),
-      })).toBe(false);
+      expect(
+        isFeaturePlanningRecord({
+          ...record(),
+          [key]: "x".repeat(FEATURE_PLANNING_LIMITS.maxIdLength + 1),
+        }),
+      ).toBe(false);
     }
     expect(isFeaturePlanningRecord({ ...record(), kind: "other" })).toBe(false);
     expect(isFeaturePlanningRecord(record({ kind: "story", storyId: undefined }))).toBe(false);
@@ -350,16 +394,28 @@ describe("isFeaturePlanningRecord", () => {
   });
 
   test("enforces user, optional id, raw response, and dispatch-state bounds", () => {
-    expect(isFeaturePlanningRecord(record({
-      userMessage: "x".repeat(FEATURE_PLANNING_LIMITS.maxUserMessageLength),
-      rawResponse: "x".repeat(FEATURE_PLANNING_LIMITS.maxRawResponseLength),
-    }))).toBe(true);
-    expect(isFeaturePlanningRecord(record({
-      userMessage: "x".repeat(FEATURE_PLANNING_LIMITS.maxUserMessageLength + 1),
-    }))).toBe(false);
-    expect(isFeaturePlanningRecord(record({
-      rawResponse: "x".repeat(FEATURE_PLANNING_LIMITS.maxRawResponseLength + 1),
-    }))).toBe(false);
+    expect(
+      isFeaturePlanningRecord(
+        record({
+          userMessage: "x".repeat(FEATURE_PLANNING_LIMITS.maxUserMessageLength),
+          rawResponse: "x".repeat(FEATURE_PLANNING_LIMITS.maxRawResponseLength),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isFeaturePlanningRecord(
+        record({
+          userMessage: "x".repeat(FEATURE_PLANNING_LIMITS.maxUserMessageLength + 1),
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isFeaturePlanningRecord(
+        record({
+          rawResponse: "x".repeat(FEATURE_PLANNING_LIMITS.maxRawResponseLength + 1),
+        }),
+      ),
+    ).toBe(false);
 
     const optionalIds = [
       "userMessageId",
@@ -373,10 +429,12 @@ describe("isFeaturePlanningRecord", () => {
     for (const key of optionalIds) {
       expect(isFeaturePlanningRecord({ ...record(), [key]: 1 })).toBe(false);
       expect(isFeaturePlanningRecord({ ...record(), [key]: "" })).toBe(false);
-      expect(isFeaturePlanningRecord({
-        ...record(),
-        [key]: "x".repeat(FEATURE_PLANNING_LIMITS.maxIdLength + 1),
-      })).toBe(false);
+      expect(
+        isFeaturePlanningRecord({
+          ...record(),
+          [key]: "x".repeat(FEATURE_PLANNING_LIMITS.maxIdLength + 1),
+        }),
+      ).toBe(false);
     }
     expect(isFeaturePlanningRecord({ ...record(), dispatchState: "queued" })).toBe(false);
   });
@@ -387,15 +445,23 @@ describe("isFeaturePlanningRecord", () => {
       (_, index) => `assistant-${index}`,
     );
     expect(isFeaturePlanningRecord(record({ baselineAssistantIds: maximum }))).toBe(true);
-    expect(isFeaturePlanningRecord(record({
-      baselineAssistantIds: [...maximum, "one-too-many"],
-    }))).toBe(false);
+    expect(
+      isFeaturePlanningRecord(
+        record({
+          baselineAssistantIds: [...maximum, "one-too-many"],
+        }),
+      ),
+    ).toBe(false);
     expect(isFeaturePlanningRecord({ ...record(), baselineAssistantIds: {} })).toBe(false);
     expect(isFeaturePlanningRecord(record({ baselineAssistantIds: [1 as never] }))).toBe(false);
     expect(isFeaturePlanningRecord(record({ baselineAssistantIds: [""] }))).toBe(false);
-    expect(isFeaturePlanningRecord(record({
-      baselineAssistantIds: ["x".repeat(FEATURE_PLANNING_LIMITS.maxIdLength + 1)],
-    }))).toBe(false);
+    expect(
+      isFeaturePlanningRecord(
+        record({
+          baselineAssistantIds: ["x".repeat(FEATURE_PLANNING_LIMITS.maxIdLength + 1)],
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("validates every failure field and boundary", () => {
@@ -407,10 +473,14 @@ describe("isFeaturePlanningRecord", () => {
     };
     for (const code of FEATURE_PLANNING_FAILURE_CODES) {
       for (const retryPhase of FEATURE_PLANNING_ACTIVE_PHASES) {
-        expect(isFeaturePlanningRecord(record({
-          phase: "failed",
-          failure: { ...validFailure, code, retryPhase },
-        }))).toBe(true);
+        expect(
+          isFeaturePlanningRecord(
+            record({
+              phase: "failed",
+              failure: { ...validFailure, code, retryPhase },
+            }),
+          ),
+        ).toBe(true);
       }
     }
     for (const failure of [
@@ -429,23 +499,24 @@ describe("isFeaturePlanningRecord", () => {
   });
 
   test("requires bounded ISO timestamps including optional attempt clocks", () => {
-    expect(isFeaturePlanningRecord(record({
-      startedAt: "2026-08-04T13:34:56.789+01:00",
-      updatedAt: "2026-08-04T13:34:56.789+01:00",
-      attemptStartedAt: "2026-08-04T13:34:56+01:00",
-      dispatchedAt: AT,
-    }))).toBe(true);
-    for (const key of [
-      "startedAt",
-      "updatedAt",
-      "attemptStartedAt",
-      "dispatchedAt",
-    ] as const) {
+    expect(
+      isFeaturePlanningRecord(
+        record({
+          startedAt: "2026-08-04T13:34:56.789+01:00",
+          updatedAt: "2026-08-04T13:34:56.789+01:00",
+          attemptStartedAt: "2026-08-04T13:34:56+01:00",
+          dispatchedAt: AT,
+        }),
+      ),
+    ).toBe(true);
+    for (const key of ["startedAt", "updatedAt", "attemptStartedAt", "dispatchedAt"] as const) {
       expect(isFeaturePlanningRecord({ ...record(), [key]: "not-a-date" })).toBe(false);
-      expect(isFeaturePlanningRecord({
-        ...record(),
-        [key]: `2026-08-04T${"0".repeat(FEATURE_PLANNING_LIMITS.maxTimestampLength)}Z`,
-      })).toBe(false);
+      expect(
+        isFeaturePlanningRecord({
+          ...record(),
+          [key]: `2026-08-04T${"0".repeat(FEATURE_PLANNING_LIMITS.maxTimestampLength)}Z`,
+        }),
+      ).toBe(false);
     }
   });
 
@@ -459,17 +530,21 @@ describe("isFeaturePlanningRecord", () => {
 
 describe("isStartFeaturePlanningInput", () => {
   test("accepts feature and story inputs at the message boundary", () => {
-    expect(isStartFeaturePlanningInput({
-      featureId: "feature-1",
-      kind: "feature",
-      userMessage: "Plan this",
-    })).toBe(true);
-    expect(isStartFeaturePlanningInput({
-      featureId: "feature-1",
-      kind: "story",
-      storyId: "story-1",
-      userMessage: "x".repeat(FEATURE_PLANNING_LIMITS.maxUserMessageLength),
-    })).toBe(true);
+    expect(
+      isStartFeaturePlanningInput({
+        featureId: "feature-1",
+        kind: "feature",
+        userMessage: "Plan this",
+      }),
+    ).toBe(true);
+    expect(
+      isStartFeaturePlanningInput({
+        featureId: "feature-1",
+        kind: "story",
+        storyId: "story-1",
+        userMessage: "x".repeat(FEATURE_PLANNING_LIMITS.maxUserMessageLength),
+      }),
+    ).toBe(true);
   });
 
   test("rejects malformed, blank, oversized, and kind-inconsistent inputs", () => {
@@ -518,7 +593,8 @@ describe("boundRawResponse", () => {
   });
 
   test("preserves a parseable terminal feature state block", () => {
-    const block = '<feature_planner_state>{"phase":"confirming","title":"Keep me","summary":"Ready"}</feature_planner_state>';
+    const block =
+      '<feature_planner_state>{"phase":"confirming","title":"Keep me","summary":"Ready"}</feature_planner_state>';
     const bounded = boundRawResponse(`${"p".repeat(max)}${block}`);
     expect(bounded.length).toBe(max);
     expect(bounded.endsWith(block)).toBe(true);

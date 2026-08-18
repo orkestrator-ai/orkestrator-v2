@@ -227,7 +227,9 @@ export function parseDraggableTabId(id: string): { tabId: string; paneId: string
 }
 
 // Helper to parse edge droppable ID
-export function parseEdgeDroppableId(id: string): { paneId: string; direction: EdgeDirection } | null {
+export function parseEdgeDroppableId(
+  id: string,
+): { paneId: string; direction: EdgeDirection } | null {
   const match = id.match(/^edge:(.+):(left|right|top|bottom)$/);
   if (!match) return null;
   return { paneId: match[1]!, direction: match[2] as EdgeDirection };

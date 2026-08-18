@@ -1,93 +1,48 @@
-import { afterAll,beforeEach,describe,expect,mock,test } from "bun:test";
-
+import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { type ReactNode } from "react";
 
-
-import { cleanup,fireEvent,render,screen,waitFor } from "@testing-library/react";
-
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { TerminalProvider } from "@/contexts";
 
-
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
-
 
 import { useConfigStore } from "@/stores/configStore";
 
-
 import { useEnvironmentStore } from "@/stores/environmentStore";
-
 
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 
-
 import { useNativeComposeStore } from "@/stores/nativeComposeStore";
-
 
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 
-
-
-
-
-
-import {
-useLoopedReviewStore,
-type LoopedReviewWorkflow,
-} from "@/stores/loopedReviewStore";
-
-
-
+import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 
+import { type PersistedPaneLayout } from "@/types/paneLayout";
 
-
-
-import {
-type PersistedPaneLayout
-} from "@/types/paneLayout";
-
-
-import type { EnsureEnvironmentSetupResult,EnvironmentSetupSession } from "@/types";
-
+import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
 
 import type { CollisionDetection } from "@dnd-kit/core";
 
-
 import * as realBackend from "@/lib/backend";
-
 
 import * as realSetupCommands from "@/lib/setup-commands";
 
-
-
-
 import * as realDndKitCore from "@dnd-kit/core";
-
-
-
-
-
 
 import * as realNativeEvents from "@/lib/native/events";
 
-
-import {
-listen
-} from "@/lib/native/events";
-
-
+import { listen } from "@/lib/native/events";
 
 const realBackendSnapshot = { ...realBackend };
 
-
 const realSetupCommandsSnapshot = { ...realSetupCommands };
 
-
 const realDndKitCoreSnapshot = { ...realDndKitCore };
-
 
 // `@/lib/native/events` is mocked once in tests/setup.ts and shared with every
 // other suite. Snapshot it here so `afterAll` can put the module back, and
@@ -96,16 +51,11 @@ const realDndKitCoreSnapshot = { ...realDndKitCore };
 // mock into a file that runs after this one.
 const realNativeEventsSnapshot = { ...realNativeEvents };
 
-
 const originalOrkestrator = window.orkestrator;
-
 
 const listenMock = listen as ReturnType<typeof mock>;
 
-
 const defaultListenImplementation = () => Promise.resolve(() => {});
-
-
 
 type DndContextHarnessProps = {
   children: ReactNode;
@@ -117,13 +67,9 @@ type DndContextHarnessProps = {
 
 const pointerWithinMock = mock<CollisionDetection>((_args) => []);
 
-
 const rectIntersectionMock = mock<CollisionDetection>((_args) => []);
 
-
 const closestCenterMock = mock<CollisionDetection>((_args) => []);
-
-
 
 mock.module("@dnd-kit/core", () => ({
   ...realDndKitCoreSnapshot,
@@ -135,138 +81,141 @@ mock.module("@dnd-kit/core", () => ({
   closestCenter: closestCenterMock,
 }));
 
-
-
 const markSetupScriptsCompleteMock = mock(() => {});
-
 
 const getSetupCommandsMock = mock(async (): Promise<string[] | null> => null);
 
-
-const ensureEnvironmentSetupMock = mock(async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
-  return {
-    setupStarted: false,
-    environment: {
-      ...environment,
-      setupScriptsComplete: true,
-    },
-  };
-});
-
+const ensureEnvironmentSetupMock = mock(
+  async (environmentId: string): Promise<EnsureEnvironmentSetupResult> => {
+    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId)!;
+    return {
+      setupStarted: false,
+      environment: {
+        ...environment,
+        setupScriptsComplete: true,
+      },
+    };
+  },
+);
 
 const runEnvironmentSetupMock = mock(async (environmentId: string) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   setupScriptsComplete: true,
 }));
 
-
-const getEnvironmentSetupSessionMock = mock(async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null);
-
+const getEnvironmentSetupSessionMock = mock(
+  async (_environmentId: string): Promise<EnvironmentSetupSession | null> => null,
+);
 
 const awaitEnvironmentSetupSessionMock = mock(
   async (environmentId: string): Promise<EnvironmentSetupSession | null> =>
     getEnvironmentSetupSessionMock(environmentId),
 );
 
-
-const setEnvironmentPendingAgentLaunchMock = mock(async (environmentId: string, pending: boolean) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-  pendingAgentLaunch: pending,
-  ...(pending
-    ? {}
-    : {
-        initialAgentModel: undefined,
-        initialReasoningEffort: undefined,
-      }),
-}));
-
+const setEnvironmentPendingAgentLaunchMock = mock(
+  async (environmentId: string, pending: boolean) => ({
+    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    pendingAgentLaunch: pending,
+    ...(pending
+      ? {}
+      : {
+          initialAgentModel: undefined,
+          initialReasoningEffort: undefined,
+        }),
+  }),
+);
 
 const acknowledgeStartupAgentSessionMock = mock(async (environmentId: string) => ({
   ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
   startupAgentSession: undefined,
 }));
 
+const setEnvironmentInitialPromptMock = mock(
+  async (environmentId: string, initialPrompt: string) => ({
+    ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+    initialPrompt,
+  }),
+);
 
-const setEnvironmentInitialPromptMock = mock(async (environmentId: string, initialPrompt: string) => ({
-  ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-  initialPrompt,
-}));
+const savePaneLayoutMock = mock(
+  async (
+    environmentId: string,
+    layout: Parameters<typeof realBackend.savePaneLayout>[1],
+    _expectedRevision: number,
+  ): Promise<PersistedPaneLayout> => ({
+    ...layout,
+    environmentId,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    revision: 1,
+  }),
+);
 
+const getPaneLayoutMock = mock(
+  async (_environmentId: string): Promise<PersistedPaneLayout | null> => null,
+);
 
-const savePaneLayoutMock = mock(async (
-  environmentId: string,
-  layout: Parameters<typeof realBackend.savePaneLayout>[1],
-  _expectedRevision: number,
-): Promise<PersistedPaneLayout> => ({
-  ...layout,
-  environmentId,
-  updatedAt: "2026-01-01T00:00:00.000Z",
-  revision: 1,
-}));
+const deletePaneLayoutMock = mock(async (_environmentId: string, _expectedRevision?: number) => {});
 
+const listLoopedReviewWorkflowsMock = mock(
+  async (_environmentId: string) =>
+    [] as Array<{
+      version: number;
+      id: string;
+      environmentId: string;
+      snapshot: LoopedReviewWorkflow;
+      updatedAt: string;
+      revision: number;
+    }>,
+);
 
-const getPaneLayoutMock = mock(async (_environmentId: string): Promise<PersistedPaneLayout | null> => null);
+const writeContainerFileMock = mock(
+  async (_containerId: string, filePath: string, _base64Data: string) => `/workspace/${filePath}`,
+);
 
+const writeLocalFileMock = mock(
+  async (worktreePath: string, filePath: string, _base64Data: string) =>
+    `${worktreePath}/${filePath}`,
+);
 
-const deletePaneLayoutMock = mock(async (
-  _environmentId: string,
-  _expectedRevision?: number,
-) => {});
-
-
-const listLoopedReviewWorkflowsMock = mock(async (_environmentId: string) => [] as Array<{
-  version: number;
-  id: string;
-  environmentId: string;
-  snapshot: LoopedReviewWorkflow;
-  updatedAt: string;
-  revision: number;
-}>);
-
-
-const writeContainerFileMock = mock(async (
-  _containerId: string,
-  filePath: string,
-  _base64Data: string,
-) => `/workspace/${filePath}`);
-
-
-const writeLocalFileMock = mock(async (
-  worktreePath: string,
-  filePath: string,
-  _base64Data: string,
-) => `${worktreePath}/${filePath}`);
-
-
-const writeInitialPromptAttachmentsMock = mock(async (
-  environmentId: string,
-  attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
-) => {
-  const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
-  const usedNames = new Set<string>();
-  return Promise.all(attachments.map(async (attachment) => {
-    const sanitized = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-    const dot = sanitized.lastIndexOf(".");
-    const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
-    const extension = dot > 0 ? sanitized.slice(dot) : "";
-    let name = sanitized;
-    let suffix = 2;
-    while (usedNames.has(name.toLowerCase())) {
-      name = `${stem}-${suffix}${extension}`;
-      suffix += 1;
-    }
-    usedNames.add(name.toLowerCase());
-    const relativePath = `.orkestrator/initial-prompt/${name}`;
-    const savedPath = environment.environmentType === "local"
-      ? await writeLocalFileMock(environment.worktreePath!, relativePath, attachment.base64Data)
-      : await writeContainerFileMock(environment.containerId!, relativePath, attachment.base64Data);
-    return { name, path: savedPath };
-  }));
-});
-
-
+const writeInitialPromptAttachmentsMock = mock(
+  async (
+    environmentId: string,
+    attachments: Parameters<typeof realBackend.writeInitialPromptAttachments>[1],
+  ) => {
+    const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+    const usedNames = new Set<string>();
+    return Promise.all(
+      attachments.map(async (attachment) => {
+        const sanitized = attachment.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+        const dot = sanitized.lastIndexOf(".");
+        const stem = dot > 0 ? sanitized.slice(0, dot) : sanitized;
+        const extension = dot > 0 ? sanitized.slice(dot) : "";
+        let name = sanitized;
+        let suffix = 2;
+        while (usedNames.has(name.toLowerCase())) {
+          name = `${stem}-${suffix}${extension}`;
+          suffix += 1;
+        }
+        usedNames.add(name.toLowerCase());
+        const relativePath = `.orkestrator/initial-prompt/${name}`;
+        const savedPath =
+          environment.environmentType === "local"
+            ? await writeLocalFileMock(
+                environment.worktreePath!,
+                relativePath,
+                attachment.base64Data,
+              )
+            : await writeContainerFileMock(
+                environment.containerId!,
+                relativePath,
+                attachment.base64Data,
+              );
+        return { name, path: savedPath };
+      }),
+    );
+  },
+);
 
 mock.module("@/lib/setup-commands", () => ({
   ...realSetupCommandsSnapshot,
@@ -281,14 +230,9 @@ mock.module("@/lib/setup-commands", () => ({
     setupCommandsResolved: boolean;
     hasPendingCommands: boolean;
   }) =>
-    isLocalEnvironment &&
-    isLocalEnvironmentReady &&
-    !setupCommandsResolved &&
-    !hasPendingCommands,
+    isLocalEnvironment && isLocalEnvironmentReady && !setupCommandsResolved && !hasPendingCommands,
   markSetupScriptsComplete: markSetupScriptsCompleteMock,
 }));
-
-
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -309,13 +253,9 @@ mock.module("@/lib/backend", () => ({
   writeInitialPromptAttachments: writeInitialPromptAttachmentsMock,
 }));
 
-
-
 mock.module("@/components/pane-layout", () => ({
   PaneTree: () => null,
 }));
-
-
 
 mock.module("@/components/ui/context-menu", () => ({
   ContextMenu: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -336,13 +276,9 @@ mock.module("@/components/ui/context-menu", () => ({
   ),
 }));
 
-
-
 mock.module("./TerminalPortalHost", () => ({
   TerminalPortalHost: () => null,
 }));
-
-
 
 mock.module("./InitializationLogs", () => ({
   InitializationLogs: ({ containerId }: { containerId: string }) => (
@@ -353,8 +289,6 @@ mock.module("./InitializationLogs", () => ({
 const { TerminalContainer } = await import("./TerminalContainer");
 
 describe("TerminalContainer", () => {
-
-
   afterAll(() => {
     window.orkestrator = originalOrkestrator;
     mock.module("@/lib/setup-commands", () => realSetupCommandsSnapshot);
@@ -364,8 +298,6 @@ describe("TerminalContainer", () => {
     listenMock.mockImplementation(defaultListenImplementation);
     mock.module("@/lib/native/events", () => realNativeEventsSnapshot);
   });
-
-
 
   beforeEach(() => {
     cleanup();
@@ -381,16 +313,19 @@ describe("TerminalContainer", () => {
 
     usePaneLayoutStore.setState({
       environments: new Map([
-        ["env-visible", {
-          root: {
-            kind: "leaf",
-            id: "default",
-            tabs: [{ id: "visible-tab", type: "plain" }],
-            activeTabId: "visible-tab",
+        [
+          "env-visible",
+          {
+            root: {
+              kind: "leaf",
+              id: "default",
+              tabs: [{ id: "visible-tab", type: "plain" }],
+              activeTabId: "visible-tab",
+            },
+            activePaneId: "default",
+            containerId: "container-visible",
           },
-          activePaneId: "default",
-          containerId: "container-visible",
-        }],
+        ],
       ]),
       hydration: new Map(),
       activeEnvironmentId: "env-visible",
@@ -470,26 +405,30 @@ describe("TerminalContainer", () => {
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
     awaitEnvironmentSetupSessionMock.mockClear();
     setEnvironmentPendingAgentLaunchMock.mockReset();
-    setEnvironmentPendingAgentLaunchMock.mockImplementation(async (environmentId: string, pending: boolean) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-      pendingAgentLaunch: pending,
-      ...(pending
-        ? {}
-        : {
-            initialAgentModel: undefined,
-            initialReasoningEffort: undefined,
-          }),
-    }));
+    setEnvironmentPendingAgentLaunchMock.mockImplementation(
+      async (environmentId: string, pending: boolean) => ({
+        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        pendingAgentLaunch: pending,
+        ...(pending
+          ? {}
+          : {
+              initialAgentModel: undefined,
+              initialReasoningEffort: undefined,
+            }),
+      }),
+    );
     acknowledgeStartupAgentSessionMock.mockReset();
     acknowledgeStartupAgentSessionMock.mockImplementation(async (environmentId: string) => ({
       ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
       startupAgentSession: undefined,
     }));
     setEnvironmentInitialPromptMock.mockReset();
-    setEnvironmentInitialPromptMock.mockImplementation(async (environmentId: string, initialPrompt: string) => ({
-      ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
-      initialPrompt,
-    }));
+    setEnvironmentInitialPromptMock.mockImplementation(
+      async (environmentId: string, initialPrompt: string) => ({
+        ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
+        initialPrompt,
+      }),
+    );
     savePaneLayoutMock.mockClear();
     getPaneLayoutMock.mockReset();
     getPaneLayoutMock.mockResolvedValue(null);
@@ -501,8 +440,12 @@ describe("TerminalContainer", () => {
     writeContainerFileMock.mockReset();
     writeLocalFileMock.mockReset();
     writeInitialPromptAttachmentsMock.mockClear();
-    writeContainerFileMock.mockImplementation(async (_containerId: string, filePath: string) => `/workspace/${filePath}`);
-    writeLocalFileMock.mockImplementation(async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`);
+    writeContainerFileMock.mockImplementation(
+      async (_containerId: string, filePath: string) => `/workspace/${filePath}`,
+    );
+    writeLocalFileMock.mockImplementation(
+      async (worktreePath: string, filePath: string) => `${worktreePath}/${filePath}`,
+    );
 
     useConfigStore.setState((state) => ({
       ...state,
@@ -524,8 +467,6 @@ describe("TerminalContainer", () => {
       pendingNativeLaunches: {},
     });
   });
-
-
 
   test("shows the stopped overlay and clears panes for a stopped failed setup", async () => {
     useEnvironmentStore.getState().updateEnvironment("env-hidden", {
@@ -571,8 +512,6 @@ describe("TerminalContainer", () => {
     });
   });
 
-
-
   test("start overlay ignores modifier clicks, starts normally, and creates scripts from the context menu", async () => {
     const onStartContainer = mock(() => {});
     const onCreateScript = mock((_prompt: string) => {});
@@ -587,7 +526,7 @@ describe("TerminalContainer", () => {
           onStartContainer={onStartContainer}
           onCreateScript={onCreateScript}
         />
-      </TerminalProvider>
+      </TerminalProvider>,
     );
 
     const startButton = screen.getByRole("button", { name: /start container/i });
@@ -602,8 +541,6 @@ describe("TerminalContainer", () => {
     expect(onCreateScript.mock.calls[0]?.[0]).toContain("setup");
   });
 
-
-
   test("renders the no-environment and container-creation overlay variants", () => {
     const noEnvironment = render(
       <TerminalProvider>
@@ -614,8 +551,7 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>,
     );
-    expect(screen.getByText("Select an environment from the sidebar to get started."))
-      .toBeTruthy();
+    expect(screen.getByText("Select an environment from the sidebar to get started.")).toBeTruthy();
     noEnvironment.unmount();
 
     render(
@@ -629,12 +565,9 @@ describe("TerminalContainer", () => {
         />
       </TerminalProvider>,
     );
-    expect(screen.getByTestId("initialization-logs").textContent)
-      .toBe("container-hidden");
+    expect(screen.getByTestId("initialization-logs").textContent).toBe("container-hidden");
     expect(screen.queryByRole("button", { name: /start container/i }) === null).toBe(true);
   });
-
-
 
   test("renders local creation and stopped overlays with environment wording", () => {
     useEnvironmentStore.setState((state) => ({
@@ -647,16 +580,12 @@ describe("TerminalContainer", () => {
               environmentType: "local",
               worktreePath: undefined,
             }
-          : environment
+          : environment,
       ),
     }));
     const creating = render(
       <TerminalProvider>
-        <TerminalContainer
-          environmentId="env-hidden"
-          containerId={null}
-          isContainerCreating
-        />
+        <TerminalContainer environmentId="env-hidden" containerId={null} isContainerCreating />
       </TerminalProvider>,
     );
     expect(screen.getByText("Creating worktree...")).toBeTruthy();
@@ -675,9 +604,7 @@ describe("TerminalContainer", () => {
     expect(screen.getByText("Environment not started")).toBeTruthy();
     expect(screen.getByRole("button", { name: /start environment/i })).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: /create script/i }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: /create script/i }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
-
 });

@@ -27,11 +27,12 @@ describe("createReviewPrompt", () => {
   test("establishes the snapshot before the shared review workflow", () => {
     const result = createReviewPrompt("main");
 
-    expect(result.indexOf("Begin by running the git commands required to establish the review snapshot."))
-      .toBeLessThan(result.indexOf("## Security and instruction hierarchy"));
-    expect(result).toContain(
-      "blocks validation only when it can change validation inputs",
-    );
+    expect(
+      result.indexOf(
+        "Begin by running the git commands required to establish the review snapshot.",
+      ),
+    ).toBeLessThan(result.indexOf("## Security and instruction hierarchy"));
+    expect(result).toContain("blocks validation only when it can change validation inputs");
   });
 
   test("keeps the follow-up fix instruction ahead of the shared workflow", () => {
@@ -40,8 +41,9 @@ describe("createReviewPrompt", () => {
       "If issues are found and the user asks to fix them, run typechecking and build validation again as appropriate for the project.";
 
     expect(result).toContain(followUp);
-    expect(result.indexOf(followUp))
-      .toBeLessThan(result.indexOf("## Security and instruction hierarchy"));
+    expect(result.indexOf(followUp)).toBeLessThan(
+      result.indexOf("## Security and instruction hierarchy"),
+    );
   });
 
   test("includes prompt-injection defence", () => {
@@ -121,7 +123,9 @@ describe("createReviewPrompt", () => {
     expect(result).toContain(
       "End with one or two concise paragraphs explaining what the change does and why",
     );
-    expect(result.trimEnd().endsWith("validate ticket, commit, and repository claims against the code.")).toBe(true);
+    expect(
+      result.trimEnd().endsWith("validate ticket, commit, and repository claims against the code."),
+    ).toBe(true);
     expect(result).not.toContain("## Review summary");
     expect(result).not.toContain("## What Changed");
     expect(result).not.toContain("## Strengths");
@@ -130,16 +134,16 @@ describe("createReviewPrompt", () => {
 
   test("uses safer no-issues wording", () => {
     const result = createReviewPrompt("main");
-    expect(result).toContain(
-      'No high-confidence issues were found in the reviewed scope.',
-    );
+    expect(result).toContain("No high-confidence issues were found in the reviewed scope.");
     expect(result).toContain("Do NOT claim the code is correct");
     expect(result).not.toContain("meets best practices");
   });
 
   test("allows clarifying questions (action bar variant)", () => {
     const result = createReviewPrompt("main");
-    expect(result).toContain("Ask a clarifying question only when the answer would materially change");
+    expect(result).toContain(
+      "Ask a clarifying question only when the answer would materially change",
+    );
     expect(result).not.toContain("automated pipeline");
   });
 

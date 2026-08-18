@@ -12,13 +12,15 @@ import { hashCwd } from "./persistence.js";
 
 const temporaryDirs: string[] = [];
 
-function journal(options: {
-  persist?: boolean;
-  now?: () => number;
-  maxRecords?: number;
-  maxBytes?: number;
-  retentionMs?: number;
-} = {}) {
+function journal(
+  options: {
+    persist?: boolean;
+    now?: () => number;
+    maxRecords?: number;
+    maxBytes?: number;
+    retentionMs?: number;
+  } = {},
+) {
   const codexHome = mkdtempSync(join(tmpdir(), "ork-journal-"));
   temporaryDirs.push(codexHome);
   return new DispatchJournal({
@@ -38,11 +40,7 @@ function journalHome(prefix: string): { codexHome: string; path: string } {
   temporaryDirs.push(codexHome);
   return {
     codexHome,
-    path: join(
-      codexHome,
-      "orkestrator-bridge",
-      `dispatch-journal-${hashCwd("/workspace")}.json`,
-    ),
+    path: join(codexHome, "orkestrator-bridge", `dispatch-journal-${hashCwd("/workspace")}.json`),
   };
 }
 
@@ -212,10 +210,12 @@ describe("journal state transitions", () => {
     await store.markPrepared({ requestId: "done", bridgeSessionId: "s1", threadId: "t1" });
     await store.markTerminal("done", "completed");
 
-    expect(store.unresolved().map((entry) => entry.requestId).sort()).toEqual([
-      "pending",
-      "running",
-    ]);
+    expect(
+      store
+        .unresolved()
+        .map((entry) => entry.requestId)
+        .sort(),
+    ).toEqual(["pending", "running"]);
   });
 
   test("forget clears a prepared record once proven not to have run", async () => {
@@ -328,11 +328,13 @@ describe("garbage collection", () => {
       await store.markPrepared({ requestId, bridgeSessionId: "s1", threadId: "t1" });
     }
 
-    await expect(store.markPrepared({
-      requestId: "c",
-      bridgeSessionId: "s1",
-      threadId: "t1",
-    })).rejects.toThrow("safety-record limit (2) is exhausted");
+    await expect(
+      store.markPrepared({
+        requestId: "c",
+        bridgeSessionId: "s1",
+        threadId: "t1",
+      }),
+    ).rejects.toThrow("safety-record limit (2) is exhausted");
 
     expect(store.unresolved().map((record) => record.requestId)).toEqual(["a", "b"]);
     expect(store.classify("c").action).toBe("dispatch");
@@ -342,11 +344,13 @@ describe("garbage collection", () => {
     const store = journal({ maxRecords: 10, maxBytes: 600 });
     await store.markPrepared({ requestId: "a", bridgeSessionId: "s1", threadId: "t1" });
 
-    await expect(store.markPrepared({
-      requestId: "b".repeat(200),
-      bridgeSessionId: "s2",
-      threadId: "t2",
-    })).rejects.toThrow("byte limit (600) is exhausted");
+    await expect(
+      store.markPrepared({
+        requestId: "b".repeat(200),
+        bridgeSessionId: "s2",
+        threadId: "t2",
+      }),
+    ).rejects.toThrow("byte limit (600) is exhausted");
 
     expect(store.unresolved().map((record) => record.requestId)).toEqual(["a"]);
   });
@@ -363,10 +367,12 @@ describe("garbage collection", () => {
     await store.markPrepared({ requestId: "trigger", bridgeSessionId: "s3", threadId: "t3" });
 
     expect(store.get("retry")).toBeUndefined();
-    expect(store.unresolved().map((record) => record.requestId).sort()).toEqual([
-      "running",
-      "trigger",
-    ]);
+    expect(
+      store
+        .unresolved()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["running", "trigger"]);
   });
 
   test("only the newest retryable marker is retained for each session", async () => {
@@ -403,10 +409,12 @@ describe("garbage collection", () => {
     await store.markPrepared({ requestId: "pending-b", bridgeSessionId: "s2", threadId: "t2" });
 
     expect(store.get("safe")).toBeUndefined();
-    expect(store.unresolved().map((record) => record.requestId).sort()).toEqual([
-      "pending-a",
-      "pending-b",
-    ]);
+    expect(
+      store
+        .unresolved()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["pending-a", "pending-b"]);
   });
 
   test("capacity sheds the oldest terminal record before newer safe records", async () => {
@@ -422,10 +430,12 @@ describe("garbage collection", () => {
     await store.markRetryable("retry");
 
     expect(store.get("old-terminal")).toBeUndefined();
-    expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
-      "new-terminal",
-      "retry",
-    ]);
+    expect(
+      store
+        .allRecords()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["new-terminal", "retry"]);
   });
 
   test("retention on load never drops an unresolved dispatch", async () => {
@@ -454,10 +464,12 @@ describe("garbage collection", () => {
     });
     await restored.load();
 
-    expect(restored.unresolved().map((record) => record.requestId).sort()).toEqual([
-      "accepted",
-      "prepared",
-    ]);
+    expect(
+      restored
+        .unresolved()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["accepted", "prepared"]);
   });
 });
 
@@ -561,10 +573,7 @@ describe("sequence assignment", () => {
     const { codexHome } = journalHome("ork-journal-tie-");
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION,
-      records: [
-        legacyRecord("aaa", { sequence: 5 }),
-        legacyRecord("bbb", { sequence: 5 }),
-      ],
+      records: [legacyRecord("aaa", { sequence: 5 }), legacyRecord("bbb", { sequence: 5 })],
     });
 
     const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
@@ -582,14 +591,16 @@ describe("load rejects shapes it cannot trust", () => {
     const { codexHome } = journalHome("ork-journal-version-");
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION + 1,
-      records: [{
-        requestId: "future",
-        bridgeSessionId: "s1",
-        threadId: "t1",
-        state: "prepared",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }],
+      records: [
+        {
+          requestId: "future",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
     });
 
     const store = new DispatchJournal({ codexHome, cwd: "/workspace", persist: true });
@@ -625,13 +636,16 @@ describe("load rejects shapes it cannot trust", () => {
       action: "blocked",
       reason: "Dispatch journal could not be safely decoded",
     });
-    await expect(store.markPrepared({
-      requestId: "new",
-      bridgeSessionId: "s1",
-      threadId: "t1",
-    })).rejects.toThrow("could not be safely decoded");
-    await expect(store.markTerminal("unknown", "failed"))
-      .rejects.toThrow("could not be safely decoded");
+    await expect(
+      store.markPrepared({
+        requestId: "new",
+        bridgeSessionId: "s1",
+        threadId: "t1",
+      }),
+    ).rejects.toThrow("could not be safely decoded");
+    await expect(store.markTerminal("unknown", "failed")).rejects.toThrow(
+      "could not be safely decoded",
+    );
     expect(store.classify("new").action).toBe("blocked");
   });
 
@@ -662,9 +676,33 @@ describe("load rejects shapes it cannot trust", () => {
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION,
       records: [
-        { requestId: "prepared-a", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: timestamp, updatedAt: timestamp, sequence: 1 },
-        { requestId: "prepared-b", bridgeSessionId: "s2", threadId: "t2", state: "prepared", createdAt: timestamp, updatedAt: timestamp, sequence: 2 },
-        { requestId: "quarantined", bridgeSessionId: "s3", threadId: "t3", state: "unknown", createdAt: timestamp, updatedAt: timestamp, sequence: 3 },
+        {
+          requestId: "prepared-a",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          sequence: 1,
+        },
+        {
+          requestId: "prepared-b",
+          bridgeSessionId: "s2",
+          threadId: "t2",
+          state: "prepared",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          sequence: 2,
+        },
+        {
+          requestId: "quarantined",
+          bridgeSessionId: "s3",
+          threadId: "t3",
+          state: "unknown",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          sequence: 3,
+        },
       ],
     });
 
@@ -720,7 +758,12 @@ describe("load rejects shapes it cannot trust", () => {
     expect(store.allRecords()).toHaveLength(2);
     expect(store.classify("new").action).toBe("dispatch");
     await store.markPrepared({ requestId: "new", bridgeSessionId: "s-new", threadId: "t-new" });
-    expect(store.unresolved().map((record) => record.requestId).sort()).toEqual(["c", "new"]);
+    expect(
+      store
+        .unresolved()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["c", "new"]);
   });
 
   test("compact input that inflates past the normalized byte cap blocks unknown dispatches", async () => {
@@ -729,8 +772,24 @@ describe("load rejects shapes it cannot trust", () => {
     const contents = JSON.stringify({
       version: DISPATCH_JOURNAL_VERSION,
       records: [
-        { requestId: "prepared-a", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: timestamp, updatedAt: timestamp, sequence: 1 },
-        { requestId: "prepared-b", bridgeSessionId: "s2", threadId: "t2", state: "prepared", createdAt: timestamp, updatedAt: timestamp, sequence: 2 },
+        {
+          requestId: "prepared-a",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          sequence: 1,
+        },
+        {
+          requestId: "prepared-b",
+          bridgeSessionId: "s2",
+          threadId: "t2",
+          state: "prepared",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          sequence: 2,
+        },
       ],
     });
     mkdirSync(join(codexHome, "orkestrator-bridge"), { recursive: true });
@@ -782,14 +841,71 @@ describe("load rejects shapes it cannot trust", () => {
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION,
       records: [
-        { requestId: "unknown-state", bridgeSessionId: "s1", threadId: "t1", state: "surprise", createdAt: timestamp, updatedAt: timestamp },
-        { requestId: "missing-session", threadId: "t1", state: "prepared", createdAt: timestamp, updatedAt: timestamp },
-        { requestId: "bad-thread", bridgeSessionId: "s1", threadId: 42, state: "prepared", createdAt: timestamp, updatedAt: timestamp },
-        { requestId: "accepted-no-turn", bridgeSessionId: "s1", threadId: "t1", state: "accepted", createdAt: timestamp, updatedAt: timestamp },
-        { requestId: "bad-terminal", bridgeSessionId: "s1", threadId: "t1", state: "terminal", terminalStatus: "unknown", createdAt: timestamp, updatedAt: timestamp },
-        { requestId: "retryable-with-turn", bridgeSessionId: "s1", threadId: "t1", turnId: "turn-1", state: "retryable", createdAt: timestamp, updatedAt: timestamp },
-        { requestId: "bad-time", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: "invalid", updatedAt: timestamp },
-        { requestId: "good", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: timestamp, updatedAt: timestamp },
+        {
+          requestId: "unknown-state",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "surprise",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          requestId: "missing-session",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          requestId: "bad-thread",
+          bridgeSessionId: "s1",
+          threadId: 42,
+          state: "prepared",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          requestId: "accepted-no-turn",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "accepted",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          requestId: "bad-terminal",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "terminal",
+          terminalStatus: "unknown",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          requestId: "retryable-with-turn",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          turnId: "turn-1",
+          state: "retryable",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+        {
+          requestId: "bad-time",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: "invalid",
+          updatedAt: timestamp,
+        },
+        {
+          requestId: "good",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
       ],
     });
 
@@ -819,14 +935,16 @@ describe("load rejects shapes it cannot trust", () => {
     let clock = 0;
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION,
-      records: [{
-        requestId: "ambiguous",
-        bridgeSessionId: "s1",
-        threadId: "t1",
-        state: "unknown",
-        createdAt: "invalid",
-        updatedAt: "invalid",
-      }],
+      records: [
+        {
+          requestId: "ambiguous",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "unknown",
+          createdAt: "invalid",
+          updatedAt: "invalid",
+        },
+      ],
     });
     const store = new DispatchJournal({
       codexHome,
@@ -865,11 +983,13 @@ describe("load rejects shapes it cannot trust", () => {
       action: "already-done",
       record: { quarantined: true },
     });
-    await expect(restored.markPrepared({
-      requestId: "third",
-      bridgeSessionId: "s3",
-      threadId: "t3",
-    })).rejects.toThrow("safety-record limit (2) is exhausted");
+    await expect(
+      restored.markPrepared({
+        requestId: "third",
+        bridgeSessionId: "s3",
+        threadId: "t3",
+      }),
+    ).rejects.toThrow("safety-record limit (2) is exhausted");
   });
 
   test("a second load does not re-read the file over live state", async () => {
@@ -883,14 +1003,16 @@ describe("load rejects shapes it cannot trust", () => {
     // journal's in-memory records are the authority for its own dispatches.
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION,
-      records: [{
-        requestId: "from-disk",
-        bridgeSessionId: "s1",
-        threadId: "t1",
-        state: "prepared",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }],
+      records: [
+        {
+          requestId: "from-disk",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ],
     });
     await store.load();
 
@@ -995,10 +1117,12 @@ describe("garbage collection edge cases", () => {
     await store.markRetryable("orphan-a");
     await store.markRetryable("orphan-b");
 
-    expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
-      "orphan-a",
-      "orphan-b",
-    ]);
+    expect(
+      store
+        .allRecords()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["orphan-a", "orphan-b"]);
   });
 
   test("the empty sentinel does not shield a real session from its own sweep", async () => {
@@ -1011,10 +1135,12 @@ describe("garbage collection edge cases", () => {
     await store.markPrepared({ requestId: "new", bridgeSessionId: "s1", threadId: "t1" });
     await store.markRetryable("new");
 
-    expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
-      "new",
-      "orphan",
-    ]);
+    expect(
+      store
+        .allRecords()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["new", "orphan"]);
   });
 
   test("a record with an unparseable timestamp is quarantined instead of trusted", async () => {
@@ -1055,29 +1181,35 @@ describe("garbage collection edge cases", () => {
 
     // Both ids stay spent, but malformed data never reaches recovery as an
     // unknown state or an invalid clock value.
-    expect(store.allRecords().map((record) => record.requestId).sort()).toEqual([
-      "prepared-garbage",
-      "terminal-garbage",
-    ]);
-    expect(store.allRecords().every(
-      (record) => record.state === "terminal" && record.terminalStatus === "failed",
-    )).toBe(true);
+    expect(
+      store
+        .allRecords()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["prepared-garbage", "terminal-garbage"]);
+    expect(
+      store
+        .allRecords()
+        .every((record) => record.state === "terminal" && record.terminalStatus === "failed"),
+    ).toBe(true);
   });
 
   test("collection during load is not written back until the next mutation", async () => {
     const { codexHome } = journalHome("ork-journal-lazy-write-");
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION,
-      records: [{
-        requestId: "expired",
-        bridgeSessionId: "s1",
-        threadId: "t1",
-        state: "terminal",
-        terminalStatus: "completed",
-        createdAt: "2026-01-01T00:00:00.000Z",
-        updatedAt: "2026-01-01T00:00:00.000Z",
-        sequence: 1,
-      }],
+      records: [
+        {
+          requestId: "expired",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "terminal",
+          terminalStatus: "completed",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          sequence: 1,
+        },
+      ],
     });
     const store = new DispatchJournal({
       codexHome,
@@ -1091,12 +1223,12 @@ describe("garbage collection edge cases", () => {
     expect(store.get("expired")).toBeUndefined();
     // Load itself does not write. That keeps startup read-only, so an unwritable
     // CODEX_HOME cannot turn a restart into a warning storm.
-    expect(readJournalFile(codexHome).records.map((record) => record.requestId))
-      .toEqual(["expired"]);
+    expect(readJournalFile(codexHome).records.map((record) => record.requestId)).toEqual([
+      "expired",
+    ]);
 
     await store.markPrepared({ requestId: "next", bridgeSessionId: "s1", threadId: "t1" });
-    expect(readJournalFile(codexHome).records.map((record) => record.requestId))
-      .toEqual(["next"]);
+    expect(readJournalFile(codexHome).records.map((record) => record.requestId)).toEqual(["next"]);
   });
 
   test("old unresolved records remain spent until runtime reconciliation", async () => {
@@ -1105,8 +1237,25 @@ describe("garbage collection edge cases", () => {
     writeJournalFile(codexHome, {
       version: DISPATCH_JOURNAL_VERSION,
       records: [
-        { requestId: "prepared", bridgeSessionId: "s1", threadId: "t1", state: "prepared", createdAt: old, updatedAt: old, sequence: 1 },
-        { requestId: "accepted", bridgeSessionId: "s2", threadId: "t2", turnId: "turn-2", state: "accepted", createdAt: old, updatedAt: old, sequence: 2 },
+        {
+          requestId: "prepared",
+          bridgeSessionId: "s1",
+          threadId: "t1",
+          state: "prepared",
+          createdAt: old,
+          updatedAt: old,
+          sequence: 1,
+        },
+        {
+          requestId: "accepted",
+          bridgeSessionId: "s2",
+          threadId: "t2",
+          turnId: "turn-2",
+          state: "accepted",
+          createdAt: old,
+          updatedAt: old,
+          sequence: 2,
+        },
       ],
     });
     const store = new DispatchJournal({
@@ -1119,15 +1268,19 @@ describe("garbage collection edge cases", () => {
     });
     await store.load();
 
-    expect(store.unresolved().map((record) => record.requestId).sort()).toEqual([
-      "accepted",
-      "prepared",
-    ]);
-    await expect(store.markPrepared({
-      requestId: "new",
-      bridgeSessionId: "s3",
-      threadId: "t3",
-    })).rejects.toThrow("safety-record limit (2) is exhausted");
+    expect(
+      store
+        .unresolved()
+        .map((record) => record.requestId)
+        .sort(),
+    ).toEqual(["accepted", "prepared"]);
+    await expect(
+      store.markPrepared({
+        requestId: "new",
+        bridgeSessionId: "s3",
+        threadId: "t3",
+      }),
+    ).rejects.toThrow("safety-record limit (2) is exhausted");
   });
 });
 
@@ -1153,16 +1306,23 @@ describe("reconcileFromThreadTurns", () => {
   });
 
   test("splits the authoritative item order around a steering message", () => {
-    expect(reconcileFromThreadTurns([{
-      id: "turn-1",
-      status: "inProgress",
-      items: [
-        { type: "userMessage", clientId: "req-original" },
-        { id: "before", type: "agentMessage" },
-        { type: "userMessage", clientId: "req-steer" },
-        { id: "after", type: "commandExecution" },
-      ],
-    }], "req-steer")).toEqual({
+    expect(
+      reconcileFromThreadTurns(
+        [
+          {
+            id: "turn-1",
+            status: "inProgress",
+            items: [
+              { type: "userMessage", clientId: "req-original" },
+              { id: "before", type: "agentMessage" },
+              { type: "userMessage", clientId: "req-steer" },
+              { id: "after", type: "commandExecution" },
+            ],
+          },
+        ],
+        "req-steer",
+      ),
+    ).toEqual({
       result: "attach",
       turnId: "turn-1",
       precedingItemIds: ["before"],
@@ -1174,14 +1334,21 @@ describe("reconcileFromThreadTurns", () => {
     // The prefix being empty here does not mean nothing preceded the steer, only
     // that app-server had not persisted it yet. Callers must not read absence
     // from `precedingItemIds`; `followingItemIds` is the side that carries proof.
-    expect(reconcileFromThreadTurns([{
-      id: "turn-1",
-      status: "inProgress",
-      items: [
-        { type: "userMessage", clientId: "req-original" },
-        { type: "userMessage", clientId: "req-steer" },
-      ],
-    }], "req-steer")).toEqual({
+    expect(
+      reconcileFromThreadTurns(
+        [
+          {
+            id: "turn-1",
+            status: "inProgress",
+            items: [
+              { type: "userMessage", clientId: "req-original" },
+              { type: "userMessage", clientId: "req-steer" },
+            ],
+          },
+        ],
+        "req-steer",
+      ),
+    ).toEqual({
       result: "attach",
       turnId: "turn-1",
       precedingItemIds: [],
@@ -1190,15 +1357,22 @@ describe("reconcileFromThreadTurns", () => {
   });
 
   test("ignores items app-server returned without an id", () => {
-    expect(reconcileFromThreadTurns([{
-      id: "turn-1",
-      status: "inProgress",
-      items: [
-        { type: "userMessage", clientId: "req-steer" },
-        { type: "agentMessage" },
-        { id: "after", type: "commandExecution" },
-      ],
-    }], "req-steer")).toEqual({
+    expect(
+      reconcileFromThreadTurns(
+        [
+          {
+            id: "turn-1",
+            status: "inProgress",
+            items: [
+              { type: "userMessage", clientId: "req-steer" },
+              { type: "agentMessage" },
+              { id: "after", type: "commandExecution" },
+            ],
+          },
+        ],
+        "req-steer",
+      ),
+    ).toEqual({
       result: "attach",
       turnId: "turn-1",
       precedingItemIds: [],

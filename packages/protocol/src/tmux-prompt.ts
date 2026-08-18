@@ -49,8 +49,7 @@ export function buildTmuxPromptWithAttachments(
       return `- ${attachment.name}: ${attachmentPath}`;
     })
     .join("\n");
-  const attachmentText =
-    `Attached images have been saved in the workspace. Use these image paths as task context:\n${attachmentList}`;
+  const attachmentText = `Attached images have been saved in the workspace. Use these image paths as task context:\n${attachmentList}`;
 
   return text ? `${text}\n\n${attachmentText}` : attachmentText;
 }
@@ -62,9 +61,7 @@ export function buildTmuxPromptWithAttachments(
  * so the drainer must not trust its shape. Anything malformed is dropped rather
  * than typed into the pane.
  */
-export function parseTmuxPromptAttachments(
-  value: unknown,
-): TmuxPromptAttachment[] {
+export function parseTmuxPromptAttachments(value: unknown): TmuxPromptAttachment[] {
   if (!Array.isArray(value)) return [];
   const attachments: TmuxPromptAttachment[] = [];
   for (const entry of value) {
@@ -80,10 +77,7 @@ export function parseTmuxPromptAttachments(
 }
 
 /** Key under which a tmux tab's queue and per-tab state are addressed. */
-export function createClaudeTmuxStateKey(
-  environmentId: string,
-  tabId: string,
-): string {
+export function createClaudeTmuxStateKey(environmentId: string, tabId: string): string {
   return `env:${environmentId}:tab:${tabId}`;
 }
 

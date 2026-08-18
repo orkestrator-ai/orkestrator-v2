@@ -213,11 +213,8 @@ describe("buildApprovalResponse", () => {
     const params = {
       permissions: { network: { allowAll: true }, fileSystem: { writeRoots: ["/tmp"] } },
     };
-    const granted = buildApprovalResponse(
-      "item/permissions/requestApproval",
-      "approve",
-      params,
-    ).result as { permissions: Record<string, unknown>; scope: string };
+    const granted = buildApprovalResponse("item/permissions/requestApproval", "approve", params)
+      .result as { permissions: Record<string, unknown>; scope: string };
 
     expect(granted.permissions).toEqual(params.permissions);
     expect(granted.scope).toBe("turn");
@@ -287,7 +284,10 @@ describe("describeApprovalOutcome", () => {
       ...base,
       kind: "file-change",
       command: undefined,
-      changes: [{ path: "/a", kind: "update" }, { path: "/b", kind: "add" }],
+      changes: [
+        { path: "/a", kind: "update" },
+        { path: "/b", kind: "add" },
+      ],
     };
     expect(describeApprovalOutcome(patch, "deny", "answered")).toContain("change 2 file(s)");
 

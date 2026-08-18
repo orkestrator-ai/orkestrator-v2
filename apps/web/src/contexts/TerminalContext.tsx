@@ -2,8 +2,20 @@
 import { createContext, useContext, useCallback, useMemo, useState, ReactNode } from "react";
 
 // Terminal-specific tab types
-export type TerminalTabType = "plain" | "claude" | "opencode" | "codex" | "cursor" | "grok" | "root";
-export type CreatableTabType = TerminalTabType | "agent-native" | "browser" | "looped-review" | "multi-review";
+export type TerminalTabType =
+  | "plain"
+  | "claude"
+  | "opencode"
+  | "codex"
+  | "cursor"
+  | "grok"
+  | "root";
+export type CreatableTabType =
+  | TerminalTabType
+  | "agent-native"
+  | "browser"
+  | "looped-review"
+  | "multi-review";
 export type AgentLaunchModeOverride = "cli" | "native" | "tmux";
 
 // All tab types including file viewer and native agent tabs
@@ -76,7 +88,9 @@ interface TerminalContextValue {
    * the environment or tab limit changes between rendering and dispatch.
    */
   createTab: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null;
-  setCreateTab: (fn: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null) => void;
+  setCreateTab: (
+    fn: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null,
+  ) => void;
   selectTab: ((index: number) => void) | null;
   setSelectTab: (fn: ((index: number) => void) | null) => void;
   closeActiveTab: (() => void) | null;
@@ -86,7 +100,9 @@ interface TerminalContextValue {
 
   // File tab management
   createFileTab: ((filePath: string, options?: CreateFileTabOptions) => void) | null;
-  setCreateFileTab: (fn: ((filePath: string, options?: CreateFileTabOptions) => void) | null) => void;
+  setCreateFileTab: (
+    fn: ((filePath: string, options?: CreateFileTabOptions) => void) | null,
+  ) => void;
   openFilePaths: string[];
   setOpenFilePaths: (paths: string[]) => void;
 }
@@ -98,13 +114,19 @@ interface TerminalProviderProps {
 }
 
 export function TerminalProvider({ children }: TerminalProviderProps) {
-  const [terminalWrite, setTerminalWriteState] = useState<((data: string) => Promise<void>) | null>(null);
+  const [terminalWrite, setTerminalWriteState] = useState<((data: string) => Promise<void>) | null>(
+    null,
+  );
   const [lastPrUrl, setLastPrUrl] = useState<string | null>(null);
-  const [createTabFn, setCreateTabFn] = useState<((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null>(null);
+  const [createTabFn, setCreateTabFn] = useState<
+    ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null
+  >(null);
   const [selectTabFn, setSelectTabFn] = useState<((index: number) => void) | null>(null);
   const [closeActiveTabFn, setCloseActiveTabFn] = useState<(() => void) | null>(null);
   const [tabCount, setTabCount] = useState(0);
-  const [createFileTabFn, setCreateFileTabFn] = useState<((filePath: string, options?: CreateFileTabOptions) => void) | null>(null);
+  const [createFileTabFn, setCreateFileTabFn] = useState<
+    ((filePath: string, options?: CreateFileTabOptions) => void) | null
+  >(null);
   const [openFilePaths, setOpenFilePaths] = useState<string[]>([]);
 
   // Note: The setters below use the pattern `setState(() => fn)` instead of `setState(fn)`.
@@ -115,9 +137,12 @@ export function TerminalProvider({ children }: TerminalProviderProps) {
     setTerminalWriteState(() => write);
   }, []);
 
-  const setCreateTab = useCallback((fn: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null) => {
-    setCreateTabFn(() => fn);
-  }, []);
+  const setCreateTab = useCallback(
+    (fn: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null) => {
+      setCreateTabFn(() => fn);
+    },
+    [],
+  );
 
   const setSelectTab = useCallback((fn: ((index: number) => void) | null) => {
     setSelectTabFn(() => fn);
@@ -127,9 +152,12 @@ export function TerminalProvider({ children }: TerminalProviderProps) {
     setCloseActiveTabFn(() => fn);
   }, []);
 
-  const setCreateFileTab = useCallback((fn: ((filePath: string, options?: CreateFileTabOptions) => void) | null) => {
-    setCreateFileTabFn(() => fn);
-  }, []);
+  const setCreateFileTab = useCallback(
+    (fn: ((filePath: string, options?: CreateFileTabOptions) => void) | null) => {
+      setCreateFileTabFn(() => fn);
+    },
+    [],
+  );
 
   // Memoized so a re-render of the provider's parent (App re-renders on every
   // environment-store write) does not hand consumers a brand-new context value
@@ -168,14 +196,10 @@ export function TerminalProvider({ children }: TerminalProviderProps) {
       createFileTabFn,
       setCreateFileTab,
       openFilePaths,
-    ]
+    ],
   );
 
-  return (
-    <TerminalContext.Provider value={value}>
-      {children}
-    </TerminalContext.Provider>
-  );
+  return <TerminalContext.Provider value={value}>{children}</TerminalContext.Provider>;
 }
 
 export function useTerminalContext(): TerminalContextValue {

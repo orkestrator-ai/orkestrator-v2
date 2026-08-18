@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Eye, Plus, Trash2, Wrench } from "lucide-react";
-import type {
-  MultiReviewModelSelection,
-} from "@orkestrator/protocol/multi-review";
+import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import { MULTI_REVIEW_MAX_REVIEWERS } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 import { Button } from "@/components/ui/button";
@@ -64,20 +62,23 @@ function initialRow(
   const model = firstModelFor(agent, catalog, preferredModels);
   const effort = defaultEffortFor(agent, model, catalog, preferredEfforts);
   return {
-    key: createUuid(), agent, model,
+    key: createUuid(),
+    agent,
+    model,
     ...(effort === "default" ? {} : { reasoningEffort: effort }),
   };
 }
 
 function flatCatalog(catalog: AgentModelCatalog): AgentModel[] {
-  return (["claude", "codex", "cursor", "grok", "opencode"] as LaunchAgent[])
-    .flatMap((agent) => modelsForAgent(catalog, agent).map((model) => ({
+  return (["claude", "codex", "cursor", "grok", "opencode"] as LaunchAgent[]).flatMap((agent) =>
+    modelsForAgent(catalog, agent).map((model) => ({
       platform: agent,
       id: model.id,
       label: model.name,
       description: model.description,
       reasoning: model.reasoningEfforts.map((effort) => ({ id: effort, label: effort })),
-    })));
+    })),
+  );
 }
 
 function ModelRow({
@@ -103,12 +104,12 @@ function ModelRow({
   onChange: (row: PickerRow) => void;
   onRemove?: () => void;
 }) {
-  const selected = modelsForAgent(catalog, row.agent)
-    .find((model) => model.id === row.model);
-  const reasoning = selected?.reasoningEfforts.map((effort) => ({
-    id: effort,
-    label: effort === "xhigh" ? "Extra high" : effort[0]?.toUpperCase() + effort.slice(1),
-  })) ?? [];
+  const selected = modelsForAgent(catalog, row.agent).find((model) => model.id === row.model);
+  const reasoning =
+    selected?.reasoningEfforts.map((effort) => ({
+      id: effort,
+      label: effort === "xhigh" ? "Extra high" : effort[0]?.toUpperCase() + effort.slice(1),
+    })) ?? [];
   /**
    * Applies the chosen model *and* the platform it came from in one update.
    *
@@ -134,7 +135,14 @@ function ModelRow({
           {label}
         </Label>
         {onRemove && (
-          <Button type="button" variant="ghost" size="icon" className="size-7" onClick={onRemove} aria-label={`Remove ${label.toLowerCase()}`}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="size-7"
+            onClick={onRemove}
+            aria-label={`Remove ${label.toLowerCase()}`}
+          >
             <Trash2 className="size-3.5" />
           </Button>
         )}
@@ -156,10 +164,12 @@ function ModelRow({
         reasoningOptions={reasoning}
         selectedReasoningId={row.reasoningEffort ?? ""}
         selectedReasoningLabel={row.reasoningEffort ?? "Default effort"}
-        onReasoningChange={(reasoningEffort) => onChange({
-          ...row,
-          reasoningEffort: reasoningEffort || undefined,
-        })}
+        onReasoningChange={(reasoningEffort) =>
+          onChange({
+            ...row,
+            reasoningEffort: reasoningEffort || undefined,
+          })
+        }
         title={label}
         className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5"
       />
@@ -179,9 +189,8 @@ export function MultiReviewLaunchDialog({
 }: MultiReviewLaunchDialogProps) {
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
   const models = useMemo(() => flatCatalog(catalog), [catalog]);
-  const makeRow = () => initialRow(
-    defaultAgent, catalog, preferredModels, preferredReasoningEfforts,
-  );
+  const makeRow = () =>
+    initialRow(defaultAgent, catalog, preferredModels, preferredReasoningEfforts);
   const [reviewers, setReviewers] = useState<PickerRow[]>(() => [makeRow(), makeRow()]);
   const [fixModel, setFixModel] = useState<PickerRow>(() => makeRow());
   const wasOpen = useRef(false);
@@ -207,7 +216,8 @@ export function MultiReviewLaunchDialog({
             Configure Multi Review
           </DialogTitle>
           <DialogDescription>
-            Run independent structured reviews, then use one fix model to reconcile them into a single report.
+            Run independent structured reviews, then use one fix model to reconcile them into a
+            single report.
           </DialogDescription>
         </DialogHeader>
 
@@ -221,11 +231,16 @@ export function MultiReviewLaunchDialog({
             onConfirm({ reviewers: reviewers.map(clean), fixModel: clean(fixModel) });
           }}
         >
-          <fieldset disabled={busy} className="min-h-0 flex-1 overflow-y-auto border-0 px-5 py-5 sm:px-6">
+          <fieldset
+            disabled={busy}
+            className="min-h-0 flex-1 overflow-y-auto border-0 px-5 py-5 sm:px-6"
+          >
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold">Review models</h3>
-                <p className="text-xs text-zinc-500">Each model receives its own isolated review session.</p>
+                <p className="text-xs text-zinc-500">
+                  Each model receives its own isolated review session.
+                </p>
               </div>
               <Button
                 type="button"
@@ -233,8 +248,11 @@ export function MultiReviewLaunchDialog({
                 size="sm"
                 className="gap-1.5"
                 disabled={reviewers.length >= MULTI_REVIEW_MAX_REVIEWERS}
-                onClick={() => setReviewers((rows) => rows.length < MULTI_REVIEW_MAX_REVIEWERS
-                  ? [...rows, makeRow()] : rows)}
+                onClick={() =>
+                  setReviewers((rows) =>
+                    rows.length < MULTI_REVIEW_MAX_REVIEWERS ? [...rows, makeRow()] : rows,
+                  )
+                }
               >
                 <Plus className="size-3.5" /> Add model
               </Button>
@@ -251,10 +269,14 @@ export function MultiReviewLaunchDialog({
                   favorites={favorites}
                   onToggleFavorite={toggleFavorite}
                   onReorderFavorites={reorderFavorites}
-                  onChange={(next) => setReviewers((rows) => rows.map((item) => item.key === row.key ? next : item))}
-                  onRemove={reviewers.length > 1
-                    ? () => setReviewers((rows) => rows.filter((item) => item.key !== row.key))
-                    : undefined}
+                  onChange={(next) =>
+                    setReviewers((rows) => rows.map((item) => (item.key === row.key ? next : item)))
+                  }
+                  onRemove={
+                    reviewers.length > 1
+                      ? () => setReviewers((rows) => rows.filter((item) => item.key !== row.key))
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -276,12 +298,20 @@ export function MultiReviewLaunchDialog({
               onChange={setFixModel}
             />
             <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-              This model deduplicates every report and remains attached to address the final issues and coverage gaps.
+              This model deduplicates every report and remains attached to address the final issues
+              and coverage gaps.
             </p>
           </fieldset>
 
           <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={busy}
+            >
+              Cancel
+            </Button>
             <Button type="submit" disabled={busy || reviewers.length === 0}>
               {busy ? "Starting Multi Review…" : `Start ${reviewers.length}-model review`}
             </Button>

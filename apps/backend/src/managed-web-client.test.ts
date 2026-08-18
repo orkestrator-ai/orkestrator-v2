@@ -13,17 +13,23 @@ import { TailscaleServeConflictError } from "./tailscale-serve.js";
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => (
-    rm(directory, { recursive: true, force: true })
-  )));
+  await Promise.all(
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
+  );
 });
 
 function memoryOwnershipStore(initial: ManagedWebClientOwnership | null = null) {
   let ownership = initial;
   return {
     load: mock(async () => ownership),
-    save: mock(async (next: ManagedWebClientOwnership) => { ownership = next; }),
-    clear: mock(async () => { ownership = null; }),
+    save: mock(async (next: ManagedWebClientOwnership) => {
+      ownership = next;
+    }),
+    clear: mock(async () => {
+      ownership = null;
+    }),
     current: () => ownership,
   };
 }
@@ -109,11 +115,17 @@ describe("managed Electron web client", () => {
   });
 
   test("reports a targeted reset failure without pretending web access stopped", async () => {
-    const client = new ManagedWebClient({
-      start: mock(async () => "https://workstation.example.ts.net/"),
-      stop: mock(async () => undefined),
-      clearHttpsPort: mock(async () => { throw new Error("permission denied"); }),
-    }, 443, { error: mock(() => undefined) });
+    const client = new ManagedWebClient(
+      {
+        start: mock(async () => "https://workstation.example.ts.net/"),
+        stop: mock(async () => undefined),
+        clearHttpsPort: mock(async () => {
+          throw new Error("permission denied");
+        }),
+      },
+      443,
+      { error: mock(() => undefined) },
+    );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
     await client.setEnabled(true);
 
@@ -131,7 +143,9 @@ describe("managed Electron web client", () => {
       throw new TailscaleServeConflictError(443, true);
     });
     const clearHttpsPort = mock(async () => undefined);
-    clearHttpsPort.mockImplementationOnce(async () => { throw new Error("daemon unavailable"); });
+    clearHttpsPort.mockImplementationOnce(async () => {
+      throw new Error("daemon unavailable");
+    });
     const client = new ManagedWebClient(
       { start, stop: mock(async () => undefined), clearHttpsPort },
       443,
@@ -170,7 +184,9 @@ describe("managed Electron web client", () => {
       if (clearCalls === 2) throw new Error("ownership disk full");
     });
     const start = mock(async () => "https://workstation.example.ts.net/");
-    start.mockImplementationOnce(async () => { throw new TailscaleServeConflictError(443, true); });
+    start.mockImplementationOnce(async () => {
+      throw new TailscaleServeConflictError(443, true);
+    });
     const client = new ManagedWebClient(
       {
         start,
@@ -196,13 +212,21 @@ describe("managed Electron web client", () => {
     const start = mock(async (): Promise<string> => {
       throw new TailscaleServeConflictError(443, true);
     });
-    start.mockImplementationOnce(async () => { throw new TailscaleServeConflictError(443, true); });
-    start.mockImplementationOnce(async () => { throw new Error("republish failed"); });
-    const client = new ManagedWebClient({
-      start,
-      stop: mock(async () => undefined),
-      clearHttpsPort: mock(async () => undefined),
-    }, 443, { error: mock(() => undefined) });
+    start.mockImplementationOnce(async () => {
+      throw new TailscaleServeConflictError(443, true);
+    });
+    start.mockImplementationOnce(async () => {
+      throw new Error("republish failed");
+    });
+    const client = new ManagedWebClient(
+      {
+        start,
+        stop: mock(async () => undefined),
+        clearHttpsPort: mock(async () => undefined),
+      },
+      443,
+      { error: mock(() => undefined) },
+    );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
     await client.setEnabled(true);
 
@@ -223,17 +247,26 @@ describe("managed Electron web client", () => {
     start.mockImplementationOnce(async () => {
       throw new TailscaleServeConflictError(443, true);
     });
-    const client = new ManagedWebClient({
-      start,
-      stop: mock(async () => { order.push("stop"); }),
-      clearHttpsPort: mock(() => new Promise<void>((resolve) => {
-        order.push("reset-start");
-        releaseReset = () => {
-          order.push("reset-end");
-          resolve();
-        };
-      })),
-    }, 443, { error: mock(() => undefined) });
+    const client = new ManagedWebClient(
+      {
+        start,
+        stop: mock(async () => {
+          order.push("stop");
+        }),
+        clearHttpsPort: mock(
+          () =>
+            new Promise<void>((resolve) => {
+              order.push("reset-start");
+              releaseReset = () => {
+                order.push("reset-end");
+                resolve();
+              };
+            }),
+        ),
+      },
+      443,
+      { error: mock(() => undefined) },
+    );
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
     await client.setEnabled(true);
     order.length = 0;
@@ -263,9 +296,12 @@ describe("managed Electron web client", () => {
 
   test("serializes rapid transitions and shuts down after pending work", async () => {
     let releaseStart: (() => void) | undefined;
-    const start = mock(() => new Promise<string>((resolve) => {
-      releaseStart = () => resolve("https://workstation.example.ts.net/");
-    }));
+    const start = mock(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseStart = () => resolve("https://workstation.example.ts.net/");
+        }),
+    );
     const stop = mock(async () => undefined);
     const client = new ManagedWebClient({ start, stop });
     client.setBrowserListenerUrl("http://127.0.0.1:34121/");
@@ -284,7 +320,9 @@ describe("managed Electron web client", () => {
 
   test("retains running state and ownership when disabling fails", async () => {
     const ownership = memoryOwnershipStore();
-    const stop = mock(async () => { throw new Error("permission denied"); });
+    const stop = mock(async () => {
+      throw new Error("permission denied");
+    });
     const client = new ManagedWebClient(
       { start: mock(async () => "https://workstation.example.ts.net/"), stop },
       443,
@@ -307,8 +345,12 @@ describe("managed Electron web client", () => {
     const ownership = memoryOwnershipStore();
     const client = new ManagedWebClient(
       {
-        start: mock(async () => { throw new Error("URL discovery failed"); }),
-        stop: mock(async () => { throw new Error("cleanup failed"); }),
+        start: mock(async () => {
+          throw new Error("URL discovery failed");
+        }),
+        stop: mock(async () => {
+          throw new Error("cleanup failed");
+        }),
       },
       443,
       { error: mock(() => undefined) },
@@ -337,7 +379,10 @@ describe("managed Electron web client", () => {
 
     await expect(client.setEnabled(true)).resolves.toMatchObject({ running: true, error: null });
     expect(start).toHaveBeenCalledWith(34121, 443, { adoptExisting: true });
-    await expect(client.setEnabled(false)).resolves.toMatchObject({ enabled: false, running: false });
+    await expect(client.setEnabled(false)).resolves.toMatchObject({
+      enabled: false,
+      running: false,
+    });
     expect(stopOwned).toHaveBeenCalledWith(34121, 443);
     expect(ownership.current()).toBeNull();
   });
@@ -373,7 +418,9 @@ describe("managed Electron web client", () => {
 
   test("rejects malformed persisted ownership without touching Serve", async () => {
     const store = {
-      load: mock(async () => { throw new Error("Managed web client ownership file is invalid"); }),
+      load: mock(async () => {
+        throw new Error("Managed web client ownership file is invalid");
+      }),
       save: mock(async () => undefined),
       clear: mock(async () => undefined),
     };

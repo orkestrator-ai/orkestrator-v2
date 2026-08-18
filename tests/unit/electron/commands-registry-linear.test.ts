@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -147,20 +142,21 @@ exit 1
     return created;
   }
 
-
-
   test("verifies, stores, and disconnects Linear auth through command handlers", async () => {
     const originalFetch = globalThis.fetch;
     const { context } = createContext(createEnvironment());
     const commands = createCommandRegistry();
-    let auth: { apiKey: string; viewer?: { id: string; name: string; email?: string } } | null = null;
+    let auth: { apiKey: string; viewer?: { id: string; name: string; email?: string } } | null =
+      null;
 
     Object.assign(context.storage, {
       getLinearAuth: mock(async () => auth),
-      saveLinearAuth: mock(async (apiKey: string, viewer?: { id: string; name: string; email?: string }) => {
-        auth = { apiKey, viewer };
-        return auth;
-      }),
+      saveLinearAuth: mock(
+        async (apiKey: string, viewer?: { id: string; name: string; email?: string }) => {
+          auth = { apiKey, viewer };
+          return auth;
+        },
+      ),
       clearLinearAuth: mock(async () => {
         auth = null;
       }),
@@ -168,11 +164,14 @@ exit 1
 
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toMatchObject({ Authorization: "lin_api_secret" });
-      return new Response(JSON.stringify({
-        data: {
-          viewer: { id: "viewer-1", name: "Ada", email: "ada@example.com" },
-        },
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          data: {
+            viewer: { id: "viewer-1", name: "Ada", email: "ada@example.com" },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }) as unknown as typeof fetch;
 
     try {
@@ -181,7 +180,9 @@ exit 1
         hasToken: false,
       });
 
-      await expect(commands.get("connect_linear")?.({ apiKey: " lin_api_secret " }, context)).resolves.toEqual({
+      await expect(
+        commands.get("connect_linear")?.({ apiKey: " lin_api_secret " }, context),
+      ).resolves.toEqual({
         connected: true,
         hasToken: true,
         viewer: { id: "viewer-1", name: "Ada", email: "ada@example.com" },
@@ -204,8 +205,6 @@ exit 1
     }
   });
 
-
-
   test("posts Linear issue comments through command handlers", async () => {
     const originalFetch = globalThis.fetch;
     const { context } = createContext(createEnvironment());
@@ -216,34 +215,45 @@ exit 1
     });
 
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
-      const request = JSON.parse(String(init?.body)) as { query: string; variables: Record<string, string> };
+      const request = JSON.parse(String(init?.body)) as {
+        query: string;
+        variables: Record<string, string>;
+      };
       expect(init?.headers).toMatchObject({ Authorization: "lin_api_secret" });
       expect(request.query).toContain("OrkestratorLinearIssueComment");
       expect(request.variables).toMatchObject({
         issueId: "issue-1",
         body: "Looks good",
       });
-      return new Response(JSON.stringify({
-        data: {
-          commentCreate: {
-            success: true,
-            comment: {
-              id: "comment-1",
-              body: "Looks good",
-              createdAt: "2026-06-28T12:10:00.000Z",
-              updatedAt: "2026-06-28T12:10:00.000Z",
-              user: { name: "Ada" },
+      return new Response(
+        JSON.stringify({
+          data: {
+            commentCreate: {
+              success: true,
+              comment: {
+                id: "comment-1",
+                body: "Looks good",
+                createdAt: "2026-06-28T12:10:00.000Z",
+                updatedAt: "2026-06-28T12:10:00.000Z",
+                user: { name: "Ada" },
+              },
             },
           },
-        },
-      }), { status: 200, headers: { "content-type": "application/json" } });
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }) as unknown as typeof fetch;
 
     try {
-      await expect(commands.get("post_linear_issue_comment")?.({
-        issueId: "issue-1",
-        body: " Looks good ",
-      }, context)).resolves.toEqual({
+      await expect(
+        commands.get("post_linear_issue_comment")?.(
+          {
+            issueId: "issue-1",
+            body: " Looks good ",
+          },
+          context,
+        ),
+      ).resolves.toEqual({
         id: "comment-1",
         body: "Looks good",
         createdAt: "2026-06-28T12:10:00.000Z",
@@ -254,8 +264,6 @@ exit 1
       globalThis.fetch = originalFetch;
     }
   });
-
-
 
   test("serializes concurrent Linear completion comments by pipeline ID", async () => {
     const originalFetch = globalThis.fetch;
@@ -283,42 +291,54 @@ exit 1
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { query: string };
       if (request.query.includes("OrkestratorLinearCompletionComments")) {
-        return new Response(JSON.stringify({
-          data: {
-            issue: {
-              comments: {
-                nodes: [],
-                pageInfo: { hasNextPage: false, endCursor: null },
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: {
+                comments: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
               },
             },
-          },
-        }), { status: 200, headers: { "content-type": "application/json" } });
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
 
       commentCreateCalls += 1;
       await new Promise((resolve) => setTimeout(resolve, 25));
-      return new Response(JSON.stringify({
-        data: {
-          commentCreate: {
-            success: true,
-            comment: { id: "comment-1", createdAt: "2026-06-28T12:00:00.000Z" },
+      return new Response(
+        JSON.stringify({
+          data: {
+            commentCreate: {
+              success: true,
+              comment: { id: "comment-1", createdAt: "2026-06-28T12:00:00.000Z" },
+            },
           },
-        },
-      }), { status: 200, headers: { "content-type": "application/json" } });
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }) as unknown as typeof fetch;
 
     try {
       const [first, second] = await Promise.all([
-        commands.get("post_linear_completion_comment")?.({
-          pipelineId: "pipeline-1",
-          issueId: "issue-1",
-          body: "Done",
-        }, context),
-        commands.get("post_linear_completion_comment")?.({
-          pipelineId: "pipeline-1",
-          issueId: "issue-1",
-          body: "Done",
-        }, context),
+        commands.get("post_linear_completion_comment")?.(
+          {
+            pipelineId: "pipeline-1",
+            issueId: "issue-1",
+            body: "Done",
+          },
+          context,
+        ),
+        commands.get("post_linear_completion_comment")?.(
+          {
+            pipelineId: "pipeline-1",
+            issueId: "issue-1",
+            body: "Done",
+          },
+          context,
+        ),
       ]);
 
       expect(commentCreateCalls).toBe(1);
@@ -336,8 +356,6 @@ exit 1
       globalThis.fetch = originalFetch;
     }
   });
-
-
 
   test("does not retry queued concurrent Linear completion comments after a failure", async () => {
     const originalFetch = globalThis.fetch;
@@ -365,37 +383,49 @@ exit 1
     globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
       const request = JSON.parse(String(init?.body)) as { query: string };
       if (request.query.includes("OrkestratorLinearCompletionComments")) {
-        return new Response(JSON.stringify({
-          data: {
-            issue: {
-              comments: {
-                nodes: [],
-                pageInfo: { hasNextPage: false, endCursor: null },
+        return new Response(
+          JSON.stringify({
+            data: {
+              issue: {
+                comments: {
+                  nodes: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
               },
             },
-          },
-        }), { status: 200, headers: { "content-type": "application/json" } });
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
       }
 
       commentCreateCalls += 1;
       await new Promise((resolve) => setTimeout(resolve, 25));
-      return new Response(JSON.stringify({
-        errors: [{ message: "Linear unavailable" }],
-      }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(
+        JSON.stringify({
+          errors: [{ message: "Linear unavailable" }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     }) as unknown as typeof fetch;
 
     try {
       const [first, second] = await Promise.allSettled([
-        commands.get("post_linear_completion_comment")?.({
-          pipelineId: "pipeline-1",
-          issueId: "issue-1",
-          body: "Done",
-        }, context),
-        commands.get("post_linear_completion_comment")?.({
-          pipelineId: "pipeline-1",
-          issueId: "issue-1",
-          body: "Done",
-        }, context),
+        commands.get("post_linear_completion_comment")?.(
+          {
+            pipelineId: "pipeline-1",
+            issueId: "issue-1",
+            body: "Done",
+          },
+          context,
+        ),
+        commands.get("post_linear_completion_comment")?.(
+          {
+            pipelineId: "pipeline-1",
+            issueId: "issue-1",
+            body: "Done",
+          },
+          context,
+        ),
       ]);
 
       expect(commentCreateCalls).toBe(1);
@@ -413,5 +443,4 @@ exit 1
       globalThis.fetch = originalFetch;
     }
   });
-
 });

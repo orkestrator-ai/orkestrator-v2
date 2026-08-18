@@ -35,15 +35,13 @@ describe("isModuleLoadError", () => {
     chunkLoadError.name = "ChunkLoadError";
 
     expect(isModuleLoadError(chunkLoadError)).toBe(true);
-    expect(isModuleLoadError(new TypeError(
-      "Failed to fetch dynamically imported module: https://host/assets/x-1234.js",
-    ))).toBe(true);
-    expect(isModuleLoadError(new Error(
-      "error loading dynamically imported module",
-    ))).toBe(true);
-    expect(isModuleLoadError(new Error(
-      "Importing a module script failed.",
-    ))).toBe(true);
+    expect(
+      isModuleLoadError(
+        new TypeError("Failed to fetch dynamically imported module: https://host/assets/x-1234.js"),
+      ),
+    ).toBe(true);
+    expect(isModuleLoadError(new Error("error loading dynamically imported module"))).toBe(true);
+    expect(isModuleLoadError(new Error("Importing a module script failed."))).toBe(true);
 
     expect(isModuleLoadError(new Error("Cannot read properties of undefined"))).toBe(false);
     expect(isModuleLoadError("not an error")).toBe(false);
@@ -100,11 +98,14 @@ describe("LazyLoadBoundary", () => {
   });
 
   test("classifies a chunk failure as a module load rather than a render failure", () => {
-    expect(createLazyLoadFailureDiagnostic(new TypeError(
-      "Failed to fetch dynamically imported module: https://host/assets/x-1234.js",
-    )).kind).toBe("module-load");
-    expect(createLazyLoadFailureDiagnostic(new TypeError("undefined is not a function")).kind)
-      .toBe("render");
+    expect(
+      createLazyLoadFailureDiagnostic(
+        new TypeError("Failed to fetch dynamically imported module: https://host/assets/x-1234.js"),
+      ).kind,
+    ).toBe("module-load");
+    expect(createLazyLoadFailureDiagnostic(new TypeError("undefined is not a function")).kind).toBe(
+      "render",
+    );
   });
 
   test("bounds the component chain and drops lines that are not component names", () => {
@@ -123,9 +124,7 @@ describe("LazyLoadBoundary", () => {
   });
 
   test("shows the supplied fallback while a lazy component is pending", () => {
-    const PendingComponent = lazy(
-      () => new Promise<{ default: () => ReactNode }>(() => {}),
-    );
+    const PendingComponent = lazy(() => new Promise<{ default: () => ReactNode }>(() => {}));
 
     render(
       <LazyLoadBoundary loadingFallback={<div>Loading feature…</div>}>
@@ -384,9 +383,7 @@ describe("LazyLoadBoundary", () => {
     await withSilencedReactErrors(async () => {
       render(
         <LazyLoadBoundary
-          renderError={(details) => (
-            <LazyLoadInlineErrorFallback {...details} isVisible={false} />
-          )}
+          renderError={(details) => <LazyLoadInlineErrorFallback {...details} isVisible={false} />}
         >
           <RejectedComponent />
         </LazyLoadBoundary>,
@@ -449,8 +446,6 @@ describe("LazyLoadBoundary", () => {
   test("renders a blocking dialog loading status", () => {
     render(<LazyDialogLoadingFallback label="Loading settings…" />);
 
-    expect(
-      screen.getByRole("status", { name: "Loading settings…" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("status", { name: "Loading settings…" })).toBeTruthy();
   });
 });

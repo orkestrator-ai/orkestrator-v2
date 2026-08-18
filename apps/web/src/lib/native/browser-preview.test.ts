@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import type { BrowserPreviewAttachInput, BrowserPreviewState } from "@orkestrator/protocol/browser-preview";
+import type {
+  BrowserPreviewAttachInput,
+  BrowserPreviewState,
+} from "@orkestrator/protocol/browser-preview";
 import {
   attachBrowserPreview,
   destroyBrowserPreview,
@@ -52,7 +55,9 @@ describe("native browser preview wrapper", () => {
     await expect(attachBrowserPreview(input)).resolves.toEqual(current);
     await expect(setBrowserPreviewBounds("browser-1", bounds)).resolves.toEqual(current);
     await expect(setBrowserPreviewVisible("browser-1", false)).resolves.toEqual(current);
-    await expect(navigateBrowserPreview("browser-1", "http://localhost:4000/")).resolves.toMatchObject({
+    await expect(
+      navigateBrowserPreview("browser-1", "http://localhost:4000/"),
+    ).resolves.toMatchObject({
       url: "http://localhost:4000/",
     });
     await goBackBrowserPreview("browser-1");
@@ -75,7 +80,9 @@ describe("native browser preview wrapper", () => {
   test("returns benign defaults for optional updates when the API is missing", async () => {
     window.orkestrator = undefined;
     expect(hasNativeBrowserPreview()).toBe(false);
-    await expect(setBrowserPreviewBounds("browser-1", { x: 0, y: 0, width: 0, height: 0 })).resolves.toBeNull();
+    await expect(
+      setBrowserPreviewBounds("browser-1", { x: 0, y: 0, width: 0, height: 0 }),
+    ).resolves.toBeNull();
     await expect(setBrowserPreviewVisible("browser-1", false)).resolves.toBeNull();
     await expect(destroyBrowserPreview("browser-1")).resolves.toBeUndefined();
   });
@@ -83,13 +90,17 @@ describe("native browser preview wrapper", () => {
   test("rejects required operations when the API is missing", async () => {
     window.orkestrator = undefined;
     const unavailable = "Native browser previews are unavailable";
-    await expect(attachBrowserPreview({
-      tabId: "browser-1",
-      url: "http://localhost:3000/",
-      bounds: { x: 0, y: 0, width: 1, height: 1 },
-      visible: true,
-    })).rejects.toThrow(unavailable);
-    await expect(navigateBrowserPreview("browser-1", "http://localhost:3000/")).rejects.toThrow(unavailable);
+    await expect(
+      attachBrowserPreview({
+        tabId: "browser-1",
+        url: "http://localhost:3000/",
+        bounds: { x: 0, y: 0, width: 1, height: 1 },
+        visible: true,
+      }),
+    ).rejects.toThrow(unavailable);
+    await expect(navigateBrowserPreview("browser-1", "http://localhost:3000/")).rejects.toThrow(
+      unavailable,
+    );
     await expect(goBackBrowserPreview("browser-1")).rejects.toThrow(unavailable);
     await expect(goForwardBrowserPreview("browser-1")).rejects.toThrow(unavailable);
     await expect(reloadBrowserPreview("browser-1")).rejects.toThrow(unavailable);

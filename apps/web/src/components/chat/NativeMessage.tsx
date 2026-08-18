@@ -1,17 +1,8 @@
-import {
-  memo,
-  useCallback,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { writeText } from "@/lib/native/clipboard";
-import {
-  ERROR_MESSAGE_PREFIX,
-  SYSTEM_MESSAGE_PREFIX,
-} from "@/lib/opencode-client";
+import { ERROR_MESSAGE_PREFIX, SYSTEM_MESSAGE_PREFIX } from "@/lib/opencode-client";
 import { MessageErrorAlert, MessageShell } from "@/components/chat/MessageShell";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { formatElapsed } from "@/lib/format-elapsed";
@@ -48,7 +39,7 @@ export const NativeMessage = memo(function NativeMessage({
 }: NativeMessageProps) {
   const normalizedMessage = useMemo(() => normalizeNativeMessage(message), [message]);
   const normalizedPreviousMessage = useMemo(
-    () => previousMessage ? normalizeNativeMessage(previousMessage) : null,
+    () => (previousMessage ? normalizeNativeMessage(previousMessage) : null),
     [previousMessage],
   );
   message = normalizedMessage;
@@ -60,13 +51,8 @@ export const NativeMessage = memo(function NativeMessage({
   // open disclosure. Production transcript owners pass their stable
   // environment/session identity; the initial container remains a safe fallback
   // for direct callers.
-  const [stableAgentExpansionScope] = useState(
-    () => agentExpansionScope ?? containerId ?? "host",
-  );
-  const messageAgentExpansionScope = JSON.stringify([
-    stableAgentExpansionScope,
-    message.id,
-  ]);
+  const [stableAgentExpansionScope] = useState(() => agentExpansionScope ?? containerId ?? "host");
+  const messageAgentExpansionScope = JSON.stringify([stableAgentExpansionScope, message.id]);
 
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
@@ -90,43 +76,32 @@ export const NativeMessage = memo(function NativeMessage({
   // block still anchors duration on the user and a `content → empty → content`
   // block does not repeat attribution. The `previousHasContent` guard below
   // remains a safety net for direct callers passing the raw predecessor.
-  const previousHasContent = previousMessage
-    ? messageHasVisibleContent(previousMessage)
-    : false;
+  const previousHasContent = previousMessage ? messageHasVisibleContent(previousMessage) : false;
   // Attribution belongs on the first content-bearing message of a transcript
   // block. Empty assistant messages (an info-only `message.updated` before any
   // part streams) carry no attribution, and same-block continuations drop the
   // model label so it is not repeated for every streamed chunk.
-  const showAssistantFooter =
-    !isUser && !isSystem && !isError && hasContent;
+  const showAssistantFooter = !isUser && !isSystem && !isError && hasContent;
   // A continuation that switched model is the one case where repeating the
   // label carries information: providers stamp `modelId` per message (Claude
   // records one per tool round-trip), so a mid-block fallback would otherwise
   // leave the new model rendering under the previous row's label.
   const showAssistantAuthorLabel =
-    showAssistantFooter
-    && (
-      !isContinuation
-      || !previousHasContent
-      || previousMessage?.modelId !== message.modelId
-    );
+    showAssistantFooter &&
+    (!isContinuation || !previousHasContent || previousMessage?.modelId !== message.modelId);
   const userCopyContent = isUser
-    ? (
-        message.parts
-          .filter((part) => part.type === "text")
-          .map((part) => part.content)
-          .join("\n\n")
-          .trim() || message.content
-      )
+    ? message.parts
+        .filter((part) => part.type === "text")
+        .map((part) => part.content)
+        .join("\n\n")
+        .trim() || message.content
     : "";
   const assistantCopyContent = !isUser
-    ? (
-        message.parts
-          .filter((part) => part.type === "text")
-          .map((part) => part.content)
-          .join("\n\n")
-          .trim() || message.content
-      )
+    ? message.parts
+        .filter((part) => part.type === "text")
+        .map((part) => part.content)
+        .join("\n\n")
+        .trim() || message.content
     : "";
   // Whether the assistant footer still has a reason to exist once attribution
   // is suppressed. Fork actions sit on every completed transcript section,
@@ -156,10 +131,7 @@ export const NativeMessage = memo(function NativeMessage({
   // Render error messages with special styling
   if (isError) {
     return (
-      <MessageErrorAlert
-        content={message.content}
-        timestampLabel={formatTime(message.createdAt)}
-      />
+      <MessageErrorAlert content={message.content} timestampLabel={formatTime(message.createdAt)} />
     );
   }
 
@@ -193,50 +165,50 @@ export const NativeMessage = memo(function NativeMessage({
   return (
     <ToolDetailLoaderContext.Provider value={loadToolDetails}>
       <BackgroundTaskStopContext.Provider value={stopBackgroundTask}>
-      <AgentPlatformContext.Provider value={platform}>
-        <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
-        <NativeMessagePartRendererContext.Provider value={(props) => <MessagePart {...props} />}>
-        <MessageShell
-        isUser={isUser}
-        authorLabel={
-          isUser
-            ? "You"
-            : assistantAuthorLabel
-        }
-        timestampLabel={formatTime(message.createdAt)}
-        durationLabel={durationLabel}
-        showHeader={!isContinuation}
-        showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
-        showAuthorLabel={isUser || showAssistantAuthorLabel}
-        className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
-        onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
-        actions={(isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
-          <>
-            {messageActions}
-            {(isUser ? userCopyContent : assistantCopyContent) ? (
-              <MessageCopyButton
-                content={isUser ? userCopyContent : assistantCopyContent}
-                wrapperClassName="mt-0 pr-0"
-              />
-            ) : null}
-          </>
-        ) : undefined}
-      >
-        {renderMessageParts(message, { showTextCopy: false, containerId })}
+        <AgentPlatformContext.Provider value={platform}>
+          <MessageExpansionScopeContext.Provider value={messageAgentExpansionScope}>
+            <NativeMessagePartRendererContext.Provider
+              value={(props) => <MessagePart {...props} />}
+            >
+              <MessageShell
+                isUser={isUser}
+                authorLabel={isUser ? "You" : assistantAuthorLabel}
+                timestampLabel={formatTime(message.createdAt)}
+                durationLabel={durationLabel}
+                showHeader={!isContinuation}
+                showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
+                showAuthorLabel={isUser || showAssistantAuthorLabel}
+                className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
+                onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
+                actions={
+                  (isUser ? userCopyContent : assistantCopyContent) || messageActions ? (
+                    <>
+                      {messageActions}
+                      {(isUser ? userCopyContent : assistantCopyContent) ? (
+                        <MessageCopyButton
+                          content={isUser ? userCopyContent : assistantCopyContent}
+                          wrapperClassName="mt-0 pr-0"
+                        />
+                      ) : null}
+                    </>
+                  ) : undefined
+                }
+              >
+                {renderMessageParts(message, { showTextCopy: false, containerId })}
 
-        {!hasTextParts && message.content && (
-          <TextPart
-            content={message.content}
-            showCopy={false}
-            truncateUserPrompt={isUser}
-            renderJsonPayload={!isUser}
-            expansionKey={`${message.id}-content/json`}
-          />
-        )}
-        </MessageShell>
-        </NativeMessagePartRendererContext.Provider>
-        </MessageExpansionScopeContext.Provider>
-      </AgentPlatformContext.Provider>
+                {!hasTextParts && message.content && (
+                  <TextPart
+                    content={message.content}
+                    showCopy={false}
+                    truncateUserPrompt={isUser}
+                    renderJsonPayload={!isUser}
+                    expansionKey={`${message.id}-content/json`}
+                  />
+                )}
+              </MessageShell>
+            </NativeMessagePartRendererContext.Provider>
+          </MessageExpansionScopeContext.Provider>
+        </AgentPlatformContext.Provider>
       </BackgroundTaskStopContext.Provider>
     </ToolDetailLoaderContext.Provider>
   );

@@ -1,11 +1,6 @@
 import { create } from "zustand";
 import { deepEqualJson } from "@/lib/chat/message-identity";
-import type {
-  AppConfig,
-  EnvironmentType,
-  GlobalConfig,
-  RepositoryConfig,
-} from "@/types";
+import type { AppConfig, EnvironmentType, GlobalConfig, RepositoryConfig } from "@/types";
 import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
@@ -129,8 +124,7 @@ export const useConfigStore = create<ConfigState>()((set, get) => ({
   // reordered but identical config would republish and rerender every
   // subscriber) and erases undefined-valued fields, which this store treats as
   // distinct from absent ones (see updateGlobalConfig's reviewInstruction).
-  setConfig: (config) =>
-    set((state) => (deepEqualJson(state.config, config) ? state : { config })),
+  setConfig: (config) => set((state) => (deepEqualJson(state.config, config) ? state : { config })),
 
   updateGlobalConfig: (updates) =>
     set((state) => {

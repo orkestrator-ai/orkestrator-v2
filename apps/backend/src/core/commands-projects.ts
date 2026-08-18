@@ -1,10 +1,22 @@
-import { fs, path, createProject, CommandFailedError, runCommand } from "./commands-dependencies.js";
+import {
+  fs,
+  path,
+  createProject,
+  CommandFailedError,
+  runCommand,
+} from "./commands-dependencies.js";
 import { conciseError } from "./commands-error-text.js";
-import type { ClaudeModelCatalogSnapshot, Project, StorageService } from "./commands-dependencies.js";
+import type {
+  ClaudeModelCatalogSnapshot,
+  Project,
+  StorageService,
+} from "./commands-dependencies.js";
 import { enqueueContainerBridgeOperation, startLocalServer } from "./commands-servers.js";
-import { startContainerClaudeServer, fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
+import {
+  startContainerClaudeServer,
+  fetchClaudeBridgeModelCatalog,
+} from "./commands-containers.js";
 import type { CommandContext } from "./commands-context.js";
-
 
 export async function refreshClaudeModelCatalog(
   environmentId: string,
@@ -24,10 +36,8 @@ export async function refreshClaudeModelCatalog(
     if (!containerId) {
       throw new Error("Container ID is required for Claude model discovery");
     }
-    const started = await enqueueContainerBridgeOperation(
-      "claude",
-      containerId,
-      () => startContainerClaudeServer(containerId),
+    const started = await enqueueContainerBridgeOperation("claude", containerId, () =>
+      startContainerClaudeServer(containerId),
     );
     port = started.hostPort;
     authToken = started.authToken;
@@ -51,13 +61,12 @@ export async function refreshClaudeModelCatalog(
     // This host-level cache improves the next launch, but it is not part of the
     // authoritative per-environment refresh. Do not hold a successful response
     // or event behind storage lock contention or an unrelated cache failure.
-    void context.storage.cacheAgentModelCatalog("claude", catalog.models)
-      .catch((error) => {
-        console.warn(
-          "[ElectronBackend] Failed to persist the Claude model catalogue:",
-          conciseError(error),
-        );
-      });
+    void context.storage.cacheAgentModelCatalog("claude", catalog.models).catch((error) => {
+      console.warn(
+        "[ElectronBackend] Failed to persist the Claude model catalogue:",
+        conciseError(error),
+      );
+    });
   }
   return snapshot;
 }
@@ -147,7 +156,7 @@ export function duplicateLocalPathGuard(
   return async (projects) => {
     for (const project of projects) {
       if (project.localPath === null) continue;
-      if (await projectPathKey(project.localPath) === targetKey) {
+      if ((await projectPathKey(project.localPath)) === targetKey) {
         throw new Error(`A project already uses this local path: ${displayPath}`);
       }
     }
@@ -166,11 +175,9 @@ export function withoutUrlCredentials(gitUrl: string): string {
 }
 
 export async function readOriginUrl(projectPath: string, run: typeof runCommand): Promise<string> {
-  const { stdout } = await run(
-    "git",
-    ["-C", projectPath, "config", "--get", "remote.origin.url"],
-    { timeoutMs: 10_000 },
-  );
+  const { stdout } = await run("git", ["-C", projectPath, "config", "--get", "remote.origin.url"], {
+    timeoutMs: 10_000,
+  });
   return withoutUrlCredentials(stdout.trim());
 }
 
@@ -189,21 +196,18 @@ export async function isResumableScratchRepository(
   projectPath: string,
   run: typeof runCommand,
 ): Promise<boolean> {
-  const git = async (args: string[]): Promise<string> => (
-    await run("git", ["-C", projectPath, ...args], { timeoutMs: 10_000 })
-  ).stdout.trim();
+  const git = async (args: string[]): Promise<string> =>
+    (await run("git", ["-C", projectPath, ...args], { timeoutMs: 10_000 })).stdout.trim();
 
   try {
-    if (await git(["rev-list", "--count", "HEAD"]) !== "1") return false;
-    if (await git(["symbolic-ref", "--short", "HEAD"]) !== "main") return false;
-    if (await git(["remote"]) !== "") return false;
-    if (await git(["status", "--porcelain"]) !== "") return false;
+    if ((await git(["rev-list", "--count", "HEAD"])) !== "1") return false;
+    if ((await git(["symbolic-ref", "--short", "HEAD"])) !== "main") return false;
+    if ((await git(["remote"])) !== "") return false;
+    if ((await git(["status", "--porcelain"])) !== "") return false;
     const identity = await git(["log", "-1", "--format=%an%n%ae%n%s"]);
-    return identity === [
-      SCRATCH_COMMIT_AUTHOR,
-      SCRATCH_COMMIT_EMAIL,
-      SCRATCH_COMMIT_SUBJECT,
-    ].join("\n");
+    return (
+      identity === [SCRATCH_COMMIT_AUTHOR, SCRATCH_COMMIT_EMAIL, SCRATCH_COMMIT_SUBJECT].join("\n")
+    );
   } catch {
     return false;
   }
@@ -233,7 +237,10 @@ export async function projectDirectoryStillMatches(
  * directory this call made. `rmdir` refuses a non-empty directory, which makes
  * walking back up inherently non-destructive.
  */
-export async function removeCreatedDirectoryChain(leaf: string, createdRoot: string): Promise<void> {
+export async function removeCreatedDirectoryChain(
+  leaf: string,
+  createdRoot: string,
+): Promise<void> {
   let current = leaf;
   while (true) {
     try {
@@ -257,7 +264,7 @@ export async function rollbackScratchRepository(options: {
   const { projectPath, createdRoot, attemptedGitInit, identity } = options;
   try {
     if (identity) {
-      if (!await projectDirectoryStillMatches(projectPath, identity)) return;
+      if (!(await projectDirectoryStillMatches(projectPath, identity))) return;
       if (attemptedGitInit && (await fs.readdir(projectPath)).includes(".git")) {
         await fs.rm(path.join(projectPath, ".git"), { recursive: true, force: true });
       }
@@ -316,8 +323,10 @@ export async function createProjectFromScratch(
       const entries = await fs.readdir(projectPath);
       const resuming = entries.length > 0;
       if (resuming) {
-        const recoverable = entries.length === 1 && entries[0] === ".git"
-          && await isResumableScratchRepository(projectPath, run);
+        const recoverable =
+          entries.length === 1 &&
+          entries[0] === ".git" &&
+          (await isResumableScratchRepository(projectPath, run));
         if (!recoverable) {
           throw new Error("Project path must be new or an empty directory");
         }
@@ -330,26 +339,31 @@ export async function createProjectFromScratch(
             timeoutMs: 30_000,
           });
         } catch (error) {
-          const detail = error instanceof CommandFailedError && error.executableMissing
-            ? "Git is not installed or available on PATH"
-            : conciseError(error);
+          const detail =
+            error instanceof CommandFailedError && error.executableMissing
+              ? "Git is not installed or available on PATH"
+              : conciseError(error);
           throw new Error(`Could not initialize the Git repository: ${detail}`);
         }
 
         try {
-          await run("git", [
-            "-C",
-            projectPath,
-            "-c",
-            `user.name=${SCRATCH_COMMIT_AUTHOR}`,
-            "-c",
-            `user.email=${SCRATCH_COMMIT_EMAIL}`,
-            "commit",
-            "--allow-empty",
-            "--no-gpg-sign",
-            "-m",
-            SCRATCH_COMMIT_SUBJECT,
-          ], { timeoutMs: 30_000 });
+          await run(
+            "git",
+            [
+              "-C",
+              projectPath,
+              "-c",
+              `user.name=${SCRATCH_COMMIT_AUTHOR}`,
+              "-c",
+              `user.email=${SCRATCH_COMMIT_EMAIL}`,
+              "commit",
+              "--allow-empty",
+              "--no-gpg-sign",
+              "-m",
+              SCRATCH_COMMIT_SUBJECT,
+            ],
+            { timeoutMs: 30_000 },
+          );
         } catch (error) {
           throw new Error(`Could not create the initial Git commit: ${conciseError(error)}`);
         }
@@ -360,23 +374,27 @@ export async function createProjectFromScratch(
         // request. Mark the outcome ambiguous before invoking gh so rollback
         // never deletes the only recoverable local repository in that case.
         remote.state = "ambiguous";
-        await run("gh", [
-          "repo",
-          "create",
-          repositoryName,
-          "--private",
-          `--source=${projectPath}`,
-          "--remote=origin",
-        ], {
-          timeoutMs: 120_000,
-        });
+        await run(
+          "gh",
+          [
+            "repo",
+            "create",
+            repositoryName,
+            "--private",
+            `--source=${projectPath}`,
+            "--remote=origin",
+          ],
+          {
+            timeoutMs: 120_000,
+          },
+        );
         remote.state = "created";
       } catch (error) {
         if (error instanceof CommandFailedError && error.executableMissing) {
           remote.state = "none";
           throw new Error(
-            "Could not create the private GitHub repository: GitHub CLI is not installed. "
-            + "Install gh and run `gh auth login`, then retry",
+            "Could not create the private GitHub repository: GitHub CLI is not installed. " +
+              "Install gh and run `gh auth login`, then retry",
           );
         }
         throw new Error(`Could not create the private GitHub repository: ${conciseError(error)}`);
@@ -385,11 +403,9 @@ export async function createProjectFromScratch(
       const gitUrl = await readOriginUrl(projectPath, run);
       if (!gitUrl) throw new Error("Could not verify the origin remote");
 
-      await run(
-        "git",
-        ["-C", projectPath, "push", "--set-upstream", "origin", "main"],
-        { timeoutMs: 120_000 },
-      );
+      await run("git", ["-C", projectPath, "push", "--set-upstream", "origin", "main"], {
+        timeoutMs: 120_000,
+      });
 
       return await storage.addProject(createProject(gitUrl, projectPath), assertPathIsFree);
     } catch (error) {
@@ -398,19 +414,18 @@ export async function createProjectFromScratch(
       }
       if (remote.state === "created") {
         throw new Error(
-          "The local and private GitHub repositories were created, but Orkestrator could not finish setup. "
-          + `Add the existing repository instead. ${conciseError(error)}`,
+          "The local and private GitHub repositories were created, but Orkestrator could not finish setup. " +
+            `Add the existing repository instead. ${conciseError(error)}`,
         );
       }
       if (remote.state === "ambiguous") {
         throw new Error(
-          "The local Git repository was preserved because GitHub may have created the private repository. "
-          + "Check GitHub, then retry the same path to resume from the local repository. "
-          + `${conciseError(error)}`,
+          "The local Git repository was preserved because GitHub may have created the private repository. " +
+            "Check GitHub, then retry the same path to resume from the local repository. " +
+            `${conciseError(error)}`,
         );
       }
       throw error;
     }
   });
 }
-

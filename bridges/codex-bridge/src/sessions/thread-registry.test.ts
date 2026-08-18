@@ -16,7 +16,11 @@ function makeRegistry(): ThreadRegistry {
   return new ThreadRegistry();
 }
 
-function createSession(registry: ThreadRegistry, id: string, threadId: string | null = null): BridgeSession {
+function createSession(
+  registry: ThreadRegistry,
+  id: string,
+  threadId: string | null = null,
+): BridgeSession {
   return registry.createSession({ id, threadId, config: CONFIG });
 }
 
@@ -312,10 +316,12 @@ describe("idle retention and cleanup", () => {
     recentMixed.lastAccessed = 9_001;
     registry.setPhase(registry.getThread("thread-failed")!, "failed", "turn failed");
 
-    expect(registry.detachableThreads(1_000).map((context) => context.threadId).sort()).toEqual([
-      "thread-failed",
-      "thread-idle",
-    ]);
+    expect(
+      registry
+        .detachableThreads(1_000)
+        .map((context) => context.threadId)
+        .sort(),
+    ).toEqual(["thread-failed", "thread-idle"]);
   });
 
   test("does not detach threads with an active turn or dispatch in flight", () => {
@@ -376,11 +382,12 @@ describe("idle retention and cleanup", () => {
     recentThreadless.lastAccessed = 9_001;
     oldLive.lastAccessed = 1_000;
 
-    expect(registry.expiredSessions(1_000).map((session) => session.id).sort()).toEqual([
-      "boundary-threadless",
-      "old-detached",
-      "old-threadless",
-    ]);
+    expect(
+      registry
+        .expiredSessions(1_000)
+        .map((session) => session.id)
+        .sort(),
+    ).toEqual(["boundary-threadless", "old-detached", "old-threadless"]);
     expect(oldDetached.threadId).toBe("thread-not-loaded");
   });
 
@@ -459,10 +466,12 @@ describe("same thread in multiple tabs", () => {
     registry.attach("tab-a", "thread-1", { engineHandle: "thread-1" });
     registry.attach("tab-b", "thread-1", { engineHandle: "thread-1" });
 
-    expect(registry.sessionsForThread("thread-1").map((s) => s.id).sort()).toEqual([
-      "tab-a",
-      "tab-b",
-    ]);
+    expect(
+      registry
+        .sessionsForThread("thread-1")
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual(["tab-a", "tab-b"]);
   });
 
   test("bound session lookup includes restored tabs that are not attached", () => {
@@ -476,10 +485,12 @@ describe("same thread in multiple tabs", () => {
     });
     registry.attach("tab-a", "thread-1", { engineHandle: "thread-1" });
 
-    expect(registry.sessionsForThread("thread-1").map((session) => session.id))
-      .toEqual(["tab-a"]);
+    expect(registry.sessionsForThread("thread-1").map((session) => session.id)).toEqual(["tab-a"]);
     expect(
-      registry.boundSessionsForThread("thread-1").map((session) => session.id).sort(),
+      registry
+        .boundSessionsForThread("thread-1")
+        .map((session) => session.id)
+        .sort(),
     ).toEqual(["tab-a", "tab-b"]);
   });
 

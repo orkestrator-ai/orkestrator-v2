@@ -108,9 +108,6 @@ import type {
 } from "./command-fixtures";
 
 describe("Electron backend command registry", () => {
-
-
-
   // The `security` stub only takes effect on darwin, where `getHostClaudeCredentials`
   // consults the Keychain; elsewhere resolution starts at the on-disk credential.
   // Seeding both with the same payload keeps these tests asserting the same thing
@@ -126,8 +123,6 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `;
-
-
 
   function claudeCredentialSyncContext(
     globalConfig: Record<string, unknown> = {},
@@ -147,8 +142,6 @@ exit 1
     return created;
   }
 
-
-
   test("waits for every shutdown attempt, reports failures, and supports retry", async () => {
     const failedChild = createFakeChild(91001);
     const successfulChild = createFakeChild(91002);
@@ -160,9 +153,7 @@ exit 1
       return child !== failedChild;
     });
 
-    await expect(shutdownLocalServers()).rejects.toThrow(
-      "Failed to shut down all local servers",
-    );
+    await expect(shutdownLocalServers()).rejects.toThrow("Failed to shut down all local servers");
     expect(attempted.sort()).toEqual([91001, 91002]);
     expect(commandTesting.getLocalServerProcess("codex:env-failure")).toBe(failedChild);
     expect(commandTesting.getLocalServerProcess("claude:env-success")).toBeUndefined();
@@ -171,8 +162,6 @@ exit 1
     await expect(shutdownLocalServers()).resolves.toBeUndefined();
     expect(commandTesting.getLocalServerProcess("codex:env-failure")).toBeUndefined();
   });
-
-
 
   test("fails a bridge replacement whose port never stops answering health checks", async () => {
     const hostPort = await reserveFreePort();
@@ -188,5 +177,4 @@ exit 1
       await bridge.close();
     }
   });
-
 });

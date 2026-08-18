@@ -82,9 +82,7 @@ describe("NativeMessage", () => {
       role: "user",
       content: "First line\nSecond line\nThird line",
       createdAt: "2026-03-07T12:00:00.000Z",
-      parts: [
-        { type: "text", content: "First line\nSecond line\nThird line" },
-      ],
+      parts: [{ type: "text", content: "First line\nSecond line\nThird line" }],
     };
 
     const { container } = render(<NativeMessage message={message} />);
@@ -97,10 +95,7 @@ describe("NativeMessage", () => {
   });
 
   test("truncates user prompts longer than 12 lines by default", () => {
-    const content = Array.from(
-      { length: 13 },
-      (_, index) => `Line ${index + 1}`,
-    ).join("\n");
+    const content = Array.from({ length: 13 }, (_, index) => `Line ${index + 1}`).join("\n");
     const message: NativeMessageType = {
       id: "msg-long-user-prompt",
       role: "user",
@@ -113,9 +108,7 @@ describe("NativeMessage", () => {
 
     const toggle = screen.getByRole("button", { name: "show more" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(
-      (toggle.previousElementSibling as HTMLElement).style.maxHeight,
-    ).toContain("12");
+    expect((toggle.previousElementSibling as HTMLElement).style.maxHeight).toContain("12");
 
     fireEvent.click(toggle);
 
@@ -125,22 +118,14 @@ describe("NativeMessage", () => {
 
     fireEvent.click(collapseToggle);
 
-    expect(
-      screen
-        .getByRole("button", { name: "show more" })
-        .getAttribute("aria-expanded"),
-    ).toBe("false");
+    expect(screen.getByRole("button", { name: "show more" }).getAttribute("aria-expanded")).toBe(
+      "false",
+    );
   });
 
   test("does not add prompt truncation controls to short user or assistant messages", () => {
-    const shortContent = Array.from(
-      { length: 12 },
-      (_, index) => `Line ${index + 1}`,
-    ).join("\n");
-    const longContent = Array.from(
-      { length: 13 },
-      (_, index) => `Line ${index + 1}`,
-    ).join("\n");
+    const shortContent = Array.from({ length: 12 }, (_, index) => `Line ${index + 1}`).join("\n");
+    const longContent = Array.from({ length: 13 }, (_, index) => `Line ${index + 1}`).join("\n");
     const shortUserMessage: NativeMessageType = {
       id: "msg-short-user-prompt",
       role: "user",
@@ -176,10 +161,9 @@ describe("NativeMessage", () => {
   });
 
   test("truncates long fallback user content when no text parts are present", () => {
-    const content = Array.from(
-      { length: 13 },
-      (_, index) => `Fallback line ${index + 1}`,
-    ).join("\n");
+    const content = Array.from({ length: 13 }, (_, index) => `Fallback line ${index + 1}`).join(
+      "\n",
+    );
     const message: NativeMessageType = {
       id: "msg-long-user-fallback-prompt",
       role: "user",
@@ -192,20 +176,14 @@ describe("NativeMessage", () => {
 
     const toggle = screen.getByRole("button", { name: "show more" });
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(
-      (toggle.previousElementSibling as HTMLElement).style.maxHeight,
-    ).toContain("12");
+    expect((toggle.previousElementSibling as HTMLElement).style.maxHeight).toContain("12");
   });
 
   test("counts CRLF and CR line endings when truncating user prompts", () => {
-    const crlfContent = Array.from(
-      { length: 13 },
-      (_, index) => `CRLF line ${index + 1}`,
-    ).join("\r\n");
-    const crContent = Array.from(
-      { length: 13 },
-      (_, index) => `CR line ${index + 1}`,
-    ).join("\r");
+    const crlfContent = Array.from({ length: 13 }, (_, index) => `CRLF line ${index + 1}`).join(
+      "\r\n",
+    );
+    const crContent = Array.from({ length: 13 }, (_, index) => `CR line ${index + 1}`).join("\r");
     const crlfMessage: NativeMessageType = {
       id: "msg-crlf-user-prompt",
       role: "user",
@@ -236,9 +214,7 @@ describe("NativeMessage", () => {
       role: "user",
       content: "Copy this user prompt",
       createdAt: "2026-03-07T12:00:00.000Z",
-      parts: [
-        { type: "text", content: "Copy this user prompt" },
-      ],
+      parts: [{ type: "text", content: "Copy this user prompt" }],
     };
 
     const { container } = render(<NativeMessage message={message} />);
@@ -318,9 +294,7 @@ describe("NativeMessage", () => {
       role: "assistant",
       content: "Read [the docs](https://example.com/docs).",
       createdAt: "2026-03-07T12:00:00.000Z",
-      parts: [
-        { type: "text", content: "Read [the docs](https://example.com/docs)." },
-      ],
+      parts: [{ type: "text", content: "Read [the docs](https://example.com/docs)." }],
     };
 
     render(<NativeMessage message={message} />);
@@ -336,9 +310,7 @@ describe("NativeMessage", () => {
       role: "assistant",
       content: "Read [the missing destination]().",
       createdAt: "2026-03-07T12:00:00.000Z",
-      parts: [
-        { type: "text", content: "Read [the missing destination]()." },
-      ],
+      parts: [{ type: "text", content: "Read [the missing destination]()." }],
     };
 
     render(<NativeMessage message={message} />);
@@ -361,9 +333,7 @@ describe("NativeMessage", () => {
       role: "assistant",
       content: "Read [the docs](https://example.com/docs).",
       createdAt: "2026-03-07T12:00:00.000Z",
-      parts: [
-        { type: "text", content: "Read [the docs](https://example.com/docs)." },
-      ],
+      parts: [{ type: "text", content: "Read [the docs](https://example.com/docs)." }],
     };
 
     try {
@@ -456,9 +426,7 @@ describe("NativeMessage", () => {
     expect(topLevelText.closest(".prose")?.parentElement?.className).toContain(
       "[&_.prose>:first-child]:mt-0",
     );
-    expect(topLevelText.closest(".prose")?.parentElement?.className).not.toContain(
-      "pt-2",
-    );
+    expect(topLevelText.closest(".prose")?.parentElement?.className).not.toContain("pt-2");
 
     fireEvent.click(screen.getByRole("button", { name: /lovelace/i }));
     const childText = screen
@@ -468,9 +436,7 @@ describe("NativeMessage", () => {
     expect(childText!.closest(".prose")?.parentElement?.className).toContain(
       "[&_.prose>:first-child]:mt-0",
     );
-    expect(childText!.closest(".prose")?.parentElement?.className).not.toContain(
-      "pt-2",
-    );
+    expect(childText!.closest(".prose")?.parentElement?.className).not.toContain("pt-2");
 
     unmount();
 
@@ -499,9 +465,7 @@ describe("NativeMessage", () => {
     expect(fallbackText.closest(".prose")?.parentElement?.className).toContain(
       "[&_.prose>:first-child]:mt-0",
     );
-    expect(fallbackText.closest(".prose")?.parentElement?.className).not.toContain(
-      "pt-2",
-    );
+    expect(fallbackText.closest(".prose")?.parentElement?.className).not.toContain("pt-2");
   });
 
   test("renders system and error messages distinctly and shows continuation metadata", () => {
@@ -513,9 +477,7 @@ describe("NativeMessage", () => {
       parts: [],
     };
 
-    const { container, rerender } = render(
-      <NativeMessage message={systemMessage} />,
-    );
+    const { container, rerender } = render(<NativeMessage message={systemMessage} />);
 
     expect(screen.getByText("Generated environment name")).toBeTruthy();
     expect(container.querySelector(".italic")).toBeTruthy();
@@ -608,9 +570,7 @@ describe("NativeMessage", () => {
 
     const { container } = render(<NativeMessage message={message} />);
 
-    const flow = container.querySelector(
-      '[data-message-attachment-flow="true"]',
-    );
+    const flow = container.querySelector('[data-message-attachment-flow="true"]');
     expect(flow).toBeTruthy();
     expect(getClassTokens(flow)).toContain("flex-wrap");
     expect(getClassTokens(flow)).toContain("w-full");
@@ -642,20 +602,14 @@ describe("NativeMessage", () => {
 
     const { container } = render(<NativeMessage message={message} />);
 
-    const flows = Array.from(
-      container.querySelectorAll('[data-message-attachment-flow="true"]'),
-    );
+    const flows = Array.from(container.querySelectorAll('[data-message-attachment-flow="true"]'));
     expect(flows).toHaveLength(2);
     expect(flows[0]?.querySelectorAll("button")).toHaveLength(1);
     expect(flows[1]?.querySelectorAll("button")).toHaveLength(1);
 
     const text = screen.getByText("Explain the difference");
-    expect(
-      flows[0]!.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      text.compareDocumentPosition(flows[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    expect(flows[0]!.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(text.compareDocumentPosition(flows[1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   test("reopens a cached local image preview without reading the file again", async () => {
@@ -705,9 +659,7 @@ describe("NativeMessage", () => {
 
     fireEvent.click(attachment);
     image = await screen.findByAltText("overlay.png");
-    const closeButton = image.parentElement?.querySelector(
-      "button",
-    ) as HTMLButtonElement;
+    const closeButton = image.parentElement?.querySelector("button") as HTMLButtonElement;
     expect(closeButton).toBeTruthy();
     fireEvent.click(closeButton);
     await waitFor(() => expect(screen.queryByAltText("overlay.png") === null).toBe(true));
@@ -1003,13 +955,17 @@ describe("NativeMessage", () => {
     expect(mockReadFileBase64).not.toHaveBeenCalled();
     expect(mockReadContainerFileBase64).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", {
-      name: "Open full image: tracker.png",
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open full image: tracker.png",
+      }),
+    );
 
-    expect(await screen.findByRole("dialog", {
-      name: "Image preview: tracker.png",
-    })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Image preview: tracker.png",
+      }),
+    ).toBeTruthy();
     expect(document.querySelectorAll(`img[src="${remoteUrl}"]`)).toHaveLength(2);
   });
 
@@ -1032,9 +988,7 @@ describe("NativeMessage", () => {
     fireEvent.click(screen.getByRole("button", { name: /error #1\.png/i }));
 
     await screen.findByAltText("error #1.png");
-    expect(mockReadFileBase64).toHaveBeenCalledWith(
-      "/tmp/screen shots/error #1.png",
-    );
+    expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/screen shots/error #1.png");
   });
 
   test("reads decoded local image paths from file URLs", async () => {
@@ -1052,16 +1006,12 @@ describe("NativeMessage", () => {
       ],
     };
 
-    const { rerender } = render(
-      <NativeMessage message={windowsFileUrlMessage} />,
-    );
+    const { rerender } = render(<NativeMessage message={windowsFileUrlMessage} />);
 
     fireEvent.click(screen.getByRole("button", { name: /windows-shot\.png/i }));
 
     await screen.findByAltText("windows-shot.png");
-    expect(mockReadFileBase64).toHaveBeenCalledWith(
-      "C:/Users/Ada/Pictures/windows-shot.png",
-    );
+    expect(mockReadFileBase64).toHaveBeenCalledWith("C:/Users/Ada/Pictures/windows-shot.png");
 
     mockReadFileBase64.mockClear();
 
@@ -1084,16 +1034,11 @@ describe("NativeMessage", () => {
     fireEvent.click(screen.getByRole("button", { name: /network-shot\.png/i }));
 
     await screen.findByAltText("network-shot.png");
-    expect(mockReadFileBase64).toHaveBeenCalledWith(
-      "//server/share/folder/network-shot.png",
-    );
+    expect(mockReadFileBase64).toHaveBeenCalledWith("//server/share/folder/network-shot.png");
   });
 
   test("falls back to absolute attachment paths for malformed local file URLs", async () => {
-    const malformedUrls = [
-      "file:///tmp/bad%ZZ.png",
-      "file://[invalid-host]/bad.png",
-    ];
+    const malformedUrls = ["file:///tmp/bad%ZZ.png", "file://[invalid-host]/bad.png"];
 
     for (const [index, fileUrl] of malformedUrls.entries()) {
       const path = `/tmp/fallback-${index}.png`;
@@ -1331,8 +1276,7 @@ describe("NativeMessage", () => {
           toolState: "success",
           toolDiff: {
             filePath: "/workspace/src/example.ts",
-            diff:
-              "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new",
+            diff: "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new",
           },
         },
       ],
@@ -1344,9 +1288,7 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /edit example\.ts success/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /edit example\.ts success/i }));
     expect(screen.getByText("--- a/src/example.ts")).toBeTruthy();
     expect(screen.getByText("+++ b/src/example.ts")).toBeTruthy();
     expect(screen.getByText("-old")).toBeTruthy();
@@ -1473,12 +1415,8 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /edit deleted\.ts -1 success/i }),
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: /write created\.ts \+1 success/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /edit deleted\.ts -1 success/i }));
+    fireEvent.click(screen.getByRole("button", { name: /write created\.ts \+1 success/i }));
 
     expect(screen.getByText("-removed only")).toBeTruthy();
     expect(screen.getByText("+created only")).toBeTruthy();
@@ -1853,12 +1791,8 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    expect(
-      screen.getByRole("button", { name: /glob src\/\*\*\/\*\.tsx success/i }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: /grep todo\|fixme success/i }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /glob src\/\*\*\/\*\.tsx success/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /grep todo\|fixme success/i })).toBeTruthy();
     expect(
       screen.getByRole("button", {
         name: /webfetch docs\.example\.com success/i,
@@ -1900,12 +1834,8 @@ describe("NativeMessage", () => {
     expect(screen.getByText("Review diff")).toBeTruthy();
     expect(screen.getByText("Run tests")).toBeTruthy();
     expect(container.querySelectorAll("[data-task-list-icon]")).toHaveLength(2);
-    expect(
-      container.querySelector("[data-task-list-icon][data-state='checked']"),
-    ).toBeTruthy();
-    expect(
-      container.querySelector("[data-task-list-icon][data-state='unchecked']"),
-    ).toBeTruthy();
+    expect(container.querySelector("[data-task-list-icon][data-state='checked']")).toBeTruthy();
+    expect(container.querySelector("[data-task-list-icon][data-state='unchecked']")).toBeTruthy();
   });
 
   test("normalizes away empty thinking without leaving an activity shell", () => {
@@ -2019,7 +1949,7 @@ describe("NativeMessage", () => {
               content: "exec_command",
               toolName: "exec_command",
               toolArgs: {
-                command: "rg -n \"codex\" src",
+                command: 'rg -n "codex" src',
               },
               toolState: "success",
               toolTitle: "exec_command",
@@ -2044,9 +1974,11 @@ describe("NativeMessage", () => {
     fireEvent.click(screen.getByRole("button", { name: /lovelace/i }));
 
     expect(screen.getByText("Inspect the Codex integration")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Exec Command rg -n "codex" src success/i })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Exec Command rg -n "codex" src success/i }),
+    ).toBeTruthy();
     fireEvent.click(screen.getAllByText("Exec Command")[0]!);
-    expect(screen.getByText("$ rg -n \"codex\" src")).toBeTruthy();
+    expect(screen.getByText('$ rg -n "codex" src')).toBeTruthy();
     expect(screen.getByText("matches")).toBeTruthy();
   });
 
@@ -2390,9 +2322,7 @@ describe("NativeMessage", () => {
     fireEvent.click(screen.getByRole("button", { name: /glob \*\.ts success/i }));
 
     const input = container.querySelector("pre");
-    expect(input?.textContent).toBe(
-      '{\n  "pattern": "*.ts",\n  "path": "/workspace/src"\n}',
-    );
+    expect(input?.textContent).toBe('{\n  "pattern": "*.ts",\n  "path": "/workspace/src"\n}');
   });
 
   test("labels pending tools as running and colours terminal tool states", () => {
@@ -2482,9 +2412,7 @@ describe("NativeMessage", () => {
 
     render(<NativeMessage message={message} />);
 
-    expect(
-      screen.getByRole("button", { name: /read README\.md success/i }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /read README\.md success/i })).toBeTruthy();
   });
 
   test("prefers the command over other argument keys in collapsed tool rows", () => {
@@ -2593,9 +2521,7 @@ describe("NativeMessage", () => {
 
     expect(screen.getByText("+new line").className).toContain("bg-green-500/20");
     expect(screen.getByText("-old line").className).toContain("bg-red-500/20");
-    expect(screen.getByText("@@ -1,3 +1,3 @@").className).toContain(
-      "text-blue-400",
-    );
+    expect(screen.getByText("@@ -1,3 +1,3 @@").className).toContain("text-blue-400");
   });
 
   test("omits the unused stat when an edit only adds or only removes lines", () => {
@@ -2678,9 +2604,7 @@ describe("NativeMessage", () => {
       </TerminalContextHarness>,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", { name: /edit partial\.ts failure/i }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: /edit partial\.ts failure/i }));
 
     expect(screen.getByText("-before")).toBeTruthy();
     expect(screen.getByText("+after")).toBeTruthy();
@@ -2715,9 +2639,7 @@ describe("NativeMessage", () => {
 
     const running = screen.getByText("running...");
     expect(running.className).toContain("animate-pulse");
-    expect(
-      screen.getByRole("button", { name: /edit pending\.ts \+1 running/i }),
-    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /edit pending\.ts \+1 running/i })).toBeTruthy();
   });
 
   test("derives image mime types from the container attachment extension", async () => {
@@ -2736,20 +2658,14 @@ describe("NativeMessage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /screenshot\.jpg/i }));
     const jpeg = await screen.findByAltText("screenshot.jpg");
-    expect(jpeg.getAttribute("src")).toBe(
-      "data:image/jpeg;base64,container-image-base64",
-    );
+    expect(jpeg.getAttribute("src")).toBe("data:image/jpeg;base64,container-image-base64");
 
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() =>
-      expect(screen.queryByAltText("screenshot.jpg") === null).toBe(true),
-    );
+    await waitFor(() => expect(screen.queryByAltText("screenshot.jpg") === null).toBe(true));
 
     fireEvent.click(screen.getByRole("button", { name: /logo\.svg/i }));
     const svg = await screen.findByAltText("logo.svg");
-    expect(svg.getAttribute("src")).toBe(
-      "data:image/svg+xml;base64,container-image-base64",
-    );
+    expect(svg.getAttribute("src")).toBe("data:image/svg+xml;base64,container-image-base64");
   }, 20_000);
 
   test.each([
@@ -2770,14 +2686,14 @@ describe("NativeMessage", () => {
     };
 
     render(<NativeMessage message={message} containerId="container-1" />);
-    fireEvent.click(screen.getByRole("button", {
-      name: `Open full image: ${filename}`,
-    }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Open full image: ${filename}`,
+      }),
+    );
 
     const image = await screen.findByAltText(filename);
-    expect(image.getAttribute("src")).toBe(
-      `data:${mimeType};base64,container-image-base64`,
-    );
+    expect(image.getAttribute("src")).toBe(`data:${mimeType};base64,container-image-base64`);
   });
 
   test("strips query strings and fragments from image paths and defaults unknown extensions to png", async () => {
@@ -2797,31 +2713,21 @@ describe("NativeMessage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /photo\.webp/i }));
     const webp = await screen.findByAltText("photo.webp?v=2#top");
-    expect(webp.getAttribute("src")).toBe(
-      "data:image/webp;base64,container-image-base64",
-    );
+    expect(webp.getAttribute("src")).toBe("data:image/webp;base64,container-image-base64");
 
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() =>
-      expect(screen.queryByAltText("photo.webp?v=2#top") === null).toBe(true),
-    );
+    await waitFor(() => expect(screen.queryByAltText("photo.webp?v=2#top") === null).toBe(true));
 
     fireEvent.click(screen.getByRole("button", { name: /fragment\.jpg/i }));
     const fragment = await screen.findByAltText("fragment.jpg#preview");
-    expect(fragment.getAttribute("src")).toBe(
-      "data:image/jpeg;base64,container-image-base64",
-    );
+    expect(fragment.getAttribute("src")).toBe("data:image/jpeg;base64,container-image-base64");
 
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() =>
-      expect(screen.queryByAltText("fragment.jpg#preview") === null).toBe(true),
-    );
+    await waitFor(() => expect(screen.queryByAltText("fragment.jpg#preview") === null).toBe(true));
 
     fireEvent.click(screen.getByRole("button", { name: /archive\.png\.bak/i }));
     const fallback = await screen.findByAltText("archive.png.bak");
-    expect(fallback.getAttribute("src")).toBe(
-      "data:image/png;base64,container-image-base64",
-    );
+    expect(fallback.getAttribute("src")).toBe("data:image/png;base64,container-image-base64");
   });
 
   test("shows an in-flight loading state while an image attachment is read", async () => {
@@ -2880,12 +2786,15 @@ describe("NativeMessage", () => {
 
     resolveRead?.("eager-base64");
 
-    expect(await screen.findByRole("dialog", {
-      name: "Image preview: eager.png",
-    })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", {
+        name: "Image preview: eager.png",
+      }),
+    ).toBeTruthy();
     expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
-    expect(screen.getByAltText("Thumbnail: eager.png").getAttribute("src"))
-      .toBe("data:image/png;base64,eager-base64");
+    expect(screen.getByAltText("Thumbnail: eager.png").getAttribute("src")).toBe(
+      "data:image/png;base64,eager-base64",
+    );
   });
 
   test("leaves an assistant image part as a compact chip and does not read it", async () => {
@@ -2932,8 +2841,9 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} />);
 
     // Painted from the cache on the first render, with no second backend read.
-    expect(screen.getByAltText("Thumbnail: remounted.png").getAttribute("src"))
-      .toBe("data:image/png;base64,image-base64");
+    expect(screen.getByAltText("Thumbnail: remounted.png").getAttribute("src")).toBe(
+      "data:image/png;base64,image-base64",
+    );
     expect(mockReadFileBase64).toHaveBeenCalledTimes(1);
   });
 
@@ -2946,9 +2856,7 @@ describe("NativeMessage", () => {
       parts: [{ type: "file", content: "workspace/shared.png" }],
     };
 
-    const first = render(
-      <NativeMessage message={message} containerId="container-1" />,
-    );
+    const first = render(<NativeMessage message={message} containerId="container-1" />);
     expect(await screen.findByAltText("Thumbnail: shared.png")).toBeTruthy();
     expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(1);
 
@@ -2957,8 +2865,9 @@ describe("NativeMessage", () => {
     render(<NativeMessage message={message} containerId="container-2" />);
 
     await waitFor(() =>
-      expect(screen.getByAltText("Thumbnail: shared.png").getAttribute("src"))
-        .toBe("data:image/png;base64,second-container-base64"),
+      expect(screen.getByAltText("Thumbnail: shared.png").getAttribute("src")).toBe(
+        "data:image/png;base64,second-container-base64",
+      ),
     );
     expect(mockReadContainerFileBase64).toHaveBeenCalledTimes(2);
   });
@@ -2984,8 +2893,9 @@ describe("NativeMessage", () => {
 
       await waitFor(() => expect(screen.getByText("preview unavailable")).toBeTruthy());
       expect(screen.queryByAltText("broken.png") === null).toBe(true);
-      expect(screen.getByRole("button", { name: /broken\.png/i }).getAttribute("aria-busy"))
-        .toBe("false");
+      expect(screen.getByRole("button", { name: /broken\.png/i }).getAttribute("aria-busy")).toBe(
+        "false",
+      );
     } finally {
       console.error = consoleError;
     }
@@ -3055,9 +2965,7 @@ describe("NativeMessage", () => {
           subagentName: "Noether",
           subagentActionCount: 1,
           toolState: "success",
-          subagentActions: [
-            { type: "text", content: "Child summary worth copying." },
-          ],
+          subagentActions: [{ type: "text", content: "Child summary worth copying." }],
         },
       ],
     };
@@ -3132,11 +3040,7 @@ describe("NativeMessage", () => {
     };
 
     render(
-      <NativeMessage
-        message={message}
-        previousMessage={previousMessage}
-        assistantLabel="Worker"
-      />,
+      <NativeMessage message={message} previousMessage={previousMessage} assistantLabel="Worker" />,
     );
 
     expect(screen.getByText("Worker")).toBeTruthy();
@@ -3182,9 +3086,7 @@ describe("NativeMessage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
     await waitFor(() => {
-      expect(mockWriteText).toHaveBeenCalledWith(
-        "First assistant block\n\nSecond assistant block",
-      );
+      expect(mockWriteText).toHaveBeenCalledWith("First assistant block\n\nSecond assistant block");
     });
   });
 

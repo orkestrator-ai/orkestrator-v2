@@ -7,11 +7,8 @@ import * as backend from "@/lib/backend";
 import type { Environment } from "@/types";
 
 const setEnvironmentUnreadMock = mock<typeof backend.setEnvironmentUnread>(
-  async (
-    _environmentId: string,
-    _unread: boolean,
-    _expectedLastActivityAt?: string | null,
-  ) => ({} as Environment),
+  async (_environmentId: string, _unread: boolean, _expectedLastActivityAt?: string | null) =>
+    ({}) as Environment,
 );
 
 mock.module("@/lib/backend", () => ({
@@ -58,8 +55,7 @@ describe("useUnreadEnvironmentSync", () => {
     });
 
     expect(setEnvironmentUnreadMock).toHaveBeenCalledWith("env-1", false, null);
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork)
-      .toBe(false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork).toBe(false);
   });
 
   test("does nothing for an environment that is already read", async () => {
@@ -87,8 +83,7 @@ describe("useUnreadEnvironmentSync", () => {
     });
 
     expect(setEnvironmentUnreadMock).not.toHaveBeenCalled();
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-2")?.hasUnreadWork)
-      .toBe(true);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-2")?.hasUnreadWork).toBe(true);
   });
 
   test("clears again when the selection moves to another unread environment", async () => {
@@ -150,8 +145,7 @@ describe("useUnreadEnvironmentSync", () => {
     });
 
     // The badge must not flicker back on for the client that is looking at it.
-    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork)
-      .toBe(false);
+    expect(useEnvironmentStore.getState().getEnvironmentById("env-1")?.hasUnreadWork).toBe(false);
   });
 
   test("guards the clear with the activity token observed before the write", async () => {
@@ -165,11 +159,7 @@ describe("useUnreadEnvironmentSync", () => {
       renderHook(() => useUnreadEnvironmentSync());
     });
 
-    expect(setEnvironmentUnreadMock).toHaveBeenCalledWith(
-      "env-1",
-      false,
-      lastActivityAt,
-    );
+    expect(setEnvironmentUnreadMock).toHaveBeenCalledWith("env-1", false, lastActivityAt);
   });
 
   test("does not let a delayed clear response overwrite a newer completion", async () => {
@@ -177,9 +167,10 @@ describe("useUnreadEnvironmentSync", () => {
     const completedAt = "2026-07-23T10:00:01.000Z";
     let resolveClear!: (environment: Environment) => void;
     setEnvironmentUnreadMock.mockImplementationOnce(
-      () => new Promise<Environment>((resolve) => {
-        resolveClear = resolve;
-      }),
+      () =>
+        new Promise<Environment>((resolve) => {
+          resolveClear = resolve;
+        }),
     );
     useEnvironmentStore.setState({
       environments: [environment({ hasUnreadWork: true, lastActivityAt: observedAt })],
@@ -198,10 +189,12 @@ describe("useUnreadEnvironmentSync", () => {
         hasUnreadWork: true,
         lastActivityAt: completedAt,
       });
-      resolveClear(environment({
-        hasUnreadWork: true,
-        lastActivityAt: completedAt,
-      }));
+      resolveClear(
+        environment({
+          hasUnreadWork: true,
+          lastActivityAt: completedAt,
+        }),
+      );
       await Promise.resolve();
     });
 

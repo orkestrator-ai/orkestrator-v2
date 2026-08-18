@@ -56,10 +56,7 @@ export type ResourceManifestKind = (typeof RESOURCE_MANIFEST_KINDS)[number];
 /** Opaque revision of one authoritative resource snapshot. */
 export type ResourceSnapshotRevision = string;
 
-export type ResourceRevisionMap = Record<
-  ResourceManifestKind,
-  ResourceSnapshotRevision
->;
+export type ResourceRevisionMap = Record<ResourceManifestKind, ResourceSnapshotRevision>;
 
 /**
  * Compact response used for periodic and reconnect reconciliation.
@@ -77,16 +74,16 @@ export interface ResourceRevisionManifest {
 
 export type ConditionalResourceSnapshot<T> =
   | {
-    status: "unchanged";
-    generation: string;
-    revision: ResourceSnapshotRevision;
-  }
+      status: "unchanged";
+      generation: string;
+      revision: ResourceSnapshotRevision;
+    }
   | {
-    status: "changed";
-    generation: string;
-    revision: ResourceSnapshotRevision;
-    snapshot: T;
-  };
+      status: "changed";
+      generation: string;
+      revision: ResourceSnapshotRevision;
+      snapshot: T;
+    };
 
 /** SSE/IPC event name carrying a {@link ResourceChange}. */
 export const RESOURCE_CHANGED_EVENT = "resource-changed";
@@ -111,17 +108,13 @@ export interface ResourceChange {
 }
 
 const RESOURCE_KIND_SET: ReadonlySet<string> = new Set(RESOURCE_KINDS);
-const RESOURCE_MANIFEST_KIND_SET: ReadonlySet<string> = new Set(
-  RESOURCE_MANIFEST_KINDS,
-);
+const RESOURCE_MANIFEST_KIND_SET: ReadonlySet<string> = new Set(RESOURCE_MANIFEST_KINDS);
 
 export function isResourceKind(value: unknown): value is ResourceKind {
   return typeof value === "string" && RESOURCE_KIND_SET.has(value);
 }
 
-export function isResourceManifestKind(
-  value: unknown,
-): value is ResourceManifestKind {
+export function isResourceManifestKind(value: unknown): value is ResourceManifestKind {
   return typeof value === "string" && RESOURCE_MANIFEST_KIND_SET.has(value);
 }
 
@@ -134,25 +127,21 @@ export function isResourceGeneration(value: unknown): value is string {
   return isResourceSnapshotRevision(value);
 }
 
-export function isResourceRevisionManifest(
-  value: unknown,
-): value is ResourceRevisionManifest {
+export function isResourceRevisionManifest(value: unknown): value is ResourceRevisionManifest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
   }
   const candidate = value as Record<string, unknown>;
   if (
-    !isResourceGeneration(candidate.generation)
-    || typeof candidate.reset !== "boolean"
-    || typeof candidate.revisions !== "object"
-    || candidate.revisions === null
-    || Array.isArray(candidate.revisions)
+    !isResourceGeneration(candidate.generation) ||
+    typeof candidate.reset !== "boolean" ||
+    typeof candidate.revisions !== "object" ||
+    candidate.revisions === null ||
+    Array.isArray(candidate.revisions)
   ) {
     return false;
   }
-  for (const [kind, revision] of Object.entries(
-    candidate.revisions as Record<string, unknown>,
-  )) {
+  for (const [kind, revision] of Object.entries(candidate.revisions as Record<string, unknown>)) {
     if (!isResourceManifestKind(kind) || !isResourceSnapshotRevision(revision)) {
       return false;
     }
@@ -168,14 +157,13 @@ export function isResourceChange(value: unknown): value is ResourceChange {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
   return (
-    isResourceKind(candidate.resource)
-    && typeof candidate.id === "string"
-    && candidate.id.length > 0
-    && (candidate.projectId === undefined || (
-      typeof candidate.projectId === "string" && candidate.projectId.trim().length > 0
-    ))
-    && typeof candidate.revision === "number"
-    && Number.isSafeInteger(candidate.revision)
-    && candidate.revision > 0
+    isResourceKind(candidate.resource) &&
+    typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
+    (candidate.projectId === undefined ||
+      (typeof candidate.projectId === "string" && candidate.projectId.trim().length > 0)) &&
+    typeof candidate.revision === "number" &&
+    Number.isSafeInteger(candidate.revision) &&
+    candidate.revision > 0
   );
 }

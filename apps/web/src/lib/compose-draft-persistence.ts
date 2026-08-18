@@ -12,10 +12,7 @@ const defaultRevisionStates = new Map<string, DraftRevisionState>();
 export { createDraftRevisionState, DraftRevisionConflictError };
 export type { DraftRevisionState };
 
-function revisionStateFor(
-  draftKey: string,
-  state?: DraftRevisionState,
-): DraftRevisionState {
+function revisionStateFor(draftKey: string, state?: DraftRevisionState): DraftRevisionState {
   if (state) return state;
   const existing = defaultRevisionStates.get(draftKey);
   if (existing) return existing;
@@ -46,11 +43,7 @@ async function recordComposeConflict(
   if (!isDraftRevisionConflict(error)) throw error;
   const current = await backend.getComposeDraft(draftKey);
   state.conflictRevision = current?.revision ?? 0;
-  throw new DraftRevisionConflictError(
-    draftKey,
-    state.conflictRevision,
-    { cause: error },
-  );
+  throw new DraftRevisionConflictError(draftKey, state.conflictRevision, { cause: error });
 }
 
 export function composeDraftKey(
@@ -69,17 +62,15 @@ export function composeDraftKey(
  * interleaving on it produce a swap against a revision the backend has already
  * moved past.
  */
-function enqueue<TResult>(
-  draftKey: string,
-  operation: () => Promise<TResult>,
-): Promise<TResult> {
+function enqueue<TResult>(draftKey: string, operation: () => Promise<TResult>): Promise<TResult> {
   const previous = writeChains.get(draftKey) ?? Promise.resolve();
-  const result = previous
-    .catch(() => undefined)
-    .then(operation);
+  const result = previous.catch(() => undefined).then(operation);
   // The chain itself must never reject, or one failure would skip every
   // operation queued behind it. Callers still see `result`'s rejection.
-  const settled = result.then(() => undefined, () => undefined);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
   writeChains.set(draftKey, settled);
   void settled.then(() => {
     if (writeChains.get(draftKey) === settled) writeChains.delete(draftKey);
@@ -132,31 +123,25 @@ export function persistComposeDraft<T>(
   revisionState?: DraftRevisionState,
 ): Promise<void> {
   const state = revisionStateFor(draftKey, revisionState);
-  return enqueue(
-    draftKey,
-    async () => {
-      if (state.conflictRevision !== null) {
-        throw new DraftRevisionConflictError(
-          draftKey,
-          state.conflictRevision,
-        );
+  return enqueue(draftKey, async () => {
+    if (state.conflictRevision !== null) {
+      throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
+    }
+    try {
+      const saved = await backend.saveComposeDraft(
+        draftKey,
+        ownerType,
+        ownerId,
+        value,
+        state.revision,
+      );
+      if (saved && typeof saved.revision === "number") {
+        state.revision = saved.revision;
       }
-      try {
-        const saved = await backend.saveComposeDraft(
-          draftKey,
-          ownerType,
-          ownerId,
-          value,
-          state.revision,
-        );
-        if (saved && typeof saved.revision === "number") {
-          state.revision = saved.revision;
-        }
-      } catch (error) {
-        await recordComposeConflict(draftKey, state, error);
-      }
-    },
-  );
+    } catch (error) {
+      await recordComposeConflict(draftKey, state, error);
+    }
+  });
 }
 
 export function discardComposeDraft(
@@ -166,10 +151,7 @@ export function discardComposeDraft(
   const state = revisionStateFor(draftKey, revisionState);
   return enqueue(draftKey, async () => {
     if (state.conflictRevision !== null) {
-      throw new DraftRevisionConflictError(
-        draftKey,
-        state.conflictRevision,
-      );
+      throw new DraftRevisionConflictError(draftKey, state.conflictRevision);
     }
     try {
       await backend.deleteComposeDraft(draftKey, state.revision);
@@ -192,13 +174,7 @@ export function resolveComposeDraftSaveConflict<T>(
     state.revision = state.conflictRevision;
     state.conflictRevision = null;
   }
-  return persistComposeDraft(
-    draftKey,
-    ownerType,
-    ownerId,
-    value,
-    state,
-  );
+  return persistComposeDraft(draftKey, ownerType, ownerId, value, state);
 }
 
 export function resolveComposeDraftDiscardConflict(

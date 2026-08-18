@@ -26,13 +26,7 @@ describe("backend shutdown handler", () => {
 
     await handler("SIGTERM");
 
-    expect(order).toEqual([
-      "tailscale",
-      "managed-web",
-      "gateway",
-      "backend",
-      "exit:0",
-    ]);
+    expect(order).toEqual(["tailscale", "managed-web", "gateway", "backend", "exit:0"]);
     expect(exit).toHaveBeenCalledWith(0);
   });
 

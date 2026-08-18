@@ -18,7 +18,13 @@ interface ChangedFileItemProps {
   onDelete?: (path: string) => void;
 }
 
-export function ChangedFileItem({ change, onClick, onReveal, onRevert, onDelete }: ChangedFileItemProps) {
+export function ChangedFileItem({
+  change,
+  onClick,
+  onReveal,
+  onRevert,
+  onDelete,
+}: ChangedFileItemProps) {
   const reveal = change.status.startsWith("D") ? undefined : onReveal;
   const item = (
     <button
@@ -26,7 +32,7 @@ export function ChangedFileItem({ change, onClick, onReveal, onRevert, onDelete 
       title={change.path}
       className={cn(
         "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
-        "hover:bg-accent/50"
+        "hover:bg-accent/50",
       )}
     >
       <FileIcon filename={change.filename} className="h-4 w-4 shrink-0" />
@@ -40,12 +46,8 @@ export function ChangedFileItem({ change, onClick, onReveal, onRevert, onDelete 
       />
 
       <div className="ml-2 flex shrink-0 items-center justify-end gap-1.5 font-mono text-xs tabular-nums">
-        {change.additions > 0 && (
-          <span className="text-green-500">+{change.additions}</span>
-        )}
-        {change.deletions > 0 && (
-          <span className="text-red-400">-{change.deletions}</span>
-        )}
+        {change.additions > 0 && <span className="text-green-500">+{change.additions}</span>}
+        {change.deletions > 0 && <span className="text-red-400">-{change.deletions}</span>}
       </div>
     </button>
   );

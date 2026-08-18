@@ -15,7 +15,18 @@ import {
 } from "./opencode-types";
 
 export interface OpenCodeEvent {
-  type: "message.updated" | "session.updated" | "session.error" | "file.edited" | "file.watcher.updated" | "permission.asked" | "permission.replied" | "question.asked" | "question.replied" | "question.rejected" | string;
+  type:
+    | "message.updated"
+    | "session.updated"
+    | "session.error"
+    | "file.edited"
+    | "file.watcher.updated"
+    | "permission.asked"
+    | "permission.replied"
+    | "question.asked"
+    | "question.replied"
+    | "question.rejected"
+    | string;
   properties?: {
     sessionID?: string;
     info?: {
@@ -51,7 +62,9 @@ export interface OpenCodeEvent {
  * Subscribe to events from the server
  * Returns an async iterator for SSE events
  */
-export async function subscribeToEvents(client: OpencodeClient): Promise<AsyncIterable<OpenCodeEvent> | null> {
+export async function subscribeToEvents(
+  client: OpencodeClient,
+): Promise<AsyncIterable<OpenCodeEvent> | null> {
   try {
     // event.subscribe() returns { stream: AsyncGenerator }
     const response = await client.event.subscribe();
@@ -98,8 +111,7 @@ export async function listSessions(client: OpencodeClient): Promise<OpenCodeSess
     if (!response.data) return [];
 
     return response.data.map((session): OpenCodeSession => {
-      const createdAt = toIsoTimestamp(session.time?.created)
-        ?? new Date().toISOString();
+      const createdAt = toIsoTimestamp(session.time?.created) ?? new Date().toISOString();
 
       return {
         id: session.id,
@@ -110,9 +122,7 @@ export async function listSessions(client: OpencodeClient): Promise<OpenCodeSess
     });
   } catch (error) {
     console.error("[opencode-client] Failed to list sessions:", error);
-    throw error instanceof Error
-      ? error
-      : new Error("Failed to list OpenCode sessions");
+    throw error instanceof Error ? error : new Error("Failed to list OpenCode sessions");
   }
 }
 
@@ -121,10 +131,7 @@ export async function listSessions(client: OpencodeClient): Promise<OpenCodeSess
  */
 export async function deleteSession(client: OpencodeClient, sessionId: string): Promise<boolean> {
   try {
-    const response = await client.session.delete(
-      { sessionID: sessionId },
-      { throwOnError: false },
-    );
+    const response = await client.session.delete({ sessionID: sessionId }, { throwOnError: false });
     if (response?.error) {
       console.error("[opencode-client] Failed to delete session:", response.error);
       return false;
@@ -147,10 +154,7 @@ export async function deleteSession(client: OpencodeClient, sessionId: string): 
  */
 export async function abortSession(client: OpencodeClient, sessionId: string): Promise<boolean> {
   try {
-    const response = await client.session.abort(
-      { sessionID: sessionId },
-      { throwOnError: false },
-    );
+    const response = await client.session.abort({ sessionID: sessionId }, { throwOnError: false });
     if (response?.error) {
       console.error("[opencode-client] Failed to abort session:", response.error);
       return false;
@@ -176,10 +180,7 @@ export async function getPendingQuestions(
     });
     if (!response.data) {
       if (options.throwOnError) {
-        throw openCodeResponseError(
-          "Failed to get pending OpenCode questions",
-          response.error,
-        );
+        throw openCodeResponseError("Failed to get pending OpenCode questions", response.error);
       }
       return [];
     }
@@ -187,9 +188,7 @@ export async function getPendingQuestions(
   } catch (error) {
     console.error("[opencode-client] Failed to get pending questions:", error);
     if (options.throwOnError) {
-      throw error instanceof Error
-        ? error
-        : new Error("Failed to get pending OpenCode questions");
+      throw error instanceof Error ? error : new Error("Failed to get pending OpenCode questions");
     }
     return [];
   }
@@ -209,10 +208,7 @@ export async function getPendingPermissions(
     });
     if (!response.data) {
       if (options.throwOnError) {
-        throw openCodeResponseError(
-          "Failed to get pending OpenCode permissions",
-          response.error,
-        );
+        throw openCodeResponseError("Failed to get pending OpenCode permissions", response.error);
       }
       return [];
     }
@@ -242,10 +238,7 @@ async function reconcileInteractionResponse(
   });
 
   try {
-    const pending = await Promise.race([
-      loadPending(controller.signal),
-      timeout,
-    ]);
+    const pending = await Promise.race([loadPending(controller.signal), timeout]);
     return pending.some((request) => request.id === requestId) ? "pending" : "gone";
   } catch (error) {
     console.error("[opencode-client] Failed to reconcile interaction response:", error);
@@ -264,7 +257,7 @@ async function reconcileInteractionResponse(
 export async function replyToQuestion(
   client: OpencodeClient,
   requestId: string,
-  answers: QuestionAnswer[]
+  answers: QuestionAnswer[],
 ): Promise<OpenCodeInteractionResponseResult> {
   try {
     await client.question.reply(
@@ -277,9 +270,8 @@ export async function replyToQuestion(
     return "applied";
   } catch (error) {
     console.error("[opencode-client] Failed to reply to question:", error);
-    return reconcileInteractionResponse(
-      requestId,
-      (signal) => getPendingQuestions(client, { throwOnError: true, signal }),
+    return reconcileInteractionResponse(requestId, (signal) =>
+      getPendingQuestions(client, { throwOnError: true, signal }),
     );
   }
 }
@@ -291,7 +283,7 @@ export async function replyToPermission(
   client: OpencodeClient,
   requestId: string,
   reply: PermissionReply,
-  message?: string
+  message?: string,
 ): Promise<OpenCodeInteractionResponseResult> {
   try {
     await client.permission.reply(
@@ -305,9 +297,8 @@ export async function replyToPermission(
     return "applied";
   } catch (error) {
     console.error("[opencode-client] Failed to reply to permission:", error);
-    return reconcileInteractionResponse(
-      requestId,
-      (signal) => getPendingPermissions(client, { throwOnError: true, signal }),
+    return reconcileInteractionResponse(requestId, (signal) =>
+      getPendingPermissions(client, { throwOnError: true, signal }),
     );
   }
 }
@@ -317,20 +308,15 @@ export async function replyToPermission(
  */
 export async function rejectQuestion(
   client: OpencodeClient,
-  requestId: string
+  requestId: string,
 ): Promise<OpenCodeInteractionResponseResult> {
   try {
-    await client.question.reject(
-      { requestID: requestId },
-      { throwOnError: true },
-    );
+    await client.question.reject({ requestID: requestId }, { throwOnError: true });
     return "applied";
   } catch (error) {
     console.error("[opencode-client] Failed to reject question:", error);
-    return reconcileInteractionResponse(
-      requestId,
-      (signal) => getPendingQuestions(client, { throwOnError: true, signal }),
+    return reconcileInteractionResponse(requestId, (signal) =>
+      getPendingQuestions(client, { throwOnError: true, signal }),
     );
   }
 }
-

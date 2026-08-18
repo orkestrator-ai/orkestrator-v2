@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { Menu, Wrench, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,8 +21,7 @@ import { cn } from "@/lib/utils";
  * label keeps that lookup from silently missing if this button is renamed.
  */
 export const MOBILE_TOOLS_TRIGGER_LABEL = "Open tools";
-export const MOBILE_TOOLS_TRIGGER_SELECTOR =
-  `button[aria-label="${MOBILE_TOOLS_TRIGGER_LABEL}"]`;
+export const MOBILE_TOOLS_TRIGGER_SELECTOR = `button[aria-label="${MOBILE_TOOLS_TRIGGER_LABEL}"]`;
 
 /** The breakpoint at which `AppShell` swaps in this layout. */
 export const MOBILE_SHELL_MEDIA_QUERY = "(max-width: 767px)";
@@ -89,8 +95,8 @@ export function MobileAppShellLayout({
     const previousSelection = previousSelectionRef.current;
     previousSelectionRef.current = { selectedEnvironmentId, selectedProjectId };
     if (
-      previousSelection.selectedEnvironmentId === selectedEnvironmentId
-      && previousSelection.selectedProjectId === selectedProjectId
+      previousSelection.selectedEnvironmentId === selectedEnvironmentId &&
+      previousSelection.selectedProjectId === selectedProjectId
     ) {
       return;
     }
@@ -144,7 +150,9 @@ export function MobileAppShellLayout({
             className="absolute left-1.5 h-9 w-9"
             style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
             onMouseDown={(event) => event.stopPropagation()}
-            aria-label={sidebarOpen ? "Close projects and environments" : "Open projects and environments"}
+            aria-label={
+              sidebarOpen ? "Close projects and environments" : "Open projects and environments"
+            }
             aria-expanded={sidebarOpen}
             aria-controls="mobile-projects-drawer"
           >
@@ -157,9 +165,11 @@ export function MobileAppShellLayout({
               type="button"
               className="absolute left-12 right-[5.5rem] min-w-0 truncate px-1 text-center text-sm font-medium text-foreground"
               data-backend-drag-region={titleUsesNativeDragRegion ? "" : undefined}
-              style={{
-                WebkitAppRegion: titleUsesNativeDragRegion ? "drag" : "no-drag",
-              } as CSSProperties}
+              style={
+                {
+                  WebkitAppRegion: titleUsesNativeDragRegion ? "drag" : "no-drag",
+                } as CSSProperties
+              }
               onMouseDown={(event) => {
                 if (!titleUsesNativeDragRegion) event.stopPropagation();
               }}

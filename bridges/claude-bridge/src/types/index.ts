@@ -1,8 +1,5 @@
 // Type definitions for Claude Bridge Server
-import type {
-  JsonSchema,
-  StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
+import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { TranscriptWindowMetadata } from "@orkestrator/protocol/transcript-window";
 
 import type { TaskListSnapshot, TaskRegistry } from "@orkestrator/protocol/task-list";
@@ -51,7 +48,13 @@ export interface SdkCompactBoundaryMessage extends SdkSystemMessage {
 /** SDK result message when query completes */
 export interface SdkResultMessage extends SdkMessageBase {
   type: "result";
-  subtype?: "success" | "error_max_turns" | "error_during_execution" | "error_max_budget_usd" | "error_max_structured_output_retries" | string;
+  subtype?:
+    | "success"
+    | "error_max_turns"
+    | "error_during_execution"
+    | "error_max_budget_usd"
+    | "error_max_structured_output_retries"
+    | string;
   result?: unknown;
   total_cost_usd?: number;
   duration_ms?: number;
@@ -60,14 +63,17 @@ export interface SdkResultMessage extends SdkMessageBase {
   num_turns?: number;
   errors?: string[];
   usage?: Record<string, unknown>;
-  modelUsage?: Record<string, {
-    inputTokens?: number;
-    outputTokens?: number;
-    cacheReadInputTokens?: number;
-    cacheCreationInputTokens?: number;
-    costUSD?: number;
-    contextWindow?: number;
-  }>;
+  modelUsage?: Record<
+    string,
+    {
+      inputTokens?: number;
+      outputTokens?: number;
+      cacheReadInputTokens?: number;
+      cacheCreationInputTokens?: number;
+      costUSD?: number;
+      contextWindow?: number;
+    }
+  >;
   permission_denials?: unknown[];
   /** Present on successful turns requested with Agent SDK `outputFormat`. */
   structured_output?: unknown;
@@ -82,15 +88,13 @@ export interface SdkResultMessage extends SdkMessageBase {
 
 /** Type guard for compact boundary message */
 export function isSdkCompactBoundaryMessage(
-  message: SdkMessageBase
+  message: SdkMessageBase,
 ): message is SdkCompactBoundaryMessage {
   return message.type === "system" && message.subtype === "compact_boundary";
 }
 
 /** Type guard for result message */
-export function isSdkResultMessage(
-  message: SdkMessageBase
-): message is SdkResultMessage {
+export function isSdkResultMessage(message: SdkMessageBase): message is SdkResultMessage {
   return message.type === "result";
 }
 
@@ -199,10 +203,7 @@ export interface ClaudeQueryControl {
    * bridge feature-detects it and validates the unknown response at runtime.
    */
   usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
-  rewindFiles?: (
-    userMessageId: string,
-    options?: { dryRun?: boolean },
-  ) => Promise<unknown>;
+  rewindFiles?: (userMessageId: string, options?: { dryRun?: boolean }) => Promise<unknown>;
   close?: () => void | Promise<void>;
 }
 
@@ -314,10 +315,13 @@ export interface SessionState {
   /** True after durable deletion has claimed the session and before removal. */
   deleting?: boolean;
   /** Single in-flight persisted transcript read shared by mounts and prompts. */
-  persistedHydration?: Promise<{
-    messages: NormalizedMessage[];
-    taskRegistry: TaskRegistry;
-  } | undefined>;
+  persistedHydration?: Promise<
+    | {
+        messages: NormalizedMessage[];
+        taskRegistry: TaskRegistry;
+      }
+    | undefined
+  >;
   /** Control for the currently executing (or most recently completed) turn. */
   queryControl?: ClaudeQueryControl;
   /**
@@ -573,7 +577,13 @@ export interface SSEEvent {
 }
 
 /** Permission mode for Claude Agent SDK */
-export type PermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan" | "dontAsk" | "auto";
+export type PermissionMode =
+  | "default"
+  | "acceptEdits"
+  | "bypassPermissions"
+  | "plan"
+  | "dontAsk"
+  | "auto";
 
 /** Prompt options */
 export interface PromptOptions {

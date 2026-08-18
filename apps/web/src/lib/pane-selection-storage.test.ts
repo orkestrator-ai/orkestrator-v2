@@ -14,11 +14,12 @@ function writeStoredPaneSelection(
   selection: { activePaneId: string; activeTabIds: Record<string, string> },
 ): void {
   const raw = localStorage.getItem(STORAGE_KEY);
-  const parsed = raw ? JSON.parse(raw) as { entries?: unknown[] } : {};
-  const entries = (parsed.entries ?? []).filter((entry) =>
-    !!entry
-    && typeof entry === "object"
-    && (entry as { environmentId?: unknown }).environmentId !== environmentId
+  const parsed = raw ? (JSON.parse(raw) as { entries?: unknown[] }) : {};
+  const entries = (parsed.entries ?? []).filter(
+    (entry) =>
+      !!entry &&
+      typeof entry === "object" &&
+      (entry as { environmentId?: unknown }).environmentId !== environmentId,
   );
   entries.push({ environmentId, ...selection });
   localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, entries }));
@@ -29,7 +30,7 @@ function leaf(id: string, tabIds: string[], activeTabId?: string | null): PaneNo
     kind: "leaf",
     id,
     tabs: tabIds.map((tabId) => ({ id: tabId, type: "plain" as const })),
-    activeTabId: activeTabId === undefined ? tabIds[0] ?? null : activeTabId,
+    activeTabId: activeTabId === undefined ? (tabIds[0] ?? null) : activeTabId,
   };
 }
 
@@ -107,21 +108,24 @@ describe("read/clear", () => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries: "nope" }));
     expect(readStoredPaneSelection("env-1")).toBeNull();
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      version: 1,
-      entries: [
-        null,
-        "entry",
-        { environmentId: "", activePaneId: "a", activeTabIds: {} },
-        { environmentId: "env-1", activePaneId: "", activeTabIds: {} },
-        { environmentId: "env-2", activePaneId: "a", activeTabIds: "nope" },
-        {
-          environmentId: "env-3",
-          activePaneId: "a",
-          activeTabIds: { good: "tab", bad: 7, blank: "" },
-        },
-      ],
-    }));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        entries: [
+          null,
+          "entry",
+          { environmentId: "", activePaneId: "a", activeTabIds: {} },
+          { environmentId: "env-1", activePaneId: "", activeTabIds: {} },
+          { environmentId: "env-2", activePaneId: "a", activeTabIds: "nope" },
+          {
+            environmentId: "env-3",
+            activePaneId: "a",
+            activeTabIds: { good: "tab", bad: 7, blank: "" },
+          },
+        ],
+      }),
+    );
     expect(readStoredPaneSelection("env-1")).toBeNull();
     expect(readStoredPaneSelection("env-2")).toBeNull();
     expect(readStoredPaneSelection("env-3")).toEqual({
@@ -174,10 +178,7 @@ describe("read/clear", () => {
 });
 
 describe("applyStoredPaneSelection", () => {
-  const restored = paneState(
-    split(leaf("left", ["a", "b"]), leaf("right", ["c", "d"])),
-    "left",
-  );
+  const restored = paneState(split(leaf("left", ["a", "b"]), leaf("right", ["c", "d"])), "left");
 
   test("re-applies a remembered pane and tab", () => {
     const applied = applyStoredPaneSelection(restored, "env-1", {
@@ -196,11 +197,10 @@ describe("applyStoredPaneSelection", () => {
 
   test("ignores a pane or tab the restored layout no longer contains", () => {
     // Another client closed "d" and removed the "right" pane between sessions.
-    const applied = applyStoredPaneSelection(
-      paneState(leaf("left", ["a", "b"]), "left"),
-      "env-1",
-      { activePaneId: "right", activeTabIds: { left: "gone", right: "d" } },
-    );
+    const applied = applyStoredPaneSelection(paneState(leaf("left", ["a", "b"]), "left"), "env-1", {
+      activePaneId: "right",
+      activeTabIds: { left: "gone", right: "d" },
+    });
 
     expect(applied.activePaneId).toBe("left");
     expect(applied.root).toMatchObject({ id: "left", activeTabId: "a" });

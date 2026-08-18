@@ -122,9 +122,7 @@ export type ThreadItem =
   | ErrorItem;
 
 /** One element of a user turn's input. */
-export type UserInput =
-  | { type: "text"; text: string }
-  | { type: "local_image"; path: string };
+export type UserInput = { type: "text"; text: string } | { type: "local_image"; path: string };
 
 /** A whole user turn: bare text, or a list of inputs when there are attachments. */
 export type Input = string | UserInput[];

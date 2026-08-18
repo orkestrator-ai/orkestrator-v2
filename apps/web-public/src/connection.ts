@@ -1,4 +1,7 @@
-import { getGatewayTokenValidationError, normalizeGatewayToken } from "@orkestrator/protocol/gateway-token";
+import {
+  getGatewayTokenValidationError,
+  normalizeGatewayToken,
+} from "@orkestrator/protocol/gateway-token";
 import type { ConnectionList, ConnectionSummary } from "@orkestrator/protocol/connections";
 
 const ADDRESS_KEY = "orkestrator.public.backend-address";
@@ -30,7 +33,9 @@ function loadSessionTokens(): Record<string, string> {
     const parsed = JSON.parse(sessionStorage.getItem(SESSION_TOKENS_KEY) ?? "{}") as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return Object.fromEntries(
-      Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
+      Object.entries(parsed).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
     );
   } catch {
     return {};
@@ -41,20 +46,26 @@ function loadRecentConnections(): RecentConnection[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(CONNECTIONS_KEY) ?? "[]") as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((entry): RecentConnection[] => {
-      if (!entry || typeof entry !== "object"
-        || typeof (entry as RecentConnection).id !== "string"
-        || typeof (entry as RecentConnection).name !== "string"
-        || typeof (entry as RecentConnection).address !== "string"
-        || typeof (entry as RecentConnection).lastConnectedAt !== "string") return [];
-      try {
-        const address = normalizeBackendAddress((entry as RecentConnection).address);
-        if ((entry as RecentConnection).id !== connectionId(address)) return [];
-        return [{ ...(entry as RecentConnection), address }];
-      } catch {
-        return [];
-      }
-    }).slice(0, MAX_RECENT_CONNECTIONS);
+    return parsed
+      .flatMap((entry): RecentConnection[] => {
+        if (
+          !entry ||
+          typeof entry !== "object" ||
+          typeof (entry as RecentConnection).id !== "string" ||
+          typeof (entry as RecentConnection).name !== "string" ||
+          typeof (entry as RecentConnection).address !== "string" ||
+          typeof (entry as RecentConnection).lastConnectedAt !== "string"
+        )
+          return [];
+        try {
+          const address = normalizeBackendAddress((entry as RecentConnection).address);
+          if ((entry as RecentConnection).id !== connectionId(address)) return [];
+          return [{ ...(entry as RecentConnection), address }];
+        } catch {
+          return [];
+        }
+      })
+      .slice(0, MAX_RECENT_CONNECTIONS);
   } catch {
     return [];
   }
@@ -123,12 +134,22 @@ export function saveConnection(connection: SavedConnection): void {
   const address = normalizeBackendAddress(connection.address);
   const id = connectionId(address);
   const now = new Date().toISOString();
-  const recent: RecentConnection = { id, name: new URL(address).hostname, address, lastConnectedAt: now };
+  const recent: RecentConnection = {
+    id,
+    name: new URL(address).hostname,
+    address,
+    lastConnectedAt: now,
+  };
   localStorage.setItem(ADDRESS_KEY, address);
-  localStorage.setItem(CONNECTIONS_KEY, JSON.stringify([
-    recent,
-    ...loadRecentConnections().filter((entry) => entry.id !== id),
-  ].slice(0, MAX_RECENT_CONNECTIONS)));
+  localStorage.setItem(
+    CONNECTIONS_KEY,
+    JSON.stringify(
+      [recent, ...loadRecentConnections().filter((entry) => entry.id !== id)].slice(
+        0,
+        MAX_RECENT_CONNECTIONS,
+      ),
+    ),
+  );
   saveSessionTokens({ ...loadSessionTokens(), [id]: connection.token });
 }
 
@@ -136,7 +157,10 @@ export function forgetConnection(): void {
   const address = localStorage.getItem(ADDRESS_KEY) ?? "";
   const id = connectionId(address);
   localStorage.removeItem(ADDRESS_KEY);
-  localStorage.setItem(CONNECTIONS_KEY, JSON.stringify(loadRecentConnections().filter((entry) => entry.id !== id)));
+  localStorage.setItem(
+    CONNECTIONS_KEY,
+    JSON.stringify(loadRecentConnections().filter((entry) => entry.id !== id)),
+  );
   const tokens = loadSessionTokens();
   delete tokens[id];
   saveSessionTokens(tokens);
@@ -167,7 +191,8 @@ export function listBrowserConnections(): ConnectionList {
 export function selectBrowserConnection(id: string): ConnectionList {
   const connection = loadRecentConnections().find((entry) => entry.id === id);
   if (!connection) throw new Error("That saved connection no longer exists.");
-  if (!loadSessionTokens()[id]) throw new Error("Enter the gateway token to reconnect to this server.");
+  if (!loadSessionTokens()[id])
+    throw new Error("Enter the gateway token to reconnect to this server.");
   localStorage.setItem(ADDRESS_KEY, connection.address);
   return listBrowserConnections();
 }
@@ -178,7 +203,10 @@ export function forgetBrowserConnection(id: string): ConnectionList {
   const tokens = loadSessionTokens();
   delete tokens[id];
   saveSessionTokens(tokens);
-  if (localStorage.getItem(ADDRESS_KEY) && connectionId(localStorage.getItem(ADDRESS_KEY) ?? "") === id) {
+  if (
+    localStorage.getItem(ADDRESS_KEY) &&
+    connectionId(localStorage.getItem(ADDRESS_KEY) ?? "") === id
+  ) {
     localStorage.removeItem(ADDRESS_KEY);
   }
   return listBrowserConnections();
@@ -199,7 +227,10 @@ export async function checkBackendConnection(
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error("Connection timeout must be a positive number of milliseconds.");
   }
-  const timeout = setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
+  const timeout = setTimeout(
+    () => controller.abort(new DOMException("Timed out", "TimeoutError")),
+    timeoutMs,
+  );
   const abortFromCaller = () => controller.abort(options.signal?.reason);
   if (options.signal?.aborted) abortFromCaller();
   else options.signal?.addEventListener("abort", abortFromCaller, { once: true });
@@ -215,7 +246,7 @@ export async function checkBackendConnection(
       signal: controller.signal,
     });
     try {
-      payload = await response.json() as { ok?: boolean; error?: string };
+      payload = (await response.json()) as { ok?: boolean; error?: string };
     } catch (error) {
       if (controller.signal.aborted) throw error;
       payload = {};
@@ -224,7 +255,9 @@ export async function checkBackendConnection(
     if (options.signal?.aborted) throw new Error("Connection check cancelled.");
     if (controller.signal.aborted) {
       const seconds = timeoutMs / 1_000;
-      throw new Error(`The backend did not respond within ${seconds} second${seconds === 1 ? "" : "s"}.`);
+      throw new Error(
+        `The backend did not respond within ${seconds} second${seconds === 1 ? "" : "s"}.`,
+      );
     }
     throw new Error(
       "Could not reach the backend. Check its HTTPS address, Tailscale connection, and allowed origin setting.",
@@ -236,9 +269,11 @@ export async function checkBackendConnection(
 
   if (response.status === 401) throw new Error("The gateway token was rejected.");
   if (response.status === 403) {
-    throw new Error(payload.error === "Origin not allowed"
-      ? "This site is not in the backend's allowed origins."
-      : payload.error ?? "The backend refused this connection.");
+    throw new Error(
+      payload.error === "Origin not allowed"
+        ? "This site is not in the backend's allowed origins."
+        : (payload.error ?? "The backend refused this connection."),
+    );
   }
   if (!response.ok || payload.ok !== true) {
     throw new Error(payload.error ?? `Backend check failed with HTTP ${response.status}.`);

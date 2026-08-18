@@ -45,10 +45,7 @@ export interface TurnRenderState {
    * normalized parts so a streaming update to the newest item does not rebuild
    * every older text/tool/diff object in the turn.
    */
-  completedItemParts: Map<
-    string,
-    { source: EngineItem | null; parts: NormalizedPart[] }
-  >;
+  completedItemParts: Map<string, { source: EngineItem | null; parts: NormalizedPart[] }>;
   subagentParts: Map<string, NormalizedPart>;
   subagentFingerprints: Map<string, string>;
   /** When the rollout-transcript probe for sub-agent activity last ran. */
@@ -138,7 +135,11 @@ export function effectiveItem(
   if (!item) {
     // Deltas only: synthesize so streaming text is visible before completion.
     if (accumulator.textDelta.length > 0) {
-      return { id: accumulator.id, type: "agent_message", text: accumulator.textDelta } as EngineItem;
+      return {
+        id: accumulator.id,
+        type: "agent_message",
+        text: accumulator.textDelta,
+      } as EngineItem;
     }
     const reasoning = joinReasoning(
       [...accumulator.summaryDeltas.entries()].sort((a, b) => a[0] - b[0]).map(([, text]) => text),
@@ -151,11 +152,11 @@ export function effectiveItem(
   }
 
   if (
-    accumulator.rawFallback
-    && item.type === "dynamic_tool_call"
-    && item.tool.trim().toLowerCase() === "apply_patch"
-    && item.status !== "failed"
-    && !turn.isTerminal()
+    accumulator.rawFallback &&
+    item.type === "dynamic_tool_call" &&
+    item.tool.trim().toLowerCase() === "apply_patch" &&
+    item.status !== "failed" &&
+    !turn.isTerminal()
   ) {
     return null;
   }
@@ -177,9 +178,7 @@ export function effectiveItem(
     }
     // A final item with empty text can happen mid-stream; prefer the deltas.
     case "agent_message":
-      return item.text.length > 0
-        ? item
-        : ({ ...item, text: accumulator.textDelta } as EngineItem);
+      return item.text.length > 0 ? item : ({ ...item, text: accumulator.textDelta } as EngineItem);
     case "reasoning": {
       if (item.text.length > 0) return item;
       const reasoning = turn.effectiveReasoning(accumulator);
@@ -362,8 +361,10 @@ export async function renderTurn(
   // The loader performs filesystem I/O. Parent events can arrive while it is
   // awaited, so take the render snapshot only after it settles. This prevents a
   // newer sub-agent fingerprint from being committed against stale parent keys.
-  const { items, itemsByKey, accumulatorsByKey, itemKeys } =
-    collectTurnItems(turn, options.segment);
+  const { items, itemsByKey, accumulatorsByKey, itemKeys } = collectTurnItems(
+    turn,
+    options.segment,
+  );
 
   // Reconcile the authoritative item set without rebuilding its order around
   // the sub-agent entries. New parent items belong at the end of the timeline;
@@ -371,8 +372,8 @@ export async function renderTurn(
   // from `[...itemKeys, ...existingSubagentKeys]` on every render would instead
   // pin even completed agents below every parent message that followed them.
   const currentItemKeys = new Set(itemKeys);
-  const timelineOrder = options.state.timelineOrder.filter((key) =>
-    key.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX) || currentItemKeys.has(key),
+  const timelineOrder = options.state.timelineOrder.filter(
+    (key) => key.startsWith(CODEX_TIMELINE_SUBAGENT_PREFIX) || currentItemKeys.has(key),
   );
   const timelineKeys = new Set(timelineOrder);
   for (const key of itemKeys) {
@@ -402,30 +403,19 @@ export async function renderTurn(
         const itemId = key.slice(CODEX_TIMELINE_ITEM_PREFIX.length);
         const accumulator = accumulatorsByKey.get(itemId);
         const cached = options.state.completedItemParts.get(itemId);
-        if (
-          accumulator?.completed
-          && cached?.source === accumulator.item
-        ) {
+        if (accumulator?.completed && cached?.source === accumulator.item) {
           // `itemToParts` touches a file's baseline while rendering its diff.
           // A completed-item cache hit skips that function, so without the
           // equivalent touch here an actively re-rendered file looks cold to
           // the LRU and can be evicted ahead of truly unused baselines.
-          touchCachedPartBaselines(
-            cached.parts,
-            options.cwd,
-            options.state.fileChange.baselines,
-          );
+          touchCachedPartBaselines(cached.parts, options.cwd, options.state.fileChange.baselines);
           parts.push(...cached.parts);
         } else {
-          const itemParts = await itemToParts(
-            item,
-            options.cwd,
-            options.state.fileChange,
-          );
-          const createdAt = typeof accumulator?.startedAt === "number"
-            && Number.isFinite(accumulator.startedAt)
-            ? new Date(accumulator.startedAt).toISOString()
-            : undefined;
+          const itemParts = await itemToParts(item, options.cwd, options.state.fileChange);
+          const createdAt =
+            typeof accumulator?.startedAt === "number" && Number.isFinite(accumulator.startedAt)
+              ? new Date(accumulator.startedAt).toISOString()
+              : undefined;
           const stampedParts = createdAt
             ? itemParts.map((part) => (part.createdAt ? part : { ...part, createdAt }))
             : itemParts;
@@ -448,8 +438,9 @@ export async function renderTurn(
 
   // The message body is the last agent message; tool output stays in parts.
   const finalText = items
-    .filter((item): item is Extract<EngineItem, { type: "agent_message" }> =>
-      item.type === "agent_message" && item.text.length > 0,
+    .filter(
+      (item): item is Extract<EngineItem, { type: "agent_message" }> =>
+        item.type === "agent_message" && item.text.length > 0,
     )
     .at(-1)?.text;
 

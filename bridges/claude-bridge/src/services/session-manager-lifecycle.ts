@@ -3,7 +3,11 @@
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ImageBlockParam, TextBlockParam, ContentBlockParam } from "@anthropic-ai/sdk/resources/messages/messages";
+import type {
+  ImageBlockParam,
+  TextBlockParam,
+  ContentBlockParam,
+} from "@anthropic-ai/sdk/resources/messages/messages";
 import type {
   ModelInfo,
   SessionState,
@@ -31,10 +35,7 @@ import type {
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
 import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
-import {
-  isRootAssistantRecord,
-  normalizeBackendModelId,
-} from "@orkestrator/protocol/model-id";
+import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
   structuredOutputFailure,
   type StructuredOutputResult,
@@ -75,9 +76,7 @@ import {
   sessions,
   touchSession,
 } from "./session-manager-core.js";
-import {
-  releaseQueryControl,
-} from "./session-manager-background-tasks.js";
+import { releaseQueryControl } from "./session-manager-background-tasks.js";
 type SessionActivity = core.SessionActivity;
 type PromptDispatchHandle = core.PromptDispatchHandle;
 /**
@@ -193,10 +192,11 @@ export function recordPromptDispatch(
   requestId: string,
   state: PromptDispatchState,
 ): void {
-  promptDispatchRecords.set(
-    promptDispatchKey(sessionId, requestId),
-    { sessionId, state, updatedAt: Date.now() },
-  );
+  promptDispatchRecords.set(promptDispatchKey(sessionId, requestId), {
+    sessionId,
+    state,
+    updatedAt: Date.now(),
+  });
   collectPromptDispatchGarbage();
 }
 
@@ -228,10 +228,11 @@ export function seedSettledPromptDispatchForTesting(
   requestId: string,
   updatedAt = Date.now(),
 ): void {
-  promptDispatchRecords.set(
-    promptDispatchKey(sessionId, requestId),
-    { sessionId, state: "already-processed", updatedAt },
-  );
+  promptDispatchRecords.set(promptDispatchKey(sessionId, requestId), {
+    sessionId,
+    state: "already-processed",
+    updatedAt,
+  });
   collectPromptDispatchGarbage();
 }
 
@@ -287,8 +288,7 @@ export async function claimPromptDispatch(
     );
   }
 
-  const dispatchedRequestIds =
-    session.dispatchedRequestIds ?? new Set<string>();
+  const dispatchedRequestIds = session.dispatchedRequestIds ?? new Set<string>();
   if (dispatchedRequestIds.has(requestId)) {
     const pending = pendingPromptDispatchClaims.get(sessionId);
     if (pending?.requestId === requestId) {
@@ -300,35 +300,23 @@ export async function claimPromptDispatch(
     throw sessionOperationError("conflict", "Session is being deleted");
   }
   if (session.status === "running") {
-    throw sessionOperationError(
-      "conflict",
-      "Session is already processing a prompt",
-    );
+    throw sessionOperationError("conflict", "Session is already processing a prompt");
   }
   if (session.rewindInProgress) {
-    throw sessionOperationError(
-      "conflict",
-      "Session is restoring files from a checkpoint",
-    );
+    throw sessionOperationError("conflict", "Session is restoring files from a checkpoint");
   }
 
   dispatchedRequestIds.add(requestId);
   session.dispatchedRequestIds = dispatchedRequestIds;
 
-  const recentRequestIds = [...dispatchedRequestIds].slice(
-    -MAX_DISPATCHED_REQUEST_IDS,
-  );
+  const recentRequestIds = [...dispatchedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS);
   const retainedRequestIds = new Set(recentRequestIds);
   session.dispatchedRequestIds = retainedRequestIds;
 
-  const sdkSessionId =
-    session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
+  const sdkSessionId = session.sdkSessionId ?? sdkSessionIdFromBridgeId(session.id);
   if (!sdkSessionId) {
     session.dispatchedRequestIds.delete(requestId);
-    throw sessionOperationError(
-      "invalid",
-      "Session does not have a durable request-id key",
-    );
+    throw sessionOperationError("invalid", "Session does not have a durable request-id key");
   }
 
   // Reserve the turn synchronously before the journal write yields. Without
@@ -347,16 +335,14 @@ export async function claimPromptDispatch(
     });
 
     if (
-      sessions.get(sessionId) !== session
-      || session.deleting
-      || claimedPromptDispatches.get(sessionId) !== requestId
+      sessions.get(sessionId) !== session ||
+      session.deleting ||
+      claimedPromptDispatches.get(sessionId) !== requestId
     ) {
       claimedPromptDispatches.delete(sessionId);
       retainedRequestIds.delete(requestId);
       await updateSessionPreferences(sdkSessionId, {
-        dispatchedRequestIds: [...retainedRequestIds].slice(
-          -MAX_DISPATCHED_REQUEST_IDS,
-        ),
+        dispatchedRequestIds: [...retainedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS),
       });
       throw sessionOperationError(
         "conflict",
@@ -379,16 +365,12 @@ export async function claimPromptDispatch(
       retainedRequestIds.delete(requestId);
       try {
         await updateSessionPreferences(sdkSessionId, {
-          dispatchedRequestIds: [...retainedRequestIds].slice(
-            -MAX_DISPATCHED_REQUEST_IDS,
-          ),
+          dispatchedRequestIds: [...retainedRequestIds].slice(-MAX_DISPATCHED_REQUEST_IDS),
         });
       } catch (rollbackError) {
         console.error(
           "[session-manager] Failed to roll back prompt dispatch claim:",
-          rollbackError instanceof Error
-            ? rollbackError.message
-            : String(rollbackError),
+          rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
         );
       }
       throw error;
@@ -415,9 +397,7 @@ export async function claimPromptDispatch(
   return "claimed";
 }
 
-export async function waitForPendingPromptDispatchClaim(
-  sessionId: string,
-): Promise<void> {
+export async function waitForPendingPromptDispatchClaim(sessionId: string): Promise<void> {
   const pending = pendingPromptDispatchClaims.get(sessionId);
   if (!pending) return;
   try {

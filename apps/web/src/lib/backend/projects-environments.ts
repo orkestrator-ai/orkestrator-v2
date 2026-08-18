@@ -1,6 +1,19 @@
 import { invoke } from "@/lib/native/backend";
-import type { Project, Environment, EnvironmentType, EnvironmentStatus, NetworkAccessMode, PortMapping, PrState, StartEnvironmentResult } from "@/types";
-import { isResourceRevisionManifest, type ResourceRevisionManifest, type ResourceRevisionMap } from "@orkestrator/protocol/resource-events";
+import type {
+  Project,
+  Environment,
+  EnvironmentType,
+  EnvironmentStatus,
+  NetworkAccessMode,
+  PortMapping,
+  PrState,
+  StartEnvironmentResult,
+} from "@/types";
+import {
+  isResourceRevisionManifest,
+  type ResourceRevisionManifest,
+  type ResourceRevisionMap,
+} from "@orkestrator/protocol/resource-events";
 /** PR detection result containing URL, state, and merge conflict status */
 
 /** PR detection result containing URL, state, and merge conflict status */
@@ -56,7 +69,7 @@ export async function reorderProjects(projectIds: string[]): Promise<Project[]> 
 
 export async function updateProject(
   projectId: string,
-  updates: Partial<Pick<Project, "name" | "localPath">>
+  updates: Partial<Pick<Project, "name" | "localPath">>,
 ): Promise<Project> {
   return invoke<Project>("update_project", { projectId, updates });
 }
@@ -75,7 +88,10 @@ export async function getEnvironmentSnapshots(projectId: string): Promise<Enviro
   return invoke<Environment[]>("get_environment_snapshots", { projectId });
 }
 
-export async function reorderEnvironments(projectId: string, environmentIds: string[]): Promise<Environment[]> {
+export async function reorderEnvironments(
+  projectId: string,
+  environmentIds: string[],
+): Promise<Environment[]> {
   return invoke<Environment[]>("reorder_environments", { projectId, environmentIds });
 }
 
@@ -156,15 +172,15 @@ export async function renameEnvironment(environmentId: string, name: string): Pr
  * Used by native mode chat tabs to rename timestamp-named environments
  * after the first user message.
  */
-export async function renameEnvironmentFromPrompt(environmentId: string, prompt: string): Promise<void> {
+export async function renameEnvironmentFromPrompt(
+  environmentId: string,
+  prompt: string,
+): Promise<void> {
   return invoke<void>("rename_environment_from_prompt", { environmentId, prompt });
 }
 
-export async function getEnvironmentStatus(
-  environmentId: string
-): Promise<EnvironmentStatus> {
+export async function getEnvironmentStatus(environmentId: string): Promise<EnvironmentStatus> {
   return invoke<EnvironmentStatus>("get_environment_status", { environmentId });
 }
 
 // --- Terminal Commands ---
-

@@ -55,9 +55,7 @@ function normalizeEntry(value: unknown): AgentActionDefault | undefined {
   // Dropping only the model leaves a well-formed entry that means "OpenCode's
   // own default model", which is what the placeholder was standing in for.
   const model =
-    platform === "opencode" && trimmedModel === OPENCODE_PLACEHOLDER_MODEL
-      ? ""
-      : trimmedModel;
+    platform === "opencode" && trimmedModel === OPENCODE_PLACEHOLDER_MODEL ? "" : trimmedModel;
   const reasoningEffort =
     typeof record.reasoningEffort === "string" ? record.reasoningEffort.trim() : "";
   return {

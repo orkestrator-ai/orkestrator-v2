@@ -7,9 +7,9 @@ function panelContaining(page: Page, child: Locator): Locator {
 const ENABLED_PLATFORMS = ["claude", "codex", "opencode"] as const;
 
 async function expectNoHorizontalOverflow(page: Page) {
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-  ).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 }
 
 /**
@@ -25,16 +25,11 @@ async function expectAgentPickerFitsAt(page: Page, width: number) {
   const picker = page.locator("#agent-model");
   await expect(picker).toBeVisible();
 
-  const [dialogBox, pickerBox] = await Promise.all([
-    dialog.boundingBox(),
-    picker.boundingBox(),
-  ]);
+  const [dialogBox, pickerBox] = await Promise.all([dialog.boundingBox(), picker.boundingBox()]);
   expect(dialogBox).not.toBeNull();
   expect(pickerBox).not.toBeNull();
   expect(pickerBox!.x).toBeGreaterThanOrEqual(dialogBox!.x);
-  expect(pickerBox!.x + pickerBox!.width).toBeLessThanOrEqual(
-    dialogBox!.x + dialogBox!.width,
-  );
+  expect(pickerBox!.x + pickerBox!.width).toBeLessThanOrEqual(dialogBox!.x + dialogBox!.width);
   await expectNoHorizontalOverflow(page);
 
   await picker.click();
@@ -73,10 +68,7 @@ test("mobile sections have one visible panel, preserve values, and stay within t
   const environmentName = page.getByLabel("Environment Name (optional)");
   const promptPanel = panelContaining(page, prompt);
   const setupPanel = panelContaining(page, environmentName);
-  const accessPanel = panelContaining(
-    page,
-    page.getByRole("button", { name: "Restricted" }),
-  );
+  const accessPanel = panelContaining(page, page.getByRole("button", { name: "Restricted" }));
 
   await expect(dialog).toBeVisible();
   await expect(tabList).toBeVisible();
@@ -88,19 +80,13 @@ test("mobile sections have one visible panel, preserve values, and stay within t
   await expect(setupPanel).toBeVisible();
   await expect(promptPanel).toBeHidden();
   await expect(setupPanel).toHaveAttribute("data-mobile-transition", "forward");
-  await expect(setupPanel).toHaveCSS(
-    "animation-name",
-    "create-environment-tab-enter-forward",
-  );
+  await expect(setupPanel).toHaveCSS("animation-name", "create-environment-tab-enter-forward");
   await expect(setupPanel).toHaveCSS("animation-duration", "0.18s");
   await environmentName.fill("mobile-layout");
 
   await page.getByRole("tab", { name: "Prompt" }).click();
   await expect(promptPanel).toHaveAttribute("data-mobile-transition", "backward");
-  await expect(promptPanel).toHaveCSS(
-    "animation-name",
-    "create-environment-tab-enter-backward",
-  );
+  await expect(promptPanel).toHaveCSS("animation-name", "create-environment-tab-enter-backward");
   await prompt.fill("Keep this prompt");
 
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -129,27 +115,19 @@ test("mobile sections have one visible panel, preserve values, and stay within t
   expect(hostBox).not.toBeNull();
   expect(protocolBox).not.toBeNull();
   expect(containerBox!.x).toBeGreaterThanOrEqual(dialogBox!.x);
-  expect(hostBox!.x + hostBox!.width).toBeLessThanOrEqual(
-    dialogBox!.x + dialogBox!.width,
-  );
+  expect(hostBox!.x + hostBox!.width).toBeLessThanOrEqual(dialogBox!.x + dialogBox!.width);
   expect(protocolBox!.y).toBeGreaterThan(containerBox!.y);
-  expect(protocolBox!.x + protocolBox!.width).toBeLessThanOrEqual(
-    dialogBox!.x + dialogBox!.width,
+  expect(protocolBox!.x + protocolBox!.width).toBeLessThanOrEqual(dialogBox!.x + dialogBox!.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
   );
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-  ).toBe(true);
   await protocol.click();
   await page.getByRole("option", { name: "UDP" }).click();
   const createButton = page.getByRole("button", { name: "Create Environment" });
   await expect(createButton).toBeVisible();
   await createButton.click();
   await expect
-    .poll(() =>
-      page.evaluate(
-        () => window.lastCreateEnvironmentOptions?.portMappings[0]?.protocol,
-      ),
-    )
+    .poll(() => page.evaluate(() => window.lastCreateEnvironmentOptions?.portMappings[0]?.protocol))
     .toBe("udp");
 });
 
@@ -191,17 +169,14 @@ test("desktop hides the mobile tablist while exposing every configuration sectio
   expect(nameBox).not.toBeNull();
   expect(accessBox).not.toBeNull();
   expect(nameBox!.x).toBeLessThan(accessBox!.x);
-  expect(
-    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-  ).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(tabList).toBeVisible();
   await page.getByRole("tab", { name: "Setup" }).click();
-  await expect(setupPanel).toHaveCSS(
-    "animation-name",
-    "create-environment-tab-enter-forward",
-  );
+  await expect(setupPanel).toHaveCSS("animation-name", "create-environment-tab-enter-forward");
 
   await page.setViewportSize({ width: 1024, height: 900 });
   await expect(tabList).toBeHidden();
@@ -247,8 +222,6 @@ test("desktop lays the picker's model and reasoning columns out side by side", a
   expect(modelsBox).not.toBeNull();
   expect(reasoningBox).not.toBeNull();
   expect(modelsBox!.x + modelsBox!.width).toBeLessThanOrEqual(reasoningBox!.x);
-  expect(reasoningBox!.x + reasoningBox!.width).toBeLessThanOrEqual(
-    menuBox!.x + menuBox!.width,
-  );
+  expect(reasoningBox!.x + reasoningBox!.width).toBeLessThanOrEqual(menuBox!.x + menuBox!.width);
   await expectNoHorizontalOverflow(page);
 });

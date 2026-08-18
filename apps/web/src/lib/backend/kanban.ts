@@ -1,5 +1,8 @@
 import { invoke } from "@/lib/native/backend";
-import type { FeaturePlanningKind, FeaturePlanningRecord } from "@orkestrator/protocol/feature-planning";
+import type {
+  FeaturePlanningKind,
+  FeaturePlanningRecord,
+} from "@orkestrator/protocol/feature-planning";
 import type { PrState } from "@/types";
 /** PR detection result containing URL, state, and merge conflict status */
 
@@ -143,9 +146,7 @@ export async function getFeaturePlanningSnapshot(
   return invoke<FeaturePlanningRecord[]>("get_feature_planning_snapshot", { projectId });
 }
 
-export async function retryFeaturePlanning(
-  featureId: string,
-): Promise<FeaturePlanningRecord> {
+export async function retryFeaturePlanning(featureId: string): Promise<FeaturePlanningRecord> {
   return invoke<FeaturePlanningRecord>("retry_feature_planning", { featureId });
 }
 
@@ -160,7 +161,7 @@ export async function getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
 export async function addKanbanTask(
   projectId: string,
   title: string,
-  description: string
+  description: string,
 ): Promise<KanbanTask> {
   return invoke<KanbanTask>("add_kanban_task", { projectId, title, description });
 }
@@ -177,7 +178,18 @@ export async function updateKanbanTask(
   prState?: PrState,
   prMergeCommented?: boolean,
 ): Promise<KanbanTask> {
-  return invoke<KanbanTask>("update_kanban_task", { taskId, title, description, acceptanceCriteria, status, environmentId, buildPipelineId, prUrl, prState, prMergeCommented });
+  return invoke<KanbanTask>("update_kanban_task", {
+    taskId,
+    title,
+    description,
+    acceptanceCriteria,
+    status,
+    environmentId,
+    buildPipelineId,
+    prUrl,
+    prState,
+    prMergeCommented,
+  });
 }
 
 export async function deleteKanbanTask(taskId: string): Promise<void> {
@@ -192,7 +204,11 @@ export async function deleteKanbanComment(taskId: string, commentId: string): Pr
   return invoke<KanbanTask>("delete_kanban_comment", { taskId, commentId });
 }
 
-export async function addKanbanImage(taskId: string, filename: string, data: string): Promise<KanbanTask> {
+export async function addKanbanImage(
+  taskId: string,
+  filename: string,
+  data: string,
+): Promise<KanbanTask> {
   return invoke<KanbanTask>("add_kanban_image", { taskId, filename, data });
 }
 
@@ -223,18 +239,20 @@ export async function createFeaturePlan(projectId: string): Promise<FeaturePlan>
 
 export async function updateFeaturePlan(
   featureId: string,
-  updates: Partial<Pick<
-    FeaturePlan,
-    | "title"
-    | "status"
-    | "summary"
-    | "messages"
-    | "stories"
-    | "codexEnvironmentId"
-    | "codexSessionId"
-    | "buildTaskId"
-    | "buildPipelineId"
-  >>,
+  updates: Partial<
+    Pick<
+      FeaturePlan,
+      | "title"
+      | "status"
+      | "summary"
+      | "messages"
+      | "stories"
+      | "codexEnvironmentId"
+      | "codexSessionId"
+      | "buildTaskId"
+      | "buildPipelineId"
+    >
+  >,
 ): Promise<FeaturePlan> {
   return invoke<FeaturePlan>("update_feature_plan", { featureId, updates });
 }
@@ -243,10 +261,10 @@ export async function claimFeaturePlanBuild(
   featureId: string,
   taskId: string,
 ): Promise<{ claimed: boolean; feature: FeaturePlan }> {
-  return invoke<{ claimed: boolean; feature: FeaturePlan }>(
-    "claim_feature_plan_build",
-    { featureId, taskId },
-  );
+  return invoke<{ claimed: boolean; feature: FeaturePlan }>("claim_feature_plan_build", {
+    featureId,
+    taskId,
+  });
 }
 
 export async function appendFeaturePlanMessage(
@@ -282,4 +300,3 @@ export async function appendFeatureStoryMessage(
     modelId,
   });
 }
-

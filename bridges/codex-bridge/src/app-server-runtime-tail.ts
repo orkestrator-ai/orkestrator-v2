@@ -37,7 +37,7 @@ import {
   parseCodexStructuredOutput,
   buildRecoveredContextPrompt,
   PromptAcceptedResult,
-  AppServerRuntimeBase
+  AppServerRuntimeBase,
 } from "./app-server-runtime-base.js";
 import { AppServerRuntimePrompt } from "./app-server-runtime-prompt.js";
 import { createHash } from "node:crypto";
@@ -138,7 +138,6 @@ import {
 import { fallbackReasoningId } from "@orkestrator/protocol/native-agent";
 import { toBridgeModel } from "./app-server-runtime-helpers.js";
 
-
 export class AppServerRuntimeTail extends AppServerRuntimePrompt {
   async abort(
     sessionId: string,
@@ -158,7 +157,10 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
     const turn = context?.activeTurn;
     if (!context || !turn) {
       // Nothing running; report the real phase rather than forcing idle.
-      return { status: context?.phase === "idle" ? "idle" : "cancelling", phase: context?.phase ?? "idle" };
+      return {
+        status: context?.phase === "idle" ? "idle" : "cancelling",
+        phase: context?.phase ?? "idle",
+      };
     }
 
     turn.markCancelling();
@@ -207,7 +209,10 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
    * `model/list` is authoritative, with the persisted cache and the hardcoded
    * fallback catalog behind it so a cold app-server cannot empty the model picker.
    */
-  async listModels(): Promise<{ models: BridgeModel[]; source: "app-server" | "cache" | "fallback" }> {
+  async listModels(): Promise<{
+    models: BridgeModel[];
+    source: "app-server" | "cache" | "fallback";
+  }> {
     if (this.modelCache) return { models: this.modelCache, source: "app-server" };
     try {
       const engineModels = await this.options.engine.listModels();
@@ -237,7 +242,10 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
    * threads are only visible on disk, and legacy `exec` sessions must keep
    * appearing after the migration.
    */
-  async listSessions(): Promise<{ sessions: Array<{ id: string; title?: string; updatedAt: string }>; cwd: string }> {
+  async listSessions(): Promise<{
+    sessions: Array<{ id: string; title?: string; updatedAt: string }>;
+    cwd: string;
+  }> {
     const cwd = getWorkingDirectory(this.options.cwd);
     const merged = new Map<string, { id: string; title?: string; updatedAt: string }>();
 
@@ -282,7 +290,7 @@ export class AppServerRuntimeTail extends AppServerRuntimePrompt {
     // Generated titles are the bridge's own, and win over a preview.
     try {
       const generated =
-        generatedTitles ?? await readPersistedSessionTitleEntries(this.options.codexHome);
+        generatedTitles ?? (await readPersistedSessionTitleEntries(this.options.codexHome));
       for (const session of merged.values()) {
         const entry = generated.get(session.id);
         if (entry) session.title = entry.title;

@@ -29,9 +29,7 @@ describe("file action backend wrappers", () => {
     await expect(revertContainerFile("env-container", "src/App.tsx", "main")).resolves.toBe(
       "src/App.tsx",
     );
-    await expect(deleteContainerFile("env-container", "src/App.tsx")).resolves.toBe(
-      "src/App.tsx",
-    );
+    await expect(deleteContainerFile("env-container", "src/App.tsx")).resolves.toBe("src/App.tsx");
 
     expect(invokeMock).toHaveBeenNthCalledWith(1, "revert_container_file", {
       environmentId: "env-container",
@@ -63,12 +61,14 @@ describe("file action backend wrappers", () => {
 
   test("uses the exact diff-stat snapshot and refresh command contracts", async () => {
     const snapshot = {
-      entries: [{
-        environmentId: "env-local",
-        comparisonRef: "trunk",
-        stats: { additions: 2, deletions: 1, filesChanged: 1, truncated: false },
-        computedAt: "2026-07-28T12:00:00.000Z",
-      }],
+      entries: [
+        {
+          environmentId: "env-local",
+          comparisonRef: "trunk",
+          stats: { additions: 2, deletions: 1, filesChanged: 1, truncated: false },
+          computedAt: "2026-07-28T12:00:00.000Z",
+        },
+      ],
     };
     invokeMock.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(undefined);
 

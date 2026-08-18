@@ -26,9 +26,7 @@ export function serializeClaudeQuestionAnswer(
   // custom answer. Preserve that long-standing pair instead of silently
   // dropping everything after the first value. JSON is also the only lossless
   // representation when a value itself contains commas, quotes, or unicode.
-  return multiple || values.length > 1
-    ? JSON.stringify(values)
-    : values[0] ?? "";
+  return multiple || values.length > 1 ? JSON.stringify(values) : (values[0] ?? "");
 }
 
 export const AGENT_INTERACTION_LIMITS = Object.freeze({
@@ -79,8 +77,7 @@ export const AGENT_INTERACTION_PROVIDERS = [
   "cursor",
   "grok",
 ] as const;
-export type AgentInteractionProvider =
-  (typeof AGENT_INTERACTION_PROVIDERS)[number];
+export type AgentInteractionProvider = (typeof AGENT_INTERACTION_PROVIDERS)[number];
 
 export const AGENT_INTERACTION_KINDS = [
   "question",
@@ -133,8 +130,7 @@ export const AGENT_INTERACTION_APPLY_RESULTS = [
   "rejected",
   "provider-unavailable",
 ] as const;
-export type AgentInteractionApplyResult =
-  (typeof AGENT_INTERACTION_APPLY_RESULTS)[number];
+export type AgentInteractionApplyResult = (typeof AGENT_INTERACTION_APPLY_RESULTS)[number];
 
 export interface AgentInteractionOption {
   /** Stable identity submitted by clients. */
@@ -242,10 +238,7 @@ export interface AgentInteractionAdapterRequest<TPayload = unknown> {
 }
 
 export type AgentInteractionPolicyMode = "interactive" | "unattended";
-export type AgentInteractionPolicyAction =
-  | "await-user"
-  | "decline-and-continue"
-  | "deny-and-fail";
+export type AgentInteractionPolicyAction = "await-user" | "decline-and-continue" | "deny-and-fail";
 
 export interface AgentInteractionPolicy {
   version: typeof AGENT_INTERACTION_POLICY_VERSION;
@@ -255,31 +248,28 @@ export interface AgentInteractionPolicy {
   unknown: "deny-and-fail";
 }
 
-export const INTERACTIVE_AGENT_INTERACTION_POLICY: AgentInteractionPolicy =
-  Object.freeze({
-    version: AGENT_INTERACTION_POLICY_VERSION,
-    mode: "interactive",
-    input: "await-user",
-    authorization: "await-user",
-    unknown: "deny-and-fail",
-  });
+export const INTERACTIVE_AGENT_INTERACTION_POLICY: AgentInteractionPolicy = Object.freeze({
+  version: AGENT_INTERACTION_POLICY_VERSION,
+  mode: "interactive",
+  input: "await-user",
+  authorization: "await-user",
+  unknown: "deny-and-fail",
+});
 
-export const UNATTENDED_AGENT_INTERACTION_POLICY: AgentInteractionPolicy =
-  Object.freeze({
-    version: AGENT_INTERACTION_POLICY_VERSION,
-    mode: "unattended",
-    input: "decline-and-continue",
-    authorization: "deny-and-fail",
-    unknown: "deny-and-fail",
-  });
+export const UNATTENDED_AGENT_INTERACTION_POLICY: AgentInteractionPolicy = Object.freeze({
+  version: AGENT_INTERACTION_POLICY_VERSION,
+  mode: "unattended",
+  input: "decline-and-continue",
+  authorization: "deny-and-fail",
+  unknown: "deny-and-fail",
+});
 
 export const AGENT_INTERACTION_JOURNAL_STATES = [
   "claimed",
   "provider-resolved",
   "workflow-recorded",
 ] as const;
-export type AgentInteractionJournalState =
-  (typeof AGENT_INTERACTION_JOURNAL_STATES)[number];
+export type AgentInteractionJournalState = (typeof AGENT_INTERACTION_JOURNAL_STATES)[number];
 
 export const AGENT_INTERACTION_OUTCOMES = [
   "answered",
@@ -376,45 +366,63 @@ export const AGENT_INTERACTION_AUTHORIZATION_KINDS = [
 ] as const satisfies readonly AgentInteractionKind[];
 
 const INPUT_KINDS = new Set<AgentInteractionKind>(AGENT_INTERACTION_INPUT_KINDS);
-const AUTHORIZATION_KINDS = new Set<AgentInteractionKind>(
-  AGENT_INTERACTION_AUTHORIZATION_KINDS,
-);
+const AUTHORIZATION_KINDS = new Set<AgentInteractionKind>(AGENT_INTERACTION_AUTHORIZATION_KINDS);
 const PROVIDERS = new Set<string>(AGENT_INTERACTION_PROVIDERS);
 const KINDS = new Set<string>(AGENT_INTERACTION_KINDS);
 const ORIGINS = new Set<string>(AGENT_INTERACTION_ORIGINS);
 const STATES = new Set<string>(AGENT_INTERACTION_STATES);
-const RESOLUTION_ACTIONS = new Set<string>(
-  AGENT_INTERACTION_RESOLUTION_ACTIONS,
-);
+const RESOLUTION_ACTIONS = new Set<string>(AGENT_INTERACTION_RESOLUTION_ACTIONS);
 const APPLY_RESULTS = new Set<string>(AGENT_INTERACTION_APPLY_RESULTS);
 const JOURNAL_STATES = new Set<string>(AGENT_INTERACTION_JOURNAL_STATES);
 const OUTCOMES = new Set<string>(AGENT_INTERACTION_OUTCOMES);
-const POLICY_ACTIONS = new Set<string>([
-  "await-user",
-  "decline-and-continue",
-  "deny-and-fail",
-]);
+const POLICY_ACTIONS = new Set<string>(["await-user", "decline-and-continue", "deny-and-fail"]);
 const TERMINAL_JOURNAL_STATE: AgentInteractionJournalState = "workflow-recorded";
 
 const REQUEST_KEYS = new Set([
-  "version", "id", "provider", "kind", "origin", "sessionId", "state",
-  "revision", "presentation", "createdAt", "updatedAt", "expiresAt",
+  "version",
+  "id",
+  "provider",
+  "kind",
+  "origin",
+  "sessionId",
+  "state",
+  "revision",
+  "presentation",
+  "createdAt",
+  "updatedAt",
+  "expiresAt",
 ]);
 const PRESENTATION_KEYS = new Set([
-  "title", "body", "questions", "url", "confirmLabel", "declineLabel",
-  "confirmDisabled", "approveForSessionLabel",
+  "title",
+  "body",
+  "questions",
+  "url",
+  "confirmLabel",
+  "declineLabel",
+  "confirmDisabled",
+  "approveForSessionLabel",
 ]);
 const QUESTION_KEYS = new Set([
-  "id", "prompt", "description", "required", "multiple", "secret",
-  "allowFreeText", "options",
+  "id",
+  "prompt",
+  "description",
+  "required",
+  "multiple",
+  "secret",
+  "allowFreeText",
+  "options",
 ]);
 const OPTION_KEYS = new Set(["id", "label", "providerValue", "description"]);
-const ANSWER_KEYS = new Set([
-  "version", "interactionId", "sessionId", "answers",
-]);
+const ANSWER_KEYS = new Set(["version", "interactionId", "sessionId", "answers"]);
 const QUESTION_ANSWER_KEYS = new Set(["questionId", "optionIds", "freeText"]);
 const RESOLUTION_KEYS = new Set([
-  "version", "interactionId", "sessionId", "action", "answer", "feedback", "resolvedAt",
+  "version",
+  "interactionId",
+  "sessionId",
+  "action",
+  "answer",
+  "feedback",
+  "resolvedAt",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -472,24 +480,22 @@ function isWithinSerializedLimit(value: unknown): boolean {
  * never reject a value that would have passed: for anything within the byte
  * limit the lower bound is within it too.
  */
-function presentationTextLength(
-  presentation: AgentInteractionPresentation,
-): number {
-  let total = presentation.title.length
-    + (presentation.body?.length ?? 0)
-    + (presentation.url?.length ?? 0)
-    + (presentation.confirmLabel?.length ?? 0)
-    + (presentation.declineLabel?.length ?? 0)
-    + (presentation.approveForSessionLabel?.length ?? 0);
+function presentationTextLength(presentation: AgentInteractionPresentation): number {
+  let total =
+    presentation.title.length +
+    (presentation.body?.length ?? 0) +
+    (presentation.url?.length ?? 0) +
+    (presentation.confirmLabel?.length ?? 0) +
+    (presentation.declineLabel?.length ?? 0) +
+    (presentation.approveForSessionLabel?.length ?? 0);
   for (const question of presentation.questions) {
-    total += question.id.length
-      + question.prompt.length
-      + (question.description?.length ?? 0);
+    total += question.id.length + question.prompt.length + (question.description?.length ?? 0);
     for (const option of question.options) {
-      total += option.id.length
-        + option.label.length
-        + option.providerValue.length
-        + (option.description?.length ?? 0);
+      total +=
+        option.id.length +
+        option.label.length +
+        option.providerValue.length +
+        (option.description?.length ?? 0);
     }
   }
   return total;
@@ -521,34 +527,32 @@ function hasUniqueStrings(values: readonly string[]): boolean {
 
 function isOption(value: unknown): value is AgentInteractionOption {
   if (!isRecord(value) || !hasOnlyKeys(value, OPTION_KEYS)) return false;
-  return isId(value.id)
-    && isBoundedString(value.label)
-    && isBoundedString(
-      value.providerValue,
-      AGENT_INTERACTION_LIMITS.maxProviderValueLength,
-    )
-    && isOptionalBoundedString(value.description);
+  return (
+    isId(value.id) &&
+    isBoundedString(value.label) &&
+    isBoundedString(value.providerValue, AGENT_INTERACTION_LIMITS.maxProviderValueLength) &&
+    isOptionalBoundedString(value.description)
+  );
 }
 
 function isQuestion(value: unknown): value is AgentInteractionQuestion {
   if (!isRecord(value) || !hasOnlyKeys(value, QUESTION_KEYS)) return false;
   if (
-    !isId(value.id)
-    || !isBoundedString(value.prompt)
-    || !isOptionalBoundedString(value.description)
-    || typeof value.required !== "boolean"
-    || typeof value.multiple !== "boolean"
-    || typeof value.secret !== "boolean"
-    || typeof value.allowFreeText !== "boolean"
-    || !Array.isArray(value.options)
-    || value.options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
-    || !value.options.every(isOption)
+    !isId(value.id) ||
+    !isBoundedString(value.prompt) ||
+    !isOptionalBoundedString(value.description) ||
+    typeof value.required !== "boolean" ||
+    typeof value.multiple !== "boolean" ||
+    typeof value.secret !== "boolean" ||
+    typeof value.allowFreeText !== "boolean" ||
+    !Array.isArray(value.options) ||
+    value.options.length > AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion ||
+    !value.options.every(isOption)
   ) {
     return false;
   }
   const optionIds = value.options.map((option) => option.id);
-  return hasUniqueStrings(optionIds)
-    && (value.options.length > 0 || value.allowFreeText);
+  return hasUniqueStrings(optionIds) && (value.options.length > 0 || value.allowFreeText);
 }
 
 function isPresentation(
@@ -557,16 +561,16 @@ function isPresentation(
 ): value is AgentInteractionPresentation {
   if (!isRecord(value) || !hasOnlyKeys(value, PRESENTATION_KEYS)) return false;
   if (
-    !isBoundedString(value.title)
-    || !isOptionalBoundedString(value.body)
-    || !isOptionalBoundedString(value.url)
-    || !isOptionalBoundedString(value.confirmLabel)
-    || !isOptionalBoundedString(value.declineLabel)
-    || (value.confirmDisabled !== undefined && typeof value.confirmDisabled !== "boolean")
-    || !isOptionalBoundedString(value.approveForSessionLabel)
-    || !Array.isArray(value.questions)
-    || value.questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest
-    || !value.questions.every(isQuestion)
+    !isBoundedString(value.title) ||
+    !isOptionalBoundedString(value.body) ||
+    !isOptionalBoundedString(value.url) ||
+    !isOptionalBoundedString(value.confirmLabel) ||
+    !isOptionalBoundedString(value.declineLabel) ||
+    (value.confirmDisabled !== undefined && typeof value.confirmDisabled !== "boolean") ||
+    !isOptionalBoundedString(value.approveForSessionLabel) ||
+    !Array.isArray(value.questions) ||
+    value.questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest ||
+    !value.questions.every(isQuestion)
   ) {
     return false;
   }
@@ -574,80 +578,81 @@ function isPresentation(
   if (!hasUniqueStrings(questionIds)) return false;
   if (kind === "mcp-url" && !isBoundedString(value.url)) return false;
   if (
-    (kind === "question" || kind === "mcp-form" || kind === "terminal-selection")
-    && value.questions.length === 0
+    (kind === "question" || kind === "mcp-form" || kind === "terminal-selection") &&
+    value.questions.length === 0
   ) {
     return false;
   }
   return true;
 }
 
-export function isAgentInteractionRequest(
-  value: unknown,
-): value is AgentInteractionRequest {
+export function isAgentInteractionRequest(value: unknown): value is AgentInteractionRequest {
   if (!isRecord(value) || !hasOnlyKeys(value, REQUEST_KEYS)) return false;
   if (
-    value.version !== AGENT_INTERACTION_CONTRACT_VERSION
-    || !isId(value.id)
-    || typeof value.provider !== "string"
-    || !PROVIDERS.has(value.provider)
-    || typeof value.kind !== "string"
-    || !KINDS.has(value.kind)
-    || typeof value.origin !== "string"
-    || !ORIGINS.has(value.origin)
-    || !isId(value.sessionId)
-    || typeof value.state !== "string"
-    || !STATES.has(value.state)
-    || !isNonNegativeInteger(value.revision)
-    || !isEpochMilliseconds(value.createdAt)
-    || !isEpochMilliseconds(value.updatedAt)
-    || value.updatedAt < value.createdAt
-    || (value.expiresAt !== undefined
-      && (!isEpochMilliseconds(value.expiresAt) || value.expiresAt <= value.createdAt))
+    value.version !== AGENT_INTERACTION_CONTRACT_VERSION ||
+    !isId(value.id) ||
+    typeof value.provider !== "string" ||
+    !PROVIDERS.has(value.provider) ||
+    typeof value.kind !== "string" ||
+    !KINDS.has(value.kind) ||
+    typeof value.origin !== "string" ||
+    !ORIGINS.has(value.origin) ||
+    !isId(value.sessionId) ||
+    typeof value.state !== "string" ||
+    !STATES.has(value.state) ||
+    !isNonNegativeInteger(value.revision) ||
+    !isEpochMilliseconds(value.createdAt) ||
+    !isEpochMilliseconds(value.updatedAt) ||
+    value.updatedAt < value.createdAt ||
+    (value.expiresAt !== undefined &&
+      (!isEpochMilliseconds(value.expiresAt) || value.expiresAt <= value.createdAt))
   ) {
     return false;
   }
   const presentation = value.presentation;
   if (!isPresentation(presentation, value.kind as AgentInteractionKind)) return false;
-  return isWithinTextLowerBound(presentationTextLength(presentation))
-    && isWithinSerializedLimit(value);
+  return (
+    isWithinTextLowerBound(presentationTextLength(presentation)) && isWithinSerializedLimit(value)
+  );
 }
 
-export function isAgentInteractionSnapshot(
-  value: unknown,
-): value is AgentInteractionSnapshot {
+export function isAgentInteractionSnapshot(value: unknown): value is AgentInteractionSnapshot {
   if (
-    !isRecord(value)
-    || !hasOnlyKeys(value, new Set(["version", "revision", "requests"]))
-    || value.version !== AGENT_INTERACTION_CONTRACT_VERSION
-    || !isNonNegativeInteger(value.revision)
-    || !Array.isArray(value.requests)
-    || value.requests.length > AGENT_INTERACTION_LIMITS.maxPendingRequests
-    || !value.requests.every((request) =>
-      isAgentInteractionRequest(request)
-      && (request.state === "pending" || request.state === "answering")
+    !isRecord(value) ||
+    !hasOnlyKeys(value, new Set(["version", "revision", "requests"])) ||
+    value.version !== AGENT_INTERACTION_CONTRACT_VERSION ||
+    !isNonNegativeInteger(value.revision) ||
+    !Array.isArray(value.requests) ||
+    value.requests.length > AGENT_INTERACTION_LIMITS.maxPendingRequests ||
+    !value.requests.every(
+      (request) =>
+        isAgentInteractionRequest(request) &&
+        (request.state === "pending" || request.state === "answering"),
     )
   ) {
     return false;
   }
-  return hasUniqueStrings(value.requests.map((request) => request.id))
-    && isWithinSerializedLimit(value);
+  return (
+    hasUniqueStrings(value.requests.map((request) => request.id)) && isWithinSerializedLimit(value)
+  );
 }
 
 function isQuestionAnswer(value: unknown): value is AgentInteractionQuestionAnswer {
   if (!isRecord(value) || !hasOnlyKeys(value, QUESTION_ANSWER_KEYS)) return false;
-  return isId(value.questionId)
-    && (value.optionIds === undefined
-      || (Array.isArray(value.optionIds)
-        && value.optionIds.length <= AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion
-        && value.optionIds.every(isId)
-        && hasUniqueStrings(value.optionIds)))
-    && (value.freeText === undefined
-      || (typeof value.freeText === "string"
-        && new TextEncoder().encode(value.freeText).byteLength > 0
-        && new TextEncoder().encode(value.freeText).byteLength
-          <= AGENT_INTERACTION_LIMITS.maxFreeTextBytes))
-    && ((value.optionIds?.length ?? 0) > 0 || value.freeText !== undefined);
+  return (
+    isId(value.questionId) &&
+    (value.optionIds === undefined ||
+      (Array.isArray(value.optionIds) &&
+        value.optionIds.length <= AGENT_INTERACTION_LIMITS.maxOptionsPerQuestion &&
+        value.optionIds.every(isId) &&
+        hasUniqueStrings(value.optionIds))) &&
+    (value.freeText === undefined ||
+      (typeof value.freeText === "string" &&
+        new TextEncoder().encode(value.freeText).byteLength > 0 &&
+        new TextEncoder().encode(value.freeText).byteLength <=
+          AGENT_INTERACTION_LIMITS.maxFreeTextBytes)) &&
+    ((value.optionIds?.length ?? 0) > 0 || value.freeText !== undefined)
+  );
 }
 
 /**
@@ -660,14 +665,14 @@ function isAnswerForValidatedRequest(
   request: AgentInteractionRequest,
 ): value is AgentInteractionAnswer {
   if (
-    !isRecord(value)
-    || !hasOnlyKeys(value, ANSWER_KEYS)
-    || value.version !== AGENT_INTERACTION_CONTRACT_VERSION
-    || value.interactionId !== request.id
-    || value.sessionId !== request.sessionId
-    || !Array.isArray(value.answers)
-    || value.answers.length > AGENT_INTERACTION_LIMITS.maxAnswerCount
-    || !value.answers.every(isQuestionAnswer)
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ANSWER_KEYS) ||
+    value.version !== AGENT_INTERACTION_CONTRACT_VERSION ||
+    value.interactionId !== request.id ||
+    value.sessionId !== request.sessionId ||
+    !Array.isArray(value.answers) ||
+    value.answers.length > AGENT_INTERACTION_LIMITS.maxAnswerCount ||
+    !value.answers.every(isQuestionAnswer)
   ) {
     return false;
   }
@@ -686,13 +691,15 @@ function isAnswerForValidatedRequest(
     const optionIds = new Set(question.options.map((option) => option.id));
     if (answer.optionIds?.some((id) => !optionIds.has(id))) return false;
   }
-  if (answers.some((answer) => !request.presentation.questions.some(
-    (question) => question.id === answer.questionId,
-  ))) {
+  if (
+    answers.some(
+      (answer) =>
+        !request.presentation.questions.some((question) => question.id === answer.questionId),
+    )
+  ) {
     return false;
   }
-  return isWithinTextLowerBound(answerTextLength(answers))
-    && isWithinSerializedLimit(value);
+  return isWithinTextLowerBound(answerTextLength(answers)) && isWithinSerializedLimit(value);
 }
 
 /** Validates identity, option references, required answers, and all size bounds. */
@@ -700,8 +707,7 @@ export function isAgentInteractionAnswer(
   value: unknown,
   request: AgentInteractionRequest,
 ): value is AgentInteractionAnswer {
-  return isAgentInteractionRequest(request)
-    && isAnswerForValidatedRequest(value, request);
+  return isAgentInteractionRequest(request) && isAnswerForValidatedRequest(value, request);
 }
 
 export function isAgentInteractionResolution(
@@ -709,30 +715,33 @@ export function isAgentInteractionResolution(
   request: AgentInteractionRequest,
 ): value is AgentInteractionResolution {
   if (
-    !isAgentInteractionRequest(request)
-    || !isRecord(value)
-    || !hasOnlyKeys(value, RESOLUTION_KEYS)
-    || value.version !== AGENT_INTERACTION_CONTRACT_VERSION
-    || value.interactionId !== request.id
-    || value.sessionId !== request.sessionId
-    || typeof value.action !== "string"
-    || !RESOLUTION_ACTIONS.has(value.action)
-    || !isEpochMilliseconds(value.resolvedAt)
-    || value.resolvedAt < request.createdAt
+    !isAgentInteractionRequest(request) ||
+    !isRecord(value) ||
+    !hasOnlyKeys(value, RESOLUTION_KEYS) ||
+    value.version !== AGENT_INTERACTION_CONTRACT_VERSION ||
+    value.interactionId !== request.id ||
+    value.sessionId !== request.sessionId ||
+    typeof value.action !== "string" ||
+    !RESOLUTION_ACTIONS.has(value.action) ||
+    !isEpochMilliseconds(value.resolvedAt) ||
+    value.resolvedAt < request.createdAt
   ) {
     return false;
   }
   if (value.action === "answer") {
-    return value.feedback === undefined
-      && isAnswerForValidatedRequest(value.answer, request)
-      && isWithinSerializedLimit(value);
+    return (
+      value.feedback === undefined &&
+      isAnswerForValidatedRequest(value.answer, request) &&
+      isWithinSerializedLimit(value)
+    );
   }
   if (value.feedback !== undefined) {
     if (
-      request.kind !== "plan-approval"
-      || (value.action !== "decline" && value.action !== "deny")
-      || !isBoundedString(value.feedback)
-    ) return false;
+      request.kind !== "plan-approval" ||
+      (value.action !== "decline" && value.action !== "deny") ||
+      !isBoundedString(value.feedback)
+    )
+      return false;
   }
   return value.answer === undefined && isWithinSerializedLimit(value);
 }
@@ -740,37 +749,34 @@ export function isAgentInteractionResolution(
 export function isAgentInteractionApplyOutcome(
   value: unknown,
 ): value is AgentInteractionApplyOutcome {
-  return isRecord(value)
-    && hasOnlyKeys(value, new Set(["result", "interactionId", "sessionId", "revision"]))
-    && typeof value.result === "string"
-    && APPLY_RESULTS.has(value.result)
-    && isId(value.interactionId)
-    && isId(value.sessionId)
-    && isNonNegativeInteger(value.revision);
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, new Set(["result", "interactionId", "sessionId", "revision"])) &&
+    typeof value.result === "string" &&
+    APPLY_RESULTS.has(value.result) &&
+    isId(value.interactionId) &&
+    isId(value.sessionId) &&
+    isNonNegativeInteger(value.revision)
+  );
 }
 
-export function isAgentInteractionPolicy(
-  value: unknown,
-): value is AgentInteractionPolicy {
+export function isAgentInteractionPolicy(value: unknown): value is AgentInteractionPolicy {
   if (
-    !isRecord(value)
-    || !hasOnlyKeys(value, new Set([
-      "version", "mode", "input", "authorization", "unknown",
-    ]))
-    || value.version !== AGENT_INTERACTION_POLICY_VERSION
-    || (value.mode !== "interactive" && value.mode !== "unattended")
-    || typeof value.input !== "string"
-    || !POLICY_ACTIONS.has(value.input)
-    || typeof value.authorization !== "string"
-    || !POLICY_ACTIONS.has(value.authorization)
-    || value.unknown !== "deny-and-fail"
+    !isRecord(value) ||
+    !hasOnlyKeys(value, new Set(["version", "mode", "input", "authorization", "unknown"])) ||
+    value.version !== AGENT_INTERACTION_POLICY_VERSION ||
+    (value.mode !== "interactive" && value.mode !== "unattended") ||
+    typeof value.input !== "string" ||
+    !POLICY_ACTIONS.has(value.input) ||
+    typeof value.authorization !== "string" ||
+    !POLICY_ACTIONS.has(value.authorization) ||
+    value.unknown !== "deny-and-fail"
   ) {
     return false;
   }
   return value.mode === "interactive"
     ? value.input === "await-user" && value.authorization === "await-user"
-    : value.input === "decline-and-continue"
-      && value.authorization === "deny-and-fail";
+    : value.input === "decline-and-continue" && value.authorization === "deny-and-fail";
 }
 
 export function agentInteractionPolicyAction(
@@ -788,81 +794,107 @@ export function agentInteractionPolicyAction(
 }
 
 function isResolutionClaim(value: unknown): value is AgentInteractionResolutionClaim {
-  if (!isRecord(value) || !hasOnlyKeys(value, new Set([
-    "workflowType", "workflowId", "phase", "fence", "claimedAt",
-  ]))) return false;
-  return (value.workflowType === "build-pipeline" || value.workflowType === "looped-review")
-    && isId(value.workflowId)
-    && isBoundedString(value.phase, 256)
-    && ((typeof value.fence === "string" && isId(value.fence))
-      || isNonNegativeInteger(value.fence))
-    && isEpochMilliseconds(value.claimedAt);
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, new Set(["workflowType", "workflowId", "phase", "fence", "claimedAt"]))
+  )
+    return false;
+  return (
+    (value.workflowType === "build-pipeline" || value.workflowType === "looped-review") &&
+    isId(value.workflowId) &&
+    isBoundedString(value.phase, 256) &&
+    ((typeof value.fence === "string" && isId(value.fence)) || isNonNegativeInteger(value.fence)) &&
+    isEpochMilliseconds(value.claimedAt)
+  );
 }
 
 function isResolutionProcessingLease(
   value: unknown,
   claim: AgentInteractionResolutionClaim,
 ): value is AgentInteractionResolutionProcessingLease {
-  if (!isRecord(value) || !hasOnlyKeys(value, new Set([
-    "ownerId", "token", "acquiredAt", "expiresAt",
-  ]))) return false;
-  return isId(value.ownerId)
-    && isId(value.token)
-    && isEpochMilliseconds(value.acquiredAt)
-    && isEpochMilliseconds(value.expiresAt)
-    && value.acquiredAt >= claim.claimedAt
-    && value.expiresAt > value.acquiredAt
-    && value.expiresAt >= claim.claimedAt
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, new Set(["ownerId", "token", "acquiredAt", "expiresAt"]))
+  )
+    return false;
+  return (
+    isId(value.ownerId) &&
+    isId(value.token) &&
+    isEpochMilliseconds(value.acquiredAt) &&
+    isEpochMilliseconds(value.expiresAt) &&
+    value.acquiredAt >= claim.claimedAt &&
+    value.expiresAt > value.acquiredAt &&
+    value.expiresAt >= claim.claimedAt &&
     // Without a ceiling, one far-future deadline pins this entry past claim
     // retention permanently. See AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS.
-    && value.expiresAt - value.acquiredAt <= AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS;
+    value.expiresAt - value.acquiredAt <= AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS
+  );
 }
 
 function isJournalEntry(value: unknown): value is AgentInteractionResolutionJournalEntry {
-  if (!isRecord(value) || !hasOnlyKeys(value, new Set([
-    "id", "interactionId", "provider", "kind", "sessionId", "state", "claim",
-    "processing", "outcome", "providerResolvedAt", "workflowRecordedAt",
-  ]))) return false;
   if (
-    !isId(value.id)
-    || !isId(value.interactionId)
-    || typeof value.provider !== "string"
-    || !PROVIDERS.has(value.provider)
-    || typeof value.kind !== "string"
-    || !KINDS.has(value.kind)
-    || !isId(value.sessionId)
-    || typeof value.state !== "string"
-    || !JOURNAL_STATES.has(value.state)
-    || !isResolutionClaim(value.claim)
-    || (value.outcome !== undefined
-      && (typeof value.outcome !== "string" || !OUTCOMES.has(value.outcome)))
-    || (value.providerResolvedAt !== undefined
-      && !isEpochMilliseconds(value.providerResolvedAt))
-    || (value.workflowRecordedAt !== undefined
-      && !isEpochMilliseconds(value.workflowRecordedAt))
-  ) return false;
+    !isRecord(value) ||
+    !hasOnlyKeys(
+      value,
+      new Set([
+        "id",
+        "interactionId",
+        "provider",
+        "kind",
+        "sessionId",
+        "state",
+        "claim",
+        "processing",
+        "outcome",
+        "providerResolvedAt",
+        "workflowRecordedAt",
+      ]),
+    )
+  )
+    return false;
+  if (
+    !isId(value.id) ||
+    !isId(value.interactionId) ||
+    typeof value.provider !== "string" ||
+    !PROVIDERS.has(value.provider) ||
+    typeof value.kind !== "string" ||
+    !KINDS.has(value.kind) ||
+    !isId(value.sessionId) ||
+    typeof value.state !== "string" ||
+    !JOURNAL_STATES.has(value.state) ||
+    !isResolutionClaim(value.claim) ||
+    (value.outcome !== undefined &&
+      (typeof value.outcome !== "string" || !OUTCOMES.has(value.outcome))) ||
+    (value.providerResolvedAt !== undefined && !isEpochMilliseconds(value.providerResolvedAt)) ||
+    (value.workflowRecordedAt !== undefined && !isEpochMilliseconds(value.workflowRecordedAt))
+  )
+    return false;
 
   if (value.state === "claimed") {
-    return value.outcome === undefined
-      && value.providerResolvedAt === undefined
-      && value.workflowRecordedAt === undefined
-      && (value.processing === undefined
-        || isResolutionProcessingLease(value.processing, value.claim));
+    return (
+      value.outcome === undefined &&
+      value.providerResolvedAt === undefined &&
+      value.workflowRecordedAt === undefined &&
+      (value.processing === undefined || isResolutionProcessingLease(value.processing, value.claim))
+    );
   }
   if (value.processing !== undefined) return false;
   if (value.outcome === undefined || value.providerResolvedAt === undefined) return false;
   if (value.providerResolvedAt < value.claim.claimedAt) return false;
   if (value.state === "provider-resolved") return value.workflowRecordedAt === undefined;
-  return value.workflowRecordedAt !== undefined
-    && value.workflowRecordedAt >= value.providerResolvedAt;
+  return (
+    value.workflowRecordedAt !== undefined && value.workflowRecordedAt >= value.providerResolvedAt
+  );
 }
 
 export function isAgentInteractionResolutionJournal(
   value: unknown,
 ): value is AgentInteractionResolutionJournal {
-  return isAgentInteractionResolutionJournalStructure(value)
-    && value.entries.length <= AGENT_INTERACTION_LIMITS.maxJournalEntries
-    && isWithinSerializedLimit(value);
+  return (
+    isAgentInteractionResolutionJournalStructure(value) &&
+    value.entries.length <= AGENT_INTERACTION_LIMITS.maxJournalEntries &&
+    isWithinSerializedLimit(value)
+  );
 }
 
 function hasUniqueInteractionPairs(
@@ -882,56 +914,66 @@ function isAgentInteractionResolutionJournalStructure(
   value: unknown,
 ): value is AgentInteractionResolutionJournal {
   if (
-    !isRecord(value)
-    || !hasOnlyKeys(value, new Set(["version", "entries"]))
-    || value.version !== AGENT_INTERACTION_JOURNAL_VERSION
-    || !Array.isArray(value.entries)
-    || value.entries.length > AGENT_INTERACTION_LIMITS.maxJournalEntries + 1
-    || !value.entries.every(isJournalEntry)
-  ) return false;
+    !isRecord(value) ||
+    !hasOnlyKeys(value, new Set(["version", "entries"])) ||
+    value.version !== AGENT_INTERACTION_JOURNAL_VERSION ||
+    !Array.isArray(value.entries) ||
+    value.entries.length > AGENT_INTERACTION_LIMITS.maxJournalEntries + 1 ||
+    !value.entries.every(isJournalEntry)
+  )
+    return false;
   const entries = value.entries as AgentInteractionResolutionJournalEntry[];
-  return hasUniqueStrings(entries.map((entry) => entry.id))
-    && hasUniqueInteractionPairs(entries);
+  return hasUniqueStrings(entries.map((entry) => entry.id)) && hasUniqueInteractionPairs(entries);
 }
 
 function isWorkflowSummaryEntry(value: unknown): value is AgentInteractionWorkflowSummaryEntry {
-  return isRecord(value)
-    && hasOnlyKeys(value, new Set([
-      "provider", "kind", "phase", "sessionId", "firstSeenAt",
-      "lastResolvedAt", "outcome", "count",
-    ]))
-    && typeof value.provider === "string"
-    && PROVIDERS.has(value.provider)
-    && typeof value.kind === "string"
-    && KINDS.has(value.kind)
-    && isBoundedString(value.phase, 256)
-    && isId(value.sessionId)
-    && isEpochMilliseconds(value.firstSeenAt)
-    && (value.lastResolvedAt === undefined
-      || (isEpochMilliseconds(value.lastResolvedAt)
-        && value.lastResolvedAt >= value.firstSeenAt))
-    && typeof value.outcome === "string"
-    && OUTCOMES.has(value.outcome)
-    && Number.isSafeInteger(value.count)
-    && (value.count as number) > 0;
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(
+      value,
+      new Set([
+        "provider",
+        "kind",
+        "phase",
+        "sessionId",
+        "firstSeenAt",
+        "lastResolvedAt",
+        "outcome",
+        "count",
+      ]),
+    ) &&
+    typeof value.provider === "string" &&
+    PROVIDERS.has(value.provider) &&
+    typeof value.kind === "string" &&
+    KINDS.has(value.kind) &&
+    isBoundedString(value.phase, 256) &&
+    isId(value.sessionId) &&
+    isEpochMilliseconds(value.firstSeenAt) &&
+    (value.lastResolvedAt === undefined ||
+      (isEpochMilliseconds(value.lastResolvedAt) && value.lastResolvedAt >= value.firstSeenAt)) &&
+    typeof value.outcome === "string" &&
+    OUTCOMES.has(value.outcome) &&
+    Number.isSafeInteger(value.count) &&
+    (value.count as number) > 0
+  );
 }
 
 export function isAgentInteractionWorkflowSummary(
   value: unknown,
 ): value is AgentInteractionWorkflowSummary {
-  return isRecord(value)
-    && hasOnlyKeys(value, new Set(["version", "entries"]))
-    && value.version === AGENT_INTERACTION_SUMMARY_VERSION
-    && Array.isArray(value.entries)
-    && value.entries.length <= AGENT_INTERACTION_LIMITS.maxWorkflowSummaries
-    && value.entries.every(isWorkflowSummaryEntry)
-    && isWithinSerializedLimit(value);
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, new Set(["version", "entries"])) &&
+    value.version === AGENT_INTERACTION_SUMMARY_VERSION &&
+    Array.isArray(value.entries) &&
+    value.entries.length <= AGENT_INTERACTION_LIMITS.maxWorkflowSummaries &&
+    value.entries.every(isWorkflowSummaryEntry) &&
+    isWithinSerializedLimit(value)
+  );
 }
 
 /** The moment an unfinished entry last made progress. */
-function unfinishedProgressAt(
-  entry: AgentInteractionResolutionJournalEntry,
-): number {
+function unfinishedProgressAt(entry: AgentInteractionResolutionJournalEntry): number {
   return Math.max(
     entry.providerResolvedAt ?? entry.claim.claimedAt,
     // An unexpired processing lease is active work even when the original
@@ -943,9 +985,9 @@ function unfinishedProgressAt(
     // never defeat AGENT_INTERACTION_CLAIM_RETENTION_MS outright.
     entry.processing
       ? Math.min(
-        entry.processing.expiresAt,
-        entry.claim.claimedAt + AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS,
-      )
+          entry.processing.expiresAt,
+          entry.claim.claimedAt + AGENT_INTERACTION_MAX_PROCESSING_LEASE_MS,
+        )
       : 0,
   );
 }
@@ -996,21 +1038,16 @@ export function pruneAgentInteractionResolutionJournal(
   journal: AgentInteractionResolutionJournal,
   now = Date.now(),
 ): AgentInteractionResolutionJournal {
-  if (
-    !isAgentInteractionResolutionJournalStructure(journal)
-    || !isEpochMilliseconds(now)
-  ) {
+  if (!isAgentInteractionResolutionJournalStructure(journal) || !isEpochMilliseconds(now)) {
     throw new Error("Invalid interaction resolution journal cleanup input");
   }
   const terminalCutoff = now - AGENT_INTERACTION_JOURNAL_RETENTION_MS;
   const claimCutoff = now - AGENT_INTERACTION_CLAIM_RETENTION_MS;
-  const normalizedEntries = journal.entries.map((entry) => (
-    entry.state === "claimed"
-      && entry.processing !== undefined
-      && entry.processing.expiresAt <= now
+  const normalizedEntries = journal.entries.map((entry) =>
+    entry.state === "claimed" && entry.processing !== undefined && entry.processing.expiresAt <= now
       ? { ...entry, processing: undefined }
-      : entry
-  ));
+      : entry,
+  );
   const unfinished = normalizedEntries
     .filter((entry) => entry.state !== TERMINAL_JOURNAL_STATE)
     .sort((a, b) => unfinishedProgressAt(b) - unfinishedProgressAt(a));
@@ -1023,9 +1060,9 @@ export function pruneAgentInteractionResolutionJournal(
     // or above what the finished array actually serializes to.
     const entryBytes = serializedBytes(entry) + 1;
     if (
-      unfinishedProgressAt(entry) >= claimCutoff
-      && kept.length < AGENT_INTERACTION_LIMITS.maxJournalEntries
-      && usedBytes + entryBytes <= AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
+      unfinishedProgressAt(entry) >= claimCutoff &&
+      kept.length < AGENT_INTERACTION_LIMITS.maxJournalEntries &&
+      usedBytes + entryBytes <= AGENT_INTERACTION_LIMITS.maxSerializedPayloadBytes
     ) {
       kept.push(entry);
       usedBytes += entryBytes;
@@ -1100,16 +1137,19 @@ export function serializeAgentInteractionTranscriptEvent(
   if (!isAgentInteractionResolution(resolution, request)) {
     throw new Error("Invalid interaction transcript resolution");
   }
-  return assertSerializable({
-    version: AGENT_INTERACTION_CONTRACT_VERSION,
-    interactionId: request.id,
-    provider: request.provider,
-    kind: request.kind,
-    origin: request.origin,
-    sessionId: request.sessionId,
-    action: resolution.action,
-    resolvedAt: resolution.resolvedAt,
-  }, "Interaction transcript event");
+  return assertSerializable(
+    {
+      version: AGENT_INTERACTION_CONTRACT_VERSION,
+      interactionId: request.id,
+      provider: request.provider,
+      kind: request.kind,
+      origin: request.origin,
+      sessionId: request.sessionId,
+      action: resolution.action,
+      resolvedAt: resolution.resolvedAt,
+    },
+    "Interaction transcript event",
+  );
 }
 
 /** Content-free workflow/failure serializer. */
@@ -1130,12 +1170,15 @@ export function serializeAgentInteractionTelemetry(
   if (!isAgentInteractionRequest(request) || !OUTCOMES.has(outcome)) {
     throw new Error("Invalid interaction telemetry input");
   }
-  return assertSerializable({
-    version: AGENT_INTERACTION_CONTRACT_VERSION,
-    provider: request.provider,
-    kind: request.kind,
-    origin: request.origin,
-    state: request.state,
-    outcome,
-  }, "Interaction telemetry");
+  return assertSerializable(
+    {
+      version: AGENT_INTERACTION_CONTRACT_VERSION,
+      provider: request.provider,
+      kind: request.kind,
+      origin: request.origin,
+      state: request.state,
+      outcome,
+    },
+    "Interaction telemetry",
+  );
 }

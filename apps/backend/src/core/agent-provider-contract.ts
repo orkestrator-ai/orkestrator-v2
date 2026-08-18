@@ -24,10 +24,7 @@ import type {
   NativeAgentSlashCommand,
   NativeAgentTurnPhase,
 } from "@orkestrator/protocol/native-agent";
-import type {
-  JsonSchema,
-  StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
+import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { PromptAttachment } from "./prompt-attachments.js";
 
 export type ProviderStatus = "running" | "blocked" | "idle" | "error" | "missing";
@@ -65,10 +62,7 @@ export interface AgentInteractionProviderCapability {
     interactionId: string,
     resolution: AgentInteractionResolution,
   ): Promise<AgentInteractionApplyOutcome>;
-  watchInteractions?(
-    sessionId: string,
-    onRevision: (revision: number) => void,
-  ): () => void;
+  watchInteractions?(sessionId: string, onRevision: (revision: number) => void): () => void;
 }
 
 export class PromptRejectedError extends Error {
@@ -80,9 +74,7 @@ export class PromptRejectedError extends Error {
 
 export class ProviderUnavailableError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
-    super(message, options?.cause === undefined
-      ? undefined
-      : { cause: options.cause });
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "ProviderUnavailableError";
   }
 }
@@ -201,20 +193,13 @@ export interface AgentSessionProvider {
    * monitor environment-wide event streams must ignore requests for every
    * session not registered here or created through createSession().
    */
-  registerSession?(
-    sessionId: string,
-    interaction?: ProviderSessionRegistration,
-  ): void;
+  registerSession?(sessionId: string, interaction?: ProviderSessionRegistration): void;
   createSession(
     phase: string,
     label: string,
     options?: ProviderCreateSessionOptions,
   ): Promise<string>;
-  send(
-    sessionId: string,
-    prompt: string,
-    options: ProviderSendOptions,
-  ): Promise<void>;
+  send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void>;
   /**
    * Do the provider's cold-start work *before* the at-most-once dispatch window
    * opens.
@@ -236,10 +221,7 @@ export interface AgentSessionProvider {
    * Read-only. It exists so an ambiguous dispatch can be settled from the
    * provider's own durable journal instead of being parked for the user.
    */
-  dispatchStatus?(
-    sessionId: string,
-    requestId: string,
-  ): Promise<ProviderDispatchStatus>;
+  dispatchStatus?(sessionId: string, requestId: string): Promise<ProviderDispatchStatus>;
   status(sessionId: string): Promise<ProviderStatus>;
   /**
    * Authoritative activity including input parked at the provider. Optional so
@@ -252,15 +234,10 @@ export interface AgentSessionProvider {
    * snapshot. Providers whose upstream API is session-scoped may omit this and
    * let callers fall back to activity()/status() per session.
    */
-  activityBatch?(
-    sessionIds: readonly string[],
-  ): Promise<Map<string, ProviderActivityState>>;
+  activityBatch?(sessionIds: readonly string[]): Promise<Map<string, ProviderActivityState>>;
   readonly interactions?: AgentInteractionProviderCapability;
   messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]>;
-  structured<T>(
-    sessionId: string,
-    requestId: string,
-  ): Promise<StructuredOutputResult<T> | null>;
+  structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null>;
   abort(sessionId: string): Promise<void>;
   dispose?(): Promise<void> | void;
 }
@@ -289,14 +266,8 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
     update: NativeAgentControlUpdate,
   ): Promise<NativeAgentComposerState | undefined>;
   listResumableSessions?(): Promise<NativeAgentResumeEntry[]>;
-  resumeSession?(
-    sessionId: string,
-    controls?: NativeAgentControlUpdate,
-  ): Promise<string>;
-  forkSession?(
-    sessionId: string,
-    messageId?: string,
-  ): Promise<NativeAgentForkOutcome>;
+  resumeSession?(sessionId: string, controls?: NativeAgentControlUpdate): Promise<string>;
+  forkSession?(sessionId: string, messageId?: string): Promise<NativeAgentForkOutcome>;
   slashCommands?(): Promise<NativeAgentSlashCommand[]>;
   /** Drop provider-side model/command caches so the next read re-discovers. */
   refreshCatalog?(): Promise<void> | void;
@@ -319,11 +290,7 @@ export interface BridgeConnection {
 }
 
 export interface ProviderCommonDependencies {
-  stageImages?: (
-    images: readonly ProviderPromptImage[],
-  ) => Promise<PromptAttachment[]>;
+  stageImages?: (images: readonly ProviderPromptImage[]) => Promise<PromptAttachment[]>;
   autoAnswerRequests?: boolean;
-  onInteractionObservation?: (
-    event: ProviderInteractionObservationEvent,
-  ) => void | Promise<void>;
+  onInteractionObservation?: (event: ProviderInteractionObservationEvent) => void | Promise<void>;
 }

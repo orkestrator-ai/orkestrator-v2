@@ -35,18 +35,29 @@ function processExists(pid: number): boolean {
 }
 
 async function waitForUrl(url: string): Promise<void> {
-  await expect.poll(async () => fetch(url).then((response) => response.ok).catch(() => false), {
-    timeout: 30_000,
-  }).toBe(true);
+  await expect
+    .poll(
+      async () =>
+        fetch(url)
+          .then((response) => response.ok)
+          .catch(() => false),
+      {
+        timeout: 30_000,
+      },
+    )
+    .toBe(true);
 }
 
 test("real Electron main process uses the profile identity and preload IPC", async () => {
   const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-smoke-"));
   let vite: ChildProcess | null = null;
   let launchedApp: ElectronApplication | null = null;
-  const build = spawnSync("bunx", ["tsc", "-p", "tsconfig.electron.json"], { cwd: packageRoot, encoding: "utf8" });
+  const build = spawnSync("bunx", ["tsc", "-p", "tsconfig.electron.json"], {
+    cwd: packageRoot,
+    encoding: "utf8",
+  });
   expect(build.status, `${build.stdout}\n${build.stderr}`).toBe(0);
-  const [rendererPort, gatewayPort] = await reserveLoopbackPorts(2) as [number, number];
+  const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   const profile = resolveRuntimeProfile({
     repositoryRoot,
     requestedId: "electron-smoke",
@@ -91,25 +102,33 @@ test("real Electron main process uses the profile identity and preload IPC", asy
     const userData = await app.evaluate(({ app: electronApp }) => electronApp.getPath("userData"));
     expect(userData).toBe(profile.dataDir);
     const greeting = await window.evaluate(async () => {
-      const api = (globalThis as typeof globalThis & {
-        orkestrator: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> };
-      }).orkestrator;
+      const api = (
+        globalThis as typeof globalThis & {
+          orkestrator: { invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> };
+        }
+      ).orkestrator;
       return api.invoke<string>("greet", { name: "Electron smoke" });
     });
     expect(greeting).toContain("Hello, Electron smoke");
-    await window.evaluate(async () => {
-      const api = (globalThis as typeof globalThis & {
-        orkestrator: { clipboard: { writeText(value: string): Promise<void>; readText(): Promise<string> } };
-      }).orkestrator;
-      await api.clipboard.writeText("orkestrator-electron-smoke");
-      return api.clipboard.readText();
-    }).then((value) => expect(value).toBe("orkestrator-electron-smoke"));
+    await window
+      .evaluate(async () => {
+        const api = (
+          globalThis as typeof globalThis & {
+            orkestrator: {
+              clipboard: { writeText(value: string): Promise<void>; readText(): Promise<string> };
+            };
+          }
+        ).orkestrator;
+        await api.clipboard.writeText("orkestrator-electron-smoke");
+        return api.clipboard.readText();
+      })
+      .then((value) => expect(value).toBe("orkestrator-electron-smoke"));
     const electronPid = await app.evaluate(() => process.pid);
     expect(electronPid).toBeTruthy();
-    const backendPid = await expect.poll(
-      () => backendChildPid(electronPid!),
-      { timeout: 10_000 },
-    ).not.toBeNull().then(() => backendChildPid(electronPid!));
+    const backendPid = await expect
+      .poll(() => backendChildPid(electronPid!), { timeout: 10_000 })
+      .not.toBeNull()
+      .then(() => backendChildPid(electronPid!));
     expect(backendPid).not.toBeNull();
     await app.close();
     launchedApp = null;
@@ -117,7 +136,9 @@ test("real Electron main process uses the profile identity and preload IPC", asy
   } finally {
     await launchedApp?.close().catch(() => undefined);
     if (vite?.pid) {
-      try { process.kill(-vite.pid, "SIGTERM"); } catch {}
+      try {
+        process.kill(-vite.pid, "SIGTERM");
+      } catch {}
     }
     await rm(temporaryRoot, { recursive: true, force: true });
   }

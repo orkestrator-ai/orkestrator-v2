@@ -71,11 +71,14 @@ describe("MobileAppShellLayout", () => {
      */
     const { container } = renderLayout();
 
-    expect(container.ownerDocument.querySelector(MOBILE_TOOLS_TRIGGER_SELECTOR))
-      .toBe(screen.getByRole("button", { name: MOBILE_TOOLS_TRIGGER_LABEL }));
+    expect(container.ownerDocument.querySelector(MOBILE_TOOLS_TRIGGER_SELECTOR)).toBe(
+      screen.getByRole("button", { name: MOBILE_TOOLS_TRIGGER_LABEL }),
+    );
 
     fireEvent.click(screen.getByRole("button", { name: MOBILE_TOOLS_TRIGGER_LABEL }));
-    expect(container.ownerDocument.querySelector(MOBILE_TOOLS_TRIGGER_SELECTOR) === null).toBe(true);
+    expect(container.ownerDocument.querySelector(MOBILE_TOOLS_TRIGGER_SELECTOR) === null).toBe(
+      true,
+    );
   });
 
   test("places agent information immediately left of the tools spanner", () => {
@@ -143,9 +146,7 @@ describe("MobileAppShellLayout", () => {
 
   test("renders whatever the shell puts in the agent-info slot", () => {
     renderLayout({ agentInfoButton: <span>Custom slot content</span> });
-    expect(
-      screen.getByTestId("mobile-agent-info-slot").textContent,
-    ).toBe("Custom slot content");
+    expect(screen.getByTestId("mobile-agent-info-slot").textContent).toBe("Custom slot content");
   });
 
   test("shows the active project name and opens tools in a popover", () => {
@@ -281,7 +282,9 @@ describe("MobileAppShellLayout", () => {
   test("closes tools for a portaled context-menu action and restores trigger focus", async () => {
     renderLayout({
       actionBar: createPortal(
-        <div data-slot="context-menu-item" role="menuitem" tabIndex={0}>Claude Native</div>,
+        <div data-slot="context-menu-item" role="menuitem" tabIndex={0}>
+          Claude Native
+        </div>,
         document.body,
       ),
     });
@@ -297,10 +300,7 @@ describe("MobileAppShellLayout", () => {
   test("keeps tools open when a nested control consumes Escape", () => {
     renderLayout({
       actionBar: (
-        <button
-          type="button"
-          onKeyDown={(event) => event.preventDefault()}
-        >
+        <button type="button" onKeyDown={(event) => event.preventDefault()}>
           Nested control
         </button>
       ),
@@ -392,7 +392,9 @@ describe("MobileAppShellLayout", () => {
     fireEvent.keyDown(document, { key: "Escape" });
 
     await waitFor(() => {
-      expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(true);
+      expect(screen.queryByRole("dialog", { name: "Projects and environments" }) === null).toBe(
+        true,
+      );
     });
     expect(document.activeElement).toBe(menuButton);
   });
@@ -408,11 +410,7 @@ describe("MobileAppShellLayout", () => {
     expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
 
     rerender(
-      <MobileAppShellLayout
-        {...props}
-        selectedProjectId={null}
-        selectedEnvironmentId={null}
-      />,
+      <MobileAppShellLayout {...props} selectedProjectId={null} selectedEnvironmentId={null} />,
     );
     expect(screen.getByRole("dialog", { name: "Projects and environments" })).toBeTruthy();
 

@@ -58,18 +58,26 @@ describe("isPrMonitorEvent", () => {
   test("accepts state events, transitions, and removals", () => {
     expect(isPrMonitorEvent({ environmentId: "env-1", state: state() })).toBe(true);
     expect(isPrMonitorEvent({ environmentId: "env-1", removed: true })).toBe(true);
-    expect(isPrMonitorEvent({
-      environmentId: "env-1",
-      state: state({ prState: "merged" }),
-      transition: { url: "https://github.com/org/repo/pull/1", state: "merged", previousState: "open" },
-    })).toBe(true);
+    expect(
+      isPrMonitorEvent({
+        environmentId: "env-1",
+        state: state({ prState: "merged" }),
+        transition: {
+          url: "https://github.com/org/repo/pull/1",
+          state: "merged",
+          previousState: "open",
+        },
+      }),
+    ).toBe(true);
   });
 
   test("accepts null PR fields for an environment being watched before a PR exists", () => {
-    expect(isPrMonitorEvent({
-      environmentId: "env-1",
-      state: state({ prUrl: null, prState: null, hasMergeConflicts: null, lastCheckAt: null }),
-    })).toBe(true);
+    expect(
+      isPrMonitorEvent({
+        environmentId: "env-1",
+        state: state({ prUrl: null, prState: null, hasMergeConflicts: null, lastCheckAt: null }),
+      }),
+    ).toBe(true);
   });
 
   test("rejects malformed payloads rather than trusting the wire", () => {
@@ -77,29 +85,45 @@ describe("isPrMonitorEvent", () => {
     expect(isPrMonitorEvent({})).toBe(false);
     expect(isPrMonitorEvent({ environmentId: "", removed: true })).toBe(false);
     expect(isPrMonitorEvent({ environmentId: "env-1" })).toBe(false);
-    expect(isPrMonitorEvent({
-      environmentId: "env-1",
-      state: state({ environmentId: "env-2" }),
-    })).toBe(false);
-    expect(isPrMonitorEvent({ environmentId: "env-1", state: state({ mode: "idle" as never }) })).toBe(false);
-    expect(isPrMonitorEvent({ environmentId: "env-1", state: state({ consecutiveErrors: -1 }) })).toBe(false);
-    expect(isPrMonitorEvent({
-      environmentId: "env-1",
-      state: state(),
-      transition: { url: "", state: "merged", previousState: null },
-    })).toBe(false);
-    expect(isPrMonitorEvent({
-      environmentId: "env-1",
-      state: state(),
-      transition: { url: "https://github.com/org/repo/pull/1", state: "reopened", previousState: null },
-    })).toBe(false);
+    expect(
+      isPrMonitorEvent({
+        environmentId: "env-1",
+        state: state({ environmentId: "env-2" }),
+      }),
+    ).toBe(false);
+    expect(
+      isPrMonitorEvent({ environmentId: "env-1", state: state({ mode: "idle" as never }) }),
+    ).toBe(false);
+    expect(
+      isPrMonitorEvent({ environmentId: "env-1", state: state({ consecutiveErrors: -1 }) }),
+    ).toBe(false);
+    expect(
+      isPrMonitorEvent({
+        environmentId: "env-1",
+        state: state(),
+        transition: { url: "", state: "merged", previousState: null },
+      }),
+    ).toBe(false);
+    expect(
+      isPrMonitorEvent({
+        environmentId: "env-1",
+        state: state(),
+        transition: {
+          url: "https://github.com/org/repo/pull/1",
+          state: "reopened",
+          previousState: null,
+        },
+      }),
+    ).toBe(false);
   });
 });
 
 describe("isPrMonitorSnapshot", () => {
   test("accepts an entries array of states and rejects anything else", () => {
     expect(isPrMonitorSnapshot({ entries: [] })).toBe(true);
-    expect(isPrMonitorSnapshot({ entries: [state(), state({ environmentId: "env-2" })] })).toBe(true);
+    expect(isPrMonitorSnapshot({ entries: [state(), state({ environmentId: "env-2" })] })).toBe(
+      true,
+    );
     expect(isPrMonitorSnapshot({ entries: [state(), { environmentId: "env-3" }] })).toBe(false);
     expect(isPrMonitorSnapshot({ entries: null })).toBe(false);
     expect(isPrMonitorSnapshot([])).toBe(false);

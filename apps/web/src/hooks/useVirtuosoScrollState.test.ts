@@ -18,9 +18,13 @@ function snapshot(overrides: Partial<StateSnapshot> = {}): StateSnapshot {
 describe("isRestorableStateSnapshot", () => {
   test("accepts a well-formed getState snapshot", () => {
     expect(isRestorableStateSnapshot(snapshot())).toBe(true);
-    expect(isRestorableStateSnapshot(snapshot({
-      ranges: [{ startIndex: 0, endIndex: 12, size: 34 }],
-    }))).toBe(true);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          ranges: [{ startIndex: 0, endIndex: 12, size: 34 }],
+        }),
+      ),
+    ).toBe(true);
     expect(isRestorableStateSnapshot(snapshot({ ranges: [], scrollTop: 0 }))).toBe(true);
   });
 
@@ -32,9 +36,13 @@ describe("isRestorableStateSnapshot", () => {
   test("rejects non-finite scrollTop", () => {
     expect(isRestorableStateSnapshot(snapshot({ scrollTop: Number.NaN }))).toBe(false);
     expect(isRestorableStateSnapshot(snapshot({ scrollTop: Infinity }))).toBe(false);
-    expect(isRestorableStateSnapshot(snapshot({
-      scrollTop: Number.NEGATIVE_INFINITY,
-    }))).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          scrollTop: Number.NEGATIVE_INFINITY,
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("accepts the negative scrollTop a view with a Header persists", () => {
@@ -50,35 +58,65 @@ describe("isRestorableStateSnapshot", () => {
   test("rejects ranges Virtuoso's size tree cannot order", () => {
     // These exact shapes throw "Failed binary finding record in array" from
     // inside a render when handed to restoreStateFrom.
-    expect(isRestorableStateSnapshot(snapshot({
-      ranges: [{ startIndex: -3, endIndex: Number.NaN, size: Number.NaN }],
-    }))).toBe(false);
-    expect(isRestorableStateSnapshot(snapshot({
-      ranges: [{ startIndex: 5, endIndex: 2, size: 10 }],
-    }))).toBe(false);
-    expect(isRestorableStateSnapshot(snapshot({
-      ranges: [{ startIndex: 0, endIndex: 3, size: -1 }],
-    }))).toBe(false);
-    expect(isRestorableStateSnapshot(snapshot({
-      ranges: [{ startIndex: 0.5, endIndex: 3, size: 10 }],
-    }))).toBe(false);
-    expect(isRestorableStateSnapshot(snapshot({
-      ranges: [
-        { startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 10 },
-        { startIndex: 4, endIndex: 8, size: 12 },
-      ],
-    }))).toBe(false);
-    expect(isRestorableStateSnapshot(snapshot({
-      ranges: [
-        { startIndex: 0, endIndex: 5, size: 10 },
-        { startIndex: 5, endIndex: Number.POSITIVE_INFINITY, size: 12 },
-      ],
-    }))).toBe(false);
-    expect(isRestorableStateSnapshot(snapshot({
-      ranges: [{ startIndex: 0, endIndex: Number.NEGATIVE_INFINITY, size: 10 }],
-    }))).toBe(false);
-    expect(isRestorableStateSnapshot(
-      snapshot({ ranges: undefined as unknown as StateSnapshot["ranges"] }),
-    )).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          ranges: [{ startIndex: -3, endIndex: Number.NaN, size: Number.NaN }],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          ranges: [{ startIndex: 5, endIndex: 2, size: 10 }],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          ranges: [{ startIndex: 0, endIndex: 3, size: -1 }],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          ranges: [{ startIndex: 0.5, endIndex: 3, size: 10 }],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          ranges: [
+            { startIndex: 0, endIndex: Number.POSITIVE_INFINITY, size: 10 },
+            { startIndex: 4, endIndex: 8, size: 12 },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          ranges: [
+            { startIndex: 0, endIndex: 5, size: 10 },
+            { startIndex: 5, endIndex: Number.POSITIVE_INFINITY, size: 12 },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({
+          ranges: [{ startIndex: 0, endIndex: Number.NEGATIVE_INFINITY, size: 10 }],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isRestorableStateSnapshot(
+        snapshot({ ranges: undefined as unknown as StateSnapshot["ranges"] }),
+      ),
+    ).toBe(false);
   });
 });

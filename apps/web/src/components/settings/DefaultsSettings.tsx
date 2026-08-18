@@ -1,23 +1,12 @@
 import { useMemo } from "react";
-import {
-  AlertTriangle,
-  Eye,
-  FolderPlus,
-  GitPullRequest,
-  RotateCcw,
-  Upload,
-} from "lucide-react";
+import { AlertTriangle, Eye, FolderPlus, GitPullRequest, RotateCcw, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useUIStore } from "@/stores";
-import {
-  effortLabel,
-  modelsForAgent,
-  type AgentModelCatalog,
-} from "@/lib/agent-launch";
+import { effortLabel, modelsForAgent, type AgentModelCatalog } from "@/lib/agent-launch";
 import {
   ACTION_DEFAULT_KEYS,
   type ActionDefaultKey,
@@ -101,9 +90,8 @@ function ActionDefaultRow({
   const platform =
     entry?.platform && enabledAgents.includes(entry.platform) ? entry.platform : undefined;
   const models = modelsForAgent(catalog, platform ?? fallbackAgent);
-  const selectedModel = platform && entry?.model
-    ? models.find((model) => model.id === entry.model)
-    : undefined;
+  const selectedModel =
+    platform && entry?.model ? models.find((model) => model.id === entry.model) : undefined;
   const modelMissingFromCatalog = Boolean(platform && entry?.model && !selectedModel);
 
   const reasoningOptions = useMemo<AgentReasoningOption[]>(() => {
@@ -124,9 +112,7 @@ function ActionDefaultRow({
   const modelLabel = !platform
     ? "App default"
     : `${AGENT_PLATFORM_LABELS[platform]} · ${
-        entry?.model
-          ? selectedModel?.name ?? entry.model
-          : "Default model"
+        entry?.model ? (selectedModel?.name ?? entry.model) : "Default model"
       }`;
 
   const pickerId = `action-default-${definition.key}`;
@@ -176,11 +162,13 @@ function ActionDefaultRow({
         selectedModelId={selectedModel?.id}
         selectedModelLabel={modelLabel}
         onModelChange={(nextModelId) =>
-          onChange({ platform: platform ?? fallbackAgent, model: nextModelId })}
+          onChange({ platform: platform ?? fallbackAgent, model: nextModelId })
+        }
         // Provider and model move together; the reasoning level belongs to the
         // model, so choosing a new one resets it to that model's default.
         onModelSelect={(nextModel) =>
-          onChange({ platform: nextModel.platform, model: nextModel.id })}
+          onChange({ platform: nextModel.platform, model: nextModel.id })
+        }
         reasoningOptions={reasoningOptions}
         selectedReasoningId={selectedReasoningId}
         selectedReasoningLabel={
@@ -191,14 +179,15 @@ function ActionDefaultRow({
             platform: platform ?? fallbackAgent,
             ...(entry?.model ? { model: entry.model } : {}),
             ...(nextReasoningId === "default" ? {} : { reasoningEffort: nextReasoningId }),
-          })}
+          })
+        }
         className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
       />
 
       {modelMissingFromCatalog && (
         <p className="text-xs text-amber-300">
-          {entry?.model} is not in the current catalog. It is still saved and will be
-          sent as-is; pick another model to replace it.
+          {entry?.model} is not in the current catalog. It is still saved and will be sent as-is;
+          pick another model to replace it.
         </p>
       )}
       {platform && !entry?.model && (
@@ -239,26 +228,24 @@ export function DefaultsSettings({
     () => normalizeAgentPlatforms(enabledAgentPlatforms),
     [enabledAgentPlatforms],
   );
-  const fallbackAgent = firstEnabledAgentPlatform(
-    enabledAgents,
-    defaultAgent,
-  );
+  const fallbackAgent = firstEnabledAgentPlatform(enabledAgents, defaultAgent);
   const pickerModels = useMemo<AgentModel[]>(
-    () => enabledAgents.flatMap((platform) =>
-      modelsForAgent(catalog, platform)
-        // With no cached OpenCode catalog the builder synthesises a single
-        // `default` entry. It is a UI placeholder no OpenCode server knows, and
-        // the normalizer drops it, so offering it here would let the pane
-        // propose a selection that silently disappears on save. Choosing
-        // OpenCode on the rail alone already means "its own default model".
-        .filter((option) => !(platform === "opencode" && option.id === "default"))
-        .map((option) => ({
-          platform,
-          id: option.id,
-          label: option.name,
-          description: option.description,
-        })),
-    ),
+    () =>
+      enabledAgents.flatMap((platform) =>
+        modelsForAgent(catalog, platform)
+          // With no cached OpenCode catalog the builder synthesises a single
+          // `default` entry. It is a UI placeholder no OpenCode server knows, and
+          // the normalizer drops it, so offering it here would let the pane
+          // propose a selection that silently disappears on save. Choosing
+          // OpenCode on the rail alone already means "its own default model".
+          .filter((option) => !(platform === "opencode" && option.id === "default"))
+          .map((option) => ({
+            platform,
+            id: option.id,
+            label: option.name,
+            description: option.description,
+          })),
+      ),
     [catalog, enabledAgents],
   );
 
@@ -267,16 +254,16 @@ export function DefaultsSettings({
       <div>
         <h3 className="text-sm font-medium text-foreground">Action defaults</h3>
         <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-          The agent, model and reasoning level each toolbar action uses when its
-          button is clicked. Right-click (or long-press) a button to configure a
-          single run instead — that never changes what is set here. Anything left
-          on <span className="text-zinc-300">App default</span> keeps using the
-          project or app default agent and its configured model.
+          The agent, model and reasoning level each toolbar action uses when its button is clicked.
+          Right-click (or long-press) a button to configure a single run instead — that never
+          changes what is set here. Anything left on{" "}
+          <span className="text-zinc-300">App default</span> keeps using the project or app default
+          agent and its configured model.
         </p>
         <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-          These are application-level. An environment created with a specific
-          agent keeps using that agent — the model and reasoning level set here
-          then apply only if they name that same agent.
+          These are application-level. An environment created with a specific agent keeps using that
+          agent — the model and reasoning level set here then apply only if they name that same
+          agent.
         </p>
       </div>
 

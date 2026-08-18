@@ -9,110 +9,117 @@ import { type AgentNativeTabProps, findNativeAgentAdapter } from "./adapter";
 import { UnassignedNativeAgentComposer } from "./AgentNativeTab.helpers";
 import { SharedNativeAgentController } from "./AgentNativeTab.controller";
 
-export const AgentNativeTab = memo(function AgentNativeTab(
-  props: AgentNativeTabProps,
-) {
+export const AgentNativeTab = memo(function AgentNativeTab(props: AgentNativeTabProps) {
   const [awaitingDurability, setAwaitingDurability] = useState(false);
   const [durabilityError, setDurabilityError] = useState<string | null>(null);
   const [pendingDurabilityOperation, setPendingDurabilityOperation] = useState<
     "send" | "resume" | null
   >(null);
-  const [resumeRequestedPlatform, setResumeRequestedPlatform] = useState<AgentPlatform | null>(null);
+  const [resumeRequestedPlatform, setResumeRequestedPlatform] = useState<AgentPlatform | null>(
+    null,
+  );
   const adapter = useMemo(
-    () => props.data.platform
-      ? findNativeAgentAdapter(props.data.platform)
-      : undefined,
+    () => (props.data.platform ? findNativeAgentAdapter(props.data.platform) : undefined),
     [props.data.platform],
   );
-  const persistLockedPane = useCallback(async (operation: "send" | "resume") => {
-    setAwaitingDurability(true);
-    setDurabilityError(null);
-    setPendingDurabilityOperation(operation);
-    const environment = usePaneLayoutStore.getState().environments.get(props.data.environmentId);
-    if (!environment) {
-      setDurabilityError("The locked agent tab is no longer available to save.");
-      setAwaitingDurability(false);
-      return;
-    }
-    try {
-      await flushPaneLayoutNow(
-        props.data.environmentId,
-        createPersistedPaneLayoutInput(environment),
-      );
-      if (operation === "send") {
-        const sessionKey = createSessionKey(props.data.environmentId, props.tabId);
-        const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
-        // Attachment metadata is not encoded in the persisted initial prompt.
-        // Preserve it until the shared controller has handed the files to the
-        // backend; text-only drafts can be cleared immediately.
-        if ((draft?.attachments.length ?? 0) === 0) {
-          useNativeComposeStore.getState().clearDraft(sessionKey);
-        }
+  const persistLockedPane = useCallback(
+    async (operation: "send" | "resume") => {
+      setAwaitingDurability(true);
+      setDurabilityError(null);
+      setPendingDurabilityOperation(operation);
+      const environment = usePaneLayoutStore.getState().environments.get(props.data.environmentId);
+      if (!environment) {
+        setDurabilityError("The locked agent tab is no longer available to save.");
+        setAwaitingDurability(false);
+        return;
       }
-      setPendingDurabilityOperation(null);
-      setAwaitingDurability(false);
-    } catch (error) {
-      console.warn("[AgentNativeTab] Failed to persist provider lock:", error);
-      setDurabilityError("The agent choice is locked, but could not be saved.");
-      setAwaitingDurability(false);
-    }
-  }, [props.data.environmentId, props.tabId]);
-  const lockAndSend = useCallback(async (
-    platform: AgentPlatform,
-    prompt: string,
-    options: {
-      modelId?: string;
-      reasoningId?: string;
-      fastMode: boolean;
-      mode?: "build" | "plan";
-      executionProfileId?: string;
+      try {
+        await flushPaneLayoutNow(
+          props.data.environmentId,
+          createPersistedPaneLayoutInput(environment),
+        );
+        if (operation === "send") {
+          const sessionKey = createSessionKey(props.data.environmentId, props.tabId);
+          const draft = useNativeComposeStore.getState().drafts.get(sessionKey);
+          // Attachment metadata is not encoded in the persisted initial prompt.
+          // Preserve it until the shared controller has handed the files to the
+          // backend; text-only drafts can be cleared immediately.
+          if ((draft?.attachments.length ?? 0) === 0) {
+            useNativeComposeStore.getState().clearDraft(sessionKey);
+          }
+        }
+        setPendingDurabilityOperation(null);
+        setAwaitingDurability(false);
+      } catch (error) {
+        console.warn("[AgentNativeTab] Failed to persist provider lock:", error);
+        setDurabilityError("The agent choice is locked, but could not be saved.");
+        setAwaitingDurability(false);
+      }
     },
-  ) => {
-    setAwaitingDurability(true);
-    setDurabilityError(null);
-    const paneStore = usePaneLayoutStore.getState();
-    const lockedPlatform = paneStore.lockTabNativePlatform(
-      props.tabId,
-      platform,
-      props.data.environmentId,
-      {
-        initialPrompt: prompt,
-        initialAgentModel: options.modelId,
-        initialReasoningEffort: options.reasoningId,
-        initialConversationMode: options.mode,
-        initialFastMode: options.fastMode,
-        initialExecutionProfileId: options.executionProfileId,
+    [props.data.environmentId, props.tabId],
+  );
+  const lockAndSend = useCallback(
+    async (
+      platform: AgentPlatform,
+      prompt: string,
+      options: {
+        modelId?: string;
+        reasoningId?: string;
+        fastMode: boolean;
+        mode?: "build" | "plan";
+        executionProfileId?: string;
       },
-    );
-    if (!lockedPlatform) {
-      setDurabilityError("This tab could not be locked to an agent.");
-      setPendingDurabilityOperation(null);
-      setAwaitingDurability(false);
-      return;
-    }
-    await persistLockedPane("send");
-  }, [persistLockedPane, props.data.environmentId, props.tabId]);
-  const lockAndResume = useCallback(async (platform: AgentPlatform) => {
-    const selectedAdapter = findNativeAgentAdapter(platform);
-    if (!selectedAdapter?.capabilities.resume) return;
-    setAwaitingDurability(true);
-    setDurabilityError(null);
-    const paneStore = usePaneLayoutStore.getState();
-    const lockedPlatform = paneStore.lockTabNativePlatform(
-      props.tabId,
-      platform,
-      props.data.environmentId,
-    );
-    const lockedAdapter = lockedPlatform ? findNativeAgentAdapter(lockedPlatform) : undefined;
-    if (!lockedPlatform || !lockedAdapter?.capabilities.resume) {
-      setDurabilityError("This tab could not be opened for session resume.");
-      setPendingDurabilityOperation(null);
-      setAwaitingDurability(false);
-      return;
-    }
-    setResumeRequestedPlatform(lockedPlatform);
-    await persistLockedPane("resume");
-  }, [persistLockedPane, props.data.environmentId, props.tabId]);
+    ) => {
+      setAwaitingDurability(true);
+      setDurabilityError(null);
+      const paneStore = usePaneLayoutStore.getState();
+      const lockedPlatform = paneStore.lockTabNativePlatform(
+        props.tabId,
+        platform,
+        props.data.environmentId,
+        {
+          initialPrompt: prompt,
+          initialAgentModel: options.modelId,
+          initialReasoningEffort: options.reasoningId,
+          initialConversationMode: options.mode,
+          initialFastMode: options.fastMode,
+          initialExecutionProfileId: options.executionProfileId,
+        },
+      );
+      if (!lockedPlatform) {
+        setDurabilityError("This tab could not be locked to an agent.");
+        setPendingDurabilityOperation(null);
+        setAwaitingDurability(false);
+        return;
+      }
+      await persistLockedPane("send");
+    },
+    [persistLockedPane, props.data.environmentId, props.tabId],
+  );
+  const lockAndResume = useCallback(
+    async (platform: AgentPlatform) => {
+      const selectedAdapter = findNativeAgentAdapter(platform);
+      if (!selectedAdapter?.capabilities.resume) return;
+      setAwaitingDurability(true);
+      setDurabilityError(null);
+      const paneStore = usePaneLayoutStore.getState();
+      const lockedPlatform = paneStore.lockTabNativePlatform(
+        props.tabId,
+        platform,
+        props.data.environmentId,
+      );
+      const lockedAdapter = lockedPlatform ? findNativeAgentAdapter(lockedPlatform) : undefined;
+      if (!lockedPlatform || !lockedAdapter?.capabilities.resume) {
+        setDurabilityError("This tab could not be opened for session resume.");
+        setPendingDurabilityOperation(null);
+        setAwaitingDurability(false);
+        return;
+      }
+      setResumeRequestedPlatform(lockedPlatform);
+      await persistLockedPane("resume");
+    },
+    [persistLockedPane, props.data.environmentId, props.tabId],
+  );
 
   // A tab whose platform has no adapter is a data problem, not a crash. Render
   // the mismatch instead of throwing out of the pane and taking its siblings
@@ -124,13 +131,21 @@ export const AgentNativeTab = memo(function AgentNativeTab(
         environmentId={props.data.environmentId}
         containerId={props.data.containerId}
         disabled={awaitingDurability}
-        onSend={(platform, prompt, options) => { void lockAndSend(platform, prompt, options); }}
-        onResume={(platform) => { void lockAndResume(platform); }}
+        onSend={(platform, prompt, options) => {
+          void lockAndSend(platform, prompt, options);
+        }}
+        onResume={(platform) => {
+          void lockAndResume(platform);
+        }}
       />
     );
   }
   if (awaitingDurability) {
-    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Saving agent choice…</div>;
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+        Saving agent choice…
+      </div>
+    );
   }
   if (durabilityError) {
     return (
@@ -140,7 +155,9 @@ export const AgentNativeTab = memo(function AgentNativeTab(
           <Button
             type="button"
             variant="outline"
-            onClick={() => { void persistLockedPane(pendingDurabilityOperation); }}
+            onClick={() => {
+              void persistLockedPane(pendingDurabilityOperation);
+            }}
           >
             Retry save
           </Button>
@@ -156,8 +173,10 @@ export const AgentNativeTab = memo(function AgentNativeTab(
     );
   }
 
-  return <SharedNativeAgentController
-    {...props}
-    initialResumeOpen={resumeRequestedPlatform === props.data.platform}
-  />;
+  return (
+    <SharedNativeAgentController
+      {...props}
+      initialResumeOpen={resumeRequestedPlatform === props.data.platform}
+    />
+  );
 });

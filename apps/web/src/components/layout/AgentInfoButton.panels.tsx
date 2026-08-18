@@ -1,12 +1,6 @@
-import {
-  useEffect,
-  useState,
-} from "react";
+import { useEffect, useState } from "react";
 import { Progress } from "@/components/ui/progress";
-import type {
-  AgentRateLimitWindow,
-  ContextUsageSnapshot,
-} from "@/lib/context-usage";
+import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
 import type { NativeAgentRuntimeSummary } from "@orkestrator/protocol/native-agent";
 
@@ -41,14 +35,13 @@ const WEEK_MINUTES = 7 * 24 * 60;
 const MINUTE_MS = 60_000;
 
 function isWeeklyRateLimit(limit: AgentRateLimitWindow): boolean {
-  return limit.windowMinutes === WEEK_MINUTES
-    || (limit.windowMinutes === undefined && /\bweekly\b/i.test(limit.label));
+  return (
+    limit.windowMinutes === WEEK_MINUTES ||
+    (limit.windowMinutes === undefined && /\bweekly\b/i.test(limit.label))
+  );
 }
 
-export function formatResetDateTime(
-  value: string,
-  locales?: Intl.LocalesArgument,
-): string | null {
+export function formatResetDateTime(value: string, locales?: Intl.LocalesArgument): string | null {
   const resetDate = new Date(value);
   if (!Number.isFinite(resetDate.getTime())) return null;
   return resetDate.toLocaleString(locales, RESET_DATE_TIME_FORMAT_OPTIONS);
@@ -62,10 +55,7 @@ export function formatResetDateTime(
  * their duration, so its explicit "Weekly" labels use the known seven-day
  * period as a compatibility fallback.
  */
-export function weeklyWindowPosition(
-  limit: AgentRateLimitWindow,
-  nowMs: number,
-): number | null {
+export function weeklyWindowPosition(limit: AgentRateLimitWindow, nowMs: number): number | null {
   const durationMinutes = isWeeklyRateLimit(limit) ? WEEK_MINUTES : null;
   if (durationMinutes === null || !limit.resetsAt) return null;
 
@@ -91,9 +81,7 @@ export function Metric({
       <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
         {label}
       </div>
-      <div className="mt-1 truncate font-mono text-sm tabular-nums text-foreground">
-        {value}
-      </div>
+      <div className="mt-1 truncate font-mono text-sm tabular-nums text-foreground">{value}</div>
       {detail ? (
         <div className="mt-0.5 truncate text-[10px] text-muted-foreground">{detail}</div>
       ) : null}
@@ -103,7 +91,7 @@ export function Metric({
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 
@@ -149,8 +137,10 @@ export async function readOpenCodeShareUrl(
   const sessions = record(client).session;
   const get = record(sessions).get;
   if (typeof get !== "function") return null;
-  const response = await (get as (parameters: { sessionID: string }) => Promise<unknown>)
-    .call(sessions, { sessionID: sessionId });
+  const response = await (get as (parameters: { sessionID: string }) => Promise<unknown>).call(
+    sessions,
+    { sessionID: sessionId },
+  );
   const url = record(record(record(response).data).share).url;
   return typeof url === "string" && url.length > 0 ? url : null;
 }
@@ -178,9 +168,10 @@ export function summarizeRewindPreview(preview: unknown): {
     root.filesChanged,
     record(root.preview).files,
   ];
-  const list = candidates.find(
-    (value): value is unknown[] => Array.isArray(value) && value.length > 0,
-  ) ?? candidates.find((value): value is unknown[] => Array.isArray(value)) ?? [];
+  const list =
+    candidates.find((value): value is unknown[] => Array.isArray(value) && value.length > 0) ??
+    candidates.find((value): value is unknown[] => Array.isArray(value)) ??
+    [];
   const files = list.flatMap((entry) => {
     if (typeof entry === "string") return [entry];
     const item = record(entry);
@@ -196,7 +187,7 @@ export function summarizeRewindPreview(preview: unknown): {
   );
   return {
     files,
-    fileCount: files.length > 0 ? files.length : reportedCount ?? 0,
+    fileCount: files.length > 0 ? files.length : (reportedCount ?? 0),
   };
 }
 
@@ -204,9 +195,7 @@ export function summarizeRewindPreview(preview: unknown): {
 export function describeRewindTarget(text: string | undefined): string {
   const normalized = (text ?? "").replace(/\s+/g, " ").trim();
   if (!normalized) return "your most recent message";
-  return normalized.length > 80
-    ? `“${normalized.slice(0, 80)}…”`
-    : `“${normalized}”`;
+  return normalized.length > 80 ? `“${normalized.slice(0, 80)}…”` : `“${normalized}”`;
 }
 
 export function codexLimitsFromHealth(health: unknown): {
@@ -216,42 +205,41 @@ export function codexLimitsFromHealth(health: unknown): {
   const response = record(record(health).rateLimits);
   const snapshot = record(response.rateLimits);
   const rateLimits: NonNullable<ContextUsageSnapshot["rateLimits"]> = [];
-  for (const [key, fallback] of [["primary", "Primary"], ["secondary", "Secondary"]] as const) {
+  for (const [key, fallback] of [
+    ["primary", "Primary"],
+    ["secondary", "Secondary"],
+  ] as const) {
     const window = record(snapshot[key]);
     if (Object.keys(window).length === 0) continue;
     const rawUsedPercent = finiteNumber(window.usedPercent);
-    const usedPercent = rawUsedPercent === undefined
-      ? undefined
-      : Math.max(0, Math.min(100, rawUsedPercent));
+    const usedPercent =
+      rawUsedPercent === undefined ? undefined : Math.max(0, Math.min(100, rawUsedPercent));
     const resetsAt = epochSecondsToIso(window.resetsAt);
     const rawWindowMinutes = finiteNumber(window.windowDurationMins);
-    const windowMinutes = rawWindowMinutes !== undefined && rawWindowMinutes >= 0
-      ? rawWindowMinutes
-      : undefined;
+    const windowMinutes =
+      rawWindowMinutes !== undefined && rawWindowMinutes >= 0 ? rawWindowMinutes : undefined;
     if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
       continue;
     }
     rateLimits.push({
-      label: typeof snapshot.limitName === "string" && key === "primary"
-        ? snapshot.limitName
-        : fallback,
+      label:
+        typeof snapshot.limitName === "string" && key === "primary" ? snapshot.limitName : fallback,
       ...(usedPercent !== undefined ? { usedPercent } : {}),
       ...(resetsAt !== undefined ? { resetsAt } : {}),
       ...(windowMinutes !== undefined ? { windowMinutes } : {}),
     });
   }
   const rawCredits = record(snapshot.credits);
-  const credits = Object.keys(rawCredits).length > 0
-    ? {
-        ...(typeof rawCredits.balance === "string" ? { balance: rawCredits.balance } : {}),
-        ...(typeof rawCredits.hasCredits === "boolean"
-          ? { hasCredits: rawCredits.hasCredits }
-          : {}),
-        ...(typeof rawCredits.unlimited === "boolean"
-          ? { unlimited: rawCredits.unlimited }
-          : {}),
-      }
-    : undefined;
+  const credits =
+    Object.keys(rawCredits).length > 0
+      ? {
+          ...(typeof rawCredits.balance === "string" ? { balance: rawCredits.balance } : {}),
+          ...(typeof rawCredits.hasCredits === "boolean"
+            ? { hasCredits: rawCredits.hasCredits }
+            : {}),
+          ...(typeof rawCredits.unlimited === "boolean" ? { unlimited: rawCredits.unlimited } : {}),
+        }
+      : undefined;
   return {
     rateLimits,
     ...(credits ? { credits } : {}),
@@ -282,7 +270,8 @@ export function CodexRuntimePanel({
             key={notice.message}
             className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-100/80"
           >
-            {notice.message}{(notice.count ?? 1) > 1 ? ` (${notice.count})` : ""}
+            {notice.message}
+            {(notice.count ?? 1) > 1 ? ` (${notice.count})` : ""}
           </div>
         ))}
       </div>
@@ -321,9 +310,11 @@ export function CodexRuntimePanel({
       </div>
       <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground">
         <span>{typeof engine.state === "string" ? engine.state : "state unavailable"}</span>
-        <span>{typeof engine.codexVersion === "string"
-          ? `Codex ${engine.codexVersion}`
-          : "version unavailable"}</span>
+        <span>
+          {typeof engine.codexVersion === "string"
+            ? `Codex ${engine.codexVersion}`
+            : "version unavailable"}
+        </span>
       </div>
       {recentNotices.length > 0 ? (
         <div className="space-y-1.5">
@@ -332,7 +323,8 @@ export function CodexRuntimePanel({
               key={notice.message}
               className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-100/80"
             >
-              {notice.message}{notice.count > 1 ? ` (${notice.count})` : ""}
+              {notice.message}
+              {notice.count > 1 ? ` (${notice.count})` : ""}
             </div>
           ))}
         </div>
@@ -364,9 +356,7 @@ export function AgentRuntimePanel({
       ["Skills", runtime?.skills],
       ["Hooks", runtime?.hooks],
     ] as const
-  ).flatMap(([label, value]) =>
-    value === undefined ? [] : [{ label, value: String(value) }],
-  );
+  ).flatMap(([label, value]) => (value === undefined ? [] : [{ label, value: String(value) }]));
 
   if (metrics.length === 0 && !runtime?.state && !runtime?.version) {
     return (
@@ -434,40 +424,45 @@ export function UsagePanel({
   }
 
   const used = Math.max(0, usage.usedTokens);
-  const contextWindow = usage.totalTokens !== undefined
-    && Number.isFinite(usage.totalTokens)
-    && usage.percentUsed !== undefined
-    && Number.isFinite(usage.percentUsed)
-    ? {
-        total: Math.max(0, usage.totalTokens),
-        percentUsed: usage.percentUsed,
-        remaining: Math.max(0, Math.max(0, usage.totalTokens) - used),
-      }
-    : null;
+  const contextWindow =
+    usage.totalTokens !== undefined &&
+    Number.isFinite(usage.totalTokens) &&
+    usage.percentUsed !== undefined &&
+    Number.isFinite(usage.percentUsed)
+      ? {
+          total: Math.max(0, usage.totalTokens),
+          percentUsed: usage.percentUsed,
+          remaining: Math.max(0, Math.max(0, usage.totalTokens) - used),
+        }
+      : null;
 
   return (
     <div className="space-y-4">
-      {contextWindow ? <div>
-        <div className="mb-2 flex items-end justify-between gap-3">
-          <div>
-            <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
-              Context
+      {contextWindow ? (
+        <div>
+          <div className="mb-2 flex items-end justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+                Context
+              </div>
+              <div className="mt-1 font-mono text-xl tabular-nums text-foreground">
+                {contextWindow.percentUsed.toFixed(contextWindow.percentUsed >= 10 ? 0 : 1)}%
+              </div>
             </div>
-            <div className="mt-1 font-mono text-xl tabular-nums text-foreground">
-              {contextWindow.percentUsed.toFixed(contextWindow.percentUsed >= 10 ? 0 : 1)}%
+            <div className="text-right font-mono text-xs tabular-nums text-muted-foreground">
+              <div>
+                {formatTokenCount(used)} / {formatTokenCount(contextWindow.total)}
+              </div>
+              <div>{formatTokenCount(contextWindow.remaining)} available</div>
             </div>
           </div>
-          <div className="text-right font-mono text-xs tabular-nums text-muted-foreground">
-            <div>{formatTokenCount(used)} / {formatTokenCount(contextWindow.total)}</div>
-            <div>{formatTokenCount(contextWindow.remaining)} available</div>
-          </div>
+          <Progress
+            value={contextWindow.percentUsed}
+            aria-label={`${contextWindow.percentUsed.toFixed(0)} percent of context used`}
+            className="h-1.5"
+          />
         </div>
-        <Progress
-          value={contextWindow.percentUsed}
-          aria-label={`${contextWindow.percentUsed.toFixed(0)} percent of context used`}
-          className="h-1.5"
-        />
-      </div> : null}
+      ) : null}
 
       <div className="grid grid-cols-2 gap-x-3 gap-y-4">
         {usage.inputTokens !== undefined ? (
@@ -492,7 +487,11 @@ export function UsagePanel({
           <Metric label="Elapsed" value={formatDuration(usage.durationMs)} />
         ) : null}
         {usage.permissionDenials !== undefined ? (
-          <Metric label="Denied" value={String(usage.permissionDenials)} detail="tool permissions" />
+          <Metric
+            label="Denied"
+            value={String(usage.permissionDenials)}
+            detail="tool permissions"
+          />
         ) : null}
         {usage.credits !== undefined ? (
           <Metric
@@ -500,40 +499,31 @@ export function UsagePanel({
             value={
               usage.credits.unlimited
                 ? "Unlimited"
-                : usage.credits.balance ?? (usage.credits.hasCredits ? "Available" : "Unavailable")
+                : (usage.credits.balance ??
+                  (usage.credits.hasCredits ? "Available" : "Unavailable"))
             }
           />
         ) : null}
       </div>
 
-      {displayedRateLimits && displayedRateLimits.length > 0
-        ? <RateLimitsSection rateLimits={displayedRateLimits} />
-        : null}
+      {displayedRateLimits && displayedRateLimits.length > 0 ? (
+        <RateLimitsSection rateLimits={displayedRateLimits} />
+      ) : null}
 
       <div className="flex items-center justify-between gap-3 border-t border-border/60 pt-3 text-[10px] text-muted-foreground">
         <span className="truncate">{usage.modelId ?? modelId ?? "Model unavailable"}</span>
-        <span className="shrink-0">
-          {usage.estimated ? "Estimated" : "Provider reported"}
-        </span>
+        <span className="shrink-0">{usage.estimated ? "Estimated" : "Provider reported"}</span>
       </div>
     </div>
   );
 }
 
-export function RateLimitsSection({
-  rateLimits,
-}: {
-  rateLimits: AgentRateLimitWindow[];
-}) {
+export function RateLimitsSection({ rateLimits }: { rateLimits: AgentRateLimitWindow[] }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const weeklyClockKey = JSON.stringify(
     rateLimits
       .filter(isWeeklyRateLimit)
-      .map((limit) => [
-        limit.label,
-        limit.resetsAt ?? null,
-        limit.windowMinutes ?? null,
-      ]),
+      .map((limit) => [limit.label, limit.resetsAt ?? null, limit.windowMinutes ?? null]),
   );
 
   useEffect(() => {
@@ -591,4 +581,3 @@ export function RateLimitsSection({
     </div>
   );
 }
-

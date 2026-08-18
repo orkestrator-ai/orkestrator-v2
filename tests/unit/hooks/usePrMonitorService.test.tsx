@@ -12,8 +12,8 @@ import type { Environment } from "../../../apps/web/src/types";
 
 const realBackendSnapshot = { ...realBackend };
 
-const mockGetPrMonitorState = mock<() => Promise<PrMonitorSnapshot>>(
-  () => Promise.resolve({ entries: [] }),
+const mockGetPrMonitorState = mock<() => Promise<PrMonitorSnapshot>>(() =>
+  Promise.resolve({ entries: [] }),
 );
 
 mock.module("@/lib/backend", () => ({
@@ -83,7 +83,11 @@ function makeState(
 function stateEvent(
   environmentId: string,
   overrides: Partial<PrMonitorEnvironmentState> = {},
-  transition?: { url: string; state: "open" | "merged" | "closed"; previousState: "open" | "merged" | "closed" | null },
+  transition?: {
+    url: string;
+    state: "open" | "merged" | "closed";
+    previousState: "open" | "merged" | "closed" | null;
+  },
 ): PrMonitorEvent {
   return { environmentId, state: makeState(environmentId, overrides), transition };
 }
@@ -144,9 +148,14 @@ describe("usePrMonitorService", () => {
   });
 
   test("rehydrates from the authoritative snapshot on mount", async () => {
-    mockGetPrMonitorState.mockImplementation(() => Promise.resolve({
-      entries: [makeState("env-1"), makeState("env-2", { mode: "create-pending", prUrl: null, prState: null })],
-    }));
+    mockGetPrMonitorState.mockImplementation(() =>
+      Promise.resolve({
+        entries: [
+          makeState("env-1"),
+          makeState("env-2", { mode: "create-pending", prUrl: null, prState: null }),
+        ],
+      }),
+    );
 
     renderHook(() => usePrMonitorService());
     await flush();
@@ -160,9 +169,9 @@ describe("usePrMonitorService", () => {
 
   test("ignores a malformed snapshot rather than trusting the wire", async () => {
     usePrMonitorStore.getState().applyEvent(stateEvent("env-1"));
-    mockGetPrMonitorState.mockImplementation(() => Promise.resolve(
-      { entries: [{ environmentId: "env-2" }] } as never,
-    ));
+    mockGetPrMonitorState.mockImplementation(() =>
+      Promise.resolve({ entries: [{ environmentId: "env-2" }] } as never),
+    );
 
     renderHook(() => usePrMonitorService());
     await flush();
@@ -292,11 +301,18 @@ describe("usePrMonitorService", () => {
     await flush();
 
     act(() => {
-      emitEvent(PR_MONITOR_CHANGED_EVENT, stateEvent("env-1", { prState: "merged" }, {
-        url: "https://github.com/org/repo/pull/1",
-        state: "merged",
-        previousState: "open",
-      }));
+      emitEvent(
+        PR_MONITOR_CHANGED_EVENT,
+        stateEvent(
+          "env-1",
+          { prState: "merged" },
+          {
+            url: "https://github.com/org/repo/pull/1",
+            state: "merged",
+            previousState: "open",
+          },
+        ),
+      );
     });
     expect(mockToastSuccess).not.toHaveBeenCalled();
 
@@ -311,16 +327,30 @@ describe("usePrMonitorService", () => {
     await flush();
 
     act(() => {
-      emitEvent(PR_MONITOR_CHANGED_EVENT, stateEvent("env-1", {}, {
-        url: "https://github.com/org/repo/pull/1",
-        state: "open",
-        previousState: null,
-      }));
-      emitEvent(PR_MONITOR_CHANGED_EVENT, stateEvent("env-1", { prState: "closed" }, {
-        url: "https://github.com/org/repo/pull/1",
-        state: "closed",
-        previousState: "open",
-      }));
+      emitEvent(
+        PR_MONITOR_CHANGED_EVENT,
+        stateEvent(
+          "env-1",
+          {},
+          {
+            url: "https://github.com/org/repo/pull/1",
+            state: "open",
+            previousState: null,
+          },
+        ),
+      );
+      emitEvent(
+        PR_MONITOR_CHANGED_EVENT,
+        stateEvent(
+          "env-1",
+          { prState: "closed" },
+          {
+            url: "https://github.com/org/repo/pull/1",
+            state: "closed",
+            previousState: "open",
+          },
+        ),
+      );
     });
 
     expect(mockToastSuccess).not.toHaveBeenCalled();

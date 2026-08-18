@@ -38,10 +38,7 @@ import type {
   ClaudeClient,
   ClaudeQuestionRequest,
 } from "@/lib/claude-client";
-import {
-  claudeQuestionDraftKey,
-  usePromptDraftStore,
-} from "@/stores/promptDraftStore";
+import { claudeQuestionDraftKey, usePromptDraftStore } from "@/stores/promptDraftStore";
 
 const client = { baseUrl: "http://127.0.0.1:9999" } as ClaudeClient;
 
@@ -53,10 +50,7 @@ function singleQuestionWithOptions(): ClaudeQuestionRequest {
       {
         question: "Pick a color",
         header: "Color",
-        options: [
-          { label: "Red" },
-          { label: "Blue" },
-        ],
+        options: [{ label: "Red" }, { label: "Blue" }],
         multiSelect: false,
       },
     ],
@@ -129,11 +123,7 @@ afterEach(() => {
 describe("ClaudeQuestionCard", () => {
   test("Submit button enables when only a custom answer is typed (no option selected)", () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
@@ -147,11 +137,7 @@ describe("ClaudeQuestionCard", () => {
 
   test("Submit button enables for a no-options question when text is typed", () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionNoOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionNoOptions()} client={client} sessionId="s-1" />,
     );
 
     const submit = screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement;
@@ -165,11 +151,7 @@ describe("ClaudeQuestionCard", () => {
 
   test("submits the typed custom answer even without pressing Enter", async () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -181,7 +163,12 @@ describe("ClaudeQuestionCard", () => {
     });
 
     expect(mockAnswerQuestion).toHaveBeenCalledTimes(1);
-    const args = mockAnswerQuestion.mock.calls[0] as unknown as [unknown, unknown, unknown, string[][]];
+    const args = mockAnswerQuestion.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      unknown,
+      string[][],
+    ];
     // args: (client, sessionId, questionId, answers)
     expect(args[3]).toEqual([["Green"]]);
   });
@@ -189,12 +176,7 @@ describe("ClaudeQuestionCard", () => {
   test("submits through the callback mode without using the native client store path", async () => {
     const onSubmitAnswers = mock(async () => true);
 
-    render(
-      <ClaudeQuestionCard
-        question={twoQuestions()}
-        onSubmitAnswers={onSubmitAnswers}
-      />
-    );
+    render(<ClaudeQuestionCard question={twoQuestions()} onSubmitAnswers={onSubmitAnswers} />);
 
     fireEvent.click(screen.getByRole("button", { name: /Red/ }));
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -217,7 +199,7 @@ describe("ClaudeQuestionCard", () => {
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={onSubmitAnswers}
-      />
+      />,
     );
 
     const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -244,11 +226,13 @@ describe("ClaudeQuestionCard", () => {
         allowOptionDeselect={false}
         submitOnOptionSelect
         onSubmitAnswers={onSubmitAnswers}
-      />
+      />,
     );
 
     expect(screen.queryByPlaceholderText(/Type your own answer/i) === null).toBe(true);
-    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /Red/ }));
@@ -266,7 +250,7 @@ describe("ClaudeQuestionCard", () => {
         allowCustomAnswer={false}
         submitOnOptionSelect
         onSubmitAnswers={onSubmitAnswers}
-      />
+      />,
     );
 
     await act(async () => {
@@ -274,7 +258,9 @@ describe("ClaudeQuestionCard", () => {
     });
 
     expect(onSubmitAnswers).toHaveBeenCalledWith([["Blue"]]);
-    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   test("submit-on-option-select does not auto-submit multi-question cards", () => {
@@ -285,7 +271,7 @@ describe("ClaudeQuestionCard", () => {
         question={twoQuestions()}
         submitOnOptionSelect
         onSubmitAnswers={onSubmitAnswers}
-      />
+      />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: /Red/ }));
@@ -295,13 +281,7 @@ describe("ClaudeQuestionCard", () => {
   });
 
   test("custom typed answer persists when navigating between questions", () => {
-    render(
-      <ClaudeQuestionCard
-        question={twoQuestions()}
-        client={client}
-        sessionId="s-1"
-      />
-    );
+    render(<ClaudeQuestionCard question={twoQuestions()} client={client} sessionId="s-1" />);
 
     // On Q1: type a custom answer
     const inputQ1 = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -324,11 +304,7 @@ describe("ClaudeQuestionCard", () => {
 
   test("Enter commits custom answer into a removable chip", () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -348,11 +324,7 @@ describe("ClaudeQuestionCard", () => {
 
   test("clicking the chip's X removes the committed custom answer", async () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -375,11 +347,7 @@ describe("ClaudeQuestionCard", () => {
 
   test("multi-select allows a chip and a selected option to coexist", async () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionMultiSelect()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionMultiSelect()} client={client} sessionId="s-1" />,
     );
 
     // Pick an option
@@ -397,17 +365,18 @@ describe("ClaudeQuestionCard", () => {
       fireEvent.click(submit);
     });
 
-    const args = mockAnswerQuestion.mock.calls[0] as unknown as [unknown, unknown, unknown, string[][]];
+    const args = mockAnswerQuestion.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      unknown,
+      string[][],
+    ];
     expect(args[3]).toEqual([["Cheese", "Pineapple"]]);
   });
 
   test("single-select Enter replaces the previous custom chip (only one chip allowed)", async () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -427,17 +396,18 @@ describe("ClaudeQuestionCard", () => {
       fireEvent.click(submit);
     });
 
-    const args = mockAnswerQuestion.mock.calls[0] as unknown as [unknown, unknown, unknown, string[][]];
+    const args = mockAnswerQuestion.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      unknown,
+      string[][],
+    ];
     expect(args[3]).toEqual([["Purple"]]);
   });
 
   test("single-select Enter keeps a selected option alongside the chip", async () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     // Select option first
@@ -454,7 +424,12 @@ describe("ClaudeQuestionCard", () => {
       fireEvent.click(submit);
     });
 
-    const args = mockAnswerQuestion.mock.calls[0] as unknown as [unknown, unknown, unknown, string[][]];
+    const args = mockAnswerQuestion.mock.calls[0] as unknown as [
+      unknown,
+      unknown,
+      unknown,
+      string[][],
+    ];
     // Option preserved + chip appended
     expect(args[3]).toEqual([["Red", "Magenta"]]);
   });
@@ -474,7 +449,7 @@ describe("ClaudeQuestionCard", () => {
           question={singleQuestionWithOptions()}
           client={client}
           sessionId="s-1"
-        />
+        />,
       );
 
       const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -504,7 +479,7 @@ describe("ClaudeQuestionCard", () => {
           question={singleQuestionWithOptions()}
           client={client}
           sessionId="s-1"
-        />
+        />,
       );
 
       const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -522,13 +497,9 @@ describe("ClaudeQuestionCard", () => {
     }
   });
 
-test("dismiss releases the server question before removing it locally", async () => {
+  test("dismiss releases the server question before removing it locally", async () => {
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     await act(async () => {
@@ -554,7 +525,7 @@ test("dismiss releases the server question before removing it locally", async ()
           question={singleQuestionWithOptions()}
           client={client}
           sessionId="s-1"
-        />
+        />,
       );
 
       const input = screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement;
@@ -573,31 +544,26 @@ test("dismiss releases the server question before removing it locally", async ()
   test("an unknown answer outcome stays visible but blocks an unsafe retry", async () => {
     mockAnswerQuestion.mockImplementationOnce(async () => "unknown");
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />,
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Red" }));
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
 
-    expect(await screen.findByText(
-      "The response outcome is unknown. Reconnect or refresh Claude before trying again.",
-    )).toBeTruthy();
-    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled)
-      .toBe(true);
+    expect(
+      await screen.findByText(
+        "The response outcome is unknown. Reconnect or refresh Claude before trying again.",
+      ),
+    ).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Submit" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
     expect(mockRemovePendingQuestion).not.toHaveBeenCalled();
   });
 
   test("a stale dismissal removes the question", async () => {
     mockDismissQuestion.mockImplementationOnce(async () => "stale");
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     await act(async () => {
@@ -610,20 +576,19 @@ test("dismiss releases the server question before removing it locally", async ()
   test("an unknown dismissal stays visible but blocks an unsafe retry", async () => {
     mockDismissQuestion.mockImplementationOnce(async () => "unknown");
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />,
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 
-    expect(await screen.findByText(
-      "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.",
-    )).toBeTruthy();
+    expect(
+      await screen.findByText(
+        "The dismissal outcome is unknown. Reconnect or refresh Claude before trying again.",
+      ),
+    ).toBeTruthy();
     await waitFor(() => {
-      expect((screen.getByRole("button", { name: "Dismiss" }) as HTMLButtonElement).disabled)
-        .toBe(true);
+      expect((screen.getByRole("button", { name: "Dismiss" }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
     });
     expect(mockRemovePendingQuestion).not.toHaveBeenCalled();
   });
@@ -631,11 +596,7 @@ test("dismiss releases the server question before removing it locally", async ()
   test("dismiss keeps the question pending when the server rejects it", async () => {
     mockDismissQuestion.mockImplementationOnce(async () => "error");
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     await act(async () => {
@@ -648,16 +609,13 @@ test("dismiss releases the server question before removing it locally", async ()
   test("dismiss disables the card and cannot be submitted twice while in flight", async () => {
     let resolveDismiss!: (value: ClaudeApprovalResponseResult) => void;
     mockDismissQuestion.mockImplementationOnce(
-      () => new Promise<ClaudeApprovalResponseResult>((resolve) => {
-        resolveDismiss = resolve;
-      }),
+      () =>
+        new Promise<ClaudeApprovalResponseResult>((resolve) => {
+          resolveDismiss = resolve;
+        }),
     );
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     const dismissButton = screen.getByRole("button", { name: "Dismiss" }) as HTMLButtonElement;
@@ -677,31 +635,23 @@ test("dismiss releases the server question before removing it locally", async ()
     // survive the tab unmounting and `claudeStore.removePendingQuestion`
     // knows which draft to clear on resolution.
     const { unmount } = render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
 
     fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
       target: { value: "half-typed" },
     });
-    expect(
-      usePromptDraftStore.getState().drafts.has(claudeQuestionDraftKey("s-1", "q-1")),
-    ).toBe(true);
+    expect(usePromptDraftStore.getState().drafts.has(claudeQuestionDraftKey("s-1", "q-1"))).toBe(
+      true,
+    );
 
     unmount();
     render(
-      <ClaudeQuestionCard
-        question={singleQuestionWithOptions()}
-        client={client}
-        sessionId="s-1"
-      />
+      <ClaudeQuestionCard question={singleQuestionWithOptions()} client={client} sessionId="s-1" />,
     );
-    expect(
-      (screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement).value,
-    ).toBe("half-typed");
+    expect((screen.getByPlaceholderText(/Type your own answer/i) as HTMLInputElement).value).toBe(
+      "half-typed",
+    );
   });
 
   test("callback mode without a draftKey does not write to the draft store", () => {
@@ -711,7 +661,7 @@ test("dismiss releases the server question before removing it locally", async ()
       <ClaudeQuestionCard
         question={singleQuestionWithOptions()}
         onSubmitAnswers={mock(async () => true)}
-      />
+      />,
     );
 
     fireEvent.change(screen.getByPlaceholderText(/Type your own answer/i), {
@@ -728,7 +678,7 @@ test("dismiss releases the server question before removing it locally", async ()
         question={singleQuestionWithOptions()}
         onSubmitAnswers={mock(async () => true)}
         onDismiss={onDismiss}
-      />
+      />,
     );
 
     await act(async () => {

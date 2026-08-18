@@ -1,9 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import {
-  MAX_JSON_RENDER_DEPTH,
-  MAX_JSON_RENDER_ENTRIES,
-} from "@/lib/chat/json-payload";
+import { MAX_JSON_RENDER_DEPTH, MAX_JSON_RENDER_ENTRIES } from "@/lib/chat/json-payload";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { JsonTree } from "./JsonTree";
 
@@ -15,12 +12,7 @@ beforeEach(() => {
 
 describe("JsonTree scalars", () => {
   test("distinguishes null, undefined and the empty string from a value", () => {
-    render(
-      <JsonTree
-        value={{ missing: null, blank: "", present: "text" }}
-        expansionKey="t"
-      />,
-    );
+    render(<JsonTree value={{ missing: null, blank: "", present: "text" }} expansionKey="t" />);
 
     // A null field is not the same as a field holding an empty string, and
     // neither should render as nothing at all.
@@ -30,18 +22,14 @@ describe("JsonTree scalars", () => {
   });
 
   test("renders booleans and numbers as literals", () => {
-    render(
-      <JsonTree value={{ enabled: false, count: 0 }} expansionKey="t" />,
-    );
+    render(<JsonTree value={{ enabled: false, count: 0 }} expansionKey="t" />);
 
     expect(screen.getByText("false")).toBeTruthy();
     expect(screen.getByText("0")).toBeTruthy();
   });
 
   test("states an empty container in place rather than folding it", () => {
-    render(
-      <JsonTree value={{ items: [], meta: {} }} expansionKey="t" />,
-    );
+    render(<JsonTree value={{ items: [], meta: {} }} expansionKey="t" />);
 
     expect(screen.getByText("None")).toBeTruthy();
     expect(screen.getByText("No fields")).toBeTruthy();
@@ -59,9 +47,7 @@ describe("JsonTree arrays", () => {
   });
 
   test("renders a scalar sitting among records without a disclosure", () => {
-    render(
-      <JsonTree value={["loose", { title: "Recorded" }]} expansionKey="t" />,
-    );
+    render(<JsonTree value={["loose", { title: "Recorded" }]} expansionKey="t" />);
 
     // Mixed arrays drop the bullet list, but the scalar must still be shown,
     // and the record keeps its own position rather than being renumbered.
@@ -88,13 +74,7 @@ describe("JsonTree bounds", () => {
   test("stops safely at the render depth without re-serializing the branch", () => {
     // The payload-level raw disclosure holds the bounded original source.
     // Re-stringifying a deeply nested parsed value here can expand quadratically.
-    render(
-      <JsonTree
-        value={{ deep: "value" }}
-        depth={MAX_JSON_RENDER_DEPTH}
-        expansionKey="t"
-      />,
-    );
+    render(<JsonTree value={{ deep: "value" }} depth={MAX_JSON_RENDER_DEPTH} expansionKey="t" />);
 
     expect(screen.getByText(/Maximum nesting depth reached/)).toBeTruthy();
     expect(screen.queryByText(/"deep": "value"/) === null).toBe(true);
@@ -102,11 +82,7 @@ describe("JsonTree bounds", () => {
 
   test("renders one level below the depth cap as structure", () => {
     render(
-      <JsonTree
-        value={{ deep: "value" }}
-        depth={MAX_JSON_RENDER_DEPTH - 1}
-        expansionKey="t"
-      />,
+      <JsonTree value={{ deep: "value" }} depth={MAX_JSON_RENDER_DEPTH - 1} expansionKey="t" />,
     );
 
     expect(screen.getByText("Deep")).toBeTruthy();
@@ -115,10 +91,7 @@ describe("JsonTree bounds", () => {
 
   test("caps the fields it renders and says how many it withheld", () => {
     const wide = Object.fromEntries(
-      Array.from({ length: MAX_JSON_RENDER_ENTRIES + 7 }, (_, index) => [
-        `field${index}`,
-        index,
-      ]),
+      Array.from({ length: MAX_JSON_RENDER_ENTRIES + 7 }, (_, index) => [`field${index}`, index]),
     );
     render(<JsonTree value={wide} expansionKey="t" />);
 
@@ -128,15 +101,10 @@ describe("JsonTree bounds", () => {
   });
 
   test("caps the items it renders and says how many it withheld", () => {
-    const long = Array.from(
-      { length: MAX_JSON_RENDER_ENTRIES + 3 },
-      (_, index) => index,
-    );
+    const long = Array.from({ length: MAX_JSON_RENDER_ENTRIES + 3 }, (_, index) => index);
     render(<JsonTree value={long} expansionKey="t" />);
 
-    expect(screen.getAllByRole("listitem")).toHaveLength(
-      MAX_JSON_RENDER_ENTRIES,
-    );
+    expect(screen.getAllByRole("listitem")).toHaveLength(MAX_JSON_RENDER_ENTRIES);
     expect(screen.getByText(/^3 more not shown/)).toBeTruthy();
   });
 
@@ -199,12 +167,7 @@ describe("JsonTree expansion persistence", () => {
 
   test("accepts valid JSON keys containing lone UTF-16 surrogates", () => {
     expect(() =>
-      render(
-        <JsonTree
-          value={{ ["\ud800"]: { value: "reachable" } }}
-          expansionKey="msg/tree"
-        />,
-      )
+      render(<JsonTree value={{ ["\ud800"]: { value: "reachable" } }} expansionKey="msg/tree" />),
     ).not.toThrow();
   });
 });

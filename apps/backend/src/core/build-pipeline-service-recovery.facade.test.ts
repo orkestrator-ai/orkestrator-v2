@@ -1,68 +1,43 @@
-import { describe,expect,mock,test } from "bun:test";
-
+import { describe, expect, mock, test } from "bun:test";
 
 import { promises as fs } from "node:fs";
 
-
 import { tmpdir } from "node:os";
-
 
 import path from "node:path";
 
-
-
-
 import type {
-BuildPipeline,
-PipelineSession,
-PipelineSessionPhase
+  BuildPipeline,
+  PipelineSession,
+  PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 
-
-
-
 import {
-AGENT_INTERACTION_CONTRACT_VERSION,
-AGENT_INTERACTION_JOURNAL_VERSION,
-UNATTENDED_AGENT_INTERACTION_POLICY,
-type AgentInteractionRequest
+  AGENT_INTERACTION_CONTRACT_VERSION,
+  AGENT_INTERACTION_JOURNAL_VERSION,
+  UNATTENDED_AGENT_INTERACTION_POLICY,
+  type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
 
-
 import {
-STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
-type StructuredReviewReport,
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
+  type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 
-
-import type {
-JsonSchema,
-StructuredOutputResult,
-} from "@orkestrator/protocol/structured-output";
-
+import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 
 import { StorageService } from "./storage.js";
 
+import { BuildPipelineService } from "./build-pipeline-service.js";
 
-import {
-BuildPipelineService,
-} from "./build-pipeline-service.js";
-
-
-import {
-ProviderSessionFailedError,
-ProviderUnavailableError,
-} from "./build-pipeline-provider.js";
-
+import { ProviderSessionFailedError, ProviderUnavailableError } from "./build-pipeline-provider.js";
 
 import type {
-BuildPipelineProvider,
-ProviderCreateSessionOptions,
-ProviderSessionRegistration,
-ProviderStatus,
+  BuildPipelineProvider,
+  ProviderCreateSessionOptions,
+  ProviderSessionRegistration,
+  ProviderStatus,
 } from "./build-pipeline-provider.js";
-
-
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -80,11 +55,13 @@ const cleanReview: StructuredReviewReport = {
     overview: "Implemented the task.",
     before: "Missing.",
     after: "Present.",
-    keyCodeChanges: [{
-      file: "src/app.ts",
-      line: 1,
-      description: "Adds the feature.",
-    }],
+    keyCodeChanges: [
+      {
+        file: "src/app.ts",
+        line: 1,
+        description: "Adds the feature.",
+      },
+    ],
     userImpact: "The feature is available.",
   },
   riskProfile: {
@@ -108,8 +85,6 @@ const cleanReview: StructuredReviewReport = {
   reviewSummary: "No findings.",
 };
 
-
-
 class FakeProvider implements BuildPipelineProvider {
   readonly agent = "claude" as const;
   readonly phases = new Map<string, PipelineSessionPhase>();
@@ -131,10 +106,7 @@ class FakeProvider implements BuildPipelineProvider {
   }> = [];
   private counter = 0;
 
-  registerSession(
-    sessionId: string,
-    interaction?: ProviderSessionRegistration,
-  ): void {
+  registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.registered.push({ sessionId, interaction });
   }
 
@@ -168,17 +140,16 @@ class FakeProvider implements BuildPipelineProvider {
   }
 
   async messages(sessionId: string): Promise<unknown[]> {
-    return [{
-      id: `${sessionId}-assistant`,
-      role: "assistant",
-      parts: [{ type: "text", content: "Finished" }],
-    }];
+    return [
+      {
+        id: `${sessionId}-assistant`,
+        role: "assistant",
+        parts: [{ type: "text", content: "Finished" }],
+      },
+    ];
   }
 
-  async structured<T>(
-    sessionId: string,
-    requestId: string,
-  ): Promise<StructuredOutputResult<T>> {
+  async structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T>> {
     const phase = this.phases.get(sessionId);
     return {
       ok: true,
@@ -192,8 +163,6 @@ class FakeProvider implements BuildPipelineProvider {
 
   async abort(_sessionId: string): Promise<void> {}
 }
-
-
 
 async function withService(
   run: (
@@ -212,13 +181,16 @@ async function withService(
       failCommandsOnce: Map<string, number>;
       currentHead: string;
       uncommittedPaths: string[];
-      kanbanTasks: Map<string, {
-        id: string;
-        status: string;
-        prUrl?: string;
-        prState?: string;
-        comments: Array<{ text: string }>;
-      }>;
+      kanbanTasks: Map<
+        string,
+        {
+          id: string;
+          status: string;
+          prUrl?: string;
+          prState?: string;
+          comments: Array<{ text: string }>;
+        }
+      >;
     },
   ) => Promise<void>,
 ): Promise<void> {
@@ -247,13 +219,16 @@ async function withService(
     command: string;
     args: Record<string, unknown>;
   }> = [];
-  const kanbanTasks = new Map<string, {
-    id: string;
-    status: string;
-    prUrl?: string;
-    prState?: string;
-    comments: Array<{ text: string }>;
-  }>();
+  const kanbanTasks = new Map<
+    string,
+    {
+      id: string;
+      status: string;
+      prUrl?: string;
+      prState?: string;
+      comments: Array<{ text: string }>;
+    }
+  >();
   const controls = {
     dataDir,
     detection: {
@@ -273,10 +248,7 @@ async function withService(
     uncommittedPaths: [] as string[],
     kanbanTasks,
   };
-  const invoke = async <T>(
-    command: string,
-    args: Record<string, unknown> = {},
-  ): Promise<T> => {
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push({ command, args });
     if (controls.failCommands.has(command)) {
       throw new Error(`${command} failed`);
@@ -329,8 +301,8 @@ async function withService(
     if (command === "update_feature_plan") return undefined as T;
     if (command === "pr_monitor_watch") return undefined as T;
     if (
-      command === "post_linear_completion_comment"
-      || command === "post_github_completion_comment"
+      command === "post_linear_completion_comment" ||
+      command === "post_github_completion_comment"
     ) {
       return {
         commentId: "comment-1",
@@ -351,18 +323,11 @@ async function withService(
   }
 }
 
-
-
-async function pipeline(
-  storage: StorageService,
-  id: string,
-): Promise<BuildPipeline> {
+async function pipeline(storage: StorageService, id: string): Promise<BuildPipeline> {
   const stored = await storage.getBuildPipeline(id);
   if (!stored) throw new Error("Pipeline disappeared");
   return stored.snapshot as BuildPipeline;
 }
-
-
 
 function startInput(
   overrides: Partial<Parameters<BuildPipelineService["start"]>[0]> = {},
@@ -385,12 +350,7 @@ function startInput(
   };
 }
 
-
-
-function pendingQuestion(
-  sessionId: string,
-  id = "question-1",
-): AgentInteractionRequest {
+function pendingQuestion(sessionId: string, id = "question-1"): AgentInteractionRequest {
   const now = Date.now();
   return {
     version: AGENT_INTERACTION_CONTRACT_VERSION,
@@ -410,8 +370,6 @@ function pendingQuestion(
   };
 }
 
-
-
 /** Runs the two provisioning passes and returns the live build session. */
 async function startBuilding(
   service: BuildPipelineService,
@@ -425,8 +383,6 @@ async function startBuilding(
   expect(running.phase).toBe("building");
   return { started, session: running.sessions[running.currentSessionIndex]! };
 }
-
-
 
 /** Writes durable state the way another process would, outside the service. */
 async function mutateStored(
@@ -449,8 +405,6 @@ async function mutateStored(
   return snapshot;
 }
 
-
-
 async function startVerifying(
   service: BuildPipelineService,
   storage: StorageService,
@@ -465,9 +419,6 @@ async function startVerifying(
 }
 
 describe("BuildPipelineService", () => {
-
-
-
   test("repairs build-tab publication when an admitted start is retried", async () => {
     await withService(async (service, storage) => {
       const ensureBuildPipelineTab = storage.ensureBuildPipelineTab.bind(storage);
@@ -479,9 +430,7 @@ describe("BuildPipelineService", () => {
       });
 
       const input = startInput();
-      await expect(service.start(input)).rejects.toThrow(
-        "pane layout temporarily unavailable",
-      );
+      await expect(service.start(input)).rejects.toThrow("pane layout temporarily unavailable");
 
       const [persisted] = await storage.listBuildPipelines(input.projectId);
       expect(persisted).toBeDefined();
@@ -499,20 +448,20 @@ describe("BuildPipelineService", () => {
         root: {
           kind: "leaf",
           activeTabId: `build-${persisted!.id}`,
-          tabs: [{
-            id: `build-${persisted!.id}`,
-            type: "claude-build",
-            buildTabData: {
-              pipelineId: persisted!.id,
-              taskId: input.taskId,
+          tabs: [
+            {
+              id: `build-${persisted!.id}`,
+              type: "claude-build",
+              buildTabData: {
+                pipelineId: persisted!.id,
+                taskId: input.taskId,
+              },
             },
-          }],
+          ],
         },
       });
     });
   });
-
-
 
   // A snapshot written before the path list existed still has to certify. The
   // "clean" status pins the baseline to the empty set on its own.
@@ -520,8 +469,7 @@ describe("BuildPipelineService", () => {
     await withService(async (service, storage) => {
       const verifying = await startVerifying(service, storage);
       await mutateStored(storage, verifying.id, (snapshot) => {
-        delete snapshot.sessions[snapshot.currentSessionIndex]!
-          .validationUncommittedPathsAtStart;
+        delete snapshot.sessions[snapshot.currentSessionIndex]!.validationUncommittedPathsAtStart;
       });
 
       await service.advanceNow(verifying.id);
@@ -529,8 +477,6 @@ describe("BuildPipelineService", () => {
       expect((await pipeline(storage, verifying.id)).phase).toBe("creating-pr");
     });
   });
-
-
 
   // A legacy "dirty" baseline has no path set to compare against, and guessing
   // one would either wave through an edit or reject a leftover. Fail instead.
@@ -542,8 +488,7 @@ describe("BuildPipelineService", () => {
         verifying.sessions[verifying.currentSessionIndex]!.validationWorktreeStatusAtStart,
       ).toBe("dirty");
       await mutateStored(storage, verifying.id, (snapshot) => {
-        delete snapshot.sessions[snapshot.currentSessionIndex]!
-          .validationUncommittedPathsAtStart;
+        delete snapshot.sessions[snapshot.currentSessionIndex]!.validationUncommittedPathsAtStart;
       });
 
       await service.advanceNow(verifying.id);
@@ -554,8 +499,6 @@ describe("BuildPipelineService", () => {
       });
     });
   });
-
-
 
   test("recovers an environment created before the pipeline association was saved", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-recovery-"));
@@ -602,14 +545,7 @@ describe("BuildPipelineService", () => {
       backendRevision: 0,
       controller: "backend",
     };
-    await storage.saveBuildPipeline(
-      recovering.id,
-      recovering.projectId,
-      "",
-      2,
-      recovering,
-      0,
-    );
+    await storage.saveBuildPipeline(recovering.id, recovering.projectId, "", 2, recovering, 0);
     let createCalls = 0;
     const service = new BuildPipelineService(
       storage,
@@ -635,8 +571,6 @@ describe("BuildPipelineService", () => {
       await fs.rm(dataDir, { recursive: true, force: true });
     }
   });
-
-
 
   test("imports only valid unowned legacy snapshots and never overwrites backend records", async () => {
     await withService(async (service, storage) => {
@@ -672,16 +606,20 @@ describe("BuildPipelineService", () => {
         importedIds: [],
         skipped: 1,
       });
-      expect(await service.importLegacy(
-        "project-1",
-        null as unknown as unknown[],
-      )).toEqual({ importedIds: [], skipped: 0 });
+      expect(await service.importLegacy("project-1", null as unknown as unknown[])).toEqual({
+        importedIds: [],
+        skipped: 0,
+      });
 
-      expect(await service.importLegacy("project-1", [{
-        ...legacy,
-        id: "missing-environment",
-        environmentId: "does-not-exist",
-      }])).toEqual({ importedIds: [], skipped: 1 });
+      expect(
+        await service.importLegacy("project-1", [
+          {
+            ...legacy,
+            id: "missing-environment",
+            environmentId: "does-not-exist",
+          },
+        ]),
+      ).toEqual({ importedIds: [], skipped: 1 });
 
       await storage.addEnvironment({
         ...(await storage.getEnvironment("env-1"))!,
@@ -691,21 +629,25 @@ describe("BuildPipelineService", () => {
         worktreePath: "/tmp/owned",
         buildPipelineId: "another-pipeline",
       });
-      expect(await service.importLegacy("project-1", [{
-        ...legacy,
-        id: "owned-environment",
-        environmentId: "owned-env",
-      }])).toEqual({ importedIds: [], skipped: 1 });
+      expect(
+        await service.importLegacy("project-1", [
+          {
+            ...legacy,
+            id: "owned-environment",
+            environmentId: "owned-env",
+          },
+        ]),
+      ).toEqual({ importedIds: [], skipped: 1 });
     });
   });
 
-
-
   test("does not report or persist a legacy snapshot that collides with an active admission", async () => {
     await withService(async (service, storage) => {
-      const active = await service.start(startInput({
-        taskId: "admission-collision",
-      }));
+      const active = await service.start(
+        startInput({
+          taskId: "admission-collision",
+        }),
+      );
       const collidingId = "legacy-admission-collision";
       const collidingSnapshot: BuildPipeline = {
         ...active,
@@ -714,9 +656,7 @@ describe("BuildPipelineService", () => {
         controller: "backend",
       };
 
-      const result = await service.importLegacy("project-1", [
-        collidingSnapshot,
-      ]);
+      const result = await service.importLegacy("project-1", [collidingSnapshot]);
 
       expect(result).toEqual({ importedIds: [], skipped: 1 });
       expect(await storage.getBuildPipeline(collidingId)).toBeNull();
@@ -730,8 +670,6 @@ describe("BuildPipelineService", () => {
       expect(await storage.listBuildPipelines("project-1")).toHaveLength(1);
     });
   });
-
-
 
   // A terminal turn error proves the bridge answered, so a stale reconnect
   // attempt accusing it of being unreachable must be cleared instead of
@@ -781,14 +719,9 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("retries a failed build stage in a fresh session", async () => {
     await withService(async (service, storage, provider) => {
-      const { started, session: firstSession } = await startBuilding(
-        service,
-        storage,
-      );
+      const { started, session: firstSession } = await startBuilding(service, storage);
       provider.status = async () => "error";
       await service.advanceNow(started.id);
 
@@ -799,10 +732,12 @@ describe("BuildPipelineService", () => {
           kind: "stage-transition",
           sessionId: firstSession.sdkSessionId,
         },
-        sessions: [expect.objectContaining({
-          sdkSessionId: firstSession.sdkSessionId,
-          status: "error",
-        })],
+        sessions: [
+          expect.objectContaining({
+            sdkSessionId: firstSession.sdkSessionId,
+            status: "error",
+          }),
+        ],
       });
 
       provider.status = async () => "idle";
@@ -824,21 +759,14 @@ describe("BuildPipelineService", () => {
         phase: "build",
         status: "running",
       });
-      expect(retried.sessions[1]?.sdkSessionId)
-        .not.toBe(firstSession.sdkSessionId);
-      expect(provider.sent.at(-1)?.sessionId)
-        .toBe(retried.sessions[1]?.sdkSessionId);
+      expect(retried.sessions[1]?.sdkSessionId).not.toBe(firstSession.sdkSessionId);
+      expect(provider.sent.at(-1)?.sessionId).toBe(retried.sessions[1]?.sdkSessionId);
     });
   });
 
-
-
   test("persists a failed retry without reporting that a session restarted", async () => {
     await withService(async (service, storage, provider) => {
-      const { started, session: firstSession } = await startBuilding(
-        service,
-        storage,
-      );
+      const { started, session: firstSession } = await startBuilding(service, storage);
       provider.status = async () => "error";
       await service.advanceNow(started.id);
       provider.createSession = async () => {
@@ -861,8 +789,6 @@ describe("BuildPipelineService", () => {
       ]);
     });
   });
-
-
 
   test("retries a failed provisioning phase without creating an agent session", async () => {
     await withService(async (service, storage, provider) => {
@@ -891,14 +817,9 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("retries a failed PR stage in a fresh session", async () => {
     await withService(async (service, storage, provider) => {
-      const { started, session: firstSession } = await startBuilding(
-        service,
-        storage,
-      );
+      const { started, session: firstSession } = await startBuilding(service, storage);
       await mutateStored(storage, started.id, (candidate) => {
         candidate.phase = "failed";
         candidate.error = "The pr session failed";
@@ -928,22 +849,15 @@ describe("BuildPipelineService", () => {
         phase: "pr",
         status: "running",
       });
-      expect(retried.sessions[1]?.sdkSessionId)
-        .not.toBe(firstSession.sdkSessionId);
+      expect(retried.sessions[1]?.sdkSessionId).not.toBe(firstSession.sdkSessionId);
       expect(provider.created.at(-1)?.phase).toBe("pr");
-      expect(provider.sent.at(-1)?.sessionId)
-        .toBe(retried.sessions[1]?.sdkSessionId);
+      expect(provider.sent.at(-1)?.sessionId).toBe(retried.sessions[1]?.sdkSessionId);
     });
   });
 
-
-
   test("retries a failed conflict-resolution stage in a fresh session", async () => {
     await withService(async (service, storage, provider) => {
-      const { started, session: firstSession } = await startBuilding(
-        service,
-        storage,
-      );
+      const { started, session: firstSession } = await startBuilding(service, storage);
       await mutateStored(storage, started.id, (candidate) => {
         candidate.phase = "failed";
         candidate.error = "The conflict resolution failed";
@@ -973,15 +887,11 @@ describe("BuildPipelineService", () => {
         phase: "resolve-conflicts",
         status: "running",
       });
-      expect(retried.sessions[1]?.sdkSessionId)
-        .not.toBe(firstSession.sdkSessionId);
+      expect(retried.sessions[1]?.sdkSessionId).not.toBe(firstSession.sdkSessionId);
       expect(provider.created.at(-1)?.phase).toBe("resolve-conflicts");
-      expect(provider.sent.at(-1)?.sessionId)
-        .toBe(retried.sessions[1]?.sdkSessionId);
+      expect(provider.sent.at(-1)?.sessionId).toBe(retried.sessions[1]?.sdkSessionId);
     });
   });
-
-
 
   test("starts a fresh stall clock whenever a new turn is dispatched", async () => {
     await withService(async (service, storage, provider) => {
@@ -1011,17 +921,13 @@ describe("BuildPipelineService", () => {
       await service.advanceNow(started.id);
       const dispatched = await pipeline(storage, started.id);
       const dispatchedSession = dispatched.sessions[dispatched.currentSessionIndex]!;
-      expect(Date.parse(dispatchedSession.turnStartedAt!)).toBeGreaterThan(
-        Date.now() - 5_000,
-      );
+      expect(Date.parse(dispatchedSession.turnStartedAt!)).toBeGreaterThan(Date.now() - 5_000);
 
       provider.status = async () => "running";
       await service.advanceNow(started.id);
       expect((await pipeline(storage, started.id)).stallWarning).toBeUndefined();
     });
   });
-
-
 
   test("rechecks an absent recovered request after leasing and resolves it if it reappears", async () => {
     await withService(async (service, storage, provider) => {
@@ -1033,27 +939,31 @@ describe("BuildPipelineService", () => {
       const request = pendingQuestion(session.sdkSessionId, "reappeared-question");
       await storage.updateAgentInteractionResolutionJournal(() => ({
         version: AGENT_INTERACTION_JOURNAL_VERSION,
-        entries: [{
-          id: "reappeared-journal",
-          interactionId: request.id,
-          provider: "claude",
-          kind: "question",
-          sessionId: session.sdkSessionId,
-          state: "claimed",
-          claim: {
-            workflowType: "build-pipeline",
-            workflowId: running.id,
-            phase: "building",
-            fence: session.sessionKey,
-            claimedAt: Date.now(),
+        entries: [
+          {
+            id: "reappeared-journal",
+            interactionId: request.id,
+            provider: "claude",
+            kind: "question",
+            sessionId: session.sdkSessionId,
+            state: "claimed",
+            claim: {
+              workflowType: "build-pipeline",
+              workflowId: running.id,
+              phase: "building",
+              fence: session.sessionKey,
+              claimedAt: Date.now(),
+            },
           },
-        }],
+        ],
       }));
       let listCalls = 0;
       let resolveCalls = 0;
-      (provider as unknown as BuildPipelineProvider & {
-        interactions: NonNullable<BuildPipelineProvider["interactions"]>;
-      }).interactions = {
+      (
+        provider as unknown as BuildPipelineProvider & {
+          interactions: NonNullable<BuildPipelineProvider["interactions"]>;
+        }
+      ).interactions = {
         async listPendingInteractions() {
           listCalls += 1;
           return {
@@ -1078,8 +988,6 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("re-registers restored sessions with cached and injected providers", async () => {
     await withService(async (service, storage, provider) => {
       const started = await service.start(startInput());
@@ -1087,10 +995,7 @@ describe("BuildPipelineService", () => {
       await service.advanceNow(started.id);
       const restored = await pipeline(storage, started.id);
       const resolveProvider = service as unknown as {
-        provider: (
-          pipeline: BuildPipeline,
-          agent: "claude",
-        ) => Promise<BuildPipelineProvider>;
+        provider: (pipeline: BuildPipeline, agent: "claude") => Promise<BuildPipelineProvider>;
         providers: Map<string, BuildPipelineProvider>;
         options: {
           provider?: () => Promise<BuildPipelineProvider>;
@@ -1099,37 +1004,39 @@ describe("BuildPipelineService", () => {
 
       provider.registered.length = 0;
       expect(await resolveProvider.provider(restored, "claude")).toBe(provider);
-      expect(provider.registered).toEqual([expect.objectContaining({
-        sessionId: "build-1",
-        interaction: expect.objectContaining({
-          origin: "build-pipeline",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: "build",
-          workflowId: started.id,
-          provider: "claude",
-          fence: expect.any(String),
+      expect(provider.registered).toEqual([
+        expect.objectContaining({
+          sessionId: "build-1",
+          interaction: expect.objectContaining({
+            origin: "build-pipeline",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            phase: "build",
+            workflowId: started.id,
+            provider: "claude",
+            fence: expect.any(String),
+          }),
         }),
-      })]);
+      ]);
 
       const injected = new FakeProvider();
       resolveProvider.providers.clear();
       resolveProvider.options.provider = async () => injected;
       expect(await resolveProvider.provider(restored, "claude")).toBe(injected);
-      expect(injected.registered).toEqual([expect.objectContaining({
-        sessionId: "build-1",
-        interaction: expect.objectContaining({
-          origin: "build-pipeline",
-          interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-          phase: "build",
-          workflowId: started.id,
-          provider: "claude",
-          fence: expect.any(String),
+      expect(injected.registered).toEqual([
+        expect.objectContaining({
+          sessionId: "build-1",
+          interaction: expect.objectContaining({
+            origin: "build-pipeline",
+            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
+            phase: "build",
+            workflowId: started.id,
+            provider: "claude",
+            fence: expect.any(String),
+          }),
         }),
-      })]);
+      ]);
     });
   });
-
-
 
   test("repairs a report that broke the contract without restarting the review", async () => {
     await withService(async (service, storage, provider) => {
@@ -1155,15 +1062,15 @@ describe("BuildPipelineService", () => {
           // the failure details, which no JSON schema can express.
           value: (reports === 1
             ? {
-              ...cleanReview,
-              testResults: {
-                total: 2,
-                passed: 1,
-                failed: 1,
-                notRun: 0,
-                failures: [],
-              },
-            }
+                ...cleanReview,
+                testResults: {
+                  total: 2,
+                  passed: 1,
+                  failed: 1,
+                  notRun: 0,
+                  failures: [],
+                },
+              }
             : cleanReview) as T,
         };
       };
@@ -1187,7 +1094,8 @@ describe("BuildPipelineService", () => {
         structuredResultStatus: "accepted",
       });
       const repair = provider.sent.find((sent) =>
-        sent.prompt.includes("Failure details count must equal failed."));
+        sent.prompt.includes("Failure details count must equal failed."),
+      );
       expect(repair).toMatchObject({
         sessionId: reviews[0]!.sdkSessionId,
         requestId: reviews[0]!.structuredRequestId,
@@ -1197,8 +1105,6 @@ describe("BuildPipelineService", () => {
       expect(repair!.prompt).toContain("repair attempt 1 of 3");
     });
   });
-
-
 
   test("accepts a report repaired on the last permitted attempt", async () => {
     await withService(async (service, storage, provider) => {
@@ -1250,20 +1156,21 @@ describe("BuildPipelineService", () => {
       // Each repair is its own turn under its own request id, and the last one
       // is the id the accepted report was read from.
       const repairs = provider.sent.filter((sent) =>
-        sent.prompt.includes("$.riskProfile.overallRisk"));
+        sent.prompt.includes("$.riskProfile.overallRisk"),
+      );
       expect(repairs).toHaveLength(3);
       expect(new Set(repairs.map((sent) => sent.requestId)).size).toBe(3);
       expect(repairs.at(-1)?.requestId).toBe(reviews[0]!.structuredRequestId);
       expect(repairs.map((sent) => sent.sessionId)).toEqual(
         Array.from({ length: 3 }, () => reviews[0]!.sdkSessionId),
       );
-      expect(repairs.map((sent) =>
-        sent.prompt.includes(`repair attempt ${repairs.indexOf(sent) + 1} of 3`)
-      )).toEqual([true, true, true]);
+      expect(
+        repairs.map((sent) =>
+          sent.prompt.includes(`repair attempt ${repairs.indexOf(sent) + 1} of 3`),
+        ),
+      ).toEqual([true, true, true]);
     });
   });
-
-
 
   test("fails the review once the bounded report repairs are exhausted", async () => {
     await withService(async (service, storage, provider) => {
@@ -1301,8 +1208,6 @@ describe("BuildPipelineService", () => {
       expect(reviews[0]?.structuredReportRepairAttempts).toBe(3);
     });
   });
-
-
 
   test("fails the review when a repair turn itself fails provider-side", async () => {
     await withService(async (service, storage, provider) => {
@@ -1365,14 +1270,11 @@ describe("BuildPipelineService", () => {
       expect(reviews).toHaveLength(1);
       expect(reviews[0]?.structuredReportRepairAttempts).toBe(1);
       // The single repair was dispatched and still carried the report schema.
-      const repairs = provider.sent.filter((sent) =>
-        sent.prompt.includes("repair attempt 1 of 3"));
+      const repairs = provider.sent.filter((sent) => sent.prompt.includes("repair attempt 1 of 3"));
       expect(repairs).toHaveLength(1);
       expect(repairs[0]?.schema).toBe(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA);
     });
   });
-
-
 
   test("fails a legacy verification snapshot with no recoverable request id", async () => {
     await withService(async (service, storage, provider) => {
@@ -1404,18 +1306,18 @@ describe("BuildPipelineService", () => {
     });
   });
 
-
-
   test("init retries a terminal comment left in posting state after a crash", async () => {
     await withService(async (service, storage, _provider, invocations, controls) => {
       controls.failCommands.add("post_linear_completion_comment");
-      const started = await service.start(startInput({
-        source: {
-          type: "linear",
-          issueId: "issue-1",
-          issueIdentifier: "ENG-1",
-        },
-      }));
+      const started = await service.start(
+        startInput({
+          source: {
+            type: "linear",
+            issueId: "issue-1",
+            issueIdentifier: "ENG-1",
+          },
+        }),
+      );
       for (let pass = 0; pass < 6; pass += 1) {
         await service.advanceNow(started.id);
       }
@@ -1438,12 +1340,11 @@ describe("BuildPipelineService", () => {
         completionCommentStatus: "posted",
         completionCommentId: "comment-1",
       });
-      expect(invocations.filter((entry) =>
-        entry.command === "post_linear_completion_comment")).toHaveLength(2);
+      expect(
+        invocations.filter((entry) => entry.command === "post_linear_completion_comment"),
+      ).toHaveLength(2);
     });
   });
-
-
 
   test("keeps one stall warning per stalled turn and clears it when it ends", async () => {
     await withService(async (service, storage, provider) => {
@@ -1453,8 +1354,7 @@ describe("BuildPipelineService", () => {
       await mutateStored(storage, started.id, (snapshot) => {
         const current = snapshot.sessions[snapshot.currentSessionIndex]!;
         current.messages = messages;
-        current.messagesFingerprint =
-          `${messages.length}:${JSON.stringify(messages.at(-1))}`;
+        current.messagesFingerprint = `${messages.length}:${JSON.stringify(messages.at(-1))}`;
         current.startedAt = stalledAt;
         current.messagesPersistedAt = stalledAt;
         current.turnStartedAt = stalledAt;
@@ -1473,8 +1373,9 @@ describe("BuildPipelineService", () => {
       await service.advanceNow(started.id);
       const secondRecord = (await storage.getBuildPipeline(started.id))!;
       expect(secondRecord.revision).toBe(warnedRecord.revision);
-      expect((secondRecord.snapshot as BuildPipeline).stallWarning?.detectedAt)
-        .toBe(warned.stallWarning!.detectedAt);
+      expect((secondRecord.snapshot as BuildPipeline).stallWarning?.detectedAt).toBe(
+        warned.stallWarning!.detectedAt,
+      );
 
       provider.status = async () => "idle";
       await service.advanceNow(started.id);
@@ -1483,8 +1384,6 @@ describe("BuildPipelineService", () => {
       expect(finished.stallWarning).toBeUndefined();
     });
   });
-
-
 
   test("a completing pipeline carries no stall warning", async () => {
     await withService(async (service, storage) => {
@@ -1507,5 +1406,4 @@ describe("BuildPipelineService", () => {
       expect(completed.stallWarning).toBeUndefined();
     });
   });
-
 });

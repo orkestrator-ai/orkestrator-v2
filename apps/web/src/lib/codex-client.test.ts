@@ -81,17 +81,19 @@ describe("applyCodexMessagePatch", () => {
   };
 
   test("applies the immediate indexed successor", () => {
-    expect(applyCodexMessagePatch(message, {
-      messageId: message.id,
-      partCount: 2,
-      changedParts: [
-        { index: 0, part: { type: "text", content: "new" } },
-        { index: 1, part: { type: "thinking", content: "why" } },
-      ],
-      content: "new",
-      createdAt: message.createdAt,
-      revision: 4,
-    })).toMatchObject({
+    expect(
+      applyCodexMessagePatch(message, {
+        messageId: message.id,
+        partCount: 2,
+        changedParts: [
+          { index: 0, part: { type: "text", content: "new" } },
+          { index: 1, part: { type: "thinking", content: "why" } },
+        ],
+        content: "new",
+        createdAt: message.createdAt,
+        revision: 4,
+      }),
+    ).toMatchObject({
       content: "new",
       revision: 4,
       parts: [
@@ -111,12 +113,14 @@ describe("applyCodexMessagePatch", () => {
     };
     expect(applyCodexMessagePatch(message, { ...base, revision: 3 })).toBeNull();
     expect(applyCodexMessagePatch(message, { ...base, revision: 5 })).toBeNull();
-    expect(applyCodexMessagePatch(message, {
-      ...base,
-      partCount: 3,
-      changedParts: [{ index: 2, part: { type: "text", content: "late" } }],
-      revision: 4,
-    })).toBeNull();
+    expect(
+      applyCodexMessagePatch(message, {
+        ...base,
+        partCount: 3,
+        changedParts: [{ index: 2, part: { type: "text", content: "late" } }],
+        revision: 4,
+      }),
+    ).toBeNull();
   });
 
   test("distinguishes stale replay from a gap or malformed successor", () => {
@@ -136,11 +140,13 @@ describe("applyCodexMessagePatch", () => {
     expect(classifyCodexMessagePatch(message, { ...base, revision: 5 })).toEqual({
       outcome: "needs-reconcile",
     });
-    expect(classifyCodexMessagePatch(message, {
-      ...base,
-      messageId: "different-message",
-      revision: 4,
-    })).toEqual({ outcome: "needs-reconcile" });
+    expect(
+      classifyCodexMessagePatch(message, {
+        ...base,
+        messageId: "different-message",
+        revision: 4,
+      }),
+    ).toEqual({ outcome: "needs-reconcile" });
   });
 });
 
@@ -175,8 +181,7 @@ describe("preferNewerCodexRevisions", () => {
 
   test("returns the snapshot untouched when nothing local is newer", () => {
     const incoming = [message("a", "snapshot-a", 5)];
-    expect(preferNewerCodexRevisions(incoming, [message("a", "local-a", 5)]))
-      .toBe(incoming);
+    expect(preferNewerCodexRevisions(incoming, [message("a", "local-a", 5)])).toBe(incoming);
     expect(preferNewerCodexRevisions(incoming, [])).toBe(incoming);
     expect(preferNewerCodexRevisions(incoming, undefined)).toBe(incoming);
   });
@@ -184,23 +189,23 @@ describe("preferNewerCodexRevisions", () => {
   test("ignores a message whose revision is missing on either side", () => {
     // Without a comparable revision there is no evidence the local copy is
     // newer, and the snapshot is the authority by default.
-    expect(preferNewerCodexRevisions(
-      [message("a", "snapshot-a", 5)],
-      [message("a", "local-a")],
-    )).toEqual([message("a", "snapshot-a", 5)]);
-    expect(preferNewerCodexRevisions(
-      [message("a", "snapshot-a")],
-      [message("a", "local-a", 9)],
-    )).toEqual([message("a", "snapshot-a")]);
+    expect(
+      preferNewerCodexRevisions([message("a", "snapshot-a", 5)], [message("a", "local-a")]),
+    ).toEqual([message("a", "snapshot-a", 5)]);
+    expect(
+      preferNewerCodexRevisions([message("a", "snapshot-a")], [message("a", "local-a", 9)]),
+    ).toEqual([message("a", "snapshot-a")]);
   });
 
   test("does not resurrect a message the snapshot no longer contains", () => {
     // A compaction or fork must be able to remove a message, so membership
     // follows the snapshot even though revisions do not.
-    expect(preferNewerCodexRevisions(
-      [message("a", "snapshot-a", 5)],
-      [message("a", "local-a", 9), message("gone", "removed", 9)],
-    )).toEqual([message("a", "local-a", 9)]);
+    expect(
+      preferNewerCodexRevisions(
+        [message("a", "snapshot-a", 5)],
+        [message("a", "local-a", 9), message("gone", "removed", 9)],
+      ),
+    ).toEqual([message("a", "local-a", 9)]);
   });
 });
 
@@ -240,8 +245,7 @@ describe("codex-client checkHealth", () => {
     const fetchMock = mock(() => new Response(null, { status: 200 }));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-    expect(await checkHealth(createClient("http://127.0.0.1:4000", "bridge-secret")))
-      .toBe(true);
+    expect(await checkHealth(createClient("http://127.0.0.1:4000", "bridge-secret"))).toBe(true);
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("http://127.0.0.1:4000/global/auth-check");
     expect(new Headers(init.headers).get("X-Orkestrator-Codex-Token")).toBe("bridge-secret");
@@ -330,16 +334,16 @@ describe("codex-client getModels", () => {
 
   test("returns bridge models and cache source when present", async () => {
     const models = [{ id: "custom-model", name: "Custom" }];
-    mockFetch(async () =>
-      new Response(JSON.stringify({ models, source: "cache" }), { status: 200 }),
+    mockFetch(
+      async () => new Response(JSON.stringify({ models, source: "cache" }), { status: 200 }),
     );
 
     await expect(getModels(client)).resolves.toEqual({ models, source: "cache" });
   });
 
   test("falls back to bundled models on invalid, non-ok, or failed responses", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({ models: [], source: "cache" }), { status: 200 }),
+    mockFetch(
+      async () => new Response(JSON.stringify({ models: [], source: "cache" }), { status: 200 }),
     );
     await expect(getModels(client)).resolves.toEqual({
       models: CODEX_MODELS,
@@ -365,17 +369,13 @@ describe("codex-client getSlashCommands", () => {
 
   test("returns commands from the bridge", async () => {
     const commands = [{ name: "/review", source: "prompt" as const }];
-    mockFetch(async () =>
-      new Response(JSON.stringify({ commands }), { status: 200 }),
-    );
+    mockFetch(async () => new Response(JSON.stringify({ commands }), { status: 200 }));
 
     await expect(getSlashCommands(client)).resolves.toEqual(commands);
   });
 
   test("returns empty list for invalid, non-ok, or failed responses", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({ commands: null }), { status: 200 }),
-    );
+    mockFetch(async () => new Response(JSON.stringify({ commands: null }), { status: 200 }));
     await expect(getSlashCommands(client)).resolves.toEqual([]);
 
     mockFetch(async () => new Response(null, { status: 500 }));
@@ -390,8 +390,11 @@ describe("codex-client createSession", () => {
   afterEach(restoreFetch);
 
   test("returns session on 201 response", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({ sessionId: "session-abc", title: "My Session" }), { status: 201 }),
+    mockFetch(
+      async () =>
+        new Response(JSON.stringify({ sessionId: "session-abc", title: "My Session" }), {
+          status: 201,
+        }),
     );
 
     const session = await createSession(client, { model: "gpt-5.3-codex" });
@@ -401,8 +404,8 @@ describe("codex-client createSession", () => {
   });
 
   test("serializes max and ultra reasoning efforts", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({ sessionId: "session-abc" }), { status: 201 }),
+    mockFetch(
+      async () => new Response(JSON.stringify({ sessionId: "session-abc" }), { status: 201 }),
     );
 
     await createSession(client, {
@@ -424,9 +427,7 @@ describe("codex-client createSession", () => {
   });
 
   test("throws on non-ok HTTP response with status and body", async () => {
-    mockFetch(async () =>
-      new Response("Internal Server Error", { status: 500 }),
-    );
+    mockFetch(async () => new Response("Internal Server Error", { status: 500 }));
 
     await expect(createSession(client)).rejects.toThrow("Codex bridge returned 500");
   });
@@ -443,17 +444,13 @@ describe("codex-client listSessions", () => {
 
   test("returns persisted sessions from the bridge", async () => {
     const sessions = [{ id: "thread-1", title: "Saved", updatedAt: "2026-03-10T10:00:00.000Z" }];
-    mockFetch(async () =>
-      new Response(JSON.stringify({ sessions }), { status: 200 }),
-    );
+    mockFetch(async () => new Response(JSON.stringify({ sessions }), { status: 200 }));
 
     await expect(listSessions(client)).resolves.toEqual(sessions);
   });
 
   test("returns empty list for invalid, non-ok, or failed responses", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({ sessions: null }), { status: 200 }),
-    );
+    mockFetch(async () => new Response(JSON.stringify({ sessions: null }), { status: 200 }));
     await expect(listSessions(client)).resolves.toEqual([]);
 
     mockFetch(async () => new Response(null, { status: 404 }));
@@ -468,26 +465,31 @@ describe("codex-client getSessionMessages", () => {
   afterEach(restoreFetch);
 
   test("returns messages without appending todo snapshots", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({
-        messages: [
-          {
-            id: "msg-1",
-            role: "assistant",
-            content: "",
-            parts: [{
-              type: "tool-invocation",
-              toolName: "TodoWrite",
-              toolArgs: {
-                todos: [{ content: "Track work", status: "in_progress" }],
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            messages: [
+              {
+                id: "msg-1",
+                role: "assistant",
+                content: "",
+                parts: [
+                  {
+                    type: "tool-invocation",
+                    toolName: "TodoWrite",
+                    toolArgs: {
+                      todos: [{ content: "Track work", status: "in_progress" }],
+                    },
+                    toolState: "success",
+                  },
+                ],
+                createdAt: "2026-03-10T10:00:00.000Z",
+                planReview: true,
               },
-              toolState: "success",
-            }],
-            createdAt: "2026-03-10T10:00:00.000Z",
-            planReview: true,
-          },
-        ],
-      })),
+            ],
+          }),
+        ),
     );
 
     const messages = await getSessionMessages(client, "session-1");
@@ -498,28 +500,33 @@ describe("codex-client getSessionMessages", () => {
   });
 
   test("returns messages without appending todo snapshots when resuming a session", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({
-        sessionId: "session-1",
-        title: "Resume",
-        messages: [
-          {
-            id: "msg-2",
-            role: "assistant",
-            content: "",
-            parts: [{
-              type: "tool-invocation",
-              toolName: "TodoWrite",
-              toolOutput: JSON.stringify({
-                todos: [{ content: "Resume task", status: "in_progress" }],
-              }),
-              toolState: "pending",
-            }],
-            createdAt: "2026-03-10T10:05:00.000Z",
-            planReview: true,
-          },
-        ],
-      })),
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            sessionId: "session-1",
+            title: "Resume",
+            messages: [
+              {
+                id: "msg-2",
+                role: "assistant",
+                content: "",
+                parts: [
+                  {
+                    type: "tool-invocation",
+                    toolName: "TodoWrite",
+                    toolOutput: JSON.stringify({
+                      todos: [{ content: "Resume task", status: "in_progress" }],
+                    }),
+                    toolState: "pending",
+                  },
+                ],
+                createdAt: "2026-03-10T10:05:00.000Z",
+                planReview: true,
+              },
+            ],
+          }),
+        ),
     );
 
     const resumed = await resumeSession(client, { threadId: "thread-1" });
@@ -530,8 +537,9 @@ describe("codex-client getSessionMessages", () => {
   });
 
   test("serializes max reasoning when resuming a session", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({ sessionId: "session-1", messages: [] }), { status: 201 }),
+    mockFetch(
+      async () =>
+        new Response(JSON.stringify({ sessionId: "session-1", messages: [] }), { status: 201 }),
     );
 
     await resumeSession(client, {
@@ -576,23 +584,28 @@ describe("codex-client getSessionMessages", () => {
   });
 
   test("returns messages as-is when no TodoWrite parts exist", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({
-        messages: [
-          {
-            id: "msg-1",
-            role: "assistant",
-            content: "Done",
-            parts: [{
-              type: "tool-invocation",
-              toolName: "Bash",
-              toolArgs: { command: "ls" },
-              toolState: "success",
-            }],
-            createdAt: "2026-03-10T10:00:00.000Z",
-          },
-        ],
-      })),
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            messages: [
+              {
+                id: "msg-1",
+                role: "assistant",
+                content: "Done",
+                parts: [
+                  {
+                    type: "tool-invocation",
+                    toolName: "Bash",
+                    toolArgs: { command: "ls" },
+                    toolState: "success",
+                  },
+                ],
+                createdAt: "2026-03-10T10:00:00.000Z",
+              },
+            ],
+          }),
+        ),
     );
 
     const messages = await getSessionMessages(client, "session-1");
@@ -605,9 +618,9 @@ describe("codex-client getSessionMessages", () => {
     mockFetch(async () => new Response(null, { status: 503 }));
 
     expect(await getSessionMessages(client, "session-1")).toEqual([]);
-    expect(
-      getSessionMessages(client, "session-1", { throwOnError: true }),
-    ).rejects.toThrow("HTTP 503");
+    expect(getSessionMessages(client, "session-1", { throwOnError: true })).rejects.toThrow(
+      "HTTP 503",
+    );
   });
 });
 
@@ -617,12 +630,14 @@ describe("codex-client updateSessionConfig", () => {
   test("posts session settings and reports whether the update was durable", async () => {
     mockFetch(async () => Response.json({ status: "updated", durable: true }));
 
-    await expect(updateSessionConfig(client, "session-1", {
-      model: "gpt-5.3-codex",
-      modelReasoningEffort: "high",
-      mode: "plan",
-      fastMode: true,
-    })).resolves.toEqual({ outcome: "applied", durable: true });
+    await expect(
+      updateSessionConfig(client, "session-1", {
+        model: "gpt-5.3-codex",
+        modelReasoningEffort: "high",
+        mode: "plan",
+        fastMode: true,
+      }),
+    ).resolves.toEqual({ outcome: "applied", durable: true });
 
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/config",
@@ -638,21 +653,23 @@ describe("codex-client updateSessionConfig", () => {
     );
 
     mockFetch(async () => Response.json({ status: "updated", durable: false }));
-    await expect(
-      updateSessionConfig(client, "session-1", { mode: "build" }),
-    ).resolves.toEqual({ outcome: "applied", durable: false });
+    await expect(updateSessionConfig(client, "session-1", { mode: "build" })).resolves.toEqual({
+      outcome: "applied",
+      durable: false,
+    });
   });
 
   test("distinguishes a definite HTTP rejection from an ambiguous transport failure", async () => {
     mockFetch(async () => new Response(null, { status: 409 }));
-    await expect(
-      updateSessionConfig(client, "session-1", { mode: "build" }),
-    ).resolves.toEqual({ outcome: "rejected", httpStatus: 409 });
+    await expect(updateSessionConfig(client, "session-1", { mode: "build" })).resolves.toEqual({
+      outcome: "rejected",
+      httpStatus: 409,
+    });
 
     mockFetchError(new Error("offline"));
-    await expect(
-      updateSessionConfig(client, "session-1", { mode: "build" }),
-    ).resolves.toEqual({ outcome: "unknown" });
+    await expect(updateSessionConfig(client, "session-1", { mode: "build" })).resolves.toEqual({
+      outcome: "unknown",
+    });
   });
 
   test("reconciles an ambiguous update against the authoritative config", async () => {
@@ -669,12 +686,14 @@ describe("codex-client updateSessionConfig", () => {
       });
     });
 
-    await expect(updateSessionConfig(client, "session-1", {
-      model: "gpt-5.3-codex",
-      modelReasoningEffort: "high",
-      mode: "plan",
-      fastMode: true,
-    })).resolves.toEqual({ outcome: "applied", durable: false });
+    await expect(
+      updateSessionConfig(client, "session-1", {
+        model: "gpt-5.3-codex",
+        modelReasoningEffort: "high",
+        mode: "plan",
+        fastMode: true,
+      }),
+    ).resolves.toEqual({ outcome: "applied", durable: false });
     expect(calls).toBe(2);
   });
 
@@ -706,20 +725,19 @@ describe("codex-client updateSessionConfig", () => {
       return new Response(null, { status: 404 });
     });
 
-    await expect(
-      updateSessionConfig(client, "session-1", { mode: "build" }),
-    ).resolves.toEqual({ outcome: "unknown" });
+    await expect(updateSessionConfig(client, "session-1", { mode: "build" })).resolves.toEqual({
+      outcome: "unknown",
+    });
   });
 });
 
 describe("codex-client classifyCodexPromptOutcome", () => {
   test("maps every send result shape to a definite classification", () => {
-    expect(classifyCodexPromptOutcome({ outcome: "accepted", status: "processing" }))
-      .toBe("accepted");
-    expect(classifyCodexPromptOutcome({ outcome: "rejected", httpStatus: 409 }))
-      .toBe("rejected");
-    expect(classifyCodexPromptOutcome({ outcome: "unknown", requestId: "r" }))
-      .toBe("unknown");
+    expect(classifyCodexPromptOutcome({ outcome: "accepted", status: "processing" })).toBe(
+      "accepted",
+    );
+    expect(classifyCodexPromptOutcome({ outcome: "rejected", httpStatus: 409 })).toBe("rejected");
+    expect(classifyCodexPromptOutcome({ outcome: "unknown", requestId: "r" })).toBe("unknown");
 
     // Legacy shapes that component stubs still return.
     expect(classifyCodexPromptOutcome(true)).toBe("accepted");
@@ -741,12 +759,16 @@ describe("codex-client getSessionStatus", () => {
   afterEach(restoreFetch);
 
   test("returns normalized status data from the bridge", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({
-        status: "error",
-        title: "Session title",
-        error: "Codex failed",
-      }), { status: 200 }),
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            title: "Session title",
+            error: "Codex failed",
+          }),
+          { status: 200 },
+        ),
     );
 
     await expect(getSessionStatus(client, "session-1")).resolves.toEqual({
@@ -757,19 +779,20 @@ describe("codex-client getSessionStatus", () => {
   });
 
   test("surfaces the app-server phase and turn identifiers when present", async () => {
-    mockFetch(async () =>
-      new Response(
-        JSON.stringify({
-          status: "running",
-          phase: "cancelling",
-          threadId: "thread-1",
-          turnId: "turn-2",
-          requestId: "req-3",
-          engineGeneration: 4,
-          messageRevision: 12,
-        }),
-        { status: 200 },
-      ),
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "running",
+            phase: "cancelling",
+            threadId: "thread-1",
+            turnId: "turn-2",
+            requestId: "req-3",
+            engineGeneration: 4,
+            messageRevision: 12,
+          }),
+          { status: 200 },
+        ),
     );
 
     // `cancelling` must still report `running`: the turn may be executing, so a
@@ -786,13 +809,15 @@ describe("codex-client getSessionStatus", () => {
   });
 
   test("accepts only a valid retryable unconfirmed-dispatch marker", async () => {
-    mockFetch(async () => Response.json({
-      status: "idle",
-      unconfirmedDispatch: {
-        requestId: "request-retry-1",
-        retryable: true,
-      },
-    }));
+    mockFetch(async () =>
+      Response.json({
+        status: "idle",
+        unconfirmedDispatch: {
+          requestId: "request-retry-1",
+          retryable: true,
+        },
+      }),
+    );
 
     await expect(getSessionStatus(client, "session-1")).resolves.toMatchObject({
       status: "idle",
@@ -813,10 +838,12 @@ describe("codex-client getSessionStatus", () => {
     ["non-retryable", { requestId: "request-retry-1", retryable: false }],
     ["missing retryable", { requestId: "request-retry-1" }],
   ])("omits a %s unconfirmed-dispatch marker", async (_description, marker) => {
-    mockFetch(async () => Response.json({
-      status: "idle",
-      unconfirmedDispatch: marker,
-    }));
+    mockFetch(async () =>
+      Response.json({
+        status: "idle",
+        unconfirmedDispatch: marker,
+      }),
+    );
 
     const status = await getSessionStatus(client, "session-1");
     expect(status).not.toHaveProperty("unconfirmedDispatch");
@@ -851,9 +878,7 @@ describe("codex-client getSessionStatus", () => {
     expect(isCodexSessionPhase("surprising-future-phase")).toBe(false);
     expect(isCodexSessionPhase(null)).toBe(false);
 
-    mockFetch(async () =>
-      Response.json({ status: "running", phase: "surprising-future-phase" }),
-    );
+    mockFetch(async () => Response.json({ status: "running", phase: "surprising-future-phase" }));
     await expect(getSessionStatus(client, "session-1")).resolves.toEqual({
       status: "running",
       title: undefined,
@@ -862,9 +887,7 @@ describe("codex-client getSessionStatus", () => {
   });
 
   test("returns null for invalid, non-ok, or failed responses", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({ status: "paused" }), { status: 200 }),
-    );
+    mockFetch(async () => new Response(JSON.stringify({ status: "paused" }), { status: 200 }));
     await expect(getSessionStatus(client, "session-1")).resolves.toBeNull();
 
     mockFetch(async () => new Response(null, { status: 404 }));
@@ -879,16 +902,19 @@ describe("codex-client getSessionStatus", () => {
     await expect(getSessionStatus(client, "missing", { throwOnError: true })).resolves.toBeNull();
 
     mockFetch(async () => new Response(null, { status: 503 }));
-    await expect(getSessionStatus(client, "session-1", { throwOnError: true }))
-      .rejects.toThrow("HTTP 503");
+    await expect(getSessionStatus(client, "session-1", { throwOnError: true })).rejects.toThrow(
+      "HTTP 503",
+    );
 
     mockFetch(async () => new Response(JSON.stringify({ status: "paused" }), { status: 200 }));
-    await expect(getSessionStatus(client, "session-1", { throwOnError: true }))
-      .rejects.toThrow("malformed");
+    await expect(getSessionStatus(client, "session-1", { throwOnError: true })).rejects.toThrow(
+      "malformed",
+    );
 
     mockFetchError(new Error("offline"));
-    await expect(getSessionStatus(client, "session-1", { throwOnError: true }))
-      .rejects.toThrow("offline");
+    await expect(getSessionStatus(client, "session-1", { throwOnError: true })).rejects.toThrow(
+      "offline",
+    );
   });
 
   test("structured lookup distinguishes an authoritative 404 from unavailable status", async () => {
@@ -965,11 +991,13 @@ describe("codex-client getSessionStatus", () => {
   });
 
   test("parses the backend turn start timestamp from a running status", async () => {
-    mockFetch(async () => Response.json({
-      status: "running",
-      phase: "running",
-      turnStartedAt: "2026-08-01T12:34:56.000Z",
-    }));
+    mockFetch(async () =>
+      Response.json({
+        status: "running",
+        phase: "running",
+        turnStartedAt: "2026-08-01T12:34:56.000Z",
+      }),
+    );
 
     await expect(lookupSessionStatus(client, "session-1")).resolves.toEqual({
       kind: "found",
@@ -990,15 +1018,19 @@ describe("codex-client sendPrompt", () => {
   test("posts prompt attachments and an idempotency key and reports acceptance", async () => {
     mockFetch(async () => new Response(null, { status: 202 }));
 
-    await expect(sendPrompt(client, "session-1", "Review this", {
-      attachments: [{
-        type: "image",
-        path: "/workspace/screenshot.png",
-        dataUrl: "data:image/png;base64,abc",
-        filename: "screenshot.png",
-      }],
-      requestId: "request-1",
-    })).resolves.toMatchObject({
+    await expect(
+      sendPrompt(client, "session-1", "Review this", {
+        attachments: [
+          {
+            type: "image",
+            path: "/workspace/screenshot.png",
+            dataUrl: "data:image/png;base64,abc",
+            filename: "screenshot.png",
+          },
+        ],
+        requestId: "request-1",
+      }),
+    ).resolves.toMatchObject({
       outcome: "accepted",
       status: "processing",
       requestId: "request-1",
@@ -1010,12 +1042,14 @@ describe("codex-client sendPrompt", () => {
         method: "POST",
         body: JSON.stringify({
           prompt: "Review this",
-          attachments: [{
-            type: "image",
-            path: "/workspace/screenshot.png",
-            dataUrl: "data:image/png;base64,abc",
-            filename: "screenshot.png",
-          }],
+          attachments: [
+            {
+              type: "image",
+              path: "/workspace/screenshot.png",
+              dataUrl: "data:image/png;base64,abc",
+              filename: "screenshot.png",
+            },
+          ],
           requestId: "request-1",
         }),
       }),
@@ -1037,17 +1071,18 @@ describe("codex-client sendPrompt", () => {
   });
 
   test("surfaces the accepted turn identifiers for reconnect reconciliation", async () => {
-    mockFetch(async () =>
-      new Response(
-        JSON.stringify({
-          status: "processing",
-          requestId: "request-1",
-          threadId: "thread-9",
-          turnId: "turn-3",
-          turnStartedAt: "2026-08-01T12:34:56.000Z",
-        }),
-        { status: 202 },
-      ),
+    mockFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: "processing",
+            requestId: "request-1",
+            threadId: "thread-9",
+            turnId: "turn-3",
+            turnStartedAt: "2026-08-01T12:34:56.000Z",
+          }),
+          { status: 202 },
+        ),
     );
 
     await expect(
@@ -1064,10 +1099,11 @@ describe("codex-client sendPrompt", () => {
   });
 
   test("reports an already-processed duplicate so the caller does not retry", async () => {
-    mockFetch(async () =>
-      new Response(JSON.stringify({ status: "already-processed", duplicate: true }), {
-        status: 202,
-      }),
+    mockFetch(
+      async () =>
+        new Response(JSON.stringify({ status: "already-processed", duplicate: true }), {
+          status: 202,
+        }),
     );
 
     await expect(
@@ -1121,9 +1157,7 @@ describe("codex-client getStructuredOutput", () => {
     } as const;
     mockFetch(async () => Response.json({ structuredOutput: success }));
 
-    await expect(
-      getStructuredOutput(client, "session-1", "request/1"),
-    ).resolves.toEqual(success);
+    await expect(getStructuredOutput(client, "session-1", "request/1")).resolves.toEqual(success);
     expect(globalThis.fetch).toHaveBeenCalledWith(
       "http://127.0.0.1:4000/session/session-1/structured-output?requestId=request%2F1",
       expect.anything(),
@@ -1132,40 +1166,38 @@ describe("codex-client getStructuredOutput", () => {
 
   test("returns null for missing and pending output", async () => {
     mockFetch(async () => new Response(null, { status: 404 }));
-    await expect(getStructuredOutput(client, "session-1", "request-1"))
-      .resolves.toBeNull();
+    await expect(getStructuredOutput(client, "session-1", "request-1")).resolves.toBeNull();
 
     mockFetch(async () => Response.json({ structuredOutput: null }));
-    await expect(getStructuredOutput(client, "session-1", "request-1"))
-      .resolves.toBeNull();
+    await expect(getStructuredOutput(client, "session-1", "request-1")).resolves.toBeNull();
   });
 
   test("returns authoritative malformed-output failures for invalid responses", async () => {
-    mockFetch(async () => Response.json({
-      structuredOutput: { ok: true, provider: "codex" },
-    }));
-    await expect(getStructuredOutput(client, "session-1", "request-1"))
-      .resolves.toMatchObject({
-        ok: false,
-        requestId: "request-1",
-        error: { code: "malformed_output" },
-      });
+    mockFetch(async () =>
+      Response.json({
+        structuredOutput: { ok: true, provider: "codex" },
+      }),
+    );
+    await expect(getStructuredOutput(client, "session-1", "request-1")).resolves.toMatchObject({
+      ok: false,
+      requestId: "request-1",
+      error: { code: "malformed_output" },
+    });
 
     mockFetch(async () => Response.json(null));
-    await expect(getStructuredOutput(client, "session-1", "request-1"))
-      .resolves.toMatchObject({
-        ok: false,
-        error: { code: "malformed_output" },
-      });
+    await expect(getStructuredOutput(client, "session-1", "request-1")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "malformed_output" },
+    });
 
-    mockFetch(async () =>
-      new Response("{", { status: 200, headers: { "Content-Type": "application/json" } })
+    mockFetch(
+      async () =>
+        new Response("{", { status: 200, headers: { "Content-Type": "application/json" } }),
     );
-    await expect(getStructuredOutput(client, "session-1", "request-1"))
-      .resolves.toMatchObject({
-        ok: false,
-        error: { code: "malformed_output" },
-      });
+    await expect(getStructuredOutput(client, "session-1", "request-1")).resolves.toMatchObject({
+      ok: false,
+      error: { code: "malformed_output" },
+    });
   });
 
   test("throws a typed observation error for transport failures", async () => {
@@ -1432,8 +1464,9 @@ describe("codex-client subscribeToEvents", () => {
   });
 
   test("bounds a slow consumer and yields one explicit reconciliation frame", async () => {
-    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
-      [Symbol.asyncIterator]();
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")[
+      Symbol.asyncIterator
+    ]();
     const source = MockEventSource.instances[0]!;
 
     for (let revision = 1; revision <= MAX_CODEX_EVENT_QUEUE_COUNT + 1; revision += 1) {
@@ -1464,8 +1497,9 @@ describe("codex-client subscribeToEvents", () => {
    * obtain the payload that had just arrived.
    */
   test("delivers one oversized frame that arrives into an empty queue", async () => {
-    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
-      [Symbol.asyncIterator]();
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")[
+      Symbol.asyncIterator
+    ]();
     const source = MockEventSource.instances[0]!;
     source.emit(
       "message.updated",
@@ -1485,8 +1519,9 @@ describe("codex-client subscribeToEvents", () => {
   });
 
   test("reconciles once an oversized frame is followed by a backlog", async () => {
-    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
-      [Symbol.asyncIterator]();
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")[
+      Symbol.asyncIterator
+    ]();
     const source = MockEventSource.instances[0]!;
     source.emit(
       "message.updated",
@@ -1513,8 +1548,9 @@ describe("codex-client subscribeToEvents", () => {
   });
 
   test("carries the last seen revision when the overflowing frame has no id", async () => {
-    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")
-      [Symbol.asyncIterator]();
+    const iterator = subscribeToEvents(client, undefined, undefined, "session-1")[
+      Symbol.asyncIterator
+    ]();
     const source = MockEventSource.instances[0]!;
 
     for (let revision = 1; revision <= MAX_CODEX_EVENT_QUEUE_COUNT; revision += 1) {
@@ -1552,7 +1588,10 @@ describe("codex-client subscribeToEvents", () => {
 
 describe("codex-client event cursor", () => {
   const originalEventSource = globalThis.EventSource;
-  const instances: Array<{ url: string; listeners: Map<string, Array<(event: MessageEvent) => void>> }> = [];
+  const instances: Array<{
+    url: string;
+    listeners: Map<string, Array<(event: MessageEvent) => void>>;
+  }> = [];
 
   class CursorMockEventSource {
     readonly listeners = new Map<string, Array<(event: MessageEvent) => void>>();
@@ -1783,19 +1822,21 @@ describe("codex-client approvals", () => {
   test("accepts a well-formed permissions descriptor", async () => {
     mockFetch(() =>
       Response.json({
-        approvals: [{
-          approvalId: "apr-permissions",
-          kind: "permissions",
-          method: "item/permissions/requestApproval",
-          threadId: "thread-1",
-          turnId: "turn-1",
-          itemId: "item-1",
-          requestedAt: 1,
-          expiresAt: 2,
-          permissions: { network: true, fileSystem: false },
-          actionable: true,
-          supportsApproveForSession: false,
-        }],
+        approvals: [
+          {
+            approvalId: "apr-permissions",
+            kind: "permissions",
+            method: "item/permissions/requestApproval",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "item-1",
+            requestedAt: 1,
+            expiresAt: 2,
+            permissions: { network: true, fileSystem: false },
+            actionable: true,
+            supportsApproveForSession: false,
+          },
+        ],
       }),
     );
 
@@ -1913,7 +1954,12 @@ describe("codex-client approvals", () => {
       expect(
         parseApproval({
           ...VALID,
-          changes: [null, "src/a.ts", { path: "/workspace/a.ts", kind: "delete" }, { path: 1, kind: "add" }],
+          changes: [
+            null,
+            "src/a.ts",
+            { path: "/workspace/a.ts", kind: "delete" },
+            { path: 1, kind: "add" },
+          ],
         })?.changes,
       ).toEqual([{ path: "/workspace/a.ts", kind: "delete" }]);
       expect(warn).not.toHaveBeenCalled();
@@ -1985,10 +2031,7 @@ describe("codex-client interactions", () => {
     id: "q-1",
     header: "Deploy target",
     question: "Which environment?",
-    options: [
-      { label: "staging", description: "safe" },
-      { label: "production" },
-    ],
+    options: [{ label: "staging", description: "safe" }, { label: "production" }],
   };
 
   const VALID_INTERACTION = {
@@ -2021,10 +2064,7 @@ describe("codex-client interactions", () => {
             question: "Which environment?",
             isOther: false,
             isSecret: false,
-            options: [
-              { label: "staging", description: "safe" },
-              { label: "production" },
-            ],
+            options: [{ label: "staging", description: "safe" }, { label: "production" }],
           },
         ],
       });
@@ -2090,16 +2130,10 @@ describe("codex-client interactions", () => {
       ["a non-string threadId", { ...VALID_INTERACTION, threadId: 5 }],
       ["a missing requestedAt", { ...VALID_INTERACTION, requestedAt: undefined }],
       ["a NaN requestedAt", { ...VALID_INTERACTION, requestedAt: Number.NaN }],
-      [
-        "an infinite requestedAt",
-        { ...VALID_INTERACTION, requestedAt: Number.POSITIVE_INFINITY },
-      ],
+      ["an infinite requestedAt", { ...VALID_INTERACTION, requestedAt: Number.POSITIVE_INFINITY }],
       ["a missing expiresAt", { ...VALID_INTERACTION, expiresAt: undefined }],
       ["a NaN expiresAt", { ...VALID_INTERACTION, expiresAt: Number.NaN }],
-      [
-        "an infinite expiresAt",
-        { ...VALID_INTERACTION, expiresAt: Number.NEGATIVE_INFINITY },
-      ],
+      ["an infinite expiresAt", { ...VALID_INTERACTION, expiresAt: Number.NEGATIVE_INFINITY }],
       // A question card with nothing to answer is a permanently blocked turn.
       ["a question kind with no questions", { ...VALID_INTERACTION, questions: undefined }],
       ["a question kind with an empty question list", { ...VALID_INTERACTION, questions: [] }],
@@ -2148,16 +2182,14 @@ describe("codex-client interactions", () => {
       parseInteraction({ ...VALID_INTERACTION, questions })?.questions;
 
     test("defaults the isOther and isSecret flags to false", () => {
-      expect(
-        withQuestions([{ id: "q-1", header: "H", question: "Q?" }]),
-      ).toEqual([{ id: "q-1", header: "H", question: "Q?", isOther: false, isSecret: false }]);
+      expect(withQuestions([{ id: "q-1", header: "H", question: "Q?" }])).toEqual([
+        { id: "q-1", header: "H", question: "Q?", isOther: false, isSecret: false },
+      ]);
     });
 
     test("passes the isOther and isSecret flags through only when strictly true", () => {
       expect(
-        withQuestions([
-          { id: "q-1", header: "H", question: "Q?", isOther: true, isSecret: "yes" },
-        ]),
+        withQuestions([{ id: "q-1", header: "H", question: "Q?", isOther: true, isSecret: "yes" }]),
       ).toEqual([{ id: "q-1", header: "H", question: "Q?", isOther: true, isSecret: false }]);
     });
 
@@ -2172,9 +2204,9 @@ describe("codex-client interactions", () => {
     ])("drops %s", (_label, entry) => {
       // One malformed question among good ones is dropped rather than failing
       // the whole interaction.
-      expect(
-        withQuestions([entry, { id: "q-2", header: "H", question: "Q?" }]),
-      ).toEqual([{ id: "q-2", header: "H", question: "Q?", isOther: false, isSecret: false }]);
+      expect(withQuestions([entry, { id: "q-2", header: "H", question: "Q?" }])).toEqual([
+        { id: "q-2", header: "H", question: "Q?", isOther: false, isSecret: false },
+      ]);
     });
 
     test("filters options down to the entries that carry a label", () => {
@@ -2231,11 +2263,7 @@ describe("codex-client interactions", () => {
     test("drops the entries it cannot parse rather than the whole snapshot", async () => {
       mockFetch(() =>
         Response.json({
-          interactions: [
-            { ...VALID_INTERACTION, interactionId: "" },
-            VALID_INTERACTION,
-            null,
-          ],
+          interactions: [{ ...VALID_INTERACTION, interactionId: "" }, VALID_INTERACTION, null],
         }),
       );
 
@@ -2245,24 +2273,16 @@ describe("codex-client interactions", () => {
 
     test("throws on a non-2xx response, a malformed body and a network failure", async () => {
       mockFetch(() => new Response(null, { status: 500 }));
-      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow(
-        "HTTP 500",
-      );
+      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow("HTTP 500");
 
       mockFetch(() => Response.json({ interactions: "not-an-array" }));
-      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow(
-        "malformed",
-      );
+      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow("malformed");
 
       mockFetch(() => Response.json({}));
-      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow(
-        "malformed",
-      );
+      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow("malformed");
 
       mockFetchError(new Error("network down"));
-      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow(
-        "network down",
-      );
+      await expect(fetchPendingInteractions(client, "session-1")).rejects.toThrow("network down");
     });
   });
 
@@ -2304,16 +2324,16 @@ describe("codex-client interactions", () => {
       [404, "error"],
     ])("maps HTTP %p to %p", async (status, expected) => {
       mockFetch(() => new Response(null, { status: status as number }));
-      expect(
-        await respondToInteraction(client, "session-1", "int-1", { action: "cancel" }),
-      ).toBe(expected as CodexApprovalResponseResult);
+      expect(await respondToInteraction(client, "session-1", "int-1", { action: "cancel" })).toBe(
+        expected as CodexApprovalResponseResult,
+      );
     });
 
     test("reports an unknown outcome rather than throwing when transport fails", async () => {
       mockFetchError(new Error("network down"));
-      expect(
-        await respondToInteraction(client, "session-1", "int-1", { action: "cancel" }),
-      ).toBe("unknown");
+      expect(await respondToInteraction(client, "session-1", "int-1", { action: "cancel" })).toBe(
+        "unknown",
+      );
     });
   });
 });
@@ -2481,9 +2501,7 @@ describe("codex-client session operations", () => {
 
   describe("forkCodexSession", () => {
     test("returns the forked session and posts the anchor message id", async () => {
-      const call = captureFetch(() =>
-        Response.json({ sessionId: "session-2", title: "Fork" }),
-      );
+      const call = captureFetch(() => Response.json({ sessionId: "session-2", title: "Fork" }));
 
       expect(await forkCodexSession(client, "session-1", "msg-3")).toEqual({
         sessionId: "session-2",
@@ -2509,9 +2527,7 @@ describe("codex-client session operations", () => {
       );
 
       mockFetch(() => Response.json({ sessionId: 7 }));
-      await expect(forkCodexSession(client, "session-1")).rejects.toThrow(
-        CodexForkError,
-      );
+      await expect(forkCodexSession(client, "session-1")).rejects.toThrow(CodexForkError);
     });
 
     /**
@@ -2592,12 +2608,11 @@ describe("codex-client session operations", () => {
         return new Response(null, { status: 200 });
       }) as unknown as typeof fetch;
 
-      expect(
-        await steerCodexSession(client, "session-1", "use bun", "req-1"),
-      ).toEqual({ outcome: "accepted" });
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual({
+        outcome: "accepted",
+      });
       expect(calls).toHaveLength(2);
-      expect(String(calls[0]?.[0]))
-        .toBe("http://127.0.0.1:4000/session/session-1/status");
+      expect(String(calls[0]?.[0])).toBe("http://127.0.0.1:4000/session/session-1/status");
       const [url, init] = calls[1]!;
       expect(url).toBe("http://127.0.0.1:4000/session/session-1/steer");
       expect(JSON.parse(init?.body as string)).toEqual({
@@ -2608,11 +2623,7 @@ describe("codex-client session operations", () => {
     });
 
     test.each([
-      [
-        409,
-        { error: "There is no active turn", outcome: "idle" },
-        { outcome: "idle" },
-      ],
+      [409, { error: "There is no active turn", outcome: "idle" }, { outcome: "idle" }],
       [
         409,
         { error: "The active turn changed; the text was not sent", outcome: "mismatch" },
@@ -2634,8 +2645,7 @@ describe("codex-client session operations", () => {
               headers: { "Content-Type": "application/json" },
             });
       });
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
-        .toEqual(expected);
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual(expected);
     });
 
     test("recognizes the idle response from an older bridge", async () => {
@@ -2649,8 +2659,9 @@ describe("codex-client session operations", () => {
               headers: { "Content-Type": "application/json" },
             });
       });
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
-        .toEqual({ outcome: "idle" });
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual({
+        outcome: "idle",
+      });
     });
 
     test("treats an unrecognized conflict conservatively as a turn mismatch", async () => {
@@ -2661,16 +2672,18 @@ describe("codex-client session operations", () => {
           ? new Response(JSON.stringify({ status: "running", turnId: "turn-1" }))
           : new Response("not-json", { status: 409 });
       });
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
-        .toEqual({ outcome: "mismatch" });
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual({
+        outcome: "mismatch",
+      });
     });
 
     test("does not post when authoritative status reports no active turn", async () => {
       const fetchMock = mock(() => new Response(JSON.stringify({ status: "idle" })));
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
-        .toEqual({ outcome: "idle" });
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual({
+        outcome: "idle",
+      });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
@@ -2678,26 +2691,26 @@ describe("codex-client session operations", () => {
       const fetchMock = mock(() => new Response(JSON.stringify({ status: "running" })));
       globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
-        .toEqual({ outcome: "unknown", requestId: "req-1" });
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual({
+        outcome: "unknown",
+        requestId: "req-1",
+      });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     test.each([
       [404, {}, { outcome: "not-found" }],
       [503, {}, { outcome: "unknown", requestId: "req-1" }],
-    ] as const)("classifies an HTTP %i status response before posting", async (
-      status,
-      body,
-      expected,
-    ) => {
-      const fetchMock = mock(() => new Response(JSON.stringify(body), { status }));
-      globalThis.fetch = fetchMock as unknown as typeof fetch;
+    ] as const)(
+      "classifies an HTTP %i status response before posting",
+      async (status, body, expected) => {
+        const fetchMock = mock(() => new Response(JSON.stringify(body), { status }));
+        globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
-        .toEqual(expected);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    });
+        expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual(expected);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+      },
+    );
 
     test("keeps a POST transport failure distinct because delivery is ambiguous", async () => {
       let call = 0;
@@ -2708,8 +2721,10 @@ describe("codex-client session operations", () => {
         }
         throw new Error("bridge offline");
       }) as unknown as typeof fetch;
-      expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
-        .toEqual({ outcome: "unknown", requestId: "req-1" });
+      expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual({
+        outcome: "unknown",
+        requestId: "req-1",
+      });
     });
 
     test.each([200, 503])(
@@ -2726,8 +2741,10 @@ describe("codex-client session operations", () => {
               });
         });
 
-        expect(await steerCodexSession(client, "session-1", "use bun", "req-1"))
-          .toEqual({ outcome: "unknown", requestId: "req-1" });
+        expect(await steerCodexSession(client, "session-1", "use bun", "req-1")).toEqual({
+          outcome: "unknown",
+          requestId: "req-1",
+        });
       },
     );
 
@@ -2736,10 +2753,12 @@ describe("codex-client session operations", () => {
       expect(describeCodexSteerFailure({ outcome: "idle" })).toContain("no active Codex turn");
       expect(describeCodexSteerFailure({ outcome: "mismatch" })).toContain("active turn changed");
       expect(describeCodexSteerFailure({ outcome: "not-found" })).toContain("no longer available");
-      expect(describeCodexSteerFailure({ outcome: "rejected", httpStatus: 503 }))
-        .toContain("HTTP 503");
-      expect(describeCodexSteerFailure({ outcome: "unknown", requestId: "req-1" }))
-        .toContain("Could not confirm whether Codex received");
+      expect(describeCodexSteerFailure({ outcome: "rejected", httpStatus: 503 })).toContain(
+        "HTTP 503",
+      );
+      expect(describeCodexSteerFailure({ outcome: "unknown", requestId: "req-1" })).toContain(
+        "Could not confirm whether Codex received",
+      );
     });
   });
 
@@ -2781,23 +2800,17 @@ describe("codex-client session operations", () => {
         mcpServers: [],
         skills: [],
       });
-      expect(call()[0]).toBe(
-        "http://127.0.0.1:4000/session/session-1/runtime-health",
-      );
+      expect(call()[0]).toBe("http://127.0.0.1:4000/session/session-1/runtime-health");
     });
 
     test("throws on a non-2xx response", async () => {
       mockFetch(() => new Response(null, { status: 503 }));
-      await expect(getCodexRuntimeHealth(client, "session-1")).rejects.toThrow(
-        "HTTP 503",
-      );
+      await expect(getCodexRuntimeHealth(client, "session-1")).rejects.toThrow("HTTP 503");
     });
 
     test("propagates a network failure", async () => {
       mockFetchError(new Error("network down"));
-      await expect(getCodexRuntimeHealth(client, "session-1")).rejects.toThrow(
-        "network down",
-      );
+      await expect(getCodexRuntimeHealth(client, "session-1")).rejects.toThrow("network down");
     });
   });
 });

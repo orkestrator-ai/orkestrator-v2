@@ -16,10 +16,9 @@ function defaultReadableHostRoots(): string[] {
 
 function isPathInsideRoot(filePath: string, rootPath: string): boolean {
   const relative = path.relative(rootPath, filePath);
-  return relative === "" || (
-    relative !== ".."
-    && !relative.startsWith(`..${path.sep}`)
-    && !path.isAbsolute(relative)
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
   );
 }
 
@@ -46,7 +45,12 @@ export function validateRelativeFilePath(filePath: string, label = "file path"):
   }
 
   const normalized = path.posix.normalize(slashPath);
-  if (normalized === "." || normalized === ".." || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+  if (
+    normalized === "." ||
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    path.posix.isAbsolute(normalized)
+  ) {
     throw new Error(`Invalid ${label}: path must stay inside the workspace`);
   }
 
@@ -59,11 +63,7 @@ export function workspaceFilePath(filePath: string): string {
 
 /** Exact decoded size of a padded, whitespace-free base64 string. */
 export function base64DecodedByteLength(normalizedBase64: string): number {
-  const padding = normalizedBase64.endsWith("==")
-    ? 2
-    : normalizedBase64.endsWith("=")
-      ? 1
-      : 0;
+  const padding = normalizedBase64.endsWith("==") ? 2 : normalizedBase64.endsWith("=") ? 1 : 0;
   return (normalizedBase64.length / 4) * 3 - padding;
 }
 
@@ -211,18 +211,22 @@ async function writeFromPinnedRoot(
   exclusive: boolean,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, [
-      "-e",
-      PINNED_CWD_WRITE_HELPER,
-      target,
-      exclusive ? "exclusive" : "overwrite",
-      String(rootStats.dev),
-      String(rootStats.ino),
-      String(content.byteLength),
-    ], {
-      cwd: rootPath,
-      stdio: ["pipe", "ignore", "pipe"],
-    });
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        PINNED_CWD_WRITE_HELPER,
+        target,
+        exclusive ? "exclusive" : "overwrite",
+        String(rootStats.dev),
+        String(rootStats.ino),
+        String(content.byteLength),
+      ],
+      {
+        cwd: rootPath,
+        stdio: ["pipe", "ignore", "pipe"],
+      },
+    );
     let stderr = "";
     child.stderr.on("data", (chunk) => {
       if (stderr.length < 1_024) stderr += chunk.toString().slice(0, 1_024 - stderr.length);
@@ -254,14 +258,23 @@ export async function removeConfinedDirectory(
   const rootStats = await fs.lstat(canonicalRoot);
   if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) return;
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, [
-      "-e", PINNED_CWD_REMOVE_DIRECTORY_HELPER, target,
-      String(rootStats.dev), String(rootStats.ino),
-    ], { cwd: canonicalRoot, stdio: ["ignore", "ignore", "ignore"] });
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        PINNED_CWD_REMOVE_DIRECTORY_HELPER,
+        target,
+        String(rootStats.dev),
+        String(rootStats.ino),
+      ],
+      { cwd: canonicalRoot, stdio: ["ignore", "ignore", "ignore"] },
+    );
     child.once("error", reject);
-    child.once("exit", (code) => code === 0
-      ? resolve()
-      : reject(new Error(`Confined directory cleanup failed (exit ${code})`)));
+    child.once("exit", (code) =>
+      code === 0
+        ? resolve()
+        : reject(new Error(`Confined directory cleanup failed (exit ${code})`)),
+    );
   });
 }
 
@@ -285,9 +298,10 @@ export async function writeConfinedFile(
 ): Promise<string> {
   const label = options.label ?? "attachment path";
   const target = validateRelativeFilePath(relativePath, label);
-  const content = typeof payload === "string"
-    ? Buffer.from(assertBase64PayloadWithinLimit(payload), "base64")
-    : payload;
+  const content =
+    typeof payload === "string"
+      ? Buffer.from(assertBase64PayloadWithinLimit(payload), "base64")
+      : payload;
   if (content.byteLength > MAX_WRITE_FILE_BYTES) {
     throw new Error(`File payload exceeds ${MAX_WRITE_FILE_BYTES} bytes`);
   }
@@ -297,13 +311,7 @@ export async function writeConfinedFile(
   if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
     throw new Error(`Invalid ${label}: worktree root is not a directory`);
   }
-  await writeFromPinnedRoot(
-    canonicalRoot,
-    rootStats,
-    target,
-    content,
-    options.exclusive !== false,
-  );
+  await writeFromPinnedRoot(canonicalRoot, rootStats, target, content, options.exclusive !== false);
   let current = canonicalRoot;
   for (const segment of target.split("/").slice(0, -1)) {
     current = path.join(current, segment);
@@ -373,10 +381,10 @@ async function assertOpenedHostFile(
     throw new Error("Invalid file path: symbolic links are not allowed");
   }
   if (
-    !pathStats.isFile()
-    || !openedStats.isFile()
-    || pathStats.dev !== openedStats.dev
-    || pathStats.ino !== openedStats.ino
+    !pathStats.isFile() ||
+    !openedStats.isFile() ||
+    pathStats.dev !== openedStats.dev ||
+    pathStats.ino !== openedStats.ino
   ) {
     throw new Error("Invalid file path: not a stable regular file");
   }
@@ -397,10 +405,7 @@ export async function readReadableHostFile(
   },
 ): Promise<Buffer> {
   const { canonicalRoot, targetPath } = await resolveReadableHostTarget(filePath, allowedRoots);
-  const handle = await fs.open(
-    targetPath,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-  );
+  const handle = await fs.open(targetPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
 
   try {
     const initialStats = await handle.stat();
@@ -413,7 +418,7 @@ export async function readReadableHostFile(
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     while (totalBytes <= MAX_BINARY_FILE_BYTES) {
-      const remaining = (MAX_BINARY_FILE_BYTES + 1) - totalBytes;
+      const remaining = MAX_BINARY_FILE_BYTES + 1 - totalBytes;
       const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining));
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
       if (bytesRead === 0) break;
@@ -427,12 +432,12 @@ export async function readReadableHostFile(
     const finalStats = await handle.stat();
     await assertOpenedHostFile(targetPath, canonicalRoot, finalStats);
     if (
-      finalStats.dev !== initialStats.dev
-      || finalStats.ino !== initialStats.ino
-      || finalStats.size !== initialStats.size
-      || finalStats.size !== totalBytes
-      || finalStats.mtimeMs !== initialStats.mtimeMs
-      || finalStats.ctimeMs !== initialStats.ctimeMs
+      finalStats.dev !== initialStats.dev ||
+      finalStats.ino !== initialStats.ino ||
+      finalStats.size !== initialStats.size ||
+      finalStats.size !== totalBytes ||
+      finalStats.mtimeMs !== initialStats.mtimeMs ||
+      finalStats.ctimeMs !== initialStats.ctimeMs
     ) {
       throw new Error("File changed while it was being read; please try again");
     }

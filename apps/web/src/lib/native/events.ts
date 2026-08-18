@@ -37,8 +37,7 @@ export const NATIVE_EVENT_STREAM_READY_TIMEOUT_MS = 5_000;
  * authoritative state because the transport intentionally has no replay
  * buffer and changes may have happened while it was disconnected.
  */
-export const NATIVE_EVENT_STREAM_CONNECTED_EVENT =
-  "native-event-stream-connected";
+export const NATIVE_EVENT_STREAM_CONNECTED_EVENT = "native-event-stream-connected";
 
 export async function listen<T>(
   event: string,

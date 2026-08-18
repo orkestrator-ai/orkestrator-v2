@@ -55,7 +55,7 @@ export function InitializationLogs({
         const snapshot = await getContainerLogs(containerId, String(MAX_LOG_LINES));
         if (disposed) return;
         const snapshotLines = snapshot
-          ? snapshot.split("\n").filter(line => line.length > 0)
+          ? snapshot.split("\n").filter((line) => line.length > 0)
           : [];
         consecutiveFailures = 0;
         setLogs(snapshotLines.slice(-MAX_LOG_LINES));
@@ -76,10 +76,7 @@ export function InitializationLogs({
         // under a spinner that implies it is live.
         consecutiveFailures += 1;
         if (consecutiveFailures === STALE_LOG_FAILURE_THRESHOLD) {
-          console.warn(
-            "[InitializationLogs] Container logs stopped refreshing:",
-            errorMessage,
-          );
+          console.warn("[InitializationLogs] Container logs stopped refreshing:", errorMessage);
         }
         if (consecutiveFailures >= STALE_LOG_FAILURE_THRESHOLD) setIsStale(true);
       } finally {
@@ -145,15 +142,23 @@ export function InitializationLogs({
                 className={cn(
                   "whitespace-pre-wrap break-all leading-relaxed",
                   // Color code based on content
-                  line.includes("ERROR") || line.includes("error") || line.includes("Failed") || line.includes("failed")
+                  line.includes("ERROR") ||
+                    line.includes("error") ||
+                    line.includes("Failed") ||
+                    line.includes("failed")
                     ? "text-red-400"
-                    : line.includes("WARNING") || line.includes("Warning") || line.includes("warning")
-                    ? "text-yellow-400"
-                    : line.includes("===") || line.includes(">>>")
-                    ? "text-blue-400 font-semibold"
-                    : line.includes("success") || line.includes("Success") || line.includes("ready") || line.includes("Ready")
-                    ? "text-green-400"
-                    : "text-foreground/80"
+                    : line.includes("WARNING") ||
+                        line.includes("Warning") ||
+                        line.includes("warning")
+                      ? "text-yellow-400"
+                      : line.includes("===") || line.includes(">>>")
+                        ? "text-blue-400 font-semibold"
+                        : line.includes("success") ||
+                            line.includes("Success") ||
+                            line.includes("ready") ||
+                            line.includes("Ready")
+                          ? "text-green-400"
+                          : "text-foreground/80",
                 )}
               >
                 {line}

@@ -22,6 +22,7 @@
   ],
   "rules": {
     "no-unused-vars": "warn",
-    "no-control-regex": "off"
+    "no-control-regex": "off",
+    "jsx-a11y/prefer-tag-over-role": "off"
   }
 }

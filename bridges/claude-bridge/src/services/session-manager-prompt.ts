@@ -1041,6 +1041,15 @@ Plan mode is read-only: do not write or edit files until the user approves your 
       // settle the pending snapshot before handling a non-delta message.
       if (message.type !== "stream_event") stream.flushStreamedAssistantMessage();
 
+      // SDKUserMessage.timestamp is optional (older emitters omit it). Capture
+      // one receive-time clock for a record that can carry transcript content,
+      // so a terminal tool result still records where its card settled. Do not
+      // allocate an ISO string for each token-sized stream event.
+      const receivedAt =
+        message.type === "assistant" || message.type === "user"
+          ? new Date().toISOString()
+          : undefined;
+
       // Handle different message types from SDK
       if (message.type === "system" && message.subtype === "init") {
         // Store the SDK session ID for resume functionality
@@ -1462,6 +1471,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           mcpServerNames,
           activeTaskIds,
           taskRegistry,
+          receivedAt,
         );
 
         // A foreground Bash call can become background work after a timeout or
@@ -1504,7 +1514,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           const streamedPart = blocks.get(blockIndex);
           blocks.set(blockIndex, {
             ...part,
-            timestamp: streamedPart?.timestamp ?? new Date().toISOString(),
+            timestamp: streamedPart?.timestamp ?? part.timestamp ?? receivedAt,
             messageUuid: messageKey,
           });
         }
@@ -1570,6 +1580,7 @@ Plan mode is read-only: do not write or edit files until the user approves your 
           mcpServerNames,
           activeTaskIds,
           taskRegistry,
+          receivedAt,
         );
 
         const sdkUserMessage = message as SDKUserMessage;

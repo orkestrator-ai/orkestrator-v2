@@ -576,6 +576,48 @@ describe("pinNativeAgentParts", () => {
     expect(pinned[2]?.createdAt).not.toBe(pinned[0]?.createdAt);
   });
 
+  test("does not collect tasks after the final API error", () => {
+    const messages = [
+      at("assistant-launch", "2026-08-18T17:00:00.000Z", [
+        { type: "text", content: "Delegating" },
+        {
+          type: "subagent",
+          content: "first worker",
+          subagentId: "agent-1",
+          toolState: "success",
+          settledAt: "2026-08-18T17:02:00.000Z",
+        },
+        {
+          type: "subagent",
+          content: "second worker",
+          subagentId: "agent-2",
+          toolState: "success",
+          settledAt: "2026-08-18T17:05:00.000Z",
+        },
+      ]),
+      at("api-error-1", "2026-08-18T17:03:00.000Z", [
+        { type: "text", content: "API Error: 529 Overloaded" },
+      ]),
+      at("continue", "2026-08-18T17:04:00.000Z", [{ type: "text", content: "Please continue" }]),
+      at("api-error-2", "2026-08-18T17:06:00.000Z", [
+        { type: "text", content: "API Error: 529 Overloaded" },
+      ]),
+    ];
+
+    const pinned = pinNativeAgentParts(messages);
+
+    // Each task remains at the last transcript row that existed when it
+    // settled. Neither is swept into one pile after the final provider error.
+    expect(pinned.map((message) => message.id)).toEqual([
+      "assistant-launch",
+      "assistant-launch:settled-agents",
+      "api-error-1",
+      "continue",
+      "continue:settled-agents",
+      "api-error-2",
+    ]);
+  });
+
   test("clocks a shared settled row from the first card to reach it", () => {
     // Everything in one row settled in the same gap — after the anchor and
     // before whatever followed it — so the earliest stamp is when the row

@@ -221,6 +221,7 @@ function buildClaudeToolDiff(
  * @param mcpServerNames - Set of known MCP server names for accurate tool parsing
  * @param activeTaskIds - Set of currently active (pending) Task IDs for parent tracking
  * @param taskRegistry - Session task list state, stamped onto Task tool results
+ * @param receivedAt - Backend receive time when the live SDK record omitted its optional timestamp
  */
 export function parseMessageContent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -229,6 +230,7 @@ export function parseMessageContent(
   mcpServerNames?: Set<string>,
   activeTaskIds?: Set<string>,
   taskRegistry?: Pick<TaskRegistry, "apply">,
+  receivedAt?: string,
 ): {
   content: string;
   thinkingParts: NormalizedPart[];
@@ -248,10 +250,13 @@ export function parseMessageContent(
   let textContent = "";
 
   const messageUuid = typeof message.uuid === "string" ? message.uuid : undefined;
-  const recordTimestamp =
+  const providerTimestamp =
     typeof message.timestamp === "string" && Number.isFinite(Date.parse(message.timestamp))
       ? message.timestamp
       : undefined;
+  const recordTimestamp =
+    providerTimestamp ??
+    (receivedAt && Number.isFinite(Date.parse(receivedAt)) ? receivedAt : undefined);
   const explicitParentTaskUseId =
     typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
       ? message.parent_tool_use_id

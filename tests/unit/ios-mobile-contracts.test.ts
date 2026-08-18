@@ -94,7 +94,9 @@ describe("iOS simulator orchestration", () => {
     expect(source).toContain('if (import.meta.main) main()');
 
     const testSource = read("scripts/test-ios.ts");
-    expect(testSource).toContain('spawnSync("xcodebuild", [');
+    // Whitespace-insensitive: the assertion is about argument-array spawning,
+    // not about how the formatter chose to wrap the call.
+    expect(testSource).toMatch(/spawnSync\(\s*"xcodebuild",\s*\[/);
     expect(testSource).toContain('selectFirstAvailableSimulator(simulatorList)');
     expect(testSource).not.toContain("CODE_SIGNING_ALLOWED=NO");
   });

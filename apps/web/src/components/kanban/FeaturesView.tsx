@@ -333,10 +333,14 @@ export function FeaturesView({ projectId }: FeaturesViewProps) {
     }
   }, [selectedFeature, selectedFeatureId]);
 
+  // Keyed on the feature id alone on purpose: re-running when the story count
+  // changes would yank the user out of the chat tab as stories arrive.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     setRightTab(selectedFeature?.stories.length ? "stories" : "chat");
     setOpenStoryTabs([]);
   }, [selectedFeature?.id]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   useEffect(() => {
     if (!selectedFeature) {

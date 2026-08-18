@@ -442,6 +442,10 @@ export function LoopedReviewTab({
     }
   }, [data.workflowId, hydrateWorkflow]);
 
+  // The cleanup increments the generation fence, so reading the latest
+  // `.current` at cleanup time is the point: it must invalidate whatever
+  // restore is in flight, not the value captured when the effect ran.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (workflow) {
       ++restoreGeneration.current;
@@ -451,9 +455,14 @@ export function LoopedReviewTab({
     }
     void restoreWorkflow();
     return () => {
+      // Reading the latest .current is the point: this is a generation fence
+      // that must invalidate whatever restore is in flight at cleanup time, not
+      // whichever value was current when the effect ran.
+      // oxlint-disable-next-line react-hooks/exhaustive-deps
       ++restoreGeneration.current;
     };
   }, [restoreWorkflow, workflow]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   // Becoming visible *again* re-reads the authoritative record: a hidden tab can
   // miss resource events entirely. Only the false→true transition triggers it —

@@ -1391,6 +1391,7 @@ export function PersistentTerminal({
   }, [
     terminal,
     fitAddon,
+    terminalAppearance,
     terminalAppearance?.fontFamily,
     terminalAppearance?.fontSize,
     terminalBackgroundColor,

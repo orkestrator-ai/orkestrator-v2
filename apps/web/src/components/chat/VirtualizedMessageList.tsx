@@ -276,7 +276,7 @@ export function VirtualizedMessageList<TMessage>({
   }, [
     chatFind.currentMatch,
     chatFind.isOpen,
-    chatFind.matches.length,
+    chatFind.matches,
     chatFind.query,
     find?.isActive,
     currentHighlightName,

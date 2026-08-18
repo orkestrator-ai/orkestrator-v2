@@ -456,6 +456,10 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       ? neutralProjection.shareUrl !== null
       : shareState.sessionIdentity === sessionIdentity && shareState.value;
 
+  // Keyed on the session, not the `activeSession` object: that is memoised on
+  // activeTab, so depending on it refetches runtime health every time the user
+  // switches tabs within one session. AgentInfoButton.test pins the call count.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!open || activeSession?.provider !== "codex" || !codexClient || !currentSessionId) {
       setCodexHealth(null);
@@ -486,6 +490,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
       cancelled = true;
     };
   }, [activeSession?.provider, codexClient, currentSessionId, open]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   const openForkTab = (
     sessionId: string,

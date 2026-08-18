@@ -423,6 +423,7 @@ export function EnvironmentSettingsDialog({
     environment.portMappings,
     environment.defaultAgent,
     environment.claudeMode,
+    environment.claudeNativeBackend,
     environment.opencodeMode,
     environment.codexMode,
     globalDomains,

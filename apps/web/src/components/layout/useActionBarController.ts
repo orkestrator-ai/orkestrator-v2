@@ -222,6 +222,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const browserPreviewSupported = isGatewayBrowserPreviewSupported();
   const canCopyEnvironmentUrl = !!environmentPortAddress;
 
+  // The object test only narrows the type: no environment means no
+  // cleanupAfterMergeError, so `!error` already covers that case. Depending on
+  // the whole environment would re-open a dismissed dialog on any field change.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     const error = selectedEnvironment?.cleanupAfterMergeError;
     if (!selectedEnvironment || !error) return;
@@ -237,6 +241,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     selectedEnvironment?.id,
     selectedEnvironment?.name,
   ]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   // Handler for opening in editor
   const handleOpenInEditor = useCallback(async () => {

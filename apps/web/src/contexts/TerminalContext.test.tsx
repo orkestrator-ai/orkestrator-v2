@@ -38,13 +38,14 @@ describe("TerminalContext", () => {
 
     function Registrar() {
       const context = useTerminalContext();
+      const { setCreateTab } = context;
       useEffect(() => {
-        context.setCreateTab((type, options) => {
+        setCreateTab((type, options) => {
           createTab(type, options?.initialUrl);
           return true;
         });
-        return () => context.setCreateTab(null);
-      }, [context.setCreateTab]);
+        return () => setCreateTab(null);
+      }, [setCreateTab]);
       return (
         <button
           type="button"

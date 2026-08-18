@@ -304,6 +304,10 @@ export function SkillsSettings({
   const selected: AgentSkill | undefined =
     skills.find((skill) => skill.id === selectedId) ?? filtered[0];
 
+  // Keyed on selected?.filePath, not `selected`: the identity changes as the
+  // list re-filters while the user types, and re-reading the file on every
+  // keystroke is exactly what the comment above this hook warns against.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     const token = fileToken.current + 1;
     fileToken.current = token;
@@ -329,6 +333,7 @@ export function SkillsSettings({
         setFileLoading(false);
       });
   }, [provider, selected?.filePath, state.revision, fileRetry, readSkill]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   /**
    * The confirmation is pane-scoped, so a timer armed for one skill would leave

@@ -526,6 +526,9 @@ export function TerminalContainer({
   // retrying, but nothing else renders it: without this the user gets a plain
   // terminal, no agent tab, and an initial prompt that never arrives.
   const reportedStartupErrorRef = useRef<string | null>(null);
+  // The three startupAgentSession fields this reads are listed individually, so
+  // the object itself would only add re-runs when it is replaced unchanged.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     const startupSession = environment?.startupAgentSession;
     if (startupSession?.status !== "error") {
@@ -550,6 +553,7 @@ export function TerminalContainer({
     environment?.startupAgentSession?.error,
     environment?.startupAgentSession?.status,
   ]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   // Represent backend-owned launch state after a mobile page reload. Native
   // launches are projected durably by the backend; this effect binds their
@@ -1683,6 +1687,7 @@ export function TerminalContainer({
       claudeNativeBackend,
       codexMode,
       isLocalEnvironmentReady,
+      isLocalEnvironment,
       createBrowserTab,
     ],
   );
@@ -1922,6 +1927,7 @@ export function TerminalContainer({
     setTabCount,
     setCreateFileTab,
     setOpenFilePaths,
+    environmentId,
   ]);
 
   // Handle drag start - track which tab is being dragged

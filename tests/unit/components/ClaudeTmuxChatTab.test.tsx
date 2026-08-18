@@ -460,11 +460,14 @@ mock.module("react-virtuoso", () => ({
       [],
     );
 
+    // Destructured so the effect depends on the two callbacks rather than the
+    // whole props object, which is a new identity on every render.
+    const { scrollerRef: reportScrollerRef, atBottomStateChange } = props;
     useEffect(() => {
-      props.scrollerRef?.(scrollerRef.current);
-      props.atBottomStateChange?.(true);
-      return () => props.scrollerRef?.(null);
-    }, [props.scrollerRef, props.atBottomStateChange]);
+      reportScrollerRef?.(scrollerRef.current);
+      atBottomStateChange?.(true);
+      return () => reportScrollerRef?.(null);
+    }, [reportScrollerRef, atBottomStateChange, scrollerRef]);
 
     const data = props.data ?? [];
     const offset = Math.max(0, data.length - VIRTUOSO_WINDOW_SIZE);

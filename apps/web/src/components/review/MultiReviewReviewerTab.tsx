@@ -148,6 +148,9 @@ export function MultiReviewReviewerTab({
     requestGeneration.current += 1;
   }, [data.reviewerId, data.workflowId]);
 
+  // Keyed on snapshot?.status: `snapshot` gets a new identity on every poll,
+  // so depending on it would clear and re-arm the interval each refresh.
+  /* oxlint-disable react-hooks/exhaustive-deps */
   useEffect(() => {
     if (!isActive) return;
     void refresh();
@@ -160,6 +163,7 @@ export function MultiReviewReviewerTab({
       requestGeneration.current += 1;
     };
   }, [isActive, refresh, snapshot?.status, transcriptError]);
+  /* oxlint-enable react-hooks/exhaustive-deps */
 
   const messages = useMemo(() => {
     if (!snapshot) return [];

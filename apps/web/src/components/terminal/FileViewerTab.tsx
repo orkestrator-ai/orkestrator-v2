@@ -384,12 +384,12 @@ export function FileViewerTab({
     return () => {
       cancelled = true;
     };
-    // Note: isImage is derived from filePath, so it doesn't need to be in the dependency array
   }, [
     containerId,
     worktreePath,
     isLocalEnvironment,
     filePath,
+    isImage,
     language,
     showDiff,
     tabId,
@@ -420,6 +420,7 @@ export function FileViewerTab({
     const timer = setTimeout(flushFileDraft, 400);
     return () => clearTimeout(timer);
   }, [
+    dirtyEntry,
     dirtyEntry?.content,
     dirtyEntry?.originalContent,
     draftHydrated,

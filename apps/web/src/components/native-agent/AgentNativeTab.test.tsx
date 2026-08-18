@@ -3377,8 +3377,8 @@ describe("AgentNativeTab", () => {
       const [first, second] = performNativeAgentSessionActionMock.mock.calls;
       // An unconfirmed action may already have reached the provider; resending
       // the same text must deduplicate rather than steer the turn twice.
-      expect((second?.[0].action as { requestId?: string }).requestId).toBe(
-        (first?.[0].action as { requestId?: string }).requestId,
+      expect((second![0].action as { requestId?: string }).requestId).toBe(
+        (first![0].action as { requestId?: string }).requestId,
       );
       performNativeAgentSessionActionMock.mockImplementation(async () => ({
         outcome: "applied" as const,

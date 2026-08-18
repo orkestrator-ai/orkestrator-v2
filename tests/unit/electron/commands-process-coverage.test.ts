@@ -1450,7 +1450,7 @@ describe("process and platform command behavior", () => {
       error: null,
     });
     expect(resolved[0]?.ips).toBeArray();
-    expect((resolved[0]?.ips as string[]).length).toBeGreaterThan(0);
+    expect((resolved[0]!.ips as string[]).length).toBeGreaterThan(0);
     expect(resolved[1]).toMatchObject({
       domain: "bad domain",
       valid: true,

@@ -3481,7 +3481,7 @@ describe("sendPrompt", () => {
           event.type === "session.updated" &&
           (event.data as { contextUsage?: unknown })?.contextUsage !== undefined,
       );
-      const contextUsage = (usageEvent?.data as { contextUsage: SessionUsageSnapshot })
+      const contextUsage = (usageEvent!.data as { contextUsage: SessionUsageSnapshot })
         .contextUsage;
       expect(contextUsage).toEqual({
         usedTokens: 15,

@@ -3175,13 +3175,13 @@ exit 0
           expect(environment.initialAgentModel).toBeUndefined();
           expect(environment.initialReasoningEffort).toBeUndefined();
           expect(
-            (failure?.payload as { environment?: Environment }).environment?.pendingAgentLaunch,
+            (failure!.payload as { environment?: Environment }).environment?.pendingAgentLaunch,
           ).toBe(false);
           expect(
-            (failure?.payload as { environment?: Environment }).environment?.initialAgentModel,
+            (failure!.payload as { environment?: Environment }).environment?.initialAgentModel,
           ).toBeUndefined();
           expect(
-            (failure?.payload as { environment?: Environment }).environment?.initialReasoningEffort,
+            (failure!.payload as { environment?: Environment }).environment?.initialReasoningEffort,
           ).toBeUndefined();
 
           // A renderer may have been inactive when the one-shot event fired. The

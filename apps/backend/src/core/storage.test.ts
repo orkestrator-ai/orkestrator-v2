@@ -1139,7 +1139,7 @@ describe("backend-owned setup and build surfaces", () => {
       });
 
       const startupTab = (
-        published?.root as {
+        published!.root as {
           tabs: Array<Record<string, unknown>>;
         }
       ).tabs[1]!;
@@ -1333,7 +1333,7 @@ describe("backend-owned setup and build surfaces", () => {
         agent: "codex",
       });
       const startupTab = (
-        published?.root as {
+        published!.root as {
           tabs: Array<Record<string, unknown>>;
         }
       ).tabs[1]!;
@@ -1351,7 +1351,7 @@ describe("backend-owned setup and build surfaces", () => {
       });
       expect(
         (
-          rebound?.root as {
+          rebound!.root as {
             tabs: Array<Record<string, unknown>>;
           }
         ).tabs[1]!.nativeAgentData,

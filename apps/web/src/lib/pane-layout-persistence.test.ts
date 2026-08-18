@@ -126,7 +126,7 @@ describe("pane layout persistence", () => {
       isLocal: false,
     });
     const rehydratedTab = (
-      rehydrated?.root as unknown as { tabs: Array<Record<string, unknown>> }
+      rehydrated!.root as unknown as { tabs: Array<Record<string, unknown>> }
     ).tabs.find((tab) => tab.id === "native");
     expect(rehydratedTab?.initialAgentModel).toBe("gpt-5.6-sol");
     expect(rehydratedTab?.initialReasoningEffort).toBe("xhigh");
@@ -276,7 +276,7 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(2);
-    expect((save.mock.calls.at(-1)?.[1].root as PaneLeaf).activeTabId).toBe("a");
+    expect((save.mock.calls.at(-1)![1].root as PaneLeaf).activeTabId).toBe("a");
     expect(usePaneLayoutStore.getState().getPane("default", "env-1")?.activeTabId).toBe("a");
     stop();
   });
@@ -355,7 +355,7 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(2);
-    expect((save.mock.calls[1]?.[1].root as PaneLeaf).activeTabId).toBe("a");
+    expect((save.mock.calls[1]![1].root as PaneLeaf).activeTabId).toBe("a");
     stop();
   });
 
@@ -383,7 +383,7 @@ describe("pane layout persistence", () => {
     await new Promise((resolve) => setTimeout(resolve, 40));
 
     expect(save).toHaveBeenCalledTimes(1);
-    expect((save.mock.calls[0]?.[1].root as PaneLeaf).activeTabId).toBe("a");
+    expect((save.mock.calls[0]![1].root as PaneLeaf).activeTabId).toBe("a");
     stop();
   });
 
@@ -552,8 +552,8 @@ describe("pane layout persistence", () => {
     releaseFirst();
     await waitForTimers();
     expect(save).toHaveBeenCalledTimes(2);
-    const firstTabs = (save.mock.calls[0]?.[1].root as { tabs: Array<{ id: string }> }).tabs;
-    const secondTabs = (save.mock.calls[1]?.[1].root as { tabs: Array<{ id: string }> }).tabs;
+    const firstTabs = (save.mock.calls[0]![1].root as { tabs: Array<{ id: string }> }).tabs;
+    const secondTabs = (save.mock.calls[1]![1].root as { tabs: Array<{ id: string }> }).tabs;
     expect(firstTabs.map(({ id }) => id)).toEqual(["tab-1"]);
     expect(secondTabs.map(({ id }) => id)).toEqual(["tab-1", "tab-2"]);
     stop();
@@ -1475,7 +1475,7 @@ describe("pane layout persistence", () => {
     await waitForTimers();
 
     expect(save).toHaveBeenCalledTimes(1);
-    expect((save.mock.calls[0]?.[1].root as PaneLeaf).activeTabId).toBe("b");
+    expect((save.mock.calls[0]![1].root as PaneLeaf).activeTabId).toBe("b");
     stop();
   });
 

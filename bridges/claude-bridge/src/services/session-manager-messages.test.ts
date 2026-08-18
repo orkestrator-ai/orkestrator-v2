@@ -163,7 +163,7 @@ describe("prompt suggestions", () => {
       );
       // JSON preserves null, so it is the explicit wire-level clear signal.
       expect(cleared).toBeDefined();
-      expect((cleared?.data as { promptSuggestion?: string | null }).promptSuggestion).toBeNull();
+      expect((cleared!.data as { promptSuggestion?: string | null }).promptSuggestion).toBeNull();
 
       secondCall.finish();
       await second;

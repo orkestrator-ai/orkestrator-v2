@@ -165,7 +165,7 @@ describe("NativeAgentInteractionCard", () => {
     fireEvent.change(token, { target: { value: "secret" } });
     fireEvent.click(screen.getByRole("button", { name: "Submit" }));
     await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(1));
-    const freeText = (onResolve.mock.calls[0]?.[0] as AgentInteractionResolution).answer?.answers[0]
+    const freeText = (onResolve.mock.calls[0]![0] as AgentInteractionResolution).answer?.answers[0]
       ?.freeText;
     expect(JSON.parse(freeText ?? "{}")).toEqual({
       count: 3,

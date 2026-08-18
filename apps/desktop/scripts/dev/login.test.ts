@@ -105,7 +105,7 @@ describe("agent-test login link", () => {
     expect(requests[0]!.url).toBe("http://127.0.0.1:41234/__orkestrator/agent-test/bootstrap");
     expect(requests[0]!.init?.method).toBe("POST");
     expect(requests[0]!.init?.redirect).toBe("error");
-    expect((requests[0]!.init?.headers as Record<string, string>).authorization).toBe(
+    expect((requests[0]!.init!.headers as Record<string, string>).authorization).toBe(
       "Bearer durable-gateway-token",
     );
 

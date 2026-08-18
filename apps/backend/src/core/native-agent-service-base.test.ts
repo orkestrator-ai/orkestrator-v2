@@ -766,7 +766,7 @@ describe("NativeAgentService", () => {
         expect(Buffer.byteLength(JSON.stringify(projection?.messages))).toBeLessThanOrEqual(
           NATIVE_PROJECTION_MAX_BYTES,
         );
-        const retained = (projection?.messages[0] as { parts: Array<{ content: string }> }).parts;
+        const retained = (projection!.messages[0] as { parts: Array<{ content: string }> }).parts;
         // Oldest-first, so the newest part is always the one that survives.
         expect(retained.at(-1)?.content).toBe(messages[0]!.parts.at(-1)!.content);
       },

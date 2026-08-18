@@ -297,7 +297,7 @@ describe("reconcilePersistedLayout", () => {
     );
 
     expect(restored).not.toBeNull();
-    const tabs = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
+    const tabs = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
     expect(tabs).toHaveLength(agentTabs.length);
     for (const tab of tabs) {
       expect(tab.initialAgentModel).toBe(`${tab.id}-model`);
@@ -329,7 +329,7 @@ describe("reconcilePersistedLayout", () => {
         context,
       );
 
-      const tab = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
+      const tab = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
       expect(tab.initialAgentModel).toBeUndefined();
       expect(tab.initialReasoningEffort).toBeUndefined();
       expect(tab.initialExecutionProfileId).toBeUndefined();
@@ -362,7 +362,7 @@ describe("reconcilePersistedLayout", () => {
       context,
     );
 
-    const tab = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
+    const tab = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
     expect(tab.agentHandoffId).toBe("handoff-live");
     expect(tab.consumedAgentHandoffId).toBe("handoff-consumed");
   });
@@ -491,7 +491,7 @@ describe("reconcilePersistedLayout", () => {
           },
         ],
       });
-      const tab = (restored?.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>)
+      const tab = (restored!.root as Extract<EnvironmentPaneState["root"], { kind: "leaf" }>)
         .tabs[0];
       if (!Array.isArray(browserData.history)) {
         expect(tab?.browserData?.history).toBeUndefined();
@@ -822,7 +822,7 @@ describe("reconcilePersistedLayout", () => {
       { ...context, hasMultiReview: () => true },
     );
 
-    const [tab] = (restored?.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
+    const [tab] = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs;
     expect(tab?.multiReviewTabData).toEqual({
       environmentId: "env-1",
       workflowId: "multi-1",

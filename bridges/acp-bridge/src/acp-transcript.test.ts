@@ -1680,7 +1680,7 @@ describe("ACP bridge", () => {
       agentState: "active",
       toolArgs: { description: "Held task", subagent_type: "explore" },
     });
-    expect((live?.toolArgs as { durationMs?: unknown }).durationMs).toBeUndefined();
+    expect((live!.toolArgs as { durationMs?: unknown }).durationMs).toBeUndefined();
     expect(
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
         response.json(),
@@ -3150,12 +3150,12 @@ describe("ACP bridge", () => {
     });
     expect(big?.toolOutput).toEqual(expect.any(String));
     expect(Buffer.byteLength(big?.toolOutput as string)).toBe(512 * 1024);
-    expect((big?.toolOutput as string).endsWith("\n… tool output truncated")).toBe(true);
+    expect((big!.toolOutput as string).endsWith("\n… tool output truncated")).toBe(true);
     const toolDiff = big?.toolDiff as Record<string, unknown> | undefined;
     expect(toolDiff).toMatchObject({ filePath: "huge.ts", additions: 1, deletions: 1 });
     // Bounded, and the cut is announced rather than silently dropping the tail.
     expect(Buffer.byteLength(toolDiff?.diff as string)).toBeLessThanOrEqual(1024 * 1024);
-    expect((toolDiff?.diff as string).endsWith("\n… file diff truncated")).toBe(true);
+    expect((toolDiff!.diff as string).endsWith("\n… file diff truncated")).toBe(true);
     expect(toolDiff?.diff).toEqual(expect.stringContaining("-old\n+new"));
     expect(toolDiff?.before).toBeUndefined();
     expect(toolDiff?.after).toBeUndefined();

@@ -1397,7 +1397,7 @@ describe("slash commands", () => {
         event.type === "message.updated" &&
         (event.data?.message as { role?: unknown } | undefined)?.role,
     );
-    expect(messageUpdates.map((event) => (event.data?.message as { role?: unknown }).role)).toEqual(
+    expect(messageUpdates.map((event) => (event.data!.message as { role?: unknown }).role)).toEqual(
       ["user", "assistant"],
     );
     const assistant = messageUpdates[1];

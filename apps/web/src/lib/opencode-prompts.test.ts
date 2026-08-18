@@ -945,7 +945,7 @@ describe("opencode-client model and attachment edge cases", () => {
         { type: "file", path: "/tmp/o.rs", filename: "o.rs" },
       ],
     });
-    const parts = (promptAsync.mock.calls[0]?.[0] as { parts: Array<Record<string, unknown>> })
+    const parts = (promptAsync.mock.calls[0]![0] as { parts: Array<Record<string, unknown>> })
       .parts;
     expect(parts.slice(1).map((part) => part.mime)).toEqual([
       "image/jpeg",
@@ -982,7 +982,7 @@ describe("opencode-client model and attachment edge cases", () => {
     });
 
     const parts = (
-      promptAsync.mock.calls[0]?.[0] as {
+      promptAsync.mock.calls[0]![0] as {
         parts: Array<Record<string, unknown>>;
       }
     ).parts;
@@ -1030,7 +1030,7 @@ describe("opencode-client model and attachment edge cases", () => {
     });
 
     const parts = (
-      promptAsync.mock.calls[0]?.[0] as {
+      promptAsync.mock.calls[0]![0] as {
         parts: Array<Record<string, unknown>>;
       }
     ).parts;

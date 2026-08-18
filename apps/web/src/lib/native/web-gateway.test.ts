@@ -3663,10 +3663,10 @@ describe("web gateway browser API", () => {
 
       expect(attempt).toBe(3);
       expect(warning).toHaveBeenCalledTimes(2);
-      expect((warning.mock.calls[0]?.[1] as Error).message).toBe(
+      expect((warning.mock.calls[0]![1] as Error).message).toBe(
         "Gateway terminal event stream failed with HTTP 503",
       );
-      expect((warning.mock.calls[1]?.[1] as Error).message).toBe(
+      expect((warning.mock.calls[1]![1] as Error).message).toBe(
         "Gateway terminal event stream failed with HTTP 200",
       );
       expect(signals[2]?.aborted).toBe(false);

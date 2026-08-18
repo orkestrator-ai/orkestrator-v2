@@ -1884,7 +1884,7 @@ describe("NativeAgentService", () => {
         await service.ensureSession(other);
         const projection = await service.getProjection(owner);
         const detailRef = (
-          projection?.messages[0] as {
+          projection!.messages[0] as {
             parts: Array<{ detailRef?: string }>;
           }
         ).parts[0]?.detailRef;
@@ -1948,7 +1948,7 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const projection = await service.getProjection(identity);
         const parts = (
-          projection?.messages[0] as {
+          projection!.messages[0] as {
             parts: Array<{
               backgroundTaskId?: string;
               detailRef?: string;
@@ -2038,7 +2038,7 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const projection = await service.getProjection(identity);
         const parts = (
-          projection?.messages[0] as {
+          projection!.messages[0] as {
             parts: Array<{ backgroundTaskId?: string }>;
           }
         ).parts;
@@ -2123,7 +2123,7 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const projection = await service.getProjection(identity);
         const detailRef = (
-          projection?.messages[0] as {
+          projection!.messages[0] as {
             parts: Array<{ detailRef?: string }>;
           }
         ).parts[0]?.detailRef;
@@ -2181,7 +2181,7 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const projection = await service.getProjection(identity);
         const refs = (
-          projection?.messages[0] as {
+          projection!.messages[0] as {
             parts: Array<{ detailRef?: string }>;
           }
         ).parts.map((part) => part.detailRef!);
@@ -2239,7 +2239,7 @@ describe("NativeAgentService", () => {
         await service.ensureSession(identity);
         const projection = await service.getProjection(identity);
         const detailRef = (
-          projection?.messages[0] as {
+          projection!.messages[0] as {
             parts: Array<{ detailRef?: string }>;
           }
         ).parts[0]?.detailRef;

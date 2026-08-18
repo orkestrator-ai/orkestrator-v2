@@ -193,7 +193,7 @@ describe("agent Kanban tools", () => {
       name: "update_ticket",
       arguments: { ticketId: ticket.id, status: "review" },
     });
-    expect((updated.body.result?.structuredContent?.ticket as { status: string }).status).toBe(
+    expect((updated.body.result!.structuredContent!.ticket as { status: string }).status).toBe(
       "review",
     );
 
@@ -203,7 +203,7 @@ describe("agent Kanban tools", () => {
     });
     expect(
       (
-        commented.body.result?.structuredContent?.ticket as {
+        commented.body.result!.structuredContent!.ticket as {
           comments: Array<{ text: string }>;
         }
       ).comments,
@@ -519,7 +519,7 @@ describe("agent Kanban tools", () => {
       acceptanceCriteriaTruncated: true,
     });
     const returnedComments = (
-      result.body.result?.structuredContent?.ticket as {
+      result.body.result!.structuredContent!.ticket as {
         comments: Array<{ textTruncated?: boolean }>;
       }
     ).comments;

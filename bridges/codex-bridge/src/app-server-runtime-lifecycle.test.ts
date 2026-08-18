@@ -1672,7 +1672,7 @@ describe("session lifecycle", () => {
     expect(h.events.indexOf(initialUserUpdates[0]!)).toBeLessThan(
       h.events.indexOf(initialAssistantUpdates[0]!),
     );
-    expect((initialAssistantUpdates[0]!.data?.message as { revision?: number }).revision).toBe(1);
+    expect((initialAssistantUpdates[0]!.data!.message as { revision?: number }).revision).toBe(1);
 
     const child = h.child();
     child.notify("turn/started", { threadId: "thread-1", turn: { id: "turn-1" } });

@@ -37,6 +37,22 @@ describe("FALLBACK_CLAUDE_MODELS", () => {
     }
   });
 
+  test("every entry resolves to the concrete model id the bridge reports", () => {
+    // `resolvedModel` is load-bearing, not decoration: configuration stores the
+    // concrete id (`claude-sonnet-5`) while the catalog is keyed by the alias
+    // (`sonnet`), and the settings panes match a stored default through this
+    // field. A drift here silently drops an inherited model's reasoning
+    // options with every other assertion in this file still green. Mirrors
+    // bridges/claude-bridge/src/services/session-manager-interactions.ts.
+    expect(Object.fromEntries(FALLBACK_CLAUDE_MODELS.map((m) => [m.id, m.resolvedModel]))).toEqual({
+      default: "claude-opus-5[1m]",
+      "opus[1m]": "claude-opus-5[1m]",
+      "claude-fable-5[1m]": "claude-fable-5",
+      sonnet: "claude-sonnet-5",
+      haiku: "claude-haiku-4-5-20251001",
+    });
+  });
+
   test("model ids are unique and carry display names", () => {
     const ids = FALLBACK_CLAUDE_MODELS.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);

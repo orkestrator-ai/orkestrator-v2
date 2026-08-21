@@ -259,7 +259,9 @@ export interface Environment {
    * An absent field means "inherit from the repository, then the application",
    * which is what the settings panes write when a control returns to Inherit.
    *
-   * @see the five `@deprecated` fields below, which this replaces.
+   * Supersedes `defaultAgent`, `claudeMode`, `claudeNativeBackend`,
+   * `opencodeMode` and `codexMode`, which the backend folds onto this shape on
+   * load (`storage-agent-settings.ts`) and then deletes from the record.
    */
   agentSettings?: AgentSettingsTier;
   setupScriptsComplete?: boolean;
@@ -618,7 +620,10 @@ export interface RepositoryConfig {
   /**
    * This repository's agent overrides — the middle tier.
    *
-   * @see the five `@deprecated` fields below, which this replaces.
+   * Supersedes `defaultAgent`, `agentStyle` (which only Claude ever read),
+   * `claudeNativeBackend`, and the single `defaultModel`/`defaultEffort` pair
+   * two consumers disagreed about. An absent field means "inherit from the
+   * application".
    */
   agentSettings?: AgentSettingsTier;
 }
@@ -652,10 +657,12 @@ export interface AppConfig {
      * Application-wide agent defaults — the widest of the three tiers, and the
      * only one with a shipped fallback beneath it.
      *
-     * @see the `@deprecated` fields below, which this replaces. The two
-     * `*NativeFastModeDefault` fields are dropped rather than migrated: speed
-     * is a per-session choice made in the model picker, and OpenCode expresses
-     * it as a `-fast` model id rather than a toggle.
+     * Supersedes `defaultAgent`, the three `*Mode` fields,
+     * `claudeNativeBackend`, `actionDefaults`, and the four model/effort fields
+     * that had no UI at all. The two `*NativeFastModeDefault` fields are
+     * dropped rather than migrated: speed is a per-session choice made in the
+     * model picker, and OpenCode expresses it as a `-fast` model id rather than
+     * a toggle.
      */
     agentSettings?: AgentSettingsTier;
     /**

@@ -471,8 +471,6 @@ export interface GlobalConfig {
   allowedDomains: string[];
   /** Preferred editor for opening containers (VS Code or Cursor) */
   preferredEditor?: PreferredEditor;
-  /** Default agent for new environments (Claude or OpenCode) */
-
   /**
    * OpenCode provider catalogues offered in model pickers. The backend filters
    * against this before the catalogue is sent to the renderer. An empty list

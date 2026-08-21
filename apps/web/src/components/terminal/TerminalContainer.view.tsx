@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } from "react";
 import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
 import {
   DndContext,
@@ -131,7 +131,14 @@ export function TerminalContainer({
   // `claude-mode-resolver.ts`, which defaulted Codex to native while the shared
   // resolver defaulted it to terminal — exactly the kind of drift that costs a
   // launch its attachments.
-  const tiers = agentSettingsTiers(config, envProjectId, { agentSettings: envAgentSettings });
+  // Memoized because the launch-reconciliation effect below depends on it. The
+  // assembly is a fresh object literal every call, so an unmemoized value would
+  // re-run that effect on every render of this container rather than only when
+  // agent settings actually change.
+  const tiers = useMemo(
+    () => agentSettingsTiers(config, envProjectId, { agentSettings: envAgentSettings }),
+    [config, envProjectId, envAgentSettings],
+  );
   const opencodeMode = resolveAgentPlatformSettings(tiers, "opencode").mode;
   const codexMode = resolveAgentPlatformSettings(tiers, "codex").mode;
   const claude = resolveAgentPlatformSettings(tiers, "claude");

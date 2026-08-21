@@ -1259,6 +1259,70 @@ exit 0
       ),
     ).rejects.toThrow("Environment not found: missing");
   });
+
+  test("leaves stored agent settings alone when the request omits the block", async () => {
+    const environment = createEnvironment({
+      agentSettings: {
+        defaultAgent: "codex",
+        actionDefaults: { review: { platform: "codex", model: "gpt-5.6-sol" } },
+        platforms: { codex: { mode: "native", model: "gpt-5.6-sol", reasoningEffort: "high" } },
+      },
+    });
+    const stored = structuredClone(environment.agentSettings);
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    // The environment tier now carries models, reasoning levels and action
+    // defaults, not just the three modes it used to. A launch-intent-only call
+    // must not be able to erase any of it: storage decides by key presence, so
+    // the handler has to withhold the key rather than send an empty block.
+    await commands.get("update_environment_agent_settings")?.(
+      { environmentId: environment.id, pendingAgentLaunch: false },
+      context,
+    );
+    expect(updates.at(-1)).not.toHaveProperty("agentSettings");
+    expect(environment.agentSettings).toEqual(stored);
+
+    await commands.get("update_environment_agent_settings")?.(
+      { environmentId: environment.id, initialAgentModel: "gpt-5.4-mini" },
+      context,
+    );
+    expect(updates.at(-1)).toEqual({ initialAgentModel: "gpt-5.4-mini" });
+    expect(environment.agentSettings).toEqual(stored);
+
+    // An explicit clear still clears, and lands as absence rather than as an
+    // empty block every environment would then carry.
+    await commands.get("update_environment_agent_settings")?.(
+      { environmentId: environment.id, agentSettings: null },
+      context,
+    );
+    expect(updates.at(-1)).toEqual({ agentSettings: undefined });
+    expect(environment.agentSettings).toBeUndefined();
+  });
+
+  test("stores an all-empty agent settings block as absence", async () => {
+    const environment = createEnvironment({
+      agentSettings: { defaultAgent: "codex" },
+    });
+    const { context, updates } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    // Every field here normalizes away, so what is left says nothing at all —
+    // which is what absence already means.
+    await commands.get("update_environment_agent_settings")?.(
+      {
+        environmentId: environment.id,
+        agentSettings: {
+          defaultAgent: "not-a-platform",
+          actionDefaults: { review: { model: "orphan-without-a-platform" } },
+          platforms: { claude: { mode: "sideways" }, nope: { mode: "native" } },
+        },
+      },
+      context,
+    );
+    expect(updates.at(-1)).toEqual({ agentSettings: undefined });
+    expect(environment.agentSettings).toBeUndefined();
+  });
 });
 
 describe("Electron backend command registry", () => {

@@ -135,7 +135,12 @@ const persistentSessionStore = {
   getSessionsByEnvironment: (_envId: string): Record<string, unknown>[] => [],
   updateSessionStatus: mock(async () => {}),
   isLoadingEnvironment: () => false,
-  loadSessionsForEnvironment: mock(async () => {}),
+  loadSessionsForEnvironment: mock(async (environmentId: string) => {
+    const current = persistentSessionStore.sessionSnapshotGenerations.get(environmentId) ?? 0;
+    const generations = new Map(persistentSessionStore.sessionSnapshotGenerations);
+    generations.set(environmentId, current + 1);
+    persistentSessionStore.sessionSnapshotGenerations = generations;
+  }),
   // Functions used by useEnvironments.ts (must be present to avoid undefined errors)
   disconnectEnvironmentSessions: mock(async () => {}),
   deleteSessionsByEnvironment: mock(async () => {}),
@@ -153,7 +158,7 @@ const persistentSessionStore = {
   getSession: mock(() => undefined),
   sessions: new Map(),
   loadingEnvironments: new Set(),
-  loadedEnvironments: new Set(["env-1"]),
+  sessionSnapshotGenerations: new Map([["env-1", 1]]),
   error: null,
 };
 
@@ -217,6 +222,16 @@ const useTerminalPortalStoreMock = (<T,>(
 
   return selector(portalStoreState());
 }) as any;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
 
 useTerminalPortalStoreMock.getState = () => ({
   ...portalStoreActions,
@@ -423,14 +438,19 @@ describe("PersistentTerminal", () => {
     persistentSessionStore.loadSessionsForEnvironment.mockClear();
     // mockClear leaves the implementation in place, and the retry tests below
     // install a failing one, so reset it rather than leaking it into siblings.
-    persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async () => {});
+    persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async (environmentId) => {
+      const current = persistentSessionStore.sessionSnapshotGenerations.get(environmentId) ?? 0;
+      const generations = new Map(persistentSessionStore.sessionSnapshotGenerations);
+      generations.set(environmentId, current + 1);
+      persistentSessionStore.sessionSnapshotGenerations = generations;
+    });
     persistentSessionStore.saveSessionBuffer.mockClear();
     persistentSessionStore.loadSessionBuffer.mockClear();
     persistentSessionStore.loadSessionBuffer.mockImplementation(
       async (): Promise<string | null> => null,
     );
     persistentSessionStore.getSessionsByEnvironment = () => [];
-    persistentSessionStore.loadedEnvironments = new Set(["env-1"]);
+    persistentSessionStore.sessionSnapshotGenerations = new Map([["env-1", 1]]);
 
     // Reset real stores to controlled state
     useTerminalSessionStore.setState({
@@ -3273,7 +3293,11 @@ describe("PersistentTerminal", () => {
   it("waits for session hydration and paints a saved setup terminal without a live PTY", async () => {
     useTerminalSessionId = null;
     useTerminalIsConnected = false;
-    persistentSessionStore.loadedEnvironments = new Set();
+    persistentSessionStore.sessionSnapshotGenerations = new Map();
+    const hydration = deferred<void>();
+    persistentSessionStore.loadSessionsForEnvironment.mockImplementationOnce(
+      async () => hydration.promise,
+    );
     persistentSessionStore.loadSessionBuffer.mockResolvedValue(
       "saved setup output\r\n\u001b[32m❯\u001b[0m ",
     );
@@ -3314,8 +3338,11 @@ describe("PersistentTerminal", () => {
     expect(persistentSessionStore.loadSessionBuffer).not.toHaveBeenCalled();
     expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true);
 
-    persistentSessionStore.loadedEnvironments = new Set(["env-1"]);
-    view.rerender(<PersistentTerminal {...props} />);
+    persistentSessionStore.sessionSnapshotGenerations = new Map([["env-1", 1]]);
+    await act(async () => {
+      hydration.resolve();
+      await hydration.promise;
+    });
 
     await waitFor(() => {
       expect(persistentSessionStore.loadSessionBuffer).toHaveBeenCalledWith("saved-setup-session");
@@ -3548,17 +3575,17 @@ describe("PersistentTerminal", () => {
   });
 
   it("retries the session list until the store publishes a snapshot", async () => {
-    // Everything downstream gates on loadedEnvironments, which only a successful
-    // load sets. Without a retry a single failed list wedges the terminal for the
-    // rest of its mount: no persistent session, so the buffer is never saved.
-    persistentSessionStore.loadedEnvironments = new Set();
+    // Everything downstream gates on a successful snapshot newer than the one
+    // observed at mount. Without a retry a failed list wedges the terminal for
+    // the rest of its mount: no persistent session, so the buffer is never saved.
+    persistentSessionStore.sessionSnapshotGenerations = new Map();
     let attempts = 0;
     persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async () => {
       attempts += 1;
       if (attempts < 2) {
         throw new Error("list failed");
       }
-      persistentSessionStore.loadedEnvironments = new Set(["env-1"]);
+      persistentSessionStore.sessionSnapshotGenerations = new Map([["env-1", 1]]);
     });
 
     render(
@@ -3578,7 +3605,7 @@ describe("PersistentTerminal", () => {
 
     await waitFor(
       () => {
-        expect(persistentSessionStore.loadedEnvironments.has("env-1")).toBe(true);
+        expect(persistentSessionStore.sessionSnapshotGenerations.has("env-1")).toBe(true);
       },
       { timeout: 3000 },
     );
@@ -3594,8 +3621,76 @@ describe("PersistentTerminal", () => {
     );
   });
 
+  it("does not reuse an old snapshot while the current hydration is pending or failed", async () => {
+    persistentSessionStore.sessionSnapshotGenerations = new Map([["env-1", 7]]);
+    const initialHydration = deferred<void>();
+    let attempts = 0;
+    persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return initialHydration.promise;
+      }
+      persistentSessionStore.sessionSnapshotGenerations = new Map([["env-1", 8]]);
+    });
+    persistentSessionStore.getSessionsByEnvironment = () => [
+      {
+        id: "fresh-persistent-session",
+        environmentId: "env-1",
+        containerId: "container-1",
+        tabId: "tab-1",
+        sessionType: "plain",
+        status: "connected",
+        hasLaunchedCommand: false,
+        lastActivityAt: "2024-01-01T00:00:00.000Z",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      },
+    ];
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(persistentSessionStore.loadSessionsForEnvironment).toHaveBeenCalledTimes(1);
+    });
+    expect(persistentSessionStore.createSession).not.toHaveBeenCalled();
+    expect(persistentSessionStore.loadSessionBuffer).not.toHaveBeenCalled();
+
+    await act(async () => {
+      initialHydration.reject(new Error("fresh list failed"));
+      try {
+        await initialHydration.promise;
+      } catch {
+        // The component contains the failure and retries it.
+      }
+    });
+
+    await waitFor(
+      () => {
+        expect(persistentSessionStore.loadSessionsForEnvironment).toHaveBeenCalledTimes(2);
+        expect(persistentSessionStore.loadSessionBuffer).toHaveBeenCalledWith(
+          "fresh-persistent-session",
+        );
+      },
+      { timeout: 3000 },
+    );
+    expect(persistentSessionStore.createSession).not.toHaveBeenCalled();
+  });
+
   it("stops retrying the session list after unmount", async () => {
-    persistentSessionStore.loadedEnvironments = new Set();
+    persistentSessionStore.sessionSnapshotGenerations = new Map();
     persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async () => {
       throw new Error("list failed");
     });

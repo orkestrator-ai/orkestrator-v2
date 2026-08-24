@@ -21,6 +21,7 @@ const sortByOrder = (sessions: Session[]): Session[] =>
   [...sessions].sort((a, b) => a.order - b.order);
 
 const activeSessionLoadRequests = new Map<string, object>();
+let nextSessionSnapshotGeneration = 0;
 interface SessionStatusQueue {
   tail: Promise<void>;
   confirmed: SessionStatus | undefined;
@@ -41,8 +42,8 @@ interface SessionState {
   sessions: Map<string, Session>;
   /** Loading state per environment */
   loadingEnvironments: Set<string>;
-  /** Environments whose persisted-session snapshot has loaded successfully at least once. */
-  loadedEnvironments: Set<string>;
+  /** Monotonic generation of the latest successful persisted-session snapshot per environment. */
+  sessionSnapshotGenerations: Map<string, number>;
   error: string | null;
 
   // Actions
@@ -101,7 +102,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   // Initial state
   sessions: new Map(),
   loadingEnvironments: new Set(),
-  loadedEnvironments: new Set(),
+  sessionSnapshotGenerations: new Map(),
   error: null,
 
   // Actions
@@ -132,12 +133,12 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           });
         const newLoading = new Set(state.loadingEnvironments);
         newLoading.delete(environmentId);
-        const newLoaded = new Set(state.loadedEnvironments);
-        newLoaded.add(environmentId);
+        const newSnapshotGenerations = new Map(state.sessionSnapshotGenerations);
+        newSnapshotGenerations.set(environmentId, (nextSessionSnapshotGeneration += 1));
         if (unchanged) {
           return {
             loadingEnvironments: newLoading,
-            loadedEnvironments: newLoaded,
+            sessionSnapshotGenerations: newSnapshotGenerations,
             ...(state.error === null ? {} : { error: null }),
           };
         }
@@ -160,7 +161,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         return {
           sessions: newSessions,
           loadingEnvironments: newLoading,
-          loadedEnvironments: newLoaded,
+          sessionSnapshotGenerations: newSnapshotGenerations,
           ...(state.error === null ? {} : { error: null }),
         };
       });
@@ -409,7 +410,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     }
   },
 
-  clearAllSessions: () => set({ sessions: new Map(), loadedEnvironments: new Set() }),
+  clearAllSessions: () => set({ sessions: new Map(), sessionSnapshotGenerations: new Map() }),
 
   setError: (error) => set({ error }),
 

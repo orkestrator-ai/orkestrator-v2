@@ -740,16 +740,30 @@ export function PersistentTerminal({
   const updateSessionStatus = useSessionStore((state) => state.updateSessionStatus);
   const loadSessionsForEnvironment = useSessionStore((state) => state.loadSessionsForEnvironment);
   const setPersistentSessionId = useTerminalSessionStore((state) => state.setPersistentSessionId);
-  const areSessionsLoaded = useSessionStore((state) => state.loadedEnvironments.has(environmentId));
+  const sessionSnapshotGeneration = useSessionStore(
+    (state) => state.sessionSnapshotGenerations.get(environmentId) ?? 0,
+  );
+  const sessionSnapshotBaselineRef = useRef({
+    environmentId,
+    generation: sessionSnapshotGeneration,
+  });
+  if (sessionSnapshotBaselineRef.current.environmentId !== environmentId) {
+    sessionSnapshotBaselineRef.current = {
+      environmentId,
+      generation: sessionSnapshotGeneration,
+    };
+  }
+  const sessionSnapshotBaseline = sessionSnapshotBaselineRef.current.generation;
+  const [, setSessionHydrationCheck] = useState(0);
+  const hasFreshSessionSnapshot = sessionSnapshotGeneration > sessionSnapshotBaseline;
 
   // Ensure sessions are loaded for this environment.
   //
-  // This retries until the store actually publishes a snapshot. Everything
-  // below gates on `areSessionsLoaded`, which only a *successful* load sets, so
-  // a single rejected list call would otherwise wedge the terminal for the rest
-  // of its mount: no persistent session is created, `persistentSessionIdRef`
-  // stays null, and the cleanup handler therefore never persists the buffer —
-  // the terminal's history would be silently lost on the next reload.
+  // This retries until the store publishes a snapshot newer than the one this
+  // mount began with. An "ever loaded" marker is not sufficient: a remount must
+  // not restore from stale renderer state while its current backend refresh is
+  // pending or failed. A concurrent terminal's successful refresh also advances
+  // the generation and can safely satisfy this mount.
   useEffect(() => {
     if (!environmentId) return;
 
@@ -758,16 +772,29 @@ export function PersistentTerminal({
     let attempt = 0;
 
     const runLoad = () => {
+      if (
+        (useSessionStore.getState().sessionSnapshotGenerations.get(environmentId) ?? 0) >
+        sessionSnapshotBaseline
+      ) {
+        setSessionHydrationCheck((revision) => revision + 1);
+        return;
+      }
       void loadSessionsForEnvironment(environmentId)
         .catch((err) => {
           console.error("[PersistentTerminal] Failed to load persistent sessions:", err);
         })
         .then(() => {
           if (cancelled) return;
-          // The promise resolving is not proof a snapshot landed: a load that
-          // was superseded by a newer request returns early without publishing.
-          // The store is the only authority on whether one arrived.
-          if (useSessionStore.getState().loadedEnvironments.has(environmentId)) return;
+          // The promise resolving is not proof a fresh snapshot landed: the
+          // store contains failures and superseded requests without publishing.
+          // Only a newer successful generation is authoritative for this mount.
+          if (
+            (useSessionStore.getState().sessionSnapshotGenerations.get(environmentId) ?? 0) >
+            sessionSnapshotBaseline
+          ) {
+            setSessionHydrationCheck((revision) => revision + 1);
+            return;
+          }
           const delay = Math.min(
             SESSION_SNAPSHOT_RETRY_BASE_MS * 2 ** attempt,
             SESSION_SNAPSHOT_RETRY_MAX_MS,
@@ -786,7 +813,7 @@ export function PersistentTerminal({
         retryTimer = null;
       }
     };
-  }, [environmentId, loadSessionsForEnvironment]);
+  }, [environmentId, loadSessionsForEnvironment, sessionSnapshotBaseline]);
 
   // Restore only after the store has received an authoritative snapshot. The
   // load effect above updates Zustand synchronously before awaiting the backend,
@@ -795,9 +822,14 @@ export function PersistentTerminal({
   // saved buffer on cold mounts.
   useEffect(() => {
     if (!environmentId) return;
-    if (existingSession) return;
+    // A PTY created during this mount is published to the terminal store before
+    // an async persistent-session snapshot can arrive. Only a session that was
+    // already present when this component mounted proves restoration is already
+    // represented locally; consulting the live value would suppress the durable
+    // buffer load on every cold connection slower than the PTY handshake.
+    if (hadExistingSessionAtMountRef.current) return;
     if (hasRestoredFromPersistentRef.current) return;
-    if (!areSessionsLoaded) return;
+    if (!hasFreshSessionSnapshot) return;
 
     const existingSessions = getSessionsByEnvironment(environmentId);
     const existingPersistentSession = existingSessions.find((s) => s.tabId === tabId);
@@ -841,8 +873,7 @@ export function PersistentTerminal({
     environmentId,
     tabId,
     sessionKey,
-    existingSession,
-    areSessionsLoaded,
+    hasFreshSessionSnapshot,
     loadPersistentSessionBuffer,
     getSessionsByEnvironment,
     setSession,
@@ -867,7 +898,7 @@ export function PersistentTerminal({
 
   // Create persistent session for sidebar tracking
   useEffect(() => {
-    if (!areSessionsLoaded) return;
+    if (!hasFreshSessionSnapshot) return;
     if (!sessionId || !environmentId) return;
     if (persistentSessionCreatedRef.current || creationInProgressRef.current) return;
 
@@ -923,7 +954,7 @@ export function PersistentTerminal({
     getSessionsByEnvironment,
     setPersistentSessionId,
     updateSessionStatus,
-    areSessionsLoaded,
+    hasFreshSessionSnapshot,
   ]);
 
   // Update session activity on user interaction

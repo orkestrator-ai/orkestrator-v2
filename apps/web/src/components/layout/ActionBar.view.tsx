@@ -287,7 +287,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     handleCopyEnvironmentUrl,
     enabledAgentList,
     enabledAgents,
-    defaultAgent,
     launchDialogDefaultsFor,
     handleReview,
     openReviewDialog,
@@ -325,8 +324,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     sourceBranch,
   } = useActionBarController({ presentation });
 
-  // Each launch dialog opens on the same agent, model and reasoning level its
-  // button would use for a plain click.
+  // Configure dialogs open on the Settings action default. A plain click still
+  // keeps the environment's own agent via `actionDefaultFor`.
   const reviewLaunchDefaults = launchDialogDefaultsFor("review");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
@@ -1315,20 +1314,14 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           }
         }}
         defaultTabType={resolveDefaultReviewTabType({
-          defaultAgent,
+          defaultAgent: reviewLaunchDefaults.defaultAgent,
           environment: selectedEnvironment ?? undefined,
           global: config.global,
           repositoryConfig: selectedProjectId ? config.repositories[selectedProjectId] : undefined,
         })}
         catalog={reviewModelCatalog}
-        preferredModels={{
-          claude: config.global.claudeModel,
-          codex: config.global.codexModel,
-          opencode: config.global.opencodeModel,
-        }}
-        preferredReasoningEfforts={{
-          codex: config.global.codexReasoningEffort,
-        }}
+        preferredModels={reviewLaunchDefaults.preferredModels}
+        preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
         busy={loopedReviewLaunchPending}
         onConfirm={handleLoopedReview}
       />
@@ -1337,14 +1330,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         onOpenChange={(open) => {
           if (!multiReviewLaunchInFlightRef.current) setMultiReviewDialogOpen(open);
         }}
-        defaultAgent={defaultAgent}
+        defaultAgent={reviewLaunchDefaults.defaultAgent}
         catalog={reviewModelCatalog}
-        preferredModels={{
-          claude: config.global.claudeModel,
-          codex: config.global.codexModel,
-          opencode: config.global.opencodeModel,
-        }}
-        preferredReasoningEfforts={{ codex: config.global.codexReasoningEffort }}
+        preferredModels={reviewLaunchDefaults.preferredModels}
+        preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}
       />

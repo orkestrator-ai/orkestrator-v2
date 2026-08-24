@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Bot, BrainCircuit, Layers3 } from "lucide-react";
 import type {
   AgentModel,
@@ -29,6 +29,7 @@ import {
   useAgentModelFavorites,
 } from "@/hooks/useAgentModelFavorites";
 import {
+  catalogIdFor,
   defaultEffortFor,
   effortLabel,
   firstModelFor,
@@ -159,7 +160,7 @@ export function ReviewLaunchDialog({
   const [passAllowance, setPassAllowance] = useState(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
   const wasOpenRef = useRef(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!justOpened) return;
@@ -183,7 +184,8 @@ export function ReviewLaunchDialog({
 
   const agent = getReviewAgent(tabType);
   const models = modelsForAgent(catalog, agent);
-  const selectedModel = models.find((option) => option.id === model) ?? models[0];
+  const resolvedModelId = catalogIdFor(models, model) ?? model;
+  const selectedModel = models.find((option) => option.id === resolvedModelId) ?? models[0];
   const reasoningEfforts = selectedModel?.reasoningEfforts ?? [];
   const effortAvailable = reasoningEfforts.length > 0;
   const effectiveEffort =

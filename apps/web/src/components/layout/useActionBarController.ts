@@ -319,14 +319,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [config.global.actionDefaults, defaultAgent, enabledAgentList, environmentAgent],
   );
   /**
-   * The same choice a plain click would make, expressed as launch-dialog
-   * preferences. The configured action default must be what the dialog opens
-   * on, otherwise right-clicking would silently propose a different run than
-   * the button next to it performs.
+   * Settings action defaults as launch-dialog preferences.
+   *
+   * A plain click still uses `actionDefaultFor`, so an environment created with
+   * Codex is not retargeted. The configure dialog is the place the user asked
+   * to pick a run, and it must open on what Settings named for this action —
+   * including its model — even when the environment's own agent is different.
    */
   const launchDialogDefaultsFor = useCallback(
     (key: ActionDefaultKey) => {
-      const actionDefault = actionDefaultFor(key);
+      const actionDefault = resolveActionDefault(config.global.actionDefaults, key, {
+        fallbackAgent: defaultAgent,
+        enabledAgents: enabledAgentList,
+      });
       return {
         defaultAgent: actionDefault.agent,
         preferredModels: {
@@ -344,11 +349,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       };
     },
     [
-      actionDefaultFor,
+      config.global.actionDefaults,
       config.global.claudeModel,
       config.global.codexModel,
       config.global.codexReasoningEffort,
       config.global.opencodeModel,
+      defaultAgent,
+      enabledAgentList,
     ],
   );
   const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } = useLoopedReviewStore(

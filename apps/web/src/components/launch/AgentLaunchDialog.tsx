@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { AlertTriangle, GitPullRequest, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
+  catalogIdFor,
   defaultEffortFor,
   effortLabel,
   firstModelFor,
@@ -36,7 +37,7 @@ interface AgentLaunchDialogProps {
   kind?: AgentLaunchKind;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Agent the toolbar would have used for a plain click. */
+  /** Agent Settings named for this action; the dialog opens on it. */
   defaultAgent: LaunchAgent;
   catalog: AgentModelCatalog;
   /** Providers the user has enabled; the picker offers no others. */
@@ -95,8 +96,9 @@ export function AgentLaunchDialog({
 
   // Only the closed -> open edge reconfigures the dialog: a parent re-render
   // that hands down a refreshed catalog must not discard a selection the user
-  // is in the middle of making.
-  useEffect(() => {
+  // is in the middle of making. Layout so the first paint is already the
+  // Settings default rather than whatever the previous mount last showed.
+  useLayoutEffect(() => {
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!justOpened) return;
@@ -109,7 +111,8 @@ export function AgentLaunchDialog({
   }, [catalog, defaultAgent, open, preferredModels, preferredReasoningEfforts]);
 
   const models = modelsForAgent(catalog, agent);
-  const selectedModel = models.find((option) => option.id === model) ?? models[0];
+  const resolvedModelId = catalogIdFor(models, model) ?? model;
+  const selectedModel = models.find((option) => option.id === resolvedModelId) ?? models[0];
   // Stable identity: the `?? []` fallback otherwise re-created the array every
   // render, defeating the reasoningOptions memo below.
   const reasoningEfforts = useMemo(

@@ -255,15 +255,16 @@ export function DefaultsSettings({
         <h3 className="text-sm font-medium text-foreground">Action defaults</h3>
         <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
           The agent, model and reasoning level each toolbar action uses when its button is clicked.
-          Right-click (or long-press) a button to configure a single run instead — that never
-          changes what is set here. Anything left on{" "}
+          Right-click (or long-press) a button to configure a single run — that dialog opens on the
+          default set here, and confirming it never changes these settings. Anything left on{" "}
           <span className="text-zinc-300">App default</span> keeps using the project or app default
           agent and its configured model.
         </p>
         <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-          These are application-level. An environment created with a specific agent keeps using that
-          agent — the model and reasoning level set here then apply only if they name that same
-          agent.
+          A one-click launch in an environment created with a specific agent keeps that agent. The
+          model and reasoning level set here then apply only if they name that same agent. The
+          configure dialog still opens on this action default so you can change the run before it
+          starts.
         </p>
       </div>
 

@@ -283,8 +283,7 @@ afterEach(() => {
   useEnvironmentStore.setState({ environments: [] });
   useConfigStore.getState().updateGlobalConfig({
     enabledAgentPlatforms: ["claude", "codex", "opencode"],
-    claudeModel: "claude-sonnet-5",
-    claudeNativeFastModeDefault: false,
+    agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
   });
   usePaneLayoutStore.setState({
     environments: new Map(),
@@ -309,6 +308,34 @@ function identity(platform: NativeAgentTabData["platform"]): NativeAgentTabData 
     sessionId: `${platform}-session`,
     isLocal: false,
   };
+}
+
+function seedUnassignedDefaultCatalog() {
+  getNativeAgentModelCatalogMock.mockImplementation(
+    async () =>
+      [
+        { platform: "claude", id: "claude-sonnet-5", label: "Claude Sonnet" },
+        {
+          platform: "codex",
+          id: "gpt-5.4",
+          label: "GPT-5.4",
+          reasoning: [
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+          defaultReasoningId: "medium",
+        },
+      ] as never,
+  );
+}
+
+async function expectUnassignedPicker(platform: "claude" | "codex", modelLabel: string) {
+  await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
+  expect(await screen.findByTitle(/Choose model/)).toBeTruthy();
+  await waitFor(() => {
+    expect(document.querySelector(`[data-native-model-platform='${platform}']`)).toBeTruthy();
+    expect(screen.getByText(modelLabel)).toBeTruthy();
+  });
 }
 
 function pendingInteraction(
@@ -591,6 +618,90 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
     expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-2xl");
+  });
+
+  test("unassigned composer adopts the environment default agent and model", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: { model: "claude-sonnet-5" },
+          codex: { model: "o3", reasoningEffort: "medium" },
+        },
+      },
+    });
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Native agent test",
+          order: 0,
+          setupPhase: "ready",
+          agentSettings: {
+            defaultAgent: "codex",
+            platforms: { codex: { model: "gpt-5.4", reasoningEffort: "high" } },
+          },
+        } as never,
+      ],
+    });
+
+    render(
+      <AgentNativeTab tabId="tab-unassigned-env" data={{ environmentId: "env-1" }} isActive />,
+    );
+
+    await expectUnassignedPicker("codex", "GPT-5.4");
+    expect(screen.getByText("High")).toBeTruthy();
+    expect(document.querySelector("[data-native-model-platform='claude']") === null).toBe(true);
+  });
+
+  test("unassigned composer adopts the repository default when the environment inherits", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: { model: "claude-sonnet-5" },
+          codex: { model: "o3" },
+        },
+      },
+    });
+    useConfigStore.getState().setRepositoryConfig("project-1", {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: { codex: { model: "gpt-5.4" } },
+      },
+    });
+
+    render(
+      <AgentNativeTab tabId="tab-unassigned-repo" data={{ environmentId: "env-1" }} isActive />,
+    );
+
+    await expectUnassignedPicker("codex", "GPT-5.4");
+    expect(document.querySelector("[data-native-model-platform='claude']") === null).toBe(true);
+  });
+
+  test("unassigned composer uses the application default when every tier inherits", async () => {
+    seedUnassignedDefaultCatalog();
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["claude", "codex", "opencode"],
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: { claude: { model: "claude-sonnet-5" } },
+      },
+    });
+
+    render(
+      <AgentNativeTab tabId="tab-unassigned-app" data={{ environmentId: "env-1" }} isActive />,
+    );
+
+    await expectUnassignedPicker("claude", "Claude Sonnet");
+    expect(document.querySelector("[data-native-model-platform='codex']") === null).toBe(true);
   });
 
   test("uses an execution profile for OpenCode's first prompt without carrying a stale mode", async () => {
@@ -1413,8 +1524,7 @@ describe("AgentNativeTab", () => {
 
   test("does not overwrite a resumed session with configured defaults", async () => {
     useConfigStore.getState().updateGlobalConfig({
-      claudeModel: "configured-default",
-      claudeNativeFastModeDefault: true,
+      agentSettings: { platforms: { claude: { model: "configured-default" } } },
     });
 
     render(
@@ -1429,8 +1539,7 @@ describe("AgentNativeTab", () => {
     expect(adopted).not.toHaveProperty("fastMode");
 
     useConfigStore.getState().updateGlobalConfig({
-      claudeModel: "claude-sonnet-5",
-      claudeNativeFastModeDefault: false,
+      agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
     });
   });
 

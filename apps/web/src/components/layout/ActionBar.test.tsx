@@ -26,6 +26,7 @@ import * as realMultiReviewPersistence from "@/lib/multi-review-persistence";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import type { Environment, PrState, Project } from "@/types";
 import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import type { KanbanTask } from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
@@ -176,10 +177,8 @@ const selectedProject: Project = {
 let currentEnvironment: Environment = selectedEnvironment;
 let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
 let currentClaudeModel = "claude-default-model";
-let currentClaudeFastModeDefault = false;
 let currentCodexModel = "codex-default-model";
 let currentCodexReasoningEffort = "medium";
-let currentCodexFastModeDefault = false;
 let currentOpenCodeModel = "opencode/default-model";
 let currentSelectedProjectId: string | null = selectedProject.id;
 /**
@@ -201,7 +200,10 @@ let currentEnabledAgentPlatforms:
   | undefined;
 let currentActionDefaults: ActionDefaults | undefined;
 let currentPreferredEditor: "vscode" | "cursor" | undefined = "vscode";
-let currentRepositoryConfig: Record<string, { prBaseBranch?: string }> = {
+let currentRepositoryConfig: Record<
+  string,
+  { prBaseBranch?: string; agentSettings?: AgentSettingsTier }
+> = {
   "project-1": { prBaseBranch: "main" },
 };
 let currentWorkspaceReady = false;
@@ -482,19 +484,12 @@ mock.module("@/stores", () => ({
     selector?: (state: {
       config: {
         global: {
-          defaultAgent?: "claude" | "opencode" | "codex";
           preferredEditor?: "vscode" | "cursor";
           reviewInstruction?: string;
-          claudeModel?: string;
-          claudeNativeFastModeDefault?: boolean;
-          codexModel: string;
-          codexReasoningEffort: string;
-          codexNativeFastModeDefault?: boolean;
-          opencodeModel: string;
           enabledAgentPlatforms?: Array<"claude" | "codex" | "cursor" | "grok" | "opencode">;
-          actionDefaults?: ActionDefaults;
+          agentSettings?: AgentSettingsTier;
         };
-        repositories: Record<string, { prBaseBranch?: string }>;
+        repositories: Record<string, { prBaseBranch?: string; agentSettings?: AgentSettingsTier }>;
       };
     }) => T,
   ) =>
@@ -502,17 +497,18 @@ mock.module("@/stores", () => ({
       {
         config: {
           global: {
-            defaultAgent: currentDefaultAgent,
             preferredEditor: currentPreferredEditor,
             reviewInstruction: currentReviewPrompt,
-            claudeModel: currentClaudeModel,
-            claudeNativeFastModeDefault: currentClaudeFastModeDefault,
-            codexModel: currentCodexModel,
-            codexReasoningEffort: currentCodexReasoningEffort,
-            codexNativeFastModeDefault: currentCodexFastModeDefault,
-            opencodeModel: currentOpenCodeModel,
             enabledAgentPlatforms: currentEnabledAgentPlatforms,
-            actionDefaults: currentActionDefaults,
+            agentSettings: {
+              defaultAgent: currentDefaultAgent,
+              actionDefaults: currentActionDefaults,
+              platforms: {
+                claude: { model: currentClaudeModel },
+                codex: { model: currentCodexModel, reasoningEffort: currentCodexReasoningEffort },
+                opencode: { model: currentOpenCodeModel },
+              },
+            },
           },
           repositories: currentRepositoryConfig,
         },
@@ -815,10 +811,8 @@ beforeEach(() => {
   currentEnabledAgentPlatforms = undefined;
   currentActionDefaults = undefined;
   currentClaudeModel = "claude-default-model";
-  currentClaudeFastModeDefault = false;
   currentCodexModel = "codex-default-model";
   currentCodexReasoningEffort = "medium";
-  currentCodexFastModeDefault = false;
   currentOpenCodeModel = "opencode/default-model";
   currentPreferredEditor = "vscode";
   currentRepositoryConfig = { "project-1": { prBaseBranch: "main" } };
@@ -1972,7 +1966,6 @@ describe("ActionBar workflow tabs", () => {
     currentReviewPrompt = "Inspect origin/{{targetBranch}}...HEAD for release blockers.";
     currentCodexModel = "gpt-review-default";
     currentCodexReasoningEffort = "xhigh";
-    currentCodexFastModeDefault = true;
 
     render(<ActionBar />);
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
@@ -1997,22 +1990,23 @@ describe("ActionBar workflow tabs", () => {
           model: "gpt-review-default",
           reasoningEffort: "xhigh",
           mode: "build",
-          fastMode: true,
+          // Speed is a per-session model-picker choice, so a queued turn starts
+          // at normal rather than inheriting a stored default.
+          fastMode: false,
         }),
       ),
     );
   });
 
-  test("preserves Claude model and fast-mode defaults in a one-click review", async () => {
+  test("preserves the Claude model default and starts a one-click review at normal speed", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "claude",
+      agentSettings: { defaultAgent: "claude" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
     };
     currentClaudeModel = "claude-review-default";
-    currentClaudeFastModeDefault = true;
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
@@ -2025,7 +2019,7 @@ describe("ActionBar workflow tabs", () => {
           model: "claude-review-default",
           effort: "high",
           planModeEnabled: false,
-          fastModeEnabled: true,
+          fastModeEnabled: false,
         }),
       ),
     );
@@ -2034,7 +2028,7 @@ describe("ActionBar workflow tabs", () => {
   test("hands an OpenCode review to the backend before an environment switch", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "opencode",
+      agentSettings: { defaultAgent: "opencode" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -2073,7 +2067,7 @@ describe("ActionBar workflow tabs", () => {
     currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "opencode"];
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "cursor",
+      agentSettings: { defaultAgent: "cursor" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -2141,7 +2135,7 @@ describe("ActionBar workflow tabs", () => {
   test("keeps a one-click PR renderer-owned for a non-ACP default agent", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -2164,15 +2158,14 @@ describe("ActionBar workflow tabs", () => {
     expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
   });
 
-  test("durably queues a configured Claude PR with its fast-mode default", async () => {
+  test("durably queues a configured Claude PR at normal speed", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "claude",
+      agentSettings: { defaultAgent: "claude" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
     };
-    currentClaudeFastModeDefault = true;
 
     render(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
@@ -2196,7 +2189,9 @@ describe("ActionBar workflow tabs", () => {
           // Claude reads `planModeEnabled` for its execution mode and treats an
           // absent field as build, so a PR launch must never arrive in plan mode.
           mode: "build",
-          fastMode: true,
+          // Speed is a per-session model-picker choice, so a queued turn starts
+          // at normal rather than inheriting a stored default.
+          fastMode: false,
         }),
       ),
     );
@@ -2205,15 +2200,14 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("durably queues a configured Codex PR with its fast-mode default", async () => {
+  test("durably queues a configured Codex PR at normal speed", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
     };
-    currentCodexFastModeDefault = true;
 
     render(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
@@ -2229,7 +2223,9 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({
           id: `initial-prompt:env-1:${tabOptions.tabId}`,
           mode: "build",
-          fastMode: true,
+          // Speed is a per-session model-picker choice, so a queued turn starts
+          // at normal rather than inheriting a stored default.
+          fastMode: false,
         }),
       ),
     );
@@ -2239,7 +2235,7 @@ describe("ActionBar workflow tabs", () => {
     currentEnabledAgentPlatforms = ["claude", "codex", "cursor", "opencode"];
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "cursor",
+      agentSettings: { defaultAgent: "cursor" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -2646,7 +2642,7 @@ describe("ActionBar workflow tabs", () => {
   test("starts PR monitoring and honors environment defaults and one-shot workflow overrides", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "opencode",
+      agentSettings: { defaultAgent: "opencode" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -4086,7 +4082,7 @@ describe("ActionBar workflow tabs", () => {
   test("falls back from an absent environment and global workflow default to Claude", () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: undefined,
+      agentSettings: { defaultAgent: undefined },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -4104,6 +4100,40 @@ describe("ActionBar workflow tabs", () => {
 });
 
 describe("ActionBar configured action defaults", () => {
+  test("launches with a repository action default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentActionDefaults = {
+      review: { platform: "opencode", model: "global-review" },
+    };
+    currentRepositoryConfig = {
+      "project-1": {
+        prBaseBranch: "main",
+        agentSettings: {
+          actionDefaults: {
+            review: { platform: "claude", model: "repo-review", reasoningEffort: "high" },
+          },
+        },
+      },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        displayTitle: "Review",
+        initialAgentModel: "repo-review",
+        initialReasoningEffort: "high",
+      }),
+    );
+  });
+
   test("launches a one-click review with the configured Review default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -4146,7 +4176,7 @@ describe("ActionBar configured action defaults", () => {
       prState: null,
       hasMergeConflicts: null,
       // The user created this environment with Codex explicitly.
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
     };
     currentActionDefaults = {
       review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
@@ -4170,7 +4200,7 @@ describe("ActionBar configured action defaults", () => {
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
-      defaultAgent: "claude",
+      agentSettings: { defaultAgent: "claude" },
     };
     currentActionDefaults = {
       pr: { platform: "claude", model: "haiku", reasoningEffort: "low" },
@@ -4321,7 +4351,7 @@ describe("ActionBar configured action defaults", () => {
       // Environments always persist the agent they were created with. A plain
       // click still honours that; the configure dialog must not, or Settings'
       // PR default never appears.
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -4344,7 +4374,7 @@ describe("ActionBar configured action defaults", () => {
   test("opens the Code review dialog on the configured Review default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -4367,7 +4397,7 @@ describe("ActionBar configured action defaults", () => {
   test("opens the Resolve dialog on the configured Resolve default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
       prState: "open",
       hasMergeConflicts: true,
     };
@@ -4389,7 +4419,7 @@ describe("ActionBar configured action defaults", () => {
   test("launches a looped review from the configured Review default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -4420,7 +4450,7 @@ describe("ActionBar configured action defaults", () => {
   test("seeds every Multi Review row from the configured Review default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -4462,7 +4492,7 @@ describe("ActionBar configured action defaults", () => {
     currentEnvironment = {
       ...selectedEnvironment,
       // The app default agent is Codex, so an unchanged fallback is observable.
-      defaultAgent: "claude",
+      agentSettings: { defaultAgent: "claude" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,

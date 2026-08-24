@@ -31,7 +31,6 @@ type AgentModel = shared.AgentModel;
 type AgentActivityState = shared.AgentActivityState;
 type AgentActivitySource = shared.AgentActivitySource;
 type AgentModelCatalogCache = shared.AgentModelCatalogCache;
-type AgentModelConfigKey = shared.AgentModelConfigKey;
 type AppConfig = shared.AppConfig;
 type ClaudeModelCatalogSnapshot = shared.ClaudeModelCatalogSnapshot;
 type ClaudeModelCatalogEntry = shared.ClaudeModelCatalogEntry;
@@ -98,7 +97,6 @@ export type StorageLayerTypes = [
   AgentActivityState,
   AgentActivitySource,
   AgentModelCatalogCache,
-  AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
   ClaudeModelCatalogEntry,

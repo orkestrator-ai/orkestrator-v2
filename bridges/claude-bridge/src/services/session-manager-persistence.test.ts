@@ -939,7 +939,7 @@ describe("hydratePersistedSessionMessages", () => {
     const state = await materializePersistedSession();
     const beforeHydration = Date.now();
     const longSummary = `\u0000${"a".repeat(4_095)}😀`;
-    mockSdkGetSessionMessages.mockImplementation(async () => [
+    const transcript: SdkSessionMessage[] = [
       {
         type: "system",
         uuid: "malformed-start",
@@ -1013,7 +1013,8 @@ describe("hydratePersistedSessionMessages", () => {
         },
         parent_tool_use_id: null,
       },
-    ]);
+    ];
+    mockSdkGetSessionMessages.mockImplementation(async () => transcript);
 
     await hydratePersistedSessionMessages(state.id);
 
@@ -1029,10 +1030,19 @@ describe("hydratePersistedSessionMessages", () => {
     expect(
       snapshot?.error?.charCodeAt((snapshot.error?.length ?? 0) - 1),
     ).not.toBeGreaterThanOrEqual(0xd800);
-    expect(snapshot?.startedAt).toBeGreaterThanOrEqual(beforeHydration);
+    // Neither record dated itself usably (`Infinity`, then a year-9999 stamp
+    // the skew guard refuses), so both take the materialization's synthetic
+    // scale: one millisecond per raw record, ending at the materialization.
+    // That is a real recent clock — never the future, and never further back
+    // than the transcript is long — which is what keeps the malformed values
+    // above from reaching a snapshot.
+    const earliestSyntheticStamp = beforeHydration - transcript.length;
+    expect(snapshot?.startedAt).toBeGreaterThanOrEqual(earliestSyntheticStamp);
     expect(snapshot?.startedAt).toBeLessThanOrEqual(Date.now());
-    expect(snapshot?.endedAt).toBeGreaterThanOrEqual(beforeHydration);
+    expect(snapshot?.endedAt).toBeGreaterThanOrEqual(earliestSyntheticStamp);
     expect(snapshot?.endedAt).toBeLessThanOrEqual(Date.now());
+    // The pair still orders: the notification followed the start.
+    expect(snapshot!.endedAt!).toBeGreaterThan(snapshot!.startedAt!);
     expect(state.backgroundTasks?.["task-backwards"]).toMatchObject({
       status: "completed",
       startedAt: Date.parse("2026-07-28T10:02:00.000Z"),
@@ -1187,6 +1197,212 @@ describe("evictIdleHydratedTranscripts", () => {
     expect(rehydrated.map((message) => message.id)).toEqual([U1, A1, A2, U2]);
     expect(state.persistedMessagesLoaded).toBe(true);
     expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps timestamp-less task settlement positioned after eviction and re-hydration", async () => {
+    const transcript: SdkSessionMessage[] = [
+      {
+        type: "assistant",
+        uuid: "task-launch",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "task-without-timestamp",
+              name: "Task",
+              input: { description: "Review the bridge" },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-before-settle",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Still working" }],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "user",
+        uuid: "task-result",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "task-without-timestamp",
+              content: "done",
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-after-settle",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Finished" }],
+        },
+        parent_tool_use_id: null,
+      },
+    ];
+    mockSdkGetSessionMessages.mockImplementation(async () => transcript);
+    const state = await materializePersistedSession();
+
+    const expectSettlementBetweenVisibleRows = () => {
+      const launch = state.messages.find((message) => message.id === "task-launch");
+      const before = state.messages.find((message) => message.id === "assistant-before-settle");
+      const after = state.messages.find((message) => message.id === "assistant-after-settle");
+      const settledAt = launch?.parts.find(
+        (part) => part.toolUseId === "task-without-timestamp",
+      )?.settledAt;
+
+      expect(settledAt).toBeDefined();
+      expect(Date.parse(settledAt!)).toBeGreaterThan(Date.parse(before!.createdAt));
+      expect(Date.parse(settledAt!)).toBeLessThan(Date.parse(after!.createdAt));
+    };
+
+    await hydratePersistedSessionMessages(state.id);
+    expectSettlementBetweenVisibleRows();
+
+    markStale(state);
+    expect(evictIdleHydratedTranscripts()).toContain(state.id);
+    await hydratePersistedSessionMessages(state.id);
+
+    expectSettlementBetweenVisibleRows();
+    expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(2);
+  });
+
+  test("keeps a timestamp-less background task's terminal edge on the transcript's own scale", async () => {
+    /*
+     * The renderer prefers a task record's terminal edge over the tool
+     * result's stamp, so the edge has to be comparable with the rows it will
+     * be resolved against. Reading a separate clock for it answers on a
+     * different scale: the whole materialization runs in well under a
+     * millisecond, so every task in it settles "before" the rows it actually
+     * ran past — and the reducer, which refuses an end that precedes the
+     * start, then drops the edge entirely.
+     */
+    const filler = (index: number): SdkSessionMessage => ({
+      type: "assistant",
+      uuid: `filler-${index}`,
+      session_id: PERSISTED_SDK_ID,
+      message: { role: "assistant", content: [{ type: "text", text: `Step ${index}` }] },
+      parent_tool_use_id: null,
+    });
+    const transcript: SdkSessionMessage[] = [
+      {
+        type: "assistant",
+        uuid: "bash-launch",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: "bash-1",
+              name: "Bash",
+              input: { command: "bun run dev", run_in_background: true },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "task-started",
+        session_id: PERSISTED_SDK_ID,
+        message: {
+          subtype: "task_started",
+          task_id: "bg-dev",
+          tool_use_id: "bash-1",
+          description: "Run the dev server",
+        },
+        parent_tool_use_id: null,
+      },
+      // Enough rows that a second clock cannot land in the same millisecond
+      // range by luck; the notification below sits well past the start.
+      ...Array.from({ length: 10 }, (_unused, index) => filler(index)),
+      {
+        type: "assistant",
+        uuid: "assistant-before-settle",
+        session_id: PERSISTED_SDK_ID,
+        message: { role: "assistant", content: [{ type: "text", text: "Still working" }] },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "system",
+        uuid: "task-done",
+        session_id: PERSISTED_SDK_ID,
+        message: { subtype: "task_notification", task_id: "bg-dev", status: "completed" },
+        parent_tool_use_id: null,
+      },
+      {
+        type: "assistant",
+        uuid: "assistant-after-settle",
+        session_id: PERSISTED_SDK_ID,
+        message: { role: "assistant", content: [{ type: "text", text: "Finished" }] },
+        parent_tool_use_id: null,
+      },
+    ];
+    mockSdkGetSessionMessages.mockImplementation(async () => transcript);
+    const state = await materializePersistedSession();
+
+    const expectTerminalEdgeBetweenVisibleRows = () => {
+      const before = state.messages.find((message) => message.id === "assistant-before-settle");
+      const after = state.messages.find((message) => message.id === "assistant-after-settle");
+      const task = state.backgroundTasks?.["bg-dev"];
+
+      expect(task?.status).toBe("completed");
+      // Dropped entirely when the edge reads earlier than the launch it
+      // belongs to, which is the failure this guards.
+      expect(task?.endedAt).toBeDefined();
+      expect(task!.endedAt!).toBeGreaterThan(task!.startedAt!);
+      expect(task!.endedAt!).toBeGreaterThan(Date.parse(before!.createdAt));
+      expect(task!.endedAt!).toBeLessThan(Date.parse(after!.createdAt));
+    };
+
+    await hydratePersistedSessionMessages(state.id);
+    expectTerminalEdgeBetweenVisibleRows();
+
+    markStale(state);
+    expect(evictIdleHydratedTranscripts()).toContain(state.id);
+    await hydratePersistedSessionMessages(state.id);
+
+    expectTerminalEdgeBetweenVisibleRows();
+    expect(mockSdkGetSessionMessages).toHaveBeenCalledTimes(2);
+  });
+
+  test("replaces a persisted timestamp it cannot parse", async () => {
+    mockSdkGetSessionMessages.mockImplementation(async () => [
+      {
+        type: "assistant",
+        uuid: "malformed-clock",
+        session_id: PERSISTED_SDK_ID,
+        timestamp: "not-a-date",
+        message: { role: "assistant", content: [{ type: "text", text: "Unclocked" }] },
+        parent_tool_use_id: null,
+      },
+    ]);
+    const state = await materializePersistedSession();
+    await hydratePersistedSessionMessages(state.id);
+
+    const row = state.messages.find((message) => message.id === "malformed-clock");
+    // Passing the record's own string straight through leaves a row nothing
+    // downstream can order, and every settle position is resolved by
+    // comparing against these clocks.
+    expect(row?.createdAt).not.toBe("not-a-date");
+    expect(Number.isFinite(Date.parse(row!.createdAt))).toBe(true);
   });
 
   test("keeps a transcript that was read recently", async () => {

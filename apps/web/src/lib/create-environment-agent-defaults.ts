@@ -12,12 +12,15 @@ import type {
   OpenCodeMode,
 } from "@/types";
 import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { SHIPPED_PLATFORM_MODES } from "@orkestrator/protocol/agent-settings";
 
 interface ConfiguredCreateEnvironmentAgentDefaults {
   agent: LaunchAgent;
   claudeMode: ClaudeMode;
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
+  cursorMode: AgentStyle;
+  grokMode: AgentStyle;
   models: Partial<Record<LaunchAgent, string>>;
   reasoningEfforts: Partial<Record<LaunchAgent, string>>;
 }
@@ -27,6 +30,8 @@ export interface CreateEnvironmentAgentDefaults {
   claudeMode: ClaudeMode;
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
+  cursorMode: AgentStyle;
+  grokMode: AgentStyle;
   model: string;
   reasoningEffort: string;
 }
@@ -34,25 +39,32 @@ export interface CreateEnvironmentAgentDefaults {
 function withRememberedMode(
   configured: ConfiguredCreateEnvironmentAgentDefaults,
   remembered: LastEnvironmentAgentSelection | undefined,
-): Pick<CreateEnvironmentAgentDefaults, "claudeMode" | "opencodeMode" | "codexMode"> {
+): Pick<
+  CreateEnvironmentAgentDefaults,
+  "claudeMode" | "opencodeMode" | "codexMode" | "cursorMode" | "grokMode"
+> {
   const modes = {
     claudeMode: configured.claudeMode,
     opencodeMode: configured.opencodeMode,
     codexMode: configured.codexMode,
+    cursorMode: configured.cursorMode,
+    grokMode: configured.grokMode,
   };
   if (!remembered) return modes;
 
   if (remembered.platform === "claude") modes.claudeMode = remembered.mode;
   if (remembered.platform === "opencode") modes.opencodeMode = remembered.mode;
   if (remembered.platform === "codex") modes.codexMode = remembered.mode;
+  if (remembered.platform === "cursor") modes.cursorMode = remembered.mode;
+  if (remembered.platform === "grok") modes.grokMode = remembered.mode;
   return modes;
 }
 
 /**
  * Resolve the initial agent controls independently from repository defaults.
- * A remembered selection wins only for its own platform and only while that
- * platform remains enabled. Removed models and reasoning levels safely fall
- * back through the current catalogue.
+ * A remembered selection covers the agent and its mode only, wins only for its
+ * own platform, and only while that platform remains enabled. The model and
+ * reasoning level always come from settings.
  *
  * Model resolution goes through `firstModelFor`, the same helper the review,
  * multi-review and build launchers use. That matters for Claude: configuration
@@ -78,18 +90,11 @@ export function resolveCreateEnvironmentAgentDefaults(options: {
       : configured.agent;
   const agent = firstEnabledAgentPlatform(options.enabledAgents, preferredPlatform);
   const rememberedForAgent = remembered?.platform === agent ? remembered : undefined;
-  const rememberedModel = rememberedForAgent ? (rememberedForAgent.model ?? "default") : undefined;
-  const model = firstModelFor(agent, catalog, {
-    ...configured.models,
-    ...(rememberedModel ? { [agent]: rememberedModel } : {}),
-  });
-  const reasoningEffort = rememberedForAgent
-    ? rememberedForAgent.reasoningEffort
-      ? defaultEffortFor(agent, model, catalog, {
-          [agent]: rememberedForAgent.reasoningEffort,
-        })
-      : "default"
-    : defaultEffortFor(agent, model, catalog, configured.reasoningEfforts);
+  // Model and reasoning come from settings only. They used to be remembered
+  // from the last create, so a one-off choice in this dialog silently outranked
+  // the configured default for every environment after it.
+  const model = firstModelFor(agent, catalog, configured.models);
+  const reasoningEffort = defaultEffortFor(agent, model, catalog, configured.reasoningEfforts);
 
   return {
     agent,
@@ -105,6 +110,8 @@ export function selectedAgentMode(
     claudeMode: ClaudeMode;
     opencodeMode: OpenCodeMode;
     codexMode: CodexMode;
+    cursorMode?: AgentStyle;
+    grokMode?: AgentStyle;
   },
 ): AgentStyle {
   return platform === "claude"
@@ -113,5 +120,7 @@ export function selectedAgentMode(
       ? modes.opencodeMode
       : platform === "codex"
         ? modes.codexMode
-        : "native";
+        : platform === "cursor"
+          ? (modes.cursorMode ?? SHIPPED_PLATFORM_MODES.cursor)
+          : (modes.grokMode ?? SHIPPED_PLATFORM_MODES.grok);
 }

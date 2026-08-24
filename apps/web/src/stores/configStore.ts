@@ -70,17 +70,21 @@ const DEFAULT_CONFIG: AppConfig = {
     ],
     enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
     favoriteModels: [],
-    defaultAgent: "claude",
-    opencodeModel: "opencode/claude-sonnet-5",
-    claudeModel: "claude-sonnet-5",
-    codexModel: "gpt-5.4",
-    codexReasoningEffort: "high",
-    opencodeMode: "terminal",
-    claudeMode: DEFAULT_CLAUDE_MODE,
-    claudeNativeBackend: "sdk",
-    claudeNativeFastModeDefault: false,
-    codexMode: "native",
-    codexNativeFastModeDefault: false,
+    // Mirrors `defaultConfig()` in the backend, which is the source of truth.
+    agentSettings: {
+      defaultAgent: "claude",
+      platforms: {
+        claude: {
+          mode: DEFAULT_CLAUDE_MODE,
+          model: "claude-sonnet-5",
+          claudeNativeBackend: "sdk",
+        },
+        codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
+        opencode: { mode: "terminal", model: "opencode/claude-sonnet-5" },
+        cursor: { mode: "terminal" },
+        grok: { mode: "terminal" },
+      },
+    },
     codexMaxConcurrentThreads: 5,
     terminalAppearance: {
       fontFamily: "FiraCode Nerd Font",

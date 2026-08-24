@@ -19,6 +19,7 @@ import type {
   AgentInteractionPolicy,
 } from "@orkestrator/protocol/agent-interactions";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 
 export type { AgentActivityState };
 
@@ -136,20 +137,14 @@ export interface Environment {
   localGrokPort?: number;
 
   // === Agent settings overrides ===
-  /** Per-environment default agent override (undefined = use global config) */
-  defaultAgent?: DefaultAgent;
-  /** Per-environment Claude mode override (undefined = use global config) */
-  claudeMode?: ClaudeMode;
   /**
-   * Per-environment Claude native backend override (undefined = inherit from
-   * repository, then global). Only meaningful when the resolved Claude mode
-   * is "native".
+   * This environment's agent overrides — the narrowest of the three tiers.
+   *
+   * An absent field means "inherit from the repository, then the application".
+   * Supersedes the five legacy fields below; the backend migrates them on load
+   * (`apps/backend/src/core/storage-agent-settings.ts`).
    */
-  claudeNativeBackend?: ClaudeNativeBackend;
-  /** Per-environment OpenCode mode override (undefined = use global config) */
-  opencodeMode?: OpenCodeMode;
-  /** Per-environment Codex mode override (undefined = use global config) */
-  codexMode?: CodexMode;
+  agentSettings?: AgentSettingsTier;
   /**
    * Whether setup scripts have completed for this environment. Persisted so
    * native chat tabs can skip the "waiting for setup" UI after app restart,
@@ -476,34 +471,12 @@ export interface GlobalConfig {
   allowedDomains: string[];
   /** Preferred editor for opening containers (VS Code or Cursor) */
   preferredEditor?: PreferredEditor;
-  /** Default agent for new environments (Claude or OpenCode) */
-  defaultAgent: DefaultAgent;
-  /** Default model for OpenCode */
-  opencodeModel: string;
-  /** Default model for Claude Native/tmux tabs */
-  claudeModel?: string;
-  /** Default model for Codex Native tabs */
-  codexModel: string;
-  /** Default reasoning effort for Codex Native tabs */
-  codexReasoningEffort: CodexReasoningEffortPreference;
-  /** OpenCode mode - terminal CLI or native chat interface */
-  opencodeMode: OpenCodeMode;
   /**
    * OpenCode provider catalogues offered in model pickers. The backend filters
    * against this before the catalogue is sent to the renderer. An empty list
    * means unrestricted (every provider OpenCode advertises).
    */
   openCodeModelProviders?: string[];
-  /** Claude mode - terminal CLI or native chat interface */
-  claudeMode: ClaudeMode;
-  /** Default backend used when Claude mode is "native" (sdk or tmux) */
-  claudeNativeBackend: ClaudeNativeBackend;
-  /** Enable fast mode by default for new Claude Native tabs */
-  claudeNativeFastModeDefault?: boolean;
-  /** Codex mode - terminal CLI or native chat interface */
-  codexMode: CodexMode;
-  /** Enable fast mode by default for new Codex Native tabs */
-  codexNativeFastModeDefault?: boolean;
   /** Maximum concurrently open spawned-agent threads per native Codex session */
   codexMaxConcurrentThreads?: number;
   /** Terminal appearance settings (font, size, colors) */
@@ -516,18 +489,31 @@ export interface GlobalConfig {
   debugLogging?: boolean;
   /** Serve the app to authenticated browsers on the host's Tailscale network */
   webClientEnabled?: boolean;
+  /**
+   * Application-wide agent defaults — the widest tier. Supersedes
+   * `defaultAgent`, the three `*Mode` fields, `claudeNativeBackend`,
+   * `actionDefaults`, and the four model/effort fields that had no UI at all.
+   * The two `*NativeFastModeDefault` fields are gone entirely: speed is a
+   * per-session model-picker choice, and OpenCode expresses it as a `-fast`
+   * model id rather than a toggle.
+   */
+  agentSettings?: AgentSettingsTier;
   /** Editable preference embedded inside Orkestrator's fixed review contract. */
   reviewInstruction?: string;
-  /**
-   * Agent, model and reasoning level applied when a toolbar action is launched
-   * with a plain click. Right-clicking still configures the run explicitly.
-   */
-  actionDefaults?: import("@orkestrator/protocol/action-defaults").ActionDefaults;
 }
 
 export type { GatewayTokenSettings, WebClientStatus } from "./webClient.js";
 
 export interface RepositoryConfig {
+  /**
+   * This repository's agent overrides — the middle tier.
+   *
+   * Replaces `defaultAgent`, `agentStyle` (which only Claude ever read),
+   * `claudeNativeBackend`, and the single `defaultModel`/`defaultEffort` pair
+   * two consumers disagreed about. An absent field means "inherit from the
+   * application".
+   */
+  agentSettings?: AgentSettingsTier;
   defaultBranch: string;
   prBaseBranch: string;
   /** Last environment type successfully created in this repository */
@@ -538,31 +524,22 @@ export interface RepositoryConfig {
   defaultPortMappings?: PortMapping[];
   /** Additional files to copy from local project path to environments (relative paths) */
   filesToCopy?: string[];
-  /** Default model ID for the configured default agent (e.g. "claude-sonnet-5") */
-  defaultModel?: string;
-  /** Default effort/thinking level for the configured default agent */
-  defaultEffort?: string;
   /** Entry port inside the container (e.g. 3000 for a web server).
    * New containers will automatically map this to an available host port. */
   entryPort?: number;
-  /** Project-level default agent override (undefined = use app default) */
-  defaultAgent?: DefaultAgent;
-  /** Project-level agent style override (undefined = use app default) */
-  agentStyle?: AgentStyle;
-  /**
-   * Project-level Claude native backend override (undefined = inherit from
-   * global). Only meaningful when the resolved Claude mode is "native".
-   */
-  claudeNativeBackend?: ClaudeNativeBackend;
 }
 
+/**
+ * The agent and mode the last successful create used in this repository.
+ *
+ * Deliberately no model or reasoning level. Those come from settings —
+ * `agentSettings.platforms[platform]` — so the value the Defaults page shows is
+ * the value a new environment gets. Remembering them here meant a choice made
+ * once in a create dialog silently outranked the configured default forever.
+ */
 export interface LastEnvironmentAgentSelection {
   platform: DefaultAgent;
   mode: AgentStyle;
-  /** Missing means the provider's default model was selected. */
-  model?: string;
-  /** Missing means the provider's default reasoning level was selected. */
-  reasoningEffort?: string;
 }
 
 export interface AppConfig {

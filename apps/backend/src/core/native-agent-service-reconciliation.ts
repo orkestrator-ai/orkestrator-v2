@@ -25,7 +25,8 @@ import {
   nonBlank,
   openCodeIncompleteTurnRequestId,
   readProviderStatus,
-  resolveStartupLaunch,
+  resolveAgentPlatformSettings,
+  resolveStartupLaunchFromSettings,
 } from "./native-agent-service-shared.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
@@ -1023,12 +1024,13 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     // Shared with the renderer rather than reimplemented here: the renderer has
     // to predict this exact decision to know whether it may still stage the
     // initial prompt's images itself, and any divergence silently costs the
-    // user the attachment. See `resolveStartupLaunch`.
-    const { agent, dispatchedByBackend } = resolveStartupLaunch({
-      environment,
-      repository,
-      global: config.global,
-    });
+    // user the attachment. See `resolveStartupLaunchFromSettings`.
+    const tiers = {
+      environment: environment.agentSettings,
+      repository: repository.agentSettings,
+      global: config.global.agentSettings,
+    };
+    const { agent, dispatchedByBackend } = resolveStartupLaunchFromSettings(tiers);
 
     // Terminal and Claude-tmux launches still need a PTY/tmux projection. They
     // are left pending for the backend terminal coordinator rather than being
@@ -1038,18 +1040,13 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     }
 
     const logicalSessionKey = `env-${environment.id}:startup-agent`;
-    const model =
-      environment.initialAgentModel ??
-      repository.defaultModel ??
-      (agent === "claude"
-        ? config.global.claudeModel
-        : agent === "codex"
-          ? config.global.codexModel
-          : config.global.opencodeModel);
-    const reasoningEffort =
-      environment.initialReasoningEffort ??
-      repository.defaultEffort ??
-      (agent === "codex" ? config.global.codexReasoningEffort : undefined);
+    // One resolver for the whole chain. This used to read the repository's
+    // single `defaultModel` for *whatever* agent launched, so a model id
+    // belonging to one platform's catalogue could be sent to another; a model
+    // now travels only down its own platform column.
+    const resolved = resolveAgentPlatformSettings(tiers, agent);
+    const model = environment.initialAgentModel ?? resolved.model;
+    const reasoningEffort = environment.initialReasoningEffort ?? resolved.reasoningEffort;
 
     // Publishing runs inside the same failure handling as the launch itself. A
     // throw here (an unwritable layout file, a root over the size bound) would

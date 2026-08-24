@@ -77,7 +77,6 @@ const {
   retryFeaturePlanning,
   startFeaturePlanning,
   updateFeaturePlan,
-  updateAgentModelDefault,
   updateEnvironmentAgentSettings,
   rememberEnvironmentAgentSelection,
   writeInitialPromptAttachments,
@@ -173,11 +172,7 @@ describe("backend setup wrappers", () => {
   test("configures an environment and its durable launch intent together", async () => {
     await updateEnvironmentAgentSettings(
       "env-1",
-      "codex",
-      null,
-      null,
-      null,
-      "native",
+      { defaultAgent: "codex" },
       true,
       "gpt-5.6-sol",
       "high",
@@ -188,11 +183,7 @@ describe("backend setup wrappers", () => {
         "update_environment_agent_settings",
         {
           environmentId: "env-1",
-          defaultAgent: "codex",
-          claudeMode: null,
-          claudeNativeBackend: null,
-          opencodeMode: null,
-          codexMode: "native",
+          agentSettings: { defaultAgent: "codex" },
           pendingAgentLaunch: true,
           initialAgentModel: "gpt-5.6-sol",
           initialReasoningEffort: "high",
@@ -209,17 +200,15 @@ describe("backend setup wrappers", () => {
       rememberEnvironmentAgentSelection("project-1", {
         platform: "codex",
         mode: "terminal",
-        model: "gpt-5.4-mini",
-        reasoningEffort: "high",
       }),
     ).resolves.toBe(config);
 
+    // Agent and mode only. Model and reasoning come from settings, so a create
+    // dialog choice cannot outrank the configured default for later creates.
     expect(invokeMock).toHaveBeenCalledWith("remember_environment_agent_selection", {
       projectId: "project-1",
       platform: "codex",
       mode: "terminal",
-      model: "gpt-5.4-mini",
-      reasoningEffort: "high",
     });
   });
 
@@ -227,17 +216,7 @@ describe("backend setup wrappers", () => {
     // Key absence is meaningful on the backend: `update_environment_agent_settings`
     // leaves a stored option alone when its key is missing, so an unset option
     // must not be sent as `undefined`/`""` and quietly overwrite one.
-    await updateEnvironmentAgentSettings(
-      "env-1",
-      "codex",
-      null,
-      null,
-      null,
-      "native",
-      true,
-      undefined,
-      "",
-    );
+    await updateEnvironmentAgentSettings("env-1", { defaultAgent: "codex" }, true, undefined, "");
 
     const payload = invokeMock.mock.calls[0]![1] as Record<string, unknown>;
     expect(payload).not.toHaveProperty("initialAgentModel");
@@ -246,7 +225,10 @@ describe("backend setup wrappers", () => {
   });
 
   test("omits the launch intent key entirely when no launch is being configured", async () => {
-    await updateEnvironmentAgentSettings("env-1", "codex", null, null, null, "native");
+    await updateEnvironmentAgentSettings("env-1", {
+      defaultAgent: "codex",
+      platforms: { codex: { mode: "native" } },
+    });
 
     // Omission is load-bearing: the settings dialog and FeaturesView both call
     // this while an environment may still be awaiting its launch, and sending
@@ -257,18 +239,14 @@ describe("backend setup wrappers", () => {
   });
 
   test("records a cleared launch intent when one is explicitly configured off", async () => {
-    await updateEnvironmentAgentSettings("env-1", "claude", "terminal", null, null, null, false);
+    await updateEnvironmentAgentSettings("env-1", { defaultAgent: "claude" }, false);
 
     expect(invokeMock.mock.calls).toEqual([
       [
         "update_environment_agent_settings",
         {
           environmentId: "env-1",
-          defaultAgent: "claude",
-          claudeMode: "terminal",
-          claudeNativeBackend: null,
-          opencodeMode: null,
-          codexMode: null,
+          agentSettings: { defaultAgent: "claude" },
           pendingAgentLaunch: false,
         },
       ],
@@ -301,11 +279,7 @@ describe("backend setup wrappers", () => {
 
     await updateEnvironmentAgentSettings(
       "env-1",
-      "codex",
-      null,
-      null,
-      null,
-      "native",
+      { defaultAgent: "codex" },
       true,
       "gpt-5.6-sol",
       "high",
@@ -1183,36 +1157,6 @@ describe("backend setup wrappers", () => {
 
     await expect(getContainerGitHubCredentialStatus()).resolves.toBe(status);
     expect(invokeMock.mock.calls).toEqual([["get_container_github_credential_status"]]);
-  });
-
-  test("forwards each agent model default under the single-key command", async () => {
-    const updated = {
-      version: "1.0",
-      global: { codexModel: "gpt-5.4-codex" },
-      repositories: {},
-    } as AppConfig;
-    invokeMock.mockResolvedValue(updated);
-
-    await expect(updateAgentModelDefault("codexModel", "gpt-5.4-codex")).resolves.toBe(updated);
-    expect(invokeMock).toHaveBeenCalledWith("update_agent_model_default", {
-      key: "codexModel",
-      modelId: "gpt-5.4-codex",
-    });
-
-    await updateAgentModelDefault("claudeModel", "claude-opus-4");
-    await updateAgentModelDefault("opencodeModel", "opencode/gpt-5.4");
-    expect(invokeMock.mock.calls).toEqual([
-      ["update_agent_model_default", { key: "codexModel", modelId: "gpt-5.4-codex" }],
-      ["update_agent_model_default", { key: "claudeModel", modelId: "claude-opus-4" }],
-      ["update_agent_model_default", { key: "opencodeModel", modelId: "opencode/gpt-5.4" }],
-    ]);
-  });
-});
-
-describe("backend pane layout wrappers", () => {
-  beforeEach(() => {
-    invokeMock.mockReset();
-    invokeMock.mockResolvedValue(undefined);
   });
 
   test("forwards exact pane layout command payloads and results", async () => {

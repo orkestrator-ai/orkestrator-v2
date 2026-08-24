@@ -16,13 +16,14 @@ function createConfig(
       containerResources: { cpuCores: 2, memoryGb: 4 },
       envFilePatterns: [],
       allowedDomains: [],
-      defaultAgent,
-      opencodeModel: "anthropic/claude-sonnet-4",
-      codexModel: "gpt-5.3-codex",
-      codexReasoningEffort: "medium",
-      opencodeMode: "native",
-      claudeMode: "native",
-      codexMode: "native",
+      agentSettings: {
+        ...(defaultAgent ? { defaultAgent } : {}),
+        platforms: {
+          claude: { mode: "native" },
+          codex: { mode: "native", model: "gpt-5.3-codex", reasoningEffort: "medium" },
+          opencode: { mode: "native", model: "anthropic/claude-sonnet-4" },
+        },
+      },
       terminalAppearance: {
         fontFamily: "Fira Code",
         fontSize: 14,
@@ -35,7 +36,7 @@ function createConfig(
           "project-1": {
             defaultBranch: "main",
             prBaseBranch: "main",
-            defaultAgent: repositoryAgent,
+            agentSettings: { defaultAgent: repositoryAgent },
           },
         }
       : {},
@@ -139,9 +140,9 @@ describe("resolveAgentModeSettings", () => {
       }),
     ).toEqual({
       defaultAgent: "claude",
-      claudeMode: "terminal",
-      opencodeMode: null,
-      codexMode: null,
+      // Only the launching agent's own column is pinned; the others keep
+      // inheriting rather than being frozen against later changes.
+      platforms: { claude: { mode: "terminal" } },
     });
 
     expect(
@@ -152,9 +153,9 @@ describe("resolveAgentModeSettings", () => {
       }),
     ).toEqual({
       defaultAgent: "opencode",
-      claudeMode: null,
-      opencodeMode: "terminal",
-      codexMode: null,
+      // Only the launching agent's own column is pinned; the others keep
+      // inheriting rather than being frozen against later changes.
+      platforms: { opencode: { mode: "terminal" } },
     });
 
     expect(
@@ -165,9 +166,35 @@ describe("resolveAgentModeSettings", () => {
       }),
     ).toEqual({
       defaultAgent: "codex",
-      claudeMode: null,
-      opencodeMode: null,
-      codexMode: "terminal",
+      // Only the launching agent's own column is pinned; the others keep
+      // inheriting rather than being frozen against later changes.
+      platforms: { codex: { mode: "terminal" } },
+    });
+
+    expect(
+      resolveAgentModeSettings("cursor", {
+        claudeMode: "native",
+        opencodeMode: "native",
+        codexMode: "native",
+        cursorMode: "terminal",
+        grokMode: "native",
+      }),
+    ).toEqual({
+      defaultAgent: "cursor",
+      platforms: { cursor: { mode: "terminal" } },
+    });
+
+    expect(
+      resolveAgentModeSettings("grok", {
+        claudeMode: "native",
+        opencodeMode: "native",
+        codexMode: "native",
+        cursorMode: "native",
+        grokMode: "terminal",
+      }),
+    ).toEqual({
+      defaultAgent: "grok",
+      platforms: { grok: { mode: "terminal" } },
     });
   });
 });
@@ -176,9 +203,7 @@ describe("getBuildEnvironmentAgentSettings", () => {
   test("returns Claude native settings and names Claude as the launch agent", () => {
     expect(getBuildEnvironmentAgentSettings("claude")).toEqual({
       defaultAgent: "claude",
-      claudeMode: "native",
-      opencodeMode: null,
-      codexMode: null,
+      platforms: { claude: { mode: "native" } },
       launchAgent: "claude",
     });
   });
@@ -186,9 +211,7 @@ describe("getBuildEnvironmentAgentSettings", () => {
   test("returns Codex native settings and names Codex as the launch agent", () => {
     expect(getBuildEnvironmentAgentSettings("codex")).toEqual({
       defaultAgent: "codex",
-      claudeMode: null,
-      opencodeMode: null,
-      codexMode: "native",
+      platforms: { codex: { mode: "native" } },
       launchAgent: "codex",
     });
   });
@@ -196,9 +219,7 @@ describe("getBuildEnvironmentAgentSettings", () => {
   test("returns OpenCode native settings and names OpenCode as the launch agent", () => {
     expect(getBuildEnvironmentAgentSettings("opencode")).toEqual({
       defaultAgent: "opencode",
-      claudeMode: null,
-      opencodeMode: "native",
-      codexMode: null,
+      platforms: { opencode: { mode: "native" } },
       launchAgent: "opencode",
     });
   });

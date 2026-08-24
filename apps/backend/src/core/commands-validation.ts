@@ -11,7 +11,6 @@ import {
 import type {
   AgentInteractionOrigin,
   AgentInteractionPolicy,
-  AgentModelConfigKey,
   AppConfig,
   CodexModelCatalogEntry,
   CodexReasoningEffort,
@@ -130,20 +129,6 @@ export type RendererGlobalConfig = Omit<
 export type RendererAppConfig = Omit<AppConfig, "global"> & {
   global: RendererGlobalConfig;
 };
-
-export const AGENT_MODEL_CONFIG_KEYS = new Set<AgentModelConfigKey>([
-  "claudeModel",
-  "codexModel",
-  "opencodeModel",
-]);
-
-export function asAgentModelConfigKey(value: unknown): AgentModelConfigKey {
-  const key = asString(value, "key") as AgentModelConfigKey;
-  if (!AGENT_MODEL_CONFIG_KEYS.has(key)) {
-    throw new Error("Expected key to identify an agent model default");
-  }
-  return key;
-}
 
 /**
  * Where the key a new container would receive actually comes from. The stored

@@ -189,16 +189,14 @@ describe("GlobalSettings", () => {
           containerResources: { cpuCores: 2, memoryGb: 4 },
           envFilePatterns: [],
           allowedDomains: [],
-          defaultAgent: "claude",
-          opencodeModel: "opencode/grok-code",
-          claudeModel: "claude-sonnet-4-6",
-          codexModel: "gpt-5.3-codex",
-          codexReasoningEffort: "medium",
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          claudeNativeFastModeDefault: false,
-          codexMode: "native",
-          codexNativeFastModeDefault: false,
+          agentSettings: {
+            defaultAgent: "claude",
+            platforms: {
+              opencode: { model: "opencode/grok-code", mode: "terminal" },
+              claude: { model: "claude-sonnet-4-6", mode: "terminal" },
+              codex: { model: "gpt-5.3-codex", reasoningEffort: "medium", mode: "native" },
+            },
+          },
           terminalAppearance: {
             fontFamily: "Fira Code",
             fontSize: 14,
@@ -224,18 +222,20 @@ describe("GlobalSettings", () => {
   test("saves codexMode changes", async () => {
     const { container } = render(<GlobalSettings activeSection="codex" />);
 
-    const codexSection = screen.getByText("Choose how Codex runs in environments").parentElement;
-    if (!codexSection) {
-      throw new Error("Expected Codex settings section");
-    }
-
-    fireEvent.click(within(codexSection).getByRole("button", { name: "Terminal" }));
+    // Each platform pane labels its own mode group, so the query cannot pick up
+    // another platform's control.
+    const codexMode = screen.getByRole("radiogroup", { name: "Codex mode" });
+    fireEvent.click(within(codexMode).getByRole("radio", { name: /^Terminal/ }));
     fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          codexMode: "terminal",
+          agentSettings: expect.objectContaining({
+            platforms: expect.objectContaining({
+              codex: expect.objectContaining({ mode: "terminal" }),
+            }),
+          }),
         }),
       );
     });
@@ -977,11 +977,11 @@ describe("GlobalSettings", () => {
     rerender(<GlobalSettings activeSection="review" />);
     expect(screen.getByText("Code review instruction")).toBeTruthy();
     rerender(<GlobalSettings activeSection="claude" />);
-    expect(screen.getByText("Choose how Claude runs in environments")).toBeTruthy();
+    expect(screen.getByText(/How Claude Code runs in environments/)).toBeTruthy();
     rerender(<GlobalSettings activeSection="opencode" />);
-    expect(screen.getByText("Choose how OpenCode runs in environments")).toBeTruthy();
+    expect(screen.getByText(/How OpenCode runs in environments/)).toBeTruthy();
     rerender(<GlobalSettings activeSection="codex" />);
-    expect(screen.getByText("Choose how Codex runs in environments")).toBeTruthy();
+    expect(screen.getByText(/How Codex runs in environments/)).toBeTruthy();
     rerender(<GlobalSettings activeSection="terminal" />);
     expect(screen.getByText("Font Family")).toBeTruthy();
     rerender(<GlobalSettings activeSection="network" />);
@@ -1240,23 +1240,39 @@ describe("GlobalSettings", () => {
     ).toBeTruthy();
   });
 
-  test("saves non-default editor and agent selections", async () => {
+  test("saves a non-default editor selection", async () => {
     render(<GlobalSettings activeSection="general" />);
 
-    expect(
-      screen
-        .getAllByRole("button")
-        .map((button) => button.textContent?.trim())
-        .filter((label) => ["Claude Code", "Codex", "OpenCode"].includes(label ?? "")),
-    ).toEqual(["Claude Code", "Codex", "OpenCode"]);
-
     fireEvent.click(screen.getByRole("button", { name: "Cursor" }));
-    fireEvent.click(screen.getByRole("button", { name: "Codex" }));
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ preferredEditor: "cursor", defaultAgent: "codex" }),
+        expect.objectContaining({ preferredEditor: "cursor" }),
+      ),
+    );
+  });
+
+  test("saves the default agent from the Defaults page", async () => {
+    // Default Agent sits beside the defaults it governs rather than on General,
+    // and the same control appears at the repository and environment tiers.
+    render(<GlobalSettings activeSection="defaults" />);
+
+    const agents = screen.getByRole("radiogroup", { name: "Default agent" });
+    expect(
+      within(agents)
+        .getAllByRole("radio")
+        .map((radio) => radio.textContent?.trim()),
+    ).toEqual(["Claude Code", "Codex", "OpenCode"]);
+
+    fireEvent.click(within(agents).getByRole("radio", { name: "Codex" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
+        }),
       ),
     );
   });
@@ -1284,7 +1300,9 @@ describe("GlobalSettings", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           enabledAgentPlatforms: ["codex", "cursor", "grok", "opencode"],
-          defaultAgent: "codex",
+          // Disabling the default agent retargets it at the first platform that
+          // is still enabled, rather than leaving a launch surface that is gone.
+          agentSettings: expect.objectContaining({ defaultAgent: "codex" }),
         }),
       ),
     );
@@ -1724,25 +1742,15 @@ describe("GlobalSettings", () => {
     ).toBe(true);
   });
 
-  test("saves Claude native fast mode default changes", async () => {
-    const { container } = render(<GlobalSettings activeSection="claude" />);
-
-    fireEvent.click(screen.getByRole("switch", { name: "Claude fast mode for new native tabs" }));
-    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
-
-    await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          claudeNativeFastModeDefault: true,
-        }),
-      );
-    });
-  });
-
   test("treats a missing legacy Claude mode as native and saves explicit terminal", async () => {
     useConfigStore.setState((state) => {
+      // A config that never set a Claude mode: the pane must show the shipped
+      // native default rather than an empty selection.
       const global = { ...state.config.global };
-      delete (global as { claudeMode?: "terminal" | "native" }).claudeMode;
+      global.agentSettings = {
+        ...global.agentSettings,
+        platforms: { ...global.agentSettings?.platforms, claude: {} },
+      };
       return {
         config: {
           ...state.config,
@@ -1752,14 +1760,15 @@ describe("GlobalSettings", () => {
     });
     render(<GlobalSettings activeSection="claude" />);
 
-    const section = screen.getByText("Choose how Claude runs in environments").parentElement;
-    if (!section) throw new Error("Expected Claude settings section");
-    const nativeButton = within(section).getByRole("button", { name: "Native" });
-    const terminalButton = within(section).getByRole("button", { name: "Terminal" });
+    const section = screen.getByRole("radiogroup", { name: "Claude Code mode" });
+    const nativeButton = within(section).getByRole("radio", { name: /^Native/ });
+    const terminalButton = within(section).getByRole("radio", { name: /^Terminal/ });
     const saveButton = screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement;
 
-    expect(nativeButton.className).toContain("border-primary");
-    expect(terminalButton.className).not.toContain("border-primary");
+    // Nothing is stored, so nothing is selected; the pane says the shipped
+    // default is Native beneath the group instead of faking a selection.
+    expect(nativeButton.getAttribute("aria-checked")).toBe("false");
+    expect(terminalButton.getAttribute("aria-checked")).toBe("false");
     expect(saveButton.disabled).toBe(true);
 
     fireEvent.click(terminalButton);
@@ -1768,7 +1777,13 @@ describe("GlobalSettings", () => {
 
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ claudeMode: "terminal" }),
+        expect.objectContaining({
+          agentSettings: expect.objectContaining({
+            platforms: expect.objectContaining({
+              claude: expect.objectContaining({ mode: "terminal" }),
+            }),
+          }),
+        }),
       ),
     );
   });
@@ -1776,12 +1791,22 @@ describe("GlobalSettings", () => {
   test("saves the Claude native backend selection", async () => {
     render(<GlobalSettings activeSection="claude" />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Tmux/ }));
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Claude native backend" })).getByRole("radio", {
+        name: /^Tmux/,
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ claudeNativeBackend: "tmux" }),
+        expect.objectContaining({
+          agentSettings: expect.objectContaining({
+            platforms: expect.objectContaining({
+              claude: expect.objectContaining({ claudeNativeBackend: "tmux" }),
+            }),
+          }),
+        }),
       ),
     );
   });
@@ -1813,7 +1838,11 @@ describe("GlobalSettings", () => {
   test("calls onSaveSuccess only after the success delay", async () => {
     const onSaveSuccess = mock(() => undefined);
     render(<GlobalSettings activeSection="codex" onSaveSuccess={onSaveSuccess} />);
-    fireEvent.click(screen.getByRole("switch", { name: "Codex fast mode for new native tabs" }));
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Codex mode" })).getByRole("radio", {
+        name: /^Terminal/,
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => expect(mockToastSuccess).toHaveBeenCalledWith("Settings saved"));
@@ -1829,123 +1858,25 @@ describe("GlobalSettings", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "default",
+          agentSettings: { platforms: { claude: { model: "default" } } },
         },
       },
     }));
 
     const { container } = render(<GlobalSettings activeSection="codex" />);
 
-    const codexSection = screen.getByText("Choose how Codex runs in environments").parentElement;
-    if (!codexSection) {
-      throw new Error("Expected Codex settings section");
-    }
-
-    fireEvent.click(within(codexSection).getByRole("button", { name: "Terminal" }));
+    // Each platform pane labels its own mode group, so the query cannot pick up
+    // another platform's control.
+    const codexMode = screen.getByRole("radiogroup", { name: "Codex mode" });
+    fireEvent.click(within(codexMode).getByRole("radio", { name: /^Terminal/ }));
     fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          claudeModel: "default",
-          codexMode: "terminal",
-        }),
-      );
-    });
-  });
-
-  test("renders saved native fast mode defaults as enabled", () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          claudeNativeFastModeDefault: true,
-          codexNativeFastModeDefault: true,
-        },
-      },
-    }));
-
-    const { rerender } = render(<GlobalSettings activeSection="claude" />);
-
-    expect(
-      screen
-        .getByRole("switch", { name: "Claude fast mode for new native tabs" })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
-
-    rerender(<GlobalSettings activeSection="codex" />);
-
-    expect(
-      screen
-        .getByRole("switch", { name: "Codex fast mode for new native tabs" })
-        .getAttribute("aria-checked"),
-    ).toBe("true");
-  });
-
-  test("reset restores unsaved native fast mode default changes", async () => {
-    useConfigStore.setState((state) => ({
-      ...state,
-      config: {
-        ...state.config,
-        global: {
-          ...state.config.global,
-          claudeNativeFastModeDefault: true,
-        },
-      },
-    }));
-    const { container } = render(<GlobalSettings activeSection="claude" />);
-    const fastModeSwitch = screen.getByRole("switch", {
-      name: "Claude fast mode for new native tabs",
-    });
-
-    fireEvent.click(fastModeSwitch);
-
-    await waitFor(() => {
-      expect(fastModeSwitch.getAttribute("aria-checked")).toBe("false");
-    });
-
-    fireEvent.click(within(container).getByRole("button", { name: "Reset" }));
-
-    await waitFor(() => {
-      expect(fastModeSwitch.getAttribute("aria-checked")).toBe("true");
-    });
-    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
-  });
-
-  test("native fast mode switches participate in save change detection", async () => {
-    const { container } = render(<GlobalSettings activeSection="claude" />);
-    const saveButton = within(container).getByRole("button", { name: "Save Changes" });
-    const fastModeSwitch = screen.getByRole("switch", {
-      name: "Claude fast mode for new native tabs",
-    });
-
-    expect((saveButton as HTMLButtonElement).disabled).toBe(true);
-
-    fireEvent.click(fastModeSwitch);
-
-    await waitFor(() => {
-      expect((saveButton as HTMLButtonElement).disabled).toBe(false);
-    });
-
-    fireEvent.click(fastModeSwitch);
-
-    await waitFor(() => {
-      expect((saveButton as HTMLButtonElement).disabled).toBe(true);
-    });
-  });
-
-  test("saves Codex native fast mode default changes", async () => {
-    const { container } = render(<GlobalSettings activeSection="codex" />);
-
-    fireEvent.click(screen.getByRole("switch", { name: "Codex fast mode for new native tabs" }));
-    fireEvent.click(within(container).getByRole("button", { name: "Save Changes" }));
-
-    await waitFor(() => {
-      expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          codexNativeFastModeDefault: true,
+          agentSettings: {
+            platforms: { claude: { model: "default" }, codex: { mode: "terminal" } },
+          },
         }),
       );
     });
@@ -1959,22 +1890,29 @@ describe("GlobalSettings", () => {
           ...state.config,
           global: {
             ...state.config.global,
-            codexModel: "gpt-5.6-sol",
-            codexReasoningEffort: effort,
-            codexNativeFastModeDefault: false,
+            agentSettings: {
+              platforms: { codex: { model: "gpt-5.6-sol", reasoningEffort: effort } },
+            },
           },
         },
       }));
       const { unmount } = render(<GlobalSettings activeSection="codex" />);
 
-      fireEvent.click(screen.getByRole("switch", { name: "Codex fast mode for new native tabs" }));
+      fireEvent.click(
+        within(screen.getByRole("radiogroup", { name: "Codex mode" })).getByRole("radio", {
+          name: /^Terminal/,
+        }),
+      );
       fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
       await waitFor(() => {
         expect(mockUpdateGlobalConfig).toHaveBeenLastCalledWith(
           expect.objectContaining({
-            codexModel: "gpt-5.6-sol",
-            codexReasoningEffort: effort,
+            agentSettings: expect.objectContaining({
+              platforms: expect.objectContaining({
+                codex: expect.objectContaining({ model: "gpt-5.6-sol", reasoningEffort: effort }),
+              }),
+            }),
           }),
         );
       });
@@ -2195,7 +2133,11 @@ describe("GlobalSettings", () => {
     mockUpdateGlobalConfig.mockRejectedValueOnce(new Error("disk full"));
     render(<GlobalSettings activeSection="codex" />);
 
-    fireEvent.click(screen.getByRole("switch", { name: "Codex fast mode for new native tabs" }));
+    fireEvent.click(
+      within(screen.getByRole("radiogroup", { name: "Codex mode" })).getByRole("radio", {
+        name: /^Terminal/,
+      }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() =>

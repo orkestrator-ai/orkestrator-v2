@@ -1,3 +1,12 @@
+import {
+  agentSettingsTiers,
+  resolvedActionDefault,
+  resolvedDefaultAgent,
+} from "@/lib/agent-settings";
+import {
+  resolveActionDefaults,
+  resolveAgentPlatformSettings,
+} from "@orkestrator/protocol/agent-settings";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   useUIStore,
@@ -295,8 +304,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [config.global.enabledAgentPlatforms],
   );
   const enabledAgents = useMemo(() => new Set<DefaultAgent>(enabledAgentList), [enabledAgentList]);
-  const configuredDefaultAgent: DefaultAgent =
-    selectedEnvironment?.defaultAgent || config.global.defaultAgent || "claude";
+  const configuredDefaultAgent: DefaultAgent = resolvedDefaultAgent(
+    config,
+    selectedEnvironment?.projectId,
+    selectedEnvironment,
+  );
   const defaultAgent: DefaultAgent = enabledAgents.has(configuredDefaultAgent)
     ? configuredDefaultAgent
     : (enabledAgents.values().next().value ?? "claude");
@@ -308,16 +320,24 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
    * specific environment is narrower than an application-level default and wins
    * over it too.
    */
-  const environmentAgent = selectedEnvironment?.defaultAgent;
-  const actionDefaultFor = useCallback(
-    (key: ActionDefaultKey) =>
-      resolveActionDefault(config.global.actionDefaults, key, {
-        fallbackAgent: defaultAgent,
-        overrideAgent: environmentAgent,
-        enabledAgents: enabledAgentList,
-      }),
-    [config.global.actionDefaults, defaultAgent, enabledAgentList, environmentAgent],
+  const settingsTiers = useMemo(
+    () => agentSettingsTiers(config, selectedEnvironment?.projectId, selectedEnvironment),
+    [config, selectedEnvironment],
   );
+  const actionDefaultFor = useCallback(
+    (key: ActionDefaultKey) => resolvedActionDefault(settingsTiers, key, enabledAgentList),
+    [enabledAgentList, settingsTiers],
+  );
+  const { preferredModelsByPlatform, preferredEffortsByPlatform } = useMemo(() => {
+    const models: Partial<Record<DefaultAgent, string>> = {};
+    const efforts: Partial<Record<DefaultAgent, string>> = {};
+    for (const platform of enabledAgentList) {
+      const resolved = resolveAgentPlatformSettings(settingsTiers, platform);
+      if (resolved.model) models[platform] = resolved.model;
+      if (resolved.reasoningEffort) efforts[platform] = resolved.reasoningEffort;
+    }
+    return { preferredModelsByPlatform: models, preferredEffortsByPlatform: efforts };
+  }, [enabledAgentList, settingsTiers]);
   /**
    * Settings action defaults as launch-dialog preferences.
    *
@@ -328,20 +348,24 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
    */
   const launchDialogDefaultsFor = useCallback(
     (key: ActionDefaultKey) => {
-      const actionDefault = resolveActionDefault(config.global.actionDefaults, key, {
+      // Deliberately not `actionDefaultFor`: that keeps a narrower tier's own
+      // `defaultAgent` ahead of the action default, which is right for a click
+      // and wrong for the dialog the user opened to choose a run.
+      const actionDefault = resolveActionDefault(resolveActionDefaults(settingsTiers), key, {
         fallbackAgent: defaultAgent,
         enabledAgents: enabledAgentList,
       });
       return {
         defaultAgent: actionDefault.agent,
+        // Each platform's own resolved model, so the dialog opens on what that
+        // platform would actually run rather than on a model from another
+        // platform's catalogue.
         preferredModels: {
-          claude: config.global.claudeModel,
-          codex: config.global.codexModel,
-          opencode: config.global.opencodeModel,
+          ...preferredModelsByPlatform,
           ...(actionDefault.model ? { [actionDefault.agent]: actionDefault.model } : {}),
         },
         preferredReasoningEfforts: {
-          codex: config.global.codexReasoningEffort,
+          ...preferredEffortsByPlatform,
           ...(actionDefault.reasoningEffort
             ? { [actionDefault.agent]: actionDefault.reasoningEffort }
             : {}),
@@ -349,13 +373,11 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       };
     },
     [
-      config.global.actionDefaults,
-      config.global.claudeModel,
-      config.global.codexModel,
-      config.global.codexReasoningEffort,
-      config.global.opencodeModel,
       defaultAgent,
       enabledAgentList,
+      preferredEffortsByPlatform,
+      preferredModelsByPlatform,
+      settingsTiers,
     ],
   );
   const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } = useLoopedReviewStore(
@@ -422,19 +444,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       // When neither the dialog nor a configured default named a model, the
       // queued turn falls back to the platform's globally configured one. The tab
       // is left to resolve that itself, which is why it is not passed above.
-      const requestedModel =
-        initialAgentModel ??
-        (agent === "claude"
-          ? config.global.claudeModel
-          : agent === "codex"
-            ? config.global.codexModel
-            : agent === "opencode"
-              ? config.global.opencodeModel
-              : undefined);
+      const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
       const model = requestedModel === "default" ? undefined : requestedModel;
-      const reasoningEffort =
-        initialReasoningEffort ??
-        (agent === "codex" ? config.global.codexReasoningEffort : undefined);
+      const reasoningEffort = initialReasoningEffort ?? preferredEffortsByPlatform[agent];
       const queuedReview =
         agent === "claude"
           ? {
@@ -445,7 +457,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
               model,
               effort: reasoningEffort ?? "high",
               planModeEnabled: false,
-              fastModeEnabled: config.global.claudeNativeFastModeDefault ?? false,
+              fastModeEnabled: false,
             }
           : agent === "codex"
             ? {
@@ -456,7 +468,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
                 model,
                 reasoningEffort: reasoningEffort ?? "high",
                 mode: "build" as const,
-                fastMode: config.global.codexNativeFastModeDefault ?? false,
+                fastMode: false,
               }
             : {
                 id: requestId,
@@ -493,12 +505,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [
       actionDefaultFor,
       canCreateTab,
-      config.global.claudeModel,
-      config.global.claudeNativeFastModeDefault,
-      config.global.codexModel,
-      config.global.codexNativeFastModeDefault,
-      config.global.codexReasoningEffort,
-      config.global.opencodeModel,
+      preferredModelsByPlatform,
+      preferredEffortsByPlatform,
       config.global.reviewInstruction,
       config.repositories,
       createTab,
@@ -1134,11 +1142,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           mode: "build" as const,
-          ...(agent === "claude"
-            ? { fastMode: config.global.claudeNativeFastModeDefault ?? false }
-            : agent === "codex"
-              ? { fastMode: config.global.codexNativeFastModeDefault ?? false }
-              : {}),
+          // Stated rather than omitted: speed is a per-session model-picker
+          // choice, and saying "normal" explicitly keeps this path identical to
+          // the review queue instead of relying on each provider's own default.
+          ...(agent === "claude" || agent === "codex" ? { fastMode: false } : {}),
         };
         const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
 
@@ -1169,8 +1176,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     [
       actionDefaultFor,
       canCreateTab,
-      config.global.claudeNativeFastModeDefault,
-      config.global.codexNativeFastModeDefault,
       config.repositories,
       createTab,
       hasPR,

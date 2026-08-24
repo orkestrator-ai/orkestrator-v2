@@ -8,11 +8,14 @@ function makeConfig(
 ): AppConfig {
   return {
     global: {
-      defaultAgent: "claude",
-      claudeModel: "claude-sonnet-5",
-      codexModel: "gpt-5.4",
-      opencodeModel: "opencode/claude-sonnet-5",
-      codexReasoningEffort: "medium",
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: { model: "claude-sonnet-5" },
+          codex: { model: "gpt-5.4", reasoningEffort: "medium" },
+          opencode: { model: "opencode/claude-sonnet-5" },
+        },
+      },
       ...global,
     } as GlobalConfig,
     repositories: repository
@@ -44,9 +47,10 @@ describe("buildLaunchDefaults", () => {
   test("applies the repository model and effort to the repository's agent only", () => {
     const defaults = buildLaunchDefaults(
       makeConfig({
-        defaultAgent: "codex",
-        defaultModel: "gpt-5.4-codex",
-        defaultEffort: "high",
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: { codex: { model: "gpt-5.4-codex", reasoningEffort: "high" } },
+        },
       }),
       "project-1",
       false,
@@ -59,20 +63,31 @@ describe("buildLaunchDefaults", () => {
     expect(defaults.preferredReasoningEfforts).toEqual({ codex: "high" });
   });
 
-  test('treats the "default" placeholder as no repository override', () => {
+  test('drops the "default" placeholder rather than offering it as a model', () => {
+    // No provider knows this id. The storage migration already refuses to store
+    // it, so this is the belt-and-braces for a config written by an older build.
     const defaults = buildLaunchDefaults(
-      makeConfig({ defaultModel: "default", defaultEffort: "default" }),
+      makeConfig({
+        agentSettings: {
+          platforms: { claude: { model: "default", reasoningEffort: "default" } },
+        },
+      }),
       "project-1",
       false,
     );
 
-    expect(defaults.preferredModels.claude).toBe("claude-sonnet-5");
+    expect(defaults.preferredModels.claude).toBeUndefined();
     expect(defaults.preferredReasoningEfforts).toEqual({ codex: "medium" });
   });
 
   test("leaves an agent unseeded when it has no global model", () => {
     const defaults = buildLaunchDefaults(
-      makeConfig(undefined, { claudeModel: undefined }),
+      makeConfig(undefined, {
+        agentSettings: {
+          defaultAgent: "claude",
+          platforms: { codex: { model: "gpt-5.4", reasoningEffort: "medium" } },
+        },
+      }),
       "project-1",
       false,
     );
@@ -85,7 +100,12 @@ describe("buildLaunchDefaults", () => {
 
   test("applies a repository model that has no matching effort", () => {
     const defaults = buildLaunchDefaults(
-      makeConfig({ defaultAgent: "codex", defaultModel: "gpt-5.4-codex" }),
+      makeConfig({
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: { codex: { model: "gpt-5.4-codex" } },
+        },
+      }),
       "project-1",
       false,
     );
@@ -97,7 +117,12 @@ describe("buildLaunchDefaults", () => {
 
   test("applies a repository effort that has no matching model", () => {
     const defaults = buildLaunchDefaults(
-      makeConfig({ defaultAgent: "opencode", defaultEffort: "deep" }),
+      makeConfig({
+        agentSettings: {
+          defaultAgent: "opencode",
+          platforms: { opencode: { reasoningEffort: "deep" } },
+        },
+      }),
       "project-1",
       false,
     );
@@ -117,9 +142,10 @@ describe("buildLaunchDefaults", () => {
   test("routes the repository overrides to an OpenCode default agent", () => {
     const defaults = buildLaunchDefaults(
       makeConfig({
-        defaultAgent: "opencode",
-        defaultModel: "opencode/other-model",
-        defaultEffort: "deep",
+        agentSettings: {
+          defaultAgent: "opencode",
+          platforms: { opencode: { model: "opencode/other-model", reasoningEffort: "deep" } },
+        },
       }),
       "project-1",
       false,
@@ -150,7 +176,12 @@ describe("buildLaunchDefaults", () => {
 
   test("falls back to the globals for an empty project id", () => {
     const defaults = buildLaunchDefaults(
-      makeConfig({ defaultAgent: "codex", defaultModel: "gpt-5.4-codex" }),
+      makeConfig({
+        agentSettings: {
+          defaultAgent: "codex",
+          platforms: { codex: { model: "gpt-5.4-codex" } },
+        },
+      }),
       "",
       false,
     );

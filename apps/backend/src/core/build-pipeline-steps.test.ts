@@ -1,3 +1,5 @@
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
@@ -290,6 +292,59 @@ function lastProviderAgents(service: BuildPipelineService): Map<string, BuildPip
 }
 
 /** Writes the global and repository defaults a step may fall back to. */
+/**
+ * Global agent settings from a per-platform model map.
+ *
+ * Models are per-platform columns now, so these fixtures name the platform
+ * each id belongs to instead of relying on flat `claudeModel`/`codexModel`
+ * fields that any agent could read.
+ */
+function globalAgents(input: {
+  defaultAgent?: AgentPlatform;
+  claude?: string;
+  codex?: string;
+  codexEffort?: string;
+  opencode?: string;
+}): AgentSettingsTier {
+  return {
+    ...(input.defaultAgent ? { defaultAgent: input.defaultAgent } : {}),
+    platforms: {
+      ...(input.claude ? { claude: { model: input.claude } } : {}),
+      ...(input.codex || input.codexEffort
+        ? {
+            codex: {
+              ...(input.codex ? { model: input.codex } : {}),
+              ...(input.codexEffort ? { reasoningEffort: input.codexEffort } : {}),
+            },
+          }
+        : {}),
+      ...(input.opencode ? { opencode: { model: input.opencode } } : {}),
+    },
+  };
+}
+
+/**
+ * Repository agent settings pinning one platform's model and effort.
+ *
+ * `defaultAgent` is set only when the repository really did name one. A
+ * repository that inherited the app's agent keeps inheriting it, and its model
+ * simply lives in that platform's column.
+ */
+function repoAgent(
+  platform: AgentPlatform,
+  input: { model?: string; effort?: string; isDefault?: boolean },
+): AgentSettingsTier {
+  return {
+    ...(input.isDefault ? { defaultAgent: platform } : {}),
+    platforms: {
+      [platform]: {
+        ...(input.model ? { model: input.model } : {}),
+        ...(input.effort ? { reasoningEffort: input.effort } : {}),
+      },
+    },
+  };
+}
+
 async function writeDefaults(
   storage: StorageService,
   defaults: {
@@ -620,9 +675,11 @@ describe("per-step build configuration", () => {
     await withService(async ({ service, storage, created }) => {
       await writeDefaults(storage, {
         repository: {
-          defaultAgent: "claude",
-          defaultModel: "repo-claude",
-          defaultEffort: "repo-effort",
+          agentSettings: repoAgent("claude", {
+            model: "repo-claude",
+            effort: "repo-effort",
+            isDefault: true,
+          }),
         },
       });
       const started = await service.start({
@@ -653,14 +710,18 @@ describe("per-step build configuration", () => {
       // agent. Handing them to another harness sends a Codex model id to Claude.
       await writeDefaults(storage, {
         global: {
-          claudeModel: "global-claude",
-          codexModel: "global-codex",
-          codexReasoningEffort: "medium",
+          agentSettings: globalAgents({
+            claude: "global-claude",
+            codex: "global-codex",
+            codexEffort: "medium",
+          }),
         },
         repository: {
-          defaultAgent: "codex",
-          defaultModel: "gpt-5.1-codex-max",
-          defaultEffort: "xhigh",
+          agentSettings: repoAgent("codex", {
+            model: "gpt-5.1-codex-max",
+            effort: "xhigh",
+            isDefault: true,
+          }),
         },
       });
 
@@ -705,16 +766,17 @@ describe("per-step build configuration", () => {
     await withService(async ({ service, storage, created }) => {
       await writeDefaults(storage, {
         global: {
-          defaultAgent: "codex",
-          claudeModel: "global-claude",
-          codexModel: "global-codex",
-          codexReasoningEffort: "medium",
+          agentSettings: globalAgents({
+            defaultAgent: "codex",
+            claude: "global-claude",
+            codex: "global-codex",
+            codexEffort: "medium",
+          }),
         },
-        // Older repository entries may omit `defaultAgent`. Their model and
-        // effort still belong to the globally selected harness.
+        // A repository may omit `defaultAgent` and keep inheriting the app's.
+        // Its model lives in that harness's own column either way.
         repository: {
-          defaultModel: "repo-codex",
-          defaultEffort: "xhigh",
+          agentSettings: repoAgent("codex", { model: "repo-codex", effort: "xhigh" }),
         },
       });
 
@@ -966,11 +1028,13 @@ describe("per-step bridge connections", () => {
   test("connects a pinned harness with its own defaults, not the repository's", async () => {
     await withBridgeService(async ({ service, storage, requests }) => {
       await writeDefaults(storage, {
-        global: { claudeModel: "global-claude" },
+        global: { agentSettings: globalAgents({ claude: "global-claude" }) },
         repository: {
-          defaultAgent: "codex",
-          defaultModel: "gpt-5.1-codex-max",
-          defaultEffort: "xhigh",
+          agentSettings: repoAgent("codex", {
+            model: "gpt-5.1-codex-max",
+            effort: "xhigh",
+            isDefault: true,
+          }),
         },
       });
       const started = await service.start({
@@ -998,15 +1062,14 @@ describe("per-step bridge connections", () => {
       bridges.set("opencode", { port: 3212, authToken: "opencode-token" });
       await writeDefaults(storage, {
         global: {
-          opencodeModel: "anthropic/claude-sonnet",
+          agentSettings: globalAgents({ opencode: "anthropic/claude-sonnet" }),
           // An install that opted into OpenCode's full catalogue, so the stored
           // default survives normalization and this stays a test of pass-through
           // rather than of the provider allowlist.
           openCodeModelProviders: [],
         },
         repository: {
-          defaultAgent: "claude",
-          defaultModel: "repo-claude",
+          agentSettings: repoAgent("claude", { model: "repo-claude", isDefault: true }),
         },
       });
       const started = await service.start({
@@ -1079,8 +1142,12 @@ describe("per-step stage coverage", () => {
       // and has no launcher control of its own. It must follow the build step
       // rather than falling back to a repository default.
       await writeDefaults(storage, {
-        global: { claudeModel: "global-claude", codexModel: "global-codex" },
-        repository: { defaultAgent: "codex", defaultModel: "repo-codex" },
+        global: {
+          agentSettings: globalAgents({ claude: "global-claude", codex: "global-codex" }),
+        },
+        repository: {
+          agentSettings: repoAgent("codex", { model: "repo-codex", isDefault: true }),
+        },
       });
       providerFor("opencode").verificationComplete = false;
 
@@ -1141,14 +1208,18 @@ describe("per-step stage coverage", () => {
       // it — but Codex still has a global effort of its own to fall back to.
       await writeDefaults(storage, {
         global: {
-          claudeModel: "global-claude",
-          codexModel: "global-codex",
-          codexReasoningEffort: "medium",
+          agentSettings: globalAgents({
+            claude: "global-claude",
+            codex: "global-codex",
+            codexEffort: "medium",
+          }),
         },
         repository: {
-          defaultAgent: "claude",
-          defaultModel: "repo-claude",
-          defaultEffort: "max",
+          agentSettings: repoAgent("claude", {
+            model: "repo-claude",
+            effort: "max",
+            isDefault: true,
+          }),
         },
       });
 
@@ -1372,7 +1443,9 @@ describe("per-step model placeholders", () => {
       // global default instead, so the build silently used a different model
       // from the one the launcher displayed.
       await writeDefaults(storage, {
-        global: { claudeModel: "claude-sonnet-5", codexModel: "global-codex" },
+        global: {
+          agentSettings: globalAgents({ claude: "claude-sonnet-5", codex: "global-codex" }),
+        },
       });
 
       const started = await service.start({
@@ -1401,7 +1474,9 @@ describe("per-step model placeholders", () => {
       // No Codex or OpenCode server knows a model called "default"; it is only
       // what the picker displays when that harness has not published a catalog.
       await writeDefaults(storage, {
-        global: { claudeModel: "global-claude", codexModel: "global-codex" },
+        global: {
+          agentSettings: globalAgents({ claude: "global-claude", codex: "global-codex" }),
+        },
       });
 
       const started = await service.start({

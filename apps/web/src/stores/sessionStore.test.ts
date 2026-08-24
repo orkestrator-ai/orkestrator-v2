@@ -74,6 +74,7 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
     useSessionStore.setState({
       sessions: new Map(),
       loadingEnvironments: new Set(),
+      sessionSnapshotGenerations: new Map(),
       error: null,
     });
   });
@@ -90,6 +91,7 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
     expect(state.sessions).toBe(sessions);
     expect(state.sessions.get(session.id)).toBe(session);
     expect(state.loadingEnvironments.has("env-1")).toBe(false);
+    expect(state.sessionSnapshotGenerations.has("env-1")).toBe(true);
   });
 
   test("preserves identity when the same session arrives with reordered keys", async () => {
@@ -153,6 +155,24 @@ describe("sessionStore.loadSessionsForEnvironment", () => {
     const state = useSessionStore.getState();
     expect(state.error).toBe("sessions unavailable");
     expect(state.loadingEnvironments.has("env-1")).toBe(false);
+    expect(state.sessionSnapshotGenerations.has("env-1")).toBe(false);
+  });
+
+  test("advances the snapshot generation only after a fresh successful load", async () => {
+    await useSessionStore.getState().loadSessionsForEnvironment("env-1");
+    const initialGeneration = useSessionStore.getState().sessionSnapshotGenerations.get("env-1")!;
+
+    getSessionsByEnvironmentMock.mockRejectedValueOnce(new Error("sessions unavailable"));
+    await useSessionStore.getState().loadSessionsForEnvironment("env-1");
+    expect(useSessionStore.getState().sessionSnapshotGenerations.get("env-1")).toBe(
+      initialGeneration,
+    );
+
+    getSessionsByEnvironmentMock.mockResolvedValueOnce([]);
+    await useSessionStore.getState().loadSessionsForEnvironment("env-1");
+    expect(useSessionStore.getState().sessionSnapshotGenerations.get("env-1")).toBeGreaterThan(
+      initialGeneration,
+    );
   });
 
   test("does not let an older concurrent load overwrite a newer snapshot", async () => {
@@ -333,7 +353,12 @@ describe("sessionStore remaining actions", () => {
       makeSession({ name: name ?? undefined }),
     );
     reorderSessionsMock.mockResolvedValue([]);
-    useSessionStore.setState({ sessions: new Map(), loadingEnvironments: new Set(), error: null });
+    useSessionStore.setState({
+      sessions: new Map(),
+      loadingEnvironments: new Set(),
+      sessionSnapshotGenerations: new Map([["env-1", 1]]),
+      error: null,
+    });
   });
 
   test("creates, updates activity, renames, and forwards buffer operations", async () => {
@@ -460,5 +485,6 @@ describe("sessionStore remaining actions", () => {
     expect(useSessionStore.getState().error).toBe("problem");
     store.clearAllSessions();
     expect(useSessionStore.getState().sessions.size).toBe(0);
+    expect(useSessionStore.getState().sessionSnapshotGenerations.size).toBe(0);
   });
 });

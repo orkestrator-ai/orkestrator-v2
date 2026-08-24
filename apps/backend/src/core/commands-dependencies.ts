@@ -37,7 +37,6 @@ export {
 } from "@orkestrator/protocol/bridge-readiness";
 export {
   PANE_LAYOUT_VERSION,
-  type AgentModelConfigKey,
   type ClientEnvironment,
   type Environment,
   type AppConfig,

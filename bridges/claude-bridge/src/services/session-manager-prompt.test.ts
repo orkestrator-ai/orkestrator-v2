@@ -2848,6 +2848,81 @@ describe("sendPrompt", () => {
     expect(session.status).toBe("idle");
   });
 
+  test("keeps task settlement at receive time when an API error ends the turn", async () => {
+    const session = createSession("result-error-task-settlement");
+    track(session.id);
+
+    const promptPromise = sendPrompt(session.id, "delegate then fail");
+    const call = await nextQueryCall();
+
+    await withControlledNewDate("2026-08-18T17:00:00.000Z", async (setTime) => {
+      call.push({
+        type: "assistant",
+        uuid: "assistant-task-launch",
+        message: {
+          id: "api-message-task-launch",
+          content: [
+            {
+              type: "tool_use",
+              id: "task-without-sdk-timestamp",
+              name: "Task",
+              input: { description: "Review the bridge" },
+            },
+          ],
+        },
+      });
+      await waitFor(() => {
+        const task = getSessionMessages(session.id)
+          .find((message) => message.role === "assistant")
+          ?.parts.find((part) => part.toolUseId === "task-without-sdk-timestamp");
+        return task?.toolState === "pending";
+      });
+
+      setTime("2026-08-18T17:04:30.000Z");
+      call.push({
+        type: "user",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "task-without-sdk-timestamp",
+              content: "done",
+              is_error: false,
+            },
+          ],
+        },
+      });
+      await waitFor(() => {
+        const task = getSessionMessages(session.id)
+          .find((message) => message.role === "assistant")
+          ?.parts.find((part) => part.toolUseId === "task-without-sdk-timestamp");
+        return task?.toolState === "success";
+      });
+
+      setTime("2026-08-18T17:05:00.000Z");
+      call.push({
+        type: "result",
+        subtype: "error_during_execution",
+        errors: ["API Error: 529 Overloaded"],
+      });
+      call.finish();
+
+      await expect(promptPromise).rejects.toThrow("API Error: 529 Overloaded");
+    });
+
+    const task = getSessionMessages(session.id)
+      .find((message) => message.role === "assistant")
+      ?.parts.find((part) => part.toolUseId === "task-without-sdk-timestamp");
+    expect(task).toMatchObject({
+      toolState: "success",
+      // The optional provider timestamp was absent, so the backend's receipt
+      // of the terminal record owns the durable transcript position.
+      settledAt: "2026-08-18T17:04:30.000Z",
+    });
+  });
+
   test("passes Agent SDK outputFormat without removing tools and stores the structured payload", async () => {
     const outputSchema = {
       type: "object",

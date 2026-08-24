@@ -128,6 +128,35 @@ describe("Claude activity in the shared native transcript", () => {
     expect(collectRenderedBackgroundTaskIds([normalized!])).toEqual(new Set(["bg-dev"]));
   });
 
+  test("applies a late settle stamp when the terminal status is unchanged", () => {
+    /*
+     * Claude can report the terminal status before the notification carrying
+     * its end time. The second snapshot therefore changes only `settledAt`;
+     * treating it as an identity-preserving no-op strands the terminal card at
+     * the bottom even though the backend now knows its transcript position.
+     */
+    const [terminalWithoutStamp] = applyClaudeBackgroundTaskStates([backgroundLaunch()], {
+      "bg-dev": {
+        id: "bg-dev",
+        toolUseId: "bash-1",
+        description: "Run the dev server",
+        status: "completed",
+      },
+    });
+    const [terminalWithStamp] = applyClaudeBackgroundTaskStates([terminalWithoutStamp!], {
+      "bg-dev": {
+        id: "bg-dev",
+        toolUseId: "bash-1",
+        description: "Run the dev server",
+        status: "completed",
+        settledAt: "2026-08-16T10:05:00.000Z",
+      },
+    });
+
+    expect(terminalWithStamp).not.toBe(terminalWithoutStamp);
+    expect(terminalWithStamp?.parts[0]?.backgroundTask?.settledAt).toBe("2026-08-16T10:05:00.000Z");
+  });
+
   describe("tasks the transcript cannot show", () => {
     const watchTask = {
       id: "orphan-task",

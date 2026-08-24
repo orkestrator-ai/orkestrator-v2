@@ -26,7 +26,6 @@ import {
   asString,
   asRecord,
   assertOnlyKeys,
-  asAgentModelConfigKey,
   redactGlobalConfig,
   redactAppConfig,
   stripRendererCredentials,
@@ -331,14 +330,6 @@ export function registerProjectCommands(
     );
     return redactAppConfig(updated);
   });
-  register("update_agent_model_default", async ({ key, modelId }, { storage }) => {
-    // The key is validated against a closed set, so the model id must be held to
-    // the same bar: storage writes it verbatim into a required config field and a
-    // renderer bug must not be able to persist an empty default.
-    const id = asString(modelId, "modelId").trim();
-    if (!id) throw new Error("Expected modelId to be non-empty");
-    return redactAppConfig(await storage.updateAgentModelDefault(asAgentModelConfigKey(key), id));
-  });
   register("set_github_token", async ({ token }, { storage }) => {
     const nextToken = token === null ? null : asString(token, "token").trim();
     if (nextToken !== null && !nextToken) {
@@ -377,7 +368,7 @@ export function registerProjectCommands(
   });
   register(
     "remember_environment_agent_selection",
-    async ({ projectId, platform, mode, model, reasoningEffort }, { storage }) => {
+    async ({ projectId, platform, mode }, { storage }) => {
       if (!isAgentPlatform(platform)) {
         throw new Error("Expected platform to be a supported agent platform");
       }
@@ -386,16 +377,9 @@ export function registerProjectCommands(
       if (selectedMode !== "terminal" && selectedMode !== "native") {
         throw new Error("Expected mode to be terminal or native");
       }
-      const selectedModel = asOptionalString(model)?.trim();
-      const selectedReasoningEffort = asOptionalString(reasoningEffort)?.trim();
       return redactAppConfig(
         await storage.patchRepositoryConfig(asString(projectId, "projectId"), {
-          lastEnvironmentAgentSelection: {
-            platform: selectedPlatform,
-            mode: selectedMode,
-            ...(selectedModel ? { model: selectedModel } : {}),
-            ...(selectedReasoningEffort ? { reasoningEffort: selectedReasoningEffort } : {}),
-          },
+          lastEnvironmentAgentSelection: { platform: selectedPlatform, mode: selectedMode },
         }),
       );
     },

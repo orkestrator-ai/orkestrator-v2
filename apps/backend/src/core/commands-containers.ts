@@ -185,7 +185,8 @@ export async function createDockerContainer(
     redactValues.push(cursorApiKey);
     args.push("-e", "CURSOR_API_KEY");
   }
-  if (config.global.opencodeModel) args.push("-e", `OPENCODE_MODEL=${config.global.opencodeModel}`);
+  const opencodeModel = config.global.agentSettings?.platforms?.opencode?.model;
+  if (opencodeModel) args.push("-e", `OPENCODE_MODEL=${opencodeModel}`);
   if (environment.networkAccessMode === "full") {
     args.push("-e", "NETWORK_MODE=full");
   } else {

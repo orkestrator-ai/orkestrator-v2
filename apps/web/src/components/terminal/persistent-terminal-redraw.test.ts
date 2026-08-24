@@ -30,6 +30,17 @@ describe("persistent terminal redraw helpers", () => {
     expect(
       shouldTriggerEnvironmentVisibilityRedraw({
         isEnvironmentVisible: true,
+        wasEnvironmentVisible: true,
+        wasDomReattached: true,
+        isActive: true,
+        terminalIsOpened: true,
+        isConnected: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldTriggerEnvironmentVisibilityRedraw({
+        isEnvironmentVisible: true,
         wasEnvironmentVisible: false,
         isActive: false,
         terminalIsOpened: true,
@@ -46,7 +57,7 @@ describe("persistent terminal redraw helpers", () => {
     expect(getTerminalResizeBounceDimensions(120, 65535)).toEqual({ cols: 121, rows: 65535 });
   });
 
-  it("uses pre-fit dimensions for the bounce resize", async () => {
+  it("settles the PTY at the post-fit dimensions when fit() resizes the viewport", async () => {
     const fit = mock(() => {});
     const refresh = mock(() => {});
     const resize = mock(async () => {});
@@ -73,9 +84,10 @@ describe("persistent terminal redraw helpers", () => {
       }) as unknown as typeof setTimeout,
     });
 
-    // Bounce and restore should use the *original* 100x30, not the post-fit 110x35
-    expect(resize).toHaveBeenNthCalledWith(1, 100, 31);
-    expect(resize).toHaveBeenNthCalledWith(2, 100, 30);
+    // A reattach into a differently sized pane fits to 110x35; settling the PTY
+    // back at the pre-fit 100x30 would leave it out of step with the viewport.
+    expect(resize).toHaveBeenNthCalledWith(1, 110, 36);
+    expect(resize).toHaveBeenNthCalledWith(2, 110, 35);
     expect(fit).toHaveBeenCalledTimes(2);
     expect(refresh).toHaveBeenCalledTimes(2);
 
@@ -87,6 +99,51 @@ describe("persistent terminal redraw helpers", () => {
 
     // Cleanup exists
     expect(typeof cancel).toBe("function");
+  });
+
+  it("still bounces when fit() leaves the dimensions unchanged", async () => {
+    const resize = mock(async () => {});
+
+    await forceTerminalVisibilityRedraw({
+      terminal: { cols: 80, rows: 24, refresh: mock(() => {}) },
+      fitAddon: { fit: mock(() => {}) },
+      resize,
+      requestAnimationFrameFn: (callback) => {
+        callback(0);
+        return 1;
+      },
+      setTimeoutFn: (() =>
+        1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+    });
+
+    // Two distinct sizes still reach the PTY, so the TUI receives a SIGWINCH.
+    expect(resize).toHaveBeenNthCalledWith(1, 80, 25);
+    expect(resize).toHaveBeenNthCalledWith(2, 80, 24);
+  });
+
+  it("bounces once fit() gives a viewport that had no dimensions before", async () => {
+    const resize = mock(async () => {});
+    const terminal = { cols: 0, rows: 0, refresh: mock(() => {}) };
+
+    await forceTerminalVisibilityRedraw({
+      terminal,
+      fitAddon: {
+        fit: () => {
+          terminal.cols = 90;
+          terminal.rows = 20;
+        },
+      },
+      resize,
+      requestAnimationFrameFn: (callback) => {
+        callback(0);
+        return 1;
+      },
+      setTimeoutFn: (() =>
+        1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+    });
+
+    expect(resize).toHaveBeenNthCalledWith(1, 90, 21);
+    expect(resize).toHaveBeenNthCalledWith(2, 90, 20);
   });
 
   it("cancel() clears the pending timeout", async () => {

@@ -20,6 +20,12 @@ import {
 } from "./commands-dependencies.js";
 import type { ClaudeModelCatalogSnapshot } from "./commands-dependencies.js";
 import {
+  CONTAINER_CURSOR_SDK_AUTH_FILE,
+  cursorSdkBridgeEnabled,
+  cursorSdkStoredApiKey,
+  syncContainerCursorSdkCredentials,
+} from "./cursor-sdk-bridge.js";
+import {
   BRIDGE_TOKEN_PATTERN,
   CONTAINER_CURSOR_API_KEY_FILE,
   CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE,
@@ -405,6 +411,19 @@ export function registerServerCommands(
     const acpExecutable = acpProvider === "cursor" ? "cursor-agent" : "grok";
     const tokenFile = `/tmp/${acpProvider}-acp-bridge-token`;
     const logFile = `/tmp/${acpProvider}-acp-bridge.log`;
+    /**
+     * Both Cursor bridges are matched, and both share port 4099.
+     *
+     * A Cursor session is served by exactly one bridge at a time, so the port
+     * is a property of the platform rather than of the engine — which is what
+     * lets the experimental toggle be flipped without recreating containers
+     * that were started before the SDK bridge existed. Switching engines has
+     * to stop whichever bridge is holding the port, so the pattern names both.
+     */
+    const bridgePattern =
+      acpProvider === "cursor"
+        ? "[a]cp-bridge/dist/index.js --provider=cursor|[c]ursor-bridge/dist/index.js"
+        : `[a]cp-bridge/dist/index.js --provider=${acpProvider}`;
     register(`start_${acpProvider}_server`, ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
       return enqueueContainerBridgeOperation(acpProvider, id, async () => {
@@ -412,10 +431,24 @@ export function registerServerCommands(
           acpProvider === "cursor"
             ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
             : undefined;
+        const useCursorSdk = acpProvider === "cursor" && (await cursorSdkBridgeEnabled(context));
+        // The engine is part of the fingerprint, not just the credential: both
+        // Cursor bridges answer `/global/health` on the same port, so a healthy
+        // bridge is not on its own evidence that the *selected* one is running.
+        // Without this, flipping the toggle would reuse the old engine until
+        // something else happened to restart it.
         const expectedCredentialFingerprint =
-          acpProvider === "cursor" ? cursorApiKeyFingerprint(cursorApiKey) : undefined;
+          acpProvider === "cursor"
+            ? `${useCursorSdk ? "sdk" : "acp"}:${cursorApiKeyFingerprint(cursorApiKey)}`
+            : undefined;
         if (acpProvider === "cursor") {
           await syncContainerCursorApiKey(id, cursorApiKey);
+          // Only the delivering direction needs its own exec. Removing a stale
+          // credential is folded into the startup script below, so selecting
+          // the ACP engine costs no extra round trip.
+          if (useCursorSdk) {
+            await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
+          }
         }
         const hostPort = await getHostPort(id, containerPort);
         if (hostPort && (await checkHttpHealth(hostPort))) {
@@ -437,10 +470,7 @@ export function registerServerCommands(
           ) {
             return { hostPort, wasRunning: true, authToken: existingToken };
           }
-          await dockerExec(
-            id,
-            `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true`,
-          );
+          await dockerExec(id, `pkill -f '${bridgePattern}' || true`);
           await waitForUnhealthy(hostPort);
         }
         const token = randomBytes(32).toString("base64url");
@@ -458,11 +488,22 @@ export function registerServerCommands(
           export PORT=${containerPort}
           export HOSTNAME=0.0.0.0
           export CWD=/workspace
+          ${
+            useCursorSdk
+              ? `export CURSOR_BRIDGE_TOKEN=${quoteShell(token)}
+          export CURSOR_BRIDGE_STATE_DIR=/tmp/orkestrator-cursor-sdk-state
+          export CURSOR_BRIDGE_AUTH_FILE=${CONTAINER_CURSOR_SDK_AUTH_FILE}
+          # The container boundary is the isolation boundary, so repository
+          # settings are readable here in exactly the way they are not on the
+          # host — the same distinction ACP_APPROVE_PROJECT_MCPS draws.
+          export CURSOR_BRIDGE_PROJECT_SETTINGS=1`
+              : `${acpProvider === "cursor" ? `rm -f ${CONTAINER_CURSOR_SDK_AUTH_FILE}` : ""}
           export ACP_PROVIDER=${acpProvider}
           export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${acpProvider}
           ${acpProvider === "cursor" ? "export ACP_APPROVE_PROJECT_MCPS=1" : ""}
           export ACP_AGENT_PATH="$(command -v ${acpExecutable} 2>/dev/null || echo ${acpExecutable})"
-          export ACP_BRIDGE_TOKEN=${quoteShell(token)}
+          export ACP_BRIDGE_TOKEN=${quoteShell(token)}`
+          }
           ${
             acpProvider === "cursor"
               ? `mkdir -p ${quoteShell(CONTAINER_CURSOR_CREDENTIAL_DIR)}
@@ -470,7 +511,11 @@ export function registerServerCommands(
           printf '%s' ${quoteShell(expectedCredentialFingerprint!)} > ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
               : ""
           }
-          setsid bun /opt/acp-bridge/dist/index.js --provider=${acpProvider} > ${logFile} 2>&1 &
+          ${
+            useCursorSdk
+              ? `setsid bun /opt/cursor-bridge/dist/index.js > ${logFile} 2>&1 &`
+              : `setsid bun /opt/acp-bridge/dist/index.js --provider=${acpProvider} > ${logFile} 2>&1 &`
+          }
         `,
           [token],
         );
@@ -482,9 +527,10 @@ export function registerServerCommands(
       return enqueueContainerBridgeOperation(acpProvider, id, () =>
         dockerExec(
           id,
-          `pkill -f '[a]cp-bridge/dist/index.js --provider=${acpProvider}' || true; rm -f ${tokenFile}` +
+          `pkill -f '${bridgePattern}' || true; rm -f ${tokenFile}` +
             (acpProvider === "cursor"
-              ? ` ${CONTAINER_CURSOR_API_KEY_FILE} ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
+              ? ` ${CONTAINER_CURSOR_API_KEY_FILE} ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}` +
+                ` ${CONTAINER_CURSOR_SDK_AUTH_FILE}`
               : ""),
         ).then(() => undefined),
       );

@@ -417,8 +417,11 @@ case "$1" in
         exit 0 ;;
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    if [ -z "$token" ]; then
+      token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    fi
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
-    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([0-9a-f][0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
+    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
     if [ -n "$fingerprint" ] && [ -e "$FAKE_CURSOR_DIR_MARKER" ]; then
       printf '%s' "$fingerprint" > "$FAKE_CURSOR_FINGERPRINT_FILE"
     fi
@@ -532,7 +535,7 @@ exit 0
               "rotated-container-cursor-key",
             );
             expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
-              createHash("sha256").update("rotated-container-cursor-key").digest("hex"),
+              `acp:${createHash("sha256").update("rotated-container-cursor-key").digest("hex")}`,
             );
 
             delete globalConfig.cursorApiKey;
@@ -544,7 +547,7 @@ exit 0
             expect(cleared.authToken).not.toBe(rotated.authToken);
             await expect(fs.readFile(cursorKeyCapture, "utf8")).rejects.toThrow();
             expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
-              createHash("sha256").update("").digest("hex"),
+              `acp:${createHash("sha256").update("").digest("hex")}`,
             );
             const rotatedExecLog = await fs.readFile(logs.exec, "utf8");
             expect(
@@ -575,8 +578,13 @@ exit 0
             context,
           );
           const afterStop = await fs.readFile(logs.exec, "utf8");
+          // Cursor's pattern names both of its bridges, because a Cursor
+          // session may be served by either engine on this same port and
+          // stopping the platform has to reach whichever one is running.
           expect(afterStop).toContain(
-            `pkill -f '[a]cp-bridge/dist/index.js --provider=${provider}'`,
+            provider === "cursor"
+              ? `pkill -f '[a]cp-bridge/dist/index.js --provider=cursor|[c]ursor-bridge/dist/index.js'`
+              : `pkill -f '[a]cp-bridge/dist/index.js --provider=${provider}'`,
           );
           expect(afterStop).toContain(`rm -f /tmp/${provider}-acp-bridge-token`);
         });
@@ -674,7 +682,7 @@ case "$1" in
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
-    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([0-9a-f][0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
+    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
     if [ -n "$fingerprint" ] && [ -e "$FAKE_CURSOR_DIR_MARKER" ]; then
       printf '%s' "$fingerprint" > "$FAKE_CURSOR_FINGERPRINT_FILE"
     fi
@@ -695,7 +703,7 @@ exit 0
 
         // The bridge ran without a key, and still recorded sha256("").
         expect(await fs.readFile(process.env.FAKE_CURSOR_FINGERPRINT_FILE!, "utf8")).toBe(
-          createHash("sha256").update("").digest("hex"),
+          `acp:${createHash("sha256").update("").digest("hex")}`,
         );
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain("unset CURSOR_API_KEY");

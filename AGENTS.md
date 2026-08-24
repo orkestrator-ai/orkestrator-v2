@@ -84,6 +84,7 @@ packages/
 
 bridges/                    # Native-mode bridge servers
 ├── claude-bridge/          # Claude Native Mode bridge server
+├── cursor-bridge/          # Cursor via @cursor/sdk (experimental, off by default)
 └── codex-bridge/           # Codex Native Mode bridge server
     └── src/
         ├── index.ts            # Routes, SSE, composition root
@@ -222,6 +223,7 @@ of these package manifests synchronized:
 - `apps/web/package.json`
 - `apps/web-public/package.json`
 - `bridges/acp-bridge/package.json`
+- `bridges/cursor-bridge/package.json`
 - `bridges/claude-bridge/package.json`
 - `bridges/codex-bridge/package.json`
 - `packages/cli/package.json`
@@ -425,6 +427,53 @@ When touching the app-server engine:
   redact prompt or file content unless you pass `--strip-content`. The recorder
   itself must stay O(1) in the read loop — buffer and flush off-loop, never await
   a write.
+
+### Cursor bridges
+
+Cursor sessions can be served by either of two bridge processes. The platform,
+the provider, the transcript shape and every HTTP route are identical; only the
+engine differs, so the backend, the store and the renderer cannot tell them
+apart.
+
+- `bridges/acp-bridge` drives the `cursor-agent` CLI over ACP. This is the
+  default and is shared with Grok Build.
+- `bridges/cursor-bridge` drives Cursor's own TypeScript SDK (`@cursor/sdk`) in
+  process. It is experimental and selected per installation by the global
+  `experimentalCursorSdkBridge` setting, exposed in Settings › Cursor.
+
+Both listen on the same container port (4099), because exactly one of them
+serves a Cursor session at a time — which is what lets the toggle be flipped
+without recreating containers built before the SDK bridge existed. The reuse
+fingerprint therefore names the engine as well as the credential, so flipping
+the toggle replaces a running bridge rather than reusing the wrong one.
+
+When touching the SDK bridge:
+
+- The engine boundary is `src/translate.ts` and `src/tool-rendering.ts`. Every
+  Cursor-specific shape stops there; nothing downstream should learn a new
+  field to render a Cursor turn.
+- `applyInteractionUpdate` never awaits. It runs on the SDK's own callback, so
+  an await there would let a large transcript back-pressure a live run.
+- A tool variant the SDK adds must degrade to a plain card, never throw. The
+  SDK is a fast-moving dependency and these branches run mid-turn.
+- The two engines keep separate session stores. They mint different agent ids,
+  so a shared state directory would have each read the other's sessions as its
+  own.
+- Sign-in runs the bridge's own `--login` mode as a short-lived child. Keeping
+  `@cursor/sdk` out of the backend is deliberate: it is a five-megabyte bundle
+  with native helpers, and a login needs no environment and no session.
+- The credential lives in Orkestrator's data directory, not the SDK's default
+  `~/.cursor/sdk/auth.json`, so an unrelated `cursor-agent logout` cannot
+  revoke it and a container can be handed exactly one file.
+- Project settings (`.cursor/`) are read inside containers and not on the host,
+  the same boundary `ACP_APPROVE_PROJECT_MCPS` draws: cloning a repository must
+  not be enough to run its code on the user's machine.
+
+A background sub-agent is settled when its parent run ends. The SDK reports
+children only through nested updates on that run, so once it is over there is
+no channel left to observe them on — the card says the child was detached
+rather than claiming it completed, because holding it active would report the
+environment as permanently busy.
 
 ### Backend
 

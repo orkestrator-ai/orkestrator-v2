@@ -93,6 +93,7 @@ const DEFAULT_CONFIG: AppConfig = {
     },
     terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
     experimentalCodexRawEventLogging: true,
+    experimentalCursorSdkBridge: false,
     webClientEnabled: true,
   },
   repositories: {},

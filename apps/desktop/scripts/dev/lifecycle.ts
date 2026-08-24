@@ -325,6 +325,37 @@ export async function seedAgentTestProfileState(
   }
 }
 
+/**
+ * Check that Electron announced everything this particular run depends on.
+ *
+ * The backend gateway is always required: without an auth file and a backend
+ * pid there is nothing to supervise or talk to.
+ *
+ * A reported *browser* URL is not. An ordinary `bun run dev` starts the backend
+ * with `--desktop-web-client`, and that backend deliberately omits `browserUrl`
+ * from its readiness message — the loopback listener is up, but its
+ * authoritative public URL belongs to ManagedWebClient and may not exist until
+ * after readiness has been announced. Requiring it unconditionally failed every
+ * desktop dev run, with a message that blamed a gateway which was in fact
+ * listening.
+ *
+ * It is required for the two cases that genuinely drive the app over HTTP:
+ * `agent-test`, which disables the managed web client precisely so its
+ * readiness carries the URL a browser suite needs, and any run seeding a
+ * fixture, which talks to the app whatever the flavor.
+ */
+export function assertElectronReadiness(
+  ready: Pick<ElectronReady, "authFile" | "backendPid" | "browserUrl">,
+  run: { flavor: "development" | "agent-test"; fixture: boolean },
+): asserts ready is typeof ready & { authFile: string; backendPid: number } {
+  if (!ready.authFile || !ready.backendPid) {
+    throw new Error("Electron readiness did not include the backend gateway");
+  }
+  if ((run.flavor === "agent-test" || run.fixture) && !ready.browserUrl) {
+    throw new Error("Electron readiness did not include the loopback browser gateway");
+  }
+}
+
 export async function startDevelopment(
   args: DevArguments,
   flavor: "development" | "agent-test",
@@ -517,11 +548,9 @@ export async function startDevelopment(
         } catch {}
       });
     });
-    if (!ready.browserUrl || !ready.authFile || !ready.backendPid) {
-      throw new Error("Electron readiness did not include the loopback browser gateway");
-    }
+    assertElectronReadiness(ready, { flavor, fixture: args.fixture });
     let testProject: string | undefined;
-    if (args.fixture) {
+    if (args.fixture && ready.browserUrl) {
       testProject = await seedFixture({
         profile,
         templateRoot: fixtureTemplateRoot,

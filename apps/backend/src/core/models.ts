@@ -680,6 +680,15 @@ export interface AppConfig {
     };
     terminalScrollback: number;
     experimentalCodexRawEventLogging?: boolean;
+    /**
+     * Run Cursor sessions on the SDK bridge instead of the ACP one.
+     *
+     * Experimental and off by default: the two bridges are separate processes
+     * with separate session stores, so switching this changes which engine a
+     * new Cursor session is created on. Existing sessions stay with the bridge
+     * that created them.
+     */
+    experimentalCursorSdkBridge?: boolean;
     debugLogging?: boolean;
     webClientEnabled?: boolean;
     /** Editable preference embedded inside Orkestrator's fixed review contract. */

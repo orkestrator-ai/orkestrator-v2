@@ -227,6 +227,7 @@ export async function loadPersistedState(): Promise<void> {
   ) {
     throw new Error("ACP persisted state is incompatible");
   }
+  const restored: SessionState[] = [];
   for (const candidate of parsed.sessions.slice(0, MAX_SESSIONS)) {
     if (
       !isObject(candidate) ||
@@ -264,6 +265,7 @@ export async function loadPersistedState(): Promise<void> {
       messages,
       activeSubagentToolIds: new Set(),
       activeSubagentDescriptors: new Map(),
+      settledCursorAgentIds: new Set(),
       subagentLimitExceeded: candidate.subagentLimitExceeded === true,
       subagentToolIds: new Map(),
       cursorTodos: restoreCursorTodosFromMessages(messages),
@@ -331,15 +333,28 @@ export async function loadPersistedState(): Promise<void> {
     }
     indexActiveSubagentsFromTranscript(state);
     boundTranscript(state);
+    rememberCatalog(state.sessionConfig.composer);
+    restored.push(state);
+    sessions.set(state.id, state);
+    if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
+  }
+  // Deliberately a second pass, after every session is in `sessions`.
+  //
+  // `settleTerminalCursorChildren` binds unnamed Task cards to child transcript
+  // directories, and `bindDiscoveredCursorChildren` only produces a stable
+  // pairing when it can see *every* session's unnamed launches at once — that
+  // is what makes the answer independent of who asks first. Run inside the loop
+  // above it would see only the sessions restored so far, and because a bound
+  // directory is then claimed for the life of the process, a file whose
+  // sessions happen to be persisted in the wrong order would pin each card to
+  // the other's child permanently.
+  for (const state of restored) {
     // A child whose transcript already ended gets its real outcome back before
     // the sweep below fails everything still running. `reconcileStaleToolParts`
     // is right that an active card cannot have survived the restart, but
     // "failed" is only true of the ones whose result is genuinely unknown.
     settleTerminalCursorChildren(state);
     reconcileStaleToolParts(state, true);
-    rememberCatalog(state.sessionConfig.composer);
-    sessions.set(state.id, state);
-    if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
   }
 }
 export function normalizeBridgeMessage(value: unknown): BridgeMessage | null {

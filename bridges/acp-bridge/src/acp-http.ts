@@ -176,19 +176,22 @@ export async function route(
    * background launch leaves its Task card `active` until something reports the
    * child's end, and for an unnamed child no such frame ever arrives — so the
    * bounded terminal probe runs first and drops the ones that already ended on
-   * disk. An errored session is never working either: its prompt outcome is
-   * unknown (a bridge restart) or failed, and in both cases nothing is left to
-   * ingest whatever a child may still be doing.
+   * disk.
+   *
+   * An errored session is not special-cased, and must not be. Every error path
+   * that can strand a child already clears the registry through
+   * `failAllActiveSubagents` — the process-death handler, the sub-agent limit
+   * latch, a failed turn, and the restart sweep in `loadPersistedState`. The one
+   * that does not is `failTranscriptLimit`, which retains its children on
+   * purpose: transcript retention is presentation-only and a display bound is
+   * not evidence that a background child stopped writing files. Reading `error`
+   * as idle there would report a live child as finished.
    */
   if (action === "activity" && request.method === "GET") {
     settleTerminalCursorChildren(state);
     return json(response, 200, {
       activity:
-        state.status === "running"
-          ? "working"
-          : state.status !== "error" && state.activeSubagentToolIds.size > 0
-            ? "working"
-            : "idle",
+        state.status === "running" || state.activeSubagentToolIds.size > 0 ? "working" : "idle",
     });
   }
   /**

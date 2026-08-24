@@ -63,6 +63,7 @@ function makeState(launches: Array<{ toolUseId: string; createdAt?: string; agen
       ]),
     ),
     subagentToolIds: new Map(),
+    settledCursorAgentIds: new Set<string>(),
   };
   return state;
 }

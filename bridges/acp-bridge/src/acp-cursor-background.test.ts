@@ -1086,6 +1086,285 @@ describe("ACP Cursor background continuation", () => {
     ).toBe(410);
   });
 
+  /**
+   * The regression the settled-claim set exists for. A background child settled
+   * straight from the `/activity` probe leaves no trace the discovery scan can
+   * see: the probe never projects the child's JSONL, `finishSubagentTool`
+   * deletes the descriptor holding the inferred id, and Cursor never named the
+   * child on the wire. Without `settledCursorAgentIds` the consumed directory
+   * reads as free again, and the next unnamed launch inside the 5s skew window
+   * adopts a transcript that is already `turn_ended` — reporting a child that
+   * has barely started as finished.
+   */
+  test("does not re-adopt a settled child's directory for the next unnamed launch", async () => {
+    const directory = await temporaryDirectory();
+    const transcripts = resolve(directory, "transcripts");
+    await fs.mkdir(transcripts, { recursive: true });
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_CURSOR_BACKGROUND_CONTINUE: "1",
+        ACP_CURSOR_BACKGROUND_WAIT_MS: "200",
+        CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts,
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
+    const readActivity = async (): Promise<{ activity: string }> =>
+      nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{ activity: string }>;
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDNOID" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(
+      read,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
+    );
+
+    const firstChild = resolve(transcripts, "child-settled-1");
+    await fs.mkdir(firstChild, { recursive: true });
+    await fs.writeFile(
+      resolve(firstChild, "child-settled-1.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "First child done." }] },
+      })}\n${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+    );
+
+    // Only the probe from here on. Reading `/session/:id` would hydrate, and
+    // hydration leaves a JSONL projection whose `sourcePartId` claims the
+    // directory — which would mask the bug this test is about.
+    expect(await waitFor(readActivity, (value) => value.activity === "idle")).toEqual({
+      activity: "idle",
+    });
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDNOID2" }),
+        })
+      ).status,
+    ).toBe(202);
+    // `child-settled-1` was created moments ago, so it is inside the second
+    // launch's discovery skew floor and is exactly what an unclaimed scan would
+    // hand it. Its own directory does not exist yet, which is the normal state
+    // for the first seconds of a background child.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect(await readActivity()).toEqual({ activity: "working" });
+    }
+    const held = await read();
+    expect(
+      held.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-2"),
+    ).toMatchObject({ agentState: "active" });
+    // The first card keeps the outcome the probe gave it; nothing here reopens
+    // or re-attributes it.
+    expect(
+      held.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ agentState: "finished" });
+  });
+
+  /**
+   * `bindDiscoveredCursorChildren` only produces a stable pairing when it can
+   * see every session's unnamed launches at once, and a bound directory is
+   * claimed for the life of the process. Restoring sessions one at a time would
+   * let the order they happen to sit in the state file decide the answer, so
+   * `loadPersistedState` registers every session before it settles any.
+   *
+   * The two sessions here are created in the opposite order to the one they
+   * prompt in, which is what makes a per-session load pass get it wrong: the
+   * session restored first is the one that launched *second*, and the older
+   * directory is still inside its skew floor.
+   */
+  test("pairs restored sessions with their own children regardless of restore order", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const directory = await temporaryDirectory();
+    const transcripts = resolve(directory, "transcripts");
+    await fs.mkdir(transcripts, { recursive: true });
+    const env = { CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts };
+
+    const first = await spawnBridge({ stateDirectory, env });
+    const create = async (clientSessionKey: string): Promise<string> =>
+      (
+        (await nativeFetch(`${first.base}/session/create`, {
+          method: "POST",
+          headers: first.headers,
+          body: JSON.stringify({ clientSessionKey }),
+        }).then((response) => response.json())) as { id: string }
+      ).id;
+    // Creation order is persistence order. `early` is created first and so is
+    // restored first, but it is `late` that launches first.
+    const early = await create("env-pairing:tab-early");
+    const late = await create("env-pairing:tab-late");
+    const readSession = async (base: string, headers: Record<string, string>, id: string) =>
+      nativeFetch(`${base}/session/${id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
+    const launch = async (id: string): Promise<void> => {
+      expect(
+        (
+          await nativeFetch(`${first.base}/session/${id}/prompt`, {
+            method: "POST",
+            headers: first.headers,
+            body: JSON.stringify({ prompt: "CURSORBACKGROUNDNOID" }),
+          })
+        ).status,
+      ).toBe(202);
+      await waitFor(
+        () => readSession(first.base, first.headers, id),
+        (value) =>
+          value.status === "idle" &&
+          value.messages.some((message) =>
+            message.parts.some(
+              (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+            ),
+          ),
+      );
+    };
+    const writeChild = async (agentId: string, status: string): Promise<void> => {
+      const childDir = resolve(transcripts, agentId);
+      await fs.mkdir(childDir, { recursive: true });
+      await fs.writeFile(
+        resolve(childDir, `${agentId}.jsonl`),
+        `${JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: `${agentId} ran.` }] },
+        })}\n${JSON.stringify({ type: "turn_ended", status })}\n`,
+      );
+    };
+
+    await launch(late);
+    // Named so that alphabetical order matches creation order: a filesystem
+    // that ties the two birthtimes still sorts them the way they were made.
+    await writeChild("child-1", "success");
+    await launch(early);
+    await writeChild("child-2", "failed");
+
+    await stopChild(first.child);
+    const restarted = await spawnBridge({ stateDirectory, env });
+    const parts = async (id: string) =>
+      (await readSession(restarted.base, restarted.headers, id)).messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1");
+
+    // Each card carries its own child's outcome. Swapping the pairing would
+    // report `late` as failed and `early` as finished — both plausible-looking
+    // and both wrong.
+    expect(await parts(late)).toMatchObject({ agentState: "finished" });
+    expect(await parts(early)).toMatchObject({ agentState: "failed" });
+  });
+
+  /**
+   * Two roots for one workspace means one is a leftover from a Cursor build
+   * that slugged differently. Taking the first candidate that exists would pin
+   * the stale one for the life of the process, and every lookup under it — the
+   * continuation waiter and the terminal probe alike — would find nothing.
+   */
+  test("prefers the most recently written root when both slug forms exist", async () => {
+    const directory = await temporaryDirectory();
+    const fakeHome = resolve(directory, "home");
+    const cwd = resolve(directory, "Application Support", "project");
+    await fs.mkdir(cwd, { recursive: true });
+    const normalized = cwd.replace(/\\/g, "/").replace(/^\/+/, "");
+    const spacedSlug = normalized.replace(/\//g, "-");
+    const dashedSlug = spacedSlug.replace(/\s+/g, "-");
+    expect(dashedSlug).not.toBe(spacedSlug);
+    const projects = resolve(fakeHome, ".cursor", "projects");
+    const staleRoot = resolve(projects, spacedSlug, "agent-transcripts");
+    const liveRoot = resolve(projects, dashedSlug, "agent-transcripts");
+    // The stale root exists and even holds a terminal child, so a first-match
+    // resolver would settle the card from a transcript that is not this run's.
+    const staleChild = resolve(staleRoot, "child-wait-1");
+    await fs.mkdir(staleChild, { recursive: true });
+    await fs.writeFile(
+      resolve(staleChild, "child-wait-1.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Stale root reached." }] },
+      })}\n${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+    );
+    const liveChild = resolve(liveRoot, "child-wait-1");
+    await fs.mkdir(liveChild, { recursive: true });
+    await fs.writeFile(
+      resolve(liveChild, "child-wait-1.jsonl"),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Live root reached." }] },
+      })}\n${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+    );
+    // Explicit rather than relying on creation order: the claim is "newest
+    // wins", so the test has to state which one is older.
+    const stale = new Date(Date.now() - 60 * 60 * 1000);
+    await fs.utimes(staleRoot, stale, stale);
+
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_CURSOR_BACKGROUND_CONTINUE: "1",
+        ACP_CURSOR_BACKGROUND_WAIT_MS: "8000",
+        HOME: fakeHome,
+        CWD: cwd,
+        CURSOR_AGENT_TRANSCRIPTS_DIR: undefined,
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
+
+    const settled = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some(
+          (message) =>
+            message.role === "user" && message.content?.includes("root reached.") === true,
+        ),
+    );
+    expect(
+      settled.messages.some((message) => message.content?.includes("Live root reached.") === true),
+    ).toBe(true);
+    expect(
+      settled.messages.some((message) => message.content?.includes("Stale root reached.") === true),
+    ).toBe(false);
+  });
+
   test("projects child JSONL tool_use into the parent Task card while the child is live", async () => {
     const directory = await temporaryDirectory();
     const transcripts = resolve(directory, "transcripts");
@@ -1685,6 +1964,7 @@ describe("ACP Cursor transcript records", () => {
       activeSubagentToolIds: new Set<string>(),
       activeSubagentDescriptors: new Map(),
       subagentToolIds: new Map(),
+      settledCursorAgentIds: new Set<string>(),
     });
 
     async function writeChild(root: string, agentId: string, body: string): Promise<string> {

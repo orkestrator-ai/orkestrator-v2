@@ -13,6 +13,7 @@ import { dirname } from "node:path";
 import {
   CURSOR_BACKGROUND_CONTINUATION_PREFIX,
   MAX_CURSOR_CHILD_RESULT_BYTES,
+  MAX_CURSOR_SETTLED_CLAIMS,
   MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN,
   MAX_MESSAGE_TEXT_BYTES,
   isObject,
@@ -228,10 +229,33 @@ export function settleTerminalCursorChildren(state: SessionState): boolean {
     // No terminal record is not evidence the child died. It stays active, and
     // the card stays live, exactly as before.
     if (!terminal) continue;
+    // Before the settle, not after: `finishSubagentTool` deletes the descriptor
+    // that holds a discovered `agentId`, and this probe never projects the
+    // child's JSONL, so this set is the only place the claim survives. Without
+    // it the directory reads as unclaimed and the next unnamed launch within
+    // the discovery skew window binds a transcript that is already terminal.
+    rememberSettledCursorAgentId(state, child.agentId);
     finishSubagentTool(state, child.toolUseId, terminal);
     settled = true;
   }
   return settled;
+}
+
+/**
+ * Retain a consumed child directory's claim past the card that owned it.
+ *
+ * Oldest-first eviction: a claim only matters against launches inside
+ * `CURSOR_CHILD_DISCOVERY_SKEW_MS`, so the entries that fall out are the ones
+ * no live launch could still reach.
+ */
+function rememberSettledCursorAgentId(state: SessionState, agentId: string): void {
+  if (state.settledCursorAgentIds.has(agentId)) return;
+  while (state.settledCursorAgentIds.size >= MAX_CURSOR_SETTLED_CLAIMS) {
+    const oldest = state.settledCursorAgentIds.values().next();
+    if (oldest.done) break;
+    state.settledCursorAgentIds.delete(oldest.value);
+  }
+  state.settledCursorAgentIds.add(agentId);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -32,9 +32,15 @@ const transcriptRootCache = new Map<string, string>();
  * The slug is the absolute path with separators turned into dashes — except
  * that Cursor also replaces whitespace, so a workspace under
  * `~/Library/Application Support/…` is written as `Application-Support`. The
- * dash form is checked as a second candidate rather than replacing the first,
- * because the first is what every space-free path (the common case) resolves
- * to and is what the existing fixtures assert.
+ * dash form is a second candidate rather than a replacement, because the first
+ * is what every space-free path (the common case) resolves to and is what the
+ * existing fixtures assert. A path with no whitespace produces one candidate
+ * and never reaches the disk check below.
+ *
+ * When both exist the newest wins. Two roots for one workspace means one of
+ * them is a leftover from a Cursor build that slugged differently, and the only
+ * thing that distinguishes the live one is that it is still being written to;
+ * taking the first match would pin the stale one for the life of the process.
  *
  * Getting this wrong is silent: `cursorChildTranscriptPath` returns a path
  * under a root that will never exist, so the continuation waiter blocks the
@@ -53,12 +59,22 @@ export function cursorTranscriptRoot(cwd: string = workingDirectory): string {
   const roots = candidates.map((slug) =>
     join(homedir(), ".cursor", "projects", slug, "agent-transcripts"),
   );
+  let selected: { root: string; mtimeMs: number } | undefined;
   for (const root of roots) {
-    if (!existsSync(root)) continue;
-    transcriptRootCache.set(cwd, root);
-    return root;
+    let mtimeMs: number;
+    try {
+      mtimeMs = statSync(root).mtimeMs;
+    } catch {
+      // Absent is the normal state until the first child spawns.
+      continue;
+    }
+    if (!selected || mtimeMs > selected.mtimeMs) selected = { root, mtimeMs };
   }
-  return roots[0]!;
+  // Only an existing root is cached. An absent one is the normal state before
+  // the first child spawns, and caching it would pin the wrong answer forever.
+  if (!selected) return roots[0]!;
+  transcriptRootCache.set(cwd, selected.root);
+  return selected.root;
 }
 
 /** Test-only: drops the resolved-root cache so a rewritten home is re-read. */
@@ -305,6 +321,10 @@ function launchStartedAtMs(part: BridgeToolPart): number | undefined {
  * `agentId` off launch parts and off JSONL projections still attached to a
  * card. It runs only while an unnamed launch is waiting to bind and a
  * directory is available to bind it to, not on the `/activity` poll.
+ *
+ * `settledCursorAgentIds` covers the one case none of those three reach: a
+ * background child settled straight from the `/activity` terminal probe, which
+ * projects nothing and whose card Cursor never named. See that field.
  */
 function claimedCursorAgentIds(states: Iterable<SessionState>): Set<string> {
   const claimed = new Set<string>();
@@ -312,6 +332,7 @@ function claimedCursorAgentIds(states: Iterable<SessionState>): Set<string> {
     for (const descriptor of candidate.activeSubagentDescriptors.values()) {
       if (descriptor.agentId) claimed.add(descriptor.agentId);
     }
+    for (const agentId of candidate.settledCursorAgentIds) claimed.add(agentId);
     for (const message of candidate.messages) {
       for (const part of message.parts) {
         const projectedId = cursorJsonlPartAgentId(part.sourcePartId);

@@ -188,6 +188,25 @@ export interface SessionState {
    * display concern and must not decide whether background work still exists.
    */
   activeSubagentDescriptors: Map<string, ActiveSubagentDescriptor>;
+  /**
+   * Cursor child directories this session has already consumed, kept after the
+   * card that owned them settled.
+   *
+   * `bindDiscoveredCursorChildren` treats a directory as claimed while it can
+   * still see the `agentId` — on a live descriptor, on the launch part, or on a
+   * JSONL projection attached to the card. A background child settled from the
+   * `/activity` probe leaves none of those: the probe never projects, the
+   * descriptor is deleted as the card settles, and Cursor never named the child
+   * on the wire in the first place. Without this the directory looks free again
+   * and the next unnamed launch inside the discovery skew window adopts it,
+   * reading a finished child's `turn_ended` as its own.
+   *
+   * In memory only, and bounded by `MAX_CURSOR_SETTLED_CLAIMS`. A restart
+   * cannot reuse a stale claim anyway: every restored card is settled or failed
+   * before the first new prompt, and the directories a new launch could reach
+   * are all older than its skew floor.
+   */
+  settledCursorAgentIds: Set<string>;
   /** Fatal latch: once the bound trips, later provider frames cannot reopen work. */
   subagentLimitExceeded: boolean;
   /** Grok's terminal sub-agent notifications identify the child, not its tool call. */
@@ -498,6 +517,14 @@ export const MAX_CURSOR_CHILD_RESULT_BYTES = 64 * 1024;
 /** Recent child JSONL activity projected into the parent Task card. */
 export const MAX_CURSOR_CHILD_PARTS = 64;
 export const MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN = 8;
+/**
+ * Cap on `SessionState.settledCursorAgentIds`. Claims are only load-bearing
+ * against launches inside `CURSOR_CHILD_DISCOVERY_SKEW_MS`, so the useful
+ * window is a handful of directories; this is generous enough to cover a burst
+ * of background Tasks and small enough that a long-lived session cannot grow
+ * the set without bound. Oldest claims are evicted first.
+ */
+export const MAX_CURSOR_SETTLED_CLAIMS = 64;
 export const CURSOR_JSONL_SOURCE_PREFIX = "cursor-jsonl:";
 /**
  * Cap on the transcript-root entries one discovery scan will stat. The scan is

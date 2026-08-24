@@ -1617,6 +1617,52 @@ describe("NativeAgentService", () => {
     });
   });
 
+  /**
+   * A Cursor background Task keeps the ACP bridge's `/activity` `working` after
+   * the parent turn ends, so the environment badge is only ever as truthful as
+   * that probe. When the bridge stops claiming a live child — the child ended,
+   * or a restart made the turn's outcome unknown — the environment has to
+   * follow it down rather than hold `working` from the earlier observation.
+   */
+  test("retires a Cursor background-child working state once the bridge reports idle", async () => {
+    let clock = Date.now();
+    let activityState: ProviderActivityState = "working";
+    const { provider } = createProviderStub("cursor", {
+      activity: async () => activityState,
+    });
+
+    await withService(
+      {
+        prefix: "orkestrator-native-cursor-background-activity-",
+        provider: async () => provider,
+        now: () => clock,
+      },
+      async ({ storage, service }) => {
+        const key = nativeAgentSessionStorageKey("env-1", "cursor", "tab-review");
+        await storage.adoptNativeAgentSession({
+          key,
+          environmentId: "env-1",
+          agent: "cursor",
+          logicalSessionKey: "tab-review",
+          providerSessionId: "provider-review",
+        });
+
+        await service.reconcileAgentActivity();
+        expect((await storage.getEnvironment("env-1"))?.agentActivityState).toBe("working");
+
+        // The bridge settled the Task from the child's transcript, or restored
+        // it as an unknown outcome after a restart. Either way nothing is live.
+        clock += 1_000;
+        activityState = "idle";
+        await service.reconcileAgentActivity();
+        expect(internals(service).observedSessionActivity.get(key)?.state).toBe("idle");
+        expect(await storage.getEnvironment("env-1")).toMatchObject({
+          agentActivityState: "idle",
+        });
+      },
+    );
+  });
+
   test("reports one session completion while another same-provider tab stays working", async () => {
     let clock = Date.now();
     const sessionActivity = new Map<string, ProviderActivityState>([

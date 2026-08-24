@@ -29,6 +29,7 @@ import {
   PROMPT_TIMEOUT_MS,
   HttpError,
   authToken,
+  bumpCursorDiscoveryRevision,
   clientSessionKeys,
   provider,
   sessions,
@@ -58,7 +59,10 @@ import {
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { dispatchAcpPrompt } from "./acp-prompt.js";
-import { hydrateCursorChildTranscripts } from "./acp-cursor-background.js";
+import {
+  hydrateCursorChildTranscripts,
+  settleTerminalCursorChildren,
+} from "./acp-cursor-background.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { structuredPromptInstruction } from "./acp-prompt.js";
 
@@ -166,7 +170,26 @@ export async function route(
     }
     return json(response, 200, state.sessionConfig.composer);
   }
+  /**
+   * Liveness only: no touch, no transcript hydration, no re-attach.
+   *
+   * `working` has to mean a turn or a child is *actually* running. A Cursor
+   * background launch leaves its Task card `active` until something reports the
+   * child's end, and for an unnamed child no such frame ever arrives — so the
+   * bounded terminal probe runs first and drops the ones that already ended on
+   * disk.
+   *
+   * An errored session is not special-cased, and must not be. Every error path
+   * that can strand a child already clears the registry through
+   * `failAllActiveSubagents` — the process-death handler, the sub-agent limit
+   * latch, a failed turn, and the restart sweep in `loadPersistedState`. The one
+   * that does not is `failTranscriptLimit`, which retains its children on
+   * purpose: transcript retention is presentation-only and a display bound is
+   * not evidence that a background child stopped writing files. Reading `error`
+   * as idle there would report a live child as finished.
+   */
   if (action === "activity" && request.method === "GET") {
+    settleTerminalCursorChildren(state);
     return json(response, 200, {
       activity:
         state.status === "running" || state.activeSubagentToolIds.size > 0 ? "working" : "idle",
@@ -491,6 +514,7 @@ export async function route(
     cancelCursorToolMetadataReconcile(state);
     await state.child?.close();
     sessions.delete(state.id);
+    bumpCursorDiscoveryRevision();
     if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
     await persistState();
     return json(response, 200, { deleted: true });

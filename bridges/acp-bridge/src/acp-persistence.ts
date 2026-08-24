@@ -18,6 +18,7 @@ import {
   MAX_MESSAGES,
   MAX_PARTS_PER_MESSAGE,
   MAX_PROMPT_JOURNAL,
+  MAX_CURSOR_SETTLED_CLAIMS,
   MAX_PERSISTED_PROMPT_JOURNAL_BYTES,
   MAX_PERSISTED_SESSION_CONFIG_BYTES,
   MAX_PERSISTED_STRUCTURED_BYTES,
@@ -37,6 +38,7 @@ import {
   RPC_TIMEOUT_MS,
   catalogCache,
   catalogProbe,
+  bumpCursorDiscoveryRevision,
   clientSessionKeys,
   isObject,
   parseProvider,
@@ -69,6 +71,8 @@ import {
   restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
+import { settleTerminalCursorChildren } from "./acp-cursor-background.js";
+import { isSafeCursorAgentId } from "./acp-cursor-child-discovery.js";
 import {
   boundTranscript,
   boundedString,
@@ -188,6 +192,7 @@ export async function restorePersistedState(): Promise<void> {
     await loadPersistedState();
   } catch (error) {
     sessions.clear();
+    bumpCursorDiscoveryRevision();
     clientSessionKeys.clear();
     console.warn(
       `[acp-bridge] Discarding unusable persisted state: ${error instanceof Error ? error.message : String(error)}`,
@@ -226,6 +231,7 @@ export async function loadPersistedState(): Promise<void> {
   ) {
     throw new Error("ACP persisted state is incompatible");
   }
+  const restored: SessionState[] = [];
   for (const candidate of parsed.sessions.slice(0, MAX_SESSIONS)) {
     if (
       !isObject(candidate) ||
@@ -263,6 +269,16 @@ export async function loadPersistedState(): Promise<void> {
       messages,
       activeSubagentToolIds: new Set(),
       activeSubagentDescriptors: new Map(),
+      settledCursorAgentIds: new Set(
+        Array.isArray(candidate.settledCursorAgentIds)
+          ? candidate.settledCursorAgentIds
+              .filter(
+                (agentId): agentId is string =>
+                  typeof agentId === "string" && isSafeCursorAgentId(agentId),
+              )
+              .slice(-MAX_CURSOR_SETTLED_CLAIMS)
+          : [],
+      ),
       subagentLimitExceeded: candidate.subagentLimitExceeded === true,
       subagentToolIds: new Map(),
       cursorTodos: restoreCursorTodosFromMessages(messages),
@@ -330,10 +346,28 @@ export async function loadPersistedState(): Promise<void> {
     }
     indexActiveSubagentsFromTranscript(state);
     boundTranscript(state);
-    reconcileStaleToolParts(state, true);
     rememberCatalog(state.sessionConfig.composer);
+    restored.push(state);
     sessions.set(state.id, state);
     if (state.clientSessionKey) clientSessionKeys.set(state.clientSessionKey, state.id);
+  }
+  // Deliberately a second pass, after every session is in `sessions`.
+  //
+  // `settleTerminalCursorChildren` binds unnamed Task cards to child transcript
+  // directories, and `bindDiscoveredCursorChildren` only produces a stable
+  // pairing when it can see *every* session's unnamed launches at once — that
+  // is what makes the answer independent of who asks first. Run inside the loop
+  // above it would see only the sessions restored so far, and because a bound
+  // directory is then claimed for the life of the process, a file whose
+  // sessions happen to be persisted in the wrong order would pin each card to
+  // the other's child permanently.
+  for (const state of restored) {
+    // A child whose transcript already ended gets its real outcome back before
+    // the sweep below fails everything still running. `reconcileStaleToolParts`
+    // is right that an active card cannot have survived the restart, but
+    // "failed" is only true of the ones whose result is genuinely unknown.
+    settleTerminalCursorChildren(state);
+    reconcileStaleToolParts(state, true);
   }
 }
 export function normalizeBridgeMessage(value: unknown): BridgeMessage | null {
@@ -442,6 +476,7 @@ export function normalizeBridgePart(
     ...(isObject(value.toolArgs) ? { toolArgs: boundedToolArguments(value.toolArgs) } : {}),
     ...(toolState ? { toolState } : {}),
     ...(agentState ? { agentState } : {}),
+    ...(value.cursorTaskPromptReported === true ? { cursorTaskPromptReported: true } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(toolOutput !== undefined ? { toolOutput } : {}),
     ...(toolError !== undefined ? { toolError } : {}),

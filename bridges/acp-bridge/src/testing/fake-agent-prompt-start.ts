@@ -520,7 +520,12 @@ export function handlePromptStart(message: JsonObject): boolean {
       return true;
     }
     if (prompt.startsWith("CURSORBACKGROUNDNOID")) {
-      writeCursorBackgroundChild({ toolCallId: "cursor-subagent-1" });
+      // A trailing digit selects the tool call id, so one session can launch
+      // more than one unnamed background child. Bare `CURSORBACKGROUNDNOID`
+      // stays `cursor-subagent-1`.
+      const suffix = prompt.slice("CURSORBACKGROUNDNOID".length).trim();
+      const index = /^[0-9]$/.test(suffix) ? suffix : "1";
+      writeCursorBackgroundChild({ toolCallId: `cursor-subagent-${index}` });
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }

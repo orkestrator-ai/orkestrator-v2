@@ -13,6 +13,7 @@ import {
   waitFor,
 } from "./acp-test-harness.js";
 import {
+  acpSubagentState,
   mergeCursorTodos,
   parseAcpPlanEntries,
   parseCursorTodos,
@@ -483,5 +484,66 @@ describe("sub-agent runtime duration", () => {
     source.rawOutput = part.toolOutput;
     stampSubagentRuntimeDuration(part, Date.parse(part.createdAt!) + 5_400);
     expect(part.toolArgs?.durationMs).toBe(84);
+  });
+});
+
+/**
+ * The launch/liveness distinction, which the incident behind
+ * `settleTerminalCursorChildren` turned on. Grok's Task input says "this call
+ * detached a child", so the call succeeding is the spawn succeeding; Cursor's
+ * `isBackground` stays true on the update that reports the child's end, so a
+ * status in the same payload supersedes it.
+ */
+describe("acpSubagentState", () => {
+  test("keeps a Cursor launch-only background payload active", () => {
+    const source = {
+      inputName: "task",
+      title: "Task: Subagent task",
+      toolState: "success" as const,
+    };
+    const output = JSON.stringify({ durationMs: 31, isBackground: true });
+    expect(acpSubagentState(source as never, output)).toBe("active");
+  });
+
+  test("settles when the same background payload also reports completion", () => {
+    const source = {
+      inputName: "task",
+      title: "Task: Subagent task",
+      toolState: "success" as const,
+    };
+    const output = JSON.stringify({ durationMs: 84, isBackground: true, status: "completed" });
+    expect(acpSubagentState(source as never, output)).toBe("finished");
+  });
+
+  test("fails when the background payload reports a terminal failure", () => {
+    const source = { inputName: "task", toolState: "success" as const };
+    const output = JSON.stringify({ isBackground: true, status: "failed" });
+    expect(acpSubagentState(source as never, output)).toBe("failed");
+  });
+
+  test("does not read a Grok launch result as the child's own outcome", () => {
+    const source = {
+      inputName: "task",
+      toolState: "success" as const,
+      toolArgs: { background: true, description: "Run snapshot validation" },
+    };
+    const output = JSON.stringify({ status: "completed" });
+    expect(acpSubagentState(source as never, output)).toBe("active");
+  });
+
+  test("never reopens a child that a lifecycle notification already settled", () => {
+    const finished = {
+      inputName: "task",
+      toolState: "success" as const,
+      toolArgs: { background: true },
+      agentState: "finished" as const,
+    };
+    expect(acpSubagentState(finished as never, JSON.stringify({ isBackground: true }))).toBe(
+      "finished",
+    );
+    const failed = { ...finished, agentState: "failed" as const };
+    expect(acpSubagentState(failed as never, JSON.stringify({ status: "completed" }))).toBe(
+      "failed",
+    );
   });
 });

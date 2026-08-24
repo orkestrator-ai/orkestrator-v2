@@ -12,6 +12,7 @@ import {
 import { parseAcpTurnUsage } from "./usage.js";
 import {
   AcpProcess,
+  bumpCursorDiscoveryRevision,
   MAX_APPROVALS_PER_SESSION,
   MAX_MESSAGES,
   MAX_MESSAGE_TEXT_BYTES,
@@ -228,6 +229,7 @@ export async function resumeSessionReserved(
       messages: [],
       activeSubagentToolIds: new Set(),
       activeSubagentDescriptors: new Map(),
+      settledCursorAgentIds: new Set(),
       subagentLimitExceeded: false,
       subagentToolIds: new Map(),
       cursorTodos: [],
@@ -283,7 +285,10 @@ export async function resumeSessionReserved(
     await persistState();
     return state;
   } catch (error) {
-    if (state && sessions.get(state.id) === state) sessions.delete(state.id);
+    if (state && sessions.get(state.id) === state) {
+      sessions.delete(state.id);
+      bumpCursorDiscoveryRevision();
+    }
     if (state) clearApprovals(state);
     await child.close();
     await persistState().catch(() => undefined);
@@ -354,6 +359,7 @@ export async function createSessionReserved(
       messages: [],
       activeSubagentToolIds: new Set(),
       activeSubagentDescriptors: new Map(),
+      settledCursorAgentIds: new Set(),
       subagentLimitExceeded: false,
       subagentToolIds: new Map(),
       cursorTodos: [],
@@ -388,7 +394,10 @@ export async function createSessionReserved(
       return state;
     } catch (error) {
       state.dispatching = false;
-      if (sessions.get(id) === state) sessions.delete(id);
+      if (sessions.get(id) === state) {
+        sessions.delete(id);
+        bumpCursorDiscoveryRevision();
+      }
       if (clientSessionKey && clientSessionKeys.get(clientSessionKey) === id) {
         clientSessionKeys.delete(clientSessionKey);
       }

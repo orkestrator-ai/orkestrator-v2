@@ -3394,6 +3394,71 @@ describe("ACP bridge", () => {
     );
   });
 
+  /**
+   * `failTranscriptLimit` is the one error path that deliberately keeps its
+   * children registered — transcript retention is presentation-only, and a
+   * display bound is not evidence that a background child stopped writing
+   * files. `/activity` therefore must not read `error` as idle: the child is
+   * still running, and reporting the environment idle would fire a completion
+   * edge and let a build pipeline advance underneath it.
+   */
+  test("keeps reporting working when a transcript-limit failure retains a live child", async () => {
+    const { base, headers } = await spawnBridge();
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    const read = async () =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{
+        status: string;
+        error?: string;
+        messages: Array<{ parts: Array<Record<string, unknown>> }>;
+      }>;
+    const activity = async () =>
+      nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{ activity: string }>;
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT" }),
+    });
+    await waitFor(
+      read,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
+    );
+    expect(await activity()).toEqual({ activity: "working" });
+
+    // A structured turn is worth exactly its complete output, so exhausting the
+    // per-message bound fails it rather than trimming. Nothing in that path
+    // touches the sub-agent registry.
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        prompt: "MANYTOOLS: flood the turn",
+        outputSchema: { type: "object" },
+      }),
+    });
+    const failed = await waitFor(read, (value) => value.status === "error");
+    expect(failed.error).toContain("exceeded the transcript limit");
+    expect(
+      failed.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ agentState: "active" });
+    expect(await activity()).toEqual({ activity: "working" });
+  });
+
   test("heals a session an older build failed for exceeding the transcript limit", async () => {
     const stateDirectory = await temporaryDirectory();
     await fs.writeFile(

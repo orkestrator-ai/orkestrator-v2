@@ -84,6 +84,8 @@ export interface BridgeToolPart {
    * does for Codex collaboration items.
    */
   agentState?: "active" | "finished" | "failed";
+  /** Internal provenance marker retained across restart for Cursor prompt correlation. */
+  cursorTaskPromptReported?: true;
   toolTitle?: string;
   toolOutput?: string;
   toolError?: string;
@@ -156,6 +158,8 @@ export interface ActiveSubagentDescriptor {
   /** Bounded launch metadata used to correlate Grok's child-id notification. */
   description?: string;
   subagentType?: string;
+  /** Prompt received from Cursor's own `cursor/task`, never from JSONL recovery. */
+  reportedPrompt?: string;
   /** Distinguishes a completed background launch from an abandoned pending one. */
   toolState?: BridgeToolPart["toolState"];
   /**
@@ -171,6 +175,8 @@ export interface ActiveSubagentDescriptor {
    * mis-inferred id would block `session/prompt` for the whole wait budget.
    */
   agentIdDiscovered?: boolean;
+  /** The inferred directory came from a complete global pairing or unique prompt match. */
+  agentIdSettlementSafe?: boolean;
 }
 
 export interface SessionState {
@@ -188,6 +194,24 @@ export interface SessionState {
    * display concern and must not decide whether background work still exists.
    */
   activeSubagentDescriptors: Map<string, ActiveSubagentDescriptor>;
+  /**
+   * Cursor child directories this session has already consumed, kept after the
+   * card that owned them settled.
+   *
+   * `bindDiscoveredCursorChildren` treats a directory as claimed while it can
+   * still see the `agentId` — on a live descriptor, on the launch part, or on a
+   * JSONL projection attached to the card. A background child settled from the
+   * `/activity` probe leaves none of those: the probe never projects, the
+   * descriptor is deleted as the card settles, and Cursor never named the child
+   * on the wire in the first place. Without this the directory looks free again
+   * and the next unnamed launch inside the discovery skew window adopts it,
+   * reading a finished child's `turn_ended` as its own.
+   *
+   * Persisted and bounded by `MAX_CURSOR_SETTLED_CLAIMS`. A fast restart can
+   * occur inside the discovery skew window, so dropping these would let the
+   * next launch reuse a recently consumed terminal directory.
+   */
+  settledCursorAgentIds: Set<string>;
   /** Fatal latch: once the bound trips, later provider frames cannot reopen work. */
   subagentLimitExceeded: boolean;
   /** Grok's terminal sub-agent notifications identify the child, not its tool call. */
@@ -312,6 +336,7 @@ export interface PersistedSession {
   usage?: PersistedUsage;
   commandCount?: number;
   subagentLimitExceeded?: boolean;
+  settledCursorAgentIds?: string[];
 }
 
 export interface PersistedState {
@@ -335,6 +360,21 @@ export const approveProjectMcps = process.env.ACP_APPROVE_PROJECT_MCPS === "1";
 export const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 export const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 export const sessions = new Map<string, SessionState>();
+let cursorDiscoveryRevision = 0;
+
+/**
+ * Cheap invalidation token for Cursor's process-wide child-directory pairing.
+ * Pairing reads every session's active launches and claims, so a per-session
+ * memo cannot infer validity from its own counts alone.
+ */
+export function currentCursorDiscoveryRevision(): number {
+  return cursorDiscoveryRevision;
+}
+
+export function bumpCursorDiscoveryRevision(): void {
+  cursorDiscoveryRevision =
+    cursorDiscoveryRevision >= Number.MAX_SAFE_INTEGER ? 0 : cursorDiscoveryRevision + 1;
+}
 export const acpToolSourceStates = new WeakMap<BridgeToolPart, AcpToolSourceState>();
 /**
  * Parts and messages whose text already sits at its byte cap, marker included.
@@ -498,6 +538,14 @@ export const MAX_CURSOR_CHILD_RESULT_BYTES = 64 * 1024;
 /** Recent child JSONL activity projected into the parent Task card. */
 export const MAX_CURSOR_CHILD_PARTS = 64;
 export const MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN = 8;
+/**
+ * Cap on `SessionState.settledCursorAgentIds`. Claims are only load-bearing
+ * against launches inside `CURSOR_CHILD_DISCOVERY_SKEW_MS`, so the useful
+ * window is a handful of directories; this is generous enough to cover a burst
+ * of background Tasks and small enough that a long-lived session cannot grow
+ * the set without bound. Oldest claims are evicted first.
+ */
+export const MAX_CURSOR_SETTLED_CLAIMS = 64;
 export const CURSOR_JSONL_SOURCE_PREFIX = "cursor-jsonl:";
 /**
  * Cap on the transcript-root entries one discovery scan will stat. The scan is

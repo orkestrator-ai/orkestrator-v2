@@ -221,6 +221,7 @@ function buildClaudeToolDiff(
  * @param mcpServerNames - Set of known MCP server names for accurate tool parsing
  * @param activeTaskIds - Set of currently active (pending) Task IDs for parent tracking
  * @param taskRegistry - Session task list state, stamped onto Task tool results
+ * @param timestampFallback - Clock to use when the record omitted its optional timestamp
  */
 export function parseMessageContent(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -229,6 +230,7 @@ export function parseMessageContent(
   mcpServerNames?: Set<string>,
   activeTaskIds?: Set<string>,
   taskRegistry?: Pick<TaskRegistry, "apply">,
+  timestampFallback?: string,
 ): {
   content: string;
   thinkingParts: NormalizedPart[];
@@ -248,10 +250,15 @@ export function parseMessageContent(
   let textContent = "";
 
   const messageUuid = typeof message.uuid === "string" ? message.uuid : undefined;
-  const recordTimestamp =
+  const providerTimestamp =
     typeof message.timestamp === "string" && Number.isFinite(Date.parse(message.timestamp))
       ? message.timestamp
       : undefined;
+  const recordTimestamp =
+    providerTimestamp ??
+    (timestampFallback && Number.isFinite(Date.parse(timestampFallback))
+      ? timestampFallback
+      : undefined);
   const explicitParentTaskUseId =
     typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
       ? message.parent_tool_use_id
@@ -386,8 +393,9 @@ export function parseMessageContent(
           }),
           state: block.is_error ? "failure" : "success",
           taskSnapshot,
-          // The record's own clock, not this process's: replaying the transcript
-          // after a restart has to reproduce the same settle position.
+          // Prefer the record's own clock. Older emitters have none, so the
+          // caller supplies one clock for this record and reuses it for the
+          // transcript row; that preserves the settle position on replay.
           settledAt: recordTimestamp,
         });
 
@@ -913,7 +921,17 @@ export function persistedBackgroundTaskMessage(raw: {
   return undefined;
 }
 
-export function persistedRecordTime(raw: { message: unknown }): number {
+/**
+ * When a persisted record was written, in epoch milliseconds.
+ *
+ * `fallback` is the position the caller already assigned this record on the
+ * materialization's synthetic scale, for a record that carries no clock of its
+ * own. Reading `Date.now()` instead would answer on a different scale from the
+ * rows around it, and the renderer resolves a settled card's position by
+ * comparing a task's terminal edge against those rows — so the card would land
+ * wherever this loop happened to have reached, not where the task stopped.
+ */
+export function persistedRecordTime(raw: { message: unknown }, fallback?: number): number {
   const now = Date.now();
   const outerTimestamp = (raw as { timestamp?: unknown }).timestamp;
   const innerTimestamp =
@@ -924,7 +942,7 @@ export function persistedRecordTime(raw: { message: unknown }): number {
     const parsed = persistedTimestamp(candidate, now);
     if (parsed !== undefined) return parsed;
   }
-  return now;
+  return fallback ?? now;
 }
 
 export function reducePersistedBackgroundTaskMessage(
@@ -1009,42 +1027,76 @@ export function normalizePersistedSessionMessages(
     raw: (typeof persisted)[number];
     content: string;
     orderedParts: OrderedPartEntry[];
+    timestamp: string;
   }> = [];
 
-  for (const raw of persisted) {
+  // Older emitters omitted record timestamps. Give every such record one
+  // clock for this materialization and use that same value both while parsing
+  // tool results and while creating visible rows. The absolute fallback may
+  // change on a later hydration, but its transcript-relative position does
+  // not: raw record order is stable, including the hidden tool-result rows.
+  //
+  // One millisecond per record, ending at the materialization rather than
+  // starting from it. Counting forwards would date the tail of a long
+  // transcript in the future — where a lifecycle snapshot is rejected outright
+  // (see MAX_PERSISTED_TIMESTAMP_FUTURE_SKEW_MS) and where a live message
+  // appended afterwards, clocked at its own `Date.now()`, would sort *above*
+  // history it followed.
+  const materializedAt = Date.now();
+  const syntheticEpochBase = materializedAt - Math.max(persisted.length - 1, 0);
+  for (let index = 0; index < persisted.length; index += 1) {
+    const raw = persisted[index]!;
+    const rawTimestamp = (raw as unknown as { timestamp?: unknown }).timestamp;
+    const providerTimestamp =
+      typeof rawTimestamp === "string" && Number.isFinite(Date.parse(rawTimestamp))
+        ? rawTimestamp
+        : undefined;
+    // This record's position on the synthetic scale, for whatever cannot read
+    // a clock off the record itself.
+    const positionAt = syntheticEpochBase + index;
+    const timestamp = providerTimestamp ?? new Date(positionAt).toISOString();
     if (raw.type === "system") {
       const taskMessage = persistedBackgroundTaskMessage(raw);
       if (taskMessage) {
         backgroundTasks = reducePersistedBackgroundTaskMessage(
           backgroundTasks,
           taskMessage,
-          persistedRecordTime(raw),
+          // A task record's own terminal edge outranks the tool result's stamp
+          // in the renderer, so it has to sit on the same scale as the rows it
+          // will be resolved against. Offer the position only when this record
+          // supplied no usable clock: `persistedRecordTime` still rejects a
+          // timestamp too far in the future, and that rejection must fall back
+          // to now rather than to the value it just refused.
+          persistedRecordTime(raw, providerTimestamp === undefined ? positionAt : undefined),
         );
       }
       continue;
     }
-    const result = parseMessageContent(raw, toolTracker, undefined, activeTaskIds, taskRegistry);
+    const result = parseMessageContent(
+      raw,
+      toolTracker,
+      undefined,
+      activeTaskIds,
+      taskRegistry,
+      timestamp,
+    );
     for (const taskId of result.newTaskIds) activeTaskIds.add(taskId);
     for (const taskId of result.completedTaskIds) activeTaskIds.delete(taskId);
     parsed.push({
       raw,
       content: result.content,
       orderedParts: result.orderedParts,
+      timestamp,
     });
   }
 
-  const now = Date.now();
   const messages: NormalizedMessage[] = [];
-  for (let index = 0; index < parsed.length; index += 1) {
-    const entry = parsed[index]!;
+  for (const entry of parsed) {
     const parts = buildMessageParts(entry.orderedParts, toolTracker);
     if (entry.raw.type === "user" && !entry.content.trim()) continue;
     if (entry.raw.type === "assistant" && parts.length === 0 && !entry.content.trim()) {
       continue;
     }
-    const rawTimestamp = (entry.raw as unknown as { timestamp?: unknown }).timestamp;
-    const timestamp =
-      typeof rawTimestamp === "string" ? rawTimestamp : new Date(now + index).toISOString();
     const isRootAssistant =
       entry.raw.type === "assistant" &&
       isRootAssistantRecord(entry.raw.parent_tool_use_id, entry.raw.isSidechain);
@@ -1057,7 +1109,7 @@ export function normalizePersistedSessionMessages(
       role: entry.raw.type,
       content: entry.content,
       parts,
-      createdAt: timestamp,
+      createdAt: entry.timestamp,
       ...(modelId ? { modelId } : {}),
       // Recorded explicitly rather than inferred from `id`: a record with no
       // uuid falls back to a generated id, which must never be mistaken for a

@@ -713,7 +713,8 @@ function sameBackgroundTask(
   return (
     left?.id === right?.id &&
     left?.description === right?.description &&
-    left?.status === right?.status
+    left?.status === right?.status &&
+    left?.settledAt === right?.settledAt
   );
 }
 

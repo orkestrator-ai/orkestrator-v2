@@ -122,11 +122,12 @@ export interface NormalizedPart {
    * When this tool's result arrived, for a call that launched a long-running
    * child (a subagent, or anything else presented as an agent card).
    *
-   * Taken from the message carrying the result rather than a clock, so a
-   * transcript replayed after a restart stamps the identical value — which is
-   * what lets the renderer place a settled card where it actually settled
-   * without remembering anything itself. See `settledAt` on the protocol's
-   * background-task summary for the same idea on the snapshot side.
+   * Taken from the message carrying the result when the provider supplied a
+   * timestamp. Older emitters fall back to one clock shared by the result and
+   * its transcript materialization, so a replay preserves the same relative
+   * position even when it cannot preserve the original absolute time. See
+   * `settledAt` on the protocol's background-task summary for the same idea on
+   * the snapshot side.
    */
   settledAt?: string;
   toolName?: string;

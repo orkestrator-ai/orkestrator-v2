@@ -117,6 +117,71 @@ describe("settle stamps", () => {
     // No position is better than a wrong one: the card stays in its launch row.
     expect(part?.settledAt).toBeUndefined();
   });
+
+  describe("the caller's fallback clock", () => {
+    /*
+     * `timestamp` is optional on an SDK record and older emitters omit it, so
+     * the caller offers the one clock it assigned this record — receive time
+     * live, or the record's position in a materialization on replay. It is a
+     * fallback, never an override: a record that dated itself is still the
+     * only thing that can reproduce the same answer on the next replay.
+     */
+    const undatedResult = (timestamp?: string) => ({
+      uuid: "user-1",
+      ...(timestamp === undefined ? {} : { timestamp }),
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "task-1",
+            content: "done",
+            is_error: false,
+          },
+        ],
+      },
+    });
+
+    const settleWith = (result: Record<string, unknown>, fallback?: string) => {
+      const toolTracker = new ToolTracker();
+      parseMessageContent(launch, toolTracker, undefined, undefined, undefined, fallback);
+      parseMessageContent(result, toolTracker, undefined, undefined, undefined, fallback);
+      return toolTracker.getTools()[0];
+    };
+
+    test("does not override a record that dated itself", () => {
+      const part = settleWith(
+        undatedResult("2026-08-17T10:04:30.000Z"),
+        "2026-08-17T23:59:00.000Z",
+      );
+
+      expect(part?.toolState).toBe("success");
+      expect(part?.settledAt).toBe("2026-08-17T10:04:30.000Z");
+    });
+
+    test("stamps a record that carries no clock of its own", () => {
+      const part = settleWith(undatedResult(), "2026-08-17T10:04:30.000Z");
+
+      expect(part?.toolState).toBe("success");
+      expect(part?.settledAt).toBe("2026-08-17T10:04:30.000Z");
+    });
+
+    test("covers a record whose own clock is unreadable", () => {
+      // An unparseable timestamp is no clock at all, so it takes the same path
+      // as a missing one rather than leaving the card unplaced.
+      const part = settleWith(undatedResult("not-a-date"), "2026-08-17T10:04:30.000Z");
+
+      expect(part?.toolState).toBe("success");
+      expect(part?.settledAt).toBe("2026-08-17T10:04:30.000Z");
+    });
+
+    test("is ignored when it is itself unreadable", () => {
+      const part = settleWith(undatedResult(), "not-a-date");
+
+      expect(part?.toolState).toBe("success");
+      expect(part?.settledAt).toBeUndefined();
+    });
+  });
 });
 
 describe("prompt suggestions", () => {

@@ -100,11 +100,6 @@ export async function forceTerminalVisibilityRedraw({
     }
   };
 
-  // Capture pre-fit dimensions so the bounce restores the *original* size,
-  // guaranteeing a SIGWINCH even if fit() itself changes the dimensions.
-  const preFitCols = terminal.cols;
-  const preFitRows = terminal.rows;
-
   await new Promise<void>((resolve) => {
     requestAnimationFrameFn(() => {
       if (!isCancelled()) {
@@ -116,18 +111,27 @@ export async function forceTerminalVisibilityRedraw({
 
   if (isCancelled()) return cleanup;
 
-  if (preFitCols <= 0 || preFitRows <= 0) {
+  // Bounce around the *post-fit* size. This redraw also fires when the xterm
+  // DOM node is reattached into a differently sized pane, where the pre-fit
+  // dimensions describe the pane the terminal just left — settling the PTY
+  // there would leave it permanently out of step with the rendered viewport.
+  // Bouncing off the fitted size still guarantees a SIGWINCH, because the
+  // nudged size differs from the target in both directions.
+  const targetCols = terminal.cols;
+  const targetRows = terminal.rows;
+
+  if (targetCols <= 0 || targetRows <= 0) {
     return cleanup;
   }
 
-  const bounceSize = getTerminalResizeBounceDimensions(preFitCols, preFitRows);
+  const bounceSize = getTerminalResizeBounceDimensions(targetCols, targetRows);
   if (bounceSize) {
     await resize(bounceSize.cols, bounceSize.rows);
   }
 
   if (isCancelled()) return cleanup;
 
-  await resize(preFitCols, preFitRows);
+  await resize(targetCols, targetRows);
 
   if (isCancelled()) return cleanup;
 

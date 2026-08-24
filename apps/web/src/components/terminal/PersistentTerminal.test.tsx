@@ -158,11 +158,16 @@ const persistentSessionStore = {
 };
 
 const realSessionStoreSnapshot = { ...realSessionStore };
-mock.module("@/stores/sessionStore", () => ({
-  // The component reads the store through narrow selectors, so the mock has to
-  // honor them.
-  useSessionStore: (selector?: (state: typeof persistentSessionStore) => unknown) =>
+// The component reads the store through narrow selectors, so the mock has to
+// honor them — and through `getState()`, which the session-list retry uses to
+// ask whether a snapshot actually landed.
+const useSessionStoreMock = Object.assign(
+  (selector?: (state: typeof persistentSessionStore) => unknown) =>
     selector ? selector(persistentSessionStore) : persistentSessionStore,
+  { getState: () => persistentSessionStore },
+);
+mock.module("@/stores/sessionStore", () => ({
+  useSessionStore: useSessionStoreMock,
 }));
 
 afterAll(() => {
@@ -416,6 +421,9 @@ describe("PersistentTerminal", () => {
     persistentSessionStore.updateSessionActivity.mockClear();
     persistentSessionStore.updateSessionStatus.mockClear();
     persistentSessionStore.loadSessionsForEnvironment.mockClear();
+    // mockClear leaves the implementation in place, and the retry tests below
+    // install a failing one, so reset it rather than leaking it into siblings.
+    persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async () => {});
     persistentSessionStore.saveSessionBuffer.mockClear();
     persistentSessionStore.loadSessionBuffer.mockClear();
     persistentSessionStore.loadSessionBuffer.mockImplementation(
@@ -560,6 +568,69 @@ describe("PersistentTerminal", () => {
       expect(resizeMock).toHaveBeenCalledWith(80, 25);
       expect(resizeMock).toHaveBeenCalledWith(80, 24);
     });
+  });
+
+  it("forces a redraw when the DOM node is reattached without a remount", async () => {
+    const props = {
+      terminalData: createTerminalData(),
+      tabId: "tab-1",
+      tabType: "claude" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = render(<PersistentTerminal {...props} />);
+
+    await waitFor(() => {
+      expect(resizeMock).toHaveBeenCalledWith(80, 25);
+    });
+    resizeMock.mockClear();
+
+    // A pane move recreates the portal target: the xterm container is detached
+    // and the tab is handed a new pane id, with no unmount in between. None of
+    // the visibility inputs change, so only the reattach can trigger the redraw.
+    storedContainerElement.remove();
+    view.rerender(<PersistentTerminal {...props} paneId="pane-2" />);
+
+    await waitFor(() => {
+      expect(resizeMock).toHaveBeenCalledWith(80, 25);
+      expect(resizeMock).toHaveBeenCalledWith(80, 24);
+    });
+  });
+
+  it("does not repeat the redraw while the DOM node stays put", async () => {
+    const props = {
+      terminalData: createTerminalData(),
+      tabId: "tab-1",
+      tabType: "claude" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = render(<PersistentTerminal {...props} />);
+
+    await waitFor(() => {
+      expect(resizeMock).toHaveBeenCalledWith(80, 25);
+    });
+    resizeMock.mockClear();
+
+    view.rerender(<PersistentTerminal {...props} isFocused={false} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const bounced = (resizeMock.mock.calls as unknown as Array<[number, number]>).some(
+      ([cols, rows]) => cols === 80 && rows === 25,
+    );
+    expect(bounced).toBe(false);
   });
 
   it("opens and registers a fresh xterm container before connecting", async () => {
@@ -3253,6 +3324,29 @@ describe("PersistentTerminal", () => {
       );
       expect(writes).toContain("saved setup output\r\n\u001b[32m❯\u001b[0m ");
     });
+
+    // A later checkpoint must not re-clear a terminal that has already painted.
+    // Periodic buffer saves keep republishing serializedBuffer, and the direct
+    // paint resets the parser, so repeating it would wipe the visible output.
+    const resetsAfterPaint = terminal.reset.mock.calls.length;
+    act(() => {
+      useTerminalSessionStore
+        .getState()
+        .setSerializedBuffer(
+          createSessionKey("container-1", "tab-1", "env-1"),
+          "saved setup output\r\nnewer checkpoint\r\n",
+        );
+    });
+    view.rerender(<PersistentTerminal {...props} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(terminal.reset.mock.calls.length).toBe(resetsAfterPaint);
+    const writesAfter = terminal.write.mock.calls.map(([data]) =>
+      data instanceof Uint8Array ? new TextDecoder().decode(data) : String(data),
+    );
+    expect(writesAfter).not.toContain("saved setup output\r\nnewer checkpoint\r\n");
   });
 
   it("marks workspace ready when an asynchronously restored first-tab buffer contains setup completion", async () => {
@@ -3451,6 +3545,93 @@ describe("PersistentTerminal", () => {
     await act(async () => {
       await Promise.resolve();
     });
+  });
+
+  it("retries the session list until the store publishes a snapshot", async () => {
+    // Everything downstream gates on loadedEnvironments, which only a successful
+    // load sets. Without a retry a single failed list wedges the terminal for the
+    // rest of its mount: no persistent session, so the buffer is never saved.
+    persistentSessionStore.loadedEnvironments = new Set();
+    let attempts = 0;
+    persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async () => {
+      attempts += 1;
+      if (attempts < 2) {
+        throw new Error("list failed");
+      }
+      persistentSessionStore.loadedEnvironments = new Set(["env-1"]);
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(
+      () => {
+        expect(persistentSessionStore.loadedEnvironments.has("env-1")).toBe(true);
+      },
+      { timeout: 3000 },
+    );
+
+    // The retry chain stops once a snapshot lands: the next attempt would have
+    // been ~500ms after the second call, so a quiet window proves it stopped.
+    const callsAtSnapshot = persistentSessionStore.loadSessionsForEnvironment.mock.calls.length;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(persistentSessionStore.loadSessionsForEnvironment.mock.calls.length).toBe(
+      callsAtSnapshot,
+    );
+  });
+
+  it("stops retrying the session list after unmount", async () => {
+    persistentSessionStore.loadedEnvironments = new Set();
+    persistentSessionStore.loadSessionsForEnvironment.mockImplementation(async () => {
+      throw new Error("list failed");
+    });
+
+    const view = render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(
+      () => {
+        expect(
+          persistentSessionStore.loadSessionsForEnvironment.mock.calls.length,
+        ).toBeGreaterThanOrEqual(2);
+      },
+      { timeout: 3000 },
+    );
+
+    view.unmount();
+    const callsAtUnmount = persistentSessionStore.loadSessionsForEnvironment.mock.calls.length;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    });
+    expect(persistentSessionStore.loadSessionsForEnvironment.mock.calls.length).toBe(
+      callsAtUnmount,
+    );
   });
 
   it("contains persistent-session creation failures", async () => {

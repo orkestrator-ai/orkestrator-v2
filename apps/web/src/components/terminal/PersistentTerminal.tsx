@@ -66,6 +66,11 @@ const BUFFER_SIZE_THRESHOLD = 0.5;
 const MAX_PENDING_DURABLE_REPLAY_BYTES = 1024 * 1024;
 const TERMINAL_BOOTSTRAP_DELAY_MS = 300;
 const TERMINAL_BOOTSTRAP_MAX_ATTEMPTS = 3;
+// Backoff for re-listing an environment's persisted sessions. Retrying rather
+// than falling open matters: proceeding without an authoritative snapshot would
+// create a duplicate persistent session for a tab that already has one.
+const SESSION_SNAPSHOT_RETRY_BASE_MS = 250;
+const SESSION_SNAPSHOT_RETRY_MAX_MS = 5000;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
 
 type ReplayMetadata = {
@@ -153,7 +158,12 @@ export function PersistentTerminal({
   const bootstrapRequestedForSessionRef = useRef<string | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
   const hasRenderedOutputRef = useRef(false);
-  const terminalDomReattachedRef = useRef(false);
+  // Render-visible, not a ref: the redraw effect below is a different effect
+  // from the one that moves the DOM node, so a ref mutation would not schedule
+  // it. A pane move that changes `paneId` without remounting re-runs only the
+  // attachment effect, and the forced redraw would silently never fire.
+  const [domReattachCount, setDomReattachCount] = useState(0);
+  const handledDomReattachRef = useRef(0);
   const pendingDurableReplayRef = useRef<PendingDurableReplay | null>(null);
   const persistentBufferLoadPendingRef = useRef(false);
   const initialLaunchOptionsRef = useRef({
@@ -732,13 +742,50 @@ export function PersistentTerminal({
   const setPersistentSessionId = useTerminalSessionStore((state) => state.setPersistentSessionId);
   const areSessionsLoaded = useSessionStore((state) => state.loadedEnvironments.has(environmentId));
 
-  // Ensure sessions are loaded for this environment
+  // Ensure sessions are loaded for this environment.
+  //
+  // This retries until the store actually publishes a snapshot. Everything
+  // below gates on `areSessionsLoaded`, which only a *successful* load sets, so
+  // a single rejected list call would otherwise wedge the terminal for the rest
+  // of its mount: no persistent session is created, `persistentSessionIdRef`
+  // stays null, and the cleanup handler therefore never persists the buffer —
+  // the terminal's history would be silently lost on the next reload.
   useEffect(() => {
-    if (environmentId) {
-      void loadSessionsForEnvironment(environmentId).catch((err) => {
-        console.error("[PersistentTerminal] Failed to load persistent sessions:", err);
-      });
-    }
+    if (!environmentId) return;
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
+    const runLoad = () => {
+      void loadSessionsForEnvironment(environmentId)
+        .catch((err) => {
+          console.error("[PersistentTerminal] Failed to load persistent sessions:", err);
+        })
+        .then(() => {
+          if (cancelled) return;
+          // The promise resolving is not proof a snapshot landed: a load that
+          // was superseded by a newer request returns early without publishing.
+          // The store is the only authority on whether one arrived.
+          if (useSessionStore.getState().loadedEnvironments.has(environmentId)) return;
+          const delay = Math.min(
+            SESSION_SNAPSHOT_RETRY_BASE_MS * 2 ** attempt,
+            SESSION_SNAPSHOT_RETRY_MAX_MS,
+          );
+          attempt += 1;
+          retryTimer = setTimeout(runLoad, delay);
+        });
+    };
+
+    runLoad();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
   }, [environmentId, loadSessionsForEnvironment]);
 
   // Restore only after the store has received an authoritative snapshot. The
@@ -1121,7 +1168,7 @@ export function PersistentTerminal({
         // Append the existing container element to the new wrapper
         // This moves the DOM node (with xterm attached) to the new location
         terminalRef.current.appendChild(containerElement);
-        terminalDomReattachedRef.current = true;
+        setDomReattachCount((count) => count + 1);
       }
 
       // CRITICAL: Only do buffer clear/restore if the terminal LOGICALLY moved to a different pane
@@ -1365,7 +1412,7 @@ export function PersistentTerminal({
     const becameVisible = shouldTriggerEnvironmentVisibilityRedraw({
       isEnvironmentVisible,
       wasEnvironmentVisible: wasEnvironmentVisibleRef.current,
-      wasDomReattached: terminalDomReattachedRef.current,
+      wasDomReattached: domReattachCount !== handledDomReattachRef.current,
       isActive,
       terminalIsOpened,
       isConnected,
@@ -1375,7 +1422,7 @@ export function PersistentTerminal({
     if (!becameVisible) {
       return;
     }
-    terminalDomReattachedRef.current = false;
+    handledDomReattachRef.current = domReattachCount;
 
     let cancelled = false;
     let redrawCleanup: { cancel: () => void } | null = null;
@@ -1393,7 +1440,16 @@ export function PersistentTerminal({
       cancelled = true;
       redrawCleanup?.cancel();
     };
-  }, [isEnvironmentVisible, isActive, terminalIsOpened, isConnected, fitAddon, terminal, resize]);
+  }, [
+    isEnvironmentVisible,
+    isActive,
+    terminalIsOpened,
+    isConnected,
+    fitAddon,
+    terminal,
+    resize,
+    domReattachCount,
+  ]);
 
   // Update terminal appearance when settings change
   useEffect(() => {

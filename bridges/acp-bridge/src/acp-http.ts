@@ -29,6 +29,7 @@ import {
   PROMPT_TIMEOUT_MS,
   HttpError,
   authToken,
+  bumpCursorDiscoveryRevision,
   clientSessionKeys,
   provider,
   sessions,
@@ -513,6 +514,7 @@ export async function route(
     cancelCursorToolMetadataReconcile(state);
     await state.child?.close();
     sessions.delete(state.id);
+    bumpCursorDiscoveryRevision();
     if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
     await persistState();
     return json(response, 200, { deleted: true });

@@ -6,6 +6,7 @@ import {
   MAX_PERSISTED_PROMPT_JOURNAL_BYTES,
   MAX_PERSISTED_SESSION_CONFIG_BYTES,
   MAX_PERSISTED_STRUCTURED_BYTES,
+  MAX_CURSOR_SETTLED_CLAIMS,
   MAX_STATE_FILE_BYTES,
   PERSISTED_WINDOW_METADATA_RESERVE_BYTES,
   persistenceScheduled,
@@ -168,6 +169,13 @@ export function persistedSnapshot(): PersistedState {
       ...(state.usage ? { usage: state.usage } : {}),
       ...(state.commandCount === undefined ? {} : { commandCount: state.commandCount }),
       ...(state.subagentLimitExceeded ? { subagentLimitExceeded: true } : {}),
+      ...(state.settledCursorAgentIds.size > 0
+        ? {
+            settledCursorAgentIds: Array.from(state.settledCursorAgentIds).slice(
+              -MAX_CURSOR_SETTLED_CLAIMS,
+            ),
+          }
+        : {}),
     })),
   };
   return boundPersistedSnapshot(snapshot);

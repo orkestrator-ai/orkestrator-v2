@@ -23,6 +23,7 @@ import {
   AcpProcess,
   activeCursorToolReplays,
   adjustActiveCursorToolReplays,
+  bumpCursorDiscoveryRevision,
   trimmedToolCalls,
   acpToolSourceStates,
   cursorToolReplayProcesses,
@@ -927,6 +928,10 @@ export function toolPartAgentId(part: BridgeToolPart): string | undefined {
 export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart): void {
   if (part.agentState === "active") {
     const agentId = toolPartAgentId(part);
+    const reportedPrompt =
+      part.cursorTaskPromptReported === true && typeof part.toolArgs?.prompt === "string"
+        ? truncateUtf8(part.toolArgs.prompt.trim(), MAX_CURSOR_CHILD_PROMPT_BYTES)
+        : undefined;
     const activated = activateSubagent(state, part.toolUseId, {
       ...(typeof part.toolArgs?.description === "string"
         ? { description: truncateUtf8(part.toolArgs.description.trim(), MAX_TOOL_TITLE_BYTES) }
@@ -935,10 +940,12 @@ export function syncActiveSubagentTool(state: SessionState, part: BridgeToolPart
         ? { subagentType: truncateUtf8(part.toolArgs.subagent_type.trim(), MAX_TOOL_NAME_BYTES) }
         : {}),
       ...(part.toolState ? { toolState: part.toolState } : {}),
+      ...(reportedPrompt ? { reportedPrompt } : {}),
       // An id rendered on the tool part came from Cursor's own payload, not
       // transcript-directory inference. Clear the weaker provenance so the
       // background continuation waiter can trust the now-authoritative id.
       ...(agentId ? { agentId, agentIdDiscovered: false } : {}),
+      ...(agentId ? { agentIdSettlementSafe: false } : {}),
     });
     if (!activated) {
       part.agentState = "failed";
@@ -979,25 +986,37 @@ export function activateSubagent(
     state.child?.notify("session/cancel", { sessionId: state.acpSessionId });
     return false;
   }
+  const wasActive = state.activeSubagentToolIds.has(toolUseId);
   const previous = state.activeSubagentDescriptors.get(toolUseId);
-  state.activeSubagentToolIds.add(toolUseId);
-  state.activeSubagentDescriptors.set(toolUseId, {
+  const next = {
     ...previous,
     ...descriptor,
     agentId: descriptor.agentId ?? previous?.agentId,
     description: descriptor.description ?? previous?.description,
     subagentType: descriptor.subagentType ?? previous?.subagentType,
     toolState: descriptor.toolState ?? previous?.toolState,
-  });
+  };
+  state.activeSubagentToolIds.add(toolUseId);
+  state.activeSubagentDescriptors.set(toolUseId, next);
+  if (
+    !wasActive ||
+    previous?.agentId !== next.agentId ||
+    previous?.agentIdDiscovered !== next.agentIdDiscovered ||
+    previous?.agentIdSettlementSafe !== next.agentIdSettlementSafe ||
+    previous?.reportedPrompt !== next.reportedPrompt
+  ) {
+    bumpCursorDiscoveryRevision();
+  }
   return true;
 }
 
 export function settleActiveSubagent(state: SessionState, toolUseId: string): void {
-  state.activeSubagentToolIds.delete(toolUseId);
-  state.activeSubagentDescriptors.delete(toolUseId);
+  const activeDeleted = state.activeSubagentToolIds.delete(toolUseId);
+  const descriptorDeleted = state.activeSubagentDescriptors.delete(toolUseId);
   for (const [subagentId, mappedToolUseId] of state.subagentToolIds) {
     if (mappedToolUseId === toolUseId) state.subagentToolIds.delete(subagentId);
   }
+  if (activeDeleted || descriptorDeleted) bumpCursorDiscoveryRevision();
 }
 
 export const MAX_CURSOR_TASK_PROMPT_BYTES = 64 * 1024;
@@ -1698,6 +1717,7 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
     }
   }
   renderAcpToolSource(part, source);
+  if (prompt) part.cursorTaskPromptReported = true;
   if (part.agentState === "finished" || part.agentState === "failed") {
     stampSubagentRuntimeDuration(part);
   }
@@ -1706,6 +1726,8 @@ export function applyCursorTask(state: SessionState, params: JsonObject): void {
 }
 
 export function failAllActiveSubagents(state: SessionState): void {
+  const hadActiveSubagents =
+    state.activeSubagentToolIds.size > 0 || state.activeSubagentDescriptors.size > 0;
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation" || !state.activeSubagentToolIds.has(part.toolUseId))
@@ -1719,6 +1741,7 @@ export function failAllActiveSubagents(state: SessionState): void {
   state.activeSubagentToolIds.clear();
   state.activeSubagentDescriptors.clear();
   state.subagentToolIds.clear();
+  if (hadActiveSubagents) bumpCursorDiscoveryRevision();
 }
 
 export function settleEvictedSubagentFromToolUpdate(

@@ -16,6 +16,8 @@ import {
   MAX_CURSOR_SETTLED_CLAIMS,
   MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN,
   MAX_MESSAGE_TEXT_BYTES,
+  bumpCursorDiscoveryRevision,
+  currentCursorDiscoveryRevision,
   isObject,
   provider,
   type SessionState,
@@ -74,7 +76,7 @@ const terminalProbeCache = new Map<string, TerminalProbeEntry>();
  */
 const probeDiscoveryMemo = new WeakMap<
   SessionState,
-  { rootMtimeMs: number; activeCount: number }
+  { root: string; rootMtimeMs: number; activeCount: number; discoveryRevision: number }
 >();
 
 export interface WatchableCursorChild {
@@ -229,6 +231,12 @@ export function settleTerminalCursorChildren(state: SessionState): boolean {
     // No terminal record is not evidence the child died. It stays active, and
     // the card stays live, exactly as before.
     if (!terminal) continue;
+    const descriptor = state.activeSubagentDescriptors.get(child.toolUseId);
+    // Directory order is useful for projecting best-effort live activity, but
+    // only Cursor's own id, a complete global pairing, or a globally unique
+    // prompt match is strong enough to declare a Task finished. A false
+    // completion would let the environment retire while the real child runs.
+    if (descriptor?.agentIdDiscovered && !descriptor.agentIdSettlementSafe) continue;
     // Before the settle, not after: `finishSubagentTool` deletes the descriptor
     // that holds a discovered `agentId`, and this probe never projects the
     // child's JSONL, so this set is the only place the claim survives. Without
@@ -256,6 +264,7 @@ function rememberSettledCursorAgentId(state: SessionState, agentId: string): voi
     state.settledCursorAgentIds.delete(oldest.value);
   }
   state.settledCursorAgentIds.add(agentId);
+  bumpCursorDiscoveryRevision();
 }
 
 /**
@@ -272,18 +281,34 @@ function rememberSettledCursorAgentId(state: SessionState, agentId: string): voi
  * `stat`.
  */
 function bindDiscoveredChildrenForProbe(state: SessionState): void {
+  const root = cursorTranscriptRoot();
   let rootMtimeMs: number;
   try {
-    rootMtimeMs = statSync(cursorTranscriptRoot()).mtimeMs;
+    rootMtimeMs = statSync(root).mtimeMs;
   } catch {
     // No transcript root means no directory to bind anything to.
     return;
   }
   const activeCount = state.activeSubagentToolIds.size;
+  const discoveryRevision = currentCursorDiscoveryRevision();
   const memo = probeDiscoveryMemo.get(state);
-  if (memo && memo.rootMtimeMs === rootMtimeMs && memo.activeCount === activeCount) return;
-  probeDiscoveryMemo.set(state, { rootMtimeMs, activeCount });
+  if (
+    memo &&
+    memo.root === root &&
+    memo.rootMtimeMs === rootMtimeMs &&
+    memo.activeCount === activeCount &&
+    memo.discoveryRevision === discoveryRevision
+  )
+    return;
   bindDiscoveredCursorChildren(state);
+  // Binding itself advances the global revision. Memoize the post-pass value
+  // so this session does not pay a redundant retry on its next activity poll.
+  probeDiscoveryMemo.set(state, {
+    root,
+    rootMtimeMs,
+    activeCount: state.activeSubagentToolIds.size,
+    discoveryRevision: currentCursorDiscoveryRevision(),
+  });
 }
 
 /**

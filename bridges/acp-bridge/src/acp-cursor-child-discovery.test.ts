@@ -20,6 +20,7 @@ import {
   hydrateCursorChildTranscripts,
   listWatchableCursorChildren,
   resetCursorTranscriptReadCache,
+  settleTerminalCursorChildren,
 } from "./acp-cursor-background.js";
 import { cursorChildTranscriptPrompt } from "./acp-cursor-transcript-parts.js";
 import { CURSOR_CHILD_DISCOVERY_SKEW_MS, sessions, type SessionState } from "./acp-context.js";
@@ -28,7 +29,14 @@ import { syncActiveSubagentTool } from "./acp-tools.js";
 const LAUNCHED_AT = "1970-01-01T00:00:00.000Z";
 const LAUNCHED_AT_MS = Date.parse(LAUNCHED_AT);
 
-function makeState(launches: Array<{ toolUseId: string; createdAt?: string; agentId?: string }>) {
+function makeState(
+  launches: Array<{
+    toolUseId: string;
+    createdAt?: string;
+    agentId?: string;
+    prompt?: string;
+  }>,
+) {
   const state = {
     messages: [
       {
@@ -44,7 +52,8 @@ function makeState(launches: Array<{ toolUseId: string; createdAt?: string; agen
           toolUseId: launch.toolUseId,
           toolName: "task",
           toolTitle: "Task: Subagent task",
-          toolArgs: {},
+          toolArgs: launch.prompt ? { prompt: launch.prompt } : {},
+          ...(launch.prompt ? { cursorTaskPromptReported: true as const } : {}),
           toolState: "pending" as const,
           agentState: "active" as const,
           createdAt: launch.createdAt ?? LAUNCHED_AT,
@@ -59,7 +68,10 @@ function makeState(launches: Array<{ toolUseId: string; createdAt?: string; agen
     activeSubagentDescriptors: new Map(
       launches.map((launch) => [
         launch.toolUseId,
-        launch.agentId ? { agentId: launch.agentId } : {},
+        {
+          ...(launch.agentId ? { agentId: launch.agentId } : {}),
+          ...(launch.prompt ? { reportedPrompt: launch.prompt } : {}),
+        },
       ]),
     ),
     subagentToolIds: new Map(),
@@ -252,11 +264,77 @@ describe("Cursor child transcript discovery", () => {
       expect(state.activeSubagentDescriptors.get("task-1")).toEqual({
         agentId: "child-a",
         agentIdDiscovered: true,
+        agentIdSettlementSafe: true,
       });
       expect(state.activeSubagentDescriptors.get("task-2")).toEqual({
         agentId: "child-b",
         agentIdDiscovered: true,
+        agentIdSettlementSafe: true,
       });
+    });
+  });
+
+  test("does not shift a later terminal child onto an earlier launch with no transcript", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(
+        root,
+        "child-later",
+        promptRecord("<user_query>\nRun the later check.\n</user_query>") +
+          `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+      );
+      const state = makeState([
+        { toolUseId: "task-early", prompt: "Run the earlier check." },
+        { toolUseId: "task-later", prompt: "Run the later check." },
+      ]);
+
+      withSessions([["session", state]], () => {
+        expect(settleTerminalCursorChildren(state as unknown as SessionState)).toBe(true);
+      });
+
+      expect(state.activeSubagentToolIds.has("task-early")).toBe(true);
+      expect(state.activeSubagentToolIds.has("task-later")).toBe(false);
+      expect(
+        state.messages[0]!.parts.find((part) => part.toolUseId === "task-early"),
+      ).toMatchObject({ agentState: "active" });
+      expect(
+        state.messages[0]!.parts.find((part) => part.toolUseId === "task-later"),
+      ).toMatchObject({ agentState: "finished" });
+    });
+  });
+
+  test("retries probe discovery after a peer session is authoritatively re-anchored", async () => {
+    await withTranscriptRoot(async (root) => {
+      await writeChildTranscript(
+        root,
+        "child-target",
+        `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+      );
+      const peer = makeState([{ toolUseId: "task-a" }]);
+      const target = makeState([{ toolUseId: "task-b" }]);
+
+      withSessions(
+        [
+          ["peer", peer],
+          ["target", target],
+        ],
+        () => {
+          // The older peer initially consumes the only positional candidate,
+          // so the target's first probe memoizes an unbound answer.
+          expect(settleTerminalCursorChildren(target as unknown as SessionState)).toBe(false);
+
+          const peerLaunch = peer.messages[0]!.parts[0]!;
+          peerLaunch.toolArgs = { agentId: "peer-authoritative" };
+          syncActiveSubagentTool(peer as unknown as SessionState, peerLaunch);
+
+          // No filesystem or target-local count changed. Only the global
+          // correlation generation can make this retry and claim the child.
+          expect(settleTerminalCursorChildren(target as unknown as SessionState)).toBe(true);
+        },
+      );
+
+      expect(peer.activeSubagentToolIds.has("task-a")).toBe(true);
+      expect(target.activeSubagentToolIds.has("task-b")).toBe(false);
+      expect(target.messages[0]!.parts[0]).toMatchObject({ agentState: "finished" });
     });
   });
 
@@ -322,6 +400,7 @@ describe("Cursor child transcript discovery", () => {
       expect(state.activeSubagentDescriptors.get("task-2")).toEqual({
         agentId: "child-b",
         agentIdDiscovered: true,
+        agentIdSettlementSafe: true,
       });
     });
   });
@@ -468,6 +547,7 @@ describe("Cursor child transcript discovery", () => {
           expect(late.activeSubagentDescriptors.get("task-1")).toEqual({
             agentId: "child-b",
             agentIdDiscovered: true,
+            agentIdSettlementSafe: true,
           });
           // The peer's candidate was reserved, not written: one tab's read must
           // not mutate another tab's state.
@@ -478,6 +558,7 @@ describe("Cursor child transcript discovery", () => {
           expect(early.activeSubagentDescriptors.get("peer-task")).toEqual({
             agentId: "child-a",
             agentIdDiscovered: true,
+            agentIdSettlementSafe: true,
           });
         },
       );
@@ -508,6 +589,7 @@ describe("Cursor child transcript discovery", () => {
       expect(state.activeSubagentDescriptors.get("task-1")).toEqual({
         agentId: "child-a",
         agentIdDiscovered: true,
+        agentIdSettlementSafe: true,
       });
     });
   });

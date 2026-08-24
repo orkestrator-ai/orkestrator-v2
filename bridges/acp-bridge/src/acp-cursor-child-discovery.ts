@@ -1,10 +1,11 @@
-import { readdirSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   CURSOR_CHILD_DISCOVERY_SKEW_MS,
   CURSOR_JSONL_SOURCE_PREFIX,
   MAX_CURSOR_DISCOVERY_ENTRIES,
+  bumpCursorDiscoveryRevision,
   provider,
   sessions,
   workingDirectory,
@@ -12,6 +13,7 @@ import {
   type SessionState,
 } from "./acp-context.js";
 import { findToolPart, toolPartAgentId } from "./acp-tools.js";
+import { cursorChildTranscriptPrompt } from "./acp-cursor-transcript-parts.js";
 
 /**
  * Cursor ids are short slugs. The cap is a sanity bound on an agent-supplied
@@ -20,9 +22,8 @@ import { findToolPart, toolPartAgentId } from "./acp-tools.js";
 const MAX_CURSOR_AGENT_ID_LENGTH = 128;
 
 /**
- * Resolved roots, keyed by cwd. Only a root that exists is cached: an absent
- * one is the normal state until the first child spawns, and caching it would
- * pin the wrong answer for the life of the process.
+ * Deterministic single-candidate roots, keyed by cwd. Whitespace produces two
+ * candidates whose relative freshness can change, so those are never cached.
  */
 const transcriptRootCache = new Map<string, string>();
 
@@ -50,12 +51,15 @@ const transcriptRootCache = new Map<string, string>();
 export function cursorTranscriptRoot(cwd: string = workingDirectory): string {
   const override = process.env.CURSOR_AGENT_TRANSCRIPTS_DIR?.trim();
   if (override) return override;
-  const cached = transcriptRootCache.get(cwd);
-  if (cached) return cached;
   const normalized = cwd.replace(/\\/g, "/").replace(/^\/+/, "");
   const candidates = [normalized.replace(/\//g, "-")];
   const dashed = normalized.replace(/\//g, "-").replace(/\s+/g, "-");
   if (dashed !== candidates[0]) candidates.push(dashed);
+  // A single candidate is deterministic and safe to cache. With two slug
+  // forms, either root can appear or become live after the first lookup, so a
+  // process-lifetime cached selection would silently pin the stale one.
+  const cached = candidates.length === 1 ? transcriptRootCache.get(cwd) : undefined;
+  if (cached) return cached;
   const roots = candidates.map((slug) =>
     join(homedir(), ".cursor", "projects", slug, "agent-transcripts"),
   );
@@ -73,7 +77,7 @@ export function cursorTranscriptRoot(cwd: string = workingDirectory): string {
   // Only an existing root is cached. An absent one is the normal state before
   // the first child spawns, and caching it would pin the wrong answer forever.
   if (!selected) return roots[0]!;
-  transcriptRootCache.set(cwd, selected.root);
+  if (roots.length === 1) transcriptRootCache.set(cwd, selected.root);
   return selected.root;
 }
 
@@ -186,6 +190,8 @@ interface UnboundCursorLaunch {
   owner: SessionState;
   toolUseId: string;
   startedAtMs: number;
+  /** Already has a projection-only positional binding; reconsider only by prompt. */
+  positionallyBound: boolean;
 }
 
 /**
@@ -218,12 +224,11 @@ interface UnboundCursorLaunch {
  * written: a peer's launch merely consumes its candidate here, and the poll
  * that owns that session re-derives the identical pairing.
  *
- * It is still an inference. If a card's child never writes a transcript, the
- * next card's directory is bound to it instead; the authoritative `agentId`
- * arriving with `cursor/task` re-anchors the card and
- * `syncCursorChildTranscriptParts` drops the superseded projection. Bindings
- * are marked `agentIdDiscovered` so nothing that must be certain — holding a
- * parent turn open — acts on one.
+ * It is still an inference. Incomplete positional matches remain available for
+ * best-effort live projection, but are marked unsafe for terminal settlement;
+ * a complete one-to-one pairing or globally unique prompt match may settle.
+ * Bindings remain `agentIdDiscovered`, so the continuation waiter never treats
+ * either form as Cursor-reported authority.
  */
 export function bindDiscoveredCursorChildren(state: SessionState): boolean {
   if (provider !== "cursor") return false;
@@ -238,31 +243,145 @@ export function bindDiscoveredCursorChildren(state: SessionState): boolean {
   const candidates = directories.filter((child) => !claimed.has(child.agentId));
   if (candidates.length === 0) return false;
 
-  let index = 0;
+  const assignments = correlateCursorChildren(launches, candidates);
   let bound = false;
-  for (const launch of launches) {
-    const floor = launch.startedAtMs - CURSOR_CHILD_DISCOVERY_SKEW_MS;
-    // Anything older than this card is older than every later card too, so it
-    // is consumed rather than reconsidered.
-    while (index < candidates.length && candidates[index]!.createdAtMs < floor) {
-      index += 1;
-    }
-    const candidate = candidates[index];
-    if (!candidate) break;
-    index += 1;
+  for (const { launch, candidate, settlementSafe } of assignments) {
     // A peer's launch has now consumed its candidate, which is the whole point
     // of the global pass, but the binding itself belongs to the poll that owns
     // that session. Writing it here would let one tab's read mutate another's.
     if (launch.owner !== state) continue;
+    if (settlementSafe) clearUnsafeCursorBindings(candidate.agentId, launch);
     const previous = state.activeSubagentDescriptors.get(launch.toolUseId);
     state.activeSubagentDescriptors.set(launch.toolUseId, {
       ...previous,
       agentId: candidate.agentId,
       agentIdDiscovered: true,
+      agentIdSettlementSafe: settlementSafe,
     });
+    bumpCursorDiscoveryRevision();
     bound = true;
   }
   return bound;
+}
+
+interface CursorChildAssignment {
+  launch: UnboundCursorLaunch;
+  candidate: DiscoveredCursorChild;
+  settlementSafe: boolean;
+}
+
+/**
+ * Correlate child directories without treating an incomplete ordered list as
+ * authoritative. If one child never writes a transcript, positional pairing
+ * shifts every later directory onto the wrong Task. Exact prompt matches are
+ * safe independently; positional matches remain projection-only unless every
+ * remaining launch and candidate forms a complete one-to-one set.
+ */
+function correlateCursorChildren(
+  launches: UnboundCursorLaunch[],
+  candidates: DiscoveredCursorChild[],
+): CursorChildAssignment[] {
+  const assignments: CursorChildAssignment[] = [];
+  const remainingLaunches = new Set(launches);
+  const remainingCandidates = new Set(candidates);
+  const prompts = new Map(
+    candidates.map((candidate) => [candidate, readCursorChildPrompt(candidate.agentId)] as const),
+  );
+
+  for (const candidate of candidates) {
+    const prompt = prompts.get(candidate);
+    if (!prompt) continue;
+    const matches = launches.filter(
+      (launch) =>
+        remainingLaunches.has(launch) &&
+        candidate.createdAtMs >= launch.startedAtMs - CURSOR_CHILD_DISCOVERY_SKEW_MS &&
+        launchPrompt(launch) === prompt,
+    );
+    if (matches.length !== 1) continue;
+    const launch = matches[0]!;
+    const matchingCandidates = candidates.filter(
+      (other) =>
+        prompts.get(other) === prompt &&
+        other.createdAtMs >= launch.startedAtMs - CURSOR_CHILD_DISCOVERY_SKEW_MS,
+    );
+    if (matchingCandidates.length !== 1) continue;
+    assignments.push({ launch, candidate, settlementSafe: true });
+    remainingLaunches.delete(launch);
+    remainingCandidates.delete(candidate);
+  }
+
+  const orderedLaunches = launches.filter(
+    (launch) => remainingLaunches.has(launch) && !launch.positionallyBound,
+  );
+  const orderedCandidates = candidates.filter((candidate) => remainingCandidates.has(candidate));
+  const orderedAssignments: CursorChildAssignment[] = [];
+  let index = 0;
+  for (const launch of orderedLaunches) {
+    const floor = launch.startedAtMs - CURSOR_CHILD_DISCOVERY_SKEW_MS;
+    while (index < orderedCandidates.length && orderedCandidates[index]!.createdAtMs < floor) {
+      index += 1;
+    }
+    const candidate = orderedCandidates[index];
+    if (!candidate) break;
+    orderedAssignments.push({ launch, candidate, settlementSafe: false });
+    index += 1;
+  }
+  // A partial ordered answer is ambiguous: any missing child could be before
+  // the directories we did see. Keep it for projection but prevent settlement.
+  const complete =
+    orderedAssignments.length === orderedLaunches.length &&
+    orderedCandidates.length === orderedLaunches.length;
+  assignments.push(
+    ...orderedAssignments.map((assignment) => ({ ...assignment, settlementSafe: complete })),
+  );
+  return assignments;
+}
+
+function clearUnsafeCursorBindings(agentId: string, selected: UnboundCursorLaunch): void {
+  for (const owner of discoverySessionStates(selected.owner)) {
+    for (const [toolUseId, descriptor] of owner.activeSubagentDescriptors) {
+      if (
+        (owner === selected.owner && toolUseId === selected.toolUseId) ||
+        descriptor.agentId !== agentId ||
+        !descriptor.agentIdDiscovered ||
+        descriptor.agentIdSettlementSafe
+      )
+        continue;
+      const cleared = { ...descriptor };
+      delete cleared.agentId;
+      delete cleared.agentIdDiscovered;
+      delete cleared.agentIdSettlementSafe;
+      owner.activeSubagentDescriptors.set(toolUseId, cleared);
+      bumpCursorDiscoveryRevision();
+    }
+  }
+}
+
+function launchPrompt(launch: UnboundCursorLaunch): string | undefined {
+  return launch.owner.activeSubagentDescriptors.get(launch.toolUseId)?.reportedPrompt;
+}
+
+const CURSOR_PROMPT_HEAD_BYTES = 64 * 1024;
+
+function readCursorChildPrompt(agentId: string): string | undefined {
+  const path = cursorChildTranscriptPath(agentId);
+  if (!path) return undefined;
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const length = Math.min(fstatSync(fd).size, CURSOR_PROMPT_HEAD_BYTES);
+    const buffer = Buffer.alloc(length);
+    readSync(fd, buffer, 0, length, 0);
+    return cursorChildTranscriptPrompt(buffer.toString("utf8"));
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
@@ -286,14 +405,27 @@ function unboundActiveLaunches(states: Iterable<SessionState>): UnboundCursorLau
   const launches: UnboundCursorLaunch[] = [];
   for (const owner of states) {
     for (const toolUseId of owner.activeSubagentToolIds) {
-      if (owner.activeSubagentDescriptors.get(toolUseId)?.agentId) continue;
+      const descriptor = owner.activeSubagentDescriptors.get(toolUseId);
+      if (
+        descriptor?.agentId &&
+        (!descriptor.agentIdDiscovered || descriptor.agentIdSettlementSafe)
+      )
+        continue;
       const found = findToolPart(owner, toolUseId);
       if (!found) continue;
       const startedAtMs = launchStartedAtMs(found.part);
       // Without a launch time there is no floor, and a card that cannot be
       // time-bounded could adopt any directory in the root.
       if (startedAtMs === undefined) continue;
-      launches.push({ owner, toolUseId, startedAtMs });
+      launches.push({
+        owner,
+        toolUseId,
+        startedAtMs,
+        positionallyBound:
+          descriptor?.agentId !== undefined &&
+          descriptor.agentIdDiscovered === true &&
+          !descriptor.agentIdSettlementSafe,
+      });
     }
   }
   launches.sort(
@@ -330,7 +462,12 @@ function claimedCursorAgentIds(states: Iterable<SessionState>): Set<string> {
   const claimed = new Set<string>();
   for (const candidate of states) {
     for (const descriptor of candidate.activeSubagentDescriptors.values()) {
-      if (descriptor.agentId) claimed.add(descriptor.agentId);
+      if (
+        descriptor.agentId &&
+        (!descriptor.agentIdDiscovered || descriptor.agentIdSettlementSafe)
+      ) {
+        claimed.add(descriptor.agentId);
+      }
     }
     for (const agentId of candidate.settledCursorAgentIds) claimed.add(agentId);
     for (const message of candidate.messages) {

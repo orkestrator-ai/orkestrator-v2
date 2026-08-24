@@ -84,6 +84,8 @@ export interface BridgeToolPart {
    * does for Codex collaboration items.
    */
   agentState?: "active" | "finished" | "failed";
+  /** Internal provenance marker retained across restart for Cursor prompt correlation. */
+  cursorTaskPromptReported?: true;
   toolTitle?: string;
   toolOutput?: string;
   toolError?: string;
@@ -156,6 +158,8 @@ export interface ActiveSubagentDescriptor {
   /** Bounded launch metadata used to correlate Grok's child-id notification. */
   description?: string;
   subagentType?: string;
+  /** Prompt received from Cursor's own `cursor/task`, never from JSONL recovery. */
+  reportedPrompt?: string;
   /** Distinguishes a completed background launch from an abandoned pending one. */
   toolState?: BridgeToolPart["toolState"];
   /**
@@ -171,6 +175,8 @@ export interface ActiveSubagentDescriptor {
    * mis-inferred id would block `session/prompt` for the whole wait budget.
    */
   agentIdDiscovered?: boolean;
+  /** The inferred directory came from a complete global pairing or unique prompt match. */
+  agentIdSettlementSafe?: boolean;
 }
 
 export interface SessionState {
@@ -201,10 +207,9 @@ export interface SessionState {
    * and the next unnamed launch inside the discovery skew window adopts it,
    * reading a finished child's `turn_ended` as its own.
    *
-   * In memory only, and bounded by `MAX_CURSOR_SETTLED_CLAIMS`. A restart
-   * cannot reuse a stale claim anyway: every restored card is settled or failed
-   * before the first new prompt, and the directories a new launch could reach
-   * are all older than its skew floor.
+   * Persisted and bounded by `MAX_CURSOR_SETTLED_CLAIMS`. A fast restart can
+   * occur inside the discovery skew window, so dropping these would let the
+   * next launch reuse a recently consumed terminal directory.
    */
   settledCursorAgentIds: Set<string>;
   /** Fatal latch: once the bound trips, later provider frames cannot reopen work. */
@@ -331,6 +336,7 @@ export interface PersistedSession {
   usage?: PersistedUsage;
   commandCount?: number;
   subagentLimitExceeded?: boolean;
+  settledCursorAgentIds?: string[];
 }
 
 export interface PersistedState {
@@ -354,6 +360,21 @@ export const approveProjectMcps = process.env.ACP_APPROVE_PROJECT_MCPS === "1";
 export const stateDirectory = process.env.ACP_STATE_DIR?.trim();
 export const stateFile = stateDirectory ? resolve(stateDirectory, "state.json") : null;
 export const sessions = new Map<string, SessionState>();
+let cursorDiscoveryRevision = 0;
+
+/**
+ * Cheap invalidation token for Cursor's process-wide child-directory pairing.
+ * Pairing reads every session's active launches and claims, so a per-session
+ * memo cannot infer validity from its own counts alone.
+ */
+export function currentCursorDiscoveryRevision(): number {
+  return cursorDiscoveryRevision;
+}
+
+export function bumpCursorDiscoveryRevision(): void {
+  cursorDiscoveryRevision =
+    cursorDiscoveryRevision >= Number.MAX_SAFE_INTEGER ? 0 : cursorDiscoveryRevision + 1;
+}
 export const acpToolSourceStates = new WeakMap<BridgeToolPart, AcpToolSourceState>();
 /**
  * Parts and messages whose text already sits at its byte cap, marker included.

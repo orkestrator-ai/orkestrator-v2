@@ -654,7 +654,7 @@ describe("AgentNativeTab", () => {
 
     await expectUnassignedPicker("codex", "GPT-5.4");
     expect(screen.getByText("High")).toBeTruthy();
-    expect(document.querySelector("[data-native-model-platform='claude']")).toBeNull();
+    expect(document.querySelector("[data-native-model-platform='claude']") === null).toBe(true);
   });
 
   test("unassigned composer adopts the repository default when the environment inherits", async () => {
@@ -683,7 +683,7 @@ describe("AgentNativeTab", () => {
     );
 
     await expectUnassignedPicker("codex", "GPT-5.4");
-    expect(document.querySelector("[data-native-model-platform='claude']")).toBeNull();
+    expect(document.querySelector("[data-native-model-platform='claude']") === null).toBe(true);
   });
 
   test("unassigned composer uses the application default when every tier inherits", async () => {
@@ -701,7 +701,7 @@ describe("AgentNativeTab", () => {
     );
 
     await expectUnassignedPicker("claude", "Claude Sonnet");
-    expect(document.querySelector("[data-native-model-platform='codex']")).toBeNull();
+    expect(document.querySelector("[data-native-model-platform='codex']") === null).toBe(true);
   });
 
   test("uses an execution profile for OpenCode's first prompt without carrying a stale mode", async () => {

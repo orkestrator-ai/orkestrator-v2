@@ -439,6 +439,44 @@ describe("ReviewLaunchDialog", () => {
     expect(picker().textContent).toContain("High");
   });
 
+  /**
+   * The global Claude preference is persisted as a resolved model id while the
+   * catalogue is keyed by alias, so it can only be matched through
+   * `resolvedModel`. A miss is silent — the dialog opens on the first entry.
+   */
+  test("matches a preferred model stored in the agent's resolved id space", () => {
+    const { onConfirm } = renderDialog({
+      catalog: {
+        ...catalog,
+        claude: [
+          {
+            id: "opus",
+            name: "Claude Opus",
+            reasoningEfforts: ["low", "high"],
+            resolvedModel: "claude-opus-5",
+          },
+          {
+            id: "sonnet",
+            name: "Claude Sonnet",
+            reasoningEfforts: ["low", "high"],
+            resolvedModel: "claude-sonnet-5",
+          },
+        ],
+      },
+      preferredModels: { claude: "claude-sonnet-5" },
+      preferredReasoningEfforts: { claude: "high" },
+    });
+
+    expect(picker().textContent).toContain("Claude Sonnet");
+
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      tabType: "claude",
+      model: "sonnet",
+      reasoningEffort: "high",
+    });
+  });
+
   test("configures looped review with allowance 6 by default and supports 1 through 10", () => {
     const onConfirm = mock((_selection: ReviewLaunchSelection) => undefined);
     render(

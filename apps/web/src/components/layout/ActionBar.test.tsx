@@ -4348,6 +4348,10 @@ describe("ActionBar configured action defaults", () => {
   test("opens the Create PR dialog on the configured PR default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
+      // Environments always persist the agent they were created with. A plain
+      // click still honours that; the configure dialog must not, or Settings'
+      // PR default never appears.
+      agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -4359,14 +4363,156 @@ describe("ActionBar configured action defaults", () => {
     render(<ActionBar />);
     fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
 
-    // Right-clicking must propose what the plain click would have done, or the
-    // two adjacent affordances disagree about the same button.
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy(),
     );
     expect(
       screen.getByRole("combobox", { name: "Agent, model and reasoning" }).textContent,
     ).toContain("Haiku");
+  });
+
+  test("opens the Code review dialog on the configured Review default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentActionDefaults = {
+      review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy(),
+    );
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    expect(picker.textContent).toContain("Sonnet");
+    expect(picker.textContent).toContain("High");
+  });
+
+  test("opens the Resolve dialog on the configured Resolve default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
+      prState: "open",
+      hasMergeConflicts: true,
+    };
+    currentActionDefaults = {
+      resolve: { platform: "claude", model: "haiku" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy(),
+    );
+    expect(
+      screen.getByRole("combobox", { name: "Agent, model and reasoning" }).textContent,
+    ).toContain("Haiku");
+  });
+
+  test("launches a looped review from the configured Review default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentActionDefaults = {
+      review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Looped code review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start looped review" }));
+
+    // The looped launcher reads the same action default as the single-pass one,
+    // so the whole decision reaches the backend rather than the environment's
+    // own agent and the globally configured Codex model.
+    await waitFor(() =>
+      expect(startLoopedReviewMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "claude",
+          model: "sonnet",
+          reasoningEffort: "high",
+        }),
+      ),
+    );
+  });
+
+  test("seeds every Multi Review row from the configured Review default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentActionDefaults = {
+      review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    // Both reviewer rows and the fix model start from the action default; none
+    // of them may fall back to the environment's agent.
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
+    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
+      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
+      fixModel: { agent: string; model: string; reasoningEffort?: string };
+    };
+    expect(launch.reviewers).toHaveLength(2);
+    for (const reviewer of launch.reviewers) {
+      expect(reviewer).toMatchObject({ agent: "claude", model: "sonnet", reasoningEffort: "high" });
+    }
+    expect(launch.fixModel).toMatchObject({
+      agent: "claude",
+      model: "sonnet",
+      reasoningEffort: "high",
+    });
+  });
+
+  /**
+   * An action left on "App default" has no entry to resolve, so the dialog has
+   * to keep falling back to the environment's own agent. Only a configured
+   * entry outranks it — without this the fallback could silently jump to the
+   * application-level default agent instead.
+   */
+  test("falls back to the environment's agent when the action has no default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      // The app default agent is Codex, so an unchanged fallback is observable.
+      agentSettings: { defaultAgent: "claude" },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentActionDefaults = {};
+
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Code review" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+
+    await waitFor(() =>
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        "claude",
+        expect.objectContaining({ displayTitle: "Review" }),
+      ),
+    );
   });
 });
 

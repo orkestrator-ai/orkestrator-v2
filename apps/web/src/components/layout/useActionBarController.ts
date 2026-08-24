@@ -3,7 +3,10 @@ import {
   resolvedActionDefault,
   resolvedDefaultAgent,
 } from "@/lib/agent-settings";
-import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
+import {
+  resolveActionDefaults,
+  resolveAgentPlatformSettings,
+} from "@orkestrator/protocol/agent-settings";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   useUIStore,
@@ -17,7 +20,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent } from "@/types";
-import type { ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
+import { resolveActionDefault, type ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
 import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
 import {
   createPRPrompt,
@@ -336,14 +339,22 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     return { preferredModelsByPlatform: models, preferredEffortsByPlatform: efforts };
   }, [enabledAgentList, settingsTiers]);
   /**
-   * The same choice a plain click would make, expressed as launch-dialog
-   * preferences. The configured action default must be what the dialog opens
-   * on, otherwise right-clicking would silently propose a different run than
-   * the button next to it performs.
+   * Settings action defaults as launch-dialog preferences.
+   *
+   * A plain click still uses `actionDefaultFor`, so an environment created with
+   * Codex is not retargeted. The configure dialog is the place the user asked
+   * to pick a run, and it must open on what Settings named for this action —
+   * including its model — even when the environment's own agent is different.
    */
   const launchDialogDefaultsFor = useCallback(
     (key: ActionDefaultKey) => {
-      const actionDefault = actionDefaultFor(key);
+      // Deliberately not `actionDefaultFor`: that keeps a narrower tier's own
+      // `defaultAgent` ahead of the action default, which is right for a click
+      // and wrong for the dialog the user opened to choose a run.
+      const actionDefault = resolveActionDefault(resolveActionDefaults(settingsTiers), key, {
+        fallbackAgent: defaultAgent,
+        enabledAgents: enabledAgentList,
+      });
       return {
         defaultAgent: actionDefault.agent,
         // Each platform's own resolved model, so the dialog opens on what that
@@ -361,7 +372,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         },
       };
     },
-    [actionDefaultFor, preferredModelsByPlatform, preferredEffortsByPlatform],
+    [
+      defaultAgent,
+      enabledAgentList,
+      preferredEffortsByPlatform,
+      preferredModelsByPlatform,
+      settingsTiers,
+    ],
   );
   const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } = useLoopedReviewStore(
     useShallow((state) => ({
@@ -1612,10 +1629,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     resolveButtonRef,
     anyLaunchDialogOpen,
     reviewModelCatalog,
-    // Each platform's own resolved model/effort, so review launch dialogs open
-    // on what that platform would actually run.
-    reviewPreferredModels: preferredModelsByPlatform,
-    reviewPreferredEfforts: preferredEffortsByPlatform,
     scrollContainerRef,
     isDragging,
     setIsDragging,

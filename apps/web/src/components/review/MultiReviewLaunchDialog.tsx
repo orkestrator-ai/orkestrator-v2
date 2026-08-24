@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Eye, Plus, Trash2, Wrench } from "lucide-react";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import { MULTI_REVIEW_MAX_REVIEWERS } from "@orkestrator/protocol/multi-review";
@@ -195,7 +195,10 @@ export function MultiReviewLaunchDialog({
   const [fixModel, setFixModel] = useState<PickerRow>(() => makeRow());
   const wasOpen = useRef(false);
 
-  useEffect(() => {
+  // Only the closed -> open edge reconfigures the rows, and it runs as a layout
+  // effect so the first paint is already the action default rather than the
+  // selection the previous open left behind.
+  useLayoutEffect(() => {
     const justOpened = open && !wasOpen.current;
     wasOpen.current = open;
     if (!justOpened) return;

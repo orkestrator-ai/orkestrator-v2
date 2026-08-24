@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Bot, BrainCircuit, Layers3 } from "lucide-react";
 import type {
   AgentModel,
@@ -159,7 +159,7 @@ export function ReviewLaunchDialog({
   const [passAllowance, setPassAllowance] = useState(String(LOOPED_REVIEW_DEFAULT_ALLOWANCE));
   const wasOpenRef = useRef(false);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const justOpened = open && !wasOpenRef.current;
     wasOpenRef.current = open;
     if (!justOpened) return;

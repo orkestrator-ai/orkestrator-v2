@@ -14,6 +14,7 @@ import {
   discoverCursorChildTranscriptDirectories,
   isSafeCursorAgentId,
   resetCursorChildDiscoveryCache,
+  resetCursorTranscriptRootCache,
 } from "./acp-cursor-child-discovery.js";
 import {
   hydrateCursorChildTranscripts,
@@ -156,6 +157,7 @@ async function withTranscriptRoot<T>(run: (root: string) => Promise<T>): Promise
   process.env.CURSOR_AGENT_TRANSCRIPTS_DIR = root;
   resetCursorChildDiscoveryCache();
   resetCursorTranscriptReadCache();
+  resetCursorTranscriptRootCache();
   try {
     return await run(root);
   } finally {
@@ -168,6 +170,7 @@ describe("Cursor child transcript discovery", () => {
   afterEach(() => {
     resetCursorChildDiscoveryCache();
     resetCursorTranscriptReadCache();
+    resetCursorTranscriptRootCache();
   });
 
   test("derives the transcript root and child path from the working directory", () => {
@@ -191,6 +194,32 @@ describe("Cursor child transcript discovery", () => {
     } finally {
       if (previous === undefined) delete process.env.CURSOR_AGENT_TRANSCRIPTS_DIR;
       else process.env.CURSOR_AGENT_TRANSCRIPTS_DIR = previous;
+    }
+  });
+
+  test("keeps the space-preserving slug when no dashed root exists on disk", () => {
+    const previous = process.env.CURSOR_AGENT_TRANSCRIPTS_DIR;
+    delete process.env.CURSOR_AGENT_TRANSCRIPTS_DIR;
+    resetCursorTranscriptRootCache();
+    try {
+      // Cursor also dashes whitespace, so a second candidate exists for this
+      // path — but only an existing directory may displace the primary
+      // derivation, and neither is present here. The dashed form winning once
+      // Cursor has written it is covered end-to-end in
+      // `acp-cursor-background.test.ts`, which can give the bridge a fake HOME.
+      expect(cursorTranscriptRoot("/Users/foo/Application Support/bar")).toBe(
+        join(
+          homedir(),
+          ".cursor",
+          "projects",
+          "Users-foo-Application Support-bar",
+          "agent-transcripts",
+        ),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.CURSOR_AGENT_TRANSCRIPTS_DIR;
+      else process.env.CURSOR_AGENT_TRANSCRIPTS_DIR = previous;
+      resetCursorTranscriptRootCache();
     }
   });
 

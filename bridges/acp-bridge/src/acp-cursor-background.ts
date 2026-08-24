@@ -21,7 +21,7 @@ import {
 } from "./acp-context.js";
 import { schedulePersist } from "./acp-persist-writer.js";
 import { boundTranscript, truncateUtf8 } from "./acp-transcript.js";
-import { terminalAgentState, toolPartAgentId } from "./acp-tools.js";
+import { finishSubagentTool, terminalAgentState, toolPartAgentId } from "./acp-tools.js";
 import {
   syncCursorChildTranscriptParts,
   type CursorChildTranscriptState,
@@ -29,6 +29,7 @@ import {
 import {
   bindDiscoveredCursorChildren,
   cursorChildTranscriptPath,
+  cursorTranscriptRoot,
 } from "./acp-cursor-child-discovery.js";
 
 // Path derivation moved to the discovery module, which owns the transcript
@@ -51,7 +52,29 @@ interface TranscriptReadCacheEntry {
   appliedState: CursorChildTranscriptState;
 }
 
+interface TerminalProbeEntry {
+  size: number;
+  mtimeMs: number;
+  terminal: "finished" | "failed" | undefined;
+}
+
 const transcriptReadCache = new Map<string, TranscriptReadCacheEntry>();
+/**
+ * Terminal state per child transcript, keyed by path.
+ *
+ * Separate from `transcriptReadCache` on purpose: that one records what a
+ * *projection* applied, and a probe that wrote its `size`/`mtimeMs` without
+ * projecting anything would make the next hydration skip a file it never read.
+ */
+const terminalProbeCache = new Map<string, TerminalProbeEntry>();
+/**
+ * What the last probe-driven discovery pass for a session was computed
+ * against. See `bindDiscoveredChildrenForProbe`.
+ */
+const probeDiscoveryMemo = new WeakMap<
+  SessionState,
+  { rootMtimeMs: number; activeCount: number }
+>();
 
 export interface WatchableCursorChild {
   toolUseId: string;
@@ -117,7 +140,9 @@ export function listWatchableCursorChildren(
 
 /**
  * Project Cursor child JSONL activity onto Task cards when the UI reads a
- * snapshot. `/activity` must not call this: it is a liveness probe.
+ * snapshot. `/activity` must not call this: it is a liveness probe, and this
+ * re-parses whole transcripts. `settleTerminalCursorChildren` is the bounded
+ * part of it that a probe may run.
  */
 export function hydrateCursorChildTranscripts(state: SessionState): void {
   if (provider !== "cursor") return;
@@ -159,6 +184,129 @@ export function hydrateCursorChildTranscripts(state: SessionState): void {
       // A missing or unreadable child file leaves the card empty.
     }
   }
+  // The reads above already know which of those children ended, so the card
+  // they belong to is settled from the same pass rather than waiting for a
+  // frame Cursor may never send for a background launch.
+  settleTerminalCursorChildren(state);
+}
+
+/**
+ * Settle Task cards whose child has ended on disk.
+ *
+ * A Cursor background launch completes as soon as the child is *spawned*, so
+ * `{ isBackground: true }` with no later status keeps the card `active`
+ * forever unless something else reports the end. `cursor/task` and a later
+ * `tool_call_update` are the two frames that can, and neither is guaranteed:
+ * an unnamed background child produces exactly the launch payload and nothing
+ * more. The child's own transcript is the remaining authority, and a terminal
+ * record in it is a statement about the child, not a guess.
+ *
+ * Cheap enough for `/session/:id/activity`, which the backend polls for every
+ * persisted session every two seconds: one `stat` per active child, capped at
+ * `MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN`, and a bounded tail read only when
+ * a file changed since the last look. It touches no liveness, hydrates no
+ * transcript and re-attaches nothing.
+ */
+export function settleTerminalCursorChildren(state: SessionState): boolean {
+  if (provider !== "cursor") return false;
+  if (state.activeSubagentToolIds.size === 0) return false;
+  // A live turn owns its own children: `waitForWatchableCursorChildren` settles
+  // them and then injects their results. Settling one from here first would
+  // drop it out of the registry before the waiter listed it, and the parent
+  // would continue without ever being told what its child found.
+  if (state.status === "running") return false;
+  // An unnamed background child has no `agentId` on the wire at all, which is
+  // exactly the case that strands a card, so the probe has to be able to infer
+  // one — cheaply.
+  bindDiscoveredChildrenForProbe(state);
+  let settled = false;
+  let inspected = 0;
+  for (const child of listWatchableCursorChildren(state)) {
+    if (inspected >= MAX_CURSOR_TRANSCRIPT_HYDRATE_CHILDREN) break;
+    inspected += 1;
+    const terminal = probeCursorChildTerminalState(child.transcriptPath);
+    // No terminal record is not evidence the child died. It stays active, and
+    // the card stays live, exactly as before.
+    if (!terminal) continue;
+    finishSubagentTool(state, child.toolUseId, terminal);
+    settled = true;
+  }
+  return settled;
+}
+
+/**
+ * `bindDiscoveredCursorChildren`, but only when its answer can have changed.
+ *
+ * That function walks every message of every session to work out which child
+ * directories are already claimed. A visible tab pays for it twice a second and
+ * gets a projection back; the activity sweep runs for *every persisted session*
+ * whether or not anyone is looking, so paying the same cost there for an answer
+ * that cannot have moved is exactly the poll cost `/activity` is supposed not
+ * to have. A new binding needs either a new directory under the transcript root
+ * — which changes the root's mtime — or a change in what this session is
+ * waiting on. Neither is true in the steady state, so this settles to one
+ * `stat`.
+ */
+function bindDiscoveredChildrenForProbe(state: SessionState): void {
+  let rootMtimeMs: number;
+  try {
+    rootMtimeMs = statSync(cursorTranscriptRoot()).mtimeMs;
+  } catch {
+    // No transcript root means no directory to bind anything to.
+    return;
+  }
+  const activeCount = state.activeSubagentToolIds.size;
+  const memo = probeDiscoveryMemo.get(state);
+  if (memo && memo.rootMtimeMs === rootMtimeMs && memo.activeCount === activeCount) return;
+  probeDiscoveryMemo.set(state, { rootMtimeMs, activeCount });
+  bindDiscoveredCursorChildren(state);
+}
+
+/**
+ * Terminal state of one child transcript, from a `stat` alone when the file
+ * has not changed since the last look. A child that is still writing changes
+ * its file, so the read this pays for is bounded by the child's own progress.
+ */
+export function probeCursorChildTerminalState(
+  transcriptPath: string,
+): "finished" | "failed" | undefined {
+  let stats;
+  try {
+    stats = statSync(transcriptPath);
+  } catch {
+    // Same rule as the projection cache: a path that disappears drops its
+    // entry so a later file at the same path is never read as unchanged.
+    terminalProbeCache.delete(transcriptPath);
+    return undefined;
+  }
+  const cached = terminalProbeCache.get(transcriptPath);
+  if (cached && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) {
+    return cached.terminal;
+  }
+  let terminal: "finished" | "failed" | undefined;
+  try {
+    terminal = cursorTranscriptTerminalState(readTranscriptTail(transcriptPath));
+  } catch {
+    return undefined;
+  }
+  rememberTerminalProbe(transcriptPath, stats.size, stats.mtimeMs, terminal);
+  return terminal;
+}
+
+function rememberTerminalProbe(
+  transcriptPath: string,
+  size: number,
+  mtimeMs: number,
+  terminal: "finished" | "failed" | undefined,
+): void {
+  if (
+    terminalProbeCache.size >= MAX_TRANSCRIPT_READ_CACHE_ENTRIES &&
+    !terminalProbeCache.has(transcriptPath)
+  ) {
+    const oldest = terminalProbeCache.keys().next();
+    if (!oldest.done) terminalProbeCache.delete(oldest.value);
+  }
+  terminalProbeCache.set(transcriptPath, { size, mtimeMs, terminal });
 }
 
 /**
@@ -193,7 +341,11 @@ function hydrateOneCursorChild(state: SessionState, child: WatchableCursorChild)
   }
 
   const contents = readTranscriptTail(child.transcriptPath);
-  const terminalPresent = cursorTranscriptTerminalState(contents) !== undefined;
+  const terminal = cursorTranscriptTerminalState(contents);
+  // This read is the expensive one; the probe cache rides along on it so the
+  // `/activity` poll behind `settleTerminalCursorChildren` never repeats it.
+  rememberTerminalProbe(child.transcriptPath, stats.size, stats.mtimeMs, terminal);
+  const terminalPresent = terminal !== undefined;
   const childState = cursorChildStateFrom(terminalPresent, active);
   syncCursorChildTranscriptParts(state, child, contents, childState);
   if (
@@ -469,7 +621,8 @@ function readTranscriptTail(path: string): string {
   }
 }
 
-/** Test-only: drops the stat cache so a rewritten fixture is re-read. */
+/** Test-only: drops the stat caches so a rewritten fixture is re-read. */
 export function resetCursorTranscriptReadCache(): void {
   transcriptReadCache.clear();
+  terminalProbeCache.clear();
 }

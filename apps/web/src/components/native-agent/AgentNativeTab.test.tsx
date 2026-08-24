@@ -3193,6 +3193,84 @@ describe("AgentNativeTab", () => {
       },
     );
 
+    /**
+     * The restart half of the stuck-Review-tab incident. The bridge maps an
+     * in-flight prompt to an error whose outcome is unknown, and the Task card
+     * to a settled state — the tab has to follow the snapshot rather than the
+     * last "thinking" event the previous tree observed.
+     */
+    test("drops the thinking indicator and the Active badge when the bridge reports an unknown outcome", async () => {
+      const tabId = "tab-cursor-subagent-restart";
+      const activeTask = {
+        type: "tool-invocation" as const,
+        content: "Task: Run snapshot validation",
+        toolName: "task",
+        toolUseId: "cursor-subagent-1",
+        toolState: "success" as const,
+        agentState: "active" as const,
+        toolArgs: { description: "Run snapshot validation" },
+      };
+      seedProjection({
+        phase: "running",
+        messages: [
+          {
+            id: "assistant-cursor-subagent-restart",
+            role: "assistant",
+            content: "",
+            createdAt: "2026-08-24T14:30:00.000Z",
+            parts: [activeTask],
+          },
+        ],
+      });
+
+      const view = render(
+        <AgentNativeTab tabId={tabId} data={identity("cursor")} isActive refreshRequestId={0} />,
+      );
+      await screen.findByRole("textbox");
+      expect(
+        await screen.findByRole("status", {
+          name: "1 sub-agent working: Run snapshot validation.",
+        }),
+      ).toBeTruthy();
+      // A launch that succeeded with a background child still running is the
+      // one case where `toolState: "success"` must stay Active.
+      await waitFor(() =>
+        expect(screen.queryByText("Cursor Agent is thinking...") === null).toBe(false),
+      );
+
+      seedProjection({
+        phase: "error",
+        messages: [
+          {
+            id: "assistant-cursor-subagent-restart",
+            role: "assistant",
+            content: "",
+            createdAt: "2026-08-24T14:30:00.000Z",
+            parts: [{ ...activeTask, agentState: "failed" as const }],
+          },
+        ],
+      });
+      view.rerender(
+        <AgentNativeTab tabId={tabId} data={identity("cursor")} isActive refreshRequestId={1} />,
+      );
+
+      await waitFor(() =>
+        expect(
+          useNativeAgentProjectionStore.getState().projections.get(createSessionKey("env-1", tabId))
+            ?.messages[0],
+        ).toMatchObject({ parts: [expect.objectContaining({ agentState: "failed" })] }),
+      );
+      expect(screen.queryByText("Cursor Agent is thinking...") === null).toBe(true);
+      expect(
+        screen.queryByRole("status", {
+          name: "1 sub-agent working: Run snapshot validation.",
+        }) === null,
+      ).toBe(true);
+      expect(
+        await screen.findByRole("status", { name: "Run snapshot validation failed." }),
+      ).toBeTruthy();
+    });
+
     /** One assistant row carrying `count` identically-labelled active children. */
     function subagentMessage(
       count: number,

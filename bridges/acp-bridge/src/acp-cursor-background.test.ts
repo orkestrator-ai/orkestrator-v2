@@ -3,7 +3,13 @@ import { promises as fs } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import {
+  nativeFetch,
+  spawnBridge,
+  stopChild,
+  temporaryDirectory,
+  waitFor,
+} from "./acp-test-harness.js";
 
 type SessionSnapshot = {
   status: string;
@@ -602,6 +608,83 @@ describe("ACP Cursor background continuation", () => {
     ]);
   });
 
+  /**
+   * Cursor's slug replaces whitespace as well as separators, so a workspace
+   * under `~/Library/Application Support/…` is written as `Application-Support`.
+   * Deriving the root with the space intact points every lookup at a directory
+   * that never exists — the waiter blocks for its whole budget and reports a
+   * timeout, and the terminal probe never sees the child end.
+   */
+  test("resolves a transcript root whose workspace path contains a space", async () => {
+    const directory = await temporaryDirectory();
+    const fakeHome = resolve(directory, "home");
+    const cwd = resolve(directory, "Application Support", "project");
+    await fs.mkdir(cwd, { recursive: true });
+    const slug = cwd
+      .replace(/\\/g, "/")
+      .replace(/^\/+/, "")
+      .replace(/\//g, "-")
+      .replace(/\s+/g, "-");
+    const agentId = "child-wait-1";
+    const childDir = resolve(fakeHome, ".cursor", "projects", slug, "agent-transcripts", agentId);
+    await fs.mkdir(childDir, { recursive: true });
+    await fs.writeFile(
+      resolve(childDir, `${agentId}.jsonl`),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Spaced path reached." }] },
+      })}\n${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+    );
+    const counterFile = resolve(directory, "prompts.log");
+
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_CURSOR_BACKGROUND_CONTINUE: "1",
+        ACP_CURSOR_BACKGROUND_WAIT_MS: "8000",
+        HOME: fakeHome,
+        CWD: cwd,
+        CURSOR_AGENT_TRANSCRIPTS_DIR: undefined,
+        FAKE_ACP_COUNTER_FILE: counterFile,
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+        })
+      ).status,
+    ).toBe(202);
+
+    const settled = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some(
+          (message) =>
+            message.role === "user" && message.content?.includes("Spaced path reached.") === true,
+        ),
+    );
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ agentState: "finished" });
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual([
+      "prompt",
+      "prompt",
+    ]);
+  });
+
   test("stops waiting after the continuation cap even if a new background child is still live", async () => {
     const directory = await temporaryDirectory();
     const transcripts = resolve(directory, "transcripts");
@@ -611,9 +694,17 @@ describe("ACP Cursor background continuation", () => {
       const agentId = `child-wait-${index}`;
       const childDir = resolve(transcripts, agentId);
       await fs.mkdir(childDir, { recursive: true });
+      // The child spawned past the cap is the point of the test, so its
+      // transcript is deliberately open: a terminal record would settle its
+      // card from disk and the "still live" premise would be fiction.
       await fs.writeFile(
         resolve(childDir, `${agentId}.jsonl`),
-        `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+        index > continuationLimit
+          ? `${JSON.stringify({
+              type: "assistant",
+              message: { content: [{ type: "text", text: "Still running." }] },
+            })}\n`
+          : `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
       );
     }
 
@@ -733,6 +824,266 @@ describe("ACP Cursor background continuation", () => {
         response.json(),
       ),
     ).toEqual({ activity: "working" });
+  });
+
+  /**
+   * The incident this whole path exists for: Cursor launched a background Task,
+   * never named the child on the wire, and ended the parent turn with a card
+   * whose only output was the launch payload. The child finished minutes later
+   * and nothing on the wire ever said so, so the card sat `Active` and the
+   * environment sat `working` for as long as the tab was open.
+   */
+  test("settles an unnamed background Task once its child transcript ends", async () => {
+    const directory = await temporaryDirectory();
+    const transcripts = resolve(directory, "transcripts");
+    await fs.mkdir(transcripts, { recursive: true });
+    const counterFile = resolve(directory, "prompts.log");
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_CURSOR_BACKGROUND_CONTINUE: "1",
+        ACP_CURSOR_BACKGROUND_WAIT_MS: "200",
+        CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts,
+        FAKE_ACP_COUNTER_FILE: counterFile,
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
+    const readActivity = async (): Promise<{ activity: string }> =>
+      nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{ activity: string }>;
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDNOID" }),
+        })
+      ).status,
+    ).toBe(202);
+
+    const launched = await waitFor(
+      read,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
+    );
+    expect(
+      launched.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ toolState: "success", agentState: "active" });
+    // Nothing has ended yet, so the card and the environment are both correct.
+    expect(await readActivity()).toEqual({ activity: "working" });
+
+    const agentId = "child-unnamed-1";
+    const childDir = resolve(transcripts, agentId);
+    await fs.mkdir(childDir, { recursive: true });
+    await fs.writeFile(
+      resolve(childDir, `${agentId}.jsonl`),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "All four commands passed." }] },
+      })}\n${JSON.stringify({ type: "turn_ended", status: "success" })}\n`,
+    );
+
+    // The liveness probe alone has to notice. No tab is polling `/messages`
+    // here, which is exactly the state a backgrounded environment is in.
+    expect(await waitFor(readActivity, (value) => value.activity === "idle")).toEqual({
+      activity: "idle",
+    });
+    const settled = await read();
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ toolState: "success", agentState: "finished" });
+    // The parent turn was already over, and a discovered binding is an
+    // inference: good enough to settle a card, never good enough to spend a
+    // turn re-prompting the agent.
+    expect(
+      settled.messages.some(
+        (message) =>
+          message.role === "user" &&
+          message.content?.startsWith("Background subagent finished.") === true,
+      ),
+    ).toBe(false);
+    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
+  });
+
+  test("keeps an unnamed background Task active while its child is still writing", async () => {
+    const directory = await temporaryDirectory();
+    const transcripts = resolve(directory, "transcripts");
+    await fs.mkdir(transcripts, { recursive: true });
+    const { base, headers } = await spawnBridge({
+      env: {
+        ACP_CURSOR_BACKGROUND_CONTINUE: "1",
+        ACP_CURSOR_BACKGROUND_WAIT_MS: "200",
+        CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts,
+      },
+    });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    const read = async (): Promise<SessionSnapshot> =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<SessionSnapshot>;
+
+    expect(
+      (
+        await nativeFetch(`${base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDNOID" }),
+        })
+      ).status,
+    ).toBe(202);
+    await waitFor(
+      read,
+      (value) =>
+        value.status === "idle" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
+    );
+
+    const agentId = "child-unnamed-live";
+    const childDir = resolve(transcripts, agentId);
+    await fs.mkdir(childDir, { recursive: true });
+    await fs.writeFile(
+      resolve(childDir, `${agentId}.jsonl`),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Running the suite." }] },
+      })}\n`,
+    );
+
+    // No terminal record is not evidence the child died, so the probe leaves
+    // both the card and the environment alone.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(
+        await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>
+          response.json(),
+        ),
+      ).toEqual({ activity: "working" });
+    }
+    expect(
+      (await read()).messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ agentState: "active" });
+  });
+
+  /**
+   * The other half of the incident. The bridge died while `session/prompt` was
+   * still open on the child wait, so the turn's outcome is unknowable — but the
+   * child's own transcript is not, and it says the child completed.
+   */
+  test("restores a background Task from its finished child transcript after a restart", async () => {
+    const stateDirectory = await temporaryDirectory();
+    const directory = await temporaryDirectory();
+    const transcripts = resolve(directory, "transcripts");
+    const agentId = "child-wait-1";
+    const childDir = resolve(transcripts, agentId);
+    await fs.mkdir(childDir, { recursive: true });
+    const jsonl = resolve(childDir, `${agentId}.jsonl`);
+    await fs.writeFile(
+      jsonl,
+      `${JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Pinned the snapshot." }] },
+      })}\n`,
+    );
+    const env = {
+      ACP_CURSOR_BACKGROUND_CONTINUE: "1",
+      ACP_CURSOR_BACKGROUND_WAIT_MS: "30000",
+      CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts,
+    };
+
+    const first = await spawnBridge({ stateDirectory, env });
+    const created = (await nativeFetch(`${first.base}/session/create`, {
+      method: "POST",
+      headers: first.headers,
+      body: JSON.stringify({ clientSessionKey: "env-cursor-restart:tab-1" }),
+    }).then((response) => response.json())) as { id: string };
+
+    expect(
+      (
+        await nativeFetch(`${first.base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers: first.headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD", requestId: "restart-req-1" }),
+        })
+      ).status,
+    ).toBe(202);
+    // The parent has ended its generation and the bridge is holding the HTTP
+    // turn open on the child wait.
+    await waitFor(
+      async () =>
+        nativeFetch(`${first.base}/session/${created.id}`, { headers: first.headers }).then(
+          (response) => response.json(),
+        ) as Promise<SessionSnapshot>,
+      (value) =>
+        value.status === "running" &&
+        value.messages.some((message) =>
+          message.parts.some(
+            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+          ),
+        ),
+    );
+
+    await stopChild(first.child);
+    await fs.appendFile(jsonl, `${JSON.stringify({ type: "turn_ended", status: "success" })}\n`);
+
+    const restarted = await spawnBridge({ stateDirectory, env });
+    const restored = (await nativeFetch(`${restarted.base}/session/${created.id}`, {
+      headers: restarted.headers,
+    }).then((response) => response.json())) as SessionSnapshot & { error?: string };
+    // The prompt is unresolvable, but the child is not: reporting it failed
+    // would be as wrong as leaving it Active.
+    expect(restored.status).toBe("error");
+    expect(restored.error).toContain("prompt outcome is unknown after bridge restart");
+    expect(
+      restored.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).toMatchObject({ toolState: "success", agentState: "finished" });
+    expect(
+      await nativeFetch(`${restarted.base}/session/${created.id}/activity`, {
+        headers: restarted.headers,
+      }).then((response) => response.json()),
+    ).toEqual({ activity: "idle" });
+    // An ambiguous dispatch is never retried, and never reported as delivered.
+    expect(
+      await nativeFetch(
+        `${restarted.base}/session/${created.id}/dispatch?requestId=restart-req-1`,
+        { headers: restarted.headers },
+      ).then((response) => response.json()),
+    ).toEqual({ dispatch: "unknown" });
+    expect(
+      (
+        await nativeFetch(`${restarted.base}/session/${created.id}/prompt`, {
+          method: "POST",
+          headers: restarted.headers,
+          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD", requestId: "restart-req-1" }),
+        })
+      ).status,
+    ).toBe(410);
   });
 
   test("projects child JSONL tool_use into the parent Task card while the child is live", async () => {

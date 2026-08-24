@@ -69,6 +69,7 @@ import {
   restoreCursorTodosFromMessages,
 } from "./acp-tools.js";
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
+import { settleTerminalCursorChildren } from "./acp-cursor-background.js";
 import {
   boundTranscript,
   boundedString,
@@ -330,6 +331,11 @@ export async function loadPersistedState(): Promise<void> {
     }
     indexActiveSubagentsFromTranscript(state);
     boundTranscript(state);
+    // A child whose transcript already ended gets its real outcome back before
+    // the sweep below fails everything still running. `reconcileStaleToolParts`
+    // is right that an active card cannot have survived the restart, but
+    // "failed" is only true of the ones whose result is genuinely unknown.
+    settleTerminalCursorChildren(state);
     reconcileStaleToolParts(state, true);
     rememberCatalog(state.sessionConfig.composer);
     sessions.set(state.id, state);

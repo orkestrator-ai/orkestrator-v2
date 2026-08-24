@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -19,11 +19,51 @@ import { findToolPart, toolPartAgentId } from "./acp-tools.js";
  */
 const MAX_CURSOR_AGENT_ID_LENGTH = 128;
 
+/**
+ * Resolved roots, keyed by cwd. Only a root that exists is cached: an absent
+ * one is the normal state until the first child spawns, and caching it would
+ * pin the wrong answer for the life of the process.
+ */
+const transcriptRootCache = new Map<string, string>();
+
+/**
+ * Where Cursor writes this workspace's child transcripts.
+ *
+ * The slug is the absolute path with separators turned into dashes — except
+ * that Cursor also replaces whitespace, so a workspace under
+ * `~/Library/Application Support/…` is written as `Application-Support`. The
+ * dash form is checked as a second candidate rather than replacing the first,
+ * because the first is what every space-free path (the common case) resolves
+ * to and is what the existing fixtures assert.
+ *
+ * Getting this wrong is silent: `cursorChildTranscriptPath` returns a path
+ * under a root that will never exist, so the continuation waiter blocks the
+ * parent turn for its whole budget and then reports a timeout, and the
+ * terminal probe behind `/activity` can never see that the child ended.
+ */
 export function cursorTranscriptRoot(cwd: string = workingDirectory): string {
   const override = process.env.CURSOR_AGENT_TRANSCRIPTS_DIR?.trim();
   if (override) return override;
-  const slug = cwd.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\//g, "-");
-  return join(homedir(), ".cursor", "projects", slug, "agent-transcripts");
+  const cached = transcriptRootCache.get(cwd);
+  if (cached) return cached;
+  const normalized = cwd.replace(/\\/g, "/").replace(/^\/+/, "");
+  const candidates = [normalized.replace(/\//g, "-")];
+  const dashed = normalized.replace(/\//g, "-").replace(/\s+/g, "-");
+  if (dashed !== candidates[0]) candidates.push(dashed);
+  const roots = candidates.map((slug) =>
+    join(homedir(), ".cursor", "projects", slug, "agent-transcripts"),
+  );
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    transcriptRootCache.set(cwd, root);
+    return root;
+  }
+  return roots[0]!;
+}
+
+/** Test-only: drops the resolved-root cache so a rewritten home is re-read. */
+export function resetCursorTranscriptRootCache(): void {
+  transcriptRootCache.clear();
 }
 
 /**

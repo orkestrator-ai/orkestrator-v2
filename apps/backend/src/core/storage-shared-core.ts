@@ -40,8 +40,16 @@ import {
   firstEnabledAgentPlatform,
   isAgentPlatform,
   normalizeAgentPlatforms,
+  type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import { isEmptyAgentSettings, type AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
+import {
+  LEGACY_GLOBAL_AGENT_KEYS,
+  LEGACY_REPOSITORY_AGENT_KEYS,
+  migrateGlobalAgentSettings,
+  migrateRepositoryAgentSettings,
+} from "./storage-agent-settings.js";
 import {
   PANE_LAYOUT_VERSION,
   paneLayoutRevisionConflictMessage,
@@ -90,7 +98,6 @@ import type {
   AgentActivityState,
   AgentActivitySource,
   AgentModelCatalogCache,
-  AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
   ClaudeModelCatalogEntry,
@@ -1527,13 +1534,6 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     normalizedEnabledAgentPlatforms.length > 0
       ? normalizedEnabledAgentPlatforms
       : [...LEGACY_ENABLED_AGENT_PLATFORMS];
-  const defaultAgent = firstEnabledAgentPlatform(
-    enabledAgentPlatforms,
-    isAgentPlatform(global.defaultAgent) ? global.defaultAgent : undefined,
-  );
-  const claudeMode = isOneOf(global.claudeMode, ["terminal", "native"])
-    ? global.claudeMode
-    : DEFAULT_CLAUDE_MODE;
   const favoriteModels = Array.isArray(global.favoriteModels)
     ? global.favoriteModels
         .flatMap((value) => {
@@ -1558,30 +1558,59 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     : migrateOpenCodeModelProviders(
         storedOpenCodeModelIds(global, reviewInstructionSanitized.repositories),
       );
-  const opencodeModel = selectableOpenCodeDefaultModel(
-    global.opencodeModel,
-    favoriteModels,
-    openCodeModelProviders,
+  // Fold every tier onto the shared agent-settings shape before anything else
+  // reads a model or a mode. Downstream normalization below operates on the
+  // migrated block only, so there is exactly one shape in play from here on.
+  const migratedGlobal = migrateGlobalAgentSettings(global);
+  const agentSettings: AgentSettingsTier = {
+    ...migratedGlobal,
+    // The default agent has to be one the user still has enabled. A stored
+    // agent for a platform they since turned off would name a launch surface
+    // that no longer exists.
+    defaultAgent: firstEnabledAgentPlatform(enabledAgentPlatforms, migratedGlobal.defaultAgent),
+    platforms: {
+      ...migratedGlobal.platforms,
+      opencode: {
+        ...migratedGlobal.platforms?.opencode,
+        ...(() => {
+          const model = selectableOpenCodeDefaultModel(
+            migratedGlobal.platforms?.opencode?.model,
+            favoriteModels,
+            openCodeModelProviders,
+          );
+          return typeof model === "string" && model ? { model } : {};
+        })(),
+      },
+    },
+  };
+
+  const globalDefaultAgent = agentSettings.defaultAgent ?? "claude";
+  const migratedRepositories = migrateRepositories(
+    reviewInstructionSanitized.repositories,
+    globalDefaultAgent,
   );
   // A repository default outranks the global one everywhere it is read, so the
   // repointing has to reach it too or the unreachable id simply survives one
   // level down. Identity is preserved when nothing moved.
   const repositories = normalizeOpenCodeRepositoryDefaults(
-    reviewInstructionSanitized.repositories,
-    defaultAgent,
+    migratedRepositories,
     favoriteModels,
     openCodeModelProviders,
   );
+
+  const nextGlobal = stripLegacyKeys(
+    { ...global, agentSettings },
+    LEGACY_GLOBAL_AGENT_KEYS,
+  ) as unknown as AppConfig["global"];
+
   if (
     repositories === reviewInstructionSanitized.repositories &&
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
     global.useHostGitHubCredentials === useHostGitHubCredentials &&
     JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
-    global.defaultAgent === defaultAgent &&
-    global.claudeMode === claudeMode &&
     JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels) &&
     JSON.stringify(global.openCodeModelProviders) === JSON.stringify(openCodeModelProviders) &&
-    global.opencodeModel === opencodeModel
+    JSON.stringify(global.agentSettings) === JSON.stringify(agentSettings)
   ) {
     return reviewInstructionSanitized;
   }
@@ -1590,17 +1619,50 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     ...reviewInstructionSanitized,
     repositories,
     global: {
-      ...global,
+      ...nextGlobal,
       codexMaxConcurrentThreads,
       useHostGitHubCredentials,
       enabledAgentPlatforms,
-      defaultAgent,
-      claudeMode,
       favoriteModels,
       openCodeModelProviders,
-      opencodeModel,
     } as unknown as AppConfig["global"],
   };
+}
+
+/** Drop keys a migration has consumed, so only one shape reaches disk. */
+function stripLegacyKeys(record: JsonRecord, keys: readonly string[]): JsonRecord {
+  const next = { ...record };
+  for (const key of keys) delete next[key];
+  return next;
+}
+
+function migrateRepositories(
+  repositories: AppConfig["repositories"],
+  globalDefaultAgent: AgentPlatform,
+): AppConfig["repositories"] {
+  if (!isRecord(repositories)) return repositories;
+  let changed = false;
+  const next: JsonRecord = {};
+  for (const [id, repository] of Object.entries(repositories)) {
+    if (!isRecord(repository)) {
+      next[id] = repository;
+      continue;
+    }
+    const migrated = migrateRepositoryAgentSettings(repository, globalDefaultAgent);
+    // An empty tier means "inherit everything", which absence already says, so
+    // it is omitted rather than written as a `{}` every repository would carry.
+    const agentSettings = isEmptyAgentSettings(migrated) ? undefined : migrated;
+    if (JSON.stringify(repository.agentSettings) === JSON.stringify(agentSettings)) {
+      next[id] = repository;
+      continue;
+    }
+    changed = true;
+    const stripped = stripLegacyKeys({ ...repository }, LEGACY_REPOSITORY_AGENT_KEYS);
+    if (agentSettings) stripped.agentSettings = agentSettings;
+    else delete stripped.agentSettings;
+    next[id] = stripped;
+  }
+  return changed ? (next as AppConfig["repositories"]) : repositories;
 }
 
 export function slugify(value: string, fallback: string, maxLength = 0): string {
@@ -1653,23 +1715,26 @@ export function defaultConfig(): AppConfig {
       allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
       enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
       favoriteModels: [],
-      defaultAgent: "claude",
-      opencodeModel: DEFAULT_OPENCODE_MODEL_ID,
-      claudeModel: "claude-sonnet-5",
-      codexModel: "gpt-5.4",
-      // New installs only. An existing config.json already holds a concrete
-      // effort, and nothing records whether the user chose it or merely
-      // inherited the previous "medium" default, so migrating would overwrite
-      // deliberate choices. Existing installs keep their stored value until the
-      // user changes it in settings.
-      codexReasoningEffort: "high",
-      opencodeMode: "terminal",
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: {
+          claude: {
+            mode: DEFAULT_CLAUDE_MODE,
+            model: "claude-sonnet-5",
+            claudeNativeBackend: "sdk",
+          },
+          // New installs only. An existing config.json already holds a concrete
+          // effort, and nothing records whether the user chose it or merely
+          // inherited the previous "medium" default, so migrating would
+          // overwrite deliberate choices. Existing installs keep their stored
+          // value until the user changes it in settings.
+          codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
+          opencode: { mode: "terminal", model: DEFAULT_OPENCODE_MODEL_ID },
+          cursor: { mode: "terminal" },
+          grok: { mode: "terminal" },
+        },
+      },
       openCodeModelProviders: [...DEFAULT_OPENCODE_MODEL_PROVIDERS],
-      claudeMode: DEFAULT_CLAUDE_MODE,
-      claudeNativeBackend: "sdk",
-      claudeNativeFastModeDefault: false,
-      codexMode: "native",
-      codexNativeFastModeDefault: false,
       codexMaxConcurrentThreads: DEFAULT_CODEX_MAX_CONCURRENT_THREADS,
       terminalAppearance: {
         fontFamily: "FiraCode Nerd Font",
@@ -1758,11 +1823,7 @@ export function createEnvironment(
     localCodexPort: undefined,
     localCursorPort: undefined,
     localGrokPort: undefined,
-    defaultAgent: undefined,
-    claudeMode: undefined,
-    claudeNativeBackend: undefined,
-    opencodeMode: undefined,
-    codexMode: undefined,
+    agentSettings: undefined,
     setupScriptsComplete: false,
     setupPhase: "pending",
     setupOverride: false,
@@ -1882,7 +1943,6 @@ export type {
   AgentActivityState,
   AgentActivitySource,
   AgentModelCatalogCache,
-  AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
   ClaudeModelCatalogEntry,

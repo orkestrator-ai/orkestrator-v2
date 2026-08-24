@@ -1,6 +1,11 @@
+import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, History } from "lucide-react";
-import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  AGENT_PLATFORMS,
+  firstEnabledAgentPlatform,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import {
   resolveReasoningId,
   type AgentModel,
@@ -335,39 +340,39 @@ export function UnassignedNativeAgentComposer({
   const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const hasDraft = useNativeComposeStore((state) => state.drafts.has(sessionKey));
   const updateStoreDraft = useNativeComposeStore((state) => state.updateDraft);
-  const defaultPlatform = useConfigStore((state) => state.config.global.defaultAgent ?? "claude");
-  const globalConfig = useConfigStore((state) => state.config.global);
+  const config = useConfigStore((state) => state.config);
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const worktreePath = environment?.worktreePath;
   const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
     useAgentModelFavorites();
+  // Same triple App overlay launches use: an environment or repository default
+  // must win over the application one, constrained to platforms still enabled.
+  const defaultPlatform = firstEnabledAgentPlatform(
+    enabledPlatforms,
+    resolvedDefaultAgent(config, environment?.projectId, environment),
+  );
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
   const platform = draft.platform ?? defaultPlatform;
+  const configured = resolvedPlatformSettings(
+    config,
+    environment?.projectId,
+    environment,
+    platform,
+  );
   const selectedAdapter = findNativeAgentAdapter(platform);
-  const platformFastModeDefault =
-    platform === "claude"
-      ? (globalConfig.claudeNativeFastModeDefault ?? false)
-      : platform === "codex"
-        ? (globalConfig.codexNativeFastModeDefault ?? false)
-        : false;
-  const effectiveFastMode = hasDraft ? draft.fastMode : platformFastModeDefault;
+  // Speed is a per-session choice made in the model picker, so a draft with no
+  // explicit choice starts at normal rather than inheriting a stored default.
+  const effectiveFastMode = hasDraft ? draft.fastMode : false;
   const updateDraft = useCallback(
     (key: string, update: Partial<typeof draft>) => {
       const current = useNativeComposeStore.getState().drafts.get(key);
-      const nextPlatform = update.platform ?? current?.platform ?? platform;
-      const defaultFastMode =
-        nextPlatform === "claude"
-          ? (useConfigStore.getState().config.global.claudeNativeFastModeDefault ?? false)
-          : nextPlatform === "codex"
-            ? (useConfigStore.getState().config.global.codexNativeFastModeDefault ?? false)
-            : false;
       updateStoreDraft(key, {
-        ...(current ? {} : { fastMode: defaultFastMode }),
+        ...(current ? {} : { fastMode: false }),
         ...update,
       });
     },
-    [platform, updateStoreDraft],
+    [updateStoreDraft],
   );
   useNativeComposeDraftPersistence(
     "agent-native",
@@ -410,8 +415,12 @@ export function UnassignedNativeAgentComposer({
     createMention,
   } = useFileMentions({ searchFiles: fileSearch.searchFiles });
   const platformModels = models.filter((model) => model.platform === platform);
+  const configuredModel = configured.model
+    ? models.find((model) => model.platform === platform && model.id === configured.model)
+    : undefined;
   const selectedModel =
     models.find((model) => model.id === draft.modelId && model.platform === platform) ??
+    configuredModel ??
     platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
@@ -434,7 +443,10 @@ export function UnassignedNativeAgentComposer({
   const selectedReasoningId =
     resolveReasoningId(
       selectedModel?.reasoning ?? [],
-      draft.reasoningId,
+      draft.reasoningId ??
+        (draft.modelId === undefined && selectedModel?.id === configured.model
+          ? configured.reasoningEffort
+          : undefined),
       selectedModel?.defaultReasoningId,
     ) ?? selectedModel?.defaultReasoningId;
   const selectedReasoningLabel =
@@ -663,12 +675,7 @@ export function UnassignedNativeAgentComposer({
                     modelId: undefined,
                     reasoningId: undefined,
                     executionProfileId: undefined,
-                    fastMode:
-                      next === "claude"
-                        ? (globalConfig.claudeNativeFastModeDefault ?? false)
-                        : next === "codex"
-                          ? (globalConfig.codexNativeFastModeDefault ?? false)
-                          : false,
+                    fastMode: false,
                     // Per type, not all-or-nothing: Codex takes images and
                     // refuses files, and its bridge rejects the entire prompt
                     // rather than dropping the entry it cannot use.

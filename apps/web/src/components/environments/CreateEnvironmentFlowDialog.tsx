@@ -1,3 +1,4 @@
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -17,7 +18,7 @@ import {
   updateEnvironmentAgentSettings,
   type GitHubCredentialStatus,
 } from "@/lib/backend";
-import { resolveAgentModeSettings, type AgentModeSettings } from "@/lib/build-pipeline-agent";
+import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { useClaudeOptionsStore, useConfigStore, useProjectStore, useUIStore } from "@/stores";
 import type { StartEnvironmentOptions } from "@/hooks/useEnvironments";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping } from "@/types";
@@ -85,7 +86,7 @@ export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
  * Unlike a build pipeline, the create dialog forwards the modes the user picked
  * instead of forcing native — the shared helper only owns the routing.
  */
-export function resolveEnvironmentAgentSettings(options: ClaudeOptions): AgentModeSettings {
+export function resolveEnvironmentAgentSettings(options: ClaudeOptions): AgentSettingsTier {
   return resolveAgentModeSettings(options.agentType, options);
 }
 
@@ -222,11 +223,7 @@ export function CreateEnvironmentFlowDialog({
       const launchSettings = resolveEnvironmentAgentLaunchSettings(options);
       const configuredEnvironment = await updateEnvironmentAgentSettings(
         environment.id,
-        agentSettings.defaultAgent,
-        agentSettings.claudeMode,
-        null,
-        agentSettings.opencodeMode,
-        agentSettings.codexMode,
+        agentSettings,
         launchSettings.pendingAgentLaunch,
         launchSettings.initialAgentModel,
         launchSettings.initialReasoningEffort,
@@ -268,8 +265,6 @@ export function CreateEnvironmentFlowDialog({
         void rememberEnvironmentAgentSelection(projectId, {
           platform: options.agentType,
           mode: selectedAgentMode(options.agentType, options),
-          ...(options.model ? { model: options.model } : {}),
-          ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
         })
           .then((updatedConfig) => {
             useConfigStore.getState().setConfig(updatedConfig);

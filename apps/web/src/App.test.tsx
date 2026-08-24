@@ -77,14 +77,14 @@ const mockConfig: AppConfig = {
     },
     envFilePatterns: [".env.local", ".env"],
     allowedDomains: ["github.com"],
-    defaultAgent: "claude",
-    opencodeModel: "opencode/grok-code",
-    codexModel: "gpt-5.3-codex",
-    codexReasoningEffort: "medium",
-    opencodeMode: "terminal",
-    claudeMode: "terminal",
-    claudeNativeBackend: "sdk",
-    codexMode: "native",
+    agentSettings: {
+      defaultAgent: "claude",
+      platforms: {
+        opencode: { model: "opencode/grok-code", mode: "terminal" },
+        codex: { model: "gpt-5.3-codex", reasoningEffort: "medium", mode: "native" },
+        claude: { mode: "terminal", claudeNativeBackend: "sdk" },
+      },
+    },
     terminalAppearance: {
       fontFamily: "FiraCode Nerd Font",
       fontSize: 14,
@@ -2013,7 +2013,7 @@ describe("App terminal overlay actions", () => {
       environments: [
         {
           ...makeEnvironment("env-visible", "project-1"),
-          defaultAgent: "codex",
+          agentSettings: { defaultAgent: "codex" },
           initialPrompt: "Stand up the Codex session",
         },
       ],
@@ -2307,7 +2307,7 @@ describe("App terminal overlay actions", () => {
       environments: [
         {
           ...makeEnvironment("env-visible", "project-1"),
-          defaultAgent: "codex",
+          agentSettings: { defaultAgent: "codex" },
           initialPrompt: "Resume the prior task",
         },
       ],
@@ -2373,7 +2373,7 @@ describe("App terminal overlay actions", () => {
       environments: [
         {
           ...makeEnvironment("env-visible", "project-1"),
-          defaultAgent: "codex",
+          agentSettings: { defaultAgent: "codex" },
           initialPrompt: "Should not be rehydrated",
           setupScriptsComplete: true,
         },

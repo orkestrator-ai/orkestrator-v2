@@ -18,6 +18,14 @@
  * import.
  */
 import type { AgentPlatform } from "./agent-platforms.js";
+import {
+  DEFAULT_AGENT_PLATFORM,
+  resolveAgentPlatformSettings,
+  resolveDefaultAgent,
+  SHIPPED_PLATFORM_MODES,
+  type AgentSettingsTier,
+  type AgentSettingsTiers,
+} from "./agent-settings.js";
 
 export type StartupLaunchMode = "terminal" | "native";
 export type StartupLaunchClaudeBackend = "sdk" | "tmux";
@@ -62,51 +70,68 @@ export interface ResolvedStartupLaunch {
   dispatchedByBackend: boolean;
 }
 
-export const DEFAULT_STARTUP_LAUNCH_AGENT: AgentPlatform = "claude";
-export const DEFAULT_CLAUDE_MODE: StartupLaunchMode = "native";
+export const DEFAULT_STARTUP_LAUNCH_AGENT: AgentPlatform = DEFAULT_AGENT_PLATFORM;
+/** Re-exported at its historical name; the table in `agent-settings.ts` owns it. */
+export const DEFAULT_CLAUDE_MODE: StartupLaunchMode = SHIPPED_PLATFORM_MODES.claude;
 
 /**
- * Non-Claude agents remain conservative when their mode is absent.
+ * Project a legacy environment/global tier onto the shared settings shape.
  *
- * Claude has its own shipped native default above. Codex and OpenCode keep the
- * terminal fallback here so this resolver does not silently expand their launch
- * ownership when a partial or legacy config reaches it.
+ * Cursor and Grok take the OpenCode mode because that is precisely what the
+ * mode ternary this function replaced did with them: they fell into its `else`
+ * branch. Writing it out here makes the coupling visible without changing a
+ * single launch decision, and the settings migration in
+ * `storage-shared-core.ts` seeds their stored blocks the same way.
  */
-const DEFAULT_STARTUP_LAUNCH_MODE: StartupLaunchMode = "terminal";
-const DEFAULT_STARTUP_LAUNCH_CLAUDE_BACKEND: StartupLaunchClaudeBackend = "sdk";
+function environmentTier(
+  tier: StartupLaunchEnvironmentSettings | StartupLaunchGlobalSettings | null | undefined,
+): AgentSettingsTier | undefined {
+  if (!tier) return undefined;
+  return {
+    ...(tier.defaultAgent ? { defaultAgent: tier.defaultAgent } : {}),
+    platforms: {
+      claude: {
+        ...(tier.claudeMode ? { mode: tier.claudeMode } : {}),
+        ...(tier.claudeNativeBackend ? { claudeNativeBackend: tier.claudeNativeBackend } : {}),
+      },
+      ...(tier.codexMode ? { codex: { mode: tier.codexMode } } : {}),
+      ...(tier.opencodeMode
+        ? {
+            opencode: { mode: tier.opencodeMode },
+            cursor: { mode: tier.opencodeMode },
+            grok: { mode: tier.opencodeMode },
+          }
+        : {}),
+    },
+  };
+}
 
-export function resolveStartupLaunch(input: {
-  environment?: StartupLaunchEnvironmentSettings | null;
-  repository?: StartupLaunchRepositorySettings | null;
-  global?: StartupLaunchGlobalSettings | null;
-}): ResolvedStartupLaunch {
-  const { environment, repository, global } = input;
+/** `agentStyle` was only ever Claude's mode; nothing else read it. */
+function repositoryTier(
+  tier: StartupLaunchRepositorySettings | null | undefined,
+): AgentSettingsTier | undefined {
+  if (!tier) return undefined;
+  return {
+    ...(tier.defaultAgent ? { defaultAgent: tier.defaultAgent } : {}),
+    platforms: {
+      claude: {
+        ...(tier.agentStyle ? { mode: tier.agentStyle } : {}),
+        ...(tier.claudeNativeBackend ? { claudeNativeBackend: tier.claudeNativeBackend } : {}),
+      },
+    },
+  };
+}
 
-  const agent: AgentPlatform =
-    environment?.defaultAgent ??
-    repository?.defaultAgent ??
-    global?.defaultAgent ??
-    DEFAULT_STARTUP_LAUNCH_AGENT;
-
-  // Only Claude and Codex carry their own mode. Every other platform is
-  // launched through the OpenCode mode, which is what the backend has always
-  // done — mirrored here rather than corrected, because a launch the two sides
-  // disagree about is worse than one they agree is unusual.
-  const mode: StartupLaunchMode =
-    agent === "claude"
-      ? (environment?.claudeMode ??
-        repository?.agentStyle ??
-        global?.claudeMode ??
-        DEFAULT_CLAUDE_MODE)
-      : agent === "codex"
-        ? (environment?.codexMode ?? global?.codexMode ?? DEFAULT_STARTUP_LAUNCH_MODE)
-        : (environment?.opencodeMode ?? global?.opencodeMode ?? DEFAULT_STARTUP_LAUNCH_MODE);
-
-  const claudeNativeBackend: StartupLaunchClaudeBackend =
-    environment?.claudeNativeBackend ??
-    repository?.claudeNativeBackend ??
-    global?.claudeNativeBackend ??
-    DEFAULT_STARTUP_LAUNCH_CLAUDE_BACKEND;
+/**
+ * Resolve a launch from migrated settings. This is the form every caller should
+ * reach for; {@link resolveStartupLaunch} is the legacy-shape adapter over it.
+ */
+export function resolveStartupLaunchFromSettings(tiers: AgentSettingsTiers): ResolvedStartupLaunch {
+  const agent = resolveDefaultAgent(tiers);
+  const { mode } = resolveAgentPlatformSettings(tiers, agent);
+  // Always read from Claude's own block: the field is only meaningful for
+  // Claude, and the legacy tiers stored it once rather than per platform.
+  const { claudeNativeBackend } = resolveAgentPlatformSettings(tiers, "claude");
 
   return {
     agent,
@@ -117,4 +142,16 @@ export function resolveStartupLaunch(input: {
     dispatchedByBackend:
       mode === "native" && !(agent === "claude" && claudeNativeBackend === "tmux"),
   };
+}
+
+export function resolveStartupLaunch(input: {
+  environment?: StartupLaunchEnvironmentSettings | null;
+  repository?: StartupLaunchRepositorySettings | null;
+  global?: StartupLaunchGlobalSettings | null;
+}): ResolvedStartupLaunch {
+  return resolveStartupLaunchFromSettings({
+    environment: environmentTier(input.environment),
+    repository: repositoryTier(input.repository),
+    global: environmentTier(input.global),
+  });
 }

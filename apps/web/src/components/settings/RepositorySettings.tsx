@@ -1,15 +1,3 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  ClaudeIcon,
-  CodexIcon,
-  CursorAgentIcon,
-  GrokBuildIcon,
-  OpenCodeIcon,
-} from "@/components/icons/AgentIcons";
 import {
   Select,
   SelectContent,
@@ -17,15 +5,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
+import { AgentPlatformPane } from "./agent/AgentPlatformPane";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
+import { SlidersHorizontal } from "lucide-react";
+import { agentSettingsTiers } from "@/lib/agent-settings";
+import {
+  normalizeAgentSettings,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
+import { normalizeAgentPlatforms } from "@orkestrator/protocol/agent-platforms";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useConfigStore } from "@/stores";
-import { useClaudeStore } from "@/stores/claudeStore";
-import { useCodexStore } from "@/stores/codexStore";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import * as backend from "@/lib/backend";
-import { cn } from "@/lib/utils";
-import type { ClaudeModel, ClaudeEffortLevel } from "@/lib/claude-client";
-import type { CodexReasoningEffort } from "@/lib/codex-client";
-import { CODEX_MODELS } from "@/lib/codex-client";
 import {
   Loader2,
   Network,
@@ -34,21 +31,12 @@ import {
   FolderOpen,
   ExternalLink,
   FileText,
-  Bot,
   Settings2,
   GitBranch,
 } from "lucide-react";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 import { open as openDialog } from "@/lib/native/dialog";
-import type {
-  Project,
-  RepositoryConfig,
-  PortMapping,
-  PortProtocol,
-  DefaultAgent,
-  AgentStyle,
-  ClaudeNativeBackend,
-} from "@/types";
+import type { Project, RepositoryConfig, PortMapping, PortProtocol } from "@/types";
 import { AGENT_PLATFORM_LABELS } from "@orkestrator/protocol/agent-platforms";
 
 interface RepositorySettingsProps {
@@ -63,64 +51,6 @@ const DEFAULT_CONFIG: RepositoryConfig = {
   prBaseBranch: "main",
 };
 
-/** Fallback Claude models when no bridge server is running */
-export const FALLBACK_CLAUDE_MODELS: ClaudeModel[] = [
-  {
-    id: "default",
-    name: "Default (recommended)",
-    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
-    supportsFastMode: true,
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-  },
-  {
-    id: "opus[1m]",
-    name: "Opus (1M context)",
-    description: "Opus 5 with 1M context · Best for everyday, complex tasks",
-    supportsFastMode: true,
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-  },
-  {
-    id: "claude-fable-5[1m]",
-    name: "Fable",
-    description: "Fable 5 · Most capable for your hardest and longest-running tasks",
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-  },
-  {
-    id: "sonnet",
-    name: "Sonnet",
-    description: "Sonnet 5 · Efficient for routine tasks",
-    supportsEffort: true,
-    supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
-  },
-  { id: "haiku", name: "Haiku", description: "Haiku 4.5 · Fastest for quick answers" },
-];
-
-/** Sentinel value representing "use the app-level default" for project overrides */
-const APP_DEFAULT = "__app_default__";
-
-const CLAUDE_EFFORT_LEVELS: { value: ClaudeEffortLevel; label: string }[] = [
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "max", label: "Max" },
-];
-
-const CODEX_EFFORT_LEVELS: { value: CodexReasoningEffort; label: string }[] = [
-  { value: "minimal", label: "Minimal" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra High" },
-  { value: "max", label: "Max" },
-  { value: "ultra", label: "Ultra" },
-];
-
-/** OpenCode uses model variants for effort/thinking levels */
-const OPENCODE_DEFAULT_VARIANTS = ["low", "high", "xhigh"];
-
 export function RepositorySettings({
   project,
   open,
@@ -130,11 +60,12 @@ export function RepositorySettings({
   const getRepositoryConfig = useConfigStore((state) => state.getRepositoryConfig);
   const setConfig = useConfigStore((state) => state.setConfig);
   const config = useConfigStore((state) => state.config);
-  const globalDefaultAgent = config.global.defaultAgent || "claude";
+  const enabledPlatforms = useMemo(
+    () => normalizeAgentPlatforms(config.global.enabledAgentPlatforms),
+    [config.global.enabledAgentPlatforms],
+  );
 
   // Pull cached models from stores
-  const claudeModels = useClaudeStore((s) => s.models);
-  const codexModels = useCodexStore((s) => s.models);
   const projectModelCatalog = useProjectModelCatalog(project.id, open);
 
   const existingConfig = getRepositoryConfig(project.id);
@@ -152,20 +83,17 @@ export function RepositorySettings({
     initialConfig.defaultPortMappings ?? [],
   );
   const [filesToCopy, setFilesToCopy] = useState<string[]>(initialConfig.filesToCopy ?? []);
-  const [defaultModel, setDefaultModel] = useState(initialConfig.defaultModel ?? "");
-  const [defaultEffort, setDefaultEffort] = useState(initialConfig.defaultEffort ?? "");
-  const [entryPort, setEntryPort] = useState<string>(
+  // One block, same shape as the app and environment tiers. Every field
+  // absent means "inherit from the app".
+  const [agentSettings, setAgentSettings] = useState<AgentSettingsTier>(() =>
+    normalizeAgentSettings(initialConfig.agentSettings),
+  );
+  const [entryPort, setEntryPort] = useState(
     initialConfig.entryPort != null ? String(initialConfig.entryPort) : "",
   );
-  const [projectDefaultAgent, setProjectDefaultAgent] = useState<string>(
-    initialConfig.defaultAgent ?? APP_DEFAULT,
-  );
-  const [projectAgentStyle, setProjectAgentStyle] = useState<string>(
-    initialConfig.agentStyle ?? APP_DEFAULT,
-  );
-  // "__app_default__" = inherit from global. "sdk"/"tmux" = override.
-  const [projectClaudeNativeBackend, setProjectClaudeNativeBackend] = useState<string>(
-    initialConfig.claudeNativeBackend ?? APP_DEFAULT,
+  const tiers = useMemo(
+    () => ({ ...agentSettingsTiers(config, project.id), repository: agentSettings }),
+    [config, project.id, agentSettings],
   );
   const [isSaving, setIsSaving] = useState(false);
 
@@ -183,12 +111,8 @@ export function RepositorySettings({
       setPrBaseBranch(config.prBaseBranch);
       setPortMappings(config.defaultPortMappings ?? []);
       setFilesToCopy(config.filesToCopy ?? []);
-      setDefaultModel(config.defaultModel ?? "");
-      setDefaultEffort(config.defaultEffort ?? "");
+      setAgentSettings(normalizeAgentSettings(config.agentSettings));
       setEntryPort(config.entryPort != null ? String(config.entryPort) : "");
-      setProjectDefaultAgent(config.defaultAgent ?? APP_DEFAULT);
-      setProjectAgentStyle(config.agentStyle ?? APP_DEFAULT);
-      setProjectClaudeNativeBackend(config.claudeNativeBackend ?? APP_DEFAULT);
     }
   }, [open, project.id, project.name, project.localPath, getRepositoryConfig]);
 
@@ -386,20 +310,11 @@ export function RepositorySettings({
         prBaseBranch,
         defaultPortMappings: portMappings.length > 0 ? portMappings : undefined,
         filesToCopy: cleanedFilesToCopy.length > 0 ? cleanedFilesToCopy : undefined,
-        defaultModel: defaultModel || undefined,
-        defaultEffort: defaultEffort || undefined,
         entryPort:
           parsedEntryPort && parsedEntryPort >= 1 && parsedEntryPort <= 65535
             ? parsedEntryPort
             : undefined,
-        defaultAgent:
-          projectDefaultAgent !== APP_DEFAULT ? (projectDefaultAgent as DefaultAgent) : undefined,
-        agentStyle:
-          projectAgentStyle !== APP_DEFAULT ? (projectAgentStyle as AgentStyle) : undefined,
-        claudeNativeBackend:
-          projectClaudeNativeBackend !== APP_DEFAULT
-            ? (projectClaudeNativeBackend as ClaudeNativeBackend)
-            : undefined,
+        agentSettings: normalizeAgentSettings(agentSettings),
       };
 
       // Update backend
@@ -429,12 +344,8 @@ export function RepositorySettings({
     setPrBaseBranch(config.prBaseBranch);
     setPortMappings(config.defaultPortMappings ?? []);
     setFilesToCopy(config.filesToCopy ?? []);
-    setDefaultModel(config.defaultModel ?? "");
-    setDefaultEffort(config.defaultEffort ?? "");
+    setAgentSettings(normalizeAgentSettings(config.agentSettings));
     setEntryPort(config.entryPort != null ? String(config.entryPort) : "");
-    setProjectDefaultAgent(config.defaultAgent ?? APP_DEFAULT);
-    setProjectAgentStyle(config.agentStyle ?? APP_DEFAULT);
-    setProjectClaudeNativeBackend(config.claudeNativeBackend ?? APP_DEFAULT);
     onOpenChange(false);
   };
 
@@ -442,174 +353,20 @@ export function RepositorySettings({
   const portValidationResult = useMemo(() => validatePortMappings(), [validatePortMappings]);
   const filesValidationResult = useMemo(() => validateFilesToCopy(), [validateFilesToCopy]);
 
-  // The effective agent for model/effort selection: project override > global default
-  const effectiveAgent =
-    projectDefaultAgent !== APP_DEFAULT
-      ? (projectDefaultAgent as DefaultAgent)
-      : globalDefaultAgent;
-
-  // Compute available models and effort levels based on the effective agent
-  const availableModels = useMemo((): { id: string; name: string }[] => {
-    switch (effectiveAgent) {
-      case "claude": {
-        const models = claudeModels.length > 0 ? claudeModels : FALLBACK_CLAUDE_MODELS;
-        return models.map((m) => ({ id: m.id, name: m.name }));
-      }
-      case "opencode": {
-        return projectModelCatalog.opencode
-          .filter((model) => model.id !== "default")
-          .map((model) => ({ id: model.id, name: model.name }));
-      }
-      case "codex": {
-        const models = codexModels.length > 0 ? codexModels : CODEX_MODELS;
-        return models.map((m) => ({ id: m.id, name: m.name }));
-      }
-      case "cursor":
-      case "grok":
-        return (projectModelCatalog[effectiveAgent] ?? [])
-          .filter((model) => model.id !== "default")
-          .map((model) => ({
-            id: model.id,
-            name: model.name,
-          }));
-      default:
-        return [];
-    }
-  }, [effectiveAgent, claudeModels, projectModelCatalog, codexModels]);
-
-  const selectedCodexModel = useMemo(() => {
-    if (effectiveAgent !== "codex") return undefined;
-    const models = codexModels.length > 0 ? codexModels : CODEX_MODELS;
-    const effectiveModel = defaultModel || config.global.codexModel;
-    return models.find((model) => model.id === effectiveModel);
-  }, [codexModels, config.global.codexModel, defaultModel, effectiveAgent]);
-
-  const selectedAcpModel = useMemo(() => {
-    if (effectiveAgent !== "cursor" && effectiveAgent !== "grok") return undefined;
-    return (projectModelCatalog[effectiveAgent] ?? []).find((model) => model.id === defaultModel);
-  }, [defaultModel, effectiveAgent, projectModelCatalog]);
-
-  const availableEffortLevels = useMemo((): { value: string; label: string }[] => {
-    switch (effectiveAgent) {
-      case "claude": {
-        // If we have a selected model with specific effort levels, use those
-        const allModels = claudeModels.length > 0 ? claudeModels : FALLBACK_CLAUDE_MODELS;
-        const selectedClaudeModel = allModels.find((m) => m.id === defaultModel);
-        if (selectedClaudeModel?.supportedEffortLevels) {
-          return CLAUDE_EFFORT_LEVELS.filter((e) =>
-            selectedClaudeModel.supportedEffortLevels!.includes(e.value),
-          );
-        }
-        return CLAUDE_EFFORT_LEVELS;
-      }
-      case "opencode": {
-        const model = projectModelCatalog.opencode.find(
-          (candidate) => candidate.id === defaultModel,
-        );
-        if (model?.reasoningEfforts.length) {
-          return model.reasoningEfforts.map((variant) => ({
-            value: variant,
-            label: variant.charAt(0).toUpperCase() + variant.slice(1),
-          }));
-        }
-        return OPENCODE_DEFAULT_VARIANTS.map((v) => ({
-          value: v,
-          label: v.charAt(0).toUpperCase() + v.slice(1),
-        }));
-      }
-      case "codex": {
-        const supportedEfforts = selectedCodexModel?.reasoningEfforts;
-        return supportedEfforts?.length
-          ? CODEX_EFFORT_LEVELS.filter((effort) => supportedEfforts.includes(effort.value))
-          : CODEX_EFFORT_LEVELS;
-      }
-      case "cursor":
-      case "grok":
-        return (selectedAcpModel?.reasoningEfforts ?? []).map((effort) => ({
-          value: effort,
-          label: effort.charAt(0).toUpperCase() + effort.slice(1),
-        }));
-      default:
-        return [];
-    }
-  }, [
-    effectiveAgent,
-    defaultModel,
-    claudeModels,
-    projectModelCatalog,
-    selectedAcpModel,
-    selectedCodexModel,
-  ]);
-
-  useEffect(() => {
-    if (
-      effectiveAgent === "codex" &&
-      selectedCodexModel &&
-      defaultEffort &&
-      selectedCodexModel.reasoningEfforts?.length &&
-      !selectedCodexModel.reasoningEfforts.includes(defaultEffort as CodexReasoningEffort)
-    ) {
-      setDefaultEffort("");
-      return;
-    }
-    if (
-      (effectiveAgent === "cursor" || effectiveAgent === "grok") &&
-      selectedAcpModel &&
-      defaultEffort &&
-      !selectedAcpModel.reasoningEfforts.includes(defaultEffort)
-    ) {
-      setDefaultEffort("");
-    }
-  }, [defaultEffort, effectiveAgent, selectedAcpModel, selectedCodexModel]);
-
-  const agentLabel = AGENT_PLATFORM_LABELS[effectiveAgent];
-  const appDefaultAgentLabel = AGENT_PLATFORM_LABELS[globalDefaultAgent];
-  const projectAgentOptions = [
-    {
-      value: APP_DEFAULT,
-      label: `Use App Default (${appDefaultAgentLabel})`,
-      icon: <Bot className="h-4 w-4" />,
-    },
-    {
-      value: "claude",
-      label: "Claude Code",
-      icon: <ClaudeIcon className="h-4 w-4" />,
-    },
-    {
-      value: "codex",
-      label: "Codex",
-      icon: <CodexIcon className="h-4 w-4 text-emerald-400" />,
-    },
-    {
-      value: "cursor",
-      label: "Cursor Agent",
-      icon: <CursorAgentIcon className="h-4 w-4" />,
-    },
-    {
-      value: "grok",
-      label: "Grok Build",
-      icon: <GrokBuildIcon className="h-4 w-4" />,
-    },
-    {
-      value: "opencode",
-      label: "OpenCode",
-      icon: <OpenCodeIcon className="h-4 w-4 shrink-0" />,
-    },
-  ].filter(
-    (option) =>
-      option.value === APP_DEFAULT ||
-      (config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"]).includes(
-        option.value as DefaultAgent,
-      ),
-  );
-
   const hasErrors =
     projectNameError !== null || !portValidationResult.valid || !filesValidationResult.valid;
 
   const repoMenuItems: SettingsMenuItem[] = [
     { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
     { id: "branches", label: "Branches", icon: <GitBranch className="h-4 w-4" /> },
-    { id: "agent", label: "Agent", icon: <Bot className="h-4 w-4" /> },
+    { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
+    // One tab per enabled platform, exactly as the app and environment dialogs
+    // show. A platform the user disabled has nothing to configure.
+    ...enabledPlatforms.map((platform) => ({
+      id: platform,
+      label: AGENT_PLATFORM_LABELS[platform],
+      icon: <AgentPlatformIcon platform={platform} accent className="h-4 w-4" />,
+    })),
     { id: "ports", label: "Ports", icon: <Network className="h-4 w-4" /> },
     { id: "files", label: "Files", icon: <FileText className="h-4 w-4" /> },
   ];
@@ -706,160 +463,34 @@ export function RepositorySettings({
             </div>
           </div>
         );
-      case "agent":
+      case "claude":
+      case "codex":
+      case "cursor":
+      case "grok":
+      case "opencode":
         return (
-          <div className="max-w-2xl space-y-6">
-            <div className="grid gap-2">
-              <div className="flex items-center gap-2">
-                <Label className="text-sm font-medium">Default Agent Settings</Label>
-                <span className="text-xs text-muted-foreground bg-zinc-800 px-1.5 py-0.5 rounded">
-                  {agentLabel}
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Override the app-level default agent and style for this project. Leave as "Use App
-                Default" to inherit from global settings.
-              </p>
-            </div>
-            <div className="grid gap-6">
-              <div className="grid gap-2">
-                <Label>Default Agent</Label>
-                <div
-                  role="radiogroup"
-                  aria-label="Default Agent"
-                  className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4"
-                >
-                  {projectAgentOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={projectDefaultAgent === option.value}
-                      onClick={() => {
-                        setProjectDefaultAgent(option.value);
-                        setDefaultModel("");
-                        setDefaultEffort("");
-                      }}
-                      disabled={isSaving}
-                      className={cn(
-                        "p-3 rounded-lg border-2 text-left transition-colors",
-                        projectDefaultAgent === option.value
-                          ? "border-primary bg-primary/5"
-                          : "border-transparent bg-zinc-900 hover:border-zinc-600",
-                        isSaving && "opacity-50 cursor-not-allowed",
-                      )}
-                    >
-                      <div className="flex items-center gap-2 text-sm font-medium">
-                        {option.icon}
-                        <span>{option.label}</span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="grid gap-2 max-w-sm">
-                <Label htmlFor="projectAgentStyle">Agent Style</Label>
-                <Select
-                  value={projectAgentStyle}
-                  onValueChange={setProjectAgentStyle}
-                  disabled={isSaving}
-                >
-                  <SelectTrigger id="projectAgentStyle">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={APP_DEFAULT}>Use App Default</SelectItem>
-                    <SelectItem value="terminal">Terminal</SelectItem>
-                    <SelectItem value="native">Native</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="grid gap-2 max-w-sm">
-                <Label htmlFor="projectClaudeNativeBackend">Claude Native backend</Label>
-                <Select
-                  value={projectClaudeNativeBackend}
-                  onValueChange={setProjectClaudeNativeBackend}
-                  disabled={isSaving}
-                >
-                  <SelectTrigger id="projectClaudeNativeBackend">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={APP_DEFAULT}>
-                      Use App Default (
-                      {config.global.claudeNativeBackend === "tmux" ? "Tmux" : "Agent SDK"})
-                    </SelectItem>
-                    <SelectItem value="sdk">Agent SDK</SelectItem>
-                    <SelectItem value="tmux">Tmux</SelectItem>
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Only applies when Claude Mode is Native. Environment settings can override this.
-                </p>
-              </div>
-            </div>
-            <div className="border-t border-border pt-4 space-y-6">
-              <div className="grid gap-2">
-                <Label htmlFor="defaultModel">Default Model</Label>
-                {availableModels.length > 0 ? (
-                  <Select
-                    value={defaultModel || APP_DEFAULT}
-                    onValueChange={(value) => {
-                      const nextModel = value === APP_DEFAULT ? "" : value;
-                      setDefaultModel(nextModel);
-                      // Effort overrides are model-specific. Inheriting another
-                      // model while retaining this model's effort can persist an
-                      // invalid pair that the backend later applies directly.
-                      if (!nextModel) setDefaultEffort("");
-                    }}
-                    disabled={isSaving}
-                  >
-                    <SelectTrigger id="defaultModel">
-                      <SelectValue placeholder="Use agent default" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={APP_DEFAULT}>Use agent default</SelectItem>
-                      {availableModels.map((model) => (
-                        <SelectItem key={model.id} value={model.id}>
-                          {model.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <p className="text-xs text-muted-foreground italic">
-                    Start an environment to load available models
-                  </p>
-                )}
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="defaultEffort">Default Effort Level</Label>
-                {availableEffortLevels.length > 0 ? (
-                  <Select
-                    value={defaultEffort || APP_DEFAULT}
-                    onValueChange={(value) => setDefaultEffort(value === APP_DEFAULT ? "" : value)}
-                    disabled={isSaving}
-                  >
-                    <SelectTrigger id="defaultEffort">
-                      <SelectValue placeholder="Use agent default" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={APP_DEFAULT}>Use agent default</SelectItem>
-                      {availableEffortLevels.map((level) => (
-                        <SelectItem key={level.value} value={level.value}>
-                          {level.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                ) : (
-                  <p className="text-xs text-muted-foreground italic">
-                    No effort levels available for this agent
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
+          <AgentPlatformPane
+            platform={section}
+            tier={agentSettings}
+            onChange={setAgentSettings}
+            tiers={tiers}
+            canInherit
+            catalog={projectModelCatalog}
+            disabled={isSaving}
+          />
+        );
+      case "defaults":
+        return (
+          <AgentDefaultsPane
+            tier={agentSettings}
+            onChange={setAgentSettings}
+            tiers={tiers}
+            canInherit
+            enabledPlatforms={enabledPlatforms}
+            catalog={projectModelCatalog}
+            disabled={isSaving}
+            scopeLabel="this repository"
+          />
         );
       case "ports":
         return (

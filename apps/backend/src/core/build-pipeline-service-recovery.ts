@@ -403,11 +403,10 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
   protected async configureEnvironment(pipeline: BuildPipeline): Promise<void> {
     await this.invoke("update_environment_agent_settings", {
       environmentId: pipeline.environmentId,
-      defaultAgent: pipeline.agentType,
-      claudeMode: "native",
-      claudeNativeBackend: null,
-      opencodeMode: "native",
-      codexMode: "native",
+      agentSettings: {
+        defaultAgent: pipeline.agentType,
+        platforms: { [pipeline.agentType]: { mode: "native" } },
+      },
       pendingAgentLaunch: false,
     });
   }

@@ -450,7 +450,7 @@ describe("useBuildPipeline", () => {
           "project-1": {
             defaultBranch: "main",
             prBaseBranch: "main",
-            defaultAgent: "opencode",
+            agentSettings: { defaultAgent: "opencode" },
           },
         },
       },

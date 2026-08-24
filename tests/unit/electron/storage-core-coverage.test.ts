@@ -80,11 +80,14 @@ describe("StorageService core coverage", () => {
       pendingRenamePrompt: "Rename me",
       createdFromCommit: "abc123",
       worktreePath: "/tmp/worktree",
-      defaultAgent: "codex",
-      claudeMode: "native",
-      claudeNativeBackend: "sdk",
-      opencodeMode: "native",
-      codexMode: "native",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: {
+          claude: { mode: "native", claudeNativeBackend: "sdk" },
+          opencode: { mode: "native" },
+          codex: { mode: "native" },
+        },
+      },
     });
 
     expect(populated).toMatchObject({
@@ -115,11 +118,14 @@ describe("StorageService core coverage", () => {
       pendingRenamePrompt: "Rename me",
       createdFromCommit: "abc123",
       worktreePath: "/tmp/worktree",
-      defaultAgent: "codex",
-      claudeMode: "native",
-      claudeNativeBackend: "sdk",
-      opencodeMode: "native",
-      codexMode: "native",
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: {
+          claude: { mode: "native", claudeNativeBackend: "sdk" },
+          opencode: { mode: "native" },
+          codex: { mode: "native" },
+        },
+      },
     });
 
     for (const invalidPortMappings of [
@@ -171,14 +177,21 @@ describe("StorageService core coverage", () => {
       pendingRenamePrompt: 42,
       createdFromCommit: {},
       worktreePath: false,
-      defaultAgent: "other",
-      claudeMode: "other",
-      claudeNativeBackend: "other",
-      opencodeMode: "other",
-      codexMode: "other",
     });
 
     expect(unchanged).toMatchObject(populated);
+
+    // `agentSettings` is written wholesale by the settings panes, so it is not
+    // one of the ignore-invalid-values probes above: a block whose every value
+    // is malformed normalizes to "inherit everything", which is a real write
+    // rather than a no-op.
+    const malformed = await storage.updateEnvironment(environment.id, {
+      agentSettings: {
+        defaultAgent: "other",
+        platforms: { claude: { mode: "other", claudeNativeBackend: "other" } },
+      },
+    } as never);
+    expect(malformed.agentSettings).toEqual({});
 
     const reset = await storage.updateEnvironment(environment.id, {
       containerId: null,
@@ -204,11 +217,8 @@ describe("StorageService core coverage", () => {
       pendingRenamePrompt: undefined,
       createdFromCommit: null,
       worktreePath: undefined,
-      defaultAgent: null,
-      claudeMode: undefined,
-      claudeNativeBackend: null,
-      opencodeMode: undefined,
-      codexMode: null,
+      // Clearing the block is how an environment returns to inheriting.
+      agentSettings: undefined,
     });
 
     expect(reset.containerId).toBeNull();
@@ -234,11 +244,7 @@ describe("StorageService core coverage", () => {
     expect(reset.pendingRenamePrompt).toBeUndefined();
     expect(reset.createdFromCommit).toBeUndefined();
     expect(reset.worktreePath).toBeUndefined();
-    expect(reset.defaultAgent).toBeUndefined();
-    expect(reset.claudeMode).toBeUndefined();
-    expect(reset.claudeNativeBackend).toBeUndefined();
-    expect(reset.opencodeMode).toBeUndefined();
-    expect(reset.codexMode).toBeUndefined();
+    expect(reset.agentSettings).toBeUndefined();
     expect(reset.name).toBe("renamed");
     expect(reset.branch).toBe("renamed-branch");
     expect(reset.status).toBe("running");
@@ -399,10 +405,10 @@ describe("StorageService core coverage", () => {
 
     await storage.updateGlobalConfig({
       ...defaultConfig().global,
-      defaultAgent: "codex",
+      agentSettings: { defaultAgent: "codex" },
     });
 
-    expect((await storage.loadConfig()).global.defaultAgent).toBe("codex");
+    expect((await storage.loadConfig()).global.agentSettings?.defaultAgent).toBe("codex");
     await expect(fs.access(lockPath)).rejects.toThrow();
   });
 

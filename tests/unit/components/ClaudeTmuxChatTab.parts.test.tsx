@@ -906,7 +906,7 @@ describe("ClaudeTmuxChatTab", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "claude-sonnet-4-6",
+          agentSettings: { platforms: { claude: { model: "claude-sonnet-4-6" } } },
         },
         repositories: {},
       },
@@ -971,7 +971,7 @@ describe("ClaudeTmuxChatTab", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "default",
+          agentSettings: { platforms: { claude: { model: "default" } } },
         },
       },
     }));
@@ -1003,7 +1003,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
@@ -1425,7 +1434,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
 
@@ -2221,12 +2239,10 @@ describe("ClaudeTmuxChatTab", () => {
     await waitFor(() => {
       expect(switchModelMock).toHaveBeenCalledWith("tab-1", "default", "env-1");
     });
-    await waitFor(() => {
-      expect(updateGlobalConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({ claudeModel: "default" }),
-      );
-      expect(useConfigStore.getState().config.global.claudeModel).toBe("default");
-    });
+    expect(updateGlobalConfigMock).not.toHaveBeenCalled();
+    expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
+      "claude-sonnet-4-6",
+    );
     expect(screen.getByRole("button", { name: /Default/ })).toBeTruthy();
   });
 
@@ -2275,7 +2291,7 @@ describe("ClaudeTmuxChatTab", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "haiku",
+          agentSettings: { platforms: { claude: { model: "haiku" } } },
         },
       },
     }));
@@ -2305,6 +2321,123 @@ describe("ClaudeTmuxChatTab", () => {
     });
   });
 
+  test("seeds fresh tmux sessions from an environment Claude model over the app default", async () => {
+    seedPane();
+    seedEnvironment({
+      agentSettings: { platforms: { claude: { model: "haiku" } } },
+    });
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: { platforms: { claude: { model: "sonnet" } } },
+        },
+      },
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "haiku",
+        effort: undefined,
+        fastMode: false,
+        resumeSessionId: undefined,
+        replaceExisting: true,
+      });
+    });
+  });
+
+  test("seeds fresh tmux sessions from a repository Claude model when the environment inherits", async () => {
+    seedPane();
+    seedEnvironment();
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: { platforms: { claude: { model: "sonnet" } } },
+        },
+      },
+    }));
+    useConfigStore.getState().setRepositoryConfig("project-1", {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      agentSettings: { platforms: { claude: { model: "haiku" } } },
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "haiku",
+        effort: undefined,
+        fastMode: false,
+        resumeSessionId: undefined,
+        replaceExisting: true,
+      });
+    });
+  });
+
+  test("prefers a one-shot launch model over the environment Claude model", async () => {
+    seedPane(undefined, "sonnet");
+    seedEnvironment({
+      agentSettings: { platforms: { claude: { model: "haiku" } } },
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialAgentModel="sonnet"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Sonnet/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "sonnet",
+        effort: "high",
+        fastMode: false,
+        resumeSessionId: undefined,
+        replaceExisting: true,
+      });
+    });
+  });
+
   test("maps a legacy persisted opus model id onto the Default sentinel", async () => {
     seedPane();
     useConfigStore.setState((state) => ({
@@ -2313,7 +2446,7 @@ describe("ClaudeTmuxChatTab", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "claude-opus-4-7",
+          agentSettings: { platforms: { claude: { model: "claude-opus-4-7" } } },
         },
       },
     }));
@@ -2348,7 +2481,7 @@ describe("ClaudeTmuxChatTab", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "default",
+          agentSettings: { platforms: { claude: { model: "default" } } },
         },
       },
     }));
@@ -2378,7 +2511,7 @@ describe("ClaudeTmuxChatTab", () => {
     });
   });
 
-  test("persists selected tmux model as the default for later sessions", async () => {
+  test("keeps a selected tmux model session-local", async () => {
     seedPane();
 
     render(
@@ -2398,12 +2531,11 @@ describe("ClaudeTmuxChatTab", () => {
       await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(updateGlobalConfigMock).toHaveBeenCalledWith(
-        expect.objectContaining({ claudeModel: "haiku" }),
-      );
-      expect(useConfigStore.getState().config.global.claudeModel).toBe("haiku");
-    });
+    expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
+    expect(updateGlobalConfigMock).not.toHaveBeenCalled();
+    expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
+      "claude-sonnet-4-6",
+    );
 
     cleanup();
     seedPane();
@@ -2416,14 +2548,11 @@ describe("ClaudeTmuxChatTab", () => {
       />,
     );
 
-    expect(await screen.findByRole("button", { name: /Haiku/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /Sonnet/ })).toBeTruthy();
   });
 
-  test("rolls back the persisted tmux model preference when saving fails", async () => {
+  test("does not write settings when selecting a tmux model", async () => {
     seedPane();
-    updateGlobalConfigMock.mockImplementationOnce(async () => {
-      throw new Error("disk full");
-    });
 
     render(
       <ClaudeTmuxChatTab
@@ -2442,10 +2571,11 @@ describe("ClaudeTmuxChatTab", () => {
       await Promise.resolve();
     });
 
-    await waitFor(() => {
-      expect(useConfigStore.getState().config.global.claudeModel).toBe("claude-sonnet-4-6");
-    });
-    expect(await screen.findByText("Failed to save Claude model default")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
+    expect(updateGlobalConfigMock).not.toHaveBeenCalled();
+    expect(useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model).toBe(
+      "claude-sonnet-4-6",
+    );
   });
 
   test("locks compose and model controls while a model switch is in flight", async () => {
@@ -2593,7 +2723,16 @@ describe("ClaudeTmuxChatTab", () => {
     useConfigStore.setState((state) => ({
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "sonnet" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "sonnet" },
+            },
+          },
+        },
       },
     }));
     useClaudeTmuxStore.getState().setEffortLevel("env:env-1:tab:tab-1", "low");
@@ -2764,7 +2903,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
@@ -2802,7 +2950,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
@@ -2845,7 +3002,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     getStatusMock.mockImplementation(async () => ({
@@ -2878,7 +3044,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
 
@@ -2915,7 +3090,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     const stateKey = createClaudeTmuxStateKey("env-1", "tab-1");
@@ -2947,7 +3131,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
@@ -2990,7 +3183,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
@@ -3037,7 +3239,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
@@ -3081,7 +3292,16 @@ describe("ClaudeTmuxChatTab", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {
@@ -3167,7 +3387,7 @@ describe("ClaudeTmuxChatTab", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "default",
+          agentSettings: { platforms: { claude: { model: "default" } } },
         },
       },
     }));
@@ -3589,7 +3809,7 @@ describe("ClaudeTmuxChatTab", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "default",
+          agentSettings: { platforms: { claude: { model: "default" } } },
         },
       },
     }));

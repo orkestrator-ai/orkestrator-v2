@@ -122,8 +122,6 @@ describe("create-environment agent preference command", () => {
         projectId: "proj-1",
         platform: "codex",
         mode: "terminal",
-        model: "gpt-remembered",
-        reasoningEffort: "xhigh",
       });
 
       expect(await storage.getRepositoryConfig("proj-1")).toEqual({
@@ -133,8 +131,6 @@ describe("create-environment agent preference command", () => {
         lastEnvironmentAgentSelection: {
           platform: "codex",
           mode: "terminal",
-          model: "gpt-remembered",
-          reasoningEffort: "xhigh",
         },
       });
 
@@ -178,7 +174,6 @@ describe("create-environment agent preference command", () => {
         lastEnvironmentAgentSelection: {
           platform: "codex",
           mode: "terminal",
-          model: "gpt-current",
         },
       });
 
@@ -191,7 +186,6 @@ describe("create-environment agent preference command", () => {
           lastEnvironmentAgentSelection: {
             platform: "claude",
             mode: "native",
-            model: "stale-model",
           },
         },
       });
@@ -203,7 +197,6 @@ describe("create-environment agent preference command", () => {
         lastEnvironmentAgentSelection: {
           platform: "codex",
           mode: "terminal",
-          model: "gpt-current",
         },
       });
     });
@@ -226,7 +219,6 @@ describe("create-environment agent preference command", () => {
           lastEnvironmentAgentSelection: {
             platform: "codex",
             mode: "terminal",
-            model: "gpt-concurrent",
           },
         }),
       ]);
@@ -238,7 +230,6 @@ describe("create-environment agent preference command", () => {
         lastEnvironmentAgentSelection: {
           platform: "codex",
           mode: "terminal",
-          model: "gpt-concurrent",
         },
       });
     });

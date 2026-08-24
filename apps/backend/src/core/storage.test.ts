@@ -11,6 +11,7 @@ import {
 import type { AppConfig, ClaudeModelCatalogEntry, CodexModelCatalogEntry } from "./models.js";
 import { MAX_CODEX_CONCURRENT_THREADS } from "./constants.js";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { PaneLayoutMergeInput } from "@orkestrator/protocol/pane-layout-merge";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
 
@@ -32,11 +33,11 @@ async function withTemporaryStorage<T>(
 // defaults (see apps/web/src/stores/configStore.test.ts) and the offered model catalogs.
 describe("defaultConfig", () => {
   test("returns the current default model selection", () => {
-    const { global } = defaultConfig();
-    expect(global.opencodeModel).toBe("opencode/claude-sonnet-5");
-    expect(global.claudeModel).toBe("claude-sonnet-5");
-    expect(global.codexModel).toBe("gpt-5.4");
-    expect(global.codexReasoningEffort).toBe("high");
+    const platforms = defaultConfig().global.agentSettings?.platforms;
+    expect(platforms?.opencode?.model).toBe("opencode/claude-sonnet-5");
+    expect(platforms?.claude?.model).toBe("claude-sonnet-5");
+    expect(platforms?.codex?.model).toBe("gpt-5.4");
+    expect(platforms?.codex?.reasoningEffort).toBe("high");
   });
 
   test("keeps the existing web client behavior enabled by default", () => {
@@ -44,7 +45,7 @@ describe("defaultConfig", () => {
   });
 
   test("uses native Claude sessions by default", () => {
-    expect(defaultConfig().global.claudeMode).toBe("native");
+    expect(defaultConfig().global.agentSettings?.platforms?.claude?.mode).toBe("native");
   });
 
   test("uses host GitHub CLI credentials by default", () => {
@@ -69,8 +70,12 @@ describe("defaultConfig", () => {
   });
 
   test("does not point defaults at any retired model id", () => {
-    const { global } = defaultConfig();
-    const selected = [global.opencodeModel, global.claudeModel, global.codexModel];
+    const platforms = defaultConfig().global.agentSettings?.platforms;
+    const selected = [
+      platforms?.opencode?.model,
+      platforms?.claude?.model,
+      platforms?.codex?.model,
+    ];
     for (const retired of ["opencode/grok-code", "claude-sonnet-4-6", "gpt-5.3-codex"]) {
       expect(selected).not.toContain(retired);
     }
@@ -104,7 +109,7 @@ describe("first-run agent platform selection", () => {
 
       const loaded = await storage.loadConfig();
       expect(loaded.global.enabledAgentPlatforms).toEqual(["cursor", "grok"]);
-      expect(loaded.global.defaultAgent).toBe("cursor");
+      expect(loaded.global.agentSettings?.defaultAgent).toBe("cursor");
     });
   });
 
@@ -120,46 +125,54 @@ describe("first-run agent platform selection", () => {
       const updated = await storage.updateGlobalConfig({
         ...defaultConfig().global,
         enabledAgentPlatforms: ["cursor", "grok"],
-        defaultAgent: "claude",
+        agentSettings: { ...defaultConfig().global.agentSettings, defaultAgent: "claude" },
       });
       expect(updated.global.enabledAgentPlatforms).toEqual(["cursor", "grok"]);
-      expect(updated.global.defaultAgent).toBe("cursor");
+      expect(updated.global.agentSettings?.defaultAgent).toBe("cursor");
     });
   });
 });
 
 describe("Claude mode normalization", () => {
-  test("upgrades a legacy config without a Claude mode to native", async () => {
+  /** A pre-agent-settings global block, i.e. what an existing install has on disk. */
+  const legacyGlobal = (overrides: Record<string, unknown> = {}) => {
+    const { agentSettings: _migrated, ...rest } = defaultConfig().global;
+    return { ...rest, ...overrides };
+  };
+
+  test("a legacy config without a Claude mode resolves to native", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
-      const { claudeMode: _absent, ...legacyGlobal } = defaultConfig().global;
       await fs.writeFile(
         path.join(dataDir, "config.json"),
-        JSON.stringify({
-          ...defaultConfig(),
-          global: legacyGlobal,
-        }),
+        JSON.stringify({ ...defaultConfig(), global: legacyGlobal() }),
         "utf8",
       );
 
-      expect((await storage.loadConfig()).global.claudeMode).toBe("native");
+      const loaded = await storage.loadConfig();
+      // Absent now means "inherit", and the widest tier inherits the shipped
+      // default rather than a value written into stored config.
+      expect(loaded.global.agentSettings?.platforms?.claude?.mode).toBeUndefined();
+      expect(
+        resolveAgentPlatformSettings({ global: loaded.global.agentSettings }, "claude").mode,
+      ).toBe("native");
     });
   });
 
-  test("preserves an explicit terminal choice", async () => {
+  test("preserves an explicit terminal choice through the migration", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       await fs.writeFile(
         path.join(dataDir, "config.json"),
         JSON.stringify({
           ...defaultConfig(),
-          global: {
-            ...defaultConfig().global,
-            claudeMode: "terminal",
-          },
+          global: legacyGlobal({ claudeMode: "terminal" }),
         }),
         "utf8",
       );
 
-      expect((await storage.loadConfig()).global.claudeMode).toBe("terminal");
+      const loaded = await storage.loadConfig();
+      expect(loaded.global.agentSettings?.platforms?.claude?.mode).toBe("terminal");
+      // The legacy key is gone, so nothing can read a stale value back.
+      expect("claudeMode" in loaded.global).toBe(false);
     });
   });
 });
@@ -244,7 +257,14 @@ describe("OpenCode model provider allowlist config", () => {
     repositories: Record<string, unknown> = {},
   ): Promise<void> {
     const base = defaultConfig();
-    const { openCodeModelProviders: _absent, ...legacyGlobal } = base.global;
+    // Strip `agentSettings` as well: a config that already carries the migrated
+    // block is authoritative, so leaving it here would make the legacy keys
+    // these tests set be ignored rather than migrated.
+    const {
+      openCodeModelProviders: _absent,
+      agentSettings: _migrated,
+      ...legacyGlobal
+    } = base.global;
     await fs.writeFile(
       path.join(dataDir, "config.json"),
       JSON.stringify({
@@ -344,7 +364,7 @@ describe("OpenCode model provider allowlist config", () => {
       });
 
       // Their own favourite, not an invented model.
-      expect((await storage.loadConfig()).global.opencodeModel).toBe(
+      expect((await storage.loadConfig()).global.agentSettings?.platforms?.opencode?.model).toBe(
         "opencode-go/deepseek-v4-flash",
       );
     });
@@ -358,7 +378,9 @@ describe("OpenCode model provider allowlist config", () => {
         favoriteModels: [{ platform: "opencode", modelId: "openrouter/kimi-k2.5" }],
       });
 
-      expect((await storage.loadConfig()).global.opencodeModel).toBe("opencode/claude-sonnet-5");
+      expect((await storage.loadConfig()).global.agentSettings?.platforms?.opencode?.model).toBe(
+        "opencode/claude-sonnet-5",
+      );
     });
   });
 
@@ -373,7 +395,7 @@ describe("OpenCode model provider allowlist config", () => {
         ],
       });
 
-      expect((await storage.loadConfig()).global.opencodeModel).toBe(
+      expect((await storage.loadConfig()).global.agentSettings?.platforms?.opencode?.model).toBe(
         "opencode-go/deepseek-v4-flash",
       );
     });
@@ -402,7 +424,7 @@ describe("OpenCode model provider allowlist config", () => {
       );
 
       const config = await storage.loadConfig();
-      expect(config.repositories["repo-explicit"]?.defaultModel).toBe(
+      expect(config.repositories["repo-explicit"]?.agentSettings?.platforms?.opencode?.model).toBe(
         "opencode-go/deepseek-v4-flash",
       );
       // The rest of the repository record survives the rewrite.
@@ -431,9 +453,10 @@ describe("OpenCode model provider allowlist config", () => {
       );
 
       // No selectable favourite, so it lands on the shipped default.
-      expect((await storage.loadConfig()).repositories["repo-inherited"]?.defaultModel).toBe(
-        "opencode/claude-sonnet-5",
-      );
+      expect(
+        (await storage.loadConfig()).repositories["repo-inherited"]?.agentSettings?.platforms
+          ?.opencode?.model,
+      ).toBe("opencode/claude-sonnet-5");
     });
   });
 
@@ -447,8 +470,10 @@ describe("OpenCode model provider allowlist config", () => {
           favoriteModels: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
         },
         {
-          // The field holds one id shared by every agent. A Claude repository's
-          // model must not be reinterpreted as `provider/model` and repointed.
+          // A Claude repository's model migrates into the Claude column, so
+          // the OpenCode repointing never sees it. Before the migration this
+          // was one field shared by every agent, and the repointing had to
+          // infer the effective agent to avoid mangling a Claude id.
           "repo-claude": {
             defaultBranch: "main",
             prBaseBranch: "main",
@@ -466,8 +491,14 @@ describe("OpenCode model provider allowlist config", () => {
       );
 
       const config = await storage.loadConfig();
-      expect(config.repositories["repo-claude"]?.defaultModel).toBe("vendor/claude-sonnet-5");
-      expect(config.repositories["repo-sentinel"]?.defaultModel).toBe("default");
+      const claudeRepo = config.repositories["repo-claude"]?.agentSettings?.platforms;
+      expect(claudeRepo?.claude?.model).toBe("vendor/claude-sonnet-5");
+      expect(claudeRepo?.opencode?.model).toBeUndefined();
+      // `"default"` was the repository's "no override" sentinel, so it is
+      // dropped rather than stored as a model no provider knows.
+      expect(
+        config.repositories["repo-sentinel"]?.agentSettings?.platforms?.opencode?.model,
+      ).toBeUndefined();
     });
   });
 
@@ -481,7 +512,7 @@ describe("OpenCode model provider allowlist config", () => {
 
       // Inventing a model the user never picked would be worse than leaving the
       // one they can still see in settings.
-      expect((await storage.loadConfig()).global.opencodeModel).toBe(
+      expect((await storage.loadConfig()).global.agentSettings?.platforms?.opencode?.model).toBe(
         "hpc-ai/deepseek/deepseek-v4-flash",
       );
     });
@@ -496,7 +527,7 @@ describe("OpenCode model provider allowlist config", () => {
         favoriteModels: [{ platform: "opencode", modelId: "opencode-go/deepseek-v4-flash" }],
       });
 
-      expect((await storage.loadConfig()).global.opencodeModel).toBe(
+      expect((await storage.loadConfig()).global.agentSettings?.platforms?.opencode?.model).toBe(
         "hpc-ai/deepseek/deepseek-v4-flash",
       );
     });

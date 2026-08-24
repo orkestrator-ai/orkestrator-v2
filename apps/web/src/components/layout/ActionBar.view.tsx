@@ -258,6 +258,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     resolveDialogOpen,
     resolveButtonRef,
     reviewModelCatalog,
+    reviewPreferredModels,
+    reviewPreferredEfforts,
     scrollContainerRef,
     isDragging,
     selectedProject,
@@ -1321,14 +1323,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           repositoryConfig: selectedProjectId ? config.repositories[selectedProjectId] : undefined,
         })}
         catalog={reviewModelCatalog}
-        preferredModels={{
-          claude: config.global.claudeModel,
-          codex: config.global.codexModel,
-          opencode: config.global.opencodeModel,
-        }}
-        preferredReasoningEfforts={{
-          codex: config.global.codexReasoningEffort,
-        }}
+        preferredModels={reviewPreferredModels}
+        preferredReasoningEfforts={reviewPreferredEfforts}
         busy={loopedReviewLaunchPending}
         onConfirm={handleLoopedReview}
       />
@@ -1339,12 +1335,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         }}
         defaultAgent={defaultAgent}
         catalog={reviewModelCatalog}
-        preferredModels={{
-          claude: config.global.claudeModel,
-          codex: config.global.codexModel,
-          opencode: config.global.opencodeModel,
-        }}
-        preferredReasoningEfforts={{ codex: config.global.codexReasoningEffort }}
+        preferredModels={reviewPreferredModels}
+        preferredReasoningEfforts={reviewPreferredEfforts}
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}
       />

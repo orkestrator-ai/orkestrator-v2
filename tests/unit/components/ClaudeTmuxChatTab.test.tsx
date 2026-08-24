@@ -906,7 +906,7 @@ describe("ClaudeTmuxChatTab", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          claudeModel: "claude-sonnet-4-6",
+          agentSettings: { platforms: { claude: { model: "claude-sonnet-4-6" } } },
         },
         repositories: {},
       },
@@ -1753,7 +1753,16 @@ Running 1 Explore agent...
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
 
@@ -2589,7 +2598,16 @@ Running 1 Explore agent...
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
 
@@ -2630,7 +2648,16 @@ Running 1 Explore agent...
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, claudeModel: "default" },
+        global: {
+          ...state.config.global,
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            platforms: {
+              ...state.config.global.agentSettings?.platforms,
+              claude: { ...state.config.global.agentSettings?.platforms?.claude, model: "default" },
+            },
+          },
+        },
       },
     }));
     useClaudeTmuxStore.getState().setRunning("tab-1", true, {

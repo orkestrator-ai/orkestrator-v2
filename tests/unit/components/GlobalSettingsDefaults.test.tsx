@@ -21,9 +21,9 @@ const { GlobalSettings } = await import("../../../apps/web/src/components/settin
 
 function savedActionDefaults(): ActionDefaults {
   const call = mockUpdateGlobalConfig.mock.calls.at(-1)?.[0] as
-    | { actionDefaults?: ActionDefaults }
+    | { agentSettings?: { actionDefaults?: ActionDefaults } }
     | undefined;
-  return call?.actionDefaults ?? {};
+  return call?.agentSettings?.actionDefaults ?? {};
 }
 
 function openPicker(action: string) {
@@ -47,15 +47,14 @@ describe("GlobalSettings defaults section", () => {
           envFilePatterns: [],
           allowedDomains: [],
           enabledAgentPlatforms: ["claude", "codex"],
-          defaultAgent: "claude",
-          opencodeModel: "opencode/grok-code",
-          claudeModel: "claude-sonnet-5",
-          codexModel: "gpt-5.4",
-          codexReasoningEffort: "medium",
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          claudeNativeBackend: "sdk",
-          codexMode: "native",
+          agentSettings: {
+            defaultAgent: "claude",
+            platforms: {
+              claude: { mode: "terminal", model: "claude-sonnet-5", claudeNativeBackend: "sdk" },
+              codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "medium" },
+              opencode: { mode: "terminal", model: "opencode/grok-code" },
+            },
+          },
           codexMaxConcurrentThreads: 5,
           terminalAppearance: {
             fontFamily: "Fira Code",
@@ -80,7 +79,7 @@ describe("GlobalSettings defaults section", () => {
   test("offers a picker per action, all on the app default until configured", () => {
     render(<GlobalSettings activeSection="defaults" />);
 
-    for (const action of ["New projects", "Review", "PR", "Resolve", "Push"]) {
+    for (const action of ["New environments", "Review", "PR", "Resolve", "Push"]) {
       const picker = screen.getByRole("combobox", {
         name: `${action} default agent, model and reasoning`,
       });
@@ -144,10 +143,10 @@ describe("GlobalSettings defaults section", () => {
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           enabledAgentPlatforms: ["codex"],
-          defaultAgent: "codex",
-          actionDefaults: {
-            review: { platform: "codex", model: "gpt-5.4" },
-          },
+          agentSettings: expect.objectContaining({
+            defaultAgent: "codex",
+            actionDefaults: { review: { platform: "codex", model: "gpt-5.4" } },
+          }),
         }),
       ),
     );
@@ -160,7 +159,10 @@ describe("GlobalSettings defaults section", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          actionDefaults: { push: { platform: "codex", model: "gpt-5.4" } },
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            actionDefaults: { push: { platform: "codex", model: "gpt-5.4" } },
+          },
         },
       },
     }));
@@ -227,7 +229,10 @@ describe("GlobalSettings defaults section", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          actionDefaults: { review: { platform: "codex", model: "gpt-5.4" } },
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            actionDefaults: { review: { platform: "codex", model: "gpt-5.4" } },
+          },
         },
       },
     }));
@@ -279,7 +284,10 @@ describe("GlobalSettings defaults section", () => {
         ...state.config,
         global: {
           ...state.config.global,
-          actionDefaults: { review: { platform: "claude", model: "retired-model" } },
+          agentSettings: {
+            ...state.config.global.agentSettings,
+            actionDefaults: { review: { platform: "claude", model: "retired-model" } },
+          },
         },
       },
     }));
@@ -326,7 +334,10 @@ describe("GlobalSettings defaults section", () => {
       ...state,
       config: {
         ...state.config,
-        global: { ...state.config.global, actionDefaults: stored },
+        global: {
+          ...state.config.global,
+          agentSettings: { ...state.config.global.agentSettings, actionDefaults: stored },
+        },
       },
     }));
     render(<GlobalSettings activeSection="review" />);

@@ -67,15 +67,12 @@ import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { tmuxQuestionDraftKey } from "@/stores/promptDraftStore";
+import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
-import {
-  getClaudeModelCatalog,
-  renameEnvironmentFromPrompt,
-  updateGlobalConfig,
-} from "@/lib/backend";
+import { getClaudeModelCatalog, renameEnvironmentFromPrompt } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 
@@ -141,9 +138,17 @@ export function ClaudeTmuxChatTab({
     () => createClaudeTmuxStateKey(environmentId, tabId),
     [environmentId, tabId],
   );
-  const worktreePath = useEnvironmentStore(
-    (state) => state.getEnvironmentById(environmentId)?.worktreePath,
-  );
+  const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
+  const worktreePath = environment?.worktreePath;
+  const config = useConfigStore((state) => state.config);
+  // Same resolver native Claude uses: a repository or environment model must
+  // outrank the application default, including when this tab is tmux-backed.
+  const persistedClaudeModel = resolvedPlatformSettings(
+    config,
+    environment?.projectId,
+    environment,
+    "claude",
+  ).model;
 
   const scopedTabState = useClaudeTmuxStore((s) => s.tabs.get(stateKey));
   const legacyTabState = useClaudeTmuxStore((s) => s.tabs.get(tabId));
@@ -173,8 +178,6 @@ export function ClaudeTmuxChatTab({
   const clearSelectionPrompt = useClaudeTmuxStore((s) => s.clearSelectionPrompt);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
   const clearTabInitialAgentOptions = usePaneLayoutStore((s) => s.clearTabInitialAgentOptions);
-  const setConfig = useConfigStore((s) => s.setConfig);
-  const persistedClaudeModel = useConfigStore((s) => s.config.global.claudeModel);
 
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -197,12 +200,14 @@ export function ClaudeTmuxChatTab({
   const initialLaunchOptionsPendingRef = useRef(
     Boolean(initialLaunchModel || initialLaunchReasoningEffort),
   );
-  const [selectedModel, setSelectedModel] = useState<string>(() =>
-    resolveTmuxModelPreference(
-      initialLaunchModel ?? useConfigStore.getState().config.global.claudeModel,
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    const snapshot = useConfigStore.getState().config;
+    const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    return resolveTmuxModelPreference(
+      initialLaunchModel ?? resolvedPlatformSettings(snapshot, env?.projectId, env, "claude").model,
       tmuxModelList(useClaudeStore.getState().getModels(environmentId)),
-    ),
-  );
+    );
+  });
   const [modelSwitching, setModelSwitching] = useState(false);
   const [effortSwitching, setEffortSwitching] = useState(false);
   const [fastModeSwitching, setFastModeSwitching] = useState(false);
@@ -356,33 +361,6 @@ export function ClaudeTmuxChatTab({
     persistedClaudeModel,
     sdkModels,
   ]);
-
-  const persistSelectedModel = useCallback(
-    async (modelId: string) => {
-      const currentConfig = useConfigStore.getState().config;
-      if (currentConfig.global.claudeModel === modelId) return;
-
-      const nextGlobal = {
-        ...currentConfig.global,
-        claudeModel: modelId,
-      };
-      setConfig({ ...currentConfig, global: nextGlobal });
-
-      try {
-        const updatedConfig = await updateGlobalConfig(nextGlobal);
-        if (useConfigStore.getState().config.global.claudeModel === modelId) {
-          setConfig(updatedConfig);
-        }
-      } catch (e) {
-        console.error("[ClaudeTmuxChatTab] Failed to persist Claude model default:", e);
-        if (useConfigStore.getState().config.global.claudeModel === modelId) {
-          setConfig(currentConfig);
-          setError("Failed to save Claude model default");
-        }
-      }
-    },
-    [setConfig],
-  );
 
   // 0. Reconnect to any already-running backend session and replay the full
   // transcript. backend events are only delivered to mounted listeners, so a
@@ -1049,7 +1027,6 @@ export function ClaudeTmuxChatTab({
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
       if (!nextSupportsFastMode) applyFastMode(false);
-      void persistSelectedModel(modelId);
       return;
     }
 
@@ -1065,7 +1042,6 @@ export function ClaudeTmuxChatTab({
       await switchModel(tabId, modelId, environmentId);
       setSelectedModel(modelId);
       clampEffortToModel(modelId);
-      void persistSelectedModel(modelId);
     } catch (e) {
       setError(String(e));
     } finally {

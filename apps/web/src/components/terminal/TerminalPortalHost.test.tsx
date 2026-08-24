@@ -141,14 +141,14 @@ describe("TerminalPortalHost", () => {
           containerResources: { cpuCores: 2, memoryGb: 4 },
           envFilePatterns: [],
           allowedDomains: [],
-          defaultAgent: "claude",
-          opencodeModel: "",
-          codexModel: "",
-          codexReasoningEffort: "medium",
-          opencodeMode: "terminal",
-          claudeMode: "terminal",
-          claudeNativeBackend: "sdk",
-          codexMode: "terminal",
+          agentSettings: {
+            defaultAgent: "claude",
+            platforms: {
+              opencode: { model: "", mode: "terminal" },
+              codex: { model: "", reasoningEffort: "medium", mode: "terminal" },
+              claude: { mode: "terminal", claudeNativeBackend: "sdk" },
+            },
+          },
           terminalAppearance: {
             fontFamily: "Fira Code",
             fontSize: 14,

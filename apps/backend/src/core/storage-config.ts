@@ -1,5 +1,5 @@
 import * as shared from "./storage-shared.js";
-import { normalizeActionDefaults } from "@orkestrator/protocol/action-defaults";
+import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
 import {
   createHash,
   defaultConfig,
@@ -7,7 +7,6 @@ import {
   firstEnabledAgentPlatform,
   fs,
   getUnscopedLegacyOpenCodeModelCatalog,
-  isAgentPlatform,
   isRecord,
   normalizeAcpModelCatalogEntries,
   normalizeAgentPlatforms,
@@ -41,7 +40,6 @@ type AgentModel = shared.AgentModel;
 type AgentActivityState = shared.AgentActivityState;
 type AgentActivitySource = shared.AgentActivitySource;
 type AgentModelCatalogCache = shared.AgentModelCatalogCache;
-type AgentModelConfigKey = shared.AgentModelConfigKey;
 type AppConfig = shared.AppConfig;
 type ClaudeModelCatalogSnapshot = shared.ClaudeModelCatalogSnapshot;
 type ClaudeModelCatalogEntry = shared.ClaudeModelCatalogEntry;
@@ -108,7 +106,6 @@ export type StorageLayerTypes = [
   AgentActivityState,
   AgentActivitySource,
   AgentModelCatalogCache,
-  AgentModelConfigKey,
   AppConfig,
   ClaudeModelCatalogSnapshot,
   ClaudeModelCatalogEntry,
@@ -173,10 +170,13 @@ export abstract class StorageConfig extends StorageProjects {
           global: {
             ...normalized.global,
             enabledAgentPlatforms,
-            defaultAgent: firstEnabledAgentPlatform(
-              enabledAgentPlatforms,
-              normalized.global.defaultAgent,
-            ),
+            agentSettings: {
+              ...normalized.global.agentSettings,
+              defaultAgent: firstEnabledAgentPlatform(
+                enabledAgentPlatforms,
+                normalized.global.agentSettings?.defaultAgent,
+              ),
+            },
           },
         };
   }
@@ -433,17 +433,17 @@ export abstract class StorageConfig extends StorageProjects {
     if (enabledAgentPlatforms.length === 0) {
       throw new Error("Select at least one agent platform");
     }
+    // The renderer writes the whole agent-settings block, so a malformed or
+    // partial entry must be dropped here rather than persisted and later
+    // applied to a launch the user cannot see being configured.
+    const agentSettings = normalizeAgentSettings(reviewValidated.agentSettings);
     const validated: AppConfig["global"] = {
       ...reviewValidated,
       enabledAgentPlatforms,
-      defaultAgent: firstEnabledAgentPlatform(
-        enabledAgentPlatforms,
-        isAgentPlatform(reviewValidated.defaultAgent) ? reviewValidated.defaultAgent : undefined,
-      ),
-      // The renderer writes this object wholesale, so a malformed or partial
-      // entry must be dropped here rather than persisted and later applied to
-      // a launch the user cannot see being configured.
-      actionDefaults: normalizeActionDefaults(reviewValidated.actionDefaults),
+      agentSettings: {
+        ...agentSettings,
+        defaultAgent: firstEnabledAgentPlatform(enabledAgentPlatforms, agentSettings.defaultAgent),
+      },
     };
     return this.enqueueConfigMutation(async () => {
       const config = await this.loadConfig();
@@ -458,19 +458,6 @@ export abstract class StorageConfig extends StorageProjects {
           }
         : validated;
       await this.saveJson(this.configFile(), config);
-      this.announce("config", "app");
-      return config;
-    });
-  }
-
-  async updateAgentModelDefault(key: AgentModelConfigKey, modelId: string): Promise<AppConfig> {
-    return this.enqueueConfigMutation(async () => {
-      const config = await this.loadConfig();
-      config.global[key] = modelId;
-      await this.saveJson(this.configFile(), config);
-      // Same announcement every other config mutation makes: other clients
-      // rehydrate their model defaults from the authoritative snapshot rather
-      // than only learning about the change through the window that made it.
       this.announce("config", "app");
       return config;
     });

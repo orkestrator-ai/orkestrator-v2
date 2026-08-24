@@ -1,10 +1,22 @@
-import type { AppConfig, ClaudeMode, CodexMode, DefaultAgent, OpenCodeMode } from "@/types";
+import { resolvedDefaultAgent } from "@/lib/agent-settings";
+import {
+  SHIPPED_PLATFORM_MODES,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
+import type {
+  AgentStyle,
+  AppConfig,
+  ClaudeMode,
+  CodexMode,
+  DefaultAgent,
+  OpenCodeMode,
+} from "@/types";
 import { firstEnabledAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 
 export function resolveBuildPipelineAgent(config: AppConfig, projectId: string): DefaultAgent {
   return firstEnabledAgentPlatform(
     config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
-    config.repositories[projectId]?.defaultAgent ?? config.global.defaultAgent ?? "claude",
+    resolvedDefaultAgent(config, projectId),
   );
 }
 
@@ -30,14 +42,11 @@ export type AgentModeSettings = {
 };
 
 /**
- * Route the selected agent's mode into its own backend slot and null the two
- * that were not selected.
+ * The environment overrides a newly created environment should carry.
  *
- * The backend keeps one mode column per agent, so leaving a stale mode on an
- * agent the environment is no longer using would make a later agent switch
- * inherit a mode the user never chose for it. Every caller that writes agent
- * settings must null the other two, which is why this lives here rather than
- * being restated at each call site.
+ * Only the launching agent's own column is pinned. The other platforms are left
+ * unset so they keep inheriting — writing every column would freeze this
+ * environment against later repository or app changes it never opted out of.
  */
 export function resolveAgentModeSettings(
   agentType: DefaultAgent,
@@ -45,17 +54,24 @@ export function resolveAgentModeSettings(
     claudeMode: ClaudeMode;
     opencodeMode: OpenCodeMode;
     codexMode: CodexMode;
+    cursorMode?: AgentStyle;
+    grokMode?: AgentStyle;
   },
-): AgentModeSettings {
-  return {
-    defaultAgent: agentType,
-    claudeMode: agentType === "claude" ? modes.claudeMode : null,
-    opencodeMode: agentType === "opencode" ? modes.opencodeMode : null,
-    codexMode: agentType === "codex" ? modes.codexMode : null,
-  };
+): AgentSettingsTier {
+  const mode =
+    agentType === "claude"
+      ? modes.claudeMode
+      : agentType === "codex"
+        ? modes.codexMode
+        : agentType === "opencode"
+          ? modes.opencodeMode
+          : agentType === "cursor"
+            ? (modes.cursorMode ?? SHIPPED_PLATFORM_MODES.cursor)
+            : (modes.grokMode ?? SHIPPED_PLATFORM_MODES.grok);
+  return { defaultAgent: agentType, platforms: { [agentType]: { mode } } };
 }
 
-export type BuildEnvironmentAgentSettings = AgentModeSettings & {
+export type BuildEnvironmentAgentSettings = AgentSettingsTier & {
   /**
    * Which agent this pipeline will open, for both the transient options store
    * and the durable `pendingAgentLaunch` intent.

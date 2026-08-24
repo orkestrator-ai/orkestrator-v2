@@ -75,8 +75,12 @@ import {
   DEFAULT_OPENCODE_MODEL_PROVIDERS,
   MAX_OPENCODE_MODEL_PROVIDERS,
 } from "@orkestrator/protocol/native-agent";
-import type { ActionDefaults } from "@orkestrator/protocol/action-defaults";
-import { DefaultsSettings } from "./DefaultsSettings";
+import type { AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
+import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
+import { AgentPlatformPane } from "./agent/AgentPlatformPane";
+import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { useUIStore } from "@/stores";
 
 // OpenCode provider ids are slug-like (`opencode`, `opencode-go`, `openrouter`).
 // A model id pasted whole would silently match nothing, so `/` is rejected.
@@ -94,8 +98,8 @@ const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
 export type GlobalSettingsSectionSettings = Record<string, any> & {
   enabledAgentPlatforms: AgentPlatform[];
   setEnabledAgentPlatforms: Dispatch<SetStateAction<AgentPlatform[]>>;
-  actionDefaults: ActionDefaults;
-  setActionDefaults: Dispatch<SetStateAction<ActionDefaults>>;
+  agentSettings: AgentSettingsTier;
+  setAgentSettings: Dispatch<SetStateAction<AgentSettingsTier>>;
   openCodeModelProviders: string[];
   setOpenCodeModelProviders: Dispatch<SetStateAction<string[]>>;
   domainErrors: string[];
@@ -138,26 +142,14 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     allowedDomains,
     preferredEditor,
     setPreferredEditor,
-    defaultAgent,
-    setDefaultAgent,
+    agentSettings,
+    setAgentSettings,
     enabledAgentPlatforms,
     setEnabledAgentPlatforms,
-    opencodeMode,
-    setOpencodeMode,
     openCodeModelProviders,
     setOpenCodeModelProviders,
     openCodeProviderDraft,
     setOpenCodeProviderDraft,
-    claudeMode,
-    setClaudeMode,
-    claudeNativeBackend,
-    setClaudeNativeBackend,
-    claudeNativeFastModeDefault,
-    setClaudeNativeFastModeDefault,
-    codexMode,
-    setCodexMode,
-    codexNativeFastModeDefault,
-    setCodexNativeFastModeDefault,
     codexMaxConcurrentThreads,
     setCodexMaxConcurrentThreads,
     terminalFontFamily,
@@ -175,8 +167,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setWebClientEnabled,
     reviewInstruction,
     setReviewInstruction,
-    actionDefaults,
-    setActionDefaults,
     webClientStatus,
     setWebClientStatus,
     setWebClientApplyError,
@@ -335,14 +325,39 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     </div>
   );
 
+  const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  // Repository-scoped so an OpenCode catalogue cached for the open project is
+  // offered here too; the Claude/Codex/Cursor/Grok catalogues are global.
+  const catalog = useProjectModelCatalog(selectedProjectId ?? "", true);
+  const agentTiers = { global: agentSettings };
+
   const renderDefaults = () => (
-    <DefaultsSettings
-      actionDefaults={actionDefaults}
-      setActionDefaults={setActionDefaults}
-      enabledAgentPlatforms={enabledAgentPlatforms}
-      defaultAgent={defaultAgent}
-      isSaving={isSaving}
+    <AgentDefaultsPane
+      tier={agentSettings}
+      onChange={setAgentSettings}
+      tiers={agentTiers}
+      // The application tier has nothing above it, so it shows concrete
+      // choices and the shipped defaults rather than an Inherit option.
+      canInherit={false}
+      enabledPlatforms={enabledAgentPlatforms}
+      catalog={catalog}
+      disabled={isSaving}
+      scopeLabel="the app"
     />
+  );
+
+  const renderPlatform = (platform: AgentPlatform, extras?: React.ReactNode) => (
+    <AgentPlatformPane
+      platform={platform}
+      tier={agentSettings}
+      onChange={setAgentSettings}
+      tiers={agentTiers}
+      canInherit={false}
+      catalog={catalog}
+      disabled={isSaving}
+    >
+      {extras}
+    </AgentPlatformPane>
   );
 
   const renderGeneral = () => (
@@ -391,37 +406,6 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         <span className="block text-xs text-muted-foreground/60">
           *Requires the Dev Containers extension
         </span>
-      </div>
-
-      {/* Default Agent */}
-      <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
-            <Bot className="h-4 w-4" />
-            Default Agent
-          </h3>
-          <p className="text-xs text-muted-foreground mt-1">Agent to launch in new environments</p>
-        </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-          {enabledAgentPlatforms.map((platform) => (
-            <button
-              key={platform}
-              type="button"
-              onClick={() => setDefaultAgent(platform)}
-              className={cn(
-                "rounded-lg border-2 p-3 text-left transition-colors",
-                defaultAgent === platform
-                  ? "border-primary bg-primary/5"
-                  : "border-transparent bg-zinc-900 hover:border-zinc-600",
-              )}
-            >
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <AgentIcon agent={platform} />
-                {AGENT_PLATFORM_LABELS[platform]}
-              </div>
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="space-y-3">
@@ -664,7 +648,13 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                     return;
                   }
                   setEnabledAgentPlatforms(selected);
-                  if (!selected.includes(defaultAgent)) setDefaultAgent(selected[0]!);
+                  // A default agent for a platform the user just disabled would
+                  // name a launch surface that no longer exists. Resolved rather
+                  // than read, so an app tier that had been inheriting the
+                  // shipped default is retargeted too.
+                  if (!selected.includes(resolveDefaultAgent({ global: agentSettings }))) {
+                    setAgentSettings({ ...agentSettings, defaultAgent: selected[0]! });
+                  }
                 }}
               />
             </div>
@@ -677,211 +667,85 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     </div>
   );
 
-  const renderModeToggle = (
-    mode: "terminal" | "native",
-    setMode: (m: "terminal" | "native") => void,
-    description: string,
-  ) => (
-    <div className="max-w-2xl space-y-4">
-      <p className="text-sm text-muted-foreground">{description}</p>
-      <div className="grid max-w-xs grid-cols-1 gap-3 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={() => setMode("terminal")}
-          className={cn(
-            "p-3 rounded-lg border-2 text-left transition-colors",
-            mode === "terminal"
-              ? "border-primary bg-primary/5"
-              : "border-transparent bg-zinc-900 hover:border-zinc-600",
-          )}
-        >
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Terminal className="h-4 w-4" />
-            Terminal
+  const renderClaude = () =>
+    renderPlatform(
+      "claude",
+      <>
+        {/* Anthropic API Key */}
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
+              <Key className="h-4 w-4" />
+              Anthropic API Key
+            </h3>
+            <p className="text-xs text-muted-foreground mt-1">
+              Optional API-key override for Claude Code in containers
+            </p>
           </div>
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("native")}
-          className={cn(
-            "p-3 rounded-lg border-2 text-left transition-colors",
-            mode === "native"
-              ? "border-primary bg-primary/5"
-              : "border-transparent bg-zinc-900 hover:border-zinc-600",
-          )}
-        >
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Bot className="h-4 w-4" />
-            Native
+          <div className="relative">
+            <Input
+              type={showApiKey ? "text" : "password"}
+              value={anthropicApiKey}
+              onChange={(event) => {
+                setAnthropicApiKey(event.target.value);
+                if (event.target.value) setClearAnthropicApiKey(false);
+              }}
+              placeholder={
+                global.anthropicApiKeyConfigured && !clearAnthropicApiKey
+                  ? "API key configured — enter a replacement"
+                  : "sk-ant-..."
+              }
+              className="pr-10 font-mono"
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+              onClick={() => setShowApiKey(!showApiKey)}
+            >
+              {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            </Button>
           </div>
-        </button>
-      </div>
-      <p className="text-xs text-muted-foreground/60">
-        Native mode opens a chat interface instead of terminal
-      </p>
-    </div>
-  );
-
-  const renderFastModeDefault = (
-    enabled: boolean,
-    setEnabled: (enabled: boolean) => void,
-    agentName: string,
-  ) => (
-    <div className="max-w-2xl space-y-3">
-      <div>
-        <h3 className="text-sm font-medium text-foreground">New Native Tabs</h3>
-        <p className="text-xs text-muted-foreground mt-1">
-          Start new {agentName} Native tabs in default mode or fast mode.
-        </p>
-      </div>
-      <div className="flex items-center justify-between max-w-xs rounded-lg border border-zinc-800 bg-zinc-900 p-3">
-        <div className="space-y-0.5">
-          <Label className="text-sm">{enabled ? "Fast mode" : "Default mode"}</Label>
+          {global.anthropicApiKeyConfigured && !clearAnthropicApiKey && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setAnthropicApiKey("");
+                setClearAnthropicApiKey(true);
+              }}
+            >
+              Clear stored Anthropic API key
+            </Button>
+          )}
+          {clearAnthropicApiKey && (
+            <p className="text-xs text-amber-500">
+              The stored Anthropic API key will be cleared when you save.
+            </p>
+          )}
+          {global.anthropicApiKeySource === "host-env" && (
+            <p className="text-xs text-amber-500">
+              No key is stored, but Orkestrator inherited ANTHROPIC_API_KEY from its own environment
+              and forwards it to new containers. Unset the variable and restart Orkestrator to stop
+              using it; a stored key overrides it.
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
-            {enabled
-              ? "Fast mode starts on for new native tabs"
-              : "Fast mode stays off for new native tabs"}
+            Get key from{" "}
+            <a
+              href="https://console.anthropic.com/settings/keys"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              console.anthropic.com
+            </a>
           </p>
         </div>
-        <Switch
-          aria-label={`${agentName} fast mode for new native tabs`}
-          checked={enabled}
-          onCheckedChange={setEnabled}
-        />
-      </div>
-    </div>
-  );
-
-  const renderClaudeNativeBackendPicker = () => (
-    <div className="max-w-2xl space-y-3">
-      <div>
-        <h3 className="text-sm font-medium text-foreground">Native backend</h3>
-        <p className="text-xs text-muted-foreground mt-1">
-          Implementation behind &ldquo;Native&rdquo; mode. Repo and environment settings can
-          override this; the most specific override wins.
-        </p>
-      </div>
-      <div className="grid max-w-md grid-cols-1 gap-3 sm:grid-cols-2">
-        {(
-          [
-            {
-              value: "sdk",
-              label: "Agent SDK",
-              hint: "Uses the Claude Agent SDK via bridge server",
-            },
-            {
-              value: "tmux",
-              label: "Tmux",
-              hint: "Drives the Claude CLI under tmux (Max plan friendly)",
-            },
-          ] as const
-        ).map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => setClaudeNativeBackend(opt.value)}
-            className={cn(
-              "p-3 rounded-lg border-2 text-left transition-colors",
-              claudeNativeBackend === opt.value
-                ? "border-primary bg-primary/5"
-                : "border-transparent bg-zinc-900 hover:border-zinc-600",
-            )}
-          >
-            <div className="text-sm font-medium">{opt.label}</div>
-            <div className="text-xs text-muted-foreground mt-1">{opt.hint}</div>
-          </button>
-        ))}
-      </div>
-      <p className="text-xs text-muted-foreground/60">
-        With Tmux: while a session is running, Orkestrator merges a{" "}
-        <code className="font-mono px-1">hooks</code> block into the environment&apos;s{" "}
-        <code className="font-mono px-1">.claude/settings.local.json</code>; the original file is
-        restored when the session stops.
-      </p>
-    </div>
-  );
-
-  const renderClaude = () => (
-    <div className="max-w-2xl space-y-8">
-      {renderModeToggle(claudeMode, setClaudeMode, "Choose how Claude runs in environments")}
-      {renderClaudeNativeBackendPicker()}
-      {renderFastModeDefault(claudeNativeFastModeDefault, setClaudeNativeFastModeDefault, "Claude")}
-
-      {/* Anthropic API Key */}
-      <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground flex items-center gap-2">
-            <Key className="h-4 w-4" />
-            Anthropic API Key
-          </h3>
-          <p className="text-xs text-muted-foreground mt-1">
-            Optional API-key override for Claude Code in containers
-          </p>
-        </div>
-        <div className="relative">
-          <Input
-            type={showApiKey ? "text" : "password"}
-            value={anthropicApiKey}
-            onChange={(event) => {
-              setAnthropicApiKey(event.target.value);
-              if (event.target.value) setClearAnthropicApiKey(false);
-            }}
-            placeholder={
-              global.anthropicApiKeyConfigured && !clearAnthropicApiKey
-                ? "API key configured — enter a replacement"
-                : "sk-ant-..."
-            }
-            className="pr-10 font-mono"
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-            onClick={() => setShowApiKey(!showApiKey)}
-          >
-            {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </Button>
-        </div>
-        {global.anthropicApiKeyConfigured && !clearAnthropicApiKey && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setAnthropicApiKey("");
-              setClearAnthropicApiKey(true);
-            }}
-          >
-            Clear stored Anthropic API key
-          </Button>
-        )}
-        {clearAnthropicApiKey && (
-          <p className="text-xs text-amber-500">
-            The stored Anthropic API key will be cleared when you save.
-          </p>
-        )}
-        {global.anthropicApiKeySource === "host-env" && (
-          <p className="text-xs text-amber-500">
-            No key is stored, but Orkestrator inherited ANTHROPIC_API_KEY from its own environment
-            and forwards it to new containers. Unset the variable and restart Orkestrator to stop
-            using it; a stored key overrides it.
-          </p>
-        )}
-        <p className="text-xs text-muted-foreground">
-          Get key from{" "}
-          <a
-            href="https://console.anthropic.com/settings/keys"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:underline"
-          >
-            console.anthropic.com
-          </a>
-        </p>
-      </div>
-    </div>
-  );
+      </>,
+    );
 
   const openCodeProviderDraftId = openCodeProviderDraft.trim().toLowerCase();
   const openCodeProviderDraftError = !openCodeProviderDraftId
@@ -901,234 +765,238 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setOpenCodeProviderDraft("");
   };
 
-  const renderOpenCode = () => (
-    <div className="max-w-2xl space-y-8">
-      {renderModeToggle(opencodeMode, setOpencodeMode, "Choose how OpenCode runs in environments")}
+  const renderOpenCode = () =>
+    renderPlatform(
+      "opencode",
+      <>
+        <div className="space-y-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Boxes className="h-4 w-4" />
+              Model Providers
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Only models from these OpenCode providers appear in model pickers. Filtering happens
+              before the catalog reaches the app, so excluded providers are never loaded.
+            </p>
+          </div>
 
-      <div className="space-y-3">
-        <div>
-          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Boxes className="h-4 w-4" />
-            Model Providers
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Only models from these OpenCode providers appear in model pickers. Filtering happens
-            before the catalog reaches the app, so excluded providers are never loaded.
-          </p>
-        </div>
-
-        {openCodeModelProviders.length > 0 ? (
-          <ul className="space-y-2">
-            {openCodeModelProviders.map((provider) => (
-              <li
-                key={provider}
-                className="flex items-center justify-between gap-3 rounded-lg bg-zinc-900 px-3 py-2"
-              >
-                <span className="font-mono text-sm text-foreground">{provider}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  aria-label={`Remove ${provider} provider`}
-                  onClick={() =>
-                    setOpenCodeModelProviders((current) =>
-                      current.filter((candidate) => candidate !== provider),
-                    )
-                  }
-                  className="h-7 px-2 text-muted-foreground hover:text-destructive"
+          {openCodeModelProviders.length > 0 ? (
+            <ul className="space-y-2">
+              {openCodeModelProviders.map((provider) => (
+                <li
+                  key={provider}
+                  className="flex items-center justify-between gap-3 rounded-lg bg-zinc-900 px-3 py-2"
                 >
-                  <X className="h-4 w-4" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              No providers selected, so every provider OpenCode advertises is offered. That can be
-              several thousand models.
-            </span>
-          </p>
-        )}
+                  <span className="font-mono text-sm text-foreground">{provider}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Remove ${provider} provider`}
+                    onClick={() =>
+                      setOpenCodeModelProviders((current) =>
+                        current.filter((candidate) => candidate !== provider),
+                      )
+                    }
+                    className="h-7 px-2 text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-500">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                No providers selected, so every provider OpenCode advertises is offered. That can be
+                several thousand models.
+              </span>
+            </p>
+          )}
 
-        <div className="space-y-1.5">
-          <Label htmlFor="opencode-provider" className="text-xs text-muted-foreground">
-            Add a provider
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              id="opencode-provider"
-              value={openCodeProviderDraft}
-              onChange={(event) => setOpenCodeProviderDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter") return;
-                // The settings pane is inside a form-like layout; Enter here
-                // means "add this provider", not "save everything".
-                event.preventDefault();
-                addOpenCodeProvider();
+          <div className="space-y-1.5">
+            <Label htmlFor="opencode-provider" className="text-xs text-muted-foreground">
+              Add a provider
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                id="opencode-provider"
+                value={openCodeProviderDraft}
+                onChange={(event) => setOpenCodeProviderDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") return;
+                  // The settings pane is inside a form-like layout; Enter here
+                  // means "add this provider", not "save everything".
+                  event.preventDefault();
+                  addOpenCodeProvider();
+                }}
+                placeholder="provider id, e.g. openrouter"
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={openCodeProviderDraftError ? true : undefined}
+                aria-describedby={
+                  openCodeProviderDraftError ? "opencode-provider-error" : undefined
+                }
+                className="font-mono"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addOpenCodeProvider}
+                disabled={!canAddOpenCodeProvider}
+              >
+                Add
+              </Button>
+            </div>
+            {openCodeProviderDraftError && (
+              <p id="opencode-provider-error" className="text-xs text-destructive">
+                {openCodeProviderDraftError}
+              </p>
+            )}
+          </div>
+
+          {!isDefaultOpenCodeProviderList(openCodeModelProviders) && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setOpenCodeModelProviders([...DEFAULT_OPENCODE_MODEL_PROVIDERS]);
+                setOpenCodeProviderDraft("");
               }}
-              placeholder="provider id, e.g. openrouter"
-              spellCheck={false}
-              autoComplete="off"
-              aria-invalid={openCodeProviderDraftError ? true : undefined}
-              aria-describedby={openCodeProviderDraftError ? "opencode-provider-error" : undefined}
-              className="font-mono"
+              className="h-7 px-2 text-xs text-muted-foreground"
+            >
+              <RotateCcw className="mr-1.5 h-3 w-3" />
+              Reset to defaults
+            </Button>
+          )}
+        </div>
+      </>,
+    );
+
+  const renderCursor = () =>
+    renderPlatform(
+      "cursor",
+      <>
+        <div className="space-y-3">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Key className="h-4 w-4" />
+              Cursor API Key
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Required for Cursor Agent inside Linux containers. A macOS Cursor login is stored in
+              Keychain and cannot be mounted into a container.
+            </p>
+          </div>
+          <div className="relative">
+            <Input
+              aria-label="Cursor API key"
+              type={showCursorApiKey ? "text" : "password"}
+              value={cursorApiKey}
+              onChange={(event) => {
+                setCursorApiKey(event.target.value);
+                if (event.target.value) setClearCursorApiKey(false);
+              }}
+              placeholder={
+                global.cursorApiKeyConfigured && !clearCursorApiKey
+                  ? "API key configured — enter a replacement"
+                  : "Cursor API key"
+              }
+              className="pr-10 font-mono"
             />
             <Button
               type="button"
-              variant="outline"
-              onClick={addOpenCodeProvider}
-              disabled={!canAddOpenCodeProvider}
+              variant="ghost"
+              size="icon"
+              className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
+              onClick={() => setShowCursorApiKey(!showCursorApiKey)}
+              aria-label={showCursorApiKey ? "Hide Cursor API key" : "Show Cursor API key"}
             >
-              Add
+              {showCursorApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             </Button>
           </div>
-          {openCodeProviderDraftError && (
-            <p id="opencode-provider-error" className="text-xs text-destructive">
-              {openCodeProviderDraftError}
+          {global.cursorApiKeyConfigured && !clearCursorApiKey && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setCursorApiKey("");
+                setClearCursorApiKey(true);
+              }}
+            >
+              Clear stored Cursor API key
+            </Button>
+          )}
+          {clearCursorApiKey && (
+            <p className="text-xs text-amber-500">
+              The stored Cursor API key will be cleared when you save.
             </p>
           )}
-        </div>
-
-        {!isDefaultOpenCodeProviderList(openCodeModelProviders) && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              setOpenCodeModelProviders([...DEFAULT_OPENCODE_MODEL_PROVIDERS]);
-              setOpenCodeProviderDraft("");
-            }}
-            className="h-7 px-2 text-xs text-muted-foreground"
-          >
-            <RotateCcw className="mr-1.5 h-3 w-3" />
-            Reset to defaults
-          </Button>
-        )}
-      </div>
-    </div>
-  );
-
-  const renderCursor = () => (
-    <div className="max-w-2xl space-y-8">
-      <div className="space-y-3">
-        <div>
-          <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
-            <Key className="h-4 w-4" />
-            Cursor API Key
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Required for Cursor Agent inside Linux containers. A macOS Cursor login is stored in
-            Keychain and cannot be mounted into a container.
+          {global.cursorApiKeySource === "host-env" && (
+            // A key inherited from the backend process environment is forwarded to
+            // every new container, but it is not stored here, so neither the field
+            // above nor the clear button can revoke it. Say so rather than showing
+            // an empty field that implies no key is in play.
+            <p className="text-xs text-amber-500">
+              No key is stored, but Orkestrator inherited CURSOR_API_KEY from its own environment
+              and forwards that key to new containers. Clearing the stored key does not stop it —
+              unset the variable and restart Orkestrator. Saving a key here overrides it.
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            Applied to newly created or recreated containers. Docker receives the key by environment
+            name, and its value is redacted from creation errors.
           </p>
         </div>
-        <div className="relative">
+      </>,
+    );
+
+  const renderCodex = () =>
+    renderPlatform(
+      "codex",
+      <>
+        <div className="space-y-3">
+          <div>
+            <Label htmlFor="codex-max-concurrent-threads">Concurrent subagent limit</Label>
+            <p
+              id="codex-max-concurrent-threads-description"
+              className="mt-1 text-xs text-muted-foreground"
+            >
+              Maximum subagents Codex can keep open at once in a native session. The main
+              conversation does not count toward the limit.
+            </p>
+          </div>
           <Input
-            aria-label="Cursor API key"
-            type={showCursorApiKey ? "text" : "password"}
-            value={cursorApiKey}
+            id="codex-max-concurrent-threads"
+            type="number"
+            min={1}
+            max={MAX_CODEX_CONCURRENT_THREADS}
+            step={1}
+            value={codexMaxConcurrentThreads}
             onChange={(event) => {
-              setCursorApiKey(event.target.value);
-              if (event.target.value) setClearCursorApiKey(false);
+              const value = Number(event.target.value);
+              if (
+                Number.isSafeInteger(value) &&
+                value >= 1 &&
+                value <= MAX_CODEX_CONCURRENT_THREADS
+              ) {
+                setCodexMaxConcurrentThreads(value);
+              }
             }}
-            placeholder={
-              global.cursorApiKeyConfigured && !clearCursorApiKey
-                ? "API key configured — enter a replacement"
-                : "Cursor API key"
-            }
-            className="pr-10 font-mono"
+            aria-describedby="codex-max-concurrent-threads-description codex-max-concurrent-threads-restart"
+            disabled={isSaving}
+            className="max-w-32"
           />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2"
-            onClick={() => setShowCursorApiKey(!showCursorApiKey)}
-            aria-label={showCursorApiKey ? "Hide Cursor API key" : "Show Cursor API key"}
-          >
-            {showCursorApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-          </Button>
-        </div>
-        {global.cursorApiKeyConfigured && !clearCursorApiKey && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setCursorApiKey("");
-              setClearCursorApiKey(true);
-            }}
-          >
-            Clear stored Cursor API key
-          </Button>
-        )}
-        {clearCursorApiKey && (
-          <p className="text-xs text-amber-500">
-            The stored Cursor API key will be cleared when you save.
-          </p>
-        )}
-        {global.cursorApiKeySource === "host-env" && (
-          // A key inherited from the backend process environment is forwarded to
-          // every new container, but it is not stored here, so neither the field
-          // above nor the clear button can revoke it. Say so rather than showing
-          // an empty field that implies no key is in play.
-          <p className="text-xs text-amber-500">
-            No key is stored, but Orkestrator inherited CURSOR_API_KEY from its own environment and
-            forwards that key to new containers. Clearing the stored key does not stop it — unset
-            the variable and restart Orkestrator. Saving a key here overrides it.
-          </p>
-        )}
-        <p className="text-xs text-muted-foreground">
-          Applied to newly created or recreated containers. Docker receives the key by environment
-          name, and its value is redacted from creation errors.
-        </p>
-      </div>
-    </div>
-  );
-
-  const renderCodex = () => (
-    <div className="max-w-2xl space-y-8">
-      {renderModeToggle(codexMode, setCodexMode, "Choose how Codex runs in environments")}
-      {renderFastModeDefault(codexNativeFastModeDefault, setCodexNativeFastModeDefault, "Codex")}
-      <div className="space-y-3">
-        <div>
-          <Label htmlFor="codex-max-concurrent-threads">Concurrent subagent limit</Label>
-          <p
-            id="codex-max-concurrent-threads-description"
-            className="mt-1 text-xs text-muted-foreground"
-          >
-            Maximum subagents Codex can keep open at once in a native session. The main conversation
-            does not count toward the limit.
+          <p id="codex-max-concurrent-threads-restart" className="text-xs text-muted-foreground/60">
+            Applies when a native Codex bridge next starts.
           </p>
         </div>
-        <Input
-          id="codex-max-concurrent-threads"
-          type="number"
-          min={1}
-          max={MAX_CODEX_CONCURRENT_THREADS}
-          step={1}
-          value={codexMaxConcurrentThreads}
-          onChange={(event) => {
-            const value = Number(event.target.value);
-            if (
-              Number.isSafeInteger(value) &&
-              value >= 1 &&
-              value <= MAX_CODEX_CONCURRENT_THREADS
-            ) {
-              setCodexMaxConcurrentThreads(value);
-            }
-          }}
-          aria-describedby="codex-max-concurrent-threads-description codex-max-concurrent-threads-restart"
-          disabled={isSaving}
-          className="max-w-32"
-        />
-        <p id="codex-max-concurrent-threads-restart" className="text-xs text-muted-foreground/60">
-          Applies when a native Codex bridge next starts.
-        </p>
-      </div>
-    </div>
-  );
+      </>,
+    );
 
   const renderTerminal = () => {
     const previewColors = getPreviewColors(terminalBackgroundColor);
@@ -1782,6 +1650,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     cursor: renderCursor,
     opencode: renderOpenCode,
     codex: renderCodex,
+    grok: () => renderPlatform("grok"),
     terminal: renderTerminal,
     network: renderNetwork,
     "web-client": renderWebClient,

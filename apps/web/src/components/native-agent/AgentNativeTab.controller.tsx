@@ -1,3 +1,4 @@
+import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, X } from "lucide-react";
 import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
@@ -42,11 +43,7 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
-import {
-  adoptNativeAgentSession,
-  renameEnvironmentFromPrompt,
-  updateGlobalConfig,
-} from "@/lib/backend";
+import { adoptNativeAgentSession, renameEnvironmentFromPrompt } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
@@ -63,8 +60,6 @@ import {
 } from "@/lib/chat/client-only-messages";
 import { pinNativeAgentParts } from "@/lib/chat/native-agent-pinning";
 import { resolveCatalogModelLabel } from "@/lib/chat/model-label";
-import { persistAgentModelDefault } from "@/lib/chat/agent-model-preferences";
-import { persistCodexGlobalPreferences } from "@/components/codex/codex-preferences";
 import {
   buildMessageForkPlan,
   forkAttachmentNotice,
@@ -133,22 +128,21 @@ export function SharedNativeAgentController({
   const adapter = getNativeAgentAdapter(platform);
   const label = adapter.label;
   const config = useConfigStore((state) => state.config);
-  const configuredModel =
-    platform === "claude"
-      ? config.global.claudeModel
-      : platform === "codex"
-        ? config.global.codexModel
-        : platform === "opencode"
-          ? config.global.opencodeModel
-          : undefined;
-  const configuredReasoning = platform === "codex" ? config.global.codexReasoningEffort : undefined;
-  const configuredFastMode =
-    platform === "claude"
-      ? (config.global.claudeNativeFastModeDefault ?? false)
-      : platform === "codex"
-        ? (config.global.codexNativeFastModeDefault ?? false)
-        : undefined;
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId));
+  // The whole tier chain in one call, for this platform only. A model belongs
+  // to its own platform's catalogue, so nothing here can hand one platform's id
+  // to another.
+  const configured = resolvedPlatformSettings(
+    config,
+    environment?.projectId,
+    environment,
+    platform,
+  );
+  const configuredModel = configured.model;
+  const configuredReasoning = configured.reasoningEffort;
+  // Speed is a per-session choice made in the model picker rather than a stored
+  // default, so a new tab starts at normal.
+  const configuredFastMode = undefined;
   const setupPending = isSetupBlocked({ setupPhase: environment?.setupPhase });
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
@@ -218,7 +212,13 @@ export function SharedNativeAgentController({
     defaultAgentModel: configuredModel,
     defaultReasoningEffort: configuredReasoning,
     initialProviderSessionId: data.sessionId,
-    initialConversationMode,
+    // A *new* mode-capable tab starts in build. Left undefined it would adopt
+    // whatever mode the provider happens to report. A resumed session is
+    // excluded deliberately: that thread already has a mode, and forcing build
+    // would silently move a conversation the user left in plan.
+    initialConversationMode:
+      initialConversationMode ??
+      (adapter.capabilities.composer.mode && !data.sessionId ? "build" : undefined),
     initialFastMode,
     initialExecutionProfileId,
     defaultFastMode: configuredFastMode,
@@ -463,21 +463,6 @@ export function SharedNativeAgentController({
     },
     [label, updateControls],
   );
-  const persistCodexDefaults = useCallback(async (modelId: string, reasoningId: string) => {
-    try {
-      const current = useConfigStore.getState().config;
-      await persistCodexGlobalPreferences({
-        config: current,
-        setConfig: useConfigStore.getState().setConfig,
-        persistGlobalConfig: updateGlobalConfig,
-        model: modelId,
-        effort: reasoningId as Parameters<typeof persistCodexGlobalPreferences>[0]["effort"],
-      });
-    } catch (error) {
-      console.warn("[AgentNativeTab] Failed to persist Codex defaults:", error);
-      toast.error("Failed to save Codex defaults");
-    }
-  }, []);
   const phase = projection?.turn.phase;
   const settingsLocked = isSubmitting || (phase !== "idle" && phase !== "error");
   const isRunning = phase === "running";
@@ -1578,15 +1563,6 @@ export function SharedNativeAgentController({
                       ...(nextReasoningId ? { reasoningId: nextReasoningId } : {}),
                     }).then((updated) => {
                       if (!updated) return;
-                      if (platform === "codex" && nextReasoningId) {
-                        void persistCodexDefaults(modelId, nextReasoningId);
-                      } else if (platform === "claude" || platform === "opencode") {
-                        void persistAgentModelDefault(
-                          platform === "claude" ? "claudeModel" : "opencodeModel",
-                          modelId,
-                          label,
-                        );
-                      }
                       if (
                         nextModel?.supportsImageInput === false &&
                         draft.attachments.some((attachment) => attachment.type === "image")
@@ -1601,11 +1577,7 @@ export function SharedNativeAgentController({
                   onReasoningChange={
                     (selectedModel?.reasoning?.length ?? 0) > 0
                       ? (reasoningId) => {
-                          void updateControlsSafely({ reasoningId }).then((updated) => {
-                            if (updated && platform === "codex" && selectedModel) {
-                              void persistCodexDefaults(selectedModel.id, reasoningId);
-                            }
-                          });
+                          void updateControlsSafely({ reasoningId });
                         }
                       : undefined
                   }

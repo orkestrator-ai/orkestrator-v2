@@ -2400,9 +2400,10 @@ describe("NativeAgentService", () => {
           await storage.updateRepositoryConfig("project-1", {
             defaultBranch: "main",
             prBaseBranch: "main",
-            defaultAgent: "codex",
-            defaultModel: "repo-model",
-            defaultEffort: "repo-effort",
+            agentSettings: {
+              defaultAgent: "codex",
+              platforms: { codex: { model: "repo-model", reasoningEffort: "repo-effort" } },
+            },
           });
 
           await service.reconcileInitialLaunch("env-1");
@@ -2444,10 +2445,12 @@ describe("NativeAgentService", () => {
           const config = await storage.loadConfig();
           await storage.updateGlobalConfig({
             ...config.global,
-            defaultAgent: "codex",
-            codexMode: "native",
-            codexModel: "global-codex",
-            codexReasoningEffort: "xhigh",
+            agentSettings: {
+              defaultAgent: "codex",
+              platforms: {
+                codex: { mode: "native", model: "global-codex", reasoningEffort: "xhigh" },
+              },
+            },
           });
 
           await service.reconcileInitialLaunch("env-1");
@@ -2479,8 +2482,10 @@ describe("NativeAgentService", () => {
           const config = await storage.loadConfig();
           await storage.updateGlobalConfig({
             ...config.global,
-            defaultAgent: "claude",
-            claudeModel: "global-claude",
+            agentSettings: {
+              defaultAgent: "claude",
+              platforms: { claude: { model: "global-claude" } },
+            },
           });
 
           await service.reconcileInitialLaunch("env-1");
@@ -2520,9 +2525,10 @@ describe("NativeAgentService", () => {
           await storage.updateRepositoryConfig("project-1", {
             defaultBranch: "main",
             prBaseBranch: "main",
-            defaultAgent: "claude",
-            defaultModel: "repo-model",
-            defaultEffort: "repo-effort",
+            agentSettings: {
+              defaultAgent: "claude",
+              platforms: { claude: { model: "repo-model", reasoningEffort: "repo-effort" } },
+            },
           });
 
           await service.reconcileInitialLaunch("env-1");
@@ -2664,11 +2670,21 @@ describe("NativeAgentService", () => {
         },
         async ({ storage, service }) => {
           const config = await storage.loadConfig();
-          await storage.updateGlobalConfig({ ...config.global, claudeMode: "terminal" });
+          await storage.updateGlobalConfig({
+            ...config.global,
+            agentSettings: {
+              ...config.global.agentSettings,
+              platforms: {
+                ...config.global.agentSettings?.platforms,
+                claude: { ...config.global.agentSettings?.platforms?.claude, mode: "terminal" },
+              },
+            },
+          });
+          // `agentStyle` was only ever Claude's mode; it is now that outright.
           await storage.updateRepositoryConfig("project-1", {
             defaultBranch: "main",
             prBaseBranch: "main",
-            agentStyle: "native",
+            agentSettings: { platforms: { claude: { mode: "native" } } },
           });
 
           await service.reconcileInitialLaunch("env-1");

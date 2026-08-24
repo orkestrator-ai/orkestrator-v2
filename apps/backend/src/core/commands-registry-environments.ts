@@ -1,3 +1,8 @@
+import {
+  isEmptyAgentSettings,
+  normalizeAgentSettings,
+  type AgentSettingsTier,
+} from "@orkestrator/protocol/agent-settings";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   createEnvironment,
@@ -45,6 +50,19 @@ import {
   logEnvironmentLifecycleFailure,
 } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
+
+/**
+ * A validated environment tier, or `undefined` when it expresses no opinion.
+ *
+ * Absence already means "inherit everything", so an all-empty block is stored
+ * as nothing at all — the same rule `loadEnvironments` applies when it migrates
+ * a legacy record. Without this an explicit clear would leave a `{}` behind on
+ * every environment the user had ever opened the settings dialog for.
+ */
+function normalizedTier(value: unknown): AgentSettingsTier | undefined {
+  const normalized = normalizeAgentSettings(value);
+  return isEmptyAgentSettings(normalized) ? undefined : normalized;
+}
 
 export function registerEnvironmentCommands(
   register: CommandRegistrar,
@@ -459,11 +477,7 @@ export function registerEnvironmentCommands(
     async (
       {
         environmentId,
-        defaultAgent,
-        claudeMode,
-        claudeNativeBackend,
-        opencodeMode,
-        codexMode,
+        agentSettings,
         pendingAgentLaunch,
         initialAgentModel,
         initialReasoningEffort,
@@ -472,13 +486,20 @@ export function registerEnvironmentCommands(
       { storage },
     ) => {
       const id = asString(environmentId, "environmentId");
-      const updates = {
-        defaultAgent,
-        claudeMode,
-        claudeNativeBackend,
-        opencodeMode,
-        codexMode,
-      } as Partial<Environment>;
+      // Only a request that actually carried the block may rewrite it. Storage
+      // reads key presence, so writing it unconditionally would make a
+      // launch-intent-only call (`{ environmentId, pendingAgentLaunch }`) erase
+      // every per-environment override the settings dialog stores — this tier
+      // now holds models, reasoning levels and action defaults, not just modes.
+      // An explicit `null` still clears, which is how the dialog returns an
+      // environment to inheriting everything.
+      //
+      // What does arrive is normalized at the boundary, as the global config's
+      // own settings are: a malformed block accepted here is later applied to a
+      // launch the user cannot see being configured.
+      const updates = (
+        agentSettings === undefined ? {} : { agentSettings: normalizedTier(agentSettings) }
+      ) as Partial<Environment>;
       if (typeof pendingAgentLaunch === "boolean") {
         updates.pendingAgentLaunch = pendingAgentLaunch;
         if (!pendingAgentLaunch) {

@@ -356,7 +356,9 @@ describe("resolveDefaultReviewTabType", () => {
     expect(
       resolveDefaultReviewTabType({
         defaultAgent: "claude",
-        environment: { claudeMode: "native", claudeNativeBackend: "sdk" },
+        environment: {
+          agentSettings: { platforms: { claude: { mode: "native", claudeNativeBackend: "sdk" } } },
+        },
         global,
       }),
     ).toBe("claude");
@@ -364,7 +366,9 @@ describe("resolveDefaultReviewTabType", () => {
     expect(
       resolveDefaultReviewTabType({
         defaultAgent: "claude",
-        environment: { claudeMode: "native", claudeNativeBackend: "tmux" },
+        environment: {
+          agentSettings: { platforms: { claude: { mode: "native", claudeNativeBackend: "tmux" } } },
+        },
         global,
       }),
     ).toBe("claude");
@@ -372,7 +376,7 @@ describe("resolveDefaultReviewTabType", () => {
     expect(
       resolveDefaultReviewTabType({
         defaultAgent: "claude",
-        environment: { claudeMode: "terminal" },
+        environment: { agentSettings: { platforms: { claude: { mode: "terminal" } } } },
         global,
       }),
     ).toBe("claude");
@@ -382,14 +386,14 @@ describe("resolveDefaultReviewTabType", () => {
     expect(
       resolveDefaultReviewTabType({
         defaultAgent: "codex",
-        environment: { codexMode: "native" },
+        environment: { agentSettings: { platforms: { codex: { mode: "native" } } } },
         global,
       }),
     ).toBe("codex");
     expect(
       resolveDefaultReviewTabType({
         defaultAgent: "opencode",
-        environment: { opencodeMode: "terminal" },
+        environment: { agentSettings: { platforms: { opencode: { mode: "terminal" } } } },
         global,
       }),
     ).toBe("opencode");

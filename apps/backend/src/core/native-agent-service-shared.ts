@@ -47,7 +47,8 @@ import {
 } from "@orkestrator/protocol/native-agent";
 import { withSessionActionSlashCommands } from "@orkestrator/protocol/agent-slash-commands";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
-import { resolveStartupLaunch } from "@orkestrator/protocol/startup-launch";
+import { resolveStartupLaunchFromSettings } from "@orkestrator/protocol/startup-launch";
+import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import type {
   Environment,
@@ -510,7 +511,8 @@ export {
   resolveReasoningId,
   withSessionActionSlashCommands,
   boundTranscriptResponse,
-  resolveStartupLaunch,
+  resolveStartupLaunchFromSettings,
+  resolveAgentPlatformSettings,
   PendingNativeAgentDispatchError,
   AmbiguousPromptDispatchError,
   createNativeAgentProvider,

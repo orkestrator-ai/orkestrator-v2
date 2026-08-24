@@ -38,9 +38,17 @@ describe("mobile responsive layout contracts", () => {
       "create-environment-mobile-tab-panel",
       "sm:!contents",
     ],
+    // The agent controls the environment dialog used to own now live in the
+    // panes it shares with the repository and app tiers, so the contract
+    // follows them there rather than being dropped.
     [
-      "apps/web/src/components/environments/EnvironmentSettingsDialog.tsx",
-      "grid-cols-2 gap-2 sm:grid-cols-4",
+      "apps/web/src/components/settings/agent/InheritedValue.tsx",
+      "grid grid-cols-1 gap-2",
+      "sm:grid-cols-3",
+    ],
+    [
+      "apps/web/src/components/settings/agent/AgentDefaultsPane.tsx",
+      "grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3",
     ],
     ["apps/web/src/components/kanban/KanbanBoard.tsx", "snap-x snap-mandatory", "sm:w-[320px]"],
     [

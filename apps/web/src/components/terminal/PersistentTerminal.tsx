@@ -66,6 +66,11 @@ const BUFFER_SIZE_THRESHOLD = 0.5;
 const MAX_PENDING_DURABLE_REPLAY_BYTES = 1024 * 1024;
 const TERMINAL_BOOTSTRAP_DELAY_MS = 300;
 const TERMINAL_BOOTSTRAP_MAX_ATTEMPTS = 3;
+// Backoff for re-listing an environment's persisted sessions. Retrying rather
+// than falling open matters: proceeding without an authoritative snapshot would
+// create a duplicate persistent session for a tab that already has one.
+const SESSION_SNAPSHOT_RETRY_BASE_MS = 250;
+const SESSION_SNAPSHOT_RETRY_MAX_MS = 5000;
 const terminalInputDisposables = new WeakMap<object, { dispose: () => void }>();
 
 type ReplayMetadata = {
@@ -153,6 +158,12 @@ export function PersistentTerminal({
   const bootstrapRequestedForSessionRef = useRef<string | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
   const hasRenderedOutputRef = useRef(false);
+  // Render-visible, not a ref: the redraw effect below is a different effect
+  // from the one that moves the DOM node, so a ref mutation would not schedule
+  // it. A pane move that changes `paneId` without remounting re-runs only the
+  // attachment effect, and the forced redraw would silently never fire.
+  const [domReattachCount, setDomReattachCount] = useState(0);
+  const handledDomReattachRef = useRef(0);
   const pendingDurableReplayRef = useRef<PendingDurableReplay | null>(null);
   const persistentBufferLoadPendingRef = useRef(false);
   const initialLaunchOptionsRef = useRef({
@@ -615,7 +626,20 @@ export function PersistentTerminal({
 
   useEffect(() => {
     const pendingReplay = pendingDurableReplayRef.current;
-    if (!serializedBuffer || !pendingReplay) return;
+    if (!serializedBuffer) return;
+
+    if (!pendingReplay) {
+      // A completed setup terminal may have no live backend PTY to attach to.
+      // Its durable checkpoint is therefore the only authoritative view. Render
+      // it directly instead of waiting for an onReplay callback that cannot
+      // arrive from attachExistingOnly without an existing session id.
+      if (!isBackendManagedSetupTab || existingSessionId || hasRenderedOutputRef.current) return;
+      terminal.clear();
+      terminal.reset();
+      handleData(new TextEncoder().encode(serializedBuffer));
+      terminal.scrollToBottom();
+      return;
+    }
 
     pendingDurableReplayRef.current = null;
     if (pendingReplay.overflowed) {
@@ -634,7 +658,7 @@ export function PersistentTerminal({
     terminal.reset();
     handleData(replayData);
     terminal.scrollToBottom();
-  }, [handleData, serializedBuffer, terminal]);
+  }, [existingSessionId, handleData, isBackendManagedSetupTab, serializedBuffer, terminal]);
 
   // Register an invisible OSC escape handler for setup completion detection.
   // When the setup command finishes, it emits an OSC sequence that xterm.js
@@ -716,23 +740,96 @@ export function PersistentTerminal({
   const updateSessionStatus = useSessionStore((state) => state.updateSessionStatus);
   const loadSessionsForEnvironment = useSessionStore((state) => state.loadSessionsForEnvironment);
   const setPersistentSessionId = useTerminalSessionStore((state) => state.setPersistentSessionId);
-  const isSessionsLoading = useSessionStore((state) => state.isLoadingEnvironment(environmentId));
+  const sessionSnapshotGeneration = useSessionStore(
+    (state) => state.sessionSnapshotGenerations.get(environmentId) ?? 0,
+  );
+  const sessionSnapshotBaselineRef = useRef({
+    environmentId,
+    generation: sessionSnapshotGeneration,
+  });
+  if (sessionSnapshotBaselineRef.current.environmentId !== environmentId) {
+    sessionSnapshotBaselineRef.current = {
+      environmentId,
+      generation: sessionSnapshotGeneration,
+    };
+  }
+  const sessionSnapshotBaseline = sessionSnapshotBaselineRef.current.generation;
+  const [, setSessionHydrationCheck] = useState(0);
+  const hasFreshSessionSnapshot = sessionSnapshotGeneration > sessionSnapshotBaseline;
 
-  // Ensure sessions are loaded for this environment
-  useEffect(() => {
-    if (environmentId) {
-      void loadSessionsForEnvironment(environmentId).catch((err) => {
-        console.error("[PersistentTerminal] Failed to load persistent sessions:", err);
-      });
-    }
-  }, [environmentId, loadSessionsForEnvironment]);
-
-  // Load persistent session data BEFORE PTY is created
+  // Ensure sessions are loaded for this environment.
+  //
+  // This retries until the store publishes a snapshot newer than the one this
+  // mount began with. An "ever loaded" marker is not sufficient: a remount must
+  // not restore from stale renderer state while its current backend refresh is
+  // pending or failed. A concurrent terminal's successful refresh also advances
+  // the generation and can safely satisfy this mount.
   useEffect(() => {
     if (!environmentId) return;
-    if (existingSession) return;
+
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+
+    const runLoad = () => {
+      if (
+        (useSessionStore.getState().sessionSnapshotGenerations.get(environmentId) ?? 0) >
+        sessionSnapshotBaseline
+      ) {
+        setSessionHydrationCheck((revision) => revision + 1);
+        return;
+      }
+      void loadSessionsForEnvironment(environmentId)
+        .catch((err) => {
+          console.error("[PersistentTerminal] Failed to load persistent sessions:", err);
+        })
+        .then(() => {
+          if (cancelled) return;
+          // The promise resolving is not proof a fresh snapshot landed: the
+          // store contains failures and superseded requests without publishing.
+          // Only a newer successful generation is authoritative for this mount.
+          if (
+            (useSessionStore.getState().sessionSnapshotGenerations.get(environmentId) ?? 0) >
+            sessionSnapshotBaseline
+          ) {
+            setSessionHydrationCheck((revision) => revision + 1);
+            return;
+          }
+          const delay = Math.min(
+            SESSION_SNAPSHOT_RETRY_BASE_MS * 2 ** attempt,
+            SESSION_SNAPSHOT_RETRY_MAX_MS,
+          );
+          attempt += 1;
+          retryTimer = setTimeout(runLoad, delay);
+        });
+    };
+
+    runLoad();
+
+    return () => {
+      cancelled = true;
+      if (retryTimer !== null) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+  }, [environmentId, loadSessionsForEnvironment, sessionSnapshotBaseline]);
+
+  // Restore only after the store has received an authoritative snapshot. The
+  // load effect above updates Zustand synchronously before awaiting the backend,
+  // but this effect still observes values from the render that scheduled it.
+  // Treating that initial empty map as authoritative permanently skipped the
+  // saved buffer on cold mounts.
+  useEffect(() => {
+    if (!environmentId) return;
+    // A PTY created during this mount is published to the terminal store before
+    // an async persistent-session snapshot can arrive. Only a session that was
+    // already present when this component mounted proves restoration is already
+    // represented locally; consulting the live value would suppress the durable
+    // buffer load on every cold connection slower than the PTY handshake.
+    if (hadExistingSessionAtMountRef.current) return;
     if (hasRestoredFromPersistentRef.current) return;
-    if (isSessionsLoading) return;
+    if (!hasFreshSessionSnapshot) return;
 
     const existingSessions = getSessionsByEnvironment(environmentId);
     const existingPersistentSession = existingSessions.find((s) => s.tabId === tabId);
@@ -776,8 +873,7 @@ export function PersistentTerminal({
     environmentId,
     tabId,
     sessionKey,
-    existingSession,
-    isSessionsLoading,
+    hasFreshSessionSnapshot,
     loadPersistentSessionBuffer,
     getSessionsByEnvironment,
     setSession,
@@ -802,7 +898,7 @@ export function PersistentTerminal({
 
   // Create persistent session for sidebar tracking
   useEffect(() => {
-    if (isSessionsLoading) return;
+    if (!hasFreshSessionSnapshot) return;
     if (!sessionId || !environmentId) return;
     if (persistentSessionCreatedRef.current || creationInProgressRef.current) return;
 
@@ -858,7 +954,7 @@ export function PersistentTerminal({
     getSessionsByEnvironment,
     setPersistentSessionId,
     updateSessionStatus,
-    isSessionsLoading,
+    hasFreshSessionSnapshot,
   ]);
 
   // Update session activity on user interaction
@@ -1103,6 +1199,7 @@ export function PersistentTerminal({
         // Append the existing container element to the new wrapper
         // This moves the DOM node (with xterm attached) to the new location
         terminalRef.current.appendChild(containerElement);
+        setDomReattachCount((count) => count + 1);
       }
 
       // CRITICAL: Only do buffer clear/restore if the terminal LOGICALLY moved to a different pane
@@ -1346,6 +1443,7 @@ export function PersistentTerminal({
     const becameVisible = shouldTriggerEnvironmentVisibilityRedraw({
       isEnvironmentVisible,
       wasEnvironmentVisible: wasEnvironmentVisibleRef.current,
+      wasDomReattached: domReattachCount !== handledDomReattachRef.current,
       isActive,
       terminalIsOpened,
       isConnected,
@@ -1355,6 +1453,7 @@ export function PersistentTerminal({
     if (!becameVisible) {
       return;
     }
+    handledDomReattachRef.current = domReattachCount;
 
     let cancelled = false;
     let redrawCleanup: { cancel: () => void } | null = null;
@@ -1372,7 +1471,16 @@ export function PersistentTerminal({
       cancelled = true;
       redrawCleanup?.cancel();
     };
-  }, [isEnvironmentVisible, isActive, terminalIsOpened, isConnected, fitAddon, terminal, resize]);
+  }, [
+    isEnvironmentVisible,
+    isActive,
+    terminalIsOpened,
+    isConnected,
+    fitAddon,
+    terminal,
+    resize,
+    domReattachCount,
+  ]);
 
   // Update terminal appearance when settings change
   useEffect(() => {

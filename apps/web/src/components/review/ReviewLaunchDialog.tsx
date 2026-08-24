@@ -29,7 +29,6 @@ import {
   useAgentModelFavorites,
 } from "@/hooks/useAgentModelFavorites";
 import {
-  catalogIdFor,
   defaultEffortFor,
   effortLabel,
   firstModelFor,
@@ -184,8 +183,7 @@ export function ReviewLaunchDialog({
 
   const agent = getReviewAgent(tabType);
   const models = modelsForAgent(catalog, agent);
-  const resolvedModelId = catalogIdFor(models, model) ?? model;
-  const selectedModel = models.find((option) => option.id === resolvedModelId) ?? models[0];
+  const selectedModel = models.find((option) => option.id === model) ?? models[0];
   const reasoningEfforts = selectedModel?.reasoningEfforts ?? [];
   const effortAvailable = reasoningEfforts.length > 0;
   const effectiveEffort =

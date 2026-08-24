@@ -51,7 +51,7 @@ export const LAUNCH_AGENT_OPTIONS: Array<{ value: LaunchAgent; label: string }> 
  * under `sonnet`. Without the second pass every Claude preference misses and the
  * launcher silently falls back to the first entry.
  */
-export function catalogIdFor(
+function catalogIdFor(
   models: AgentModelOption[],
   preferred: string | undefined,
 ): string | undefined {

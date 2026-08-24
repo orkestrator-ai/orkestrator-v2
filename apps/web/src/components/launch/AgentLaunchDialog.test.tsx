@@ -131,6 +131,46 @@ describe("AgentLaunchDialog", () => {
     });
   });
 
+  /**
+   * Configuration persists a Claude model in its resolved space
+   * (`claude-sonnet-5`) while the catalogue is keyed by alias (`sonnet`), so the
+   * preference has to be matched through `resolvedModel`. A miss here is silent:
+   * the dialog would simply open on the catalogue's first entry.
+   */
+  test("matches a preferred model stored in the agent's resolved id space", () => {
+    const { onConfirm } = renderDialog({
+      catalog: {
+        ...catalog,
+        claude: [
+          {
+            id: "opus",
+            name: "Claude Opus",
+            reasoningEfforts: ["low", "high"],
+            resolvedModel: "claude-opus-5",
+          },
+          {
+            id: "sonnet",
+            name: "Claude Sonnet",
+            reasoningEfforts: ["low", "high"],
+            resolvedModel: "claude-sonnet-5",
+          },
+        ],
+      },
+      preferredModels: { claude: "claude-sonnet-5" },
+      preferredReasoningEfforts: { claude: "high" },
+    });
+
+    expect(picker().textContent).toContain("Claude Sonnet");
+
+    // The catalogue id, not the resolved one, is what the launch must carry.
+    submit();
+    expect(onConfirm).toHaveBeenCalledWith({
+      agent: "claude",
+      model: "sonnet",
+      reasoningEffort: "high",
+    });
+  });
+
   test("names the base branch the pull request will target", () => {
     renderDialog({ targetBranch: "release/2.10" });
 

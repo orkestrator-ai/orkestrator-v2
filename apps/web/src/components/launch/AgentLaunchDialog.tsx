@@ -13,7 +13,6 @@ import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import {
-  catalogIdFor,
   defaultEffortFor,
   effortLabel,
   firstModelFor,
@@ -111,8 +110,7 @@ export function AgentLaunchDialog({
   }, [catalog, defaultAgent, open, preferredModels, preferredReasoningEfforts]);
 
   const models = modelsForAgent(catalog, agent);
-  const resolvedModelId = catalogIdFor(models, model) ?? model;
-  const selectedModel = models.find((option) => option.id === resolvedModelId) ?? models[0];
+  const selectedModel = models.find((option) => option.id === model) ?? models[0];
   // Stable identity: the `?? []` fallback otherwise re-created the array every
   // render, defeating the reasoningOptions memo below.
   const reasoningEfforts = useMemo(

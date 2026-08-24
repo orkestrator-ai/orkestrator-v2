@@ -153,6 +153,7 @@ const persistentSessionStore = {
   getSession: mock(() => undefined),
   sessions: new Map(),
   loadingEnvironments: new Set(),
+  loadedEnvironments: new Set(["env-1"]),
   error: null,
 };
 
@@ -416,10 +417,12 @@ describe("PersistentTerminal", () => {
     persistentSessionStore.updateSessionStatus.mockClear();
     persistentSessionStore.loadSessionsForEnvironment.mockClear();
     persistentSessionStore.saveSessionBuffer.mockClear();
+    persistentSessionStore.loadSessionBuffer.mockClear();
     persistentSessionStore.loadSessionBuffer.mockImplementation(
       async (): Promise<string | null> => null,
     );
     persistentSessionStore.getSessionsByEnvironment = () => [];
+    persistentSessionStore.loadedEnvironments = new Set(["env-1"]);
 
     // Reset real stores to controlled state
     useTerminalSessionStore.setState({
@@ -514,7 +517,8 @@ describe("PersistentTerminal", () => {
     cleanup();
   });
 
-  it("does not force a redraw on initial mount when already visible", async () => {
+  it("does not force a redraw when opening a fresh terminal already visible", async () => {
+    portalTerminalIsOpened = false;
     render(
       <PersistentTerminal
         terminalData={createTerminalData()}
@@ -533,6 +537,28 @@ describe("PersistentTerminal", () => {
     await waitFor(() => {
       const resizeCalls = resizeMock.mock.calls as unknown as Array<[number, number]>;
       expect(resizeCalls.some(([cols, rows]) => cols === 80 && rows === 25)).toBe(false);
+    });
+  });
+
+  it("forces a redraw when an opened terminal DOM is reattached on mount", async () => {
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="claude"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible={true}
+        isActive={true}
+        isFocused={true}
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(resizeMock).toHaveBeenCalledWith(80, 25);
+      expect(resizeMock).toHaveBeenCalledWith(80, 24);
     });
   });
 
@@ -3170,6 +3196,62 @@ describe("PersistentTerminal", () => {
       const sessions = useTerminalSessionStore.getState().sessions;
       const session = sessions.get("container-1:tab-1");
       expect(session?.serializedBuffer).toBe("restored-buffer");
+    });
+  });
+
+  it("waits for session hydration and paints a saved setup terminal without a live PTY", async () => {
+    useTerminalSessionId = null;
+    useTerminalIsConnected = false;
+    persistentSessionStore.loadedEnvironments = new Set();
+    persistentSessionStore.loadSessionBuffer.mockResolvedValue(
+      "saved setup output\r\n\u001b[32m❯\u001b[0m ",
+    );
+    persistentSessionStore.getSessionsByEnvironment = () => [
+      {
+        id: "saved-setup-session",
+        environmentId: "env-1",
+        containerId: "container-1",
+        tabId: "tab-1",
+        sessionType: "plain",
+        status: "connected",
+        hasLaunchedCommand: false,
+        lastActivityAt: "2024-01-01T00:00:00.000Z",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        order: 0,
+      },
+    ];
+    const terminalData = createTerminalData();
+    const terminal = terminalData.terminal as unknown as MockTerminal;
+    const props = {
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: true,
+      paneId: "pane-1",
+      isSetupTab: true,
+    };
+    const view = render(<PersistentTerminal {...props} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(persistentSessionStore.loadSessionBuffer).not.toHaveBeenCalled();
+    expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true);
+
+    persistentSessionStore.loadedEnvironments = new Set(["env-1"]);
+    view.rerender(<PersistentTerminal {...props} />);
+
+    await waitFor(() => {
+      expect(persistentSessionStore.loadSessionBuffer).toHaveBeenCalledWith("saved-setup-session");
+      const writes = terminal.write.mock.calls.map(([data]) =>
+        data instanceof Uint8Array ? new TextDecoder().decode(data) : String(data),
+      );
+      expect(writes).toContain("saved setup output\r\n\u001b[32m❯\u001b[0m ");
     });
   });
 

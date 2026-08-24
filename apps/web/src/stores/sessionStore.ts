@@ -41,6 +41,8 @@ interface SessionState {
   sessions: Map<string, Session>;
   /** Loading state per environment */
   loadingEnvironments: Set<string>;
+  /** Environments whose persisted-session snapshot has loaded successfully at least once. */
+  loadedEnvironments: Set<string>;
   error: string | null;
 
   // Actions
@@ -99,6 +101,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
   // Initial state
   sessions: new Map(),
   loadingEnvironments: new Set(),
+  loadedEnvironments: new Set(),
   error: null,
 
   // Actions
@@ -129,9 +132,12 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
           });
         const newLoading = new Set(state.loadingEnvironments);
         newLoading.delete(environmentId);
+        const newLoaded = new Set(state.loadedEnvironments);
+        newLoaded.add(environmentId);
         if (unchanged) {
           return {
             loadingEnvironments: newLoading,
+            loadedEnvironments: newLoaded,
             ...(state.error === null ? {} : { error: null }),
           };
         }
@@ -154,6 +160,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
         return {
           sessions: newSessions,
           loadingEnvironments: newLoading,
+          loadedEnvironments: newLoaded,
           ...(state.error === null ? {} : { error: null }),
         };
       });
@@ -402,7 +409,7 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     }
   },
 
-  clearAllSessions: () => set({ sessions: new Map() }),
+  clearAllSessions: () => set({ sessions: new Map(), loadedEnvironments: new Set() }),
 
   setError: (error) => set({ error }),
 

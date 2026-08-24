@@ -26,6 +26,7 @@ export interface ForceRedrawCleanup {
 interface ShouldTriggerVisibilityRedrawOptions {
   isEnvironmentVisible: boolean;
   wasEnvironmentVisible: boolean;
+  wasDomReattached?: boolean;
   isActive: boolean;
   terminalIsOpened: boolean;
   isConnected: boolean;
@@ -57,12 +58,17 @@ export function getTerminalResizeBounceDimensions(
 export function shouldTriggerEnvironmentVisibilityRedraw({
   isEnvironmentVisible,
   wasEnvironmentVisible,
+  wasDomReattached = false,
   isActive,
   terminalIsOpened,
   isConnected,
 }: ShouldTriggerVisibilityRedrawOptions): boolean {
   return (
-    isEnvironmentVisible && !wasEnvironmentVisible && isActive && terminalIsOpened && isConnected
+    isEnvironmentVisible &&
+    (!wasEnvironmentVisible || wasDomReattached) &&
+    isActive &&
+    terminalIsOpened &&
+    isConnected
   );
 }
 

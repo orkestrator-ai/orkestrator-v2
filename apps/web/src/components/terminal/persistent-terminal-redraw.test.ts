@@ -30,6 +30,17 @@ describe("persistent terminal redraw helpers", () => {
     expect(
       shouldTriggerEnvironmentVisibilityRedraw({
         isEnvironmentVisible: true,
+        wasEnvironmentVisible: true,
+        wasDomReattached: true,
+        isActive: true,
+        terminalIsOpened: true,
+        isConnected: true,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldTriggerEnvironmentVisibilityRedraw({
+        isEnvironmentVisible: true,
         wasEnvironmentVisible: false,
         isActive: false,
         terminalIsOpened: true,

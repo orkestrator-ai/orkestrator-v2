@@ -153,6 +153,7 @@ export function PersistentTerminal({
   const bootstrapRequestedForSessionRef = useRef<string | null>(null);
   const hasInitiatedConnectionRef = useRef(false);
   const hasRenderedOutputRef = useRef(false);
+  const terminalDomReattachedRef = useRef(false);
   const pendingDurableReplayRef = useRef<PendingDurableReplay | null>(null);
   const persistentBufferLoadPendingRef = useRef(false);
   const initialLaunchOptionsRef = useRef({
@@ -615,7 +616,20 @@ export function PersistentTerminal({
 
   useEffect(() => {
     const pendingReplay = pendingDurableReplayRef.current;
-    if (!serializedBuffer || !pendingReplay) return;
+    if (!serializedBuffer) return;
+
+    if (!pendingReplay) {
+      // A completed setup terminal may have no live backend PTY to attach to.
+      // Its durable checkpoint is therefore the only authoritative view. Render
+      // it directly instead of waiting for an onReplay callback that cannot
+      // arrive from attachExistingOnly without an existing session id.
+      if (!isBackendManagedSetupTab || existingSessionId || hasRenderedOutputRef.current) return;
+      terminal.clear();
+      terminal.reset();
+      handleData(new TextEncoder().encode(serializedBuffer));
+      terminal.scrollToBottom();
+      return;
+    }
 
     pendingDurableReplayRef.current = null;
     if (pendingReplay.overflowed) {
@@ -634,7 +648,7 @@ export function PersistentTerminal({
     terminal.reset();
     handleData(replayData);
     terminal.scrollToBottom();
-  }, [handleData, serializedBuffer, terminal]);
+  }, [existingSessionId, handleData, isBackendManagedSetupTab, serializedBuffer, terminal]);
 
   // Register an invisible OSC escape handler for setup completion detection.
   // When the setup command finishes, it emits an OSC sequence that xterm.js
@@ -716,7 +730,7 @@ export function PersistentTerminal({
   const updateSessionStatus = useSessionStore((state) => state.updateSessionStatus);
   const loadSessionsForEnvironment = useSessionStore((state) => state.loadSessionsForEnvironment);
   const setPersistentSessionId = useTerminalSessionStore((state) => state.setPersistentSessionId);
-  const isSessionsLoading = useSessionStore((state) => state.isLoadingEnvironment(environmentId));
+  const areSessionsLoaded = useSessionStore((state) => state.loadedEnvironments.has(environmentId));
 
   // Ensure sessions are loaded for this environment
   useEffect(() => {
@@ -727,12 +741,16 @@ export function PersistentTerminal({
     }
   }, [environmentId, loadSessionsForEnvironment]);
 
-  // Load persistent session data BEFORE PTY is created
+  // Restore only after the store has received an authoritative snapshot. The
+  // load effect above updates Zustand synchronously before awaiting the backend,
+  // but this effect still observes values from the render that scheduled it.
+  // Treating that initial empty map as authoritative permanently skipped the
+  // saved buffer on cold mounts.
   useEffect(() => {
     if (!environmentId) return;
     if (existingSession) return;
     if (hasRestoredFromPersistentRef.current) return;
-    if (isSessionsLoading) return;
+    if (!areSessionsLoaded) return;
 
     const existingSessions = getSessionsByEnvironment(environmentId);
     const existingPersistentSession = existingSessions.find((s) => s.tabId === tabId);
@@ -777,7 +795,7 @@ export function PersistentTerminal({
     tabId,
     sessionKey,
     existingSession,
-    isSessionsLoading,
+    areSessionsLoaded,
     loadPersistentSessionBuffer,
     getSessionsByEnvironment,
     setSession,
@@ -802,7 +820,7 @@ export function PersistentTerminal({
 
   // Create persistent session for sidebar tracking
   useEffect(() => {
-    if (isSessionsLoading) return;
+    if (!areSessionsLoaded) return;
     if (!sessionId || !environmentId) return;
     if (persistentSessionCreatedRef.current || creationInProgressRef.current) return;
 
@@ -858,7 +876,7 @@ export function PersistentTerminal({
     getSessionsByEnvironment,
     setPersistentSessionId,
     updateSessionStatus,
-    isSessionsLoading,
+    areSessionsLoaded,
   ]);
 
   // Update session activity on user interaction
@@ -1103,6 +1121,7 @@ export function PersistentTerminal({
         // Append the existing container element to the new wrapper
         // This moves the DOM node (with xterm attached) to the new location
         terminalRef.current.appendChild(containerElement);
+        terminalDomReattachedRef.current = true;
       }
 
       // CRITICAL: Only do buffer clear/restore if the terminal LOGICALLY moved to a different pane
@@ -1346,6 +1365,7 @@ export function PersistentTerminal({
     const becameVisible = shouldTriggerEnvironmentVisibilityRedraw({
       isEnvironmentVisible,
       wasEnvironmentVisible: wasEnvironmentVisibleRef.current,
+      wasDomReattached: terminalDomReattachedRef.current,
       isActive,
       terminalIsOpened,
       isConnected,
@@ -1355,6 +1375,7 @@ export function PersistentTerminal({
     if (!becameVisible) {
       return;
     }
+    terminalDomReattachedRef.current = false;
 
     let cancelled = false;
     let redrawCleanup: { cancel: () => void } | null = null;

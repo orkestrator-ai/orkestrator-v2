@@ -286,6 +286,8 @@ export type SdkSessionMessage = {
   message: unknown;
   parent_tool_use_id: string | null;
   isSidechain?: boolean;
+  /** Optional on a real record; older emitters omit it entirely. */
+  timestamp?: string;
 };
 
 export const mockSdkListSessions = mock(

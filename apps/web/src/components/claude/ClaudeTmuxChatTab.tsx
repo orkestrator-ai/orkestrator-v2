@@ -67,6 +67,7 @@ import { applyTmuxAgentUsageSummaries } from "@/lib/claude-tmux-usage";
 import type { ClaudeEffortLevel } from "@/lib/claude-client";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { tmuxQuestionDraftKey } from "@/stores/promptDraftStore";
+import { resolvedPlatformSettings } from "@/lib/agent-settings";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
@@ -137,9 +138,17 @@ export function ClaudeTmuxChatTab({
     () => createClaudeTmuxStateKey(environmentId, tabId),
     [environmentId, tabId],
   );
-  const worktreePath = useEnvironmentStore(
-    (state) => state.getEnvironmentById(environmentId)?.worktreePath,
-  );
+  const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
+  const worktreePath = environment?.worktreePath;
+  const config = useConfigStore((state) => state.config);
+  // Same resolver native Claude uses: a repository or environment model must
+  // outrank the application default, including when this tab is tmux-backed.
+  const persistedClaudeModel = resolvedPlatformSettings(
+    config,
+    environment?.projectId,
+    environment,
+    "claude",
+  ).model;
 
   const scopedTabState = useClaudeTmuxStore((s) => s.tabs.get(stateKey));
   const legacyTabState = useClaudeTmuxStore((s) => s.tabs.get(tabId));
@@ -169,9 +178,6 @@ export function ClaudeTmuxChatTab({
   const clearSelectionPrompt = useClaudeTmuxStore((s) => s.clearSelectionPrompt);
   const clearTabInitialPrompt = usePaneLayoutStore((s) => s.clearTabInitialPrompt);
   const clearTabInitialAgentOptions = usePaneLayoutStore((s) => s.clearTabInitialAgentOptions);
-  const persistedClaudeModel = useConfigStore(
-    (s) => s.config.global.agentSettings?.platforms?.claude?.model,
-  );
 
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -194,13 +200,14 @@ export function ClaudeTmuxChatTab({
   const initialLaunchOptionsPendingRef = useRef(
     Boolean(initialLaunchModel || initialLaunchReasoningEffort),
   );
-  const [selectedModel, setSelectedModel] = useState<string>(() =>
-    resolveTmuxModelPreference(
-      initialLaunchModel ??
-        useConfigStore.getState().config.global.agentSettings?.platforms?.claude?.model,
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    const snapshot = useConfigStore.getState().config;
+    const env = useEnvironmentStore.getState().getEnvironmentById(environmentId);
+    return resolveTmuxModelPreference(
+      initialLaunchModel ?? resolvedPlatformSettings(snapshot, env?.projectId, env, "claude").model,
       tmuxModelList(useClaudeStore.getState().getModels(environmentId)),
-    ),
-  );
+    );
+  });
   const [modelSwitching, setModelSwitching] = useState(false);
   const [effortSwitching, setEffortSwitching] = useState(false);
   const [fastModeSwitching, setFastModeSwitching] = useState(false);

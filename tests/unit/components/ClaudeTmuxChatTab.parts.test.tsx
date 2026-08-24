@@ -2321,6 +2321,123 @@ describe("ClaudeTmuxChatTab", () => {
     });
   });
 
+  test("seeds fresh tmux sessions from an environment Claude model over the app default", async () => {
+    seedPane();
+    seedEnvironment({
+      agentSettings: { platforms: { claude: { model: "haiku" } } },
+    });
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: { platforms: { claude: { model: "sonnet" } } },
+        },
+      },
+    }));
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "haiku",
+        effort: undefined,
+        fastMode: false,
+        resumeSessionId: undefined,
+        replaceExisting: true,
+      });
+    });
+  });
+
+  test("seeds fresh tmux sessions from a repository Claude model when the environment inherits", async () => {
+    seedPane();
+    seedEnvironment();
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          agentSettings: { platforms: { claude: { model: "sonnet" } } },
+        },
+      },
+    }));
+    useConfigStore.getState().setRepositoryConfig("project-1", {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      agentSettings: { platforms: { claude: { model: "haiku" } } },
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Haiku/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "haiku",
+        effort: undefined,
+        fastMode: false,
+        resumeSessionId: undefined,
+        replaceExisting: true,
+      });
+    });
+  });
+
+  test("prefers a one-shot launch model over the environment Claude model", async () => {
+    seedPane(undefined, "sonnet");
+    seedEnvironment({
+      agentSettings: { platforms: { claude: { model: "haiku" } } },
+    });
+
+    render(
+      <ClaudeTmuxChatTab
+        tabId="tab-1"
+        data={{ environmentId: "env-1", containerId: "container-1" }}
+        isActive
+        initialAgentModel="sonnet"
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "Start fresh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Sonnet/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start fresh" }));
+
+    await waitFor(() => {
+      expect(startSessionMock).toHaveBeenCalledWith("tab-1", "env-1", {
+        initialPrompt: undefined,
+        model: "sonnet",
+        effort: "high",
+        fastMode: false,
+        resumeSessionId: undefined,
+        replaceExisting: true,
+      });
+    });
+  });
+
   test("maps a legacy persisted opus model id onto the Default sentinel", async () => {
     seedPane();
     useConfigStore.setState((state) => ({

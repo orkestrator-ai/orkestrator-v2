@@ -1,7 +1,11 @@
-import { resolvedDefaultAgent } from "@/lib/agent-settings";
+import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, History } from "lucide-react";
-import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import {
+  AGENT_PLATFORMS,
+  firstEnabledAgentPlatform,
+  type AgentPlatform,
+} from "@orkestrator/protocol/agent-platforms";
 import {
   resolveReasoningId,
   type AgentModel,
@@ -336,14 +340,26 @@ export function UnassignedNativeAgentComposer({
   const draft = useNativeComposeStore((state) => nativeComposeDraft(state, sessionKey));
   const hasDraft = useNativeComposeStore((state) => state.drafts.has(sessionKey));
   const updateStoreDraft = useNativeComposeStore((state) => state.updateDraft);
-  const defaultPlatform = useConfigStore((state) => resolvedDefaultAgent(state.config));
+  const config = useConfigStore((state) => state.config);
   const environment = useEnvironmentStore((state) => state.getEnvironmentById(environmentId));
   const worktreePath = environment?.worktreePath;
   const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
     useAgentModelFavorites();
+  // Same triple App overlay launches use: an environment or repository default
+  // must win over the application one, constrained to platforms still enabled.
+  const defaultPlatform = firstEnabledAgentPlatform(
+    enabledPlatforms,
+    resolvedDefaultAgent(config, environment?.projectId, environment),
+  );
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
   const platform = draft.platform ?? defaultPlatform;
+  const configured = resolvedPlatformSettings(
+    config,
+    environment?.projectId,
+    environment,
+    platform,
+  );
   const selectedAdapter = findNativeAgentAdapter(platform);
   // Speed is a per-session choice made in the model picker, so a draft with no
   // explicit choice starts at normal rather than inheriting a stored default.
@@ -399,8 +415,12 @@ export function UnassignedNativeAgentComposer({
     createMention,
   } = useFileMentions({ searchFiles: fileSearch.searchFiles });
   const platformModels = models.filter((model) => model.platform === platform);
+  const configuredModel = configured.model
+    ? models.find((model) => model.platform === platform && model.id === configured.model)
+    : undefined;
   const selectedModel =
     models.find((model) => model.id === draft.modelId && model.platform === platform) ??
+    configuredModel ??
     platformModels[0];
   const canConfigureReasoning = selectedAdapter?.capabilities.composer.reasoning === true;
   const canConfigureMode = selectedAdapter?.capabilities.composer.mode === true;
@@ -423,7 +443,10 @@ export function UnassignedNativeAgentComposer({
   const selectedReasoningId =
     resolveReasoningId(
       selectedModel?.reasoning ?? [],
-      draft.reasoningId,
+      draft.reasoningId ??
+        (draft.modelId === undefined && selectedModel?.id === configured.model
+          ? configured.reasoningEffort
+          : undefined),
       selectedModel?.defaultReasoningId,
     ) ?? selectedModel?.defaultReasoningId;
   const selectedReasoningLabel =

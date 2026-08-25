@@ -46,6 +46,12 @@ describe("round trip", () => {
     const state = newSessionState("client-key");
     state.agentId = "agent-1";
     state.composer = { ...state.composer, selectedModelId: "composer-2.5", selectedModeId: "plan" };
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      context: { inputTokens: 30, outputTokens: 10, totalTokens: 40 },
+      modelId: "composer-2.5",
+      updatedAt: new Date(1).toISOString(),
+    };
     state.messages.push({
       id: "m0",
       role: "user",
@@ -69,12 +75,46 @@ describe("round trip", () => {
     expect(restored.revision).toBe(7);
     expect(restored.composer.selectedModelId).toBe("composer-2.5");
     expect(restored.composer.selectedModeId).toBe("plan");
+    expect(restored.usage).toEqual(state.usage);
     // The catalogue is a live read; a stale one would offer models the account
     // may no longer have.
     expect(restored.composer.models).toEqual([]);
     // Nothing about the dead process survives.
     expect(restored.agent).toBeNull();
     expect(restored.dispatching).toBe(false);
+  });
+
+  test("drops token counts a state file cannot justify", async () => {
+    const state = newSessionState();
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      updatedAt: new Date(1).toISOString(),
+    };
+    sessions.set(state.id, state);
+    await persist();
+
+    // A hand-edited or partially-written state file must not put non-numbers
+    // into the projection the context gauge divides by.
+    const payload = JSON.parse(await readFile(stateFile, "utf8")) as {
+      sessions: Array<{ usage: { turn: Record<string, unknown>; context?: unknown } }>;
+    };
+    payload.sessions[0]!.usage.turn = {
+      inputTokens: 80,
+      outputTokens: "twenty",
+      cacheReadTokens: null,
+      totalTokens: Number.NaN,
+    };
+    payload.sessions[0]!.usage.context = { inputTokens: "nope" };
+    await writeFile(stateFile, JSON.stringify(payload), "utf8");
+
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+
+    // `NaN` serialises as `null`, so only the one usable count survives.
+    expect(sessions.get(state.id)!.usage?.turn).toEqual({ inputTokens: 80 });
+    // A context snapshot with nothing usable left is dropped, not stored empty.
+    expect(sessions.get(state.id)!.usage?.context).toBeUndefined();
   });
 
   test("a session that was mid-turn is restored idle, never running", async () => {

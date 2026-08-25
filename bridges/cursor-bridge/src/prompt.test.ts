@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import { followRun, type FollowableRun } from "./prompt.js";
 import { newSessionState } from "./agent-session.js";
+import { publicContextUsage } from "./public.js";
 import { sessionIsWorking, type SessionState } from "./state.js";
 
 function runningSession(): SessionState {
@@ -199,5 +200,487 @@ describe("a turn that outlives its budget", () => {
     run.finish();
     await completion;
     expect(state.promptJournal.get("r1")?.state).toBe("completed");
+  });
+});
+
+describe("terminal run usage", () => {
+  test("prefers RunResult usage over streamed and turn-ended usage", async () => {
+    const state = runningSession();
+    state.composer.selectedModelId = "requested-model";
+    state.currentTurnUsage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+    const run: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          agent_id: "agent-1",
+          run_id: "run-1",
+          usage: {
+            inputTokens: 40,
+            outputTokens: 10,
+            cacheReadTokens: 5,
+            cacheWriteTokens: 0,
+            totalTokens: 55,
+          },
+        };
+      },
+      cancel: async () => undefined,
+      wait: async () => ({
+        status: "finished",
+        durationMs: 123,
+        model: { id: "resolved-model" },
+        usage: {
+          inputTokens: 100,
+          outputTokens: 20,
+          cacheReadTokens: 5,
+          cacheWriteTokens: 10,
+          reasoningTokens: 7,
+          totalTokens: 135,
+        },
+      }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.usage).toMatchObject({
+      modelId: "resolved-model",
+      durationMs: 123,
+      turn: {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 10,
+        reasoningTokens: 7,
+        totalTokens: 135,
+      },
+    });
+    expect(publicContextUsage(state)).toMatchObject({
+      // Occupancy comes from the final model call, spend from the run total.
+      usedTokens: 55,
+      lastTurnTokens: 135,
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 10,
+      reasoningTokens: 7,
+      modelId: "resolved-model",
+      durationMs: 123,
+      source: "provider",
+    });
+  });
+
+  test("sums multiple streamed SDK usage messages when the terminal result omits usage", async () => {
+    const state = runningSession();
+    const run: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          agent_id: "agent-1",
+          run_id: "run-1",
+          usage: {
+            inputTokens: 40,
+            outputTokens: 10,
+            cacheReadTokens: 5,
+            cacheWriteTokens: 0,
+            totalTokens: 55,
+          },
+        };
+        yield {
+          type: "usage",
+          agent_id: "agent-1",
+          run_id: "run-1",
+          usage: {
+            inputTokens: 6,
+            outputTokens: 4,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 1,
+            reasoningTokens: 2,
+            totalTokens: 11,
+          },
+        };
+      },
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished" }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(publicContextUsage(state)).toMatchObject({
+      // 6 + 4 + 0 + 1: what the window held on the last call, not the run total.
+      usedTokens: 11,
+      lastTurnTokens: 66,
+      inputTokens: 46,
+      outputTokens: 14,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 1,
+      reasoningTokens: 2,
+      source: "provider",
+    });
+  });
+
+  test("uses the provider total instead of reconstructing it from token categories", () => {
+    const state = runningSession();
+    state.usage = {
+      turn: {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 10,
+        totalTokens: 121,
+      },
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 121,
+      lastTurnTokens: 121,
+    });
+  });
+
+  test("records terminal usage when a run ends in error", async () => {
+    const state = runningSession();
+    const run: FollowableRun = {
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({
+        status: "error",
+        error: { message: "provider failed" },
+        durationMs: 234,
+        model: { id: "resolved-model" },
+        usage: {
+          inputTokens: 30,
+          outputTokens: 5,
+          cacheReadTokens: 2,
+          cacheWriteTokens: 0,
+          totalTokens: 37,
+        },
+      }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.status).toBe("error");
+    expect(state.error).toBe("provider failed");
+    expect(state.usage).toMatchObject({
+      modelId: "resolved-model",
+      durationMs: 234,
+      turn: { inputTokens: 30, outputTokens: 5, totalTokens: 37 },
+    });
+  });
+
+  test("records terminal usage when a run is cancelled", async () => {
+    const state = runningSession();
+    const run: FollowableRun = {
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({
+        status: "cancelled",
+        usage: {
+          inputTokens: 12,
+          outputTokens: 3,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 15,
+        },
+      }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.status).toBe("idle");
+    expect(state.error).toBeUndefined();
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 15,
+      lastTurnTokens: 15,
+    });
+  });
+
+  test("falls back to the turn-ended delta when neither terminal nor streamed usage exists", async () => {
+    // The documented compatibility path for runtimes that report usage only
+    // through `onDelta`. Nothing else covers the third tier of the chain.
+    const state = runningSession();
+    state.composer.selectedModelId = "requested-model";
+    state.currentTurnUsage = { inputTokens: 70, outputTokens: 10, cacheReadTokens: 20 };
+    const run: FollowableRun = {
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished" }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.usage?.turn).toEqual({
+      inputTokens: 70,
+      outputTokens: 10,
+      cacheReadTokens: 20,
+    });
+    expect(publicContextUsage(state)).toMatchObject({
+      // No provider total to trust, so the categories are summed.
+      usedTokens: 100,
+      lastTurnTokens: 100,
+      modelId: "requested-model",
+    });
+    expect(state.currentTurnUsage).toBeUndefined();
+  });
+
+  test("keeps the previous snapshot when a turn reports no usage at all", async () => {
+    const state = runningSession();
+    state.usage = {
+      turn: { inputTokens: 90, outputTokens: 10, totalTokens: 100 },
+      updatedAt: new Date(1).toISOString(),
+    };
+    const run: FollowableRun = {
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished" }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.usage?.turn).toEqual({ inputTokens: 90, outputTokens: 10, totalTokens: 100 });
+  });
+
+  test("recomputes the provider total when a streamed message omits it", async () => {
+    // `terminalTurnUsage` accepts partial usage objects on purpose, so a
+    // carried-forward `totalTokens` would summarise a different subset of
+    // messages than the categories beside it — and the context projection
+    // trusts the total over those categories.
+    const state = runningSession();
+    const run: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: 40,
+            outputTokens: 10,
+            cacheReadTokens: 5,
+            cacheWriteTokens: 0,
+            totalTokens: 55,
+          },
+        };
+        yield { type: "usage", usage: { inputTokens: 6, outputTokens: 4 } };
+      },
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished" }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.usage?.turn).toMatchObject({
+      inputTokens: 46,
+      outputTokens: 14,
+      cacheReadTokens: 5,
+      cacheWriteTokens: 0,
+      // 46 + 14 + 5 + 0, not the 55 the first message reported.
+      totalTokens: 65,
+    });
+    expect(publicContextUsage(state)).toMatchObject({ lastTurnTokens: 65 });
+  });
+
+  test("drops token counts that are not usable numbers", async () => {
+    const state = runningSession();
+    const run: FollowableRun = {
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({
+        status: "finished",
+        usage: {
+          inputTokens: 50,
+          outputTokens: -5,
+          cacheReadTokens: Number.NaN,
+          cacheWriteTokens: Number.POSITIVE_INFINITY,
+          reasoningTokens: "12",
+          totalTokens: 50,
+        },
+      }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.usage?.turn).toEqual({ inputTokens: 50, totalTokens: 50 });
+  });
+
+  test("ignores a terminal result whose usage is not an object", async () => {
+    const state = runningSession();
+    state.currentTurnUsage = { inputTokens: 8, outputTokens: 2 };
+    const run: FollowableRun = {
+      async *stream() {
+        yield { type: "usage", usage: "not-an-object" };
+        yield { type: "assistant", text: "no usage here" };
+      },
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished", usage: "not-an-object" }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.usage?.turn).toEqual({ inputTokens: 8, outputTokens: 2 });
+  });
+});
+
+describe("context occupancy versus turn spend", () => {
+  test("measures the context gauge from the final model call, not the run total", async () => {
+    const state = runningSession();
+    state.composer.models = [
+      {
+        platform: "cursor",
+        id: "big-model",
+        label: "Big Model",
+        providerLabel: "Cursor",
+        contextWindow: 200_000,
+      },
+    ];
+    state.composer.selectedModelId = "big-model";
+    // Four model calls, each re-reading a ~120k context out of cache. The
+    // cumulative spend is far past the window; the window itself never was.
+    const call = {
+      inputTokens: 2_000,
+      outputTokens: 1_000,
+      cacheReadTokens: 117_000,
+      cacheWriteTokens: 0,
+      totalTokens: 120_000,
+    };
+    const run: FollowableRun = {
+      async *stream() {
+        for (let index = 0; index < 4; index += 1) {
+          yield { type: "usage", usage: call };
+        }
+      },
+      cancel: async () => undefined,
+      wait: async () => ({
+        status: "finished",
+        model: { id: "big-model" },
+        usage: {
+          inputTokens: 8_000,
+          outputTokens: 4_000,
+          cacheReadTokens: 468_000,
+          cacheWriteTokens: 0,
+          totalTokens: 480_000,
+        },
+      }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    const usage = publicContextUsage(state);
+    expect(usage).toMatchObject({
+      usedTokens: 120_000,
+      maximumTokens: 200_000,
+      lastTurnTokens: 480_000,
+    });
+    // The gauge stays inside the window rather than pegging at 100%.
+    expect(usage?.usedTokens).toBeLessThan(usage?.maximumTokens ?? 0);
+  });
+
+  test("reports one figure when the run made a single model call", async () => {
+    const state = runningSession();
+    const run: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: 30,
+            outputTokens: 10,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 40,
+          },
+        };
+      },
+      cancel: async () => undefined,
+      wait: async () => ({ status: "finished" }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    // One reading, so nothing to disambiguate and nothing duplicated on disk.
+    expect(state.usage?.context).toBeUndefined();
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 40,
+      lastTurnTokens: 40,
+    });
+  });
+
+  test("records streamed usage when the turn is abandoned after its budget", async () => {
+    const state = runningSession();
+    let released!: () => void;
+    const streamOpen = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    const run: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: 25,
+            outputTokens: 5,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 30,
+          },
+        };
+        await streamOpen;
+      },
+      // Neither the wait nor the cancellation ever settles.
+      wait: () => new Promise(() => undefined),
+      cancel: () => new Promise(() => undefined),
+    };
+
+    const completion = followRun(
+      state,
+      run,
+      state.promptSequence,
+      { prompt: "x", images: [] },
+      5,
+      50,
+    );
+    await completion;
+    released();
+
+    expect(state.status).toBe("error");
+    expect(state.error).toContain("did not stop");
+    // The turn was abandoned, but the tokens it burned still happened.
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 30,
+      lastTurnTokens: 30,
+    });
+  });
+
+  test("records streamed usage when a terminal result arrives after the budget", async () => {
+    const state = runningSession();
+    const run = controlledRun();
+    const streaming: FollowableRun = {
+      async *stream() {
+        yield {
+          type: "usage",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 8,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 20,
+          },
+        };
+        yield* run.stream();
+      },
+      wait: run.wait,
+      cancel: run.cancel,
+    };
+
+    const completion = followRun(
+      state,
+      streaming,
+      state.promptSequence,
+      { prompt: "x", images: [] },
+      5,
+    );
+    await waitFor(() => run.cancels() === 1);
+    run.finish({ status: "cancelled" });
+    await completion;
+
+    expect(state.status).toBe("idle");
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 20,
+      lastTurnTokens: 20,
+    });
   });
 });

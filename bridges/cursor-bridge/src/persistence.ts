@@ -214,8 +214,8 @@ function restoreComposer(value: unknown): SessionState["composer"] {
   };
 }
 
-function restoreUsage(value: unknown): SessionState["usage"] {
-  if (!isObject(value) || !isObject(value.turn)) return undefined;
+function restoreTurnUsage(value: unknown): NonNullable<SessionState["usage"]>["turn"] | undefined {
+  if (!isObject(value)) return undefined;
   const turn: NonNullable<SessionState["usage"]>["turn"] = {};
   for (const key of [
     "inputTokens",
@@ -223,13 +223,22 @@ function restoreUsage(value: unknown): SessionState["usage"] {
     "cacheReadTokens",
     "cacheWriteTokens",
     "reasoningTokens",
+    "totalTokens",
   ] as const) {
-    const count = value.turn[key];
+    const count = value[key];
     if (typeof count === "number" && Number.isFinite(count)) turn[key] = count;
   }
-  if (Object.keys(turn).length === 0) return undefined;
+  return Object.keys(turn).length > 0 ? turn : undefined;
+}
+
+function restoreUsage(value: unknown): SessionState["usage"] {
+  if (!isObject(value)) return undefined;
+  const turn = restoreTurnUsage(value.turn);
+  if (!turn) return undefined;
+  const context = restoreTurnUsage(value.context);
   return {
     turn,
+    ...(context ? { context } : {}),
     ...(nonBlank(value.modelId) ? { modelId: value.modelId } : {}),
     ...(typeof value.durationMs === "number" && Number.isFinite(value.durationMs)
       ? { durationMs: value.durationMs }

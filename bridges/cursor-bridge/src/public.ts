@@ -11,7 +11,7 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { PROVIDER } from "./config.js";
-import { sessionIsWorking, type JsonObject, type SessionState } from "./state.js";
+import { sessionIsWorking, type JsonObject, type SessionState, type TurnUsage } from "./state.js";
 
 export function publicSession(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
@@ -104,11 +104,13 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
   const usage = state.usage;
   if (!usage) return undefined;
   const turn = usage.turn;
-  const used =
-    (turn.inputTokens ?? 0) +
-    (turn.outputTokens ?? 0) +
-    (turn.cacheReadTokens ?? 0) +
-    (turn.cacheWriteTokens ?? 0);
+  const spent = turnTokenTotal(turn);
+  // `usedTokens` is measured against the model's context window, so it has to
+  // be an occupancy figure. `turn` is cumulative across every model call the
+  // run made and can exceed the window several times over, which would peg the
+  // gauge at 100%; `context` is the final call's own snapshot, which is what
+  // the window actually held. They are the same number on a single-call run.
+  const used = usage.context ? turnTokenTotal(usage.context) : spent;
   if (used === 0) return undefined;
   const model = state.composer.models.find((entry) => entry.id === usage.modelId);
   return {
@@ -120,11 +122,28 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     ...(turn.cacheReadTokens !== undefined ? { cacheReadTokens: turn.cacheReadTokens } : {}),
     ...(turn.cacheWriteTokens !== undefined ? { cacheWriteTokens: turn.cacheWriteTokens } : {}),
     ...(turn.reasoningTokens !== undefined ? { reasoningTokens: turn.reasoningTokens } : {}),
-    lastTurnTokens: used,
+    // What the turn cost, as opposed to what the window holds. The category
+    // breakdown above is cumulative for the same reason.
+    lastTurnTokens: spent,
     ...(usage.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
     source: "provider",
     updatedAt: usage.updatedAt,
   };
+}
+
+/**
+ * The provider's own total when it reported one, and the sum of the categories
+ * it summarises otherwise. `reasoningTokens` is deliberately excluded: the SDK
+ * documents it as a subset of `outputTokens`, so adding it would double-count.
+ */
+function turnTokenTotal(turn: TurnUsage): number {
+  return (
+    turn.totalTokens ??
+    (turn.inputTokens ?? 0) +
+      (turn.outputTokens ?? 0) +
+      (turn.cacheReadTokens ?? 0) +
+      (turn.cacheWriteTokens ?? 0)
+  );
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {

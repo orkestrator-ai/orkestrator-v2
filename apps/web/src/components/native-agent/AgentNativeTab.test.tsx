@@ -1785,6 +1785,20 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
   });
 
+  test("treats a recovering Pi projection as still connecting", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+      turn: { phase: "recovering" as const },
+    }));
+
+    render(<AgentNativeTab tabId="tab-pi-recovering" data={identity("pi")} isActive />);
+
+    await waitFor(() => expect(screen.getByText("Connecting to Pi...")).toBeTruthy());
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+  });
+
   test("stays connecting while an invalidation races a new tab's session creation", async () => {
     // What the backend really answers while `ensure` is still spawning the
     // agent: the logical key has no provider session to resolve yet.

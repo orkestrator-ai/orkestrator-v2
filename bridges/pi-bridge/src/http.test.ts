@@ -26,6 +26,7 @@ const { newSessionState, setAgentSessionTestHooks } = await import("./agent-sess
 const { refreshModels } = await import("./models.js");
 const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
 const { sessions, clientSessionKeys } = await import("./state.js");
+const { loadPersistedState } = await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 let origin: string;
@@ -258,6 +259,34 @@ describe("successful lifecycle routes", () => {
       expect(clientSessionKeys.get("tab-create-success")).toBe(body.sessionId);
       expect(sessions.has(body.sessionId)).toBe(true);
     } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("create persists the session so a restart can reopen it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-persist-"));
+    process.env.PI_BRIDGE_STATE_DIR = directory;
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    try {
+      const response = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({ clientSessionKey: "tab-durable-create" }),
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { sessionId: string };
+      expect(typeof body.sessionId).toBe("string");
+
+      sessions.clear();
+      clientSessionKeys.clear();
+      await loadPersistedState();
+
+      expect(sessions.has(body.sessionId)).toBe(true);
+      expect(clientSessionKeys.get("tab-durable-create")).toBe(body.sessionId);
+    } finally {
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      sessions.clear();
+      clientSessionKeys.clear();
+      await rm(directory, { recursive: true, force: true });
       resetTestDependencies();
     }
   });

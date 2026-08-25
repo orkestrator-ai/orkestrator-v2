@@ -750,7 +750,35 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         generation = `${generation}:${String(snapshot.providerGeneration)}`;
       }
       if (snapshot.status === "missing") {
-        throw new ProviderUnavailableError("Native agent provider session is recovering");
+        // The mapping is real and the bridge is up; it just does not hold this
+        // session yet (a restart that has not finished restoring, an idle
+        // detach). Stamping `connection: "error"` made the renderer flash
+        // Connection Failed on a tab that was about to attach. Stay connecting
+        // so the next poll can reopen it instead of asking the user to Retry.
+        const projection: NativeAgentSessionProjection = {
+          ...(previous?.projection ?? {
+            platform: input.agent,
+            environmentId: input.environmentId,
+            sessionId: resolved.session.providerSessionId,
+            messages: [],
+            interactions: [],
+            composerControls: [],
+            capabilities,
+            revision: 0,
+            generation,
+          }),
+          connection: "connecting",
+          turn: { phase: "recovering" },
+          notices: [
+            {
+              kind: "recovery",
+              message: "Reconnecting to the native agent runtime…",
+            },
+          ],
+          revision: 0,
+          generation,
+        };
+        return this.commitProjection(key, windowed, projection, generation, epoch);
       }
       const blocked = interactionSnapshot.requests.length > 0;
       const composer = await this.projectionComposer(

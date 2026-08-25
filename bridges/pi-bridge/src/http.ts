@@ -170,6 +170,10 @@ async function routeGlobal(
     const body = await readJson(request);
     const clientSessionKey = readBoundedString(body.clientSessionKey, 512, "clientSessionKey");
     const state = await createSession(clientSessionKey, parseComposerPatch(body));
+    // The backend stores this session id as soon as create returns. A bridge
+    // restart before the first prompt used to lose it, so every later status
+    // read 404'd and the tab stuck on "session is recovering".
+    await persistBarrier();
     json(response, 201, publicSession(state));
     return true;
   }
@@ -187,6 +191,7 @@ async function routeGlobal(
     const state = await resumeSession(sessionFile, parseComposerPatch(body)).catch((error) => {
       throw new HttpError(400, errorText(error));
     });
+    await persistBarrier();
     json(response, 201, publicSession(state));
     return true;
   }
@@ -269,6 +274,9 @@ async function routeSession(
     // the at-most-once window, where a failure is unambiguous: nothing
     // journaled, no prompt written.
     await ensureSession(state);
+    // `sessionFile` is what re-attaches to the same Pi conversation after a
+    // restart. Create persists the bridge id; this persists the pointer.
+    await persistBarrier();
     return json(response, 200, { attached: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {
@@ -441,6 +449,7 @@ async function handleFork(
     readBoundedString(body.upToMessageId, 512, "upToMessageId") ??
     readBoundedString(body.lastMessageId, 512, "lastMessageId");
   const forked = await forkSession(state, messageId);
+  await persistBarrier();
   return json(response, 200, {
     sessionId: forked.id,
     ...(forked.title ? { title: forked.title } : {}),

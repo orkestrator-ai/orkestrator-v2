@@ -358,7 +358,9 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
       },
     };
     const maxAttempts =
-      input.agent === "cursor" || input.agent === "grok" ? ACP_SESSION_CREATE_ATTEMPTS : 1;
+      input.agent === "cursor" || input.agent === "grok" || input.agent === "pi"
+        ? ACP_SESSION_CREATE_ATTEMPTS
+        : 1;
     let providerSessionId: string | undefined;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
@@ -372,9 +374,11 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
         if (!(error instanceof ProviderUnavailableError) || attempt === maxAttempts) {
           throw error;
         }
-        // ACP session/create is idempotent by clientSessionKey. Retrying here
-        // keeps a short bridge/agent initialization race represented as
+        // ACP and Pi session/create are both idempotent by clientSessionKey.
+        // Retrying here keeps a short bridge initialization race represented as
         // "connecting" by the waiting renderer, without risking two sessions.
+        // Pi belongs here because its cold start builds a model runtime the
+        // same way an ACP spawn does.
         await this.assertEnvironmentLive(input.environmentId);
         const delay = ACP_SESSION_CREATE_RETRY_BASE_MS * 2 ** (attempt - 1);
         await (this.options.delay

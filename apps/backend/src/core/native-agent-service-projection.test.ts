@@ -499,6 +499,34 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("keeps a missing provider session connecting instead of failed", async () => {
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () => ({ status: "missing", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-pi-recovering-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi",
+        };
+        await service.ensureSession(identity);
+
+        const projection = await service.getProjection(identity);
+        expect(projection).toMatchObject({
+          platform: "pi",
+          connection: "connecting",
+          turn: { phase: "recovering" },
+        });
+        expect(projection?.turn.error).toBeUndefined();
+      },
+    );
+  });
+
   test("gates composer surfaces on the capability table, not on what the provider reported", async () => {
     // OpenCode has no fast surface and no Build/Plan permission mode: its
     // `mode` used to be sent as the SDK `agent` name, duplicating the execution

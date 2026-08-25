@@ -80,7 +80,15 @@ export async function authStatus(): Promise<BridgeAuthStatus> {
     providers.push({
       id: provider.id,
       label: provider.name || provider.id,
-      authenticated: configured,
+      // Asked of the runtime rather than inferred from a stored credential
+      // being present, which is what this module promises. A key that was
+      // revoked after it was written still has `hasConfiguredAuth` true, and
+      // reporting that as signed in tells the user their empty model picker is
+      // someone else's problem. `checkAuth` resolves undefined for a
+      // credential it cannot resolve, and rejects — caught above — when a
+      // refresh fails, so either way the models it can actually serve is the
+      // corroborating answer.
+      authenticated: configured && (Boolean(check) || models.length > 0),
       ...(check?.source ? { source: check.source } : {}),
       ...(check?.type ? { type: check.type } : {}),
       modelCount: models.length,

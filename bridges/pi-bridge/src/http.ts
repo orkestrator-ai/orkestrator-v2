@@ -12,7 +12,12 @@ import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
 import { authenticate, MAX_BODY_BYTES, PROVIDER, workingDirectory } from "./config.js";
 import { authStatus, CredentialError } from "./credentials.js";
-import { publicApprovals, publicInteractions, resolveApproval } from "./interactions.js";
+import {
+  denyAllApprovals,
+  publicApprovals,
+  publicInteractions,
+  resolveApproval,
+} from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
 import { schedulePersist } from "./persistence.js";
 import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
@@ -40,6 +45,7 @@ import {
   applyComposerPatch,
   applyComposerToSession,
   createSession,
+  detachSession,
   ensureSession,
   forkSession,
   listResumableSessions,
@@ -47,6 +53,7 @@ import {
   resumeSession,
 } from "./agent-session.js";
 import {
+  clientSessionKeys,
   isObject,
   nonBlank,
   sessions,
@@ -175,7 +182,11 @@ async function routeGlobal(
       readBoundedString(body.sessionId, 4096, "sessionId") ??
       readBoundedString(body.threadId, 4096, "sessionId");
     if (!sessionFile) throw new HttpError(400, "sessionId is required");
-    const state = await resumeSession(sessionFile, parseComposerPatch(body));
+    // A handle outside the session directory, or one naming a file that does
+    // not exist, is a caller error rather than a bridge failure.
+    const state = await resumeSession(sessionFile, parseComposerPatch(body)).catch((error) => {
+      throw new HttpError(400, errorText(error));
+    });
     json(response, 201, publicSession(state));
     return true;
   }
@@ -223,6 +234,9 @@ async function routeSession(
   if (!action && request.method === "GET") {
     boundTranscriptForRead(state);
     return json(response, 200, publicSession(state));
+  }
+  if (!action && request.method === "DELETE") {
+    return await handleDelete(response, state);
   }
   if (action === "messages" && request.method === "GET") {
     boundTranscriptForRead(state);
@@ -290,6 +304,38 @@ async function routeSession(
   return json(response, 404, { error: "Not found" });
 }
 
+/**
+ * Close one bridge session, which is what a closed tab means.
+ *
+ * The backend issues this for a torn-down `pi-native` tab and reads a 404 as
+ * "already gone", so a bridge without the route leaked every session it ever
+ * served — a bounded-but-large transcript retained for the life of the
+ * process and rewritten into `state.json` on every persist.
+ *
+ * Deliberately narrower than it looks: Pi's own JSONL session file is *not*
+ * removed. The conversation lives there rather than here, so deleting it would
+ * destroy user history that a resume is still entitled to reach. This releases
+ * the SDK session, denies anything parked, and drops the bridge's rendered
+ * copy.
+ */
+async function handleDelete(response: ServerResponse, state: SessionState): Promise<void> {
+  denyAllApprovals(state, "The session was closed before this request was answered.");
+  // Cancelling first means a turn in flight stops writing into a transcript
+  // nothing will read, rather than running to completion against a detached
+  // session.
+  try {
+    state.cancelTurn?.();
+  } catch {
+    // Best-effort: a cancel handle that throws must not strand the session in
+    // the map, which is the leak this route exists to close.
+  }
+  await detachSession(state);
+  sessions.delete(state.id);
+  if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
+  schedulePersist();
+  return json(response, 200, { deleted: true });
+}
+
 async function handleConfig(
   request: IncomingMessage,
   response: ServerResponse,
@@ -336,16 +382,23 @@ async function handleCancel(response: ServerResponse, state: SessionState): Prom
  * user is watching in order to shrink its context.
  */
 async function handleCompact(response: ServerResponse, state: SessionState): Promise<void> {
-  if (state.status === "running" || state.dispatching) {
+  if (state.status === "running" || state.dispatching || state.compacting) {
     throw new HttpError(409, "Session is already running");
   }
-  const session = await ensureSession(state);
+  // Claimed synchronously, before the first await, exactly as the prompt route
+  // does. `ensureSession` is a full cold attach for the idle-detached sessions
+  // compaction usually targets, and a prompt arriving inside that window used
+  // to pass its own busy check and claim the turn — which `session.compact()`
+  // then aborted, silently cancelling a turn the user had just sent.
+  state.dispatching = true;
   state.compacting = true;
   state.revision += 1;
   try {
+    const session = await ensureSession(state);
     await session.compact();
   } finally {
     state.compacting = false;
+    state.dispatching = false;
     state.revision += 1;
     schedulePersist();
   }
@@ -448,7 +501,10 @@ async function handlePrompt(
       throw new HttpError(409, "Prompt dispatch is still preparing");
     return json(response, 202, { accepted: true, duplicate: true });
   }
-  if (state.status === "running" || state.dispatching) {
+  // `compacting` counts as busy: Pi's compaction aborts whatever is running,
+  // so a prompt admitted alongside one is a turn that gets cancelled out from
+  // under the user.
+  if (state.status === "running" || state.dispatching || state.compacting) {
     throw new HttpError(409, "Session is already running");
   }
 

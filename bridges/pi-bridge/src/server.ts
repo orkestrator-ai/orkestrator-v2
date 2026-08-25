@@ -58,9 +58,18 @@ function sweepIdleSessions(): void {
   }
 }
 
-export async function start(): Promise<void> {
+/**
+ * Bind the server and arm its background sweeps.
+ *
+ * `listenPort` exists for tests. `config.ts` reads `PORT` once at import, so a
+ * suite that sets it cannot count on being the first file in a shared process
+ * to load that module — it would bind whatever port the ambient environment
+ * happened to carry, and fail when that port is in use. Production passes
+ * nothing and keeps the configured port.
+ */
+export async function start(listenPort: number = port): Promise<void> {
   await loadPersistedState();
-  await new Promise<void>((resolve) => server.listen(port, hostname, resolve));
+  await new Promise<void>((resolve) => server.listen(listenPort, hostname, resolve));
 
   const idleSweep = setInterval(sweepIdleSessions, IDLE_SWEEP_MS);
   idleSweep.unref();

@@ -111,16 +111,28 @@ describe("tool cards", () => {
       isError: false,
     });
     expect(parts(state)).toHaveLength(1);
-    expect(parts(state)[0]).toMatchObject({ toolState: "success", toolOutput: "hi\n" });
+    // The end frame carries no `args` — Pi sends them on the start frame and
+    // nowhere else — so a card re-rendered from the frame alone would lose the
+    // command it ran and fall back to the bare tool name.
+    expect(parts(state)[0]).toMatchObject({
+      toolState: "success",
+      toolOutput: "hi\n",
+      toolTitle: "echo hi",
+    });
   });
 
   test("records a failed call with the text the model also saw", () => {
     const state = running();
     applySessionEvent(state, {
-      type: "tool_execution_end",
+      type: "tool_execution_start",
       toolCallId: "call-1",
       toolName: "read",
       args: { path: "missing.ts" },
+    });
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "read",
       result: { content: [{ type: "text", text: "ENOENT: missing.ts" }] },
       isError: true,
     });
@@ -128,23 +140,131 @@ describe("tool cards", () => {
     expect(parts(state)[0]).toMatchObject({
       toolState: "failure",
       toolError: "ENOENT: missing.ts",
+      toolTitle: "missing.ts",
     });
   });
 
   test("renders an edit's diff onto the card", () => {
     const state = running();
     applySessionEvent(state, {
-      type: "tool_execution_end",
+      type: "tool_execution_start",
       toolCallId: "call-1",
       toolName: "edit",
       args: { path: "src/a.ts", edits: [{ oldText: "a", newText: "b" }] },
+    });
+    // The diff only ever arrives on the end frame, and the path only ever on
+    // the start frame, so this card needs both halves to render completely.
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "edit",
       result: { content: [], details: { diff: "-a\n+b" } },
       isError: false,
     });
 
     expect(parts(state)[0]).toMatchObject({
       toolDiff: { filePath: "src/a.ts", diff: "-a\n+b" },
+      toolTitle: "src/a.ts",
     });
+  });
+
+  test("degrades a settled call it never saw start to the tool name", () => {
+    const state = running();
+    // A restart, or a call started before this bridge attached: there is no
+    // remembered input, so the card must still render rather than throw.
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "orphan-1",
+      toolName: "bash",
+      result: { content: [{ type: "text", text: "done" }] },
+      isError: false,
+    });
+
+    expect(parts(state)[0]).toMatchObject({
+      toolState: "success",
+      toolTitle: "bash",
+      toolOutput: "done",
+    });
+  });
+
+  test("releases a settled call's remembered input", () => {
+    const state = running();
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "call-1",
+      toolName: "bash",
+      args: { command: "echo hi" },
+    });
+    expect(state.toolInputs.size).toBe(1);
+
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "bash",
+      result: { content: [] },
+      isError: false,
+    });
+    // Held only for the life of the call: a turn with many tool calls must not
+    // accumulate their arguments for the life of the session.
+    expect(state.toolInputs.size).toBe(0);
+  });
+
+  test("keeps the write card's file path across settlement", () => {
+    const state = running();
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "call-1",
+      toolName: "write",
+      args: { path: "src/new.ts", content: "export const a = 1;\n" },
+    });
+    applySessionEvent(state, {
+      type: "tool_execution_end",
+      toolCallId: "call-1",
+      toolName: "write",
+      result: { content: [] },
+      isError: false,
+    });
+
+    expect(parts(state)[0]).toMatchObject({
+      toolTitle: "src/new.ts",
+      toolDiff: { filePath: "src/new.ts", after: "export const a = 1;\n" },
+    });
+  });
+
+  test("ignores turn frames from a run nobody owns any more", () => {
+    const state = running();
+    applySessionEvent(state, textDelta("live"));
+    // What a timed-out turn looks like from here: the wait rejected, the turn
+    // was failed, and the aborted run is still winding down. Its frames must
+    // not append to a transcript already reported as failed, nor survive to
+    // interleave with the next turn's message.
+    state.status = "error";
+
+    applySessionEvent(state, textDelta(" zombie"));
+    applySessionEvent(state, {
+      type: "tool_execution_start",
+      toolCallId: "call-late",
+      toolName: "bash",
+      args: { command: "rm -rf /" },
+    });
+    applySessionEvent(state, {
+      type: "turn_end",
+      message: { usage: { input: 999, output: 999 } },
+    });
+
+    expect(parts(state)).toHaveLength(1);
+    expect(parts(state)[0]).toMatchObject({ content: "live" });
+    expect(state.currentTurnUsage).toBeUndefined();
+  });
+
+  test("still records session-scoped frames while no turn is running", () => {
+    const state = running();
+    state.status = "idle";
+
+    // The title and the thinking level are true whether or not a turn owns
+    // them, and the tab reads both while idle.
+    applySessionEvent(state, { type: "session_info_changed", name: "Fix the parser" });
+    expect(state.title).toBe("Fix the parser");
   });
 
   test("ignores a call with no id rather than opening an unpatchable card", () => {

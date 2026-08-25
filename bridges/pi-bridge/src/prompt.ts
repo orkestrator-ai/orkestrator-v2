@@ -119,6 +119,18 @@ async function followRun(
     if (!turnStillOwned(state, promptSequence)) return;
     finishTurn(state, input);
   } catch (error) {
+    // The timeout rejects the wait, not the run: `session.prompt` is still
+    // executing, and `settleTurn` is about to drop the only handle that can
+    // stop it. Aborting first is what keeps a timed-out turn from continuing
+    // to write into the transcript of a session the user has been told
+    // failed — and from interleaving its deltas into the next turn's message.
+    // Awaited so the abort has landed before the session is reported idle.
+    try {
+      await state.cancelTurn?.();
+    } catch {
+      // Best-effort. A session that will not abort still has to reach a
+      // terminal state here, or the tab stays "running" forever.
+    }
     if (!turnStillOwned(state, promptSequence)) return;
     failTurn(state, error, input);
   }

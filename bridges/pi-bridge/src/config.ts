@@ -64,7 +64,9 @@ export function sessionDirectory(): string | undefined {
  * a per-call prompt, is what isolates an agent. When it *is* on, every timeout,
  * disconnect and malformed answer denies — see `interactions.ts`.
  */
-export const approvalsEnabled = process.env.PI_BRIDGE_REQUIRE_APPROVAL === "1";
+export function approvalsEnabled(): boolean {
+  return process.env.PI_BRIDGE_REQUIRE_APPROVAL === "1";
+}
 
 /**
  * Ambient project-local resources the SDK is allowed to load from the workspace.
@@ -123,7 +125,17 @@ export const CATALOG_TIMEOUT_MS = 30_000;
  * Denial, never approval: an unanswered prompt is a prompt nobody saw, and
  * running the command anyway would execute something the user never read.
  */
-export const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+export function approvalTimeoutMs(): number {
+  return parseBoundedInteger(
+    process.env.PI_BRIDGE_APPROVAL_TIMEOUT_MS,
+    5 * 60 * 1000,
+    // Floored at a second rather than at a realistic human budget: the only
+    // caller that lowers it is a test proving the timeout denies, and a test
+    // that has to wait five minutes to prove that is a test nobody runs.
+    1_000,
+    60 * 60 * 1000,
+  );
+}
 
 /**
  * Authenticate a request against the bridge token.

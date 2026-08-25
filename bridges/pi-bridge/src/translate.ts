@@ -29,6 +29,24 @@ import {
 } from "./state.js";
 
 /**
+ * Whether a turn-scoped frame still has an owner to render into.
+ *
+ * The SDK's listener is per *session*, not per run, so a frame carries nothing
+ * that identifies which run produced it. A run this bridge has given up on —
+ * one that outran `PROMPT_TIMEOUT_MS` and was aborted — can still emit for as
+ * long as it takes Pi to wind down, and those frames would otherwise append to
+ * a transcript already reported as failed and interleave with the next turn's
+ * message.
+ *
+ * Session-scoped frames (the title, the thinking level, the queue, compaction)
+ * are deliberately not gated: they are true whether or not a turn is running,
+ * and dropping them would lose state the tab reads while idle.
+ */
+function turnFramesWelcome(state: SessionState): boolean {
+  return state.status === "running" || state.compacting;
+}
+
+/**
  * Apply one session event to the transcript.
  *
  * Unknown event types are ignored rather than rejected. Pi adds vocabulary
@@ -40,6 +58,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
 
   switch (event.type) {
     case "message_update":
+      if (!turnFramesWelcome(state)) break;
       applyMessageUpdate(state, event.assistantMessageEvent);
       break;
     case "message_end":
@@ -47,15 +66,19 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
       state.openTextParts.clear();
       break;
     case "tool_execution_start":
+      if (!turnFramesWelcome(state)) break;
       applyToolExecution(state, event, "pending");
       break;
     case "tool_execution_update":
+      if (!turnFramesWelcome(state)) break;
       applyToolExecution(state, event, "pending");
       break;
     case "tool_execution_end":
+      if (!turnFramesWelcome(state)) break;
       applyToolExecution(state, event, "settled");
       break;
     case "turn_end":
+      if (!turnFramesWelcome(state)) break;
       applyTurnUsage(state, event.message);
       break;
     case "queue_update":
@@ -79,6 +102,7 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
       }
       break;
     case "auto_retry_start":
+      if (!turnFramesWelcome(state)) break;
       applyNotice(state, retryNotice(event));
       break;
     case "bash_execution_update":
@@ -155,6 +179,31 @@ function applyTextDelta(state: SessionState, text: string, kind: "text" | "think
   state.revision += 1;
 }
 
+/**
+ * The most bounded set of in-flight tool inputs worth holding.
+ *
+ * One turn's parallel calls, with room to spare. The map is cleared when a
+ * call settles and when a turn ends, so this cap only ever bites on a runaway
+ * stream of starts with no ends — where dropping the oldest input costs a card
+ * title, not correctness.
+ */
+const MAX_TRACKED_TOOL_INPUTS = 256;
+
+/**
+ * Remember what a tool call was started with.
+ *
+ * The end frame does not repeat the arguments, so without this every settled
+ * card re-rendered from `{}`.
+ */
+function rememberToolInput(state: SessionState, toolCallId: string, input: unknown): void {
+  if (!isObject(input)) return;
+  if (state.toolInputs.size >= MAX_TRACKED_TOOL_INPUTS) {
+    const oldest = state.toolInputs.keys().next();
+    if (!oldest.done) state.toolInputs.delete(oldest.value);
+  }
+  state.toolInputs.set(toolCallId, input);
+}
+
 function applyToolExecution(
   state: SessionState,
   event: JsonObject,
@@ -162,9 +211,16 @@ function applyToolExecution(
 ): void {
   const toolCallId = nonBlank(event.toolCallId) ? event.toolCallId : undefined;
   if (!toolCallId) return;
+  // Pi sends the arguments on the start frame only. Falling back to the
+  // remembered input is what keeps a settled `bash` card titled with the
+  // command it ran instead of the word "bash", and keeps the file path on an
+  // edit or write diff — the diff itself only ever arrives on the end frame,
+  // so it cannot be preserved by simply not re-rendering.
+  if (isObject(event.args)) rememberToolInput(state, toolCallId, event.args);
+  const input = isObject(event.args) ? event.args : state.toolInputs.get(toolCallId);
   const rendered = renderToolCall({
     toolName: nonBlank(event.toolName) ? event.toolName : "tool",
-    input: event.args,
+    input,
     // `tool_execution_update` streams a partial result under its own key; the
     // end frame carries the final one. Both render through the same path so a
     // long `bash` call fills in as it runs.
@@ -191,6 +247,8 @@ function applyToolExecution(
 
   if (phase === "settled") {
     part.toolState = rendered.toolError === undefined ? "success" : "failure";
+    // The call is over, so its input has no further reader.
+    state.toolInputs.delete(toolCallId);
   } else if (part.toolState === undefined) {
     part.toolState = "pending";
   }

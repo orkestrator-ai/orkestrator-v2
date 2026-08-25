@@ -40,31 +40,49 @@ export function publicStatus(state: SessionState): JsonObject {
     status: state.status,
     error: state.error,
     revision: state.revision,
+    // The backend reads the title from this route and no other — `/session/:id`
+    // carries one too, but nothing calls it for Pi. Omitting it here left the
+    // title Pi reports in `session_info_changed` stranded in bridge state.
+    ...(state.title ? { title: state.title } : {}),
     composer: state.composer,
     ...(contextUsage ? { contextUsage } : {}),
     runtime: publicRuntime(state),
   };
 }
 
+/**
+ * The transcript window the backend parses.
+ *
+ * Two fields here are read from an exact path rather than by name, so their
+ * shape is the contract and not a detail: `readTranscript` takes truncation
+ * from `messageWindow.truncated` and the failure text from a top-level
+ * `error`. A flat `truncated` and an absent `error` both parse cleanly as
+ * "false" and "no error" — which is why serving them that way showed an
+ * errored Pi turn as an empty failed tab and made the truncation notice
+ * unreachable. This matches `acp-public.ts`.
+ */
 export function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
   const baseIndex = state.droppedMessages;
-  if (fromIndex === null || fromIndex < baseIndex) {
-    // The caller's anchor was evicted, so an incremental reply would silently
-    // skip messages. Hand back the whole retained window instead.
-    return {
-      messages: state.messages,
-      baseIndex,
-      revision: state.revision,
-      status: state.status,
-      truncated: state.transcriptTruncated,
-    };
-  }
+  // An anchor at or before the first retained message cannot be served
+  // incrementally without silently skipping the evicted range, so the whole
+  // retained window goes back instead.
+  const start =
+    fromIndex === null || fromIndex < baseIndex
+      ? 0
+      : Math.min(fromIndex - baseIndex, state.messages.length);
+  const omittedMessages = baseIndex + start;
   return {
-    messages: state.messages.slice(fromIndex - baseIndex),
-    baseIndex: Math.max(fromIndex, baseIndex),
+    messages: state.messages.slice(start),
+    baseIndex: omittedMessages,
+    totalMessages: baseIndex + state.messages.length,
+    messageWindow: {
+      truncated: state.transcriptTruncated || omittedMessages > 0,
+      ...(omittedMessages > 0 ? { omittedMessages } : {}),
+      ...(state.droppedParts > 0 ? { omittedParts: state.droppedParts } : {}),
+    },
     revision: state.revision,
     status: state.status,
-    truncated: state.transcriptTruncated,
+    error: state.error,
   };
 }
 

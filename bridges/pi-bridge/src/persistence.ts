@@ -52,23 +52,74 @@ export function schedulePersist(): void {
 /** Flush and stop accepting further writes. Used on shutdown. */
 export async function drainPersistence(): Promise<void> {
   if (!stateFilePath()) return;
+  // Closed to new writes *first*. Draining before this flag was set let a
+  // write scheduled during the drain (a turn settling as shutdown denies its
+  // approvals) chain onto the tail and run concurrently with the final write
+  // below — two writers truncating the same `.tmp` file, with the rename
+  // publishing whichever interleaving won.
+  shuttingDown = true;
   await tail.catch(() => undefined);
   await persistNow().catch(() => undefined);
-  shuttingDown = true;
+}
+
+/**
+ * Bring an oversized payload under the file bound by shedding transcripts.
+ *
+ * Transcripts are trimmed per session, never in aggregate, so enough sessions
+ * will always eventually exceed the whole-file bound. Skipping the write there
+ * — which is what this used to do — is silently permanent: nothing shrinks the
+ * aggregate afterwards, so every later write is skipped too and a restart
+ * loses every session pointer *and* the at-most-once prompt journal.
+ *
+ * What is shed is only the rendered transcript, oldest-touched session first.
+ * The session id, its Pi session file, its journal and its composer are what
+ * make a session recoverable, and they are tiny — a shed session re-attaches
+ * to the same Pi conversation, it just starts with an empty rendered copy.
+ * Live state is deliberately untouched: the tab the user is looking at keeps
+ * its transcript.
+ */
+function shedToFit(payload: PersistedState, order: Map<string, number>): boolean {
+  const byOldest = [...payload.sessions].sort(
+    (left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0),
+  );
+  let shed = 0;
+  for (const session of byOldest) {
+    if (session.messages.length === 0) continue;
+    session.droppedMessages = (session.droppedMessages ?? 0) + session.messages.length;
+    session.messages = [];
+    session.transcriptTruncated = true;
+    shed += 1;
+    if (Buffer.byteLength(JSON.stringify(payload)) <= MAX_STATE_FILE_BYTES) {
+      console.warn(
+        `[pi-bridge] state file over budget; persisted ${shed} session(s) without their transcript`,
+      );
+      return true;
+    }
+  }
+  // Every transcript is gone and it still does not fit, which means the
+  // non-transcript state alone is over budget. Report it rather than failing
+  // silently forever.
+  console.warn(
+    `[pi-bridge] state file still over budget after shedding ${shed} transcript(s); skipping write`,
+  );
+  return false;
 }
 
 async function persistNow(): Promise<void> {
   const stateFile = stateFilePath();
   if (!stateFile) return;
+  const live = Array.from(sessions.values());
   const payload: PersistedState = {
     version: 1,
     provider: "pi",
-    sessions: Array.from(sessions.values()).map(toPersisted),
+    sessions: live.map(toPersisted),
   };
-  const serialized = JSON.stringify(payload);
-  // A transcript that outgrew the file bound is not worth losing the whole
-  // file over: skip this write and let the next trimmed state land.
-  if (Buffer.byteLength(serialized) > MAX_STATE_FILE_BYTES) return;
+  let serialized = JSON.stringify(payload);
+  if (Buffer.byteLength(serialized) > MAX_STATE_FILE_BYTES) {
+    const order = new Map(live.map((state) => [state.id, state.lastAccessed]));
+    if (!shedToFit(payload, order)) return;
+    serialized = JSON.stringify(payload);
+  }
   await mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
   const temporary = `${stateFile}.tmp`;
   // Write-then-rename: a bridge killed mid-write must not leave a truncated

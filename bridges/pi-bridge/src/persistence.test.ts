@@ -30,6 +30,92 @@ async function readState(): Promise<PersistedState> {
   return JSON.parse(await readFile(join(directory, "state.json"), "utf8")) as PersistedState;
 }
 
+describe("the whole-file bound", () => {
+  /** A session whose transcript alone is a meaningful share of the cap. */
+  function bulkySession(key: string, lastAccessed: number) {
+    const state = newSessionState(key);
+    state.lastAccessed = lastAccessed;
+    state.sessionFile = `/sessions/${key}.jsonl`;
+    state.promptJournal.set("req-1", {
+      requestId: "req-1",
+      state: "completed",
+      acceptedAt: 1,
+    });
+    state.messages = [
+      {
+        id: `${key}-m1`,
+        role: "assistant",
+        content: "x".repeat(9 * 1024 * 1024),
+        parts: [],
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+    return state;
+  }
+
+  test("sheds transcripts oldest-first rather than skipping the write", async () => {
+    // Transcripts are trimmed per session and never in aggregate, so enough
+    // sessions always eventually exceed the whole-file bound. Skipping the
+    // write there is permanent: nothing shrinks the aggregate afterwards.
+    // Four at ~9MB each is over the 32MB cap; three is under it, so exactly
+    // one transcript has to go.
+    for (const [index, key] of ["old", "middle", "new", "newest"].entries()) {
+      const state = bulkySession(key, index + 1);
+      sessions.set(state.id, state);
+    }
+
+    schedulePersist();
+    await drainPersistence();
+
+    const written = await readState();
+    expect(written.sessions).toHaveLength(4);
+    // What makes a session recoverable is its id, its Pi session file and its
+    // journal — all tiny. Only the rendered transcript is shed, and the
+    // least-recently-touched session loses it first.
+    const byKey = new Map(written.sessions.map((entry) => [entry.clientSessionKey, entry]));
+    expect(byKey.get("old")!.messages).toHaveLength(0);
+    expect(byKey.get("old")!.transcriptTruncated).toBe(true);
+    expect(byKey.get("old")!.sessionFile).toBe("/sessions/old.jsonl");
+    expect(byKey.get("old")!.promptJournal).toHaveLength(1);
+    // Shedding stops as soon as it fits, so nothing newer is touched.
+    expect(byKey.get("middle")!.messages).toHaveLength(1);
+    expect(byKey.get("newest")!.messages).toHaveLength(1);
+  });
+
+  test("leaves live state untouched when it sheds", async () => {
+    const state = bulkySession("old", 1);
+    sessions.set(state.id, state);
+    for (const [index, key] of ["middle", "new", "newest"].entries()) {
+      const other = bulkySession(key, index + 2);
+      sessions.set(other.id, other);
+    }
+
+    schedulePersist();
+    await drainPersistence();
+
+    // The tab the user is looking at keeps its transcript; only the persisted
+    // copy is degraded.
+    expect(state.messages).toHaveLength(1);
+    expect(state.transcriptTruncated).toBe(false);
+  });
+
+  test("refuses to load a file past the bound rather than parsing it", async () => {
+    await writeFile(
+      join(directory, "state.json"),
+      JSON.stringify({
+        version: 1,
+        provider: "pi",
+        sessions: [{ id: "a", messages: [], revision: 0, structured: [], promptJournal: [] }],
+        padding: "x".repeat(33 * 1024 * 1024),
+      }),
+      "utf8",
+    );
+
+    await loadPersistedState();
+    expect(sessions.size).toBe(0);
+  });
+});
+
 describe("writing", () => {
   test("records an unfinished turn as idle and its request id as ambiguous", async () => {
     const state = newSessionState("tab-1");

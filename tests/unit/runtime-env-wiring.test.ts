@@ -275,6 +275,26 @@ describe("container runtime environment wiring", () => {
     expect(entrypoint).not.toMatch(/^[ \t]*settings\.json[ \t]*\\?$/m);
   });
 
+  test("every agent home the image pre-creates is owned by the node user", () => {
+    // `mkdir -p` in this layer runs as root, so a directory left out of the
+    // adjacent `chown` is root-owned at runtime — and the entrypoint, the
+    // bridges and the agents all run as `node`. For Pi that meant credentials
+    // that could not be copied in and a session directory the bridge could not
+    // create, which surfaces as a working image and a broken platform.
+    const dockerfile = read("docker/Dockerfile");
+    const layer = dockerfile.split("\n").find((line) => line.includes("mkdir -p /workspace"));
+    expect(layer).toBeDefined();
+    const chown = dockerfile
+      .split("\n")
+      .find((line) => line.includes("chown -R node:node /workspace"));
+    expect(chown).toBeDefined();
+
+    for (const home of [".claude", ".codex", ".cursor", ".grok", ".pi"]) {
+      expect(layer).toContain(`/home/node/${home}`);
+      expect(chown).toContain(`/home/node/${home}`);
+    }
+  });
+
   test("container startup copies only bounded Pi configuration state", () => {
     const entrypoint = section(
       read("docker/entrypoint.sh"),

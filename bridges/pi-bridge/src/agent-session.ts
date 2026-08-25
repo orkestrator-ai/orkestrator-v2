@@ -13,6 +13,8 @@
  * state costs a rendered transcript; it never costs the conversation.
  */
 import { randomBytes } from "node:crypto";
+import { realpath, stat } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -80,6 +82,7 @@ export function newSessionState(clientSessionKey?: string): SessionState {
     dispatching: false,
     promptSequence: 0,
     openTextParts: new Map(),
+    toolInputs: new Map(),
     uncheckedTranscriptBytes: 0,
     currentTurnOutput: null,
     queue: { steering: [], followUp: [] },
@@ -299,6 +302,14 @@ export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
   if (nonBlank(body.modelId)) patch.modelId = body.modelId.trim();
   if (nonBlank(body.model)) patch.modelId ??= body.model.trim();
   if (nonBlank(body.reasoningId)) patch.reasoningId = body.reasoningId.trim();
+  // `reasoningEffort` is the spelling the backend actually sends on
+  // `/session/create` and on every prompt; `effort` is the shorter one the
+  // config route uses. Reading only the first two dropped the composer's
+  // thinking level on every dispatched turn, and — because a patch carrying a
+  // model resets the reasoning selection to whatever was parsed here — reset it
+  // to undefined as well. The ACP bridge accepts all three spellings for the
+  // same reason.
+  if (nonBlank(body.reasoningEffort)) patch.reasoningId ??= body.reasoningEffort.trim();
   if (nonBlank(body.effort)) patch.reasoningId ??= body.effort.trim();
   return Object.keys(patch).length > 0 ? patch : undefined;
 }
@@ -379,6 +390,50 @@ export async function listResumableSessions(): Promise<NativeAgentResumeEntry[]>
 }
 
 /**
+ * The directory a resume handle is allowed to name.
+ *
+ * `SessionManager.list` only ever hands out paths from here, so this is where
+ * every legitimate handle comes from.
+ */
+function resumableSessionRoot(): string {
+  return sessionDirectory() ?? join(agentDirectory() ?? getAgentDir(), "sessions");
+}
+
+/**
+ * Confine a resume handle to Pi's own session directory.
+ *
+ * The handle is a filesystem path rather than an opaque id, and it arrives
+ * over HTTP. Passed through unchecked, `SessionManager.open` will read any
+ * JSONL-parseable file into a rendered transcript, and — because it "preserves
+ * the explicit path" for a file that does not exist yet — will happily create
+ * and write a session anywhere this process can write. Neither is something a
+ * resume needs, so both are refused here rather than trusted to the caller.
+ *
+ * Resolved through `realpath` so a symlink inside the session directory cannot
+ * point out of it, and required to already exist: a resume names a
+ * conversation that happened, and `POST /session/create` is the route for one
+ * that has not.
+ */
+export async function assertResumableSessionFile(sessionFile: string): Promise<string> {
+  const root = resumableSessionRoot();
+  const requested = resolve(root, sessionFile);
+  let real: string;
+  let rootReal: string;
+  try {
+    rootReal = await realpath(root);
+    real = await realpath(requested);
+  } catch {
+    throw new Error("That Pi session file does not exist");
+  }
+  if (real !== rootReal && !real.startsWith(rootReal.endsWith(sep) ? rootReal : rootReal + sep)) {
+    throw new Error("That Pi session file is outside this environment's session directory");
+  }
+  const info = await stat(real).catch(() => undefined);
+  if (!info?.isFile()) throw new Error("That Pi session file does not exist");
+  return real;
+}
+
+/**
  * Adopt an existing Pi session file as a new bridge session, replaying it.
  *
  * The replay is best-effort and deliberately so. A resumed conversation whose
@@ -390,8 +445,20 @@ export async function resumeSession(
   sessionFile: string,
   patch: ComposerPatch | undefined,
 ): Promise<SessionState> {
+  const resolved = await assertResumableSessionFile(sessionFile);
+  // One JSONL file, one bridge session. Two live `AgentSession`s appending to
+  // the same file interleave their entries, which corrupts the branch
+  // structure Pi resumes and forks from — so a repeat resume adopts the
+  // session that already owns the file.
+  for (const existing of sessions.values()) {
+    if (existing.sessionFile === resolved) {
+      applyComposerPatch(existing, patch);
+      existing.lastAccessed = Date.now();
+      return existing;
+    }
+  }
   const state = newSessionState();
-  state.sessionFile = sessionFile;
+  state.sessionFile = resolved;
   applyComposerPatch(state, patch);
   state.composer = await hydrateComposer(state.composer);
   hydrateHistory(state);

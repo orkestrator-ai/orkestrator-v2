@@ -186,6 +186,18 @@ export interface SessionState {
    * lookup and starts a new block.
    */
   openTextParts: Map<string, string>;
+  /**
+   * The arguments each in-flight tool call was started with.
+   *
+   * Pi's `tool_execution_end` frame carries only `toolCallId`, `toolName`,
+   * `result` and `isError` — the arguments are on the start frame and nowhere
+   * else. Re-rendering a settled card without them collapsed every title to
+   * the bare tool name and dropped the file path off edit and write diffs, so
+   * the start frame's input is held here until the call settles. Runtime-only
+   * and bounded: `toPersisted` does not carry it, and a restart re-renders
+   * from the transcript it already wrote.
+   */
+  toolInputs: Map<string, JsonObject>;
   /** Bytes appended since the transcript was last measured against its budget. */
   uncheckedTranscriptBytes: number;
   /** Accumulates the assistant text of a structured-output turn. */

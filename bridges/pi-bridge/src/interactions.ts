@@ -19,7 +19,7 @@
  */
 import { randomBytes } from "node:crypto";
 import {
-  APPROVAL_TIMEOUT_MS,
+  approvalTimeoutMs,
   approvalsEnabled,
   MAX_PENDING_APPROVALS,
   MAX_TOOL_ARGUMENT_BYTES,
@@ -49,7 +49,7 @@ export async function requestToolApproval(
   toolName: string,
   input: unknown,
 ): Promise<ToolCallDecision> {
-  if (!approvalsEnabled) return { block: false };
+  if (!approvalsEnabled()) return { block: false };
   if (READ_ONLY_TOOLS.has(toolName)) return { block: false };
   if (state.approvals.size >= MAX_PENDING_APPROVALS) {
     // Refusing is the only safe answer: parking it would grow the map without
@@ -74,9 +74,13 @@ export async function requestToolApproval(
       );
     };
 
+    // Read per call rather than at import, so a bridge started with a
+    // different budget — or a test proving the denial — gets the value that is
+    // actually configured rather than whichever one loaded first.
+    const timeoutMs = approvalTimeoutMs();
     const timer = setTimeout(
       () => settle("deny", "The approval request expired before it was answered."),
-      APPROVAL_TIMEOUT_MS,
+      timeoutMs,
     );
     // Unref'd so a parked approval cannot by itself hold the process open; the
     // turn awaiting it is what keeps the bridge alive, and shutdown denies.
@@ -88,7 +92,7 @@ export async function requestToolApproval(
       toolName,
       input: isObject(input) ? input : {},
       createdAt: now,
-      expiresAt: now + APPROVAL_TIMEOUT_MS,
+      expiresAt: now + timeoutMs,
       settle,
     });
     state.revision += 1;

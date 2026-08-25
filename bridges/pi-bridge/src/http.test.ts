@@ -1,26 +1,32 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AddressInfo } from "node:net";
 
-const TOKEN = "test-token";
-
 // `config.ts` reads its environment once, at import. Everything below is
 // therefore loaded dynamically, after the environment this suite needs is in
 // place — importing it statically would bind the real defaults instead.
 process.env.PORT = "0";
 process.env.HOSTNAME = "127.0.0.1";
-process.env.PI_BRIDGE_TOKEN = TOKEN;
+process.env.PI_BRIDGE_TOKEN = "test-token";
 process.env.PI_BRIDGE_LIBRARY_ONLY = "1";
 delete process.env.PI_BRIDGE_STATE_DIR;
 
 const { server, start, shutdown } = await import("./server.js");
+// Read back rather than assumed. In a shared process another suite may have
+// imported `config.ts` before the assignment above, in which case the module
+// froze a different token and every request here would 401 — a failure that
+// looks like broken routing rather than a test that was never self-sufficient.
+const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState } = await import("./agent-session.js");
-const { sessions } = await import("./state.js");
+const { sessions, clientSessionKeys } = await import("./state.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 let origin: string;
 
 beforeAll(async () => {
-  await start();
+  // Explicitly ephemeral rather than relying on `PORT` above: another suite in
+  // a shared process may have imported `config.ts` first, in which case that
+  // assignment came too late to be read.
+  await start(0);
   const address = server.address() as AddressInfo;
   origin = `http://127.0.0.1:${address.port}`;
 });
@@ -135,7 +141,13 @@ describe("session routes", () => {
     ];
 
     const whole = await (await call(`/session/${state.id}/messages`)).json();
-    expect(whole).toMatchObject({ baseIndex: 2, truncated: false });
+    // `truncated` lives under `messageWindow` because that is the exact path
+    // the backend's `readTranscript` reads; a flat copy parses as `false`.
+    expect(whole).toMatchObject({
+      baseIndex: 2,
+      totalMessages: 4,
+      messageWindow: { truncated: true, omittedMessages: 2 },
+    });
     expect(whole.messages).toHaveLength(2);
 
     const tail = await (await call(`/session/${state.id}/messages?fromIndex=3`)).json();
@@ -147,6 +159,235 @@ describe("session routes", () => {
     const evicted = await (await call(`/session/${state.id}/messages?fromIndex=0`)).json();
     expect(evicted).toMatchObject({ baseIndex: 2 });
     expect(evicted.messages).toHaveLength(2);
+
+    // An anchor past the live tail clamps to it rather than slicing negatively.
+    const beyond = await (await call(`/session/${state.id}/messages?fromIndex=99`)).json();
+    expect(beyond.messages).toHaveLength(0);
+    expect(beyond).toMatchObject({ baseIndex: 4 });
+  });
+
+  test("serves the failure text and truncation flag the backend parses", async () => {
+    const state = seedSession();
+    state.status = "error";
+    state.error = "provider refused the request";
+    state.transcriptTruncated = true;
+    state.droppedParts = 3;
+
+    const body = await (await call(`/session/${state.id}/messages`)).json();
+    // The backend prefers the transcript's own error whenever `/messages`
+    // carries a status, so an absent one here is not falling back to `/status`
+    // — it renders an errored tab with no message at all.
+    expect(body.error).toBe("provider refused the request");
+    expect(body.status).toBe("error");
+    expect(body.messageWindow).toMatchObject({ truncated: true, omittedParts: 3 });
+  });
+
+  test("carries the session title on the status route the backend reads", async () => {
+    const state = seedSession();
+    state.title = "Investigate the failing suite";
+
+    const status = await (await call(`/session/${state.id}/status`)).json();
+    expect(status.title).toBe("Investigate the failing suite");
+  });
+});
+
+describe("closing a session", () => {
+  test("removes the session, its client key, and answers deleted", async () => {
+    const state = newSessionState("tab-7");
+    sessions.set(state.id, state);
+    clientSessionKeys.set("tab-7", state.id);
+
+    const response = await call(`/session/${state.id}`, { method: "DELETE" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: true });
+
+    // Without this route the backend's tab teardown reads a 404 as "already
+    // gone" and the bridge retains the session — and its transcript — forever.
+    expect(sessions.has(state.id)).toBe(false);
+    expect(clientSessionKeys.has("tab-7")).toBe(false);
+    expect(await (await call(`/session/${state.id}/activity`)).json()).toEqual({
+      activity: "missing",
+    });
+  });
+
+  test("denies anything parked on the way out", async () => {
+    const state = seedSession();
+    const decisions: string[] = [];
+    state.approvals.set("a1", {
+      id: "a1",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "rm -rf build" },
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      settle: (decision) => decisions.push(decision),
+    });
+
+    await call(`/session/${state.id}`, { method: "DELETE" });
+    // A closing session must never leave a tool call awaiting a promise
+    // nothing will settle, and it must deny rather than approve.
+    expect(decisions).toEqual(["deny"]);
+  });
+
+  test("cancels a turn still in flight", async () => {
+    const state = seedSession();
+    state.status = "running";
+    let cancelled = false;
+    state.cancelTurn = async () => {
+      cancelled = true;
+    };
+
+    await call(`/session/${state.id}`, { method: "DELETE" });
+    expect(cancelled).toBe(true);
+  });
+
+  test("answers an unknown session 404 so teardown treats it as gone", async () => {
+    const response = await call("/session/never-existed", { method: "DELETE" });
+    expect(response.status).toBe(404);
+  });
+});
+
+describe("resume containment", () => {
+  test("refuses a handle outside the session directory", async () => {
+    // The handle is a filesystem path that arrives over HTTP. Unchecked,
+    // `SessionManager.open` reads any JSONL-parseable file into a transcript.
+    const response = await call("/session/resume", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: "/etc/passwd" }),
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toMatch(/session directory|does not exist/);
+  });
+
+  test("refuses a traversal out of the session directory", async () => {
+    const response = await call("/session/resume", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: "../../../../etc/passwd" }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  test("refuses a path that does not exist rather than creating a session there", async () => {
+    // A nonexistent path is the write case: the SDK preserves the explicit
+    // path and would create a session file wherever this points.
+    const response = await call("/session/resume", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: "/tmp/pi-bridge-should-not-be-created.jsonl" }),
+    });
+    expect(response.status).toBe(400);
+    expect(await Bun.file("/tmp/pi-bridge-should-not-be-created.jsonl").exists()).toBe(false);
+  });
+
+  test("still requires a handle at all", async () => {
+    const response = await call("/session/resume", { method: "POST", body: JSON.stringify({}) });
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("compaction", () => {
+  test("refuses to compact a running turn", async () => {
+    const state = seedSession();
+    state.status = "running";
+
+    // Pi's manual compaction aborts the current operation, so allowing this
+    // would silently cancel the turn the user is watching.
+    const response = await call(`/session/${state.id}/compact`, { method: "POST" });
+    expect(response.status).toBe(409);
+  });
+
+  test("refuses a prompt while a compaction holds the session", async () => {
+    const state = seedSession();
+    state.compacting = true;
+
+    // The window that mattered: compaction claims the session across a cold
+    // attach, and a prompt admitted inside it was aborted by the compaction.
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "hello" }),
+    });
+    expect(response.status).toBe(409);
+  });
+
+  test("refuses a second compaction while one is already running", async () => {
+    const state = seedSession();
+    state.compacting = true;
+    const response = await call(`/session/${state.id}/compact`, { method: "POST" });
+    expect(response.status).toBe(409);
+  });
+});
+
+describe("cancel", () => {
+  test("reports whether there was anything to cancel", async () => {
+    const state = seedSession();
+    expect(await (await call(`/session/${state.id}/cancel`, { method: "POST" })).json()).toEqual({
+      cancelled: false,
+    });
+
+    let cancelled = false;
+    state.cancelTurn = async () => {
+      cancelled = true;
+    };
+    expect(await (await call(`/session/${state.id}/abort`, { method: "POST" })).json()).toEqual({
+      cancelled: true,
+    });
+    expect(cancelled).toBe(true);
+  });
+});
+
+describe("steering", () => {
+  test("answers idle rather than failing when no turn is running", async () => {
+    const state = seedSession();
+    // The caller's view of the turn is a poll behind, so a steer that lands
+    // after the turn ended is a race, not an error — and must not be turned
+    // into a fresh prompt the user never sent.
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ input: "focus on the parser" }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ outcome: "idle" });
+  });
+
+  test("requires text to steer with", async () => {
+    const state = seedSession();
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ input: "   " }),
+    });
+    expect(response.status).toBe(400);
+  });
+});
+
+describe("composer configuration", () => {
+  test("records a model and the thinking level sent alongside it", async () => {
+    const state = seedSession();
+    const response = await call(`/session/${state.id}/config`, {
+      method: "POST",
+      body: JSON.stringify({ model: "anthropic/claude-opus-4-5", reasoningId: "high" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(state.composer.selectedModelId).toBe("anthropic/claude-opus-4-5");
+    expect(state.composer.selectedReasoningId).toBe("high");
+  });
+
+  test("accepts the reasoningEffort spelling the backend sends", async () => {
+    const state = seedSession();
+    // The backend sends `reasoningEffort` on create and on every prompt.
+    // Reading only `reasoningId` dropped the level silently.
+    await call(`/session/${state.id}/config`, {
+      method: "POST",
+      body: JSON.stringify({ model: "openai/gpt-5", reasoningEffort: "xhigh" }),
+    });
+    expect(state.composer.selectedReasoningId).toBe("xhigh");
+  });
+
+  test("serves the current selection back with the session's commands", async () => {
+    const state = seedSession();
+    state.composer = { ...state.composer, selectedModelId: "anthropic/claude-opus-4-5" };
+    const body = await (await call(`/session/${state.id}/config`)).json();
+    expect(body.selectedModelId).toBe("anthropic/claude-opus-4-5");
+    expect(Array.isArray(body.commands)).toBe(true);
   });
 });
 

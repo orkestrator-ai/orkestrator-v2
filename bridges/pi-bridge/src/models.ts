@@ -129,7 +129,12 @@ export async function listModels(defaults?: ThinkingLevelDefaults): Promise<Agen
       catalogProbe = null;
     }
   })();
-  return catalogProbe.catch(() => []);
+  // A rebuild that fails falls back to the catalogue already held rather than
+  // to nothing. The rebuild path is reached when a *better* answer is
+  // available — a caller that can resolve the user's thinking-level defaults —
+  // so a timeout there would otherwise empty a model picker that was working a
+  // moment ago.
+  return catalogProbe.catch(() => catalogCache ?? []);
 }
 
 /** Drop the memo so the next read re-discovers. */

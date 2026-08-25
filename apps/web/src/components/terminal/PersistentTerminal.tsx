@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { writeText } from "@/lib/native/clipboard";
+import { createTerminalTargetIdentity } from "@/hooks/terminal-target-identity";
 import { useTerminal } from "@/hooks/useTerminal";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
@@ -730,20 +731,43 @@ export function PersistentTerminal({
   }, [connect]);
 
   const connectionAttemptTarget = JSON.stringify({
-    containerId,
-    environmentId,
-    // Publishing the hook's active session into the terminal store is adoption
-    // of this connection, not a second target that should rearm the fallback.
+    // Built from the same fields useTerminal invalidates a connection on. A
+    // field that resets the hook but is missing here would strand a terminal
+    // disconnected behind a gate that never reopens, so there is one builder.
+    target: createTerminalTargetIdentity({
+      containerId,
+      environmentId,
+      isLocal: isLocalEnvironment,
+      terminalKey: tabId,
+      user: terminalUser,
+      replayOutputBuffer: shouldReplayBackendOutputBuffer,
+      attachExistingOnly: isBackendManagedSetupTab,
+      trackEnvironmentActivity,
+    }),
+    // The session this attempt would attach to. The stored id is preferred so
+    // that a store rewrite which drops `sessionId` — the persistent-session
+    // metadata restore below does exactly that — falls back to the hook's own
+    // session instead of reading as a brand new target. A genuinely different
+    // session id *is* a new target: the fallback effect only runs while
+    // disconnected, so attaching to it is the work that still needs doing.
     sessionId: existingSessionId ?? sessionId ?? null,
-    isLocalEnvironment,
-    attachExistingOnly: isBackendManagedSetupTab,
-    terminalUser: terminalUser ?? null,
   });
-  const connectToCurrentTarget = useCallback(() => {
-    if (connectionAttemptTargetRef.current === connectionAttemptTarget) return;
-    connectionAttemptTargetRef.current = connectionAttemptTarget;
-    void connectRef.current();
+  // Read through a ref so this callback keeps a stable identity. The
+  // DOM/attachment effect below depends on it, and that effect's cleanup
+  // serializes the entire scrollback into the session store — re-running it
+  // every time the hook publishes a freshly created session id is work nobody
+  // asked for, on the most side-effect-heavy effect in this file.
+  const currentConnectionTargetRef = useRef(connectionAttemptTarget);
+  useEffect(() => {
+    currentConnectionTargetRef.current = connectionAttemptTarget;
   }, [connectionAttemptTarget]);
+  const connectToCurrentTarget = useCallback(() => {
+    const target = currentConnectionTargetRef.current;
+    if (connectionAttemptTargetRef.current === target) return false;
+    connectionAttemptTargetRef.current = target;
+    void connectRef.current();
+    return true;
+  }, []);
 
   // Persistent session tracking
   const persistentSessionCreatedRef = useRef(false);
@@ -1176,7 +1200,7 @@ export function PersistentTerminal({
       // portal store update has not yet exposed terminalIsOpened to the
       // fallback effect. The mount-lifecycle cleanup rearms this under Strict
       // Mode after useTerminal cancels the probe connection.
-      if (connectionAttemptTargetRef.current !== connectionAttemptTarget) {
+      if (connectionAttemptTargetRef.current !== currentConnectionTargetRef.current) {
         if (!isReconnecting) {
           initialRestorationCompleteRef.current = true;
         }
@@ -1434,7 +1458,6 @@ export function PersistentTerminal({
     handlePaste,
     handleSelectAll,
     toggleComposeBar,
-    connectionAttemptTarget,
     connectToCurrentTarget,
     sessionKey,
     savePersistentSessionBuffer,
@@ -1553,11 +1576,25 @@ export function PersistentTerminal({
 
   // Connect when terminal is opened to DOM
   // This is a fallback - primary connection happens immediately after terminal.open()
+  //
+  // `connectionAttemptTarget` is a dependency because it is what re-arms this
+  // effect. `connectToCurrentTarget` is deliberately identity-stable, so a
+  // terminal that is already disconnected when it starts pointing at a
+  // different backend PTY — a new container, say — would otherwise never see
+  // an attempt: none of the other dependencies change in that case.
   useEffect(() => {
-    if (terminalIsOpened && !isConnected && !isConnecting) {
-      connectToCurrentTarget();
-    }
-  }, [terminalIsOpened, isConnected, isConnecting, connectToCurrentTarget, tabId]);
+    if (!terminalIsOpened) return;
+    if (isConnected || isConnecting) return;
+    if (connectionAttemptTargetRef.current === connectionAttemptTarget) return;
+    connectToCurrentTarget();
+  }, [
+    terminalIsOpened,
+    isConnected,
+    isConnecting,
+    connectionAttemptTarget,
+    connectToCurrentTarget,
+    tabId,
+  ]);
 
   /**
    * The launch payload, keyed on its contents rather than its props' identity.

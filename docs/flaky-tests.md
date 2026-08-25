@@ -136,6 +136,15 @@ history rather than two partial ones.
   isolated rerun,
   `bun test ./src/components/layout/ActionBar.test.tsx --only-failures` from
   `apps/web`, passed all 189 tests in 12.37 s.
+- **Recurrence (retry-gate review follow-up, 2026-08-25):** the same case failed
+  again on the next `bun run test` for that branch, at `ActionBar.test.tsx:5170`
+  after 51.07 ms, alongside `opens the Resolve modal after a mobile long press
+  without launching a default resolve` in the same file. The web workspace group
+  reported 5,393 passed, 1 skipped, and 2 failed across 233 files. The isolated
+  rerun `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx`
+  passed 189/189 in 14.54 s. Two distinct cases in one file failing together,
+  both of which pass alone, points at the whole file losing its wall-clock
+  budget rather than at either assertion.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
 
 ## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)
@@ -1712,6 +1721,16 @@ Post-fix stress verification:
 - **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar --parallel=2`
   → exit 0, no failures. The aggregate command had also passed twice earlier in
   the same session at the same commit.
+- **Recurrence (retry-gate review follow-up, 2026-08-25):** `bun run test` on
+  `environment-log-flood` failed this case after 712.65 ms, now reported at
+  `ActionBar.test.tsx:3041` with the same `getElementError` from
+  `tests/bounded-test-diagnostics.ts:28`. It failed in the same run as
+  `ActionBar keyboard shortcuts and tab guards > dispatches tab, workflow,
+  editor, and panel shortcuts`; web workspace group 5,393 passed, 1 skipped,
+  2 failed across 233 files. The isolated rerun
+  `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` passed
+  189/189 in 14.54 s. Consistent with the hypothesis below: the bare
+  `setTimeout(575)` has no margin left once the whole file is running behind.
 - **Hypothesis:** the same wall-clock race already documented and fixed for
   `clears active long-press click suppression when the action bar unmounts`
   above. The case fires a touch `pointerDown`, sleeps a bare

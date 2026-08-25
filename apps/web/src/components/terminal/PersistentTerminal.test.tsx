@@ -35,6 +35,7 @@ let terminalOscHandler: ((data: string) => boolean) | undefined;
 let terminalInputDisposables: Array<{ dispose: ReturnType<typeof mock> }> = [];
 let terminalKeyHandler: ((event: KeyboardEvent) => boolean) | undefined;
 type MockUseTerminalOptions = {
+  containerId?: string | null;
   onData?: (data: Uint8Array) => void;
   onReplay?: (
     data: Uint8Array,
@@ -777,6 +778,146 @@ describe("PersistentTerminal", () => {
         });
     });
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("adopts a freshly published session id without probing again, then reconnects once", async () => {
+    // The real hook reports no session until it has resolved one, so the very
+    // first attempt is made against a null session. Starting the mock there is
+    // what makes the adoption transition below observable at all.
+    useTerminalSessionId = null;
+    useTerminalIsConnected = false;
+    const terminalData = createTerminalData();
+    const props = {
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = render(<PersistentTerminal {...props} />);
+
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+
+    // The hook resolves a session and reports itself connected. The component
+    // publishes that id into the terminal store, which feeds straight back in
+    // as existingSessionId. That is this connection being adopted, not a second
+    // target, so it must not start another probe.
+    useTerminalSessionId = "session-1";
+    useTerminalIsConnected = true;
+    view.rerender(<PersistentTerminal {...props} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(connectMock).toHaveBeenCalledTimes(1);
+    expect(
+      useTerminalSessionStore
+        .getState()
+        .sessions.get(createSessionKey("container-1", "tab-1", "env-1"))?.sessionId,
+    ).toBe("session-1");
+
+    // Losing that connection is a genuine reason to attach again, and the
+    // fallback effect is the only automatic path that will do it.
+    useTerminalIsConnected = false;
+    view.rerender(<PersistentTerminal {...props} />);
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
+
+    // Once. A failure that settles against the same session must not loop.
+    useTerminalIsConnecting = true;
+    view.rerender(<PersistentTerminal {...props} />);
+    useTerminalIsConnecting = false;
+    view.rerender(<PersistentTerminal {...props} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(connectMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops probing a dead attach-only setup session instead of looping", async () => {
+    // A backend-managed setup tab attaches to an existing PTY and never creates
+    // a replacement. When that PTY is gone useTerminal settles by returning --
+    // it sets an error, leaves isConnected false and flips isConnecting back to
+    // false -- rather than throwing, which is the shape that flooded the log.
+    act(() => {
+      useTerminalSessionStore
+        .getState()
+        .setSession(createSessionKey("container-1", "tab-1", "env-1"), {
+          sessionId: "dead-setup-session",
+        });
+    });
+    useTerminalSessionId = null;
+    useTerminalIsConnected = false;
+    const terminalData = createTerminalData();
+    const props = {
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+      isSetupTab: true,
+    };
+    const view = render(<PersistentTerminal {...props} />);
+
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+    expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true);
+
+    for (let round = 0; round < 3; round += 1) {
+      useTerminalIsConnecting = true;
+      view.rerender(<PersistentTerminal {...props} />);
+      useTerminalIsConnecting = false;
+      view.rerender(<PersistentTerminal {...props} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+    }
+
+    expect(connectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rearms the connection gate for a new container while already disconnected", async () => {
+    useTerminalIsConnected = false;
+    useTerminalSessionId = null;
+    const terminalData = createTerminalData();
+    const props = {
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = render(<PersistentTerminal {...props} />);
+
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+
+    useTerminalIsConnecting = true;
+    view.rerender(<PersistentTerminal {...props} />);
+    useTerminalIsConnecting = false;
+    view.rerender(<PersistentTerminal {...props} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(connectMock).toHaveBeenCalledTimes(1);
+
+    // A recreated container is a different backend PTY. Nothing else the
+    // fallback effect watches changes here -- it is already disconnected and
+    // not connecting -- so the target itself has to be what rearms it.
+    view.rerender(<PersistentTerminal {...props} containerId="container-2" />);
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
+    expect(lastUseTerminalOptions?.containerId).toBe("container-2");
   });
 
   it("forwards the environment identity to terminal compose draft persistence", () => {

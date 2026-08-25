@@ -8,7 +8,6 @@
  * seeing anything other than a session that was briefly connecting.
  */
 import { randomBytes } from "node:crypto";
-import { Agent, type SDKAgent } from "@cursor/sdk";
 import {
   CATALOG_TIMEOUT_MS,
   MAX_RESUME_ENTRIES,
@@ -16,6 +15,7 @@ import {
   settingSources,
   workingDirectory,
 } from "./config.js";
+import { Agent, type SDKAgent } from "@cursor/sdk";
 import { resolveCredential } from "./credentials.js";
 import { emptyComposer, hydrateComposer, modelSelection } from "./models.js";
 import { renderToolCall } from "./tool-rendering.js";

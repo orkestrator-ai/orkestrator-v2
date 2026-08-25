@@ -770,6 +770,15 @@ export async function startLocalServerUnlocked(
   let command = "";
   let cwd = environment.worktreePath;
   /**
+   * Directory that contains `dist/index.js` when that is not the process cwd.
+   *
+   * The Cursor SDK Shell tool defaults to `process.cwd()` when the model omits
+   * `workingDirectory`, so this engine must keep `cwd` on the worktree. Other
+   * bridges still run from their package directory; only the SDK path splits
+   * the two.
+   */
+  let bridgePackageRoot: string | undefined;
+  /**
    * Whether this Cursor session is being served by the SDK bridge.
    *
    * Recorded when the branch below selects it, because the token variable and
@@ -853,7 +862,7 @@ export async function startLocalServerUnlocked(
   } else if (kind === "cursor" && (await cursorSdkBridgeEnabled(context))) {
     useCursorSdkBridge = true;
     command = resolveBunBinary(context);
-    cwd = getBridgePath(context, "cursor-bridge");
+    bridgePackageRoot = getBridgePath(context, "cursor-bridge");
     // The SDK bridge keeps its own session store, deliberately separate from
     // the ACP bridge's: the two engines produce different agent ids and a
     // shared directory would have each read the other's sessions as its own.
@@ -919,9 +928,11 @@ export async function startLocalServerUnlocked(
     }
   }
 
-  const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
+  const packageRoot = bridgePackageRoot ?? cwd;
+  const bridgeEntrypoint = path.join(packageRoot, "dist", "index.js");
   if (kind !== "opencode") {
-    if (!existsSync(cwd)) throw new Error(`${kind} bridge directory not found: ${cwd}`);
+    if (!existsSync(packageRoot))
+      throw new Error(`${kind} bridge directory not found: ${packageRoot}`);
     if (!existsSync(bridgeEntrypoint))
       throw new Error(`${kind} bridge entrypoint not found: ${bridgeEntrypoint}`);
   }

@@ -2827,6 +2827,7 @@ exit 1
         const http = require("node:http");
         require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
           cwd: process.cwd(),
+          envCwd: process.env.CWD ?? "",
           stateDir: process.env.CURSOR_BRIDGE_STATE_DIR ?? "",
           authFile: process.env.CURSOR_BRIDGE_AUTH_FILE ?? "",
           projectSettings: process.env.CURSOR_BRIDGE_PROJECT_SETTINGS ?? "",
@@ -2866,7 +2867,10 @@ exit 1
     try {
       expect(started.wasRunning).toBe(false);
       const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
-      expect(marker.cwd).toBe(await fs.realpath(path.join(resourceRoot, "cursor-bridge")));
+      // Shell calls that omit workingDirectory inherit this cwd, so it must be
+      // the worktree rather than the packaged bridge directory.
+      expect(marker.cwd).toBe(await fs.realpath(worktreePath));
+      expect(marker.envCwd).toBe(worktreePath);
       expect(marker.stateDir).toContain(path.join("cursor-bridge-state"));
       expect(marker.stateDir).not.toContain(path.join("acp-bridge-state"));
       expect(marker.authFile).toBe(path.join(dataDir, "cursor-sdk", "auth.json"));

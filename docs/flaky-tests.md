@@ -10,6 +10,18 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `ACP bridge > counts in-flight creation reservations against the session cap` (`bridges/acp-bridge/src/acp-http.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-25
+- **Original command:** `bun run test:logged -- --name full-suite -- bun run test` (complete concurrent cross-platform suite)
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was inside the bridges group, 3,091 tests across 115 files in 61.63 s.
+- **Failure:** the case timed out at 5,059.00 ms. The bridges group reported two failures in that run; the other one, `reaps a session process when the creating HTTP client disconnects`, reproduces in isolation and is a separate, non-flaky problem (see Attribution).
+- **Suite counts:** bridges group — 3,078 passed, 11 skipped, 2 failed; 9,913 `expect()` calls.
+- **Isolated rerun:** `bun run test:logged -- --name rerun-acp -- bun test bridges/acp-bridge/src/acp-http.test.ts` → 5 passed, 1 failed, 37 `expect()` calls in 5.76 s. This case **passed**; only `reaps a session process when the creating HTTP client disconnects` failed, at 5,067.86 ms.
+- **Attribution:** observed while changing `apps/web` action-default resolution and `packages/protocol/src/action-defaults.ts`. Neither file is reachable from the ACP bridge, so the two share only host capacity. The host ran Bun 1.4.0 against the repo's pinned `bun@1.3.14`, and the same run produced six root-group failures that all reproduce in isolation — treat this observation as coming from a toolchain-mismatched host.
+- **Hypothesis:** the case holds creation reservations open to prove they count against the session cap, so it is waiting on real bridge child processes under the generic 5-second budget. Under group-level contention those spawns miss the window, which is the same shape as the `announces overflow…` entry above in the same file. A recurrence should time the reservation's spawn-to-counted interval under load before widening the budget; a genuine cap regression would fail deterministically rather than at exactly the timeout.
+
 ## `ACP bridge > announces overflow when earlier stream chunks leave no room for the marker` (`bridges/acp-bridge/src/acp-http.test.ts:191`)
 
 - **Status:** open

@@ -63,7 +63,21 @@ export function resolvedDefaultAgent(
   return resolveDefaultAgent(agentSettingsTiers(config, projectId, environment));
 }
 
-/** Resolve one action through the same environment → repository → app cascade as Settings. */
+/**
+ * Resolve one action through the same environment → repository → app cascade as
+ * Settings.
+ *
+ * An action entry outranks a generic `defaultAgent` at any tier, including a
+ * narrower one. Environments persist the agent they were created with
+ * unconditionally, so the opposite rule meant an action default's platform
+ * never applied to a plain click while the launch dialog beside it opened on
+ * that platform anyway. `CreateEnvironmentDialog` reads `newProject` through
+ * here as well, so the same rule decides what a new environment preselects.
+ *
+ * The generic fallback is clamped to the enabled set before it is used: it is
+ * only reached when the action names nothing usable, and a stale `defaultAgent`
+ * naming a disabled platform must not strand the action there.
+ */
 export function resolvedActionDefault(
   tiers: AgentSettingsTiers,
   key: ActionDefaultKey,

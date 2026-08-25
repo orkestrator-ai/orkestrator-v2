@@ -4269,6 +4269,44 @@ describe("ActionBar configured action defaults", () => {
     );
   });
 
+  test("keeps the dialog aligned with the click when the Review default is disabled", async () => {
+    // Both surfaces read one resolver, so dropping an entry whose platform the
+    // user has turned off has to drop it for the dialog as well. A dialog that
+    // still opened on Claude here would offer a run the click cannot launch.
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentEnabledAgentPlatforms = ["codex"];
+    currentActionDefaults = {
+      review: { platform: "claude", model: "opus[1m]", reasoningEffort: "max" },
+    };
+
+    render(<ActionBar />);
+    const reviewButton = screen.getByRole("button", { name: "Code review" });
+    fireEvent.contextMenu(reviewButton);
+
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy(),
+    );
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    // `gpt-5.4` is the Codex catalogue's own model, so seeing it here is what
+    // says the dialog moved off Claude rather than keeping Claude's entry.
+    expect(picker.textContent).toContain("gpt-5.4");
+    expect(picker.textContent).not.toContain("Opus");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(reviewButton);
+
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "codex",
+      expect.objectContaining({ displayTitle: "Review" }),
+    );
+    expect(createTabMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialAgentModel");
+  });
+
   test("applies the configured PR default to a plain Create PR click", () => {
     currentEnvironment = {
       ...selectedEnvironment,

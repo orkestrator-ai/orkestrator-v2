@@ -3,10 +3,11 @@
  * launched with a single click.
  *
  * Right-clicking those buttons opens a launch dialog that configures the run
- * explicitly. A plain click has no such surface, so it falls back to whatever
- * these defaults name. An entry is a whole decision — platform, model and
- * reasoning level together — because a model id is only meaningful inside its
- * own platform's catalogue.
+ * explicitly, and a plain click has no such surface. Both read the same entry:
+ * the dialog opens on it and the click launches it, so the button and the
+ * dialog behind it can never name different runs. An entry is a whole decision
+ * — platform, model and reasoning level together — because a model id is only
+ * meaningful inside its own platform's catalogue.
  */
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 
@@ -81,7 +82,16 @@ export function normalizeActionDefaults(value: unknown): ActionDefaults {
 }
 
 /**
- * The agent, model and reasoning level a plain click should use.
+ * The agent, model and reasoning level this action should use.
+ *
+ * There is deliberately no way to hand this resolver an agent that outranks the
+ * entry. It used to take one — the agent an environment was created with — so
+ * that an application-level default could not retarget a deliberate per-tier
+ * choice. Environments persist that agent unconditionally, so in practice the
+ * override was always set and the entry's platform never applied: the launch
+ * dialog opened on Settings' choice while the click beside it launched the
+ * environment's. `fallbackAgent` is the whole of the generic cascade now, and
+ * it is consulted only when this action names nothing usable.
  *
  * A default naming a platform the user has since disabled is ignored whole:
  * carrying its model across to a different platform would send the run to a
@@ -93,31 +103,13 @@ export function resolveActionDefault(
   options: {
     fallbackAgent: AgentPlatform;
     enabledAgents: readonly AgentPlatform[];
-    /**
-     * An agent chosen at a narrower scope than the application, such as the
-     * agent this environment was created with.
-     *
-     * These defaults are application-level, so a choice the user made for one
-     * specific environment outranks them — the same way repository config
-     * outranks the `newProject` entry. Without this the Defaults tab would
-     * silently retarget every action in an environment deliberately created
-     * with another agent.
-     */
-    overrideAgent?: AgentPlatform;
   },
 ): { agent: AgentPlatform; model?: string; reasoningEffort?: string } {
   const entry = actionDefaults?.[key];
   const platform = entry?.platform;
-  const scopedAgent =
-    options.overrideAgent && options.enabledAgents.includes(options.overrideAgent)
-      ? options.overrideAgent
-      : undefined;
   if (!platform || !options.enabledAgents.includes(platform)) {
-    return { agent: scopedAgent ?? options.fallbackAgent };
+    return { agent: options.fallbackAgent };
   }
-  // The narrower scope names a different platform, so the entry's model stays
-  // behind with the platform whose catalogue it came from.
-  if (scopedAgent && scopedAgent !== platform) return { agent: scopedAgent };
   return {
     agent: platform,
     ...(entry.model ? { model: entry.model } : {}),

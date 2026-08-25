@@ -111,6 +111,59 @@ describe("resolvedActionDefault", () => {
     ).toEqual({ agent: "codex", model: "gpt-5.4" });
   });
 
+  test("resolves newProject the same way, which is what the create dialog reads", () => {
+    // `CreateEnvironmentDialog` shares this resolver, so the rule that stops a
+    // generic tab default displacing an action entry reaches the preselected
+    // agent and model of a new environment too. Deliberate: "New environments"
+    // is a decision about this action, and a repository-wide Default agent is
+    // not. The dialog has no environment tier, so this is the narrowest case.
+    expect(
+      resolvedActionDefault(
+        {
+          global: {
+            defaultAgent: "claude",
+            actionDefaults: { newProject: { platform: "claude", model: "sonnet" } },
+          },
+          repository: { defaultAgent: "codex" },
+        },
+        "newProject",
+        enabled,
+      ),
+    ).toEqual({ agent: "claude", model: "sonnet" });
+
+    // With no entry to answer for the action, the repository's generic agent is
+    // still the one that does.
+    expect(
+      resolvedActionDefault(
+        { global: { defaultAgent: "claude" }, repository: { defaultAgent: "codex" } },
+        "newProject",
+        enabled,
+      ),
+    ).toEqual({ agent: "codex" });
+  });
+
+  test("clamps the generic fallback to the enabled set when no action names one", () => {
+    // Nothing configured this action, so the generic cascade answers — but it
+    // names a platform the user has since turned off. Handing that back would
+    // launch an agent with no catalogue and no toolchain; the enabled list is
+    // ordered, so its head is the same agent every other caller falls back to.
+    expect(
+      resolvedActionDefault(
+        { global: { defaultAgent: "claude" }, environment: { defaultAgent: "grok" } },
+        "review",
+        ["codex", "claude"],
+      ),
+    ).toEqual({ agent: "codex" });
+
+    // An enabled generic default is still preferred over the head of the list.
+    expect(
+      resolvedActionDefault({ environment: { defaultAgent: "claude" } }, "review", [
+        "codex",
+        "claude",
+      ]),
+    ).toEqual({ agent: "claude" });
+  });
+
   test("an action at a tier wins over that tier's generic agent", () => {
     expect(
       resolvedActionDefault(

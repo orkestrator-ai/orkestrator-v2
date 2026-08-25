@@ -546,7 +546,7 @@ export class BackendProcess {
     }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
-    child.stderr?.on("data", (chunk) => process.stderr.write(`[Backend] ${chunk}`));
+    child.stderr?.on("data", (chunk) => console.error(`[Backend] ${String(chunk)}`.trimEnd()));
 
     let startupComplete = false;
     let unexpectedExitReported = false;
@@ -605,7 +605,7 @@ export class BackendProcess {
               return;
             finish(message as ReadyMessage);
           } catch {
-            process.stdout.write(`[Backend] ${line}\n`);
+            console.log(`[Backend] ${line}`);
           }
         });
       });

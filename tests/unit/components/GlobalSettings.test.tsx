@@ -39,6 +39,8 @@ const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
   repositories: {},
 }));
 const mockGetLogDirectory = mock(async () => null);
+const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
+const mockCleanupLogs = mock(async () => ({ totalBytes: 0, fileCount: 0 }));
 const mockPropagateGithubCredentialsToContainers = mock(
   async (): Promise<{ updated: string[]; failed: [string, string][] }> => ({
     updated: [],
@@ -88,6 +90,8 @@ mock.module("@/lib/backend", () => ({
   setCursorApiKey: mockSetCursorApiKey,
   setAnthropicApiKey: mockSetAnthropicApiKey,
   getLogDirectory: mockGetLogDirectory,
+  getLogStorageStats: mockGetLogStorageStats,
+  cleanupLogs: mockCleanupLogs,
   propagateGithubCredentialsToContainers: mockPropagateGithubCredentialsToContainers,
   getWebClientStatus: mockGetWebClientStatus,
   setWebClientEnabled: mockSetWebClientEnabled,
@@ -132,6 +136,8 @@ describe("GlobalSettings", () => {
     mockSetCursorApiKey.mockClear();
     mockSetAnthropicApiKey.mockClear();
     mockGetLogDirectory.mockClear();
+    mockGetLogStorageStats.mockClear();
+    mockCleanupLogs.mockClear();
     mockPropagateGithubCredentialsToContainers.mockClear();
     mockPropagateGithubCredentialsToContainers.mockImplementation(async () => ({
       updated: [],
@@ -205,6 +211,7 @@ describe("GlobalSettings", () => {
           terminalScrollback: 5000,
           experimentalCodexRawEventLogging: true,
           debugLogging: false,
+          debugLogRetentionDays: 7,
           webClientEnabled: true,
         },
         repositories: {},
@@ -1657,11 +1664,13 @@ describe("GlobalSettings", () => {
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
 
-  test("saves debug logging and opens its log directory", async () => {
+  test("saves debug logging retention, reports storage, and cleans up its log directory", async () => {
     mockGetLogDirectory.mockResolvedValueOnce("/tmp/orkestrator-logs");
     render(<GlobalSettings activeSection="debug" />);
 
+    expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Disabled" }));
+    fireEvent.change(screen.getByLabelText("Log retention days"), { target: { value: "30" } });
     const logDirectory = await screen.findByRole("button", { name: "/tmp/orkestrator-logs" });
     fireEvent.click(logDirectory);
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -1669,9 +1678,14 @@ describe("GlobalSettings", () => {
     expect(mockRevealInFileManager).toHaveBeenCalledWith("/tmp/orkestrator-logs");
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ debugLogging: true }),
+        expect.objectContaining({ debugLogging: true, debugLogRetentionDays: 30 }),
       ),
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean up logs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete logs" }));
+    await waitFor(() => expect(mockCleanupLogs).toHaveBeenCalled());
+    expect(await screen.findByText("0 B across 0 files")).toBeTruthy();
   });
 
   test("uses and restores the default terminal scrollback when legacy config omits it", () => {

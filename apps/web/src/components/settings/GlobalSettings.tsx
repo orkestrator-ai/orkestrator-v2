@@ -27,6 +27,10 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
+import {
+  isValidDebugLogRetentionDays,
+  normalizeDebugLogRetentionDays,
+} from "@orkestrator/protocol/debug-logging";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 
 // Domain validation regex
@@ -69,6 +73,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.experimentalCodexRawEventLogging ?? true,
     global.experimentalCursorSdkBridge ?? false,
     global.debugLogging ?? false,
+    normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
     // Canonical shape, so an edit that only reorders keys is not a change.
@@ -142,6 +147,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     global.experimentalCursorSdkBridge ?? false,
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
+  const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
+    normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
+  );
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [reviewInstruction, setReviewInstruction] = useState(
     getSavedReviewInstruction(global.reviewInstruction),
@@ -157,6 +165,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isLoadingWebClientStatus, setIsLoadingWebClientStatus] = useState(false);
   const [isLoadingGatewayToken, setIsLoadingGatewayToken] = useState(false);
   const [logDirectory, setLogDirectory] = useState<string | null>(null);
+  const [logStorageStats, setLogStorageStats] = useState<backend.LogStorageStats | null>(null);
+  const [isLoadingLogStorage, setIsLoadingLogStorage] = useState(false);
+  const [isCleaningLogs, setIsCleaningLogs] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showCursorApiKey, setShowCursorApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
@@ -226,6 +237,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setExperimentalCursorSdkBridge(global.experimentalCursorSdkBridge ?? false);
     setDebugLogging(global.debugLogging ?? false);
+    setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
   }, [global]);
@@ -286,12 +298,37 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     };
   }, [activeSection, refreshWebClientStatus]);
 
-  // Fetch log directory path once on mount
+  const refreshLogStorage = useCallback(async () => {
+    setIsLoadingLogStorage(true);
+    try {
+      const directory = await backend.getLogDirectory();
+      setLogDirectory(directory);
+      const stats = await backend.getLogStorageStats();
+      setLogStorageStats(stats);
+    } catch {
+      setLogStorageStats(null);
+    } finally {
+      setIsLoadingLogStorage(false);
+    }
+  }, []);
+
   useEffect(() => {
-    backend
-      .getLogDirectory()
-      .then(setLogDirectory)
-      .catch(() => {});
+    void refreshLogStorage();
+  }, [refreshLogStorage]);
+
+  const handleCleanupLogs = useCallback(async () => {
+    setIsCleaningLogs(true);
+    try {
+      const stats = await backend.cleanupLogs();
+      setLogStorageStats(stats);
+      toast.success("Logs cleaned up");
+    } catch (error) {
+      toast.error("Failed to clean up logs", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      setIsCleaningLogs(false);
+    }
   }, []);
 
   // Check for changes
@@ -327,6 +364,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       experimentalCursorSdkBridge !== (global.experimentalCursorSdkBridge ?? false) ||
       debugLogging !== (global.debugLogging ?? false) ||
+      debugLogRetentionDays !== normalizeDebugLogRetentionDays(global.debugLogRetentionDays) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
       reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction) ||
       webClientApplyError !== null ||
@@ -361,6 +399,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     experimentalCodexRawEventLogging,
     experimentalCursorSdkBridge,
     debugLogging,
+    debugLogRetentionDays,
     webClientEnabled,
     reviewInstruction,
     webClientApplyError,
@@ -462,6 +501,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         experimentalCodexRawEventLogging: boolean;
         experimentalCursorSdkBridge: boolean;
         debugLogging: boolean;
+        debugLogRetentionDays: number;
         webClientEnabled: boolean;
         reviewInstruction?: string;
       } = {
@@ -485,6 +525,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         experimentalCodexRawEventLogging,
         experimentalCursorSdkBridge,
         debugLogging,
+        debugLogRetentionDays,
         webClientEnabled,
         // `update_global_config` replaces the stored global wholesale, so this
         // has to be sent from every section's save, not only the Defaults tab.
@@ -675,6 +716,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setExperimentalCursorSdkBridge(global.experimentalCursorSdkBridge ?? false);
     setDebugLogging(global.debugLogging ?? false);
+    setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
     setWebClientApplyError(null);
@@ -741,6 +783,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCursorSdkBridge,
     debugLogging,
     setDebugLogging,
+    debugLogRetentionDays,
+    setDebugLogRetentionDays,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,
@@ -763,6 +807,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setIsLoadingGatewayToken,
     logDirectory,
     setLogDirectory,
+    logStorageStats,
+    isLoadingLogStorage,
+    isCleaningLogs,
+    refreshLogStorage,
+    handleCleanupLogs,
     showApiKey,
     setShowApiKey,
     showCursorApiKey,
@@ -811,6 +860,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
             saveSuccess ||
             domainErrors.length > 0 ||
             !!colorError ||
+            !isValidDebugLogRetentionDays(debugLogRetentionDays) ||
             !!gatewayTokenValidationError ||
             !!reviewInstructionValidationError
           }

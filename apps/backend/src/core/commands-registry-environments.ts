@@ -51,6 +51,7 @@ import {
   logEnvironmentLifecycleFailure,
 } from "./commands-helpers.js";
 import type { CommandContext } from "./commands-context.js";
+import { cleanupLogStorage, getLogStorageStats } from "./log-storage.js";
 
 /**
  * A validated environment tier, or `undefined` when it expresses no opinion.
@@ -72,6 +73,14 @@ export function registerEnvironmentCommands(
   const { conditionalManifestSnapshot, schedulePendingEnvironmentRename, extensionDiscoveryCache } =
     dependencies;
   register("get_log_directory", (_args, { storage }) => storage.getLogDirectory());
+  register("get_log_storage_stats", (args, { storage }) => {
+    assertOnlyKeys(args, [], "arguments");
+    return getLogStorageStats(storage.getLogDirectory());
+  });
+  register("cleanup_logs", (args, { storage }) => {
+    assertOnlyKeys(args, [], "arguments");
+    return cleanupLogStorage(storage.getLogDirectory());
+  });
 
   register("get_environments", async ({ projectId }, context) => {
     const { storage } = context;

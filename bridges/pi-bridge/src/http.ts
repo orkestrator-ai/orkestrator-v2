@@ -48,6 +48,7 @@ import {
   createSession,
   ensureSession,
   forkSession,
+  hydrateSessionComposer,
   listResumableSessions,
   parseComposerPatch,
   resumeSession,
@@ -135,6 +136,13 @@ async function routeGlobal(
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
     refreshModels();
     await refreshRuntimeCatalog();
+    // Restored sessions intentionally hold no persisted model rows. A manual
+    // refresh must repair those session snapshots too, otherwise the global
+    // catalogue changes while the open tab keeps saying no models are
+    // available until its ordinary retry deadline passes.
+    await Promise.all(
+      Array.from(sessions.values()).map((state) => hydrateSessionComposer(state, { force: true })),
+    );
     json(response, 200, { ok: true });
     return true;
   }
@@ -235,6 +243,17 @@ async function routeSession(
   // the backend sweeps every persisted session every couple of seconds, so
   // refreshing on those would put idle detaching permanently out of reach.
   if (action !== "activity" && action !== "dispatch") state.lastAccessed = Date.now();
+
+  // `restoreComposer` drops the persisted model rows by design. Rehydrate on
+  // the routes that publish or mutate composer state so a restarted bridge's
+  // authoritative snapshot can stand on its own instead of depending on a
+  // renderer-side event or an environment-wide cache happening to be fresh.
+  if (
+    (request.method === "GET" && (!action || action === "status" || action === "config")) ||
+    (request.method === "POST" && action === "config")
+  ) {
+    await hydrateSessionComposer(state);
+  }
 
   if (!action && request.method === "GET") {
     boundTranscriptForRead(state);

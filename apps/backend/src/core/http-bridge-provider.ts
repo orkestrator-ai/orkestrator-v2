@@ -1005,12 +1005,31 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return composer as unknown as NativeAgentComposerState;
   }
 
-  refreshCatalog(): void {
+  async refreshCatalog(): Promise<void> {
     // Execution profiles and runtime inventory are discovered alongside models,
     // so an explicit refresh has to drop them too or the picker re-renders the
     // same stale list it was asked to replace.
     this.codexRuntimeMetadataGeneration += 1;
     this.interactiveMetadata.clear();
+    if (this.agent !== "pi") return;
+
+    // Pi's ModelRuntime owns a process-wide credential and availability
+    // snapshot. A `/login` in a separate Pi terminal changes auth.json behind
+    // that runtime, so clearing only the backend cache cannot discover the new
+    // provider. Ask the bridge to refresh its own authority before the backend
+    // re-lists the catalogue.
+    const response = await bridgeFetch(
+      this.connection,
+      "/global/refresh-catalog",
+      { method: "POST" },
+      this.fetchImpl,
+    );
+    // Compatibility with a Pi bridge from before the refresh route existed:
+    // the backend cache is still cleared above, so its next read gets the best
+    // catalogue that older bridge can provide.
+    if (response.status !== 404) {
+      await assertOkWithErrorDetail(response, "Pi model catalogue refresh");
+    }
   }
 
   async listResumableSessions(): Promise<NativeAgentResumeEntry[]> {

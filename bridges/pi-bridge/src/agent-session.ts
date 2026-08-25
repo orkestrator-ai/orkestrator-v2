@@ -70,6 +70,11 @@ const closingSessions = new WeakSet<SessionState>();
 /** One in-flight adoption per canonical Pi session file. */
 const sessionResumptions = new Map<string, Promise<SessionState>>();
 
+/** One live-catalogue repair per restored bridge session. */
+const composerHydrations = new WeakMap<SessionState, Promise<void>>();
+/** Empty catalogues are retryable, but not on every 500ms status poll. */
+const composerHydrationRetryAfter = new WeakMap<SessionState, number>();
+
 /**
  * Narrow dependency seam for lifecycle tests and HTTP contract fakes.
  *
@@ -98,6 +103,48 @@ function hydrateComposerForSession(
 
 function resolveModelForSession(modelId: string | undefined): ReturnType<typeof resolveModel> {
   return (agentSessionTestHooks.resolveModel ?? resolveModel)(modelId);
+}
+
+/**
+ * Put the live model catalogue back into a restored session composer.
+ *
+ * Persistence deliberately retains only the user's selection: provider auth
+ * can change while the bridge is down, so restoring yesterday's model rows
+ * would offer models the account can no longer run. That makes the first
+ * status/config read after a restart responsible for rehydrating the rows.
+ * Sharing the work prevents the backend's parallel projection reads from
+ * multiplying SDK availability probes, while the retry deadline prevents an
+ * unauthenticated session from probing on every projection poll.
+ */
+export async function hydrateSessionComposer(
+  state: SessionState,
+  options: { force?: boolean } = {},
+): Promise<void> {
+  if (!options.force && state.composer.models.length > 0) return;
+  if (!options.force && (composerHydrationRetryAfter.get(state) ?? 0) > Date.now()) {
+    return;
+  }
+  const pending = composerHydrations.get(state);
+  if (pending) return pending;
+
+  const operation = (async () => {
+    const hydrated = await hydrateComposerForSession(state.composer);
+    if (hydrated.models.length === 0) {
+      composerHydrationRetryAfter.set(state, Date.now() + CATALOG_TIMEOUT_MS);
+      if (options.force && state.composer.models.length > 0) {
+        state.composer = hydrated;
+        state.revision += 1;
+      }
+      return;
+    }
+    composerHydrationRetryAfter.delete(state);
+    state.composer = hydrated;
+    state.revision += 1;
+  })().finally(() => {
+    if (composerHydrations.get(state) === operation) composerHydrations.delete(state);
+  });
+  composerHydrations.set(state, operation);
+  return operation;
 }
 
 export function newSessionState(clientSessionKey?: string): SessionState {
@@ -144,7 +191,10 @@ export async function createSession(
   if (clientSessionKey) {
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
-    if (existing) return existing;
+    if (existing) {
+      await hydrateSessionComposer(existing);
+      return existing;
+    }
     const inFlight = sessionCreations.get(clientSessionKey);
     if (inFlight) return inFlight;
   }

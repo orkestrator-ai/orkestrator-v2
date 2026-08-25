@@ -829,6 +829,22 @@ describe("HTTP bridge provider", () => {
     ).toEqual({ input: "Prioritize the regression test", requestId: "steer-1" });
   });
 
+  test("refreshes Pi's bridge-owned model runtime before re-listing", async () => {
+    const { provider, requests } = httpProvider(
+      (url) =>
+        url.endsWith("/global/refresh-catalog")
+          ? Response.json({ ok: true })
+          : new Response(null, { status: 404 }),
+      piConnection,
+    );
+
+    await expect(provider.refreshCatalog?.()).resolves.toBeUndefined();
+    expect(requests.map((request) => [request.url, request.init.method ?? "GET"])).toContainEqual([
+      "http://pi.test/global/refresh-catalog",
+      "POST",
+    ]);
+  });
+
   test("routes Claude background-task stop and prompt-suggestion dismissal", async () => {
     const { provider, requests } = httpProvider(() => new Response(null, { status: 204 }));
 

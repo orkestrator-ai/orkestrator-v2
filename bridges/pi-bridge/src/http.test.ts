@@ -210,10 +210,22 @@ describe("authorized global routes", () => {
       models,
     );
     try {
+      const created = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({ clientSessionKey: "refresh-open-session" }),
+      });
+      const sessionId = (await created.json()).sessionId as string;
+      expect(sessions.get(sessionId)?.composer.models.map((model) => model.id)).toEqual([
+        "test-provider/before",
+      ]);
+
       const refresh = await call("/global/refresh-catalog", { method: "POST" });
       expect(refresh.status).toBe(200);
       expect(await refresh.json()).toEqual({ ok: true });
       expect(refreshed).toBe(1);
+      expect(sessions.get(sessionId)?.composer.models.map((model) => model.id)).toEqual([
+        "test-provider/after",
+      ]);
 
       const catalogue = await (await call("/global/models")).json();
       expect(catalogue.models.map((model: { id: string }) => model.id)).toEqual([
@@ -282,6 +294,47 @@ describe("successful lifecycle routes", () => {
 
       expect(sessions.has(body.sessionId)).toBe(true);
       expect(clientSessionKeys.get("tab-durable-create")).toBe(body.sessionId);
+    } finally {
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      sessions.clear();
+      clientSessionKeys.clear();
+      await rm(directory, { recursive: true, force: true });
+      resetTestDependencies();
+    }
+  });
+
+  test("status rehydrates a restored session's live model catalogue", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-model-rehydrate-"));
+    process.env.PI_BRIDGE_STATE_DIR = directory;
+    installRuntime();
+    try {
+      const created = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({ clientSessionKey: "tab-model-rehydrate" }),
+      });
+      expect(created.status).toBe(201);
+      const createdBody = (await created.json()) as {
+        sessionId: string;
+        composer: { models: Array<{ id: string }> };
+      };
+      expect(createdBody.composer.models.map((model) => model.id)).toEqual([
+        "test-provider/test-model",
+      ]);
+
+      sessions.clear();
+      clientSessionKeys.clear();
+      await loadPersistedState();
+      expect(sessions.get(createdBody.sessionId)?.composer.models).toEqual([]);
+
+      const status = await call(`/session/${createdBody.sessionId}/status`);
+      expect(status.status).toBe(200);
+      const statusBody = (await status.json()) as {
+        composer: { models: Array<{ id: string }> };
+      };
+      expect(statusBody.composer.models.map((model) => model.id)).toEqual([
+        "test-provider/test-model",
+      ]);
+      expect(sessions.get(createdBody.sessionId)?.composer.models).toHaveLength(1);
     } finally {
       delete process.env.PI_BRIDGE_STATE_DIR;
       sessions.clear();

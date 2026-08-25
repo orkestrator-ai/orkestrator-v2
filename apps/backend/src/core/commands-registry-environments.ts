@@ -30,6 +30,7 @@ import {
   makeUniqueEnvironmentSlug,
   createExtensionCommandRunner,
   listGitBranchesAtPath,
+  renameEnvironmentToName,
   renameEnvironmentFromPrompt,
   parsePrState,
   toClientEnvironment,
@@ -207,19 +208,25 @@ export function registerEnvironmentCommands(
     extensionDiscoveryCache.invalidate(id);
     return deleteEnvironmentTask(id, context);
   });
-  register("rename_environment", ({ environmentId, name }, { storage }) => {
+  register("rename_environment", async ({ environmentId, name }, context) => {
+    const { storage } = context;
+    const id = asString(environmentId, "environmentId");
     const newName = sanitizeEnvironmentName(asString(name, "name"));
-    return storage
-      .updateEnvironment(asString(environmentId, "environmentId"), {
-        name: newName,
-        branch: sanitizeBranchName(newName),
-        pendingRenamePrompt: undefined,
-      })
-      .then(toClientEnvironment);
+    const environment = await storage.getEnvironment(id);
+    if (!environment) throw new Error(`Environment not found: ${id}`);
+    const updated = await renameEnvironmentToName(
+      environment,
+      newName,
+      sanitizeBranchName(newName),
+      context,
+    );
+    await syncPrMonitorTracking(context);
+    return toClientEnvironment(updated);
   });
   register("rename_environment_from_prompt", async ({ environmentId, prompt }, context) => {
     const envId = asString(environmentId, "environmentId");
     await renameEnvironmentFromPrompt(envId, asString(prompt, "prompt"), context);
+    await syncPrMonitorTracking(context);
   });
   register("get_environment_status", async ({ environmentId }, context) => {
     const { storage } = context;

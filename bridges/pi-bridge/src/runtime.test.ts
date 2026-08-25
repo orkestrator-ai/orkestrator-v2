@@ -53,11 +53,13 @@ describe("modelRuntime", () => {
 });
 
 describe("refreshRuntimeCatalog", () => {
-  test("uses the shared runtime and treats provider refresh failure as best-effort", async () => {
+  test("forces the shared runtime with a bounded signal and treats failures as best-effort", async () => {
     let refreshes = 0;
+    const options: Array<{ force?: boolean; signal?: AbortSignal }> = [];
     const created = fakeRuntime({
-      refresh: async () => {
+      refresh: async (received: { force?: boolean; signal?: AbortSignal }) => {
         refreshes += 1;
+        options.push(received);
         throw new Error("provider offline");
       },
     });
@@ -66,5 +68,7 @@ describe("refreshRuntimeCatalog", () => {
     await expect(refreshRuntimeCatalog()).resolves.toBeUndefined();
     await expect(refreshRuntimeCatalog()).resolves.toBeUndefined();
     expect(refreshes).toBe(2);
+    expect(options.map((entry) => entry.force)).toEqual([true, true]);
+    expect(options.every((entry) => entry.signal instanceof AbortSignal)).toBe(true);
   });
 });

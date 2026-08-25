@@ -1740,6 +1740,70 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("still re-lists when the provider's own catalogue refresh fails", async () => {
+    // Some providers answer `refreshCatalog` by reaching their bridge process,
+    // so it can fail for reasons that have nothing to do with the caches this
+    // method exists to drop. By the time it runs, the in-flight discovery has
+    // already been discarded — so propagating would leave the user with an
+    // error *and* the stale picker they asked to replace.
+    let now = 1_000;
+    let catalogReads = 0;
+    const invoke: Invoke = async <T>(command: string): Promise<T> => {
+      if (command !== "get_native_agent_model_catalog") {
+        throw new Error(`Unexpected backend command: ${command}`);
+      }
+      catalogReads += 1;
+      return [
+        {
+          platform: "codex",
+          id: catalogReads > 1 ? "gpt-new" : "gpt-old",
+          label: catalogReads > 1 ? "GPT new" : "GPT old",
+        },
+      ] as T;
+    };
+    let commandReads = 0;
+    const stub = createProviderStub("codex", {
+      interactiveSnapshot: async () => ({ status: "idle", messages: [] }),
+      slashCommands: async () => {
+        commandReads += 1;
+        return [{ name: commandReads > 1 ? "/new" : "/old" }];
+      },
+      refreshCatalog: async () => {
+        throw new ProviderUnavailableError("pi bridge is unavailable");
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-refresh-failure-",
+        provider: async () => stub.provider,
+        invoke,
+        now: () => now,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-refresh-failure",
+        };
+        await service.ensureSession(identity);
+        const initial = await service.getProjection(identity);
+        expect(initial?.composer?.models.map((model) => model.id)).toEqual(["gpt-old"]);
+        expect(initial?.slashCommands?.map((command) => command.name)).toEqual(["/old", "/steer"]);
+
+        const refreshed = await service.refreshProjectionModels(identity);
+
+        expect(stub.refreshCatalog).toHaveBeenCalledTimes(1);
+        // The caches were dropped despite the throw, so the re-list ran and the
+        // user sees the newer catalogue rather than the one they refreshed away.
+        expect(refreshed?.composer?.models.map((model) => model.id)).toEqual(["gpt-new"]);
+        expect(refreshed?.slashCommands?.map((command) => command.name)).toEqual([
+          "/new",
+          "/steer",
+        ]);
+      },
+    );
+  });
+
   test("backs a failed background discovery off instead of retrying every poll", async () => {
     let now = 1_000;
     let catalogReads = 0;

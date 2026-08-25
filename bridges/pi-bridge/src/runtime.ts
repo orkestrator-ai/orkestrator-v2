@@ -13,7 +13,6 @@
  */
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { agentDirectory, CATALOG_TIMEOUT_MS } from "./config.js";
-import { withTimeout } from "./timeout.js";
 
 let runtime: ModelRuntime | null = null;
 let creation: Promise<ModelRuntime> | null = null;
@@ -60,9 +59,12 @@ async function createSdkRuntime(): Promise<ModelRuntime> {
  */
 export async function refreshRuntimeCatalog(): Promise<void> {
   const created = await modelRuntime();
-  await withTimeout(created.refresh(), CATALOG_TIMEOUT_MS, "Pi catalogue refresh timed out").catch(
-    () => undefined,
-  );
+  // This is the explicit user refresh path, so bypass the SDK's provider
+  // freshness windows. Its AbortSignal reaches the provider operation itself;
+  // racing an uncancelled promise against a timer would let a timed-out refresh
+  // keep mutating the catalogue after this function returned.
+  const signal = AbortSignal.timeout(CATALOG_TIMEOUT_MS);
+  await created.refresh({ force: true, signal }).catch(() => undefined);
 }
 
 /** Drop the memo so the next read rebuilds from disk. Tests only. */

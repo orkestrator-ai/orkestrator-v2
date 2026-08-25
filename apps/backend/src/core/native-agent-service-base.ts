@@ -553,9 +553,26 @@ export abstract class NativeAgentServiceBase {
       pendingSlashCommands.validity.current = false;
       this.slashCommandRefreshes.delete(slashCommandKey);
     }
-    await provider.refreshCatalog?.();
     this.modelCatalogCache.delete(input.environmentId);
     this.slashCommandCache.delete(slashCommandKey);
+    // Best-effort, and dropped *after* the caches above rather than before.
+    // Some providers answer this by reaching their bridge process — Pi has to,
+    // because its `ModelRuntime` owns a credential snapshot this side cannot
+    // invalidate — so it can fail for reasons that have nothing to do with the
+    // local caches. The in-flight discovery has already been discarded, so
+    // throwing here would leave the refresh both failed *and* stale, which is
+    // strictly worse than the partial refresh this did when it could not throw
+    // at all. Re-listing against a bridge that did not refresh still gives the
+    // best answer that bridge can produce.
+    //
+    // try/catch rather than `.catch`: the contract allows a synchronous
+    // implementation — OpenCode's returns `void` — so there is not always a
+    // promise to attach to, and a synchronous throw has to be caught too.
+    try {
+      await provider.refreshCatalog?.();
+    } catch (error) {
+      console.warn(`[native-agent] ${input.agent} catalogue refresh failed:`, error);
+    }
     return this.refreshProjection(input, true);
   }
 

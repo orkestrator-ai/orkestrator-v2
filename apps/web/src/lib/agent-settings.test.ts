@@ -7,26 +7,47 @@ import { agentSettingsTiers, resolvedActionDefault } from "./agent-settings";
 describe("resolvedActionDefault", () => {
   const enabled = ["claude", "codex", "cursor", "grok", "opencode"] as const;
 
-  test("resolves action entries independently across all three tiers", () => {
+  test("resolves PR, Resolve, and Push independently across all three tiers", () => {
     const tiers = {
       global: {
         actionDefaults: {
           review: { platform: "claude" as const },
-          pr: { platform: "grok" as const, model: "grok-4" },
+          pr: { platform: "claude" as const, model: "app-pr" },
+          resolve: { platform: "claude" as const, model: "app-resolve" },
+          push: { platform: "claude" as const, model: "app-push" },
         },
       },
-      repository: { actionDefaults: { review: { platform: "codex" as const } } },
-      environment: { actionDefaults: { review: { platform: "cursor" as const } } },
+      repository: {
+        actionDefaults: {
+          review: { platform: "codex" as const },
+          pr: { platform: "codex" as const, model: "repo-pr" },
+          resolve: { platform: "codex" as const, model: "repo-resolve" },
+        },
+      },
+      environment: {
+        actionDefaults: {
+          review: { platform: "cursor" as const },
+          pr: { platform: "grok" as const, model: "env-pr" },
+        },
+      },
     };
 
     expect(resolvedActionDefault(tiers, "review", enabled)).toEqual({ agent: "cursor" });
     expect(resolvedActionDefault(tiers, "pr", enabled)).toEqual({
       agent: "grok",
-      model: "grok-4",
+      model: "env-pr",
+    });
+    expect(resolvedActionDefault(tiers, "resolve", enabled)).toEqual({
+      agent: "codex",
+      model: "repo-resolve",
+    });
+    expect(resolvedActionDefault(tiers, "push", enabled)).toEqual({
+      agent: "claude",
+      model: "app-push",
     });
   });
 
-  test("a narrower generic agent wins when that tier does not set the action", () => {
+  test("an action default is not displaced by a narrower generic tab default", () => {
     expect(
       resolvedActionDefault(
         {
@@ -37,14 +58,12 @@ describe("resolvedActionDefault", () => {
         "review",
         enabled,
       ),
-    ).toEqual({ agent: "cursor" });
+    ).toEqual({ agent: "claude" });
   });
 
   test("ignores an action entry whose platform the user has since disabled", () => {
     // The entry is dropped whole rather than having its model carried across to
-    // a different platform, and the narrower generic agent is what takes over —
-    // not the application default, which is wider than the choice the user made
-    // for this environment.
+    // a different platform. The generic default then follows its own cascade.
     expect(
       resolvedActionDefault(
         {
@@ -90,6 +109,59 @@ describe("resolvedActionDefault", () => {
         ["claude", "codex"],
       ),
     ).toEqual({ agent: "codex", model: "gpt-5.4" });
+  });
+
+  test("resolves newProject the same way, which is what the create dialog reads", () => {
+    // `CreateEnvironmentDialog` shares this resolver, so the rule that stops a
+    // generic tab default displacing an action entry reaches the preselected
+    // agent and model of a new environment too. Deliberate: "New environments"
+    // is a decision about this action, and a repository-wide Default agent is
+    // not. The dialog has no environment tier, so this is the narrowest case.
+    expect(
+      resolvedActionDefault(
+        {
+          global: {
+            defaultAgent: "claude",
+            actionDefaults: { newProject: { platform: "claude", model: "sonnet" } },
+          },
+          repository: { defaultAgent: "codex" },
+        },
+        "newProject",
+        enabled,
+      ),
+    ).toEqual({ agent: "claude", model: "sonnet" });
+
+    // With no entry to answer for the action, the repository's generic agent is
+    // still the one that does.
+    expect(
+      resolvedActionDefault(
+        { global: { defaultAgent: "claude" }, repository: { defaultAgent: "codex" } },
+        "newProject",
+        enabled,
+      ),
+    ).toEqual({ agent: "codex" });
+  });
+
+  test("clamps the generic fallback to the enabled set when no action names one", () => {
+    // Nothing configured this action, so the generic cascade answers — but it
+    // names a platform the user has since turned off. Handing that back would
+    // launch an agent with no catalogue and no toolchain; the enabled list is
+    // ordered, so its head is the same agent every other caller falls back to.
+    expect(
+      resolvedActionDefault(
+        { global: { defaultAgent: "claude" }, environment: { defaultAgent: "grok" } },
+        "review",
+        ["codex", "claude"],
+      ),
+    ).toEqual({ agent: "codex" });
+
+    // An enabled generic default is still preferred over the head of the list.
+    expect(
+      resolvedActionDefault({ environment: { defaultAgent: "claude" } }, "review", [
+        "codex",
+        "claude",
+      ]),
+    ).toEqual({ agent: "claude" });
   });
 
   test("an action at a tier wins over that tier's generic agent", () => {

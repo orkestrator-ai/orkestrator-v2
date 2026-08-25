@@ -110,6 +110,9 @@
       "buildResources": "apps/desktop/electron/resources",
       "output": "release"
     },
+    "electronFuses": {
+      "runAsNode": false
+    },
     "files": [
       "apps/desktop/dist/**",
       "package.json"

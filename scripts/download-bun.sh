@@ -11,7 +11,7 @@ BINARIES_DIR="$PROJECT_ROOT/binaries"
 # (docker/Dockerfile `FROM oven/bun:<version>-debian`) so the host bridge and
 # the in-container bridge run on an identical runtime. tests/unit/version-drift
 # enforces this match; bump both together.
-BUN_VERSION="1.3.14"
+BUN_VERSION="1.4.0"
 
 # Detect architecture
 ARCH=$(uname -m)

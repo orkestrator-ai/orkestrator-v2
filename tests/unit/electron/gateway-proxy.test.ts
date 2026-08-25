@@ -1025,9 +1025,12 @@ describe("remote gateway", () => {
     const proxyPrefix = `/__orkestrator/proxy/loopback/${targetAddress.port}`;
 
     try {
-      const cookieResponse = await requestUrl(`${info.url}${proxyPrefix}/cookies`, {
-        headers: { authorization: `Bearer ${info.token}` },
-      });
+      const cookieResponse = await requestUrl(
+        new URL(`${proxyPrefix}/cookies`, info.url).toString(),
+        {
+          headers: { authorization: `Bearer ${info.token}` },
+        },
+      );
       expect(cookieResponse.status).toBe(200);
       expect(cookieResponse.headers["set-cookie"]).toEqual([
         `app_session=abc123; Path=${proxyPrefix}/; HttpOnly`,
@@ -1036,15 +1039,21 @@ describe("remote gateway", () => {
       expect(cookieResponse.headers["access-control-allow-origin"]).toBeUndefined();
       expect(cookieResponse.headers["access-control-allow-credentials"]).toBeUndefined();
 
-      const relativeRedirect = await requestUrl(`${info.url}${proxyPrefix}/relative`, {
-        headers: { authorization: `Bearer ${info.token}` },
-      });
+      const relativeRedirect = await requestUrl(
+        new URL(`${proxyPrefix}/relative`, info.url).toString(),
+        {
+          headers: { authorization: `Bearer ${info.token}` },
+        },
+      );
       expect(relativeRedirect.status).toBe(302);
       expect(relativeRedirect.headers.location).toBe(`${proxyPrefix}/next`);
 
-      const absoluteRedirect = await requestUrl(`${info.url}${proxyPrefix}/absolute`, {
-        headers: { authorization: `Bearer ${info.token}` },
-      });
+      const absoluteRedirect = await requestUrl(
+        new URL(`${proxyPrefix}/absolute`, info.url).toString(),
+        {
+          headers: { authorization: `Bearer ${info.token}` },
+        },
+      );
       expect(absoluteRedirect.status).toBe(302);
       expect(absoluteRedirect.headers.location).toBe(`${proxyPrefix}/next?x=1`);
     } finally {

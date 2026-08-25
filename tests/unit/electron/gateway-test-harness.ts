@@ -537,6 +537,12 @@ export function releaseBufferedBytes(response: ServerResponse | EventClientWrite
   Reflect.deleteProperty(response, "writableLength");
 }
 
+export function emitEventClientDrain(response: EventClientWriter): void {
+  const serverResponse = (response as EventClientWriter & { response?: ServerResponse }).response;
+  if (!serverResponse) throw new Error("Event client does not expose its server response");
+  serverResponse.emit("drain");
+}
+
 afterEach(async () => {
   await Promise.all(gateways.splice(0).map((gateway) => gateway.stop().catch(() => undefined)));
   await Promise.all(

@@ -7,6 +7,7 @@ import {
   children,
   here,
   nativeFetch,
+  NativeAbortController,
   spawnBridge,
   stopChild,
   temporaryDirectory,
@@ -205,8 +206,8 @@ describe("ACP bridge", () => {
         ACP_MAX_SESSIONS: "2",
       },
     });
-    const firstController = new AbortController();
-    const secondController = new AbortController();
+    const firstController = new NativeAbortController();
+    const secondController = new NativeAbortController();
     const create = (key: string, signal: AbortSignal) =>
       nativeFetch(`${bridge.base}/session/create`, {
         method: "POST",

@@ -1,7 +1,7 @@
 # Bun is the primary runtime: it builds and runs the bridge servers. The
 # `-debian` variant is glibc-based (Debian), which keeps the musl-delete logic
 # for the Claude Agent SDK below valid. (An Alpine/musl base would invert it.)
-FROM oven/bun:1.3.14-debian
+FROM oven/bun:1.4.0-debian
 
 ARG TZ
 ENV TZ="$TZ"
@@ -277,8 +277,7 @@ WORKDIR /opt/bridge-build/bridges/claude-bridge
 # resolved at runtime — the old top-level rm never touched it) to make resolution
 # unambiguous and drop ~225MB of dead weight. If switching to an Alpine/musl
 # base, keep musl and strip gnu instead.
-# Verified in oven/bun:1.3.14-debian: bridge boots and /global/health returns 200,
-# resolving the gnu binary.
+# The Debian/glibc image must boot the bridge and resolve the gnu binary.
 RUN bun run build \
  && rm -rf node_modules \
  && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl

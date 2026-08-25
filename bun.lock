@@ -12,7 +12,7 @@
         "@playwright/test": "^1.61.0",
         "@testing-library/dom": "10.4.1",
         "@testing-library/react": "^16.3.1",
-        "@types/bun": "^1.3.12",
+        "@types/bun": "^1.4.0",
         "@types/node": "^25.9.3",
         "@types/react": "^19.1.8",
         "@types/react-dom": "^19.1.6",
@@ -35,7 +35,7 @@
     },
     "apps/backend": {
       "name": "@orkestrator/backend",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@modelcontextprotocol/node": "2.0.0",
         "@modelcontextprotocol/server": "2.0.0",
@@ -52,7 +52,7 @@
     },
     "apps/desktop": {
       "name": "@orkestrator/desktop",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@orkestrator/backend": "workspace:*",
         "@orkestrator/protocol": "workspace:*",
@@ -70,7 +70,7 @@
     },
     "apps/web": {
       "name": "@orkestrator/web",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
@@ -137,7 +137,7 @@
     },
     "apps/web-public": {
       "name": "@orkestrator/web-public",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@orkestrator/protocol": "workspace:*",
         "@orkestrator/web": "workspace:*",
@@ -157,19 +157,19 @@
     },
     "bridges/acp-bridge": {
       "name": "acp-bridge",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@orkestrator/protocol": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "^1.3.12",
+        "@types/bun": "^1.4.0",
         "@types/node": "^22.0.0",
         "typescript": "^5.7.0",
       },
     },
     "bridges/claude-bridge": {
       "name": "claude-bridge",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.245",
         "@anthropic-ai/sdk": "0.120.0",
@@ -187,7 +187,7 @@
     },
     "bridges/codex-bridge": {
       "name": "codex-bridge",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@hono/node-server": "^1.13.0",
         "@orkestrator/protocol": "workspace:*",
@@ -201,20 +201,20 @@
     },
     "bridges/cursor-bridge": {
       "name": "cursor-bridge",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@cursor/sdk": "1.0.28",
         "@orkestrator/protocol": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "^1.3.12",
+        "@types/bun": "^1.4.0",
         "@types/node": "^22.0.0",
         "typescript": "^5.7.0",
       },
     },
     "bridges/pi-bridge": {
       "name": "pi-bridge",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "dependencies": {
         "@earendil-works/pi-agent-core": "0.84.3",
         "@earendil-works/pi-ai": "0.84.3",
@@ -222,14 +222,14 @@
         "@orkestrator/protocol": "workspace:*",
       },
       "devDependencies": {
-        "@types/bun": "^1.3.12",
+        "@types/bun": "^1.4.0",
         "@types/node": "^22.0.0",
         "typescript": "^5.7.0",
       },
     },
     "packages/cli": {
       "name": "orkestrator",
-      "version": "2.10.10",
+      "version": "2.11.1",
       "bin": {
         "orkestrator": "bin/orkestrator.js",
       },
@@ -240,7 +240,7 @@
     },
     "packages/protocol": {
       "name": "@orkestrator/protocol",
-      "version": "2.10.10",
+      "version": "2.11.1",
     },
   },
   "packages": {
@@ -994,7 +994,7 @@
 
     "@types/babel__traverse": ["@types/babel__traverse@7.28.0", "", { "dependencies": { "@babel/types": "^7.28.2" } }, "sha512-8PvcXf70gTDZBgt9ptxJ8elBeBjcLOAcOtoO/mPJjtji1+CdGbHgm77om1GrsPxsiE+uXIpNSK64UYaIwQXd4Q=="],
 
-    "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
+    "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
 
     "@types/cacheable-request": ["@types/cacheable-request@6.0.3", "", { "dependencies": { "@types/http-cache-semantics": "*", "@types/keyv": "^3.1.4", "@types/node": "*", "@types/responselike": "^1.0.0" } }, "sha512-IQ3EbTzGxIigb1I3qPZc1rWJnH0BmSKv5QYTalEwweFvyBDLSAe24zP0le/hyi7ecGfZVlIVAg4BZqb8WBwKqw=="],
 
@@ -1132,7 +1132,7 @@
 
     "builder-util-runtime": ["builder-util-runtime@9.7.0", "", { "dependencies": { "debug": "^4.3.4", "sax": "^1.2.4" } }, "sha512-g/kR520giAFYkSXTzcmF3kqQq7wi8F6N6SzeDgZrqTBN+VHdmgWOyTdD1yD7AATDId/yXLvuP34CxW46/BwCdw=="],
 
-    "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
+    "bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
 
     "bytes": ["bytes@3.1.2", "", {}, "sha512-/Nf7TyzTx6S3yRJObOAV7956r8cr2+Oj8AC5dt8wSP3BQAoeX58NoHyCU8P8zGkNXStjTSi6fzO6F0pBdcYbEg=="],
 

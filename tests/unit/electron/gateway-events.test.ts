@@ -49,6 +49,7 @@ import {
   createRendererRoot,
   createTempDir,
   decodeResponseBody,
+  emitEventClientDrain,
   eventClients,
   eventFrames,
   frameId,
@@ -3089,7 +3090,10 @@ describe("remote gateway", () => {
     // longer fits, and a client that cannot even be told it desynced is beyond
     // recovering in place.
     pinBufferedBytes(stream.response, 8 * 1024 * 1024);
-    stream.response.write(": nudge\n\n");
+    // The preceding test covers a real refused write producing a drain event.
+    // Trigger the drain directly here so this case isolates the hard-limit
+    // recovery branch from runtime-specific loopback socket buffering.
+    emitEventClientDrain(stream.response);
 
     await waitUntil(() => stream.aborted(), "Hopeless stream was never disconnected");
     expect(eventClients(gateway).size).toBe(0);
@@ -3378,7 +3382,7 @@ describe("remote gateway", () => {
     const prefix = `/__orkestrator/browser/loopback/${targetAddress.port}`;
     const headers = { authorization: `Bearer ${info.token}`, origin: "null" };
 
-    const page = await requestUrl(`${info.url}${prefix}/`, { headers });
+    const page = await requestUrl(new URL(`${prefix}/`, info.url).toString(), { headers });
     expect(page.status).toBe(200);
     expect(page.body).toBe(`<script type="module" src="${prefix}/src/main.js"></script>`);
     expect(page.headers["x-frame-options"]).toBeUndefined();
@@ -3386,7 +3390,9 @@ describe("remote gateway", () => {
     expect(page.headers["access-control-allow-origin"]).toBe("null");
     expect(page.headers["access-control-allow-credentials"]).toBe("true");
 
-    const script = await requestUrl(`${info.url}${prefix}/src/main.js`, { headers });
+    const script = await requestUrl(new URL(`${prefix}/src/main.js`, info.url).toString(), {
+      headers,
+    });
     expect(script.body).toBe(`import "${prefix}/src/dependency.js";`);
   });
 
@@ -3414,7 +3420,7 @@ describe("remote gateway", () => {
 
     const { info } = await startGateway({ compression: "body" });
     const prefix = `/__orkestrator/browser/loopback/${address.port}`;
-    const result = await requestUrl(`${info.url}${prefix}/`, {
+    const result = await requestUrl(new URL(`${prefix}/`, info.url).toString(), {
       headers: {
         authorization: `Bearer ${info.token}`,
         origin: "null",
@@ -3454,7 +3460,7 @@ describe("remote gateway", () => {
 
     const { info } = await startGateway();
     const prefix = `/__orkestrator/browser/loopback/${targetAddress.port}`;
-    const result = await requestUrl(`${info.url}${prefix}/`, {
+    const result = await requestUrl(new URL(`${prefix}/`, info.url).toString(), {
       headers: { authorization: `Bearer ${info.token}`, origin: "null" },
     });
     expect(result.status).toBe(200);

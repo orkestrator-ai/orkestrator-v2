@@ -345,12 +345,23 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(getShellVar("scripts/download-bun.sh", "BUN_VERSION")).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
+  test("Bun: package metadata requires the pinned runtime version", () => {
+    const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
+    const rootPackage = JSON.parse(read("package.json")) as { packageManager?: string };
+    const cliPackage = JSON.parse(read("packages/cli/package.json")) as {
+      engines?: { bun?: string };
+    };
+
+    expect(rootPackage.packageManager).toBe(`bun@${hostPin}`);
+    expect(cliPackage.engines?.bun).toBe(`>=${hostPin}`);
+  });
+
   test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {
     // The claude-bridge build vendors the SDK into dist/node_modules, which is the
     // tree the SDK actually resolves its native binary from at runtime. Stripping
     // musl from top-level node_modules (the historical location) is a no-op against
     // that runtime path. This guards against regressing to the ineffective form.
-    // Verified in oven/bun:1.3.14-debian: the bridge boots and resolves the gnu binary.
+    // The Debian/glibc image must resolve the gnu binary from this vendored tree.
     const dockerfile = read("docker/Dockerfile");
     expect(dockerfile).toContain(
       "rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",

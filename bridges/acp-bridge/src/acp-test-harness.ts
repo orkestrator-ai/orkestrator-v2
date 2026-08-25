@@ -36,10 +36,22 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const here = dirname(fileURLToPath(import.meta.url));
 
-// The repository-wide test preload installs a browser-like fetch for UI tests.
-// Use Bun's native client for loopback bridge integration requests so browser
-// CORS rules cannot turn these GETs into preflight requests.
-export const nativeFetch = Bun.fetch;
+type NativeWebPlatform = {
+  fetch: typeof fetch;
+  AbortController: typeof AbortController;
+};
+
+const nativeWebPlatform = (
+  globalThis as typeof globalThis & {
+    [key: symbol]: NativeWebPlatform | undefined;
+  }
+)[Symbol.for("orkestrator.tests.native-web-platform")];
+
+// The repository-wide test preload installs Happy DOM's browser-like fetch and
+// abort classes. Keep Bun's matching native pair for loopback integration
+// requests: Bun 1.4 rejects Happy DOM's AbortSignal at the native fetch boundary.
+export const nativeFetch = nativeWebPlatform?.fetch ?? Bun.fetch;
+export const NativeAbortController = nativeWebPlatform?.AbortController ?? AbortController;
 
 export const children = new Set<ChildProcessWithoutNullStreams>();
 

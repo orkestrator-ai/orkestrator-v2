@@ -607,7 +607,7 @@ closes those out on the way in.
 
 ## Docker Base Image
 
-The image is built from `oven/bun:1.3.14-debian` and every version below is
+The image is built from `oven/bun:1.4.0-debian` and every version below is
 pinned by an `ARG` in `docker/Dockerfile`, which is the source of truth.
 
 Runtimes:

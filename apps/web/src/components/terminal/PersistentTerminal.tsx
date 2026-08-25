@@ -156,7 +156,11 @@ export function PersistentTerminal({
   const setupCompleteRef = useRef(false);
   const workspaceReadySignaledRef = useRef(false);
   const bootstrapRequestedForSessionRef = useRef<string | null>(null);
-  const hasInitiatedConnectionRef = useRef(false);
+  // A failed attachment leaves the hook disconnected. Remember the exact
+  // target we already tried so the fallback effect does not turn that settled
+  // failure into a tight renderer/backend retry loop. A new session or target
+  // gets a different key and is still allowed one immediate attempt.
+  const connectionAttemptTargetRef = useRef<string | null>(null);
   const hasRenderedOutputRef = useRef(false);
   // Render-visible, not a ref: the redraw effect below is a different effect
   // from the one that moves the DOM node, so a ref mutation would not schedule
@@ -416,7 +420,7 @@ export function PersistentTerminal({
       // React Strict Mode cancels the first development-only connection before
       // replaying mount effects. Rearm the one-shot connection gate for that
       // replay; a genuine remount receives a fresh ref and behaves the same way.
-      hasInitiatedConnectionRef.current = false;
+      connectionAttemptTargetRef.current = null;
     };
   }, [tabId, environmentId]);
 
@@ -426,7 +430,7 @@ export function PersistentTerminal({
       setIsEnvironmentReady(false);
       dataBufferRef.current = "";
       workspaceReadySignaledRef.current = false;
-      hasInitiatedConnectionRef.current = false;
+      connectionAttemptTargetRef.current = null;
       hasRenderedOutputRef.current = false;
       initialRestorationCompleteRef.current = false;
       previousContainerIdRef.current = containerId;
@@ -724,6 +728,22 @@ export function PersistentTerminal({
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  const connectionAttemptTarget = JSON.stringify({
+    containerId,
+    environmentId,
+    // Publishing the hook's active session into the terminal store is adoption
+    // of this connection, not a second target that should rearm the fallback.
+    sessionId: existingSessionId ?? sessionId ?? null,
+    isLocalEnvironment,
+    attachExistingOnly: isBackendManagedSetupTab,
+    terminalUser: terminalUser ?? null,
+  });
+  const connectToCurrentTarget = useCallback(() => {
+    if (connectionAttemptTargetRef.current === connectionAttemptTarget) return;
+    connectionAttemptTargetRef.current = connectionAttemptTarget;
+    void connectRef.current();
+  }, [connectionAttemptTarget]);
 
   // Persistent session tracking
   const persistentSessionCreatedRef = useRef(false);
@@ -1156,12 +1176,11 @@ export function PersistentTerminal({
       // portal store update has not yet exposed terminalIsOpened to the
       // fallback effect. The mount-lifecycle cleanup rearms this under Strict
       // Mode after useTerminal cancels the probe connection.
-      if (!hasInitiatedConnectionRef.current) {
-        hasInitiatedConnectionRef.current = true;
+      if (connectionAttemptTargetRef.current !== connectionAttemptTarget) {
         if (!isReconnecting) {
           initialRestorationCompleteRef.current = true;
         }
-        void connectRef.current();
+        connectToCurrentTarget();
       }
     } else if (containerElement) {
       // Terminal already opened - reuse the stored container element
@@ -1415,6 +1434,8 @@ export function PersistentTerminal({
     handlePaste,
     handleSelectAll,
     toggleComposeBar,
+    connectionAttemptTarget,
+    connectToCurrentTarget,
     sessionKey,
     savePersistentSessionBuffer,
   ]);
@@ -1534,9 +1555,9 @@ export function PersistentTerminal({
   // This is a fallback - primary connection happens immediately after terminal.open()
   useEffect(() => {
     if (terminalIsOpened && !isConnected && !isConnecting) {
-      connect();
+      connectToCurrentTarget();
     }
-  }, [terminalIsOpened, isConnected, isConnecting, connect, tabId]);
+  }, [terminalIsOpened, isConnected, isConnecting, connectToCurrentTarget, tabId]);
 
   /**
    * The launch payload, keyed on its contents rather than its props' identity.

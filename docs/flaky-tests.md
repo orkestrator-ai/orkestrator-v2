@@ -50,8 +50,37 @@ history rather than two partial ones.
 - **Failure:** the case timed out at 5,059.00 ms. The bridges group reported two failures in that run; the other one, `reaps a session process when the creating HTTP client disconnects`, reproduces in isolation and is a separate, non-flaky problem (see Attribution).
 - **Suite counts:** bridges group — 3,078 passed, 11 skipped, 2 failed; 9,913 `expect()` calls.
 - **Isolated rerun:** `bun run test:logged -- --name rerun-acp -- bun test bridges/acp-bridge/src/acp-http.test.ts` → 5 passed, 1 failed, 37 `expect()` calls in 5.76 s. This case **passed**; only `reaps a session process when the creating HTTP client disconnects` failed, at 5,067.86 ms.
+- **Recurrence (setup-terminal retry-loop fix, 2026-08-25):** `bun run test`
+  timed out at the same `waitFor` after 5,053.98 ms; the bridges group
+  reported 3,111 passed, 11 skipped, and 2 failed across 115 files. The
+  isolated owner rerun,
+  `bun test ./src/acp-http.test.ts ./src/acp-server.test.ts --only-failures`
+  from `bridges/acp-bridge`, passed all 15 tests in 1.23 s.
 - **Attribution:** observed while changing `apps/web` action-default resolution and `packages/protocol/src/action-defaults.ts`. Neither file is reachable from the ACP bridge, so the two share only host capacity. The host ran Bun 1.4.0 against the repo's pinned `bun@1.3.14`, and the same run produced six root-group failures that all reproduce in isolation — treat this observation as coming from a toolchain-mismatched host.
 - **Hypothesis:** the case holds creation reservations open to prove they count against the session cap, so it is waiting on real bridge child processes under the generic 5-second budget. Under group-level contention those spawns miss the window, which is the same shape as the `announces overflow…` entry above in the same file. A recurrence should time the reservation's spawn-to-counted interval under load before widening the budget; a genuine cap regression would fail deterministically rather than at exactly the timeout.
+
+## `ACP bridge > reaps a session process when the creating HTTP client disconnects` (`bridges/acp-bridge/src/acp-http.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-25
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace,
+  root/agent-support, bridges, and protocol-lockfile groups concurrently; the
+  bridges group used two Bun workers.
+- **Failure:** `Timed out waiting for ACP state: ""` from
+  `acp-test-harness.ts:160` while waiting for the disconnected client session
+  to be reaped (duration: 5,049.72 ms).
+- **Suite counts:** bridges group — 3,111 passed, 11 skipped, 2 failed; 9,997
+  `expect()` calls across 115 files in 59.89 s.
+- **Isolated rerun:**
+  `bun test ./src/acp-http.test.ts ./src/acp-server.test.ts --only-failures`
+  from `bridges/acp-bridge` -> 15 passed, 0 failed, 68 `expect()` calls in 1.23
+  s.
+- **Hypothesis:** the earlier observation in this log reproduced under an
+  isolated owner run, but this recurrence did not. The failure still lands at
+  the generic five-second state deadline while the bridges group is under
+  process contention. Capture whether the child exit or registry removal is
+  late on the next recurrence before changing the reap assertion.
 
 ## `ACP bridge > announces overflow when earlier stream chunks leave no room for the marker` (`bridges/acp-bridge/src/acp-http.test.ts:191`)
 
@@ -100,6 +129,13 @@ history rather than two partial ones.
 - **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` → 171 passed in 17.3 s. Also passed under `--parallel=4` (16.0 s), and passed on a stashed working tree at `4d25c8ea` with no local changes, so it is not attributable to the branch under test.
 - **Recurrence (action-bar launch-dialog defaults review, 2026-08-24):** `bun run test:logged -- --name web-package-tests2 -- bun --cwd=apps/web test --parallel=4 --only-failures` reproduced the identical signature at `ActionBar.test.tsx:1767` — `expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] })` followed by `But it was not called.` (duration: 48.19 ms), matching the 47.14 ms original. Web package: 1 failed across 232 files, 5,327 tests in 45.88 s. Two immediate re-runs of the same command passed (45.7 s), and the isolated rerun `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` passed 187/187 in 16.20 s. The reviewed change adds tests to the same file but only below line 4340, so it cannot reorder or affect this case, which sits at line 1752. Evidence: `web-package-tests2.log.gz` in the run's `orkestrator-test-run.*` log directory.
 - **Recurrence (pi reconnect review, 2026-08-25):** `bun run test:logged -- --name full-suite-final -- bun run test` failed the web workspace group on the same assertion in a *different* case in the same file — `ActionBar keyboard shortcuts and tab guards > dispatches tab, workflow, editor, and panel shortcuts` at `ActionBar.test.tsx:5089`, `expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] })` (duration: 45.81 ms). The mock had recorded three calls (`plain`, `agent-native`, `codex`), so the earlier shortcuts in the sequence did fire and only the one under assertion was missed, which fits the handler-installation hypothesis below rather than a wholesale failure to mount. Web package: 5,375 passed, 1 skipped, 1 failed across 232 files in 66.62 s. The isolated rerun `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` passed 188/188, and a full re-run of `bun --cwd=apps/web test --parallel=4 --only-failures` passed in 32.8 s. An earlier `bun run test` on the same branch passed this group outright. Evidence: `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under `/var/folders/.../orkestrator-test-run.PHvwPq`.
+- **Recurrence (setup-terminal retry-loop fix, 2026-08-25):** `bun run test`
+  failed `ActionBar keyboard shortcuts and tab guards > dispatches tab,
+  workflow, editor, and panel shortcuts` after 26.31 ms. The web workspace
+  group reported 5,379 passed, 1 skipped, and 1 failed across 232 files. The
+  isolated rerun,
+  `bun test ./src/components/layout/ActionBar.test.tsx --only-failures` from
+  `apps/web`, passed all 189 tests in 12.37 s.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
 
 ## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)

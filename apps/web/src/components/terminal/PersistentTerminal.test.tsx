@@ -55,6 +55,7 @@ let lastUseTerminalOptions: MockUseTerminalOptions | undefined;
 let useTerminalOptionsHistory: MockUseTerminalOptions[] = [];
 let useTerminalSessionId: string | null = "session-1";
 let useTerminalIsConnected = true;
+let useTerminalIsConnecting = false;
 let useTerminalBootstrapped = false;
 let clipboardImagePasteOptions:
   | {
@@ -99,7 +100,7 @@ mock.module("@/hooks/useTerminal", () => ({
       sessionId: useTerminalSessionId,
       bootstrapped: useTerminalBootstrapped || locallyBootstrapped,
       isConnected: useTerminalIsConnected,
-      isConnecting: false,
+      isConnecting: useTerminalIsConnecting,
       error: null,
       connect: connectMock,
       disconnect: mock(async () => {}),
@@ -422,6 +423,7 @@ describe("PersistentTerminal", () => {
     useTerminalOptionsHistory = [];
     useTerminalSessionId = "session-1";
     useTerminalIsConnected = true;
+    useTerminalIsConnecting = false;
     useTerminalBootstrapped = false;
     clipboardImagePasteOptions = undefined;
     composeBarOptions = undefined;
@@ -733,6 +735,48 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not retry a settled failed connection until the terminal target changes", async () => {
+    useTerminalIsConnected = false;
+    const terminalData = createTerminalData();
+    const props = {
+      terminalData,
+      tabId: "tab-1",
+      tabType: "plain" as const,
+      containerId: "container-1",
+      environmentId: "env-1",
+      isEnvironmentVisible: true,
+      isActive: true,
+      isFocused: true,
+      isFirstTab: false,
+      paneId: "pane-1",
+    };
+    const view = render(<PersistentTerminal {...props} />);
+
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+
+    // useTerminal sets this true while probing the backend, then false when a
+    // dead attach-only session settles. That state transition used to make the
+    // fallback effect start the same probe again indefinitely.
+    useTerminalIsConnecting = true;
+    view.rerender(<PersistentTerminal {...props} />);
+    useTerminalIsConnecting = false;
+    view.rerender(<PersistentTerminal {...props} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(connectMock).toHaveBeenCalledTimes(1);
+
+    useTerminalSessionId = "replacement-session";
+    act(() => {
+      useTerminalSessionStore
+        .getState()
+        .setSession(createSessionKey("container-1", "tab-1", "env-1"), {
+          sessionId: "replacement-session",
+        });
+    });
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
   });
 
   it("forwards the environment identity to terminal compose draft persistence", () => {

@@ -15,6 +15,43 @@ export const hostname = process.env.HOSTNAME?.trim() || "127.0.0.1";
 export const workingDirectory = resolve(process.env.CWD?.trim() || process.cwd());
 export const authToken =
   process.env.CURSOR_BRIDGE_TOKEN?.trim() || randomBytes(32).toString("base64url");
+
+/**
+ * Pin `process.cwd()` to the workspace so Shell calls that omit
+ * `workingDirectory` still run inside the repo.
+ *
+ * `Agent.create({ local: { cwd } })` is the SDK workspace for indexing and its
+ * "default shell", but the model-facing Shell tool falls back to the process
+ * cwd when that argument is omitted. The launcher spawns this process inside
+ * the bridge package, which is not the git worktree, so entering the workspace
+ * is this bridge's own job.
+ *
+ * It has to stay that way round. `bun` reads `bunfig.toml` — `preload` and
+ * all — plus `.env` from its working directory *before* this module runs, so a
+ * launcher that started us in the worktree would let a cloned repository
+ * execute code in this process. Bootstrapping from the trusted package
+ * directory and moving afterwards is what keeps both properties.
+ *
+ * Called at module load, which `index.ts` puts ahead of every other module by
+ * exporting this file first — so `@cursor/sdk` is evaluated after the process
+ * is already in the workspace. `start()` calls it again so a later cwd change
+ * cannot stick.
+ *
+ * @param directory - Workspace to enter. Defaults to {@link workingDirectory}.
+ */
+export function applyWorkingDirectory(directory: string = workingDirectory): void {
+  const target = resolve(directory);
+  if (process.cwd() === target) return;
+  try {
+    process.chdir(target);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cursor bridge could not enter the workspace directory ${target}: ${detail}`);
+  }
+}
+
+applyWorkingDirectory();
+
 /**
  * Where durable session state lives, or null when this bridge is stateless.
  *

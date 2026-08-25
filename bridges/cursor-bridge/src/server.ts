@@ -2,7 +2,7 @@
  * Process lifecycle: the HTTP server, idle detaching, and a clean shutdown.
  */
 import { createServer, type Server } from "node:http";
-import { hostname, port } from "./config.js";
+import { applyWorkingDirectory, hostname, port } from "./config.js";
 import { detachAgent } from "./agent-session.js";
 import { json, route } from "./http.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
@@ -56,6 +56,7 @@ function sweepIdleSessions(): void {
 }
 
 export async function start(): Promise<void> {
+  applyWorkingDirectory();
   await loadPersistedState();
   await new Promise<void>((resolve) => server.listen(port, hostname, resolve));
 

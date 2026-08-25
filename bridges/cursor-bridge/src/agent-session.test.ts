@@ -14,6 +14,7 @@
  */
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as realCursorSdk from "@cursor/sdk";
+import { workingDirectory } from "./config.js";
 
 const realCursorSdkSnapshot = { ...realCursorSdk };
 
@@ -113,6 +114,7 @@ describe("ensureAgent", () => {
     const [first, second] = await Promise.all([ensureAgent(state), ensureAgent(state)]);
     expect(first).toBe(second);
     expect(created).toHaveLength(1);
+    expect(created[0]).toMatchObject({ local: { cwd: workingDirectory } });
   });
 
   test("a failed attach does not poison the next one", async () => {

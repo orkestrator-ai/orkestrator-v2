@@ -2565,6 +2565,8 @@ exit 1
         `
           const http = require("node:http");
           require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+            cwd: process.cwd(),
+            envCwd: process.env.CWD ?? "",
             provider: process.env.ACP_PROVIDER ?? "",
             agentPath: process.env.ACP_AGENT_PATH ?? "",
             approveProjectMcps: process.env.ACP_APPROVE_PROJECT_MCPS ?? "",
@@ -2665,6 +2667,11 @@ exit 1
         expect(started.wasRunning).toBe(false);
         expect(started.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
         const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
+        // Every bridge bootstraps from its own package directory and learns the
+        // worktree from `CWD`. Only the Cursor SDK bridge then enters it, and
+        // it does so itself rather than being spawned there.
+        expect(marker.cwd).toBe(await fs.realpath(path.join(appRoot, "bridges", "acp-bridge")));
+        expect(marker.envCwd).toBe(worktreePath);
         expect(marker.provider).toBe(provider);
         expect(marker.agentPath).toBe(managedAgentPath);
         expect(marker.approveProjectMcps).toBe("0");
@@ -2819,14 +2826,26 @@ exit 1
     const worktreePath = await createTempDir("ork-electron-cursor-sdk-worktree-");
     const dataDir = await createTempDir("ork-electron-cursor-sdk-data-");
     const markerPath = path.join(resourceRoot, "cursor-sdk-env.json");
-    const bridgeDist = path.join(resourceRoot, "cursor-bridge", "dist");
+    const bridgeRoot = path.join(resourceRoot, "cursor-bridge");
+    const bridgeDist = path.join(bridgeRoot, "dist");
     await fs.mkdir(bridgeDist, { recursive: true });
+    // `bun` reads `bunfig.toml` — `preload` included — from its working
+    // directory before the entrypoint runs. Planting one in the worktree is
+    // what a cloned repository would do, so the launcher must not spawn the
+    // bridge there.
+    const preloadMarkerPath = path.join(worktreePath, "repo-preload-ran");
+    await fs.writeFile(path.join(worktreePath, "bunfig.toml"), 'preload = ["./repo-preload.js"]\n');
+    await fs.writeFile(
+      path.join(worktreePath, "repo-preload.js"),
+      `require("node:fs").writeFileSync(${JSON.stringify(preloadMarkerPath)}, "ran");\n`,
+    );
     await fs.writeFile(
       path.join(bridgeDist, "index.js"),
       `
         const http = require("node:http");
         require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
           cwd: process.cwd(),
+          envCwd: process.env.CWD ?? "",
           stateDir: process.env.CURSOR_BRIDGE_STATE_DIR ?? "",
           authFile: process.env.CURSOR_BRIDGE_AUTH_FILE ?? "",
           projectSettings: process.env.CURSOR_BRIDGE_PROJECT_SETTINGS ?? "",
@@ -2866,7 +2885,19 @@ exit 1
     try {
       expect(started.wasRunning).toBe(false);
       const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
-      expect(marker.cwd).toBe(await fs.realpath(path.join(resourceRoot, "cursor-bridge")));
+      // The bridge bootstraps from its own package directory and enters the
+      // worktree itself once `bun` is up (see `applyWorkingDirectory` in the
+      // bridge's config). Spawning it in the worktree instead would hand a
+      // cloned repository a `bunfig.toml` preload inside a host process that
+      // holds the Cursor credential path and the bridge token.
+      expect(marker.cwd).toBe(await fs.realpath(bridgeRoot));
+      expect(marker.envCwd).toBe(worktreePath);
+      expect(
+        await fs.access(preloadMarkerPath).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
       expect(marker.stateDir).toContain(path.join("cursor-bridge-state"));
       expect(marker.stateDir).not.toContain(path.join("acp-bridge-state"));
       expect(marker.authFile).toBe(path.join(dataDir, "cursor-sdk", "auth.json"));

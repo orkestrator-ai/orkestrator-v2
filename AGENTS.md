@@ -546,6 +546,15 @@ When touching the SDK bridge:
 - Project settings (`.cursor/`) are read inside containers and not on the host,
   the same boundary `ACP_APPROVE_PROJECT_MCPS` draws: cloning a repository must
   not be enough to run its code on the user's machine.
+- The host launcher spawns the bridge in its own package directory, never in
+  the worktree. `bun` reads `bunfig.toml` — `preload` included — and `.env`
+  from its working directory before the entrypoint runs, so spawning there
+  hands a cloned repository arbitrary code execution inside a process holding
+  the credential path, the bridge token and the agent MCP token. The SDK's
+  Shell tool does default to `process.cwd()`, but the bridge enters the
+  workspace itself afterwards (`applyWorkingDirectory` in `config.ts`, called
+  at module load and again from `start()`), which is why `index.ts` exports
+  `./config.js` before anything that loads `@cursor/sdk`.
 - `DELETE /session/:id` is not optional. Backend tab teardown reads a 404 there
   as "already gone", so a bridge that does not answer it leaks a session, its
   transcript and its attached agent on every closed tab — and once the state

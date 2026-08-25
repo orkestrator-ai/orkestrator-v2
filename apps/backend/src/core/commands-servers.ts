@@ -853,6 +853,17 @@ export async function startLocalServerUnlocked(
   } else if (kind === "cursor" && (await cursorSdkBridgeEnabled(context))) {
     useCursorSdkBridge = true;
     command = resolveBunBinary(context);
+    // Every bridge is spawned from its own package directory, and this one is
+    // no exception. `bun` bootstraps from its working directory — it reads
+    // `bunfig.toml` (including `preload`) and `.env` before the entrypoint
+    // runs — so starting it in the worktree would let a cloned repository
+    // execute code in a host process holding the Cursor credential path, the
+    // bridge token and the agent MCP token. That is the boundary
+    // `CURSOR_BRIDGE_PROJECT_SETTINGS=0` below exists to hold.
+    //
+    // The SDK's Shell tool still defaults to `process.cwd()` when the model
+    // omits `workingDirectory`, so the bridge enters `CWD` itself once bun has
+    // bootstrapped: see `applyWorkingDirectory` in the bridge's `config.ts`.
     cwd = getBridgePath(context, "cursor-bridge");
     // The SDK bridge keeps its own session store, deliberately separate from
     // the ACP bridge's: the two engines produce different agent ids and a

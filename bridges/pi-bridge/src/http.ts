@@ -10,7 +10,13 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
-import { authenticate, MAX_BODY_BYTES, PROVIDER, workingDirectory } from "./config.js";
+import {
+  authenticate,
+  COMPOSER_HYDRATION_WAIT_MS,
+  MAX_BODY_BYTES,
+  PROVIDER,
+  workingDirectory,
+} from "./config.js";
 import { authStatus, CredentialError } from "./credentials.js";
 import {
   denyAllApprovals,
@@ -40,6 +46,7 @@ import {
   publicStatus,
 } from "./public.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
+import { withTimeout } from "./timeout.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -248,10 +255,24 @@ async function routeSession(
   // the routes that publish or mutate composer state so a restarted bridge's
   // authoritative snapshot can stand on its own instead of depending on a
   // renderer-side event or an environment-wide cache happening to be fresh.
-  if (
-    (request.method === "GET" && (!action || action === "status" || action === "config")) ||
-    (request.method === "POST" && action === "config")
-  ) {
+  //
+  // How long each route is willing to wait differs, because the callers do.
+  // `/status` and the bare session read are polled — the backend's `status()`
+  // and `interactiveSnapshot()` both sit on `/status` — so they wait only
+  // `COMPOSER_HYDRATION_WAIT_MS` and then answer with the snapshot they have,
+  // leaving the hydration running for the next poll to collect. The config
+  // routes are user-initiated and the backend rejects a composer whose
+  // `models` is absent, so those wait for the real thing.
+  if (request.method === "GET" && (!action || action === "status")) {
+    // `.catch` before the race, not after: the loser of a `Promise.race` still
+    // settles, and a hydration that rejects after the wait elapsed would
+    // otherwise surface as an unhandled rejection.
+    await withTimeout(
+      hydrateSessionComposer(state).catch(() => undefined),
+      COMPOSER_HYDRATION_WAIT_MS,
+      "Pi composer hydration is still running",
+    ).catch(() => undefined);
+  } else if (action === "config" && (request.method === "GET" || request.method === "POST")) {
     await hydrateSessionComposer(state);
   }
 

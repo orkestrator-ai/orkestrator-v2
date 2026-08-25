@@ -1024,9 +1024,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       { method: "POST" },
       this.fetchImpl,
     );
-    // Compatibility with a Pi bridge from before the refresh route existed:
-    // the backend cache is still cleared above, so its next read gets the best
-    // catalogue that older bridge can provide.
+    // Compatibility with a Pi bridge from before the refresh route existed.
+    // Not an error: `refreshProjectionModels` has already dropped its own
+    // caches, so re-listing still gets the best catalogue that older bridge can
+    // provide. Any *other* failing status is reported, and the caller decides
+    // what to do with it — today it logs and re-lists anyway rather than
+    // failing the refresh the user asked for.
     if (response.status !== 404) {
       await assertOkWithErrorDetail(response, "Pi model catalogue refresh");
     }

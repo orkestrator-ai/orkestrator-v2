@@ -64,6 +64,15 @@ function seedSession(): ReturnType<typeof newSessionState> {
   return state;
 }
 
+/** Poll for work a route deliberately did not wait for. */
+async function waitFor(condition: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error("Timed out waiting for the expected condition");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 function testModel(overrides: Partial<Model<Api>> = {}): Model<Api> {
   return {
     id: "test-model",
@@ -232,6 +241,12 @@ describe("authorized global routes", () => {
         "test-provider/after",
       ]);
     } finally {
+      // `resetTestDependencies` does not touch the session maps, and
+      // `/global/refresh-catalog` force-hydrates every session it finds — so a
+      // session left here would be probed by later tests against whatever
+      // runtime they install.
+      sessions.clear();
+      clientSessionKeys.clear();
       resetTestDependencies();
     }
   });
@@ -340,6 +355,69 @@ describe("successful lifecycle routes", () => {
       sessions.clear();
       clientSessionKeys.clear();
       await rm(directory, { recursive: true, force: true });
+      resetTestDependencies();
+    }
+  });
+
+  test("answers a polled status read without waiting out a stalled catalogue", async () => {
+    // `/status` is what the backend polls, and it budgets the whole call at the
+    // same 30s the catalogue probe is bounded by. Waiting the probe out would
+    // turn a slow provider into a *failed* status read, so the route publishes
+    // the snapshot it has and lets the hydration finish for the next poll.
+    let release: (() => void) | undefined;
+    setAgentSessionTestHooks({
+      hydrateComposer: async (composer) => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { ...composer, models: [{ platform: "pi", id: "late/model", label: "Late" }] };
+      },
+    });
+    const state = seedSession();
+    try {
+      const status = await call(`/session/${state.id}/status`);
+
+      expect(status.status).toBe(200);
+      expect(
+        ((await status.json()) as { composer: { models: unknown[] } }).composer.models,
+      ).toEqual([]);
+
+      // The hydration was not abandoned, only un-awaited: releasing it still
+      // repairs the session, which is what the next poll will publish.
+      release!();
+      await waitFor(() => state.composer.models.length === 1);
+    } finally {
+      release?.();
+      sessions.clear();
+      resetTestDependencies();
+    }
+  });
+
+  test.each([
+    ["messages", "GET"],
+    ["activity", "GET"],
+    ["prompt", "POST"],
+  ])("does not hydrate the composer on /%s", async (action, method) => {
+    // Only the routes that publish composer state pay for a catalogue probe.
+    // `/activity` in particular is swept for every persisted session every two
+    // seconds, so probing there would put idle detaching out of reach.
+    let hydrations = 0;
+    setAgentSessionTestHooks({
+      hydrateComposer: async (composer) => {
+        hydrations += 1;
+        return composer;
+      },
+    });
+    const state = seedSession();
+    try {
+      await call(`/session/${state.id}/${action}`, {
+        method,
+        ...(method === "POST" ? { body: JSON.stringify({ prompt: "" }) } : {}),
+      });
+
+      expect(hydrations).toBe(0);
+    } finally {
+      sessions.clear();
       resetTestDependencies();
     }
   });

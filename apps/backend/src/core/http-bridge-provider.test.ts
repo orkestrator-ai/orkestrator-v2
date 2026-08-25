@@ -845,6 +845,51 @@ describe("HTTP bridge provider", () => {
     ]);
   });
 
+  test("accepts a 404 from a Pi bridge that predates the refresh route", async () => {
+    // The route is newer than the bridges that may be running. Treating its
+    // absence as a failure would make the picker's refresh button error against
+    // an environment whose container was built before it existed, even though
+    // re-listing still produces the best answer that bridge can give.
+    const { provider } = httpProvider(() => new Response(null, { status: 404 }), piConnection);
+
+    await expect(provider.refreshCatalog?.()).resolves.toBeUndefined();
+  });
+
+  test.each([
+    ["a server error", () => new Response("boom", { status: 500 })],
+    [
+      "an unreachable bridge",
+      () => {
+        throw new TypeError("Unable to connect");
+      },
+    ],
+  ])("reports %s from the Pi refresh route rather than swallowing it", async (_label, handler) => {
+    // Reported, not swallowed: `refreshProjectionModels` is the one that
+    // decides a failed bridge refresh must not fail the whole user-facing
+    // refresh, and it can only make that call if it is told.
+    const { provider } = httpProvider(handler, piConnection);
+
+    await expect(provider.refreshCatalog?.()).rejects.toThrow();
+  });
+
+  test.each([
+    ["claude" as const, claudeConnection],
+    ["codex" as const, codexConnection],
+    ["cursor" as const, cursorConnection],
+    ["grok" as const, grokConnection],
+  ])("does not reach the bridge to refresh a %s catalogue", async (_agent, connection) => {
+    // Only Pi keeps a process-wide credential snapshot this side cannot
+    // invalidate. For everyone else dropping the local caches is the whole
+    // refresh, and a bridge round-trip would be latency for nothing.
+    const { provider, requests } = httpProvider(
+      () => new Response(null, { status: 500 }),
+      connection,
+    );
+
+    await expect(provider.refreshCatalog?.()).resolves.toBeUndefined();
+    expect(requests).toEqual([]);
+  });
+
   test("routes Claude background-task stop and prompt-suggestion dismissal", async () => {
     const { provider, requests } = httpProvider(() => new Response(null, { status: 204 }));
 

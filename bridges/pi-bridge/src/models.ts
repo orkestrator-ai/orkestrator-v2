@@ -54,6 +54,8 @@ const THINKING_LABELS: Readonly<Record<PiThinkingLevel, string>> = Object.freeze
 
 let catalogCache: AgentModel[] | null = null;
 let catalogProbe: Promise<AgentModel[]> | null = null;
+/** See {@link catalogReadFailed}: an empty catalogue is not always an answer. */
+let lastCatalogReadFailed = false;
 /**
  * The thinking-level preferences the *last* catalogue read was built against.
  *
@@ -147,7 +149,11 @@ export async function listModels(defaults?: ThinkingLevelDefaults): Promise<Agen
         catalogCache = models;
         catalogDefaults = defaults;
       }
+      lastCatalogReadFailed = false;
       return models;
+    } catch (error) {
+      lastCatalogReadFailed = true;
+      throw error;
     } finally {
       catalogProbe = null;
     }
@@ -160,10 +166,30 @@ export async function listModels(defaults?: ThinkingLevelDefaults): Promise<Agen
   return catalogProbe.catch(() => catalogCache ?? []);
 }
 
+/**
+ * Whether the most recently *completed* catalogue probe failed.
+ *
+ * `listModels` answers a failed probe with the catalogue it already held, or
+ * with `[]` when it held none — so an empty list on its own cannot tell "this
+ * account has no models" from "the read timed out". Callers that would act
+ * destructively on emptiness, such as clearing an open session's picker, have
+ * to know which one it was.
+ *
+ * One flag is enough because one probe is: `catalogProbe` is shared, so every
+ * concurrent caller is reading the same result this describes.
+ */
+export function catalogReadFailed(): boolean {
+  return lastCatalogReadFailed;
+}
+
 /** Drop the memo so the next read re-discovers. */
 export function refreshModels(): void {
   catalogCache = null;
   catalogDefaults = undefined;
+  // The old verdict described a read whose result has just been discarded.
+  // Leaving it set would let the *next* caller attribute a stale failure to a
+  // probe that has not run yet.
+  lastCatalogReadFailed = false;
 }
 
 /**

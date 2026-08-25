@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   applyComposerPatch,
@@ -11,7 +11,9 @@ import {
   createSession,
   detachSession,
   ensureSession,
+  expireComposerHydrationRetryForTests,
   forkSession,
+  hydrateSessionComposer,
   newSessionState,
   projectResourceDiscoveryOptions,
   resumeSession,
@@ -20,8 +22,10 @@ import {
   type AgentSessionTestHooks,
 } from "./agent-session.js";
 import { workingDirectory } from "./config.js";
+import { catalogReadFailed, refreshModels } from "./models.js";
 import { dispatchPrompt } from "./prompt.js";
-import { clientSessionKeys, sessionCreations, sessions } from "./state.js";
+import { setModelRuntimeFactoryForTests } from "./runtime.js";
+import { clientSessionKeys, sessionCreations, sessions, type SessionState } from "./state.js";
 
 let sessionDirectory: string;
 let previousSessionDirectory: string | undefined;
@@ -40,6 +44,10 @@ afterEach(async () => {
   if (previousSessionDirectory === undefined) delete process.env.PI_SESSION_DIR;
   else process.env.PI_SESSION_DIR = previousSessionDirectory;
   setAgentSessionTestHooks(undefined);
+  // Restores the real SDK factory and drops both the catalogue memo and the
+  // failed-read verdict derived from whatever fake a test installed.
+  setModelRuntimeFactoryForTests();
+  refreshModels();
   sessions.clear();
   clientSessionKeys.clear();
   sessionCreations.clear();
@@ -51,6 +59,31 @@ function installTestHooks(hooks: AgentSessionTestHooks = {}): void {
     hydrateComposer: async (composer) => composer,
     ...hooks,
   });
+}
+
+/**
+ * Install a runtime the real catalogue path can read, or fail against.
+ *
+ * Tests that need the *failed read* verdict cannot use the `hydrateComposer`
+ * hook: the verdict is produced by `listModels`, which the hook replaces.
+ */
+function installRuntimeWithModels(available: Model<Api>[] | Error): void {
+  setModelRuntimeFactoryForTests(
+    async () =>
+      ({
+        getProviders: () => [],
+        hasConfiguredAuth: () => true,
+        checkAuth: async () => ({ source: "environment", type: "api_key" }),
+        getAvailable: async () => {
+          if (available instanceof Error) throw available;
+          return available;
+        },
+        getProvider: () => undefined,
+        getModel: () => undefined,
+        refresh: async () => undefined,
+      }) as unknown as ModelRuntime,
+  );
+  refreshModels();
 }
 
 function model(provider: string, id: string): Model<Api> {
@@ -385,5 +418,178 @@ describe("Pi SDK lifecycle", () => {
     await handle.completion;
     expect(state.status).toBe("idle");
     expect(state.promptJournal.get("req-happy")?.state).toBe("completed");
+  });
+});
+
+describe("composer hydration", () => {
+  /** A composer carrying the rows a catalogue read would have produced. */
+  function hydratedComposer(
+    composer: SessionState["composer"],
+    ids: string[],
+  ): SessionState["composer"] {
+    return {
+      ...composer,
+      models: ids.map((id) => ({
+        platform: "pi" as const,
+        id,
+        label: id,
+        defaultReasoningId: "medium",
+      })),
+      selectedModelId: composer.selectedModelId ?? ids[0],
+      selectedReasoningId: composer.selectedReasoningId ?? "medium",
+      fastModeAvailable: false,
+    };
+  }
+
+  test("keeps a selection recorded while the catalogue read was in flight", async () => {
+    // The read is unbounded and nothing serializes it against the other
+    // composer writers. Assigning the object it was derived from would revert
+    // whatever landed meanwhile — here the user's own model pick, but in
+    // production also the attach-time reconciliation that stops the picker
+    // naming a model the turn is not running.
+    let release: (() => void) | undefined;
+    installTestHooks({
+      hydrateComposer: async (composer) => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return hydratedComposer(composer, ["provider/from-catalogue"]);
+      },
+    });
+    const state = newSessionState();
+
+    const hydration = hydrateSessionComposer(state);
+    await Promise.resolve();
+    expect(applyComposerPatch(state, { modelId: "provider/chosen-meanwhile" })).toBe(true);
+    release!();
+    await hydration;
+
+    expect(state.composer.selectedModelId).toBe("provider/chosen-meanwhile");
+    expect(state.composer.models.map((entry) => entry.id)).toEqual(["provider/from-catalogue"]);
+  });
+
+  test("shares one probe across the backend's concurrent projection reads", async () => {
+    let hydrations = 0;
+    let release: (() => void) | undefined;
+    installTestHooks({
+      hydrateComposer: async (composer) => {
+        hydrations += 1;
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return hydratedComposer(composer, ["provider/one"]);
+      },
+    });
+    const state = newSessionState();
+
+    const reads = [
+      hydrateSessionComposer(state),
+      hydrateSessionComposer(state),
+      hydrateSessionComposer(state),
+    ];
+    await Promise.resolve();
+    expect(hydrations).toBe(1);
+    release!();
+    await Promise.all(reads);
+
+    expect(hydrations).toBe(1);
+    expect(state.composer.models).toHaveLength(1);
+  });
+
+  test("does not probe again once the session already has rows", async () => {
+    let hydrations = 0;
+    installTestHooks({
+      hydrateComposer: async (composer) => {
+        hydrations += 1;
+        return hydratedComposer(composer, ["provider/one"]);
+      },
+    });
+    const state = newSessionState();
+
+    await hydrateSessionComposer(state);
+    await hydrateSessionComposer(state);
+    await hydrateSessionComposer(state);
+
+    expect(hydrations).toBe(1);
+  });
+
+  test("suppresses retries after an empty read until the deadline passes", async () => {
+    // Empty is retryable — a provider signed into later must be able to appear
+    // — but not on every 500ms projection poll.
+    let hydrations = 0;
+    installTestHooks({
+      hydrateComposer: async (composer) => {
+        hydrations += 1;
+        return composer;
+      },
+    });
+    const state = newSessionState();
+
+    await hydrateSessionComposer(state);
+    await hydrateSessionComposer(state);
+    expect(hydrations).toBe(1);
+
+    expireComposerHydrationRetryForTests(state);
+    await hydrateSessionComposer(state);
+    expect(hydrations).toBe(2);
+  });
+
+  test("a forced refresh re-reads instead of adopting an in-flight probe", async () => {
+    // The in-flight read started before `/global/refresh-catalog` dropped the
+    // catalogue, so it answers with exactly the rows the refresh was asked to
+    // replace. Adopting it would also give the session models, which is the
+    // condition that stops every later unforced hydration — leaving the tab
+    // stale until the user refreshed a second time.
+    let hydrations = 0;
+    let release: (() => void) | undefined;
+    installTestHooks({
+      hydrateComposer: async (composer) => {
+        hydrations += 1;
+        if (hydrations === 1) {
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          return hydratedComposer(composer, ["provider/before"]);
+        }
+        return hydratedComposer(composer, ["provider/after"]);
+      },
+    });
+    const state = newSessionState();
+
+    const polled = hydrateSessionComposer(state);
+    await Promise.resolve();
+    const forced = hydrateSessionComposer(state, { force: true });
+    release!();
+    await Promise.all([polled, forced]);
+
+    expect(hydrations).toBe(2);
+    expect(state.composer.models.map((entry) => entry.id)).toEqual(["provider/after"]);
+  });
+
+  test("a forced refresh clears the rows when the account really has none", async () => {
+    installRuntimeWithModels([]);
+    installTestHooks({ hydrateComposer: undefined });
+    const state = newSessionState();
+    state.composer = hydratedComposer(state.composer, ["provider/stale"]);
+
+    await hydrateSessionComposer(state, { force: true });
+
+    expect(state.composer.models).toEqual([]);
+  });
+
+  test("a forced refresh keeps the rows when the catalogue read merely failed", async () => {
+    // `listModels` answers a failed probe with `[]` once the refresh route has
+    // dropped the cache that would otherwise have absorbed it. Emptying a
+    // working picker because a provider timed out is worse than one stale
+    // retry interval, and the user cannot tell the two apart from the UI.
+    installRuntimeWithModels(new Error("Pi catalogue read timed out"));
+    installTestHooks({ hydrateComposer: undefined });
+    const state = newSessionState();
+    state.composer = hydratedComposer(state.composer, ["provider/stale"]);
+
+    await hydrateSessionComposer(state, { force: true });
+
+    expect(catalogReadFailed()).toBe(true);
+    expect(state.composer.models.map((entry) => entry.id)).toEqual(["provider/stale"]);
   });
 });

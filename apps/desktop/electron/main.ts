@@ -46,6 +46,10 @@ import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapter
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
+import {
+  installProductionApplicationLogging,
+  registerApplicationLoggingShutdown,
+} from "./application-logging.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,6 +63,10 @@ app.setPath(
   "userData",
   runtimeProfile?.dataDir ?? path.join(app.getPath("appData"), userDataDirectoryName(isDev)),
 );
+const applicationLogging =
+  runtimeFlavor === "production"
+    ? installProductionApplicationLogging({ dataDir: app.getPath("userData") })
+    : null;
 
 // Must follow the `userData` override above: the lock is scoped to that path.
 const isPrimaryInstance = claimSingleInstanceLock(app);
@@ -311,3 +319,4 @@ app.on("window-all-closed", () => {
 });
 
 registerBackendShutdown(app, backendProcess);
+registerApplicationLoggingShutdown(app, applicationLogging);

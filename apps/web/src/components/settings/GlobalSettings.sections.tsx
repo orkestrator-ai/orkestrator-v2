@@ -48,6 +48,7 @@ import {
   RotateCcw,
   X,
   FlaskConical,
+  Trash2,
 } from "lucide-react";
 import { AgentIcon } from "@/components/agents/AgentRadioGroup";
 import { CursorSdkSignIn } from "./agent/CursorSdkSignIn";
@@ -83,6 +84,11 @@ import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useUIStore } from "@/stores";
+import {
+  MAX_DEBUG_LOG_RETENTION_DAYS,
+  MIN_DEBUG_LOG_RETENTION_DAYS,
+  isValidDebugLogRetentionDays,
+} from "@orkestrator/protocol/debug-logging";
 
 // OpenCode provider ids are slug-like (`opencode`, `opencode-go`, `openrouter`).
 // A model id pasted whole would silently match nothing, so `/` is rejected.
@@ -93,6 +99,13 @@ function isDefaultOpenCodeProviderList(providers: readonly string[]): boolean {
     providers.length === DEFAULT_OPENCODE_MODEL_PROVIDERS.length &&
     providers.every((provider, index) => provider === DEFAULT_OPENCODE_MODEL_PROVIDERS[index])
   );
+}
+
+function formatLogBytes(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${Number.parseFloat((bytes / 1024 ** unit).toFixed(2))} ${units[unit]}`;
 }
 // Codex V2 adds the root conversation to this child-only limit.
 const MAX_CODEX_CONCURRENT_THREADS = Number.MAX_SAFE_INTEGER - 1;
@@ -167,6 +180,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setExperimentalCodexRawEventLogging,
     debugLogging,
     setDebugLogging,
+    debugLogRetentionDays,
+    setDebugLogRetentionDays,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,
@@ -182,6 +197,11 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     isLoadingWebClientStatus,
     isLoadingGatewayToken,
     logDirectory,
+    logStorageStats,
+    isLoadingLogStorage,
+    isCleaningLogs,
+    refreshLogStorage,
+    handleCleanupLogs,
     showApiKey,
     setShowApiKey,
     showCursorApiKey,
@@ -1577,7 +1597,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   };
 
   const renderDebug = () => (
-    <div className="max-w-2xl space-y-4">
+    <div className="max-w-2xl space-y-5">
       <div>
         <h3 className="text-sm font-medium text-foreground">Save Logs for Debugging</h3>
         <p className="text-xs text-muted-foreground mt-1">
@@ -1611,9 +1631,61 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </div>
         </div>
       </button>
-      {debugLogging && logDirectory && (
-        <div className="space-y-1.5">
-          <p className="text-xs text-muted-foreground">Logs will be saved to:</p>
+      <div className="max-w-xs space-y-2">
+        <Label htmlFor="debug-log-retention" className="text-sm">
+          Keep logs for
+        </Label>
+        <div className="flex items-center gap-2">
+          <Input
+            id="debug-log-retention"
+            aria-label="Log retention days"
+            type="number"
+            min={MIN_DEBUG_LOG_RETENTION_DAYS}
+            max={MAX_DEBUG_LOG_RETENTION_DAYS}
+            step={1}
+            value={debugLogRetentionDays}
+            onChange={(event) => setDebugLogRetentionDays(Number(event.target.value))}
+            className="w-24"
+          />
+          <span className="text-sm text-muted-foreground">days</span>
+        </div>
+        {!isValidDebugLogRetentionDays(debugLogRetentionDays) && (
+          <p className="text-xs text-destructive">
+            Enter a whole number from {MIN_DEBUG_LOG_RETENTION_DAYS} to{" "}
+            {MAX_DEBUG_LOG_RETENTION_DAYS}.
+          </p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          Expired production logs are removed at startup and periodically while the app runs. Logs
+          also roll over to a new file once one grows large, and the oldest are dropped if the
+          directory as a whole gets too big.
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-4 space-y-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">Stored logs</p>
+            <p className="text-xs text-muted-foreground mt-1" aria-live="polite">
+              {isLoadingLogStorage
+                ? "Calculating storage used…"
+                : logStorageStats
+                  ? `${formatLogBytes(logStorageStats.totalBytes)} across ${logStorageStats.fileCount} ${logStorageStats.fileCount === 1 ? "file" : "files"}`
+                  : "Storage usage unavailable"}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={() => void refreshLogStorage()}
+            disabled={isLoadingLogStorage || isCleaningLogs}
+            aria-label="Refresh log storage"
+          >
+            <RefreshCw className={cn("h-4 w-4", isLoadingLogStorage && "animate-spin")} />
+          </Button>
+        </div>
+        {logDirectory && (
           <button
             type="button"
             onClick={() => {
@@ -1625,9 +1697,43 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             <FolderOpen className="h-3 w-3 shrink-0" />
             <span className="truncate">{logDirectory}</span>
           </button>
-        </div>
-      )}
-      <p className="text-xs text-muted-foreground/60">Requires app restart to take effect</p>
+        )}
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isCleaningLogs || isLoadingLogStorage || !logStorageStats?.fileCount}
+            >
+              {isCleaningLogs ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4 mr-2" />
+              )}
+              Clean up logs
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent className={Z_FULLSCREEN_DIALOG}>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete all stored logs?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently deletes every file in the application log directory. If logging is
+                active, a new daily log may be created immediately afterward.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void handleCleanupLogs()}>
+                Delete logs
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+      <p className="text-xs text-muted-foreground/60">
+        Enabling logging or changing retention requires an app restart to take effect.
+      </p>
     </div>
   );
 

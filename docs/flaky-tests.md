@@ -86,6 +86,40 @@ history rather than two partial ones.
   from `bridges/acp-bridge`, passed all 15 tests in 1.23 s.
 - **Attribution:** observed while changing `apps/web` action-default resolution and `packages/protocol/src/action-defaults.ts`. Neither file is reachable from the ACP bridge, so the two share only host capacity. The host ran Bun 1.4.0 against the repo's pinned `bun@1.3.14`, and the same run produced six root-group failures that all reproduce in isolation — treat this observation as coming from a toolchain-mismatched host.
 - **Hypothesis:** the case holds creation reservations open to prove they count against the session cap, so it is waiting on real bridge child processes under the generic 5-second budget. Under group-level contention those spawns miss the window, which is the same shape as the `announces overflow…` entry above in the same file. A recurrence should time the reservation's spawn-to-counted interval under load before widening the budget; a genuine cap regression would fail deterministically rather than at exactly the timeout.
+- **Recurrence (Electron production logging, 2026-08-25):** `bun run test`
+  timed out this case at 5,057.18 ms in its current owner,
+  `bridges/acp-bridge/src/acp-server.test.ts`. The bridges group reported
+  3,111 passed, 11 skipped, and 2 failed across 115 files in 60.65 s. The
+  isolated rerun `bun test ./src/acp-server.test.ts` from
+  `bridges/acp-bridge` passed all 9 tests in 0.884 s, with the target taking
+  47.74 ms. The change in flight touches Electron logging, backend log-file
+  management, shared retention validation, and the Settings UI; none is in
+  the ACP bridge process path. This recurrence strengthens the existing
+  process-contention hypothesis without adding a new mechanism.
+
+## `ACP bridge > reaps a session process when the creating HTTP client disconnects` (`bridges/acp-bridge/src/acp-http.test.ts`)
+
+- **Status:** open
+- **Date observed:** 2026-08-25
+- **Original command:** `bun run test` (complete concurrent cross-platform
+  suite).
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace,
+  root/agent-support, bridges, and protocol-lockfile groups concurrently; this
+  failed in the bridges group.
+- **Failure:** `Timed out waiting for ACP state: ""` from
+  `acp-test-harness.ts:160` after 5,054.57 ms.
+- **Suite counts:** bridges group — 3,111 passed, 11 skipped, 2 failed; 3,124
+  tests across 115 files in 60.65 s.
+- **Isolated rerun:** `bun test ./src/acp-http.test.ts` from
+  `bridges/acp-bridge` -> 6 passed, 0 failed, 40 `expect()` calls in 0.519 s;
+  the target passed in 68.36 ms.
+- **Hypothesis:** the case waits for a real bridge child process to observe the
+  disconnected creator and reap its session. Its isolated runtime is two
+  orders of magnitude below the fixed aggregate deadline, while the sibling
+  reservation test failed at the same five-second boundary in the same run.
+  This is consistent with group-level process starvation. Capture the child
+  exit and poll timings on another recurrence before changing the lifecycle
+  assertion.
 
 ## `ACP bridge > reaps a session process when the creating HTTP client disconnects` (`bridges/acp-bridge/src/acp-http.test.ts`)
 

@@ -1,5 +1,6 @@
 import * as shared from "./storage-shared.js";
 import { normalizeAgentSettings } from "@orkestrator/protocol/agent-settings";
+import { normalizeDebugLogRetentionDays } from "@orkestrator/protocol/debug-logging";
 import {
   createHash,
   defaultConfig,
@@ -439,6 +440,7 @@ export abstract class StorageConfig extends StorageProjects {
     const agentSettings = normalizeAgentSettings(reviewValidated.agentSettings);
     const validated: AppConfig["global"] = {
       ...reviewValidated,
+      debugLogRetentionDays: normalizeDebugLogRetentionDays(reviewValidated.debugLogRetentionDays),
       enabledAgentPlatforms,
       agentSettings: {
         ...agentSettings,

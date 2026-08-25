@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Check, Loader2 } from "lucide-react";
@@ -27,6 +27,12 @@ import {
   type AgentSettingsTier,
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
+import {
+  MAX_DEBUG_LOG_RETENTION_DAYS,
+  MIN_DEBUG_LOG_RETENTION_DAYS,
+  isValidDebugLogRetentionDays,
+  normalizeDebugLogRetentionDays,
+} from "@orkestrator/protocol/debug-logging";
 import { GlobalSettingsSections } from "./GlobalSettings.sections";
 
 // Domain validation regex
@@ -69,6 +75,7 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.experimentalCodexRawEventLogging ?? true,
     global.experimentalCursorSdkBridge ?? false,
     global.debugLogging ?? false,
+    normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
     // Canonical shape, so an edit that only reorders keys is not a change.
@@ -142,6 +149,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     global.experimentalCursorSdkBridge ?? false,
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
+  const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
+    normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
+  );
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
   const [reviewInstruction, setReviewInstruction] = useState(
     getSavedReviewInstruction(global.reviewInstruction),
@@ -157,6 +167,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isLoadingWebClientStatus, setIsLoadingWebClientStatus] = useState(false);
   const [isLoadingGatewayToken, setIsLoadingGatewayToken] = useState(false);
   const [logDirectory, setLogDirectory] = useState<string | null>(null);
+  const [logStorageStats, setLogStorageStats] = useState<backend.LogStorageStats | null>(null);
+  const [isLoadingLogStorage, setIsLoadingLogStorage] = useState(false);
+  const [isCleaningLogs, setIsCleaningLogs] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
   const [showCursorApiKey, setShowCursorApiKey] = useState(false);
   const [showGithubToken, setShowGithubToken] = useState(false);
@@ -174,6 +187,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
   const webClientStatusRequestRef = useRef(0);
+  const logStorageRequestRef = useRef(0);
   // The last `global` this form synced itself from, as a value rather than an
   // object identity. `null` until the first sync so a fresh mount always runs.
   const syncedGlobalSignatureRef = useRef<string | null>(null);
@@ -226,6 +240,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setExperimentalCursorSdkBridge(global.experimentalCursorSdkBridge ?? false);
     setDebugLogging(global.debugLogging ?? false);
+    setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
   }, [global]);
@@ -286,12 +301,55 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     };
   }, [activeSection, refreshWebClientStatus]);
 
-  // Fetch log directory path once on mount
+  // `get_log_storage_stats` stats every file under the log tree, so it is kept
+  // off the mount path of unrelated sections. The directory itself is a path
+  // join on the backend and stays cheap enough to fetch eagerly. Walks and
+  // cleanups share one generation so a slower earlier request cannot replace
+  // newer stats or clear the spinner while a later walk is still in flight.
+  const refreshLogStorage = useCallback(async () => {
+    const requestId = ++logStorageRequestRef.current;
+    setIsLoadingLogStorage(true);
+    const [directory, stats] = await Promise.allSettled([
+      backend.getLogDirectory(),
+      backend.getLogStorageStats(),
+    ]);
+    if (requestId !== logStorageRequestRef.current) return;
+    if (directory.status === "fulfilled") setLogDirectory(directory.value);
+    setLogStorageStats(stats.status === "fulfilled" ? stats.value : null);
+    setIsLoadingLogStorage(false);
+  }, []);
+
   useEffect(() => {
     backend
       .getLogDirectory()
       .then(setLogDirectory)
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === "debug") void refreshLogStorage();
+    return () => {
+      logStorageRequestRef.current += 1;
+    };
+  }, [activeSection, refreshLogStorage]);
+
+  const handleCleanupLogs = useCallback(async () => {
+    const requestId = ++logStorageRequestRef.current;
+    setIsCleaningLogs(true);
+    setIsLoadingLogStorage(false);
+    try {
+      const stats = await backend.cleanupLogs();
+      if (requestId !== logStorageRequestRef.current) return;
+      setLogStorageStats(stats);
+      toast.success("Logs cleaned up");
+    } catch (error) {
+      if (requestId !== logStorageRequestRef.current) return;
+      toast.error("Failed to clean up logs", {
+        description: error instanceof Error ? error.message : "Unknown error",
+      });
+    } finally {
+      setIsCleaningLogs(false);
+    }
   }, []);
 
   // Check for changes
@@ -327,6 +385,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
       experimentalCursorSdkBridge !== (global.experimentalCursorSdkBridge ?? false) ||
       debugLogging !== (global.debugLogging ?? false) ||
+      debugLogRetentionDays !== normalizeDebugLogRetentionDays(global.debugLogRetentionDays) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
       reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction) ||
       webClientApplyError !== null ||
@@ -361,6 +420,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     experimentalCodexRawEventLogging,
     experimentalCursorSdkBridge,
     debugLogging,
+    debugLogRetentionDays,
     webClientEnabled,
     reviewInstruction,
     webClientApplyError,
@@ -462,6 +522,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         experimentalCodexRawEventLogging: boolean;
         experimentalCursorSdkBridge: boolean;
         debugLogging: boolean;
+        debugLogRetentionDays: number;
         webClientEnabled: boolean;
         reviewInstruction?: string;
       } = {
@@ -485,6 +546,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         experimentalCodexRawEventLogging,
         experimentalCursorSdkBridge,
         debugLogging,
+        debugLogRetentionDays,
         webClientEnabled,
         // `update_global_config` replaces the stored global wholesale, so this
         // has to be sent from every section's save, not only the Defaults tab.
@@ -675,6 +737,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
     setExperimentalCursorSdkBridge(global.experimentalCursorSdkBridge ?? false);
     setDebugLogging(global.debugLogging ?? false);
+    setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
     setWebClientApplyError(null);
@@ -741,6 +804,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setExperimentalCursorSdkBridge,
     debugLogging,
     setDebugLogging,
+    debugLogRetentionDays,
+    setDebugLogRetentionDays,
     webClientEnabled,
     setWebClientEnabled,
     reviewInstruction,
@@ -763,6 +828,11 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setIsLoadingGatewayToken,
     logDirectory,
     setLogDirectory,
+    logStorageStats,
+    isLoadingLogStorage,
+    isCleaningLogs,
+    refreshLogStorage,
+    handleCleanupLogs,
     showApiKey,
     setShowApiKey,
     showCursorApiKey,
@@ -792,6 +862,44 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     handleBackgroundColorChange,
     handleTestDomains,
   };
+
+  // The Save button is shared by every section, so a validation failure in one
+  // section blocks saving in all of them. Each blocker carries the section that
+  // owns it so the save bar can name the reason when the user is looking
+  // somewhere else, rather than leaving the disabled button unexplained.
+  const saveBlocker = useMemo(() => {
+    const blockers: Array<{ section: string; message: string }> = [];
+    if (domainErrors.length > 0) {
+      blockers.push({
+        section: "network",
+        message: "Fix the allowed-domain errors in Network before saving.",
+      });
+    }
+    if (colorError) blockers.push({ section: "terminal", message: colorError });
+    if (!isValidDebugLogRetentionDays(debugLogRetentionDays)) {
+      blockers.push({
+        section: "debug",
+        message: `Log retention in Debug must be a whole number from ${MIN_DEBUG_LOG_RETENTION_DAYS} to ${MAX_DEBUG_LOG_RETENTION_DAYS} days.`,
+      });
+    }
+    if (gatewayTokenValidationError) {
+      blockers.push({ section: "web-client", message: gatewayTokenValidationError });
+    }
+    if (reviewInstructionValidationError) {
+      blockers.push({ section: "review", message: reviewInstructionValidationError });
+    }
+    return blockers[0] ?? null;
+  }, [
+    domainErrors,
+    colorError,
+    debugLogRetentionDays,
+    gatewayTokenValidationError,
+    reviewInstructionValidationError,
+  ]);
+  // The owning section already renders its own inline message; repeating it
+  // here would show the same error twice.
+  const saveBlockedReason =
+    saveBlocker && saveBlocker.section !== activeSection ? saveBlocker.message : null;
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1">
@@ -799,21 +907,18 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       </div>
 
       {/* Sticky save bar */}
-      <div className="flex justify-end gap-2 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
+      <div className="flex items-center justify-end gap-3 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
+        {saveBlockedReason && (
+          <p role="alert" className="text-xs text-destructive text-right">
+            {saveBlockedReason}
+          </p>
+        )}
         <Button variant="outline" onClick={handleReset} disabled={!hasChanges}>
           Reset
         </Button>
         <Button
           onClick={handleSave}
-          disabled={
-            !hasChanges ||
-            isSaving ||
-            saveSuccess ||
-            domainErrors.length > 0 ||
-            !!colorError ||
-            !!gatewayTokenValidationError ||
-            !!reviewInstructionValidationError
-          }
+          disabled={!hasChanges || isSaving || saveSuccess || saveBlocker !== null}
         >
           {saveSuccess ? (
             <>

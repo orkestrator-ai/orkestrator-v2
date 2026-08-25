@@ -509,6 +509,8 @@ export interface GlobalConfig {
   experimentalCursorSdkBridge?: boolean;
   /** Enable debug logging to disk (requires app restart) */
   debugLogging?: boolean;
+  /** Number of days production application logs remain on disk */
+  debugLogRetentionDays?: number;
   /** Serve the app to authenticated browsers on the host's Tailscale network */
   webClientEnabled?: boolean;
   /**

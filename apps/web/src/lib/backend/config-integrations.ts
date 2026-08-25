@@ -201,6 +201,19 @@ export async function getLogDirectory(): Promise<string> {
   return invoke<string>("get_log_directory");
 }
 
+export interface LogStorageStats {
+  totalBytes: number;
+  fileCount: number;
+}
+
+export async function getLogStorageStats(): Promise<LogStorageStats> {
+  return invoke<LogStorageStats>("get_log_storage_stats");
+}
+
+export async function cleanupLogs(): Promise<LogStorageStats> {
+  return invoke<LogStorageStats>("cleanup_logs");
+}
+
 // --- Linear Commands ---
 
 export async function getLinearConnection(): Promise<LinearConnectionStatus> {

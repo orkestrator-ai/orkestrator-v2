@@ -22,7 +22,6 @@
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { chmod, mkdir, mkdtemp, rename, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -35,13 +34,14 @@ import {
   type ToolchainPlatform,
 } from "../apps/desktop/electron/toolchain-manifest";
 import {
-  expectDigest,
   fetchArtifact,
-  hashArchiveEntry,
+  verifyDownloadedArchive,
   type FetchArtifact,
 } from "./verify-toolchain-artifacts";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
+const VERSION_PROBE_TIMEOUT_MS = 30_000;
+const MAX_PROCESS_OUTPUT_BYTES = 2_000;
 
 export interface DownloadOptions {
   agent: ToolchainName;
@@ -53,6 +53,8 @@ export interface DownloadOptions {
   /** Injected so the install logic is testable without downloads. */
   artifacts?: readonly ToolchainArtifact[];
   fetchImpl?: FetchArtifact;
+  /** Shortened by tests that exercise a hung executable. */
+  versionProbeTimeoutMs?: number;
 }
 
 /** Maps `uname`-style values onto the manifest's vocabulary. */
@@ -81,27 +83,90 @@ function run(command: string, args: string[], cwd?: string): Promise<void> {
     const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
+      stderr = `${stderr}${chunk.toString()}`.slice(-MAX_PROCESS_OUTPUT_BYTES);
     });
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`${command} exited ${code}: ${stderr.slice(0, 2_000)}`));
+      else reject(new Error(`${command} exited ${code}: ${stderr}`));
     });
   });
 }
 
-/** `--version`, purely to prove the file we installed actually runs. */
-function probeVersion(executable: string): Promise<string> {
-  return new Promise((resolve) => {
+/** `--version`, purely to prove the staged file actually runs. */
+function probeVersion(executable: string, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
     const child = spawn(executable, ["--version"], { stdio: ["ignore", "pipe", "pipe"] });
-    let out = "";
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (error?: Error, reported = ""): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve(reported);
+    };
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(new Error(`${path.basename(executable)} --version timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
-      out += chunk.toString();
+      stdout = `${stdout}${chunk.toString()}`.slice(-MAX_PROCESS_OUTPUT_BYTES);
     });
-    child.on("error", () => resolve(""));
-    child.on("close", () => resolve(out.trim().split("\n")[0] ?? ""));
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-MAX_PROCESS_OUTPUT_BYTES);
+    });
+    child.on("error", (error) => {
+      finish(new Error(`Could not run ${path.basename(executable)} --version: ${error.message}`));
+    });
+    child.on("close", (code, signal) => {
+      if (code !== 0) {
+        const detail = stderr.trim() || `signal ${signal ?? "unknown"}`;
+        finish(new Error(`${path.basename(executable)} --version exited ${code}: ${detail}`));
+        return;
+      }
+      finish(undefined, (stdout.trim() || stderr.trim()).split("\n")[0] ?? "");
+    });
   });
+}
+
+type Promotion = { source: string; destination: string };
+
+/** Promote a complete staged install, restoring the previous files on failure. */
+async function promotePaths(promotions: readonly Promotion[], staging: string): Promise<void> {
+  const backups: Array<Promotion & { backup: string; existed: boolean }> = [];
+  const promoted: Promotion[] = [];
+  try {
+    for (const [index, promotion] of promotions.entries()) {
+      const backup = path.join(staging, `.previous-${index}`);
+      let existed = true;
+      try {
+        await rename(promotion.destination, backup);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        existed = false;
+      }
+      backups.push({ ...promotion, backup, existed });
+    }
+    for (const promotion of promotions) {
+      await rename(promotion.source, promotion.destination);
+      promoted.push(promotion);
+    }
+  } catch (error) {
+    for (const promotion of promoted.reverse()) {
+      await rename(promotion.destination, promotion.source).catch(() => undefined);
+    }
+    for (const previous of backups.reverse()) {
+      if (previous.existed) {
+        await rename(previous.backup, previous.destination).catch(() => undefined);
+      }
+    }
+    throw error;
+  }
+  for (const previous of backups) {
+    if (previous.existed) await rm(previous.backup, { recursive: true, force: true });
+  }
 }
 
 async function downloadTo(
@@ -136,6 +201,7 @@ export async function downloadAgent(options: DownloadOptions): Promise<string> {
   const { agent, platform, architecture } = options;
   const log = options.log ?? console.log;
   const directory = options.directory ?? path.join(repoRoot, "binaries");
+  const versionProbeTimeoutMs = options.versionProbeTimeoutMs ?? VERSION_PROBE_TIMEOUT_MS;
   const artifacts = options.artifacts ?? pinnedToolchainArtifacts(platform, architecture);
   const artifact = artifacts.find(
     (entry) =>
@@ -147,84 +213,99 @@ export async function downloadAgent(options: DownloadOptions): Promise<string> {
 
   log(`Downloading ${agent} v${artifact.version} for ${platform}-${architecture}...`);
   await mkdir(directory, { recursive: true });
-  const staging = await mkdtemp(path.join(tmpdir(), `ork-download-${agent}-`));
+  // Keep staging beside the destination so every final rename stays on one
+  // filesystem, including when the workspace or --dir is a mounted volume.
+  const staging = await mkdtemp(path.join(directory, `.ork-download-${agent}-`));
   try {
     const archivePath = path.join(staging, "archive");
     await downloadTo(artifact.archive, archivePath, options.fetchImpl);
-
-    // Verify before installing. The manifest's digests are the whole point of
-    // pinning; fetching a URL and trusting the bytes is what this replaces.
-    const executableDigest = await hashArchiveEntry(artifact.archive, archivePath);
-    expectDigest(`${agent} executable`, executableDigest, artifact.executable);
+    await verifyDownloadedArchive(agent, artifact.archive, artifact.executable, archivePath);
 
     const destination = path.join(directory, artifact.executable.fileName);
     if (artifact.archive.bundleRoot) {
       // Cursor and Pi read themes, helpers and grammars from beside the
       // launcher, so the tree is installed intact rather than reduced to one
       // file. `--strip-components=1` drops the archive's own root directory.
+      const stagedBundle = path.join(staging, `${agent}-bundle`);
       const bundleDirectory = path.join(directory, `${agent}-bundle`);
-      await rm(bundleDirectory, { recursive: true, force: true });
-      await mkdir(bundleDirectory, { recursive: true });
+      await mkdir(stagedBundle, { recursive: true });
       await run("tar", [
         "-xzf",
         archivePath,
         "-C",
-        bundleDirectory,
+        stagedBundle,
         "--strip-components=1",
         "--no-same-owner",
       ]);
       const inside = artifact.archive.entryPath.slice(artifact.archive.bundleRoot.length);
+      const stagedLauncher = path.join(stagedBundle, ...inside.split("/"));
+      await chmod(stagedLauncher, 0o755);
+      if (platform === "darwin") await adHocSign(stagedLauncher, log);
+      const reported = await probeVersion(stagedLauncher, versionProbeTimeoutMs);
+      await promotePaths([{ source: stagedBundle, destination: bundleDirectory }], staging);
       const launcher = path.join(bundleDirectory, ...inside.split("/"));
-      await chmod(launcher, 0o755);
-      if (platform === "darwin") await adHocSign(launcher, log);
       log(`${agent} bundle installed at ${bundleDirectory}`);
       log(`${agent} launcher at ${launcher}`);
-      const reported = await probeVersion(launcher);
       if (reported) log(reported);
       return launcher;
     }
 
+    const stagedInstall = path.join(staging, "install");
+    await mkdir(stagedInstall, { recursive: true });
+    const stagedDestination = path.join(stagedInstall, artifact.executable.fileName);
     switch (artifact.archive.format) {
       case "raw":
-        await rename(archivePath, destination);
+        await rename(archivePath, stagedDestination);
         break;
       case "zip":
         await run("unzip", ["-o", "-q", archivePath, artifact.archive.entryPath, "-d", staging]);
-        await rename(path.join(staging, artifact.archive.entryPath), destination);
+        await rename(path.join(staging, artifact.archive.entryPath), stagedDestination);
         break;
       case "tar.gz":
         await run("tar", ["-xzf", archivePath, "-C", staging, artifact.archive.entryPath]);
-        await rename(path.join(staging, artifact.archive.entryPath), destination);
+        await rename(path.join(staging, artifact.archive.entryPath), stagedDestination);
         break;
       default: {
         const unreachable: never = artifact.archive.format;
         throw new Error(`Unsupported archive format: ${String(unreachable)}`);
       }
     }
-    await chmod(destination, 0o755);
-    if (platform === "darwin") await adHocSign(destination, log);
+    await chmod(stagedDestination, 0o755);
+    if (platform === "darwin") await adHocSign(stagedDestination, log);
 
     // A companion is a helper the primary spawns from its own directory, so it
     // has to land beside it. Codex's code-mode host is the only one today, and
     // omitting it breaks every model that defaults to code mode.
+    const promotions: Promotion[] = [{ source: stagedDestination, destination }];
     for (const companion of artifact.companions ?? []) {
       log(`  fetching companion ${companion.fileName}`);
       const companionArchive = path.join(staging, `companion-${companion.fileName}`);
       await downloadTo(companion.archive, companionArchive, options.fetchImpl);
-      const companionDigest = await hashArchiveEntry(companion.archive, companionArchive);
-      expectDigest(`${agent} ${companion.fileName}`, companionDigest, companion.executable);
+      await verifyDownloadedArchive(
+        `${agent} ${companion.fileName}`,
+        companion.archive,
+        companion.executable,
+        companionArchive,
+      );
       const companionPath = path.join(directory, companion.fileName);
+      const stagedCompanion = path.join(stagedInstall, companion.fileName);
       await run("tar", ["-xzf", companionArchive, "-C", staging, companion.archive.entryPath]);
-      await rename(path.join(staging, companion.archive.entryPath), companionPath);
-      await chmod(companionPath, 0o755);
+      await rename(path.join(staging, companion.archive.entryPath), stagedCompanion);
+      await chmod(stagedCompanion, 0o755);
       // Companions are helper processes with their own protocols, not CLIs, so
       // they are deliberately never probed with `--version`.
-      if (platform === "darwin") await adHocSign(companionPath, log);
-      log(`${agent} ${companion.fileName} downloaded to ${companionPath}`);
+      if (platform === "darwin") await adHocSign(stagedCompanion, log);
+      promotions.push({ source: stagedCompanion, destination: companionPath });
     }
 
+    const reported = await probeVersion(stagedDestination, versionProbeTimeoutMs);
+    await promotePaths(promotions, staging);
     log(`${agent} binary downloaded to ${destination}`);
-    const reported = await probeVersion(destination);
+    for (const companion of artifact.companions ?? []) {
+      log(
+        `${agent} ${companion.fileName} downloaded to ${path.join(directory, companion.fileName)}`,
+      );
+    }
     if (reported) log(reported);
     return destination;
   } finally {

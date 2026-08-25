@@ -16,7 +16,7 @@ import {
   type ToolchainPlatform,
 } from "../apps/desktop/electron/toolchain-manifest";
 
-type Digest = {
+export type Digest = {
   size: number;
   sha256: string;
 };
@@ -345,6 +345,59 @@ async function hashBundleArchive(
   };
 }
 
+export type DownloadedArchiveDigests = {
+  archive: Digest;
+  executable: Digest;
+  bundleIntegrity?: BundleIntegrity;
+};
+
+async function hashArchiveContents(
+  archive: ToolchainArchive,
+  archivePath: string,
+): Promise<Omit<DownloadedArchiveDigests, "archive">> {
+  const bundle = archive.bundleIntegrity
+    ? await hashBundleArchive(archive, archivePath)
+    : undefined;
+  return {
+    executable: bundle?.executable ?? (await hashArchiveEntry(archive, archivePath)),
+    bundleIntegrity: bundle?.integrity,
+  };
+}
+
+function expectBundleIntegrity(
+  label: string,
+  actual: BundleIntegrity | undefined,
+  expected: BundleIntegrity | undefined,
+): void {
+  if (!expected) return;
+  if (
+    !actual ||
+    actual.fileCount !== expected.fileCount ||
+    actual.totalSize !== expected.totalSize ||
+    actual.sha256 !== expected.sha256
+  ) {
+    throw new Error(
+      `${label} bundle integrity mismatch: expected ${expected.fileCount} files / ` +
+        `${expected.totalSize} bytes / ${expected.sha256}, got ${actual?.fileCount ?? 0} / ` +
+        `${actual?.totalSize ?? 0} / ${actual?.sha256 ?? "missing"}`,
+    );
+  }
+}
+
+/** Verify a downloaded archive before any of its contents are installed. */
+export async function verifyDownloadedArchive(
+  label: string,
+  archive: ToolchainArchive,
+  executable: Digest,
+  archivePath: string,
+): Promise<void> {
+  const archiveDigest = await hashFile(archivePath);
+  expectDigest(`${label} archive`, archiveDigest, archive);
+  const contents = await hashArchiveContents(archive, archivePath);
+  expectDigest(`${label} executable`, contents.executable, executable);
+  expectBundleIntegrity(label, contents.bundleIntegrity, archive.bundleIntegrity);
+}
+
 export async function hashBundleIntegrity(
   archive: ToolchainArchive,
   archivePath: string,
@@ -376,16 +429,9 @@ async function verifyArchive(
   // parser. Emit mode intentionally has no current digest to compare against,
   // so its bundle parser enforces strict path, entry-count and expansion bounds.
   if (!options.emit) {
-    expectDigest(`${label} archive`, archiveDigest, {
-      size: archive.size,
-      sha256: archive.sha256,
-    });
+    expectDigest(`${label} archive`, archiveDigest, archive);
   }
-  const bundle = archive.bundleIntegrity
-    ? await hashBundleArchive(archive, archivePath)
-    : undefined;
-  const executableDigest = bundle?.executable ?? (await hashArchiveEntry(archive, archivePath));
-  const bundleIntegrity = bundle?.integrity;
+  const contents = await hashArchiveContents(archive, archivePath);
 
   if (options.emit) {
     // A version bump changes all four digests per archive. Printing them in
@@ -395,33 +441,20 @@ async function verifyArchive(
         `  // ${label}`,
         `  archive.size:      ${formatManifestSize(archiveDigest.size)},`,
         `  archive.sha256:    "${archiveDigest.sha256}",`,
-        `  executable.size:   ${formatManifestSize(executableDigest.size)},`,
-        `  executable.sha256: "${executableDigest.sha256}",`,
-        ...(bundleIntegrity
+        `  executable.size:   ${formatManifestSize(contents.executable.size)},`,
+        `  executable.sha256: "${contents.executable.sha256}",`,
+        ...(contents.bundleIntegrity
           ? [
-              `  bundleIntegrity.fileCount: ${formatManifestSize(bundleIntegrity.fileCount)},`,
-              `  bundleIntegrity.totalSize: ${formatManifestSize(bundleIntegrity.totalSize)},`,
-              `  bundleIntegrity.sha256:    "${bundleIntegrity.sha256}",`,
+              `  bundleIntegrity.fileCount: ${formatManifestSize(contents.bundleIntegrity.fileCount)},`,
+              `  bundleIntegrity.totalSize: ${formatManifestSize(contents.bundleIntegrity.totalSize)},`,
+              `  bundleIntegrity.sha256:    "${contents.bundleIntegrity.sha256}",`,
             ]
           : []),
       ].join("\n"),
     );
   } else {
-    expectDigest(`${label} executable`, executableDigest, executable);
-    if (bundleIntegrity && archive.bundleIntegrity) {
-      const expected = archive.bundleIntegrity;
-      if (
-        bundleIntegrity.fileCount !== expected.fileCount ||
-        bundleIntegrity.totalSize !== expected.totalSize ||
-        bundleIntegrity.sha256 !== expected.sha256
-      ) {
-        throw new Error(
-          `${label} bundle integrity mismatch: expected ${expected.fileCount} files / ` +
-            `${expected.totalSize} bytes / ${expected.sha256}, got ${bundleIntegrity.fileCount} / ` +
-            `${bundleIntegrity.totalSize} / ${bundleIntegrity.sha256}`,
-        );
-      }
-    }
+    expectDigest(`${label} executable`, contents.executable, executable);
+    expectBundleIntegrity(label, contents.bundleIntegrity, archive.bundleIntegrity);
   }
 
   await rm(archivePath, { force: true });

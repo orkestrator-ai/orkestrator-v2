@@ -11,7 +11,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -19,6 +19,7 @@ import {
   PINNED_TOOLCHAIN_VERSIONS,
 } from "../../apps/desktop/electron/toolchain-manifest";
 import { downloadAgent, hostTarget, parseAgent } from "../../scripts/download-agent";
+import { hashBundleIntegrity } from "../../scripts/verify-toolchain-artifacts";
 
 const AGENT_NAMES = Object.keys(PINNED_TOOLCHAIN_VERSIONS);
 
@@ -39,6 +40,39 @@ async function makeTarGz(root: string, entryPath: string, contents: string): Pro
 function digestOf(contents: string) {
   const bytes = Buffer.from(contents);
   return { size: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
+}
+
+function digestBytes(contents: Uint8Array) {
+  return {
+    size: contents.byteLength,
+    sha256: createHash("sha256").update(contents).digest("hex"),
+  };
+}
+
+async function makeZip(root: string, entryPath: string, contents: string): Promise<string> {
+  const staging = path.join(root, "zip-src");
+  await Bun.write(path.join(staging, entryPath), contents);
+  const archivePath = path.join(root, "fixture.zip");
+  const zip = Bun.spawn(["zip", "-q", "-X", archivePath, entryPath], {
+    cwd: staging,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(await zip.exited).toBe(0);
+  return archivePath;
+}
+
+async function makeBundleTarGz(root: string, launcher: string, guide: string): Promise<string> {
+  const staging = path.join(root, "bundle-src");
+  await Bun.write(path.join(staging, "pi", "pi"), launcher);
+  await Bun.write(path.join(staging, "pi", "docs", "guide.md"), guide);
+  const archivePath = path.join(root, "bundle.tar.gz");
+  const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", staging, "pi"], {
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(await tar.exited).toBe(0);
+  return archivePath;
 }
 
 describe("download-agent", () => {
@@ -114,6 +148,89 @@ describe("download-agent", () => {
       expect(await Bun.file(installed).text()).toBe(contents);
       // 0o755: the whole point of fetching it is to run it.
       expect((await stat(installed)).mode & 0o111).not.toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("installs a zip entry, which every darwin OpenCode artifact uses", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
+    try {
+      const contents = "#!/bin/sh\nprintf 'opencode\\n'\n";
+      const archivePath = await makeZip(root, "opencode", contents);
+      const archive = await readFile(archivePath);
+      const destination = path.join(root, "out");
+
+      const installed = await downloadAgent({
+        agent: "opencode",
+        platform: "linux",
+        architecture: "x64",
+        directory: destination,
+        log: () => undefined,
+        artifacts: [
+          {
+            name: "opencode",
+            version: "9.9.9",
+            platform: "linux",
+            architecture: "x64",
+            archive: {
+              format: "zip",
+              url: "https://downloads.example.test/opencode.zip",
+              entryPath: "opencode",
+              allowedHosts: ["downloads.example.test"],
+              ...digestBytes(archive),
+            },
+            executable: { fileName: "opencode", ...digestOf(contents) },
+          },
+        ],
+        fetchImpl: async () => new Response(new Uint8Array(archive)),
+      });
+
+      expect(await Bun.file(installed).text()).toBe(contents);
+      expect((await stat(installed)).mode & 0o111).not.toBe(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects an archive digest mismatch before extracting a matching executable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
+    try {
+      const contents = "#!/bin/sh\nprintf 'claude\\n'\n";
+      const archivePath = await makeTarGz(root, "package/claude", contents);
+      const archive = await readFile(archivePath);
+      const destination = path.join(root, "out");
+      await Bun.write(path.join(destination, "claude"), "previous installation");
+
+      await expect(
+        downloadAgent({
+          agent: "claude",
+          platform: "linux",
+          architecture: "x64",
+          directory: destination,
+          log: () => undefined,
+          artifacts: [
+            {
+              name: "claude",
+              version: "9.9.9",
+              platform: "linux",
+              architecture: "x64",
+              archive: {
+                format: "tar.gz",
+                url: "https://downloads.example.test/claude.tar.gz",
+                entryPath: "package/claude",
+                allowedHosts: ["downloads.example.test"],
+                size: archive.byteLength,
+                sha256: "f".repeat(64),
+              },
+              executable: { fileName: "claude", ...digestOf(contents) },
+            },
+          ],
+          fetchImpl: async () => new Response(new Uint8Array(archive)),
+        }),
+      ).rejects.toThrow(/claude archive SHA-256 mismatch/);
+
+      expect(await Bun.file(path.join(destination, "claude")).text()).toBe("previous installation");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -202,6 +319,178 @@ describe("download-agent", () => {
     }
   });
 
+  test("creates staging on the destination filesystem before promotion", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
+    try {
+      const contents = "#!/bin/sh\nprintf 'grok\\n'\n";
+      const bytes = Buffer.from(contents);
+      const destination = path.join(root, "mounted-destination");
+      await mkdir(destination, { recursive: true });
+      let observedDestinationLocalStaging = false;
+
+      await downloadAgent({
+        agent: "grok",
+        platform: "linux",
+        architecture: "x64",
+        directory: destination,
+        log: () => undefined,
+        artifacts: [
+          {
+            name: "grok",
+            version: "9.9.9",
+            platform: "linux",
+            architecture: "x64",
+            archive: {
+              format: "raw",
+              url: "https://downloads.example.test/grok-linux-x86_64",
+              entryPath: "",
+              allowedHosts: ["downloads.example.test"],
+              ...digestBytes(bytes),
+            },
+            executable: { fileName: "grok", ...digestBytes(bytes) },
+          },
+        ],
+        fetchImpl: async () => {
+          const entries = await readdir(destination);
+          const stagingName = entries.find((entry) => entry.startsWith(".ork-download-grok-"));
+          expect(stagingName).toBeDefined();
+          observedDestinationLocalStaging =
+            (await stat(path.join(destination, stagingName!))).dev ===
+            (await stat(destination)).dev;
+          return new Response(new Uint8Array(bytes));
+        },
+      });
+
+      expect(observedDestinationLocalStaging).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a non-zero version probe without replacing the installed executable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
+    try {
+      const contents = "#!/bin/sh\nprintf 'probe failed\\n' >&2\nexit 7\n";
+      const bytes = Buffer.from(contents);
+      const destination = path.join(root, "out");
+      await Bun.write(path.join(destination, "grok"), "previous installation");
+
+      await expect(
+        downloadAgent({
+          agent: "grok",
+          platform: "linux",
+          architecture: "x64",
+          directory: destination,
+          log: () => undefined,
+          artifacts: [
+            {
+              name: "grok",
+              version: "9.9.9",
+              platform: "linux",
+              architecture: "x64",
+              archive: {
+                format: "raw",
+                url: "https://downloads.example.test/grok-linux-x86_64",
+                entryPath: "",
+                allowedHosts: ["downloads.example.test"],
+                ...digestBytes(bytes),
+              },
+              executable: { fileName: "grok", ...digestBytes(bytes) },
+            },
+          ],
+          fetchImpl: async () => new Response(new Uint8Array(bytes)),
+        }),
+      ).rejects.toThrow(/grok --version exited 7: probe failed/);
+
+      expect(await Bun.file(path.join(destination, "grok")).text()).toBe("previous installation");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a version probe that cannot spawn without replacing the installed executable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
+    try {
+      const contents = "#!/definitely-not-present/orkestrator\n";
+      const bytes = Buffer.from(contents);
+      const destination = path.join(root, "out");
+      await Bun.write(path.join(destination, "grok"), "previous installation");
+
+      await expect(
+        downloadAgent({
+          agent: "grok",
+          platform: "linux",
+          architecture: "x64",
+          directory: destination,
+          log: () => undefined,
+          artifacts: [
+            {
+              name: "grok",
+              version: "9.9.9",
+              platform: "linux",
+              architecture: "x64",
+              archive: {
+                format: "raw",
+                url: "https://downloads.example.test/grok-linux-x86_64",
+                entryPath: "",
+                allowedHosts: ["downloads.example.test"],
+                ...digestBytes(bytes),
+              },
+              executable: { fileName: "grok", ...digestBytes(bytes) },
+            },
+          ],
+          fetchImpl: async () => new Response(new Uint8Array(bytes)),
+        }),
+      ).rejects.toThrow(/Could not run grok --version/);
+
+      expect(await Bun.file(path.join(destination, "grok")).text()).toBe("previous installation");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("times out a hung version probe without replacing the installed executable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
+    try {
+      const contents = "#!/bin/sh\nwhile :; do :; done\n";
+      const bytes = Buffer.from(contents);
+      const destination = path.join(root, "out");
+      await Bun.write(path.join(destination, "grok"), "previous installation");
+
+      await expect(
+        downloadAgent({
+          agent: "grok",
+          platform: "linux",
+          architecture: "x64",
+          directory: destination,
+          log: () => undefined,
+          versionProbeTimeoutMs: 50,
+          artifacts: [
+            {
+              name: "grok",
+              version: "9.9.9",
+              platform: "linux",
+              architecture: "x64",
+              archive: {
+                format: "raw",
+                url: "https://downloads.example.test/grok-linux-x86_64",
+                entryPath: "",
+                allowedHosts: ["downloads.example.test"],
+                ...digestBytes(bytes),
+              },
+              executable: { fileName: "grok", ...digestBytes(bytes) },
+            },
+          ],
+          fetchImpl: async () => new Response(new Uint8Array(bytes)),
+        }),
+      ).rejects.toThrow(/grok --version timed out after 50ms/);
+
+      expect(await Bun.file(path.join(destination, "grok")).text()).toBe("previous installation");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("keeps a bundle's tree intact rather than extracting one file", async () => {
     // Cursor and Pi load themes, helpers and grammars from beside the
     // launcher, so a downloader that lifted out only the executable would
@@ -209,17 +498,18 @@ describe("download-agent", () => {
     const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
     try {
       const launcher = "#!/bin/sh\nprintf 'pi\\n'\n";
-      const staging = path.join(root, "src");
-      await Bun.write(path.join(staging, "pi", "pi"), launcher);
-      await Bun.write(path.join(staging, "pi", "docs", "guide.md"), "# guide");
-      const archivePath = path.join(root, "fixture.tar.gz");
-      const tar = Bun.spawn(["tar", "-czf", archivePath, "-C", staging, "pi"], {
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      expect(await tar.exited).toBe(0);
+      const archivePath = await makeBundleTarGz(root, launcher, "# guide");
       const archive = await readFile(archivePath);
       const destination = path.join(root, "out");
+      const archiveDescriptor = {
+        format: "tar.gz" as const,
+        url: "https://downloads.example.test/pi-linux-x64.tar.gz",
+        entryPath: "pi/pi",
+        bundleRoot: "pi/",
+        allowedHosts: ["downloads.example.test"],
+        ...digestBytes(archive),
+      };
+      const bundleIntegrity = await hashBundleIntegrity(archiveDescriptor, archivePath);
 
       const installed = await downloadAgent({
         agent: "pi",
@@ -234,13 +524,8 @@ describe("download-agent", () => {
             platform: "linux",
             architecture: "x64",
             archive: {
-              format: "tar.gz",
-              url: "https://downloads.example.test/pi-linux-x64.tar.gz",
-              entryPath: "pi/pi",
-              bundleRoot: "pi/",
-              allowedHosts: ["downloads.example.test"],
-              size: archive.byteLength,
-              sha256: createHash("sha256").update(archive).digest("hex"),
+              ...archiveDescriptor,
+              bundleIntegrity,
             },
             executable: { fileName: "pi", ...digestOf(launcher) },
           },
@@ -252,6 +537,72 @@ describe("download-agent", () => {
       // The sibling file is the whole reason this is a bundle.
       expect(await Bun.file(path.join(destination, "pi-bundle", "docs", "guide.md")).text()).toBe(
         "# guide",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a modified bundle sibling while preserving the installed bundle", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "ork-dl-test-"));
+    try {
+      const launcher = "#!/bin/sh\nprintf 'pi\\n'\n";
+      const trustedArchivePath = await makeBundleTarGz(
+        path.join(root, "trusted"),
+        launcher,
+        "trusted guide",
+      );
+      const trustedArchive = await readFile(trustedArchivePath);
+      const trustedDescriptor = {
+        format: "tar.gz" as const,
+        url: "https://downloads.example.test/pi-linux-x64.tar.gz",
+        entryPath: "pi/pi",
+        bundleRoot: "pi/",
+        allowedHosts: ["downloads.example.test"],
+        ...digestBytes(trustedArchive),
+      };
+      const bundleIntegrity = await hashBundleIntegrity(trustedDescriptor, trustedArchivePath);
+
+      const modifiedArchivePath = await makeBundleTarGz(
+        path.join(root, "modified"),
+        launcher,
+        "modified runtime content",
+      );
+      const modifiedArchive = await readFile(modifiedArchivePath);
+      const destination = path.join(root, "out");
+      await Bun.write(path.join(destination, "pi-bundle", "pi"), "previous launcher");
+      await Bun.write(path.join(destination, "pi-bundle", "docs", "guide.md"), "previous guide");
+
+      await expect(
+        downloadAgent({
+          agent: "pi",
+          platform: "linux",
+          architecture: "x64",
+          directory: destination,
+          log: () => undefined,
+          artifacts: [
+            {
+              name: "pi",
+              version: "9.9.9",
+              platform: "linux",
+              architecture: "x64",
+              archive: {
+                ...trustedDescriptor,
+                ...digestBytes(modifiedArchive),
+                bundleIntegrity,
+              },
+              executable: { fileName: "pi", ...digestOf(launcher) },
+            },
+          ],
+          fetchImpl: async () => new Response(new Uint8Array(modifiedArchive)),
+        }),
+      ).rejects.toThrow(/pi bundle integrity mismatch/);
+
+      expect(await Bun.file(path.join(destination, "pi-bundle", "pi")).text()).toBe(
+        "previous launcher",
+      );
+      expect(await Bun.file(path.join(destination, "pi-bundle", "docs", "guide.md")).text()).toBe(
+        "previous guide",
       );
     } finally {
       await rm(root, { recursive: true, force: true });

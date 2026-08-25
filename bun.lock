@@ -35,7 +35,7 @@
     },
     "apps/backend": {
       "name": "@orkestrator/backend",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@modelcontextprotocol/node": "2.0.0",
         "@modelcontextprotocol/server": "2.0.0",
@@ -52,7 +52,7 @@
     },
     "apps/desktop": {
       "name": "@orkestrator/desktop",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@orkestrator/backend": "workspace:*",
         "@orkestrator/protocol": "workspace:*",
@@ -70,7 +70,7 @@
     },
     "apps/web": {
       "name": "@orkestrator/web",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@dnd-kit/core": "^6.3.1",
         "@dnd-kit/sortable": "^10.0.0",
@@ -137,7 +137,7 @@
     },
     "apps/web-public": {
       "name": "@orkestrator/web-public",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@orkestrator/protocol": "workspace:*",
         "@orkestrator/web": "workspace:*",
@@ -157,7 +157,7 @@
     },
     "bridges/acp-bridge": {
       "name": "acp-bridge",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@orkestrator/protocol": "workspace:*",
       },
@@ -169,7 +169,7 @@
     },
     "bridges/claude-bridge": {
       "name": "claude-bridge",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "0.3.245",
         "@anthropic-ai/sdk": "0.120.0",
@@ -187,7 +187,7 @@
     },
     "bridges/codex-bridge": {
       "name": "codex-bridge",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@hono/node-server": "^1.13.0",
         "@orkestrator/protocol": "workspace:*",
@@ -201,7 +201,7 @@
     },
     "bridges/cursor-bridge": {
       "name": "cursor-bridge",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@cursor/sdk": "1.0.28",
         "@orkestrator/protocol": "workspace:*",
@@ -214,7 +214,7 @@
     },
     "bridges/pi-bridge": {
       "name": "pi-bridge",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "dependencies": {
         "@earendil-works/pi-agent-core": "0.84.3",
         "@earendil-works/pi-ai": "0.84.3",
@@ -229,7 +229,7 @@
     },
     "packages/cli": {
       "name": "orkestrator",
-      "version": "2.11.1",
+      "version": "2.11.2",
       "bin": {
         "orkestrator": "bin/orkestrator.js",
       },
@@ -240,7 +240,7 @@
     },
     "packages/protocol": {
       "name": "@orkestrator/protocol",
-      "version": "2.11.1",
+      "version": "2.11.2",
     },
   },
   "packages": {

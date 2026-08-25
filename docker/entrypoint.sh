@@ -836,6 +836,41 @@ fi
 report_agent_copy_skips Grok
 log_progress "Grok configuration ready"
 
+# Set up Pi configuration. Pi keeps its credentials, model cache, settings and
+# session transcripts all under ~/.pi/agent, and the bridge writes sessions
+# there while it runs — so the host mount cannot live at that path either.
+log_progress "Setting up Pi configuration..."
+mkdir -p "$HOME/.pi/agent"
+
+if [ -d /pi-config/agent ]; then
+    for file in \
+        auth.json \
+        models.json \
+        settings.json \
+        SYSTEM.md \
+        APPEND_SYSTEM.md
+    do
+        copy_agent_file /pi-config/agent "$HOME/.pi/agent" "$file" Pi
+    done
+
+    # User-authored resources only. Sessions are deliberately not imported: they
+    # are the host's own conversation history, and a container that adopted them
+    # would offer to resume work that never happened in this workspace.
+    for dir in \
+        skills \
+        prompts \
+        extensions \
+        themes
+    do
+        copy_agent_directory_entries /pi-config/agent "$HOME/.pi/agent" "$dir" Pi
+    done
+
+    chmod 600 "$HOME/.pi/agent/auth.json" 2>/dev/null || true
+fi
+
+report_agent_copy_skips Pi
+log_progress "Pi configuration ready"
+
 # Verify the config file exists and is valid
 if [ -f "$HOME/.claude.json" ]; then
     if jq -e '.hasCompletedOnboarding' "$HOME/.claude.json" > /dev/null 2>&1; then

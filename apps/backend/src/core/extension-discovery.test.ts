@@ -47,12 +47,14 @@ const EMPTY_GROK = {
   "grok plugin list --json": "[]",
 };
 const EMPTY_OPENCODE = { "opencode debug config": "{}" };
+const EMPTY_PI = { "pi list --no-approve": "No packages installed." };
 const EMPTY_ALL = {
   ...EMPTY_CLAUDE,
   ...EMPTY_CODEX,
   ...EMPTY_CURSOR,
   ...EMPTY_GROK,
   ...EMPTY_OPENCODE,
+  ...EMPTY_PI,
 };
 
 function catalogFor(
@@ -578,6 +580,7 @@ describe("discoverAgentExtensions", () => {
       "cursor",
       "grok",
       "opencode",
+      "pi",
     ]);
     expect(catalogFor(result, "claude")).toMatchObject({
       agent: "claude",
@@ -608,12 +611,17 @@ describe("discoverAgentExtensions", () => {
       "cursor",
       "grok",
       "opencode",
+      "pi",
     ]);
     for (const catalog of result) {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);
-      expect(catalog.mcpError).toBeTruthy();
       expect(catalog.pluginError).toBeTruthy();
+      // Pi ships no MCP client of its own — MCP is something one of its
+      // packages adds — so there is no command to fail. Reporting an error
+      // there would say something is broken when the feature does not exist.
+      if (catalog.agent === "pi") expect(catalog.mcpError).toBeUndefined();
+      else expect(catalog.mcpError).toBeTruthy();
     }
   });
 
@@ -673,6 +681,7 @@ describe("discoverAgentExtensions", () => {
       ...EMPTY_CODEX,
       ...EMPTY_CURSOR,
       ...EMPTY_GROK,
+      ...EMPTY_PI,
     });
 
     expect(catalogFor(await discoverAgentExtensions(run), "opencode")).toEqual({
@@ -690,6 +699,7 @@ describe("discoverAgentExtensions", () => {
       ...EMPTY_CODEX,
       ...EMPTY_CURSOR,
       ...EMPTY_GROK,
+      ...EMPTY_PI,
       "opencode debug config": "opencode: command not found",
     });
 
@@ -704,6 +714,7 @@ describe("discoverAgentExtensions", () => {
       ...EMPTY_CLAUDE,
       ...EMPTY_CURSOR,
       ...EMPTY_GROK,
+      ...EMPTY_PI,
       ...EMPTY_OPENCODE,
       "codex mcp list --json": JSON.stringify([{ name: "github" }]),
     });
@@ -721,6 +732,7 @@ describe("discoverAgentExtensions", () => {
       ...EMPTY_CODEX,
       ...EMPTY_CURSOR,
       ...EMPTY_GROK,
+      ...EMPTY_PI,
       ...EMPTY_OPENCODE,
       "claude plugin list --json": JSON.stringify([{ id: "review@official" }]),
     });
@@ -743,6 +755,7 @@ describe("discoverAgentExtensions", () => {
       ...EMPTY_CODEX,
       ...EMPTY_CURSOR,
       ...EMPTY_GROK,
+      ...EMPTY_PI,
       "opencode debug config": JSON.stringify({
         mcp: "servers-moved-elsewhere",
         plugin: ["@team/review"],
@@ -763,6 +776,7 @@ describe("discoverAgentExtensions", () => {
       ...EMPTY_CODEX,
       ...EMPTY_CURSOR,
       ...EMPTY_GROK,
+      ...EMPTY_PI,
       "opencode debug config": JSON.stringify({
         mcp: { docs: { type: "local", command: ["docs"] } },
         plugin: { "@team/review": true },
@@ -774,6 +788,39 @@ describe("discoverAgentExtensions", () => {
       mcpServers: [{ name: "docs", status: "configured" }],
       plugins: [],
       pluginError: "Could not read OpenCode plugins.",
+    });
+  });
+
+  test("reads Pi packages and reports no MCP surface", async () => {
+    const { run } = fixtureRunner({
+      ...EMPTY_ALL,
+      "pi list --no-approve": [
+        "Installed packages:",
+        "  @team/review-pack (user)",
+        "  ./local-extension (project)",
+        "  npm:pi-mcp-adapter",
+      ].join("\n"),
+    });
+
+    expect(catalogFor(await discoverAgentExtensions(run), "pi")).toEqual({
+      agent: "pi",
+      // Empty and *not* an error: Pi has no `mcp list` because it has no MCP
+      // client. The section is honestly empty rather than reported as broken.
+      mcpServers: [],
+      plugins: [
+        { name: "@team/review-pack", status: "configured", source: "user" },
+        { name: "./local-extension", status: "configured", source: "project" },
+        { name: "npm:pi-mcp-adapter", status: "configured" },
+      ],
+    });
+  });
+
+  test("reads Pi's empty state as no packages rather than a failure", async () => {
+    const { run } = fixtureRunner(EMPTY_ALL);
+    expect(catalogFor(await discoverAgentExtensions(run), "pi")).toEqual({
+      agent: "pi",
+      mcpServers: [],
+      plugins: [],
     });
   });
 
@@ -796,6 +843,10 @@ describe("discoverAgentExtensions", () => {
       "grok mcp list --json",
       "grok plugin list --json",
       "opencode debug config",
+      // `--no-approve` because this discovery runs against whatever repository
+      // is open, and a project-local package must not be trusted just because
+      // someone opened a settings pane.
+      "pi list --no-approve",
     ]);
   });
 });

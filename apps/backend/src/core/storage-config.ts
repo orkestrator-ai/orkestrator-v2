@@ -220,11 +220,11 @@ export abstract class StorageConfig extends StorageProjects {
     models: CodexModelCatalogEntry[],
   ): Promise<AgentModelCatalogCache>;
   async cacheAgentModelCatalog(
-    agent: "cursor" | "grok",
+    agent: "cursor" | "grok" | "pi",
     models: AgentModel[],
   ): Promise<AgentModelCatalogCache>;
   async cacheAgentModelCatalog(
-    agent: "claude" | "codex" | "cursor" | "grok",
+    agent: "claude" | "codex" | "cursor" | "grok" | "pi",
     models: ClaudeModelCatalogEntry[] | CodexModelCatalogEntry[] | AgentModel[],
   ): Promise<AgentModelCatalogCache> {
     const normalizedModels =

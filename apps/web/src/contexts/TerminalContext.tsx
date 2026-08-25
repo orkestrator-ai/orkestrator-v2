@@ -9,6 +9,7 @@ export type TerminalTabType =
   | "codex"
   | "cursor"
   | "grok"
+  | "pi"
   | "root";
 export type CreatableTabType =
   | TerminalTabType

@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import path, { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { createGunzip } from "node:zlib";
+import * as tar from "tar-stream";
 import {
   PINNED_TOOLCHAIN_ARTIFACTS,
   type ToolchainArchive,
@@ -39,7 +41,10 @@ export function parseFilters(args: string[]): Filters {
     const separator = argument.indexOf("=");
     const flag = separator === -1 ? argument : argument.slice(0, separator);
     const value = separator === -1 ? "" : argument.slice(separator + 1);
-    if (flag === "--tool" && ["claude", "codex", "opencode"].includes(value)) {
+    if (
+      flag === "--tool" &&
+      ["claude", "codex", "cursor", "grok", "opencode", "pi"].includes(value)
+    ) {
       filters.tool = value as ToolchainName;
     } else if (flag === "--platform" && ["darwin", "linux"].includes(value)) {
       filters.platform = value as ToolchainPlatform;
@@ -47,7 +52,7 @@ export function parseFilters(args: string[]): Filters {
       filters.architecture = value as ToolchainArchitecture;
     } else {
       throw new Error(
-        `Unknown filter ${argument}. Use --tool=claude|codex|opencode, ` +
+        `Unknown filter ${argument}. Use --tool=claude|codex|cursor|grok|opencode|pi, ` +
           "--platform=darwin|linux, or --arch=arm64|x64.",
       );
     }
@@ -181,6 +186,154 @@ function formatManifestSize(size: number): string {
   return size.toLocaleString("en-US").replace(/,/g, "_");
 }
 
+export type BundleIntegrity = {
+  fileCount: number;
+  totalSize: number;
+  sha256: string;
+};
+
+type HashedBundle = {
+  integrity: BundleIntegrity;
+  executable: Digest;
+};
+
+const MAX_BUNDLE_ENTRIES = 20_000;
+const MAX_BUNDLE_EXPANSION_RATIO = 6;
+
+/**
+ * Reproduce the bundle digest `toolchain-manager.ts` checks on every startup.
+ *
+ * It has to agree byte for byte with `bundleTreeEntries` and `bundleTreeDigest`
+ * there, including the two details that are easy to lose: the primary
+ * executable is excluded, and a file counts as executable when the *archive*
+ * header carries any exec bit — which is precisely what the extractor turns
+ * into `0o500` on disk. Reading it from the archive rather than from an
+ * extracted copy keeps this independent of the umask of whoever runs it.
+ */
+async function hashBundleArchive(
+  archive: ToolchainArchive,
+  archivePath: string,
+): Promise<HashedBundle> {
+  const root = archive.bundleRoot!;
+  const executableRelativePath = archive.entryPath.slice(root.length);
+  const archiveSize = (await stat(archivePath)).size;
+  const maxExtractedBytes = Math.max(archiveSize * MAX_BUNDLE_EXPANSION_RATIO, archiveSize);
+  const entries: Array<{ path: string; size: number; executable: boolean; sha256: string }> = [];
+  const seen = new Set<string>();
+  let entryCount = 0;
+  let extractedBytes = 0;
+  let executable: Digest | undefined;
+  const extract = tar.extract();
+
+  extract.on("entry", (header, stream, next) => {
+    const rejectEntry = (error: Error): void => {
+      // Destroying tar-stream also destroys the current entry stream. Attach a
+      // no-op listener first so the parser's intentional rejection is observed
+      // only through the pipeline promise, not as a second unhandled error.
+      stream.once("error", () => undefined);
+      extract.destroy(error);
+      stream.resume();
+    };
+    if (!header.name.startsWith(root)) {
+      stream.once("end", next);
+      stream.resume();
+      return;
+    }
+    const relative = header.name.slice(root.length);
+    if (!relative) {
+      stream.once("end", next);
+      stream.resume();
+      return;
+    }
+    const normalized = path.posix.normalize(relative);
+    if (
+      normalized !== relative ||
+      normalized.startsWith("../") ||
+      normalized.startsWith("/") ||
+      normalized.includes("\\") ||
+      path.posix.isAbsolute(normalized) ||
+      seen.has(normalized)
+    ) {
+      rejectEntry(new Error(`Unsafe or duplicate path in ${archive.url}`));
+      return;
+    }
+    seen.add(normalized);
+    entryCount += 1;
+    extractedBytes += header.size ?? 0;
+    if (entryCount > MAX_BUNDLE_ENTRIES || extractedBytes > maxExtractedBytes) {
+      rejectEntry(new Error(`${archive.url} bundle exceeded its extraction bounds`));
+      return;
+    }
+    if (header.type === "directory") {
+      stream.once("end", next);
+      stream.resume();
+      return;
+    }
+    if (header.type !== "file") {
+      rejectEntry(new Error(`${archive.url} contains an unsupported link or entry type`));
+      return;
+    }
+
+    const hash = createHash("sha256");
+    let size = 0;
+    stream.on("data", (chunk: Buffer) => {
+      size += chunk.byteLength;
+      hash.update(chunk);
+    });
+    stream.once("error", (error) => extract.destroy(error));
+    stream.once("end", () => {
+      if (size !== header.size) {
+        extract.destroy(new Error(`${archive.url} bundle entry was truncated`));
+        return;
+      }
+      const digest = { size, sha256: hash.digest("hex") };
+      if (normalized === executableRelativePath) {
+        if (executable) {
+          extract.destroy(new Error(`${archive.url} contains a duplicate executable entry`));
+          return;
+        }
+        executable = digest;
+      } else {
+        entries.push({
+          path: normalized,
+          size,
+          executable: ((header.mode ?? 0) & 0o111) !== 0,
+          sha256: digest.sha256,
+        });
+      }
+      next();
+    });
+  });
+  await pipeline(createReadStream(archivePath), createGunzip(), extract);
+  if (!executable) throw new Error(`${archive.entryPath} was not found in ${archive.url}`);
+
+  entries.sort((left, right) => left.path.localeCompare(right.path));
+  const hash = createHash("sha256");
+  let totalSize = 0;
+  for (const entry of entries) {
+    totalSize += entry.size;
+    hash.update(entry.path);
+    hash.update("\0");
+    hash.update(String(entry.size));
+    hash.update("\0");
+    hash.update(entry.executable ? "x" : "-");
+    hash.update("\0");
+    hash.update(entry.sha256);
+    hash.update("\n");
+  }
+  return {
+    integrity: { fileCount: entries.length, totalSize, sha256: hash.digest("hex") },
+    executable,
+  };
+}
+
+export async function hashBundleIntegrity(
+  archive: ToolchainArchive,
+  archivePath: string,
+): Promise<BundleIntegrity> {
+  return (await hashBundleArchive(archive, archivePath)).integrity;
+}
+
 /**
  * Downloads one archive, hashes it and its pinned entry, then either prints the
  * digests in manifest form or asserts them. Used for an artifact's primary
@@ -196,12 +349,25 @@ async function verifyArchive(
   const response = await fetchArchive(archive, options.fetchImpl);
   if (!response.body) throw new Error(`Artifact response omitted a body: ${archive.url}`);
   await pipeline(
-    Readable.fromWeb(response.body as globalThis.ReadableStream<Uint8Array>),
+    Readable.fromWeb(response.body as unknown as Parameters<typeof Readable.fromWeb>[0]),
     createWriteStream(archivePath),
   );
 
   const archiveDigest = await hashFile(archivePath);
-  const executableDigest = await hashArchiveEntry(archive, archivePath);
+  // In verification mode, reject substituted bytes before invoking any archive
+  // parser. Emit mode intentionally has no current digest to compare against,
+  // so its bundle parser enforces strict path, entry-count and expansion bounds.
+  if (!options.emit) {
+    expectDigest(`${label} archive`, archiveDigest, {
+      size: archive.size,
+      sha256: archive.sha256,
+    });
+  }
+  const bundle = archive.bundleIntegrity
+    ? await hashBundleArchive(archive, archivePath)
+    : undefined;
+  const executableDigest = bundle?.executable ?? (await hashArchiveEntry(archive, archivePath));
+  const bundleIntegrity = bundle?.integrity;
 
   if (options.emit) {
     // A version bump changes all four digests per archive. Printing them in
@@ -213,14 +379,31 @@ async function verifyArchive(
         `  archive.sha256:    "${archiveDigest.sha256}",`,
         `  executable.size:   ${formatManifestSize(executableDigest.size)},`,
         `  executable.sha256: "${executableDigest.sha256}",`,
+        ...(bundleIntegrity
+          ? [
+              `  bundleIntegrity.fileCount: ${formatManifestSize(bundleIntegrity.fileCount)},`,
+              `  bundleIntegrity.totalSize: ${formatManifestSize(bundleIntegrity.totalSize)},`,
+              `  bundleIntegrity.sha256:    "${bundleIntegrity.sha256}",`,
+            ]
+          : []),
       ].join("\n"),
     );
   } else {
-    expectDigest(`${label} archive`, archiveDigest, {
-      size: archive.size,
-      sha256: archive.sha256,
-    });
     expectDigest(`${label} executable`, executableDigest, executable);
+    if (bundleIntegrity && archive.bundleIntegrity) {
+      const expected = archive.bundleIntegrity;
+      if (
+        bundleIntegrity.fileCount !== expected.fileCount ||
+        bundleIntegrity.totalSize !== expected.totalSize ||
+        bundleIntegrity.sha256 !== expected.sha256
+      ) {
+        throw new Error(
+          `${label} bundle integrity mismatch: expected ${expected.fileCount} files / ` +
+            `${expected.totalSize} bytes / ${expected.sha256}, got ${bundleIntegrity.fileCount} / ` +
+            `${bundleIntegrity.totalSize} / ${bundleIntegrity.sha256}`,
+        );
+      }
+    }
   }
 
   await rm(archivePath, { force: true });

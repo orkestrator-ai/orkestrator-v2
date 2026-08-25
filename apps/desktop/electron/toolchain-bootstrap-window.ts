@@ -76,6 +76,7 @@ const PLATFORM_SELECTION_HTML = `<!doctype html>
       <label><input type="checkbox" value="cursor" checked><span class="name">Cursor Agent</span><span class="protocol">ACP + CLI</span></label>
       <label><input type="checkbox" value="grok" checked><span class="name">Grok Build</span><span class="protocol">ACP + CLI</span></label>
       <label><input type="checkbox" value="opencode" checked><span class="name">OpenCode</span><span class="protocol">Native + CLI</span></label>
+      <label><input type="checkbox" value="pi" checked><span class="name">Pi</span><span class="protocol">Native + CLI</span></label>
     </fieldset>
     <footer><p id="error" role="alert"></p><button id="continue" type="button">Download selected</button></footer>
   </main>

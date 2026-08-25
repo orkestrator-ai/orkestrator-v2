@@ -160,6 +160,7 @@ export function buildReviewModelCatalog(
     }));
   const cursor = toLaunchOptions(cachedAcpCatalog.cursorModels);
   const grok = toLaunchOptions(cachedAcpCatalog.grokModels);
+  const pi = toLaunchOptions(cachedAcpCatalog.piModels);
 
   return {
     claude: claude.length > 0 ? claude : CLAUDE_FALLBACK_MODELS,
@@ -172,6 +173,7 @@ export function buildReviewModelCatalog(
       grok.length > 0
         ? grok
         : [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
+    pi: pi.length > 0 ? pi : [{ id: "default", name: "Pi default", reasoningEfforts: [] }],
     opencode:
       opencode.length > 0 ? opencode : [{ id: "default", name: "Default", reasoningEfforts: [] }],
   };

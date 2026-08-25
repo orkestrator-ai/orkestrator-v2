@@ -20,6 +20,7 @@ import {
   CodexIcon,
   CursorAgentIcon,
   GrokBuildIcon,
+  PiIcon,
   OpenCodeIcon,
 } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
@@ -36,6 +37,7 @@ const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "cursor", label: "Cursor", icon: <CursorAgentIcon className="h-4 w-4" /> },
   { id: "grok", label: "Grok", icon: <GrokBuildIcon className="h-4 w-4" /> },
   { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-4 w-4" /> },
+  { id: "pi", label: "Pi", icon: <PiIcon className="h-4 w-4 text-amber-400" /> },
   { id: "skills", label: "Skills", icon: <Sparkles className="h-4 w-4" /> },
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },

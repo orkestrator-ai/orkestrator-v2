@@ -201,6 +201,19 @@ export function resolveClaudeBinary(context: CommandContext): string {
 }
 
 /**
+ * Pi keeps the PATH fallback the other SDK-backed agents have.
+ *
+ * Unlike Cursor and Grok, `pi` on PATH is the same program the toolchain
+ * installs — it is published to npm and installed by its own script — so a user
+ * who already has it gets a working terminal tab without waiting for a
+ * download. The native bridge does not use this at all: it drives the SDK in
+ * process.
+ */
+export function resolvePiBinary(context: CommandContext): string {
+  return resolveManagedBinary(context, "pi") ?? "pi";
+}
+
+/**
  * The one resolver for a locally launchable Cursor or Grok agent.
  *
  * Unlike the other agents, these never fall back to a PATH lookup. `cursor` on
@@ -234,6 +247,7 @@ export function extensionCliName(agent: AgentExtensionId): string {
 export function resolveAgentBinary(context: CommandContext, agent: AgentExtensionId): string {
   if (agent === "claude") return resolveClaudeBinary(context);
   if (agent === "codex") return resolveCodexBinary(context);
+  if (agent === "pi") return resolvePiBinary(context);
   if (agent === "cursor" || agent === "grok") {
     const managed = resolveManagedAcpBinary(context, agent);
     if (!managed) {

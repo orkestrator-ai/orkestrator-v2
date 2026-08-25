@@ -12,6 +12,7 @@ import {
   cursorConnection,
   grokConnection,
   httpProvider,
+  piConnection,
 } from "./agent-provider-test-support.js";
 
 describe("HTTP bridge provider", () => {
@@ -41,7 +42,8 @@ describe("HTTP bridge provider", () => {
   test.each([
     ["cursor" as const, cursorConnection],
     ["grok" as const, grokConnection],
-  ])("lists and resumes %s ACP sessions through the bridge", async (_agent, connection) => {
+    ["pi" as const, piConnection],
+  ])("lists and resumes %s sessions through the bridge", async (_agent, connection) => {
     const { provider, requests } = httpProvider((url) => {
       if (url.endsWith("/session/list")) {
         return Response.json({
@@ -94,8 +96,9 @@ describe("HTTP bridge provider", () => {
   for (const [agent, connection] of [
     ["cursor" as const, cursorConnection],
     ["grok" as const, grokConnection],
+    ["pi" as const, piConnection],
   ] as const) {
-    test(`rejects malformed ${agent} ACP session responses`, async () => {
+    test(`rejects malformed ${agent} session responses`, async () => {
       const malformedList = httpProvider(
         (url) =>
           url.endsWith("/session/list")
@@ -119,7 +122,7 @@ describe("HTTP bridge provider", () => {
       ).rejects.toBeInstanceOf(ProviderUnavailableError);
     });
 
-    test(`surfaces why ${agent} cannot list its own ACP sessions`, async () => {
+    test(`surfaces why ${agent} cannot list its own sessions`, async () => {
       const { provider } = httpProvider(
         (url) =>
           url.endsWith("/session/list")
@@ -258,6 +261,7 @@ describe("HTTP bridge provider", () => {
   test.each([
     ["cursor" as const, cursorConnection],
     ["grok" as const, grokConnection],
+    ["pi" as const, piConnection],
   ])(
     "attaches a %s session before dispatch and tolerates older bridges",
     async (_agent, connection) => {
@@ -283,6 +287,60 @@ describe("HTTP bridge provider", () => {
       await provider.prepareDispatch?.("session-1");
       expect(requests).toEqual([]);
     }
+  });
+
+  test("authenticates Pi and preserves its model selection without forwarding staged bytes", async () => {
+    const { provider, requests } = httpProvider(
+      (url) =>
+        url.endsWith("/session/create")
+          ? Response.json({ sessionId: "pi-session" })
+          : new Response(null, { status: 204 }),
+      piConnection,
+    );
+
+    await provider.createSession("build", "Pi task", {
+      clientSessionKey: "pipeline:pi:attempt",
+      model: "openrouter/anthropic/claude-opus-4-5",
+      effort: "high",
+    });
+    await provider.send("pi-session", "Inspect the screenshot", {
+      requestId: "request-pi",
+      model: "openrouter/anthropic/claude-opus-4-5",
+      effort: "xhigh",
+      attachments: [
+        {
+          type: "image",
+          path: "/workspace/screenshot.png",
+          filename: "screenshot.png",
+          dataUrl: "data:image/png;base64,AA==",
+        },
+      ],
+    });
+
+    for (const request of requests) {
+      expect(new Headers(request.init.headers).get("Authorization")).toBe("Bearer pi-token");
+      expect(new Headers(request.init.headers).has("X-Orkestrator-Acp-Token")).toBe(false);
+    }
+    expect(JSON.parse(String(requests[0]!.init.body))).toEqual({
+      title: "Pi task",
+      clientSessionKey: "pipeline:pi:attempt",
+      model: "openrouter/anthropic/claude-opus-4-5",
+      reasoningEffort: "high",
+      mode: "build",
+    });
+    expect(JSON.parse(String(requests[1]!.init.body))).toEqual({
+      prompt: "Inspect the screenshot",
+      requestId: "request-pi",
+      attachments: [
+        {
+          type: "image",
+          path: "/workspace/screenshot.png",
+          filename: "screenshot.png",
+        },
+      ],
+      model: "openrouter/anthropic/claude-opus-4-5",
+      reasoningEffort: "xhigh",
+    });
   });
 
   test("reads dispatch status and treats every non-positive answer as unknown", async () => {
@@ -694,6 +752,81 @@ describe("HTTP bridge provider", () => {
     const snapshot = await provider.interactiveSnapshot!("cursor-1");
 
     expect(snapshot).toEqual({ status: "missing", messages: [] });
+  });
+
+  test("projects and updates Pi's composer, then steers the running session", async () => {
+    const composer = {
+      models: [
+        {
+          platform: "pi",
+          id: "anthropic/claude-opus-4-5",
+          label: "Claude Opus 4.5",
+          reasoning: [{ id: "high", label: "High" }],
+          defaultReasoningId: "high",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ],
+      modes: [],
+      fastModeEnabled: null,
+      fastModeAvailable: false,
+      selectedModelId: "anthropic/claude-opus-4-5",
+      selectedReasoningId: "high",
+    };
+    const { provider, requests } = httpProvider((url, init) => {
+      if (url.endsWith("/messages")) {
+        return Response.json({
+          messages: [{ id: "pi-message", role: "assistant", content: "Working", parts: [] }],
+          messageWindow: { truncated: false },
+          status: "running",
+          revision: 12,
+        });
+      }
+      if (url.endsWith("/status")) {
+        return Response.json({ status: "running", revision: 11, title: "Pi work", composer });
+      }
+      if (url.endsWith("/config") && init.method === "POST") {
+        return Response.json({ ...composer, selectedReasoningId: "xhigh" });
+      }
+      if (url.endsWith("/steer")) return Response.json({ outcome: "applied" });
+      return new Response(null, { status: 404 });
+    }, piConnection);
+
+    await expect(provider.interactiveSnapshot!("pi/session")).resolves.toMatchObject({
+      status: "running",
+      title: "Pi work",
+      providerRevision: 12,
+      messages: [{ id: "pi-message", content: "Working" }],
+      composer,
+    });
+    await expect(
+      provider.updateInteractiveControls!("pi/session", {
+        modelId: "anthropic/claude-opus-4-5",
+        reasoningId: "xhigh",
+      }),
+    ).resolves.toMatchObject({ selectedReasoningId: "xhigh" });
+    await expect(
+      provider.performSessionAction!("pi/session", {
+        kind: "steer",
+        text: "Prioritize the regression test",
+        requestId: "steer-1",
+      }),
+    ).resolves.toEqual({ outcome: "applied" });
+
+    expect(requests.map((request) => [request.url, request.init.method ?? "GET"])).toEqual(
+      expect.arrayContaining([
+        ["http://pi.test/session/pi%2Fsession/status", "GET"],
+        ["http://pi.test/session/pi%2Fsession/messages", "GET"],
+        ["http://pi.test/session/pi%2Fsession/config", "POST"],
+        ["http://pi.test/session/pi%2Fsession/steer", "POST"],
+      ]),
+    );
+    expect(
+      JSON.parse(String(requests.find((request) => request.url.endsWith("/config"))!.init.body)),
+    ).toEqual({ modelId: "anthropic/claude-opus-4-5", reasoningId: "xhigh" });
+    expect(
+      JSON.parse(String(requests.find((request) => request.url.endsWith("/steer"))!.init.body)),
+    ).toEqual({ input: "Prioritize the regression test", requestId: "steer-1" });
   });
 
   test("routes Claude background-task stop and prompt-suggestion dismissal", async () => {

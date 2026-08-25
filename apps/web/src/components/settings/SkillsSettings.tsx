@@ -13,6 +13,7 @@ import {
   CursorAgentIcon,
   GrokBuildIcon,
   OpenCodeIcon,
+  PiIcon,
 } from "@/components/icons/AgentIcons";
 import * as backend from "@/lib/backend";
 import type {
@@ -33,6 +34,7 @@ const PROVIDERS: Array<{ id: AgentSkillProvider; label: string; icon: React.Reac
   },
   { id: "grok", label: "Grok", icon: <GrokBuildIcon className="h-3.5 w-3.5 text-sky-400" /> },
   { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-3.5 w-3.5" /> },
+  { id: "pi", label: "Pi", icon: <PiIcon className="h-3.5 w-3.5 text-amber-400" /> },
 ];
 
 const SCOPE_LABELS: Record<AgentSkillScope, string> = {

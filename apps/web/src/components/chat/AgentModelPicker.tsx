@@ -125,6 +125,7 @@ const PLATFORM_LABELS: Record<AgentPlatform, string> = {
   opencode: "OpenCode",
   cursor: "Cursor",
   grok: "Grok",
+  pi: "Pi",
 };
 
 function PlatformIcon({ platform }: { platform: AgentPlatform }) {

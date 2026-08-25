@@ -50,6 +50,11 @@ function defaultExtensionCatalogs(): AgentExtensionCatalog[] {
       mcpServers: [{ name: "opencode-linear", status: "disabled" }],
       plugins: [{ name: "@team/opencode-review", status: "configured" }],
     },
+    {
+      agent: "pi",
+      mcpServers: [],
+      plugins: [{ name: "pi-project-extension", status: "configured", source: "project" }],
+    },
   ];
 }
 
@@ -311,8 +316,9 @@ describe("EnvironmentSettingsDialog", () => {
       "Cursor",
       "Grok",
       "OpenCode",
+      "Pi",
     ]);
-    // Five tabs no longer fit one row at a narrow width. happy-dom does not lay
+    // Six tabs do not fit one row at a narrow width. happy-dom does not lay
     // out, so the class contract stands in for the measurement: a fixed row
     // height with no wrapping is what clipped the two agents added last.
     expect(tabList.className).toContain("flex-wrap");
@@ -342,16 +348,21 @@ describe("EnvironmentSettingsDialog", () => {
     expect(screen.getByText("@team/opencode-review")).toBeTruthy();
     await waitFor(() => expect(screen.getAllByText("opencode-skill").length).toBeGreaterThan(0));
 
+    clickAgentTab("Pi");
+    await waitFor(() => expect(screen.getByText("pi-project-extension")).toBeTruthy());
+    expect(screen.getByText("Pi does not include a built-in MCP client")).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByText("pi-skill").length).toBeGreaterThan(0));
+
     const skillCalls = mockListEnvironmentAgentSkills.mock.calls.map((call) => call.slice(0, 2));
     expect(skillCalls.every(([environmentId]) => environmentId === "env-1")).toBe(true);
     expect(new Set(skillCalls.map(([, provider]) => provider))).toEqual(
-      new Set(["claude", "codex", "cursor", "grok", "opencode"]),
+      new Set(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
     );
     await waitFor(() => {
       const readCalls = mockReadEnvironmentAgentSkill.mock.calls;
       expect(readCalls.every(([environmentId]) => environmentId === "env-1")).toBe(true);
       expect(new Set(readCalls.map(([, provider]) => provider))).toEqual(
-        new Set(["claude", "codex", "cursor", "grok", "opencode"]),
+        new Set(["claude", "codex", "cursor", "grok", "opencode", "pi"]),
       );
     });
     expect(screen.queryByRole("button", { name: "Reveal skill in file manager" }) === null).toBe(

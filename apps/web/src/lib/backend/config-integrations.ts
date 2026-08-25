@@ -56,6 +56,10 @@ export interface AgentModelCatalogCache {
     updatedAt: string;
     models: AgentModel[];
   };
+  pi?: {
+    updatedAt: string;
+    models: AgentModel[];
+  };
 }
 
 /** Load the host-wide last-known-good catalogues before any bridge starts. */

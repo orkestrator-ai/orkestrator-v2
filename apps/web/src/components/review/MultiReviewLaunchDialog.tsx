@@ -70,14 +70,15 @@ function initialRow(
 }
 
 function flatCatalog(catalog: AgentModelCatalog): AgentModel[] {
-  return (["claude", "codex", "cursor", "grok", "opencode"] as LaunchAgent[]).flatMap((agent) =>
-    modelsForAgent(catalog, agent).map((model) => ({
-      platform: agent,
-      id: model.id,
-      label: model.name,
-      description: model.description,
-      reasoning: model.reasoningEfforts.map((effort) => ({ id: effort, label: effort })),
-    })),
+  return (["claude", "codex", "cursor", "grok", "opencode", "pi"] as LaunchAgent[]).flatMap(
+    (agent) =>
+      modelsForAgent(catalog, agent).map((model) => ({
+        platform: agent,
+        id: model.id,
+        label: model.name,
+        description: model.description,
+        reasoning: model.reasoningEfforts.map((effort) => ({ id: effort, label: effort })),
+      })),
   );
 }
 

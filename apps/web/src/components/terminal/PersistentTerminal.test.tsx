@@ -1214,6 +1214,7 @@ describe("PersistentTerminal", () => {
     ["claude", true],
     ["opencode", true],
     ["codex", true],
+    ["pi", true],
     ["plain", false],
     ["root", false],
   ] as const)(

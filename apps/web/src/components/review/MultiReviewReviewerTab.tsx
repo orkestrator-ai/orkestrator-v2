@@ -36,6 +36,7 @@ const AGENT_LABELS = {
   cursor: "Cursor",
   grok: "Grok",
   opencode: "OpenCode",
+  pi: "Pi",
 } as const;
 
 /**

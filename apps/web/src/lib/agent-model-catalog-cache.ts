@@ -13,6 +13,7 @@ export async function hydrateAgentModelCatalogCache(): Promise<void> {
   const codexModelsBeforeRead = useCodexStore.getState().models;
   const cursorModelsBeforeRead = useAgentModelCatalogStore.getState().cursorModels;
   const grokModelsBeforeRead = useAgentModelCatalogStore.getState().grokModels;
+  const piModelsBeforeRead = useAgentModelCatalogStore.getState().piModels;
   const cache = await getAgentModelCatalogCache();
   if (cache.claude?.models.length && useClaudeStore.getState().models === claudeModelsBeforeRead) {
     useClaudeStore.getState().setModels(cache.claude.models);
@@ -27,6 +28,9 @@ export async function hydrateAgentModelCatalogCache(): Promise<void> {
       : {}),
     ...(cache.grok?.models.length && currentAcpModels.grokModels === grokModelsBeforeRead
       ? { grokModels: cache.grok.models }
+      : {}),
+    ...(cache.pi?.models.length && currentAcpModels.piModels === piModelsBeforeRead
+      ? { piModels: cache.pi.models }
       : {}),
   });
 }

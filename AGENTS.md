@@ -84,6 +84,7 @@ packages/
 
 bridges/                    # Native-mode bridge servers
 ├── claude-bridge/          # Claude Native Mode bridge server
+├── pi-bridge/              # Pi Native Mode bridge server (Pi SDK, in process)
 ├── cursor-bridge/          # Cursor via @cursor/sdk (experimental, off by default)
 └── codex-bridge/           # Codex Native Mode bridge server
     └── src/
@@ -226,6 +227,7 @@ of these package manifests synchronized:
 - `bridges/cursor-bridge/package.json`
 - `bridges/claude-bridge/package.json`
 - `bridges/codex-bridge/package.json`
+- `bridges/pi-bridge/package.json`
 - `packages/cli/package.json`
 - `packages/protocol/package.json`
 
@@ -428,6 +430,75 @@ When touching the app-server engine:
   itself must stay O(1) in the read loop — buffer and flush off-loop, never await
   a write.
 
+### Pi bridge
+
+`bridges/pi-bridge` drives Pi's own TypeScript SDK
+(`@earendil-works/pi-coding-agent`) in process and serves the same HTTP routes
+and the same transcript shape as every other bridge, so the backend, the store
+and the renderer cannot tell which engine is behind a session.
+
+Pi differs from the other platforms in one way that matters, and it is confined
+to two files. Pi is a *harness*, not a vendor: it fronts fifteen-odd model
+providers using the user's own credentials. So a model is identified by a pair
+rather than a name, and "signed in" is one answer per provider.
+
+- `models.ts` encodes the pair as `provider/modelId`, split on the **first**
+  slash only — an OpenRouter id contains its own. This is the same encoding
+  OpenCode already uses, so one convention covers both pickers.
+- The reasoning axis is Pi's **thinking level**, and the supported set per model
+  comes from Pi's own `getSupportedThinkingLevels` rather than being derived
+  from `thinkingLevelMap` here. The rule is not the obvious one: a `null`
+  mapping excludes a level, but `xhigh` and `max` additionally require an
+  *explicit* mapping, so an absent key excludes those two and includes every
+  other. Getting that wrong offers controls the model then clamps away, and a
+  clamped turn succeeds — it simply thinks less than the user asked. `off` is a
+  real level, not an absence; the shared `default` id has no Pi equivalent.
+- A fresh session's level is resolved the way Pi resolves it — per-model
+  setting, then global default, then `medium` — reading the same
+  `settings.json` that `/thinking` writes, so one preference serves both the
+  model picker and a Pi terminal tab. `thinking_level_changed` is echoed back
+  into the composer so the picker shows the level actually in force after Pi
+  clamps it.
+- `credentials.ts` reports per-provider status and deliberately implements no
+  sign-in. Pi's login is an interactive multi-step prompt flow with no
+  counterpart in Orkestrator's session surface, and the credential it writes is
+  account-wide rather than per-environment. Users sign in with `/login` in a Pi
+  terminal tab or by writing `auth.json`; containers are handed the resulting
+  directory as a bind mount.
+
+When touching the Pi bridge:
+
+- The engine boundary is `src/translate.ts` and `src/tool-rendering.ts`. Every
+  Pi-specific shape stops there; nothing downstream should learn a new field to
+  render a Pi turn.
+- `applySessionEvent` never awaits. It runs on the SDK's own listener, so an
+  await there would let a large transcript back-pressure a live run.
+- A tool variant Pi adds — or a custom tool from a project extension, whose
+  shape this bridge cannot know at all — must degrade to a plain card, never
+  throw. These branches run mid-turn.
+- The conversation lives in Pi's own JSONL session file, not in this bridge.
+  Losing the bridge's state costs a rendered transcript; it never costs the
+  conversation. That is why `detachSession` keeps `sessionFile` and why a
+  restart re-attaches to the same session rather than starting a new one.
+- Approvals are off unless `PI_BRIDGE_REQUIRE_APPROVAL=1`, matching the
+  permissive default every other bridge here uses. When on, every timeout,
+  disconnect, closing session and unparseable answer **denies**. A turn that
+  ends with a call still parked denies it too — leaving it unanswered wedges the
+  turn and, with it, the environment's activity state.
+- Project-local `.pi/` resources are opt-in through
+  `PI_BRIDGE_PROJECT_RESOURCES`, and only the container launcher opts in. A Pi
+  extension is arbitrary TypeScript this process would execute, so cloning a
+  repository must not be enough to run its code — the same boundary
+  `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge.
+- Pi ships no MCP client and no plan/build mode. Both are things an extension
+  adds, so the composer reports `mode: false` and extension discovery reports an
+  empty MCP list rather than an error. Offering either would be a control
+  nothing can honour.
+- The SDK and the pinned `pi` binary are the same program, so they are pinned to
+  the same version and `tests/unit/version-drift.test.ts` enforces it — a bump
+  that moves one and not the other gives a user two different agents behind one
+  platform name.
+
 ### Cursor bridges
 
 Cursor sessions can be served by either of two bridge processes. The platform,
@@ -538,17 +609,19 @@ Runtimes:
   published checksum. The agent CLIs need genuine Node, not bun's node shim.
 
 Agent CLIs, one per supported platform:
-- Claude Code (`claude`), Codex (`codex`), and OpenCode (`opencode`), whose
-  runtime paths the backend reads from `CLAUDE_CLI_PATH`, `CODEX_CLI_PATH`, and
-  `OPENCODE_CLI_PATH`.
+- Claude Code (`claude`), Codex (`codex`), OpenCode (`opencode`), and Pi
+  (`pi`), whose runtime paths the backend reads from `CLAUDE_CLI_PATH`,
+  `CODEX_CLI_PATH`, `OPENCODE_CLI_PATH`, and `PI_CLI_PATH`.
 - Cursor Agent (`cursor`/`cursor-agent`) and Grok Build (`grok`), both
-  downloaded as hash-verified pinned artifacts.
-- The image build fails immediately if any of the five is not runnable, and if
+  downloaded as hash-verified pinned artifacts. Pi is downloaded the same way,
+  as a bundle rather than a single file.
+- The image build fails immediately if any of the six is not runnable, and if
   Codex did not vendor `codex-code-mode-host` beside its binary.
 
 Prebuilt bridge servers, so a container never builds them at runtime:
-- `/opt/claude-bridge`, `/opt/codex-bridge`, and `/opt/acp-bridge` (the shared
-  ACP HTTP bridge used by Cursor Agent and Grok Build).
+- `/opt/claude-bridge`, `/opt/codex-bridge`, `/opt/pi-bridge`, and
+  `/opt/acp-bridge` (the shared ACP HTTP bridge used by Cursor Agent and Grok
+  Build).
 
 Developer tooling:
 - Git, GitHub CLI (`gh`), git-delta, and SSH with GitHub/GitLab/Bitbucket host
@@ -620,7 +693,10 @@ else is rejected outright. `full` mode skips the firewall entirely.
 - Everything else comes from the environment's `ALLOWED_DOMAINS`, which the
   backend builds from the per-environment or global `allowedDomains` plus the
   hosts the enabled agent platforms require (`requiredAgentNetworkDomains`
-  re-adds Cursor's and Grok's hosts only when those platforms are enabled).
+  re-adds Cursor's, Grok's and Pi's hosts only when those platforms are
+  enabled). Pi's list is necessarily partial: it fronts the user's own model
+  providers, so a self-hosted endpoint or a regional mirror is a host only the
+  user knows and belongs in `allowedDomains` rather than being guessed at.
 - A new install persists `DEFAULT_ALLOWED_DOMAINS`
   (`apps/backend/src/core/storage-shared-core.ts`): GitHub, npm, Bun, the
   Anthropic API, Sentry/Statsig, the VS Code marketplace, Context7, and

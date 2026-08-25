@@ -5,6 +5,7 @@ export const AGENT_PLATFORMS = Object.freeze([
   "cursor",
   "grok",
   "opencode",
+  "pi",
 ] as const);
 
 export type AgentPlatform = (typeof AGENT_PLATFORMS)[number];
@@ -15,6 +16,7 @@ export const AGENT_PLATFORM_LABELS: Readonly<Record<AgentPlatform, string>> = Ob
   cursor: "Cursor Agent",
   grok: "Grok Build",
   opencode: "OpenCode",
+  pi: "Pi",
 });
 
 /** Existing installations keep their pre-selection behavior after upgrading. */

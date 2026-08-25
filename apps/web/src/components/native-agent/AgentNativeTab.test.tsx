@@ -5,7 +5,7 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
+import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
   AGENT_INTERACTION_CONTRACT_VERSION,
   type AgentInteractionRequest,
@@ -144,7 +144,7 @@ const stopNativeAgentSessionMock = mock(async () =>
   }),
 );
 const defaultProjection = async (input: {
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: AgentPlatform;
   environmentId: string;
   messageLimit?: number;
 }): Promise<NativeAgentSessionProjection<NativeMessage>> => ({
@@ -226,7 +226,7 @@ let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
 
 beforeEach(() => {
   configSnapshot = useConfigStore.getState().config;
-  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
+  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
   useEnvironmentStore.setState({
     environments: [
       {

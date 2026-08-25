@@ -723,12 +723,18 @@ describe("agent extension discovery commands", () => {
       "cursor",
       "grok",
       "opencode",
+      "pi",
     ]);
     for (const catalog of catalogs) {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);
-      expect(catalog.mcpError).toBeTruthy();
       expect(catalog.pluginError).toBeTruthy();
+      // Pi ships no MCP client of its own — MCP is something one of its
+      // packages adds — so an unreachable environment has nothing to fail at.
+      // Reporting an error there would tell the user something is broken when
+      // the feature simply does not exist.
+      if (catalog.agent === "pi") expect(catalog.mcpError).toBeUndefined();
+      else expect(catalog.mcpError).toBeTruthy();
     }
   });
 

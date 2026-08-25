@@ -7,6 +7,7 @@ import {
   resolveActionDefaults,
   resolveAgentPlatformSettings,
 } from "@orkestrator/protocol/agent-settings";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   useUIStore,
@@ -390,7 +391,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // Handler for code review
   const handleReview = useCallback(
     (
-      agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok",
+      agentOverride?: AgentPlatform,
       launchOptions?: {
         agentLaunchMode?: AgentLaunchModeOverride;
         initialAgentModel?: string;
@@ -1080,7 +1081,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // Handler for PR creation - launches agent tab with PR workflow prompt
   const handleCreatePR = useCallback(
     (
-      agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok",
+      agentOverride?: AgentPlatform,
       launchOptions?: {
         agentLaunchMode?: AgentLaunchModeOverride;
         initialAgentModel?: string;
@@ -1246,7 +1247,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   // Handler for pushing changes to an existing PR - launches agent tab with commit/push prompt
   const handlePushChanges = useCallback(
-    (agentOverride?: "claude" | "opencode" | "codex" | "cursor" | "grok") => {
+    (agentOverride?: AgentPlatform) => {
       if (!createTab || !canCreateTab) return;
 
       const pushPrompt = createPushChangesPrompt();
@@ -1270,7 +1271,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   // Handler for resolving merge conflicts - launches agent tab with conflict resolution prompt
   const handleResolveConflicts = useCallback(
     async (options?: {
-      agent?: "claude" | "opencode" | "codex" | "cursor" | "grok";
+      agent?: AgentPlatform;
       launch?: {
         agentLaunchMode?: AgentLaunchModeOverride;
         initialAgentModel?: string;

@@ -255,6 +255,23 @@ describe("paneLayoutStore tab cleanup", () => {
     );
   });
 
+  test("closing a Pi terminal tab delegates PTY teardown to the backend", () => {
+    seedSingleTabEnvironment("env-pi", "container-pi", { id: "pi-tab", type: "pi" });
+    const sessionKey = createTerminalSessionKey("container-pi", "pi-tab", "env-pi");
+    useTerminalSessionStore.getState().setSession(sessionKey, { sessionId: "pty-pi" });
+
+    usePaneLayoutStore.getState().removeTab("default", "pi-tab", "env-pi");
+
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-pi",
+      tabId: "pi-tab",
+      kind: "terminal",
+      sessionId: "pty-pi",
+      persistentSessionId: undefined,
+    });
+    expect(useTerminalSessionStore.getState().sessions.has(sessionKey)).toBe(false);
+  });
+
   test("closing a Claude tmux tab records backend teardown intent", () => {
     seedSingleTabEnvironment("env-local", null, { id: "tab-tmux", type: "claude-tmux" });
 
@@ -495,6 +512,27 @@ describe("paneLayoutStore tab cleanup", () => {
     expect(useClaudeStore.getState().sessions.has(claudeKey)).toBe(false);
     expect(useCodexStore.getState().sessions.has(codexKey)).toBe(false);
     expect(useOpenCodeStore.getState().sessions.has(openCodeKey)).toBe(false);
+  });
+
+  test("closing a Pi native tab delegates Pi cleanup to the backend", () => {
+    seedSingleTabEnvironment("env-pi-native", null, {
+      id: "pi-native",
+      type: "agent-native",
+      nativeAgentData: {
+        platform: "pi",
+        environmentId: "env-pi-native",
+        sessionId: "pi-session",
+      },
+    });
+
+    usePaneLayoutStore.getState().removeTab("default", "pi-native", "env-pi-native");
+
+    expect(teardownTab).toHaveBeenCalledWith({
+      environmentId: "env-pi-native",
+      tabId: "pi-native",
+      kind: "pi-native",
+      sessionId: "pi-session",
+    });
   });
 
   test("reset cleans up all tab resources for the environment", () => {

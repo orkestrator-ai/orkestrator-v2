@@ -417,7 +417,7 @@ export async function setEnvironmentInitialPrompt(
   });
 }
 
-export type AgentExtensionId = "claude" | "codex" | "cursor" | "grok" | "opencode";
+export type AgentExtensionId = "claude" | "codex" | "cursor" | "grok" | "opencode" | "pi";
 
 export interface AgentExtensionItem {
   name: string;

@@ -4,6 +4,7 @@ export const PINNED_TOOLCHAIN_VERSIONS = {
   cursor: "2026.08.11-e8db854",
   grok: "1.0.3",
   opencode: "1.18.16",
+  pi: "0.84.3",
 } as const;
 
 export type ToolchainName = keyof typeof PINNED_TOOLCHAIN_VERSIONS;
@@ -105,6 +106,8 @@ const GROK_DOWNLOAD_HOSTS = ["x.ai", "storage.googleapis.com", "storage.cloud.go
 // asserts the two stay in step.
 export const CODEX_RELEASE_BASE =
   `https://github.com/openai/codex/releases/download/rust-v${PINNED_TOOLCHAIN_VERSIONS.codex}` as const;
+export const PI_RELEASE_BASE =
+  `https://github.com/earendil-works/pi/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.pi}` as const;
 export const OPENCODE_RELEASE_BASE =
   `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}` as const;
 
@@ -604,6 +607,118 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       fileName: "grok",
       size: 165_768_512,
       sha256: "2a7d46dea3fbed067e4072258b835d401e017d6848dc996279f0fb3d668a0961",
+    },
+  },
+  {
+    name: "pi",
+    version: PINNED_TOOLCHAIN_VERSIONS.pi,
+    platform: "darwin",
+    architecture: "arm64",
+    archive: {
+      format: "tar.gz",
+      url: `${PI_RELEASE_BASE}/pi-darwin-arm64.tar.gz`,
+      entryPath: "pi/pi",
+      // Pi ships a launcher beside the themes, docs, examples and a native
+      // helper module it loads at runtime, so the whole tree is retained and
+      // verified as one digest rather than reduced to a file allowlist.
+      bundleRoot: "pi/",
+      bundleIntegrity: {
+        fileCount: 213,
+        totalSize: 8_754_470,
+        sha256: "8c18e265719e274b80bf259ecf056cdee9a695cfb370cd186f1c0c70eb709c18",
+      },
+      size: 30_919_980,
+      sha256: "0120c9f99ea05fe801e6e7c2c9d91dd65636563ca0803711b37b9f32920d4b63",
+      allowedHosts: GITHUB_RELEASE_HOSTS,
+    },
+    executable: {
+      fileName: "pi",
+      size: 74_393_570,
+      sha256: "e844dc14981fc70c7f4c45c5ba5f8c237199891bd8520d1ed21fe78be6479dac",
+    },
+  },
+  {
+    name: "pi",
+    version: PINNED_TOOLCHAIN_VERSIONS.pi,
+    platform: "darwin",
+    architecture: "x64",
+    archive: {
+      format: "tar.gz",
+      url: `${PI_RELEASE_BASE}/pi-darwin-x64.tar.gz`,
+      entryPath: "pi/pi",
+      // Pi ships a launcher beside the themes, docs, examples and a native
+      // helper module it loads at runtime, so the whole tree is retained and
+      // verified as one digest rather than reduced to a file allowlist.
+      bundleRoot: "pi/",
+      bundleIntegrity: {
+        fileCount: 213,
+        totalSize: 8_763_174,
+        sha256: "cb011b361cdbe200aa626a0602c499b8589724c7f7ce35d74636f6688adddd63",
+      },
+      size: 33_434_213,
+      sha256: "b99706b3254faaf3695395ecb69cb7e1f4d4822bd3f832e6d1f2636d896b6bde",
+      allowedHosts: GITHUB_RELEASE_HOSTS,
+    },
+    executable: {
+      fileName: "pi",
+      size: 80_035_920,
+      sha256: "9b060399789096551d069142cf903dccfb8205642bb4c162e5b7509a2049fc43",
+    },
+  },
+  {
+    name: "pi",
+    version: PINNED_TOOLCHAIN_VERSIONS.pi,
+    platform: "linux",
+    architecture: "arm64",
+    archive: {
+      format: "tar.gz",
+      url: `${PI_RELEASE_BASE}/pi-linux-arm64.tar.gz`,
+      entryPath: "pi/pi",
+      // Pi ships a launcher beside the themes, docs, examples and a native
+      // helper module it loads at runtime, so the whole tree is retained and
+      // verified as one digest rather than reduced to a file allowlist.
+      bundleRoot: "pi/",
+      bundleIntegrity: {
+        fileCount: 212,
+        totalSize: 8_540_670,
+        sha256: "eee901de43c3600cc299ee1ce7bcb5d81a1d469d22e67556cb86b9124888fd3c",
+      },
+      size: 42_521_548,
+      sha256: "e7cd48cd6f64b708e8459a890882b1007332f6e6b876fe1fd5c5203abd0addb7",
+      allowedHosts: GITHUB_RELEASE_HOSTS,
+    },
+    executable: {
+      fileName: "pi",
+      size: 104_507_536,
+      sha256: "0869b9310d3c3a7f9c9e5f604125edbdad81a97af20346fb40eb690390329e22",
+    },
+  },
+  {
+    name: "pi",
+    version: PINNED_TOOLCHAIN_VERSIONS.pi,
+    platform: "linux",
+    architecture: "x64",
+    archive: {
+      format: "tar.gz",
+      url: `${PI_RELEASE_BASE}/pi-linux-x64.tar.gz`,
+      entryPath: "pi/pi",
+      // Pi ships a launcher beside the themes, docs, examples and a native
+      // helper module it loads at runtime, so the whole tree is retained and
+      // verified as one digest rather than reduced to a file allowlist.
+      bundleRoot: "pi/",
+      bundleIntegrity: {
+        fileCount: 212,
+        totalSize: 8_635_094,
+        sha256: "f4bb2dc40396d27b52ab7b6493a8a4d2904fb86a2b8989add768af5203242308",
+      },
+      size: 42_458_773,
+      sha256: "6f8bb67c21bc6b8a8a106d354f56d7fd4a190a3cd8ad3a32db45f6d281a5d008",
+      allowedHosts: GITHUB_RELEASE_HOSTS,
+    },
+    executable: {
+      fileName: "pi",
+      size: 104_487_040,
+      sha256: "ca858fde375ab91531353b22fac6ebdf29c0a153efe754f5f9b8a72a7423ed08",
     },
   },
 ] as const;

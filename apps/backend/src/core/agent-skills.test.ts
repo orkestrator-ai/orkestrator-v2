@@ -253,6 +253,23 @@ describe("scanAgentSkills", () => {
     expect(scan.roots.some((root) => root.label === "~/.grok/skills")).toBe(true);
   });
 
+  test("Pi reads its agent-directory skills plus the shared roots", async () => {
+    await writeSkill(join(home, ".pi", "agent", "skills"), "from-pi");
+    await writeSkill(join(home, ".pi", "skills"), "wrong-pi-root");
+    await writeSkill(join(home, ".agents", "skills"), "from-agents");
+    await writeSkill(join(home, ".claude", "skills"), "from-claude");
+
+    const scan = await scanAgentSkills("pi");
+
+    expect(scan.skills.map((skill) => [skill.name, skill.scope])).toEqual([
+      ["from-agents", "shared"],
+      ["from-claude", "shared"],
+      ["from-pi", "user"],
+    ]);
+    expect(scan.roots.some((root) => root.label === "~/.pi/agent/skills")).toBe(true);
+    expect(scan.roots.some((root) => root.label === "~/.pi/skills")).toBe(false);
+  });
+
   test("collapses one file reachable through two OpenCode roots", async () => {
     const shared = join(home, ".agents", "skills");
     await writeSkill(shared, "dual");

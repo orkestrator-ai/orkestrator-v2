@@ -294,7 +294,7 @@ function getEnvironmentPaneState(
   );
 }
 
-const TERMINAL_TAB_TYPES = new Set(["plain", "claude", "opencode", "codex", "root"]);
+const TERMINAL_TAB_TYPES = new Set(["plain", "claude", "opencode", "codex", "pi", "root"]);
 
 function cleanupTerminalTab(envId: string, containerId: string | null, tabId: string) {
   const sessionStore = useTerminalSessionStore.getState();
@@ -372,9 +372,9 @@ function cleanupCodexNativeTab(envId: string, tabId: string) {
     .catch((err) => console.debug("[PaneLayout] Codex teardown remains pending:", err));
 }
 
-function cleanupAcpNativeTab(envId: string, tab: TabInfo) {
+function cleanupSharedNativeTab(envId: string, tab: TabInfo) {
   const data = getNativeAgentData(tab);
-  if (data?.platform !== "cursor" && data?.platform !== "grok") return;
+  if (data?.platform !== "cursor" && data?.platform !== "grok" && data?.platform !== "pi") return;
   void backend
     .teardownTab({
       environmentId: envId,
@@ -382,7 +382,7 @@ function cleanupAcpNativeTab(envId: string, tab: TabInfo) {
       kind: `${data.platform}-native`,
       sessionId: data.sessionId,
     })
-    .catch((err) => console.debug("[PaneLayout] ACP teardown remains pending:", err));
+    .catch((err) => console.debug("[PaneLayout] shared native teardown remains pending:", err));
 }
 
 function cleanupClaudeTmuxTab(envId: string, tabId: string) {
@@ -415,7 +415,8 @@ function cleanupTabResources(envId: string, containerId: string | null, tab: Tab
     if (platform === "claude") cleanupClaudeNativeTab(envId, tab.id);
     else if (platform === "opencode") cleanupOpenCodeNativeTab(envId, tab.id);
     else if (platform === "codex") cleanupCodexNativeTab(envId, tab.id);
-    else if (platform === "cursor" || platform === "grok") cleanupAcpNativeTab(envId, tab);
+    else if (platform === "cursor" || platform === "grok" || platform === "pi")
+      cleanupSharedNativeTab(envId, tab);
     return;
   }
 

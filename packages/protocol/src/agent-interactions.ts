@@ -76,6 +76,7 @@ export const AGENT_INTERACTION_PROVIDERS = [
   "codex",
   "cursor",
   "grok",
+  "pi",
 ] as const;
 export type AgentInteractionProvider = (typeof AGENT_INTERACTION_PROVIDERS)[number];
 

@@ -9,19 +9,23 @@ interface AgentModelCatalogState {
    */
   cursorModels: AgentModel[];
   grokModels: AgentModel[];
+  piModels: AgentModel[];
   setAcpModels: (models: AgentModel[]) => void;
 }
 
 export const useAgentModelCatalogStore = create<AgentModelCatalogState>((set) => ({
   cursorModels: [],
   grokModels: [],
+  piModels: [],
   setAcpModels: (models) => {
     const cursorModels = models.filter((model) => model.platform === "cursor");
     const grokModels = models.filter((model) => model.platform === "grok");
-    if (cursorModels.length === 0 && grokModels.length === 0) return;
+    const piModels = models.filter((model) => model.platform === "pi");
+    if (cursorModels.length === 0 && grokModels.length === 0 && piModels.length === 0) return;
     set((state) => ({
       ...(cursorModels.length > 0 ? { cursorModels } : { cursorModels: state.cursorModels }),
       ...(grokModels.length > 0 ? { grokModels } : { grokModels: state.grokModels }),
+      ...(piModels.length > 0 ? { piModels } : { piModels: state.piModels }),
     }));
   },
 }));

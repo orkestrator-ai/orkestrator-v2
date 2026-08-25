@@ -7,7 +7,7 @@
  */
 export type JsonSchema = Record<string, unknown>;
 
-export type StructuredOutputProvider = "claude" | "codex" | "opencode" | "cursor" | "grok";
+export type StructuredOutputProvider = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 
 export type StructuredOutputFailureCode =
   | "schema_retry_exhausted"
@@ -94,7 +94,8 @@ export function isStructuredOutputResult(value: unknown): value is StructuredOut
     result.provider !== "codex" &&
     result.provider !== "opencode" &&
     result.provider !== "cursor" &&
-    result.provider !== "grok"
+    result.provider !== "grok" &&
+    result.provider !== "pi"
   ) {
     return false;
   }

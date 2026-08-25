@@ -46,6 +46,7 @@ type NativeDraftNamespace =
   | "opencode"
   | "cursor"
   | "grok"
+  | "pi"
   | "agent-native";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,7 +95,8 @@ function effectiveAttachmentNamespace(
     platform === "codex" ||
     platform === "opencode" ||
     platform === "cursor" ||
-    platform === "grok"
+    platform === "grok" ||
+    platform === "pi"
     ? platform
     : namespace;
 }

@@ -1066,8 +1066,8 @@ describe("useNativeComposeDraftPersistence", () => {
     hook.unmount();
   });
 
-  test("restores both attachment kinds when the stored platform accepts them", async () => {
-    const sessionKey = "env-neutral:tab-attachments-claude";
+  test("restores both attachment kinds when the stored Pi platform accepts them", async () => {
+    const sessionKey = "env-neutral:tab-attachments-pi";
     const file = {
       id: "a",
       type: "file" as const,
@@ -1088,7 +1088,7 @@ describe("useNativeComposeDraftPersistence", () => {
         text: "review these",
         mentions: [],
         attachments: [file, image],
-        metadata: { platform: "claude" },
+        metadata: { platform: "pi" },
       },
       updatedAt: "2026-08-14T00:00:00.000Z",
       revision: 1,

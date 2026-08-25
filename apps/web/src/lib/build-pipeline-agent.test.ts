@@ -196,6 +196,19 @@ describe("resolveAgentModeSettings", () => {
       defaultAgent: "grok",
       platforms: { grok: { mode: "terminal" } },
     });
+
+    expect(
+      resolveAgentModeSettings("pi", {
+        claudeMode: "native",
+        opencodeMode: "native",
+        codexMode: "native",
+        grokMode: "native",
+        piMode: "terminal",
+      }),
+    ).toEqual({
+      defaultAgent: "pi",
+      platforms: { pi: { mode: "terminal" } },
+    });
   });
 });
 
@@ -224,10 +237,18 @@ describe("getBuildEnvironmentAgentSettings", () => {
     });
   });
 
+  test("returns Pi native settings and names Pi as the launch agent", () => {
+    expect(getBuildEnvironmentAgentSettings("pi")).toEqual({
+      defaultAgent: "pi",
+      platforms: { pi: { mode: "native" } },
+      launchAgent: "pi",
+    });
+  });
+
   // The durable intent exists so a mobile page eviction cannot lose the launch.
   // That risk is identical for every agent, so none of them may opt out.
   test("names a launch agent for every agent type", () => {
-    for (const agentType of ["claude", "codex", "cursor", "grok", "opencode"] as const) {
+    for (const agentType of ["claude", "codex", "cursor", "grok", "opencode", "pi"] as const) {
       expect(getBuildEnvironmentAgentSettings(agentType).launchAgent).toBe(agentType);
     }
   });

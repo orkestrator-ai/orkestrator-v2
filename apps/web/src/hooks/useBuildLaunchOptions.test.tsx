@@ -36,7 +36,7 @@ describe("useBuildLaunchOptions", () => {
     getCachedOpenCodeModelCatalogMock.mockImplementation(async () => null);
     getOpencodeModelPreferencesMock.mockImplementation(async () => undefined);
     useConfigStore.setState({ config: baseConfig });
-    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
+    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
   });
 
   test("resolves OpenCode favorite model refs to ids, deduplicated and in order", async () => {
@@ -150,7 +150,7 @@ describe("useBuildLaunchOptions", () => {
     expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["default"]);
   });
 
-  test("reacts to the shared backend-hydrated Cursor catalogue", async () => {
+  test("reacts to shared backend-hydrated Cursor and Pi catalogues", async () => {
     const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
     await flushPromises();
 
@@ -162,10 +162,16 @@ describe("useBuildLaunchOptions", () => {
           id: "composer-2.5",
           label: "Composer 2.5",
         },
+        {
+          platform: "pi",
+          id: "anthropic/claude-pi",
+          label: "Claude Pi",
+        },
       ]);
     });
 
     expect(result.current.catalog.cursor?.map((model) => model.id)).toEqual(["composer-2.5"]);
+    expect(result.current.catalog.pi?.map((model) => model.id)).toEqual(["anthropic/claude-pi"]);
   });
 
   test("ignores a cached catalog snapshot that belongs to another project", async () => {

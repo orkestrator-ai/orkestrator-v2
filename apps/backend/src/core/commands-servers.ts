@@ -9,6 +9,7 @@ import {
   CURSOR_ACP_BRIDGE_PORT,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   GROK_ACP_BRIDGE_PORT,
+  PI_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
   resolveCodexMaxConcurrentThreads,
   ORKESTRATOR_AGENT_MCP_SERVER_NAME,
@@ -52,6 +53,7 @@ import {
   localOpenCodeServerPasswords,
   localCursorBridgeTokens,
   localGrokBridgeTokens,
+  localPiBridgeTokens,
   localCursorCredentialFingerprints,
   openCodeAgentToolsConfigurations,
   configuredOpenCodeAgentTools,
@@ -149,7 +151,7 @@ export async function waitForLocalServerStartup(
 
 export function getBridgePath(
   context: CommandContext,
-  bridgeName: "claude-bridge" | "codex-bridge" | "acp-bridge" | "cursor-bridge",
+  bridgeName: "claude-bridge" | "codex-bridge" | "acp-bridge" | "pi-bridge" | "cursor-bridge",
 ): string {
   const devPath = path.join(context.appRoot, "bridges", bridgeName);
   if (process.env.NODE_ENV !== "production" && existsSync(devPath)) return devPath;
@@ -192,6 +194,7 @@ export function localBridgeTokens(kind: LocalServerKind): Map<string, string> {
   if (kind === "claude") return localClaudeBridgeTokens;
   if (kind === "cursor") return localCursorBridgeTokens;
   if (kind === "grok") return localGrokBridgeTokens;
+  if (kind === "pi") return localPiBridgeTokens;
   return localOpenCodeServerPasswords;
 }
 
@@ -203,6 +206,7 @@ export function localServerPort(
   if (kind === "claude") return environment?.localClaudePort;
   if (kind === "codex") return environment?.localCodexPort;
   if (kind === "cursor") return environment?.localCursorPort;
+  if (kind === "pi") return environment?.localPiPort;
   return environment?.localGrokPort;
 }
 
@@ -222,6 +226,7 @@ export const CONTAINER_BRIDGE_PEEK: Record<
   codex: { containerPort: CODEX_BRIDGE_PORT, tokenFile: "/tmp/codex-bridge-token" },
   cursor: { containerPort: CURSOR_ACP_BRIDGE_PORT, tokenFile: "/tmp/cursor-acp-bridge-token" },
   grok: { containerPort: GROK_ACP_BRIDGE_PORT, tokenFile: "/tmp/grok-acp-bridge-token" },
+  pi: { containerPort: PI_BRIDGE_PORT, tokenFile: "/tmp/pi-bridge-token" },
   opencode: {
     containerPort: OPENCODE_SERVER_PORT,
     tokenFile: "/tmp/opencode-server-password",
@@ -255,7 +260,7 @@ export async function peekLocalAgentBridge(
     "/global/health",
     kind === "opencode"
       ? openCodeHealthHeaders(authToken)
-      : kind === "cursor" || kind === "grok"
+      : kind === "cursor" || kind === "grok" || kind === "pi"
         ? bearerBridgeHeaders(authToken)
         : undefined,
   );
@@ -283,17 +288,24 @@ export async function peekContainerAgentBridge(
     "/global/health",
     kind === "opencode"
       ? openCodeHealthHeaders(authToken)
-      : kind === "cursor" || kind === "grok"
+      : kind === "cursor" || kind === "grok" || kind === "pi"
         ? bearerBridgeHeaders(authToken)
         : undefined,
   );
   return healthy ? { hostPort, authToken } : null;
 }
 
+/**
+ * Read one bridge's live model catalogue for the durable cache.
+ *
+ * Named for the ACP bridges it was written against, and kept for Pi too: the
+ * three serve `/global/models` identically behind a bearer token, so a second
+ * copy of this would be the same function with one string changed.
+ */
 export async function fetchAcpNormalizedModels(
   environment: Environment,
   context: CommandContext,
-  kind: "cursor" | "grok",
+  kind: "cursor" | "grok" | "pi",
 ): Promise<AgentModel[]> {
   const bridge =
     environment.environmentType === "local"
@@ -343,7 +355,7 @@ export async function fetchAcpNormalizedModels(
           label: typeof model.label === "string" ? model.label : model.id,
           ...(typeof model.providerLabel === "string"
             ? { providerLabel: model.providerLabel }
-            : { providerLabel: kind === "cursor" ? "Cursor" : "Grok" }),
+            : { providerLabel: AGENT_PLATFORM_LABELS[kind] }),
           ...(typeof model.description === "string" ? { description: model.description } : {}),
           ...(reasoning && reasoning.length > 0 ? { reasoning } : {}),
           ...(typeof model.defaultReasoningId === "string"
@@ -351,6 +363,15 @@ export async function fetchAcpNormalizedModels(
             : {}),
           supportsSpeed: model.supportsSpeed === true,
           supportsMode: model.supportsMode === true,
+          // Carried through because the shared usage meter reads it, and a
+          // platform that publishes a per-model context window has no other way
+          // to reach the cache the launch dialogs read before a bridge exists.
+          ...(typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
+            ? { contextWindow: model.contextWindow }
+            : {}),
+          ...(typeof model.supportsImageInput === "boolean"
+            ? { supportsImageInput: model.supportsImageInput }
+            : {}),
         },
       ];
     });
@@ -703,7 +724,7 @@ export async function startLocalServerUnlocked(
     const healthHeaders = authToken
       ? kind === "opencode"
         ? openCodeHealthHeaders(authToken)
-        : kind === "cursor" || kind === "grok"
+        : kind === "cursor" || kind === "grok" || kind === "pi"
           ? bearerBridgeHeaders(authToken)
           : undefined
       : undefined;
@@ -804,6 +825,31 @@ export async function startLocalServerUnlocked(
     );
     // Forwarded to app-server as clientInfo.version.
     env.ORKESTRATOR_VERSION = APP_VERSION;
+  } else if (kind === "pi") {
+    command = resolveBunBinary(context);
+    cwd = getBridgePath(context, "pi-bridge");
+    // Pi's own configuration directory holds `auth.json`, which is the user's
+    // provider credentials. A local worktree runs as the user, so the default
+    // `~/.pi/agent` is exactly the one they signed in with — leaving it unset
+    // is what makes `pi` in a terminal tab and a Pi native tab share an
+    // account. Containers are handed an explicit path instead.
+    delete env.PI_AGENT_DIR;
+    env.PI_SESSION_DIR = path.join(
+      context.storage.getDataDir(),
+      "pi-bridge-sessions",
+      createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
+    );
+    env.PI_BRIDGE_STATE_DIR = path.join(
+      context.storage.getDataDir(),
+      "pi-bridge-state",
+      createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
+    );
+    // A local worktree is the user's own checkout, and `.pi/` in it holds
+    // extensions that are arbitrary TypeScript the bridge process would run.
+    // Pinned explicitly after inheriting process.env so an ambient variable
+    // cannot bypass the local trust boundary; the container launcher is the
+    // only caller that opts in.
+    env.PI_BRIDGE_PROJECT_RESOURCES = "0";
   } else if (kind === "cursor" && (await cursorSdkBridgeEnabled(context))) {
     useCursorSdkBridge = true;
     command = resolveBunBinary(context);
@@ -896,9 +942,11 @@ export async function startLocalServerUnlocked(
           ? "CLAUDE_BRIDGE_TOKEN"
           : kind === "opencode"
             ? "OPENCODE_SERVER_PASSWORD"
-            : useCursorSdkBridge
-              ? "CURSOR_BRIDGE_TOKEN"
-              : "ACP_BRIDGE_TOKEN"
+            : kind === "pi"
+              ? "PI_BRIDGE_TOKEN"
+              : useCursorSdkBridge
+                ? "CURSOR_BRIDGE_TOKEN"
+                : "ACP_BRIDGE_TOKEN"
     ] = authToken;
     if (kind === "opencode") env.OPENCODE_SERVER_USERNAME = "opencode";
     tokens.set(environmentId, authToken);
@@ -946,7 +994,7 @@ export async function startLocalServerUnlocked(
       authToken
         ? kind === "opencode"
           ? openCodeHealthHeaders(authToken)
-          : kind === "cursor" || kind === "grok"
+          : kind === "cursor" || kind === "grok" || kind === "pi"
             ? bearerBridgeHeaders(authToken)
             : undefined
         : undefined,

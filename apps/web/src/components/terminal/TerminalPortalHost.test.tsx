@@ -282,7 +282,7 @@ describe("TerminalPortalHost", () => {
     });
   });
 
-  test.each(["cursor", "grok"] as const)(
+  test.each(["cursor", "grok", "pi"] as const)(
     "mounts %s CLI tabs as persistent terminals",
     async (tabType) => {
       usePaneLayoutStore.setState((state) => {

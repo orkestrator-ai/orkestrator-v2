@@ -75,7 +75,14 @@ interface EnvironmentSettingsDialogProps {
   onRestart?: (environmentId: string) => Promise<void>;
 }
 
-const AGENT_ORDER: backend.AgentExtensionId[] = ["claude", "codex", "cursor", "grok", "opencode"];
+const AGENT_ORDER: backend.AgentExtensionId[] = [
+  "claude",
+  "codex",
+  "cursor",
+  "grok",
+  "opencode",
+  "pi",
+];
 
 const AGENT_EXTENSION_COPY: Record<
   backend.AgentExtensionId,
@@ -109,6 +116,11 @@ const AGENT_EXTENSION_COPY: Record<
     label: "OpenCode",
     mcpConfig: "opencode.json(c) or ~/.config/opencode/opencode.json(c)",
     pluginConfig: "opencode.json(c) or ~/.config/opencode/opencode.json(c)",
+  },
+  pi: {
+    label: "Pi",
+    mcpConfig: "Pi does not include a built-in MCP client",
+    pluginConfig: ".pi/ or ~/.pi/agent",
   },
 };
 

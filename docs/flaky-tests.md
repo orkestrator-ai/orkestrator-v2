@@ -164,6 +164,17 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 - **Fix:** Track transcript-read and action failures separately; transcript polling clears only transcript failures, while the action failure remains visible until another action or tab identity change. The one exception is a gone workflow or reviewer, which is terminal for the view and displaces the stale action failure rather than hiding why polling stopped. The regression test now forces a successful refresh after the rejected stop and asserts the action error remains; a sibling test pins the gone-workflow exception.
 - **Verification:** The owning component test and the web typecheck were rerun for this change, followed by the aggregate suite. A real-browser pass over the reviewer tab has not been run against this fix and is still outstanding.
 
+## `Pi ACP background discovery > does not re-adopt a settled child's directory for the next unnamed launch` (`bridges/acp-bridge/src/acp-cursor-background.test.ts:1200`)
+
+- **Status:** open
+- **Date observed:** 2026-08-25
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the bridges group used two Bun workers.
+- **Failure:** The lookup for the `cursor-subagent-2` transcript part returned `undefined`, so `toMatchObject({ agentState: "active" })` failed.
+- **Suite counts:** complete suite: 14,821 passed, 13 skipped, 2 failed; bridges group: 2,892 passed, 11 skipped, 1 failed.
+- **Isolated rerun:** `bun test bridges/acp-bridge/src/acp-cursor-background.test.ts --only-failures` → 34 passed, 0 failed, in 2.67 seconds.
+- **Hypothesis:** The test confirms `working` activity with five immediate probes and then reads the transcript once. Child discovery and transcript projection are separate asynchronous updates, so aggregate bridge contention can expose `working` before the new child card has been projected. A recurrence should poll for the `cursor-subagent-2` part with the existing bounded diagnostic rather than weakening its required `active` state.
+
 ## 2026-08-16 resolution sweep
 
 The remaining open entries were reconciled against their current owning files

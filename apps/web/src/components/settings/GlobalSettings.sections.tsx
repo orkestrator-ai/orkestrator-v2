@@ -1708,6 +1708,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     opencode: renderOpenCode,
     codex: renderCodex,
     grok: () => renderPlatform("grok"),
+    pi: () => renderPlatform("pi"),
     terminal: renderTerminal,
     network: renderNetwork,
     "web-client": renderWebClient,

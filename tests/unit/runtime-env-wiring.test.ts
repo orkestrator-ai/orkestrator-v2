@@ -213,8 +213,31 @@ describe("container runtime environment wiring", () => {
     expect(backend).not.toContain('path.join(home, ".grok"), "/home/node/.grok"');
   });
 
+  /**
+   * The slice of a script between two markers.
+   *
+   * Allowlist assertions are per-agent, and the agents' allowlists overlap. A
+   * whole-file regex would let one agent's entry satisfy — or violate —
+   * another's rule.
+   */
+  function section(source: string, start: string, end: string): string {
+    const from = source.indexOf(start);
+    expect(from).toBeGreaterThanOrEqual(0);
+    const to = source.indexOf(end, from);
+    expect(to).toBeGreaterThan(from);
+    return source.slice(from, to);
+  }
+
   test("container startup copies only bounded Claude configuration state", () => {
-    const entrypoint = read("docker/entrypoint.sh");
+    // Scoped to the Claude block rather than the whole file. Every agent has its
+    // own allowlist and they legitimately overlap — Pi copies a `settings.json`
+    // that nothing later overwrites — so a whole-file assertion would read one
+    // agent's allowlist as another's.
+    const entrypoint = section(
+      read("docker/entrypoint.sh"),
+      "if [ -d /claude-config ]; then",
+      "# Create credentials.json from the host's Claude Code credential.",
+    );
 
     for (const allowlisted of [
       "CLAUDE.md",
@@ -248,8 +271,62 @@ describe("container runtime environment wiring", () => {
     }
     // settings.json is rewritten below with the container's bypass-permissions
     // settings, so copying the host copy first was immediately discarded.
-    expect(entrypoint).toContain('cat > "$HOME/.claude/settings.json"');
+    expect(read("docker/entrypoint.sh")).toContain('cat > "$HOME/.claude/settings.json"');
     expect(entrypoint).not.toMatch(/^[ \t]*settings\.json[ \t]*\\?$/m);
+  });
+
+  test("every agent home the image pre-creates is owned by the node user", () => {
+    // `mkdir -p` in this layer runs as root, so a directory left out of the
+    // adjacent `chown` is root-owned at runtime — and the entrypoint, the
+    // bridges and the agents all run as `node`. For Pi that meant credentials
+    // that could not be copied in and a session directory the bridge could not
+    // create, which surfaces as a working image and a broken platform.
+    const dockerfile = read("docker/Dockerfile");
+    const layer = dockerfile.split("\n").find((line) => line.includes("mkdir -p /workspace"));
+    expect(layer).toBeDefined();
+    const chown = dockerfile
+      .split("\n")
+      .find((line) => line.includes("chown -R node:node /workspace"));
+    expect(chown).toBeDefined();
+
+    for (const home of [".claude", ".codex", ".cursor", ".grok", ".pi"]) {
+      expect(layer).toContain(`/home/node/${home}`);
+      expect(chown).toContain(`/home/node/${home}`);
+    }
+  });
+
+  test("container startup copies only bounded Pi configuration state", () => {
+    const entrypoint = section(
+      read("docker/entrypoint.sh"),
+      "if [ -d /pi-config/agent ]; then",
+      "report_agent_copy_skips Pi",
+    );
+
+    for (const allowlisted of [
+      "auth.json",
+      "models.json",
+      "settings.json",
+      "skills",
+      "prompts",
+      "extensions",
+      "themes",
+    ]) {
+      expect(entrypoint).toMatch(
+        new RegExp(
+          `^[ \\t]*${allowlisted.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`,
+          "m",
+        ),
+      );
+    }
+    // Pi's session transcripts are the host's own conversation history. A
+    // container that adopted them would offer to resume work that never
+    // happened in this workspace.
+    for (const excluded of ["sessions", "logs"]) {
+      expect(entrypoint).not.toMatch(
+        new RegExp(`^[ \\t]*${excluded.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*\\\\?$`, "m"),
+      );
+    }
+    expect(entrypoint).toContain('chmod 600 "$HOME/.pi/agent/auth.json"');
   });
 
   test("Claude data copy takes config and skips host history", () => {

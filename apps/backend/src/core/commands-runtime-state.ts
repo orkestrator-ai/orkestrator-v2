@@ -82,6 +82,7 @@ export const localOpenCodeServerPasswords = new Map<string, string>();
 /** Per-process bearer tokens for renderer → ACP bridge requests. */
 export const localCursorBridgeTokens = new Map<string, string>();
 export const localGrokBridgeTokens = new Map<string, string>();
+export const localPiBridgeTokens = new Map<string, string>();
 /** Credential generation used by each live local Cursor bridge. */
 export const localCursorCredentialFingerprints = new Map<string, string>();
 export type OpenCodeAgentToolsConfiguration = {
@@ -113,7 +114,7 @@ export const containerBridgeOperations = new Map<string, Promise<void>>();
 export const deletingLocalServerEnvironments = new Set<string>();
 export const mergingEnvironments = new Set<string>();
 export const mergeCleanupRecoveryTasks = new Map<string, Promise<void>>();
-export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok";
+export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
 /** The ACP-speaking subset of `LocalServerKind`, launched through the ACP bridge. */
 export type AcpLocalServerKind = Extract<LocalServerKind, "cursor" | "grok">;
 
@@ -129,6 +130,7 @@ export const LOCAL_SERVER_KINDS: readonly LocalServerKind[] = [
   "codex",
   "cursor",
   "grok",
+  "pi",
 ];
 // Codex bridge shutdown can spend five seconds draining app-server before its
 // one-second hard-kill fallback. Give that path time to reap the MCP process

@@ -13,7 +13,7 @@ import {
 
 export const BUILD_PIPELINE_VERSION = 2;
 
-export type BuildPipelineAgent = "claude" | "opencode" | "codex" | "cursor" | "grok";
+export type BuildPipelineAgent = "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi";
 
 /** The one list every agent check is built from. */
 export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] = Object.freeze([
@@ -22,6 +22,7 @@ export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] = Object.freez
   "codex",
   "cursor",
   "grok",
+  "pi",
 ]);
 
 export type BuildPipelineEnvironmentType = "containerized" | "local";

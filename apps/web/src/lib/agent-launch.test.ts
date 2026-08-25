@@ -110,6 +110,7 @@ describe("LAUNCH_AGENT_OPTIONS", () => {
       { value: "cursor", label: "Cursor Agent" },
       { value: "grok", label: "Grok Build" },
       { value: "opencode", label: "OpenCode" },
+      { value: "pi", label: "Pi" },
     ]);
   });
 });

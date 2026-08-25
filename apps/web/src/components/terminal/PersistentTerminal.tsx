@@ -691,6 +691,7 @@ export function PersistentTerminal({
     tabType === "claude" ||
     tabType === "opencode" ||
     tabType === "codex" ||
+    tabType === "pi" ||
     tabType === "cursor" ||
     tabType === "grok";
 

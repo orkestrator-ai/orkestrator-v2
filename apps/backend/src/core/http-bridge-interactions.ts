@@ -43,7 +43,7 @@ export class HttpBridgeInteractionAdapter {
   private readonly resolvingInteractions = new Set<string>();
 
   constructor(
-    readonly agent: "claude" | "codex" | "cursor" | "grok",
+    readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi",
     private readonly connection: BridgeConnection,
     private readonly fetchImpl: typeof fetch,
   ) {}
@@ -563,6 +563,10 @@ export class HttpBridgeInteractionAdapter {
       // reject non-empty unknown payloads instead of pretending they vanished.
       if (secondRequests.length > 0) droppedRequests += secondRequests.length;
     } else {
+      // Codex and Pi. The Pi bridge serves the same approval payload shape and
+      // an always-empty second family, so it needs no branch of its own — the
+      // mappers below are named for where the shape came from, not for the one
+      // agent that produces it.
       for (const request of firstRequests) {
         mapRequest(request, (raw) => this.mapCodexApproval(sessionId, raw));
       }

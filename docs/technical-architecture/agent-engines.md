@@ -1,6 +1,6 @@
 # Agent engine architecture
 
-Orkestrator provisions five coding-agent platforms. They are listed once, in
+Orkestrator provisions six coding-agent platforms. They are listed once, in
 `packages/protocol/src/agent-platforms.ts`, and everything else keys off that
 list:
 
@@ -11,6 +11,7 @@ list:
 | `opencode` | OpenCode | No bridge — the backend drives `opencode serve` through the SDK |
 | `cursor` | Cursor Agent | Bridge process speaking ACP to the CLI over stdio |
 | `grok` | Grok Build | Bridge process speaking ACP to the CLI over stdio |
+| `pi` | Pi | Bridge process wrapping the Pi coding-agent SDK |
 
 They do **not** share one mechanism. Each vendor exposes a different surface —
 a TypeScript SDK, a JSON-RPC app-server, an HTTP server, or a raw stdio
@@ -31,7 +32,7 @@ lists are the reason these engines are built the way they are. In short:
    an agent process.
 3. **Every child is authenticated.** The backend generates a 32-byte token per
    environment and passes it in as `CLAUDE_BRIDGE_TOKEN`, `CODEX_BRIDGE_TOKEN`,
-   `ACP_BRIDGE_TOKEN`, or `OPENCODE_SERVER_PASSWORD`. A missing or blank token
+   `ACP_BRIDGE_TOKEN`, `PI_BRIDGE_TOKEN`, or `OPENCODE_SERVER_PASSWORD`. A missing or blank token
    makes a bridge fall back to a random value nobody holds, so it fails closed
    rather than open. The Claude and Codex bridges delete the variable from
    `process.env` after reading it, so a spawned agent child cannot inherit the
@@ -203,6 +204,79 @@ Agent stderr is drained but never logged: it may contain prompts or file
 contents. Vendor wire formats stay inside the adapter — `session-config.ts`
 converts them to the shared `NativeAgentComposerState` that HTTP clients see, so
 Cursor's and Grok's differing config surfaces do not leak into the renderer.
+
+## Pi
+
+**Bridge:** `bridges/pi-bridge/` · **Transport:** HTTP (Node `http`)
+
+Pi is the second SDK-in-process bridge, after Claude. It wraps
+`@earendil-works/pi-coding-agent` and serves the same REST surface as every
+other bridge: `POST /session/create`, `POST /session/:id/prompt`,
+`GET /session/:id/messages`, `GET /session/:id/activity`, and the rest.
+`src/translate.ts` is the compatibility surface — it turns Pi's
+`AgentSessionEvent` stream into Orkestrator's `BridgeMessage`/`BridgeMessagePart`
+model, and it is the file to review on every SDK bump.
+
+What makes Pi structurally different from the other five is that it is a
+*harness*, not a vendor. It fronts around fifteen model providers using the
+user's own credentials, so:
+
+- **A model is a pair.** `provider` plus `modelId`, encoded flat as
+  `provider/modelId` and split on the first slash only, because an OpenRouter
+  id carries its own slashes. Identical to OpenCode's encoding, deliberately.
+- **"Signed in" is per provider.** `GET /global/auth` reports each provider's
+  status; there is no single account. Sign-in itself is not served: Pi's login
+  is an interactive multi-step prompt flow (`select`, `text`, `secret`) with no
+  counterpart in Orkestrator's session surface, and the credential it writes is
+  account-wide. Users sign in with `/login` in a Pi terminal tab, and containers
+  receive `~/.pi` as a bind mount the entrypoint copies a bounded subset of.
+- **Reasoning is Pi's thinking level** — the same off/minimal/low/medium/high/
+  xhigh/max ladder `/thinking` sets, mapped onto the reasoning axis the Codex
+  picker already uses, so an application-level effort default carries across
+  without translation. Which levels a given model offers comes from Pi's own
+  `getSupportedThinkingLevels`, because the rule has a corner: `xhigh` and `max`
+  require an explicit `thinkingLevelMap` entry where every other level is
+  included unless mapped to `null`. The default for a fresh session is resolved
+  Pi's way too — per-model setting, then global default, then `medium` — off the
+  same `settings.json` the CLI writes, so a level chosen in a terminal tab is
+  the one the picker opens on. Pi clamps a level the model cannot honour, and
+  `thinking_level_changed` carries the effective value back into the composer;
+  without that the control would keep showing a selection the run is not using,
+  and a clamped turn gives no other signal because it simply succeeds.
+
+  There is no speed axis and no plan/build mode: "primitives, not features" is
+  Pi's stated design, and both are things an extension adds rather than things
+  the harness has.
+
+The conversation is Pi's, not the bridge's. Pi persists each session to its own
+JSONL file and resumes from it, so the bridge holds only the *rendered*
+transcript, the composer selection and the prompt journal. An idle detach, a
+bridge restart and a crashed process all recover by reopening that file, and
+losing the bridge's own state costs a transcript rather than a conversation.
+That also gives fork a real implementation: `createBranchedSession` writes a new
+file holding the path to the chosen entry, so a fork is an independent
+conversation rather than a copy of what was on screen.
+
+Approvals exist but are off by default. Pi ships no permission system — a gate
+is something you build on its `tool_call` extension hook — so the bridge
+registers exactly that as an inline extension, enabled by
+`PI_BRIDGE_REQUIRE_APPROVAL=1`. The default is permissive for the same reason
+the Claude bridge's is: an Orkestrator tab is an interactive session in an
+already-isolated environment. When the gate is on, timeout, disconnect, session
+close and a malformed answer all deny, and a turn that ends with a call still
+parked denies it rather than leaving the turn awaiting a promise nobody will
+settle.
+
+Project-local `.pi/` resources — extensions, skills, prompt templates — are
+opt-in through `PI_BRIDGE_PROJECT_RESOURCES` and only the container launcher
+opts in. A Pi extension is arbitrary TypeScript the bridge process would run, so
+this is the same boundary `ACP_APPROVE_PROJECT_MCPS` draws for the ACP bridge:
+cloning a repository must not be enough to run its code on the user's machine.
+
+The SDK and the `pi` binary a terminal tab runs are the same program published
+two ways, so they are pinned to one version and `tests/unit/version-drift.test.ts`
+enforces that the bridge's dependencies, `PINNED_TOOLCHAIN_VERSIONS.pi` and the
+Dockerfile's `PI_CLI_VERSION` all agree.
 
 ## Where to look next
 

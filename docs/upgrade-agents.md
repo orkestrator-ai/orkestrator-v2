@@ -443,6 +443,62 @@ contract.
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
 
+## Pi
+
+### Where the contract lives
+
+Pi is pinned in three places that must move together, because the SDK the
+bridge drives and the `pi` binary a terminal tab runs are the same program
+published two ways:
+
+- `bridges/pi-bridge/package.json` — `@earendil-works/pi-coding-agent` and the
+  two packages it exposes types from, `@earendil-works/pi-ai` and
+  `@earendil-works/pi-agent-core`, all pinned exactly.
+- `apps/desktop/electron/toolchain-manifest.ts` — `PINNED_TOOLCHAIN_VERSIONS.pi`
+  and four `bundleIntegrity` records.
+- `docker/Dockerfile` — `PI_CLI_VERSION` and the two Linux archive digests.
+
+`tests/unit/version-drift.test.ts` enforces that all three agree, and that the
+Dockerfile pins the same archive digests the manifest does.
+
+### Procedure
+
+1. Bump the three SDK dependencies in `bridges/pi-bridge/package.json`, then
+   `bun install`.
+2. Bump `PINNED_TOOLCHAIN_VERSIONS.pi` and `ARG PI_CLI_VERSION` to the same
+   version.
+3. Refresh the four artifact records. Unlike the single-file agents, Pi ships a
+   bundle — the launcher reads its themes, docs, examples and a native helper
+   module from beside itself — so each record carries a `bundleIntegrity` digest
+   over the whole extracted tree as well as the archive and executable digests.
+   `--emit` prints all of them:
+
+   ```bash
+   RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts --emit --tool=pi
+   ```
+
+   Paste the values in, then assert them:
+
+   ```bash
+   RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts --tool=pi
+   ```
+
+4. Copy the two `linux` archive digests into the Dockerfile's `PI_SHA` branches.
+   They are verified by `sha256sum -c -` during the image build, so a version
+   bumped without them fails `bun run docker:build` rather than shipping an
+   unverified binary.
+5. Review `bridges/pi-bridge/src/translate.ts` against the SDK's
+   `AgentSessionEvent` union. This is the compatibility surface: a new event
+   type degrades to "not rendered", which is safe but silent, so a bump that
+   adds one is a bump that may quietly stop showing something.
+6. Review `src/models.ts` against `Model` and `ThinkingLevel`. A new thinking
+   level that is not in `THINKING_LEVELS` is simply never offered.
+7. Smoke-test one interactive Pi tab and one terminal tab, including a model
+   switch, a compaction, and the inactive-environment path.
+
+Upstream references: [Pi releases](https://github.com/earendil-works/pi/releases)
+and [Pi SDK documentation](https://pi.dev/docs/latest/sdk).
+
 ## Cursor and Grok (ACP)
 
 ### Where the CLI contract lives

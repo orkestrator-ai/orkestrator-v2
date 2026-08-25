@@ -96,7 +96,12 @@ export function DraggableTabBar({
       }
       const platform = tab ? getNativeAgentData(tab)?.platform : undefined;
       const namespace =
-        platform === "claude" || platform === "codex" || platform === "opencode" ? platform : null;
+        platform === "claude" ||
+        platform === "codex" ||
+        platform === "opencode" ||
+        platform === "pi"
+          ? platform
+          : null;
       if (!namespace) return Promise.resolve();
       const sessionKey = createSessionKey(environmentId, tabId);
       const draftKey = composeDraftKey(namespace, environmentId, sessionKey);

@@ -375,6 +375,48 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(PINNED_TOOLCHAIN_VERSIONS.opencode).toBe(sdkPin);
   });
 
+  test("Pi: SDK pin, managed binary, and Docker CLI all match", () => {
+    // Pi is the second platform where Orkestrator ships both an SDK and the CLI
+    // that SDK is published alongside: the bridge drives `@earendil-works/pi-coding-agent`
+    // in process, while a terminal tab runs the `pi` binary from the toolchain.
+    // They are the same program, so a bump that moves one and not the other
+    // would give a user two different agents behind one platform name.
+    const sdkPin = expectExactVersion(
+      "bridges/pi-bridge/package.json",
+      "@earendil-works/pi-coding-agent",
+    );
+    expect(expectExactVersion("bridges/pi-bridge/package.json", "@earendil-works/pi-ai")).toBe(
+      sdkPin,
+    );
+    expect(
+      expectExactVersion("bridges/pi-bridge/package.json", "@earendil-works/pi-agent-core"),
+    ).toBe(sdkPin);
+    expect(getDockerfileArg("PI_CLI_VERSION")).toBe(sdkPin);
+    expect(PINNED_TOOLCHAIN_VERSIONS.pi).toBe(sdkPin);
+  });
+
+  test("Pi: the container downloads the same release the manifest pins", () => {
+    const dockerfile = readFileSync("docker/Dockerfile", "utf8");
+    // The image and the desktop toolchain install the same two Linux archives,
+    // so their digests have to be the same literals. A mismatch means a
+    // container and a local worktree are running different builds of Pi.
+    for (const architecture of ["arm64", "x64"] as const) {
+      const artifact = PINNED_TOOLCHAIN_ARTIFACTS.find(
+        (candidate) =>
+          candidate.name === "pi" &&
+          candidate.platform === "linux" &&
+          candidate.architecture === architecture,
+      );
+      expect(artifact).toBeDefined();
+      expect(dockerfile).toContain(artifact!.archive.sha256);
+    }
+    expect(dockerfile).toContain(
+      'curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz"',
+    );
+    expect(dockerfile).toContain("ENV PI_CLI_PATH=/usr/local/bin/pi");
+    expect(dockerfile).toContain('&& "$PI_CLI_PATH" --version');
+  });
+
   test("OpenCode: bundled binary download uses the same release base as the managed manifest", () => {
     // The managed manifest and the bundling script must resolve to the same
     // GitHub org. OpenCode moved from `sst` to `anomalyco`; without this the two

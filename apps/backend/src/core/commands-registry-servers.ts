@@ -10,6 +10,7 @@ import {
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
+  PI_BRIDGE_PORT,
   resolveCodexMaxConcurrentThreads,
   ORKESTRATOR_AGENT_MCP_TOKEN_ENV,
   ORKESTRATOR_AGENT_MCP_URL_ENV,
@@ -555,4 +556,88 @@ export function registerServerCommands(
       dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`),
     );
   }
+
+  registerPiServerCommands(register);
+}
+
+/**
+ * The container-side Pi bridge.
+ *
+ * Structurally the same as the ACP bridges above — one prebuilt bridge under
+ * `/opt`, a token file the backend reads back, a log file — but it is not part
+ * of that loop because nothing about it is per-provider: Pi is one platform
+ * with one executable and no vendor credential for the backend to sync. Its
+ * credentials are the user's own provider keys, which reach the container as a
+ * bind-mounted `~/.pi` (see `commands-containers.ts`).
+ */
+function registerPiServerCommands(register: CommandRegistrar): void {
+  const tokenFile = "/tmp/pi-bridge-token";
+  const logFile = "/tmp/pi-bridge.log";
+  const processPattern = "[p]i-bridge/dist/index.js";
+
+  register("start_pi_server", ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    return enqueueContainerBridgeOperation("pi", id, async () => {
+      const hostPort = await getHostPort(id, PI_BRIDGE_PORT);
+      if (hostPort && (await checkHttpHealth(hostPort))) {
+        const existingToken = (await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)).trim();
+        if (BRIDGE_TOKEN_PATTERN.test(existingToken)) {
+          return { hostPort, wasRunning: true, authToken: existingToken };
+        }
+        await dockerExec(id, `pkill -f '${processPattern}' || true`);
+        await waitForUnhealthy(hostPort);
+      }
+      const token = randomBytes(32).toString("base64url");
+      const started = await startContainerServer(
+        id,
+        PI_BRIDGE_PORT,
+        "pi",
+        `
+          cd /workspace
+          rm -f ${logFile}
+          umask 077
+          printf '%s' ${quoteShell(token)} > ${tokenFile}
+          source /usr/local/bin/orkestrator-runtime-env.sh 2>/dev/null || true
+          orkestrator_source_runtime_env 2>/dev/null || true
+          export PORT=${PI_BRIDGE_PORT}
+          export HOSTNAME=0.0.0.0
+          export CWD=/workspace
+          export PI_AGENT_DIR=/home/node/.pi/agent
+          export PI_SESSION_DIR=/home/node/.pi/agent/sessions
+          export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state
+          export PI_BRIDGE_PROJECT_RESOURCES=1
+          export PI_BRIDGE_TOKEN=${quoteShell(token)}
+          setsid bun /opt/pi-bridge/dist/index.js > ${logFile} 2>&1 &
+        `,
+        [token],
+      );
+      return { ...started, authToken: token };
+    });
+  });
+
+  register("stop_pi_server", ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    return enqueueContainerBridgeOperation("pi", id, () =>
+      dockerExec(id, `pkill -f '${processPattern}' || true; rm -f ${tokenFile}`).then(
+        () => undefined,
+      ),
+    );
+  });
+
+  register("get_pi_server_status", async ({ containerId }) => {
+    const id = asString(containerId, "containerId");
+    const hostPort = await getHostPort(id, PI_BRIDGE_PORT);
+    const authToken = hostPort
+      ? (await dockerExec(id, `cat ${tokenFile} 2>/dev/null || true`)).trim()
+      : "";
+    const running =
+      !!hostPort &&
+      BRIDGE_TOKEN_PATTERN.test(authToken) &&
+      (await checkHttpHealth(hostPort, "/global/health"));
+    return { running, hostPort, ...(running ? { authToken } : {}) };
+  });
+
+  register("get_pi_server_log", ({ containerId }) =>
+    dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`),
+  );
 }

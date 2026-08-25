@@ -1307,7 +1307,7 @@ export function normalizeCodexModelCatalogEntries(value: unknown): CodexModelCat
 
 export function normalizeAcpModelCatalogEntries(
   value: unknown,
-  platform: "cursor" | "grok",
+  platform: "cursor" | "grok" | "pi",
 ): AgentModel[] {
   if (!Array.isArray(value)) return [];
   const normalized: AgentModel[] = [];
@@ -1411,12 +1411,14 @@ export function parsePersistedAgentModelCatalogCache(value: unknown): AgentModel
   const grok = parseCatalog(value.grok, (models) =>
     normalizeAcpModelCatalogEntries(models, "grok"),
   );
+  const pi = parseCatalog(value.pi, (models) => normalizeAcpModelCatalogEntries(models, "pi"));
   return {
     schemaVersion: 1,
     ...(claude ? { claude } : {}),
     ...(codex ? { codex } : {}),
     ...(cursor ? { cursor } : {}),
     ...(grok ? { grok } : {}),
+    ...(pi ? { pi } : {}),
   };
 }
 

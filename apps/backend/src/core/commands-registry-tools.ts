@@ -93,6 +93,7 @@ export function registerToolingCommands(
   // then refuses it — see `resolveManagedAcpBinary`.
   register("check_cursor_cli", (_args, context) => hasManagedAcpBinary(context, "cursor"));
   register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
+  register("check_pi_cli", (_args, context) => hasPackagedOrPathBinary(context, "pi"));
   register("check_github_cli", () => commandExists("gh"));
   register("get_container_github_credential_status", async (_args, context) =>
     getContainerGitHubCredentialStatus((await context.storage.loadConfig()).global),
@@ -104,7 +105,8 @@ export function registerToolingCommands(
       (await hasPackagedOrPathBinary(context, "opencode")) ||
       (await hasPackagedOrPathBinary(context, "codex")) ||
       (await hasManagedAcpBinary(context, "cursor")) ||
-      (await hasManagedAcpBinary(context, "grok")),
+      (await hasManagedAcpBinary(context, "grok")) ||
+      (await hasPackagedOrPathBinary(context, "pi")),
   );
   register("get_available_ai_cli", async (_args, context) =>
     (await hasPackagedOrPathBinary(context, "claude"))
@@ -117,6 +119,8 @@ export function registerToolingCommands(
             ? "cursor"
             : (await hasManagedAcpBinary(context, "grok"))
               ? "grok"
-              : null,
+              : (await hasPackagedOrPathBinary(context, "pi"))
+                ? "pi"
+                : null,
   );
 }

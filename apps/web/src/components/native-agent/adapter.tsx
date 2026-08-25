@@ -46,6 +46,7 @@ export const nativeAgentAdapters: Readonly<Record<AgentPlatform, NativeAgentAdap
   opencode: adapter("opencode", "OpenCode"),
   cursor: adapter("cursor", "Cursor Agent"),
   grok: adapter("grok", "Grok Build"),
+  pi: adapter("pi", "Pi"),
 };
 
 export function getNativeAgentAdapter(platform: AgentPlatform): NativeAgentAdapter {

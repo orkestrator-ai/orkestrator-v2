@@ -84,8 +84,8 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
 ENV DEVCONTAINER=true
 
 # Create workspace and config directories and set permissions
-RUN mkdir -p /workspace /opencode-state /home/node/.claude /home/node/.codex /home/node/.cursor /home/node/.grok /home/node/.config/opencode /home/node/.config/grok /home/node/.local/share/opencode /home/node/.local/state/opencode && \
-  chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.cursor /home/node/.grok /home/node/.config /home/node/.local
+RUN mkdir -p /workspace /opencode-state /home/node/.claude /home/node/.codex /home/node/.cursor /home/node/.grok /home/node/.pi/agent /home/node/.config/opencode /home/node/.config/grok /home/node/.local/share/opencode /home/node/.local/state/opencode && \
+  chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.cursor /home/node/.grok /home/node/.pi /home/node/.config /home/node/.local
 
 WORKDIR /workspace
 
@@ -128,6 +128,7 @@ ARG CODEX_CLI_VERSION=0.147.0
 ARG OPENCODE_CLI_VERSION=1.18.16
 ARG CURSOR_AGENT_VERSION=2026.08.11-e8db854
 ARG GROK_BUILD_VERSION=1.0.3
+ARG PI_CLI_VERSION=0.84.3
 
 # Install Claude Code from the pinned npm package. The package pulls in the
 # platform-native binary via optional dependencies.
@@ -163,7 +164,27 @@ RUN ARCH="$(dpkg --print-architecture)" && \
   printf '%s  %s\n' "$GROK_SHA" /usr/local/bin/grok | sha256sum -c - && \
   chmod 755 /usr/local/bin/grok /opt/cursor-agent/cursor-agent && \
   rm -f /tmp/cursor-agent.tar.gz
+
+# Pi ships as a self-contained bundle: the launcher loads its themes, docs,
+# examples and a native helper module from beside itself, so the tree is kept
+# intact rather than reduced to a single binary. Pinned and hash verified like
+# the two above; the digests match the ones in
+# apps/desktop/electron/toolchain-manifest.ts for the same version.
+RUN ARCH="$(dpkg --print-architecture)" && \
+  case "$ARCH" in \
+    amd64) PI_ARCH=x64; PI_SHA=6f8bb67c21bc6b8a8a106d354f56d7fd4a190a3cd8ad3a32db45f6d281a5d008 ;; \
+    arm64) PI_ARCH=arm64; PI_SHA=e7cd48cd6f64b708e8459a890882b1007332f6e6b876fe1fd5c5203abd0addb7 ;; \
+    *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
+  esac && \
+  curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz" -o /tmp/pi.tar.gz && \
+  printf '%s  %s\n' "$PI_SHA" /tmp/pi.tar.gz | sha256sum -c - && \
+  mkdir -p /opt/pi && \
+  tar -xzf /tmp/pi.tar.gz -C /opt/pi --strip-components=1 --no-same-owner && \
+  ln -s /opt/pi/pi /usr/local/bin/pi && \
+  chmod 755 /opt/pi/pi && \
+  rm -f /tmp/pi.tar.gz
 USER node
+ENV PI_CLI_PATH=/usr/local/bin/pi
 
 # Fail the image build immediately if an installer completed without leaving a
 # runnable CLI at the path the backend will use.
@@ -171,7 +192,8 @@ RUN "$CLAUDE_CLI_PATH" --version \
  && "$CODEX_CLI_PATH" --version \
  && "$OPENCODE_CLI_PATH" --version \
  && cursor-agent --version \
- && grok --version
+ && grok --version \
+ && "$PI_CLI_PATH" --version
 
 # Codex spawns `codex-code-mode-host` from its own directory for every code-mode
 # turn, and the models that default to code mode are unusable without it. The
@@ -232,10 +254,11 @@ COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol
 COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge
 COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge
 COPY --chown=node:node bridges/acp-bridge /opt/bridge-build/bridges/acp-bridge
+COPY --chown=node:node bridges/pi-bridge /opt/bridge-build/bridges/pi-bridge
 COPY --chown=node:node bridges/cursor-bridge /opt/bridge-build/bridges/cursor-bridge
 WORKDIR /opt/bridge-build
 RUN bun install --filter claude-bridge --filter codex-bridge --filter acp-bridge \
-      --filter cursor-bridge
+      --filter pi-bridge --filter cursor-bridge
 
 # Build Claude Bridge Server.
 WORKDIR /opt/bridge-build/bridges/claude-bridge
@@ -266,6 +289,14 @@ WORKDIR /opt/bridge-build/bridges/acp-bridge
 RUN bun run build \
  && rm -rf node_modules
 
+# Build the Pi bridge. Like the Claude bridge, its `vendor` step copies the SDK
+# into dist/node_modules because the SDK compiles extension TypeScript with jiti
+# and reads its themes and templates from files inside the package — neither of
+# which a bundler can follow. The top-level node_modules is build-only.
+WORKDIR /opt/bridge-build/bridges/pi-bridge
+RUN bun run build \
+ && rm -rf node_modules
+
 # Build the experimental Cursor SDK bridge, the alternative engine for Cursor
 # sessions. Its build bundles @cursor/sdk's JavaScript into dist/index.js and
 # the `vendor` step stages the SDK's Linux platform package — ripgrep, the
@@ -282,6 +313,7 @@ USER root
 RUN mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge \
  && mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge \
  && mv /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge \
+ && mv /opt/bridge-build/bridges/pi-bridge /opt/pi-bridge \
  && mv /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge \
  && rm -rf /opt/bridge-build
 USER node

@@ -141,6 +141,7 @@ export function TerminalContainer({
   );
   const opencodeMode = resolveAgentPlatformSettings(tiers, "opencode").mode;
   const codexMode = resolveAgentPlatformSettings(tiers, "codex").mode;
+  const piMode = resolveAgentPlatformSettings(tiers, "pi").mode;
   const claude = resolveAgentPlatformSettings(tiers, "claude");
   const claudeMode = claude.mode;
   const claudeNativeBackend = claude.claudeNativeBackend;
@@ -647,7 +648,8 @@ export function TerminalContainer({
     const launchMode =
       (agentType === "claude" && claudeMode === "native") ||
       (agentType === "codex" && codexMode === "native") ||
-      (agentType === "opencode" && opencodeMode === "native")
+      (agentType === "opencode" && opencodeMode === "native") ||
+      (agentType === "pi" && piMode === "native")
         ? "native"
         : "terminal";
 
@@ -677,6 +679,7 @@ export function TerminalContainer({
     isEnvironmentRunning,
     isLocalEnvironment,
     opencodeMode,
+    piMode,
     pendingNativeLaunch,
     setupReady,
     startupLaunchDispatchedByBackend,
@@ -1010,7 +1013,10 @@ export function TerminalContainer({
       const useNativeOpenCode = initialTabType === "opencode" && opencodeMode === "native";
       const useNativeClaude = initialTabType === "claude" && claudeMode === "native";
       const useNativeCodex = initialTabType === "codex" && codexMode === "native";
-      const useNativeAcp = initialTabType === "cursor" || initialTabType === "grok";
+      const useNativeAcp =
+        initialTabType === "cursor" ||
+        initialTabType === "grok" ||
+        (initialTabType === "pi" && piMode === "native");
 
       if (backendSetupRunning) {
         console.info("[setup-terminal] adding backend-managed setup tab", {
@@ -1053,6 +1059,7 @@ export function TerminalContainer({
         useNativeOpenCode,
         useNativeClaude,
         useNativeCodex,
+        useNativeAcp,
         isLocalEnvironment,
         setupPhase,
       });
@@ -1122,6 +1129,7 @@ export function TerminalContainer({
     claudeMode,
     claudeNativeBackend,
     codexMode,
+    piMode,
     setPendingNativeLaunch,
     setOptions,
     worktreePath,
@@ -1501,7 +1509,9 @@ export function TerminalContainer({
         type === "codex" &&
         (launchModeOverride === "native" || (!launchModeOverride && codexMode === "native"));
       const shouldUseAcpNative =
-        (type === "cursor" || type === "grok") && launchModeOverride !== "cli";
+        ((type === "cursor" || type === "grok") && launchModeOverride !== "cli") ||
+        (type === "pi" &&
+          (launchModeOverride === "native" || (!launchModeOverride && piMode === "native")));
       const prelockNativePlatform = Boolean(
         options?.initialPrompt ||
         options?.isReviewTab ||
@@ -1614,7 +1624,7 @@ export function TerminalContainer({
       }
 
       if (shouldUseAcpNative) {
-        const provider = type as "cursor" | "grok";
+        const provider = type as "cursor" | "grok" | "pi";
         const newTab = createAgentNativeTab({
           id: newTabId,
           platform: prelockNativePlatform ? provider : undefined,
@@ -1668,6 +1678,7 @@ export function TerminalContainer({
       claudeMode,
       claudeNativeBackend,
       codexMode,
+      piMode,
       isLocalEnvironmentReady,
       isLocalEnvironment,
       createBrowserTab,

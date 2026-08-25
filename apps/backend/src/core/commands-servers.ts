@@ -105,6 +105,7 @@ import {
   getHostCursorCredentials,
   syncAgentTestCursorCredentials,
 } from "./commands-files.js";
+import { cursorSdkBridgeEnabled, cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 
@@ -150,7 +151,7 @@ export async function waitForLocalServerStartup(
 
 export function getBridgePath(
   context: CommandContext,
-  bridgeName: "claude-bridge" | "codex-bridge" | "acp-bridge" | "pi-bridge",
+  bridgeName: "claude-bridge" | "codex-bridge" | "acp-bridge" | "pi-bridge" | "cursor-bridge",
 ): string {
   const devPath = path.join(context.appRoot, "bridges", bridgeName);
   if (process.env.NODE_ENV !== "production" && existsSync(devPath)) return devPath;
@@ -768,6 +769,14 @@ export async function startLocalServerUnlocked(
   const port = await allocateLocalPort();
   let command = "";
   let cwd = environment.worktreePath;
+  /**
+   * Whether this Cursor session is being served by the SDK bridge.
+   *
+   * Recorded when the branch below selects it, because the token variable and
+   * everything else downstream depend on which *bridge* is running rather than
+   * on the platform: a Cursor session can be served by either.
+   */
+  let useCursorSdkBridge = false;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(port),
@@ -841,6 +850,27 @@ export async function startLocalServerUnlocked(
     // cannot bypass the local trust boundary; the container launcher is the
     // only caller that opts in.
     env.PI_BRIDGE_PROJECT_RESOURCES = "0";
+  } else if (kind === "cursor" && (await cursorSdkBridgeEnabled(context))) {
+    useCursorSdkBridge = true;
+    command = resolveBunBinary(context);
+    cwd = getBridgePath(context, "cursor-bridge");
+    // The SDK bridge keeps its own session store, deliberately separate from
+    // the ACP bridge's: the two engines produce different agent ids and a
+    // shared directory would have each read the other's sessions as its own.
+    env.CURSOR_BRIDGE_STATE_DIR = path.join(
+      context.storage.getDataDir(),
+      "cursor-bridge-state",
+      createHash("sha256").update(environmentId).digest("hex").slice(0, 32),
+    );
+    env.CURSOR_BRIDGE_AUTH_FILE = cursorSdkCredentialPath(context);
+    // A local worktree can contain repository-controlled Cursor settings and
+    // MCP commands. Cloning a repository must not be enough to run its code,
+    // so the project settings layer stays off on the host — the same boundary
+    // `ACP_APPROVE_PROJECT_MCPS` draws for the ACP path. Pinned after
+    // inheriting process.env so an ambient value cannot bypass it.
+    env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
+    if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
+    else delete env.CURSOR_API_KEY;
   } else {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "acp-bridge");
@@ -914,7 +944,9 @@ export async function startLocalServerUnlocked(
             ? "OPENCODE_SERVER_PASSWORD"
             : kind === "pi"
               ? "PI_BRIDGE_TOKEN"
-              : "ACP_BRIDGE_TOKEN"
+              : useCursorSdkBridge
+                ? "CURSOR_BRIDGE_TOKEN"
+                : "ACP_BRIDGE_TOKEN"
     ] = authToken;
     if (kind === "opencode") env.OPENCODE_SERVER_USERNAME = "opencode";
     tokens.set(environmentId, authToken);

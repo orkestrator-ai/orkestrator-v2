@@ -1,3 +1,4 @@
+import nodePath from "node:path";
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
   parseStoredDesktopConnections,
@@ -349,6 +350,46 @@ export function registerProjectCommands(
       throw new Error("Cursor API key cannot be empty. Use null to clear it.");
     }
     return redactAppConfig(await storage.setCursorApiKey(nextApiKey));
+  });
+  /**
+   * Experimental Cursor SDK sign-in.
+   *
+   * Split into start and poll rather than one awaited call: the browser flow is
+   * human-paced and can take minutes, which is far longer than a request should
+   * be held open. Every decision — spawning the bridge, parsing its output,
+   * storing the credential, cancelling — stays here; the settings pane only
+   * opens the returned URL and polls.
+   */
+  register("cursor_sdk_login_start", async (_payload, context) => {
+    const { getBridgePath } = await import("./commands-servers.js");
+    const { resolveBunBinary } = await import("./commands-agent-support.js");
+    const { startCursorSdkLogin } = await import("./cursor-sdk-bridge.js");
+    return startCursorSdkLogin(context, {
+      bridgeEntrypoint: nodePath.join(getBridgePath(context, "cursor-bridge"), "dist", "index.js"),
+      runtime: resolveBunBinary(context),
+    });
+  });
+  register("cursor_sdk_login_status", async (_payload, context) => {
+    const { cursorSdkLoginProgress } = await import("./cursor-sdk-bridge.js");
+    const { resolveCursorApiKey } = await import("./commands-validation.js");
+    const config = await context.storage.loadConfig();
+    // The stored key is read only to report *which* credential is in play; it
+    // is never returned.
+    return cursorSdkLoginProgress(context, resolveCursorApiKey(config.global).apiKey);
+  });
+  register("cursor_sdk_login_cancel", async () => {
+    const { cancelCursorSdkLogin } = await import("./cursor-sdk-bridge.js");
+    cancelCursorSdkLogin();
+    return { cancelled: true };
+  });
+  register("cursor_sdk_logout", async (_payload, context) => {
+    const { cancelCursorSdkLogin, cursorSdkAuthStatus, cursorSdkLogout } =
+      await import("./cursor-sdk-bridge.js");
+    const { resolveCursorApiKey } = await import("./commands-validation.js");
+    cancelCursorSdkLogin();
+    await cursorSdkLogout(context);
+    const config = await context.storage.loadConfig();
+    return cursorSdkAuthStatus(context, resolveCursorApiKey(config.global).apiKey);
   });
   register("set_anthropic_api_key", async ({ apiKey }, { storage }) => {
     const nextApiKey = apiKey === null ? null : asString(apiKey, "apiKey").trim();

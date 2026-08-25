@@ -49,6 +49,7 @@ type ElectronReady = {
   backendPid?: number;
   authFile?: string;
   browserUrl?: string;
+  invokeUrl?: string;
 };
 
 export type BoundedLogWriter = {
@@ -325,6 +326,40 @@ export async function seedAgentTestProfileState(
   }
 }
 
+/**
+ * Check that Electron announced everything this particular run depends on.
+ *
+ * The backend gateway is always required: without an auth file and a backend
+ * pid there is nothing to supervise or talk to.
+ *
+ * A reported *browser* URL is not. An ordinary `bun run dev` starts the backend
+ * with `--desktop-web-client`, and that backend deliberately omits `browserUrl`
+ * from its readiness message — the loopback listener is up, but its
+ * authoritative public URL belongs to ManagedWebClient and may not exist until
+ * after readiness has been announced. Requiring it unconditionally failed every
+ * desktop dev run, with a message that blamed a gateway which was in fact
+ * listening.
+ *
+ * `agent-test` requires the public browser URL because its browser suite drives
+ * that surface. Fixture seeding can instead use the backend's authenticated
+ * invoke listener, which remains available when the managed desktop web client
+ * deliberately suppresses `browserUrl`.
+ */
+export function assertElectronReadiness(
+  ready: Pick<ElectronReady, "authFile" | "backendPid" | "browserUrl" | "invokeUrl">,
+  run: { flavor: "development" | "agent-test"; fixture: boolean },
+): asserts ready is typeof ready & { authFile: string; backendPid: number } {
+  if (!ready.authFile || !ready.backendPid) {
+    throw new Error("Electron readiness did not include the backend gateway");
+  }
+  if (run.flavor === "agent-test" && !ready.browserUrl) {
+    throw new Error("Electron readiness did not include the loopback browser gateway");
+  }
+  if (run.fixture && !ready.browserUrl && !ready.invokeUrl) {
+    throw new Error("Electron readiness did not include a gateway for fixture seeding");
+  }
+}
+
 export async function startDevelopment(
   args: DevArguments,
   flavor: "development" | "agent-test",
@@ -517,15 +552,14 @@ export async function startDevelopment(
         } catch {}
       });
     });
-    if (!ready.browserUrl || !ready.authFile || !ready.backendPid) {
-      throw new Error("Electron readiness did not include the loopback browser gateway");
-    }
+    assertElectronReadiness(ready, { flavor, fixture: args.fixture });
     let testProject: string | undefined;
-    if (args.fixture) {
+    const fixtureUrl = ready.browserUrl ?? ready.invokeUrl;
+    if (args.fixture && fixtureUrl) {
       testProject = await seedFixture({
         profile,
         templateRoot: fixtureTemplateRoot,
-        browserUrl: ready.browserUrl,
+        browserUrl: fixtureUrl,
         authFile: ready.authFile,
         environments: args.fixtureEnvironments,
       });

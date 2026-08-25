@@ -273,6 +273,7 @@ async function startApplication(): Promise<void> {
         backendPid: backendProcess.getPid(),
         authFile: info?.authFile,
         browserUrl: info?.browserUrl,
+        invokeUrl: info?.url,
       })}\n`,
     );
   }

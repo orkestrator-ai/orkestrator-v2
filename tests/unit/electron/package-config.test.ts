@@ -84,6 +84,8 @@ describe("Electron packaging configuration", () => {
         expect.objectContaining({ from: "apps/backend/dist", to: "backend" }),
         expect.objectContaining({ from: "bridges/claude-bridge", to: "claude-bridge" }),
         expect.objectContaining({ from: "bridges/codex-bridge", to: "codex-bridge" }),
+        expect.objectContaining({ from: "bridges/acp-bridge", to: "acp-bridge" }),
+        expect.objectContaining({ from: "bridges/cursor-bridge", to: "cursor-bridge" }),
         expect.objectContaining({ from: "binaries", to: "bin", filter: ["bun"] }),
       ]),
     );

@@ -443,6 +443,21 @@ export interface TerminalAppearance {
   backgroundColor: string;
 }
 
+/** Which credential the experimental Cursor SDK bridge would actually use. */
+export interface CursorSdkAuthStatus {
+  authenticated: boolean;
+  source: "api-key-env" | "api-key-config" | "stored-login" | "none";
+  email?: string;
+  expiresAt?: string;
+}
+
+export interface CursorSdkLoginProgress {
+  state: "pending" | "authenticated" | "failed" | "idle";
+  loginUrl?: string;
+  error?: string;
+  auth: CursorSdkAuthStatus;
+}
+
 export interface GlobalConfig {
   /** Agent systems installed and exposed in launch/review surfaces. */
   enabledAgentPlatforms?: AgentPlatform[];
@@ -485,6 +500,11 @@ export interface GlobalConfig {
   terminalScrollback: number;
   /** Capture raw Codex bridge events for subagent transcript debugging */
   experimentalCodexRawEventLogging?: boolean;
+  /**
+   * Run Cursor sessions on the experimental SDK bridge instead of the ACP one.
+   * Off by default; the two run side by side.
+   */
+  experimentalCursorSdkBridge?: boolean;
   /** Enable debug logging to disk (requires app restart) */
   debugLogging?: boolean;
   /** Serve the app to authenticated browsers on the host's Tailscale network */

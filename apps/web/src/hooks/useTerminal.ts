@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT, UnlistenFn } from "@/lib/native/events";
 import { toast } from "sonner";
 import * as backend from "@/lib/backend";
+import { createTerminalTargetIdentity } from "./terminal-target-identity";
 
 /**
  * Wire shape of a `terminal-output-<sessionId>` event.
@@ -204,15 +205,15 @@ export function useTerminal({
     isLocalRef.current = isLocal;
   }, [isLocal]);
 
-  const terminalTargetIdentity = JSON.stringify({
-    kind: isLocal ? "local" : "container",
+  const terminalTargetIdentity = createTerminalTargetIdentity({
     containerId,
-    environmentId: environmentId ?? null,
-    terminalKey: terminalKey ?? null,
-    attachExistingOnly,
+    environmentId,
+    isLocal,
+    terminalKey,
+    user,
     replayOutputBuffer,
+    attachExistingOnly,
     trackEnvironmentActivity,
-    user: user ?? null,
   });
   const previousTerminalTargetIdentityRef = useRef(terminalTargetIdentity);
   const previousExistingSessionIdRef = useRef(existingSessionId ?? null);

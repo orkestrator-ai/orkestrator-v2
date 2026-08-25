@@ -204,13 +204,25 @@ describe("a turn that outlives its budget", () => {
 });
 
 describe("terminal run usage", () => {
-  test("uses RunResult usage when the turn-ended delta did not report it", async () => {
+  test("prefers RunResult usage over streamed and turn-ended usage", async () => {
     const state = runningSession();
     state.composer.selectedModelId = "requested-model";
-    state.currentTurnUsage = {};
+    state.currentTurnUsage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
     const run: FollowableRun = {
-      // eslint-disable-next-line require-yield
-      async *stream() {},
+      async *stream() {
+        yield {
+          type: "usage",
+          agent_id: "agent-1",
+          run_id: "run-1",
+          usage: {
+            inputTokens: 40,
+            outputTokens: 10,
+            cacheReadTokens: 5,
+            cacheWriteTokens: 0,
+            totalTokens: 55,
+          },
+        };
+      },
       cancel: async () => undefined,
       wait: async () => ({
         status: "finished",
@@ -255,7 +267,7 @@ describe("terminal run usage", () => {
     });
   });
 
-  test("uses streamed SDK usage when the terminal result omits usage", async () => {
+  test("sums multiple streamed SDK usage messages when the terminal result omits usage", async () => {
     const state = runningSession();
     const run: FollowableRun = {
       async *stream() {
@@ -271,6 +283,19 @@ describe("terminal run usage", () => {
             totalTokens: 55,
           },
         };
+        yield {
+          type: "usage",
+          agent_id: "agent-1",
+          run_id: "run-1",
+          usage: {
+            inputTokens: 6,
+            outputTokens: 4,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 1,
+            reasoningTokens: 2,
+            totalTokens: 11,
+          },
+        };
       },
       cancel: async () => undefined,
       wait: async () => ({ status: "finished" }),
@@ -279,12 +304,93 @@ describe("terminal run usage", () => {
     await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
 
     expect(publicContextUsage(state)).toMatchObject({
-      usedTokens: 55,
-      inputTokens: 40,
-      outputTokens: 10,
+      usedTokens: 66,
+      lastTurnTokens: 66,
+      inputTokens: 46,
+      outputTokens: 14,
       cacheReadTokens: 5,
-      cacheWriteTokens: 0,
+      cacheWriteTokens: 1,
+      reasoningTokens: 2,
       source: "provider",
+    });
+  });
+
+  test("uses the provider total instead of reconstructing it from token categories", () => {
+    const state = runningSession();
+    state.usage = {
+      turn: {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 5,
+        cacheWriteTokens: 10,
+        totalTokens: 121,
+      },
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 121,
+      lastTurnTokens: 121,
+    });
+  });
+
+  test("records terminal usage when a run ends in error", async () => {
+    const state = runningSession();
+    const run: FollowableRun = {
+      // eslint-disable-next-line require-yield
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({
+        status: "error",
+        error: { message: "provider failed" },
+        durationMs: 234,
+        model: { id: "resolved-model" },
+        usage: {
+          inputTokens: 30,
+          outputTokens: 5,
+          cacheReadTokens: 2,
+          cacheWriteTokens: 0,
+          totalTokens: 37,
+        },
+      }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.status).toBe("error");
+    expect(state.error).toBe("provider failed");
+    expect(state.usage).toMatchObject({
+      modelId: "resolved-model",
+      durationMs: 234,
+      turn: { inputTokens: 30, outputTokens: 5, totalTokens: 37 },
+    });
+  });
+
+  test("records terminal usage when a run is cancelled", async () => {
+    const state = runningSession();
+    const run: FollowableRun = {
+      // eslint-disable-next-line require-yield
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({
+        status: "cancelled",
+        usage: {
+          inputTokens: 12,
+          outputTokens: 3,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 15,
+        },
+      }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+
+    expect(state.status).toBe("idle");
+    expect(state.error).toBeUndefined();
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 15,
+      lastTurnTokens: 15,
     });
   });
 });

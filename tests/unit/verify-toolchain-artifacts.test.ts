@@ -491,6 +491,50 @@ describe("verify-toolchain-artifacts", () => {
     }
   });
 
+  test("hashes a raw artifact as itself, which every Grok build is", async () => {
+    // A `raw` artifact is the executable, not a container holding one, so its
+    // `entryPath` is empty and archive and executable digests are one value.
+    // Handing that empty pattern to tar fails with "pattern is empty" instead
+    // of producing a digest, which silently took both `--emit` and
+    // `verify:toolchains:live` out for all four Grok targets.
+    const root = await mkdtemp(join(tmpdir(), "ork-artifact-test-"));
+    try {
+      const executable = Buffer.from("#!/bin/sh\nprintf 'grok\\n'\n");
+      const archivePath = join(root, "grok");
+      await writeFile(archivePath, executable);
+      const digest = {
+        size: executable.byteLength,
+        sha256: createHash("sha256").update(executable).digest("hex"),
+      };
+      const artifact = testArtifact({
+        name: "grok",
+        platform: "darwin",
+        architecture: "arm64",
+        archive: {
+          format: "raw",
+          url: "https://downloads.example.test/grok-macos-aarch64",
+          entryPath: "",
+          allowedHosts: ["downloads.example.test"],
+          ...digest,
+        },
+        executable: { fileName: "grok", ...digest },
+      });
+
+      expect(await hashExecutable(artifact, archivePath)).toEqual(digest);
+      await verifyArtifact(artifact, root, {
+        fetchImpl: async () =>
+          new Response(
+            executable.buffer.slice(
+              executable.byteOffset,
+              executable.byteOffset + executable.byteLength,
+            ),
+          ),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("verifies, emits, and rejects a companion alongside its primary executable", async () => {
     // A companion ships as its own release asset, so its digests move
     // independently of the primary executable's. Both have to be downloaded and

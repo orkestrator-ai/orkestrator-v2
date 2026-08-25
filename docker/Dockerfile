@@ -119,15 +119,21 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
   -a "export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
   -x
 
-# Keep these in sync with the repository pins. tests/unit/version-drift.test.ts enforces Codex/OpenCode.
-#   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol (and scripts/download-codex.sh)
-#   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/web/package.json and apps/backend/package.json (and scripts/download-opencode.sh)
-# Claude CLI has its own release train distinct from @anthropic-ai/claude-agent-sdk.
-ARG CLAUDE_CLI_VERSION=2.1.228
-ARG CODEX_CLI_VERSION=0.147.0
-ARG OPENCODE_CLI_VERSION=1.18.16
+# Every version below must equal PINNED_TOOLCHAIN_VERSIONS in
+# apps/desktop/electron/toolchain-manifest.ts, and the SHA literals further down
+# must equal that manifest's linux digests. The image cannot read the manifest,
+# so these are a second copy; `every shipped agent, uniformly` in
+# tests/unit/version-drift.test.ts is what stops the two drifting.
+#   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol
+#   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/web/package.json and apps/backend/package.json
+#   PI_CLI_VERSION        ↔ the three @earendil-works/pi-* pins in bridges/pi-bridge/package.json
+# Claude CLI and the Cursor CLI have their own release trains, distinct from
+# @anthropic-ai/claude-agent-sdk and @cursor/sdk respectively.
+ARG CLAUDE_CLI_VERSION=2.1.245
+ARG CODEX_CLI_VERSION=0.149.1
+ARG OPENCODE_CLI_VERSION=1.18.23
 ARG CURSOR_AGENT_VERSION=2026.08.11-e8db854
-ARG GROK_BUILD_VERSION=1.0.3
+ARG GROK_BUILD_VERSION=1.0.10
 ARG PI_CLI_VERSION=0.84.3
 
 # Install Claude Code from the pinned npm package. The package pulls in the
@@ -150,8 +156,8 @@ ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) CURSOR_ARCH=x64; CURSOR_SHA=bfff4bf6f4e9dd30c1d0ef0a70b6077b074015dd2948e4c50685d53afdcfce5a; GROK_ARCH=x86_64; GROK_SHA=2a7d46dea3fbed067e4072258b835d401e017d6848dc996279f0fb3d668a0961 ;; \
-    arm64) CURSOR_ARCH=arm64; CURSOR_SHA=ea13f92e295f523a99ce8d8f57d6894d21e5d1e2d030ffad718ccd5955ca2eed; GROK_ARCH=aarch64; GROK_SHA=ed44950eab90573b6f475191f5791713a56943939b3b9a62e3f4e95edd14acd9 ;; \
+    amd64) CURSOR_ARCH=x64; CURSOR_SHA=bfff4bf6f4e9dd30c1d0ef0a70b6077b074015dd2948e4c50685d53afdcfce5a; GROK_ARCH=x86_64; GROK_SHA=d698a2dfa7ea37043f1c70cdca7da12ca51a5e124ffb4fc9a7b12bd26d0e2752 ;; \
+    arm64) CURSOR_ARCH=arm64; CURSOR_SHA=ea13f92e295f523a99ce8d8f57d6894d21e5d1e2d030ffad718ccd5955ca2eed; GROK_ARCH=aarch64; GROK_SHA=050a0e35a8aa612cdf1ed9ea15d2733e05413db2b20f2cbb39a26b66e51f2b4d ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
   curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_AGENT_VERSION}/linux/${CURSOR_ARCH}/agent-cli-package.tar.gz" -o /tmp/cursor-agent.tar.gz && \

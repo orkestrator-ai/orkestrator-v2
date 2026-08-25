@@ -120,6 +120,19 @@ export const PROMPT_TIMEOUT_MS = parseBoundedInteger(
 /** Bounded budget for catalogue and history reads, which are never on a turn. */
 export const CATALOG_TIMEOUT_MS = 30_000;
 /**
+ * How long a *polled* read may wait for a composer rehydration before it
+ * answers with the snapshot it already has.
+ *
+ * `/session/:id/status` is what the backend polls, and it budgets the whole
+ * call at 30s — the same ceiling `CATALOG_TIMEOUT_MS` puts on the catalogue
+ * probe behind a hydration. Waiting the full probe out would turn a slow
+ * provider into a *failed* status read, so these routes wait only long enough
+ * for a warm catalogue and then publish what they have. The hydration carries
+ * on in the background and the next poll picks it up, which is the same
+ * snapshot-plus-increment contract every other read here follows.
+ */
+export const COMPOSER_HYDRATION_WAIT_MS = 1_500;
+/**
  * How long a tool call may wait for a human before it is denied.
  *
  * Denial, never approval: an unanswered prompt is a prompt nobody saw, and

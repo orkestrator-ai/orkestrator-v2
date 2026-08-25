@@ -110,12 +110,19 @@ docker/                     # Docker configuration
 ```bash
 bun install              # NOT npm install
 bun run <script>         # NOT npm run
-bun test                 # NOT npm test
+bun run test             # Repository-declared full suite; NOT bare `bun test`
+bun test <explicit-path> # Focused Bun test-runner invocation only
 bunx <package>           # NOT npx
 bun <file>               # NOT node <file>
 ```
 
 Bun automatically loads `.env` files.
+
+At the repository root, bare `bun test` is not equivalent to running the
+package's `test` script. It performs direct test discovery and can collect
+Playwright/E2E specifications and unrelated fixtures. Use `bun run test` for
+the repository's complete validation suite. Reserve `bun test` for an explicit
+test file or directory when intentionally running a focused subset.
 
 ## Formatting and Linting - oxc
 
@@ -721,6 +728,11 @@ Files:
 - `toolchains/` - Versioned, hash-verified Codex, OpenCode, and Claude Code executables shared by local environments
 
 ## Testing
+
+For the complete repository suite, always invoke the package script with
+`bun run test`; never substitute a bare root-level `bun test`. Direct
+`bun test` is appropriate only with an explicit focused path, as in the logged
+root and bridge subset commands below.
 
 ```bash
 bun run test

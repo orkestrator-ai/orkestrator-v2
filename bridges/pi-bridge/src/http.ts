@@ -10,7 +10,13 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
-import { authenticate, MAX_BODY_BYTES, PROVIDER, workingDirectory } from "./config.js";
+import {
+  authenticate,
+  COMPOSER_HYDRATION_WAIT_MS,
+  MAX_BODY_BYTES,
+  PROVIDER,
+  workingDirectory,
+} from "./config.js";
 import { authStatus, CredentialError } from "./credentials.js";
 import {
   denyAllApprovals,
@@ -40,6 +46,7 @@ import {
   publicStatus,
 } from "./public.js";
 import { refreshRuntimeCatalog } from "./runtime.js";
+import { withTimeout } from "./timeout.js";
 import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./transcript.js";
 import {
   applyComposerPatch,
@@ -48,6 +55,7 @@ import {
   createSession,
   ensureSession,
   forkSession,
+  hydrateSessionComposer,
   listResumableSessions,
   parseComposerPatch,
   resumeSession,
@@ -133,8 +141,19 @@ async function routeGlobal(
     return true;
   }
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
-    refreshModels();
     await refreshRuntimeCatalog();
+    // Invalidate after the SDK refresh settles. A catalogue probe that began
+    // before the refresh may still complete while it is running; the model
+    // layer's generation guard stops that probe publishing, and this ordering
+    // ensures even a result that landed just before settlement is discarded.
+    refreshModels();
+    // Restored sessions intentionally hold no persisted model rows. A manual
+    // refresh must repair those session snapshots too, otherwise the global
+    // catalogue changes while the open tab keeps saying no models are
+    // available until its ordinary retry deadline passes.
+    await Promise.all(
+      Array.from(sessions.values()).map((state) => hydrateSessionComposer(state, { force: true })),
+    );
     json(response, 200, { ok: true });
     return true;
   }
@@ -235,6 +254,31 @@ async function routeSession(
   // the backend sweeps every persisted session every couple of seconds, so
   // refreshing on those would put idle detaching permanently out of reach.
   if (action !== "activity" && action !== "dispatch") state.lastAccessed = Date.now();
+
+  // `restoreComposer` drops the persisted model rows by design. Rehydrate on
+  // the routes that publish or mutate composer state so a restarted bridge's
+  // authoritative snapshot can stand on its own instead of depending on a
+  // renderer-side event or an environment-wide cache happening to be fresh.
+  //
+  // Every route that publishes composer state has to stay below the backend's
+  // request ceiling. Config POST is especially important: waiting the full
+  // catalogue timeout before reading its body let the client time out first,
+  // after which the abandoned server request could still apply the selection.
+  // A bounded wait publishes a warm catalogue immediately and otherwise leaves
+  // the shared hydration running for this or the next snapshot to collect.
+  if (
+    (request.method === "GET" && (!action || action === "status")) ||
+    (action === "config" && (request.method === "GET" || request.method === "POST"))
+  ) {
+    // `.catch` before the race, not after: the loser of a `Promise.race` still
+    // settles, and a hydration that rejects after the wait elapsed would
+    // otherwise surface as an unhandled rejection.
+    await withTimeout(
+      hydrateSessionComposer(state).catch(() => undefined),
+      COMPOSER_HYDRATION_WAIT_MS,
+      "Pi composer hydration is still running",
+    ).catch(() => undefined);
+  }
 
   if (!action && request.method === "GET") {
     boundTranscriptForRead(state);

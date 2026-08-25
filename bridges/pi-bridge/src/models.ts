@@ -53,7 +53,16 @@ const THINKING_LABELS: Readonly<Record<PiThinkingLevel, string>> = Object.freeze
 });
 
 let catalogCache: AgentModel[] | null = null;
-let catalogProbe: Promise<AgentModel[]> | null = null;
+interface CatalogProbe {
+  generation: number;
+  operation: Promise<AgentModel[]>;
+}
+
+let catalogProbe: CatalogProbe | null = null;
+/** Invalidates both cached rows and probes that started before an explicit refresh. */
+let catalogGeneration = 0;
+/** See {@link catalogReadFailed}: an empty catalogue is not always an answer. */
+let lastCatalogReadFailed = false;
 /**
  * The thinking-level preferences the *last* catalogue read was built against.
  *
@@ -129,41 +138,81 @@ export async function listModels(defaults?: ThinkingLevelDefaults): Promise<Agen
   if (catalogCache && (catalogDefaults !== undefined || defaults === undefined)) {
     return catalogCache;
   }
-  catalogProbe ??= (async () => {
-    try {
-      const runtime = await modelRuntime();
-      const available = await withTimeout(
-        runtime.getAvailable(),
-        CATALOG_TIMEOUT_MS,
-        "Pi catalogue read timed out",
-      );
-      const models = available
-        .slice(0, MAX_MODELS)
-        .map((model) =>
-          normalizeAgentModel(model, defaults, runtime.getProvider(model.provider)?.name),
-        )
-        .filter((model) => model.id.length > 0);
-      if (models.length > 0) {
-        catalogCache = models;
-        catalogDefaults = defaults;
+  const generation = catalogGeneration;
+  if (!catalogProbe || catalogProbe.generation !== generation) {
+    const operation = (async () => {
+      try {
+        const runtime = await modelRuntime();
+        const available = await withTimeout(
+          runtime.getAvailable(),
+          CATALOG_TIMEOUT_MS,
+          "Pi catalogue read timed out",
+        );
+        const models = available
+          .slice(0, MAX_MODELS)
+          .map((model) =>
+            normalizeAgentModel(model, defaults, runtime.getProvider(model.provider)?.name),
+          )
+          .filter((model) => model.id.length > 0);
+        // An explicit refresh can land while `getAvailable` is awaiting SDK
+        // auth or provider work. The caller that started this read may still use
+        // its result, but an obsolete generation must never repopulate the
+        // process-wide cache the refresh just invalidated.
+        if (generation === catalogGeneration) {
+          if (models.length > 0) {
+            catalogCache = models;
+            catalogDefaults = defaults;
+          }
+          lastCatalogReadFailed = false;
+        }
+        return models;
+      } catch (error) {
+        if (generation === catalogGeneration) lastCatalogReadFailed = true;
+        throw error;
       }
-      return models;
-    } finally {
-      catalogProbe = null;
-    }
-  })();
+    })();
+    const probe = { generation, operation };
+    catalogProbe = probe;
+    const clear = () => {
+      if (catalogProbe === probe) catalogProbe = null;
+    };
+    // Both handlers return normally, so observing cleanup cannot create a
+    // second rejected promise when the catalogue read itself fails.
+    void operation.then(clear, clear);
+  }
   // A rebuild that fails falls back to the catalogue already held rather than
   // to nothing. The rebuild path is reached when a *better* answer is
   // available — a caller that can resolve the user's thinking-level defaults —
   // so a timeout there would otherwise empty a model picker that was working a
   // moment ago.
-  return catalogProbe.catch(() => catalogCache ?? []);
+  return catalogProbe.operation.catch(() => catalogCache ?? []);
+}
+
+/**
+ * Whether the most recently *completed* catalogue probe failed.
+ *
+ * `listModels` answers a failed probe with the catalogue it already held, or
+ * with `[]` when it held none — so an empty list on its own cannot tell "this
+ * account has no models" from "the read timed out". Callers that would act
+ * destructively on emptiness, such as clearing an open session's picker, have
+ * to know which one it was.
+ *
+ * One flag is enough because one probe is: `catalogProbe` is shared, so every
+ * concurrent caller is reading the same result this describes.
+ */
+export function catalogReadFailed(): boolean {
+  return lastCatalogReadFailed;
 }
 
 /** Drop the memo so the next read re-discovers. */
 export function refreshModels(): void {
+  catalogGeneration += 1;
   catalogCache = null;
   catalogDefaults = undefined;
+  // The old verdict described a read whose result has just been discarded.
+  // Leaving it set would let the *next* caller attribute a stale failure to a
+  // probe that has not run yet.
+  lastCatalogReadFailed = false;
 }
 
 /**

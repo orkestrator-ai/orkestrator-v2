@@ -11,6 +11,11 @@ import { asRecord, isTransientHttpStatus, nonEmptyString } from "./agent-provide
 
 const DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS = 30_000;
 const ACP_SESSION_START_TIMEOUT_MS = 75_000;
+// Pi's explicit catalogue refresh has two independently bounded phases: the
+// SDK runtime refresh and the session-composer rebuild. Keep the caller alive
+// long enough for both so a server-side refresh cannot outlive a client that
+// already moved on to re-listing stale rows.
+const BRIDGE_CATALOG_REFRESH_TIMEOUT_MS = 65_000;
 /**
  * Prompt dispatch and session attach share one budget, because they do the same
  * work.
@@ -30,7 +35,12 @@ const BRIDGE_ATTACH_TIMEOUT_MS = 90_000;
  * Which ceiling a request gets. `prompt` and `attach` are separate names for
  * the same budget so call sites read as what they do.
  */
-export type BridgeRequestTimeoutKind = "default" | "session-start" | "attach" | "prompt";
+export type BridgeRequestTimeoutKind =
+  | "default"
+  | "session-start"
+  | "attach"
+  | "prompt"
+  | "catalog-refresh";
 
 /**
  * Transport failures that are proven to precede the first written byte.
@@ -147,6 +157,7 @@ function bridgeRequestTimeoutMs(
   // can reattach a detached session on its prompt route, and none of them
   // benefits from the caller giving up while that work is still running.
   if (kind === "attach" || kind === "prompt") return BRIDGE_ATTACH_TIMEOUT_MS;
+  if (kind === "catalog-refresh") return BRIDGE_CATALOG_REFRESH_TIMEOUT_MS;
   return DEFAULT_BRIDGE_REQUEST_TIMEOUT_MS;
 }
 

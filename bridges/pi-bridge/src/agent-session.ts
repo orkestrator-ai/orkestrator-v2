@@ -40,6 +40,7 @@ import {
 import { assertAuthenticated } from "./credentials.js";
 import { requestToolApproval } from "./interactions.js";
 import {
+  catalogReadFailed,
   emptyComposer,
   hydrateComposer,
   reconcileComposerSelection,
@@ -70,6 +71,11 @@ const closingSessions = new WeakSet<SessionState>();
 /** One in-flight adoption per canonical Pi session file. */
 const sessionResumptions = new Map<string, Promise<SessionState>>();
 
+/** One live-catalogue repair per restored bridge session. */
+const composerHydrations = new WeakMap<SessionState, Promise<void>>();
+/** Empty catalogues are retryable, but not on every 500ms status poll. */
+const composerHydrationRetryAfter = new WeakMap<SessionState, number>();
+
 /**
  * Narrow dependency seam for lifecycle tests and HTTP contract fakes.
  *
@@ -89,6 +95,17 @@ export function setAgentSessionTestHooks(hooks: AgentSessionTestHooks | undefine
   agentSessionTestHooks = hooks ?? {};
 }
 
+/**
+ * Test seam: drop a session's hydration retry deadline.
+ *
+ * The deadline is `CATALOG_TIMEOUT_MS` in the future, which no test should
+ * wait out and none should fake a clock for — `Date.now` is read on the
+ * request path here, not through an injectable one.
+ */
+export function expireComposerHydrationRetryForTests(state: SessionState): void {
+  composerHydrationRetryAfter.delete(state);
+}
+
 function hydrateComposerForSession(
   composer: SessionState["composer"],
   defaults?: ThinkingLevelDefaults,
@@ -98,6 +115,84 @@ function hydrateComposerForSession(
 
 function resolveModelForSession(modelId: string | undefined): ReturnType<typeof resolveModel> {
   return (agentSessionTestHooks.resolveModel ?? resolveModel)(modelId);
+}
+
+/**
+ * Merge a freshly read catalogue into whatever the composer is *now*.
+ *
+ * The read this result came from is unbounded, and nothing serializes it
+ * against the other composer writers: attaching reconciles the selection
+ * against the model the turn will really run, `applyComposerPatch` records the
+ * user's pick, and Pi's own `thinking_level_changed` echoes the level it
+ * clamped to. Assigning the object the read was *derived* from would silently
+ * revert whichever of those landed while it was in flight — including the
+ * reconciliation that exists precisely so the picker cannot name a model the
+ * turn is not running. Only the rows this read is the authority for cross over.
+ */
+function adoptHydratedComposer(state: SessionState, hydrated: SessionState["composer"]): void {
+  const current = state.composer;
+  const selectedModelId = current.selectedModelId ?? hydrated.selectedModelId;
+  state.composer = {
+    ...current,
+    models: hydrated.models,
+    ...(selectedModelId ? { selectedModelId } : {}),
+    selectedReasoningId: current.selectedReasoningId ?? hydrated.selectedReasoningId,
+    fastModeAvailable: false,
+  };
+  state.revision += 1;
+}
+
+/**
+ * Put the live model catalogue back into a restored session composer.
+ *
+ * Persistence deliberately retains only the user's selection: provider auth
+ * can change while the bridge is down, so restoring yesterday's model rows
+ * would offer models the account can no longer run. That makes the first
+ * status/config read after a restart responsible for rehydrating the rows.
+ * Sharing the work prevents the backend's parallel projection reads from
+ * multiplying SDK availability probes, while the retry deadline prevents an
+ * unauthenticated session from probing on every projection poll.
+ */
+export async function hydrateSessionComposer(
+  state: SessionState,
+  options: { force?: boolean } = {},
+): Promise<void> {
+  if (!options.force && state.composer.models.length > 0) return;
+  if (!options.force && (composerHydrationRetryAfter.get(state) ?? 0) > Date.now()) {
+    return;
+  }
+  const pending = composerHydrations.get(state);
+  if (pending && !options.force) return pending;
+  // A forced refresh must not *adopt* an in-flight read. That read started
+  // before `/global/refresh-catalog` dropped the catalogue, so it answers with
+  // exactly the rows the refresh was asked to replace — and once it lands the
+  // session has models again, which is the condition that stops every later
+  // unforced hydration from running. The tab would then stay stale until the
+  // user refreshed a second time. Wait for it, then read the catalogue afresh.
+  const settled = pending?.catch(() => undefined);
+
+  const operation = (async () => {
+    if (settled) await settled;
+    const hydrated = await hydrateComposerForSession(state.composer);
+    if (hydrated.models.length === 0) {
+      composerHydrationRetryAfter.set(state, Date.now() + CATALOG_TIMEOUT_MS);
+      // An empty list from a read that *failed* is not evidence that the
+      // account has no models, and the refresh route has already dropped the
+      // cache that would otherwise have absorbed the failure. Emptying a
+      // working picker because a provider timed out is worse than leaving it
+      // stale for one retry interval.
+      if (options.force && !catalogReadFailed() && state.composer.models.length > 0) {
+        adoptHydratedComposer(state, hydrated);
+      }
+      return;
+    }
+    composerHydrationRetryAfter.delete(state);
+    adoptHydratedComposer(state, hydrated);
+  })().finally(() => {
+    if (composerHydrations.get(state) === operation) composerHydrations.delete(state);
+  });
+  composerHydrations.set(state, operation);
+  return operation;
 }
 
 export function newSessionState(clientSessionKey?: string): SessionState {
@@ -144,7 +239,10 @@ export async function createSession(
   if (clientSessionKey) {
     const existingId = clientSessionKeys.get(clientSessionKey);
     const existing = existingId ? sessions.get(existingId) : undefined;
-    if (existing) return existing;
+    if (existing) {
+      await hydrateSessionComposer(existing);
+      return existing;
+    }
     const inFlight = sessionCreations.get(clientSessionKey);
     if (inFlight) return inFlight;
   }

@@ -1487,6 +1487,9 @@ exit 42
 
   test("clears a pending prompt when the user manually renames the environment", async () => {
     const environment = createEnvironment({
+      environmentType: "containerized",
+      worktreePath: undefined,
+      status: "stopped",
       pendingRenamePrompt: "Generate a name after startup",
     });
     const { context } = createContext(environment);
@@ -1500,6 +1503,41 @@ exit 42
     expect(environment.name).toBe("manual-choice");
     expect(environment.branch).toBe("manual-choice");
     expect(environment.pendingRenamePrompt).toBeUndefined();
+  });
+
+  test("manual rename keeps the live local branch aligned for PR detection", async () => {
+    const worktreePath = await createGitRepoOnBranch("old-branch");
+    const environment = createEnvironment({
+      environmentType: "local",
+      worktreePath,
+      name: "old-name",
+      branch: "old-branch",
+      prUrl: "https://github.com/acme/repo/pull/1",
+      prState: "open",
+      hasMergeConflicts: true,
+    });
+    const { context, emitted } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await expect(
+      commands.get("rename_environment")?.(
+        { environmentId: environment.id, name: "Manual Choice" },
+        context,
+      ),
+    ).resolves.toMatchObject({ name: "manual-choice", branch: "manual-choice" });
+
+    expect(await currentGitBranch(worktreePath)).toBe("manual-choice");
+    expect(environment.prUrl).toBeNull();
+    expect(environment.prState).toBeNull();
+    expect(environment.hasMergeConflicts).toBeNull();
+    expect(emitted).toContainEqual({
+      event: "environment-renamed",
+      payload: {
+        environment_id: environment.id,
+        new_name: "manual-choice",
+        new_branch: "manual-choice",
+      },
+    });
   });
 
   test(

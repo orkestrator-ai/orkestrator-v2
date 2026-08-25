@@ -3,12 +3,10 @@ import {
   isAgentBridgeKind,
   isStructuredCommandError,
   isPrMonitorMode,
-  runCommand,
 } from "./commands-dependencies.js";
 import type { AwaitBridgeReadyResult, PrMonitorSnapshot } from "./commands-dependencies.js";
 import {
   LOCAL_SERVER_KINDS,
-  withContainerRuntimeCredential,
   setPrMonitorRuntime,
   prMonitorService,
   environmentToPrMonitorTarget,
@@ -21,7 +19,6 @@ import {
   asNumber,
   asStringArray,
   asNonBlankString,
-  quoteShell,
   parseMergeMethod,
   parseReviewPackageId,
   parseReviewRound,
@@ -31,11 +28,10 @@ import {
   generateLoopedReviewPackage,
   mergePullRequestInContainer,
   runStoredEnvironmentMerge,
-  parsePrDetectionOutput,
   validatePrDetectionBranch,
+  detectEnvironmentPullRequest,
   findEnvironmentByContainerId,
   deleteMergedEnvironmentRemoteBranch,
-  dockerExec,
   asLocalServerKind,
   peekLocalAgentBridge,
   peekContainerAgentBridge,
@@ -93,34 +89,25 @@ export function registerPullRequestCommands(
     if (!env) throw new Error(`Environment not found: ${environmentId}`);
     if (!env.worktreePath)
       throw new Error("Environment is not a local environment (no worktree path)");
-    const headBranch = validatePrDetectionBranch(branch);
-    const { stdout } = await runCommand(
-      "gh",
-      [
-        "pr",
-        "list",
-        "--head",
-        headBranch,
-        "--state",
-        "all",
-        "--limit",
-        "30",
-        "--json",
-        "url,state,mergeable,updatedAt",
-      ],
-      { cwd: env.worktreePath, timeoutMs: 30_000 },
-    );
-    return parsePrDetectionOutput(stdout, headBranch);
+    return detectEnvironmentPullRequest({
+      ...environmentToPrMonitorTarget(env),
+      branch: validatePrDetectionBranch(branch),
+      prUrl: null,
+      prState: null,
+    });
   });
   register("detect_pr", async ({ containerId, branch }) => {
-    const headBranch = validatePrDetectionBranch(branch);
-    const output = await dockerExec(
-      asString(containerId, "containerId"),
-      withContainerRuntimeCredential(
-        `gh pr list --head ${quoteShell(headBranch)} --state all --limit 30 --json url,state,mergeable,updatedAt`,
-      ),
-    );
-    return parsePrDetectionOutput(output, headBranch);
+    const resolvedContainerId = asString(containerId, "containerId");
+    return detectEnvironmentPullRequest({
+      environmentId: resolvedContainerId,
+      branch: validatePrDetectionBranch(branch),
+      kind: "container",
+      containerId: resolvedContainerId,
+      ready: true,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    });
   });
   register("merge_pr_local", async ({ environmentId, method, deleteBranch }, context) => {
     const id = asString(environmentId, "environmentId");

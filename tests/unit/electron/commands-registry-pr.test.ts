@@ -195,6 +195,39 @@ printf '[]\\n'
     );
   });
 
+  test("detects a PR from the live branch after stored branch drift from a rename", async () => {
+    const worktreePath = await createGitRepoOnBranch("live-branch");
+    const environment = createEnvironment({
+      environmentType: "local",
+      worktreePath,
+      branch: "renamed-environment",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+
+    await withFakeGh(
+      `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/17","state":"OPEN","mergeable":"MERGEABLE","updatedAt":"2026-08-25T17:43:11Z"}]'
+`,
+      async (logPath) => {
+        await expect(
+          commands.get("detect_pr_local")?.(
+            { environmentId: environment.id, branch: environment.branch },
+            context,
+          ),
+        ).resolves.toMatchObject({
+          url: "https://github.com/acme/repo/pull/17",
+          state: "open",
+        });
+
+        const ghLog = await fs.readFile(logPath, "utf8");
+        expect(ghLog).toContain("pr list --head live-branch");
+        expect(ghLog).not.toContain("--head renamed-environment");
+      },
+    );
+  });
+
   test.each([
     ["UNKNOWN mergeability", '"mergeable":"UNKNOWN"', null],
     ["missing mergeability", "", null],
@@ -310,6 +343,9 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/1"}'
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "exec" ]; then
   printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+  case "$*" in
+    *"git -C /workspace branch --show-current"*) printf '%s\\n' 'feature/container-pr'; exit 0 ;;
+  esac
   printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/9","state":"MERGED","mergeable":"MERGEABLE","updatedAt":"2026-01-03T00:00:00Z"}]'
   exit 0
 fi

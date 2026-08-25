@@ -193,11 +193,49 @@ export function parsePrMonitorDetectionResponse(
     : parsePrDetectionOutput(stdout, request.branch);
 }
 
+/**
+ * Resolve the branch from the live checkout when possible.
+ *
+ * Stored environment data from versions with the manual-rename bug can name a
+ * branch that Git never adopted. PR discovery must follow the branch an agent
+ * can actually push, while a stopped/unavailable/detached checkout safely falls
+ * back to the stored value.
+ */
+export async function resolvePrDetectionBranch(target: PrMonitorTarget): Promise<string> {
+  const fallback = validatePrDetectionBranch(target.branch);
+  let stdout: string | null = null;
+  if (target.kind === "local") {
+    if (!target.worktreePath) return fallback;
+    stdout = await runCommand("git", ["-C", target.worktreePath, "branch", "--show-current"], {
+      timeoutMs: 10_000,
+    }).then(
+      (result) => result.stdout,
+      () => null,
+    );
+  } else {
+    if (!target.containerId) return fallback;
+    stdout = await dockerExec(
+      target.containerId,
+      "git -C /workspace branch --show-current",
+      10_000,
+    ).then(
+      (result) => result,
+      () => null,
+    );
+  }
+  const liveBranch = stdout?.trim();
+  return liveBranch ? validatePrDetectionBranch(liveBranch) : fallback;
+}
+
 /** Runs immutable lookup for known PRs and branch discovery for unknown PRs. */
 export async function detectEnvironmentPullRequest(
   target: PrMonitorTarget,
 ): Promise<PrDetection | null> {
-  const request = getPrMonitorDetectionRequest(target);
+  const detectionTarget =
+    target.prUrl && target.prState !== "merged" && target.prState !== "closed"
+      ? target
+      : { ...target, branch: await resolvePrDetectionBranch(target) };
+  const request = getPrMonitorDetectionRequest(detectionTarget);
   if (target.kind === "local") {
     if (!target.worktreePath) throw new Error("Local environment has no worktree path");
     const { stdout } = await runCommand("gh", request.args, {

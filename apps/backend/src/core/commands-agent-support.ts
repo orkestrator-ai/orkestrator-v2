@@ -801,6 +801,25 @@ export async function renameEnvironmentFromPrompt(
     existingGitBranches,
   );
   const newBranch = sanitizeBranchName(newName);
+  await renameEnvironmentToName(environment, newName, newBranch, context);
+}
+
+/**
+ * Applies an environment rename without allowing its stored branch to diverge
+ * from the live checkout.
+ *
+ * Both manual and first-prompt renames reach this path. The old manual command
+ * updated `environment.branch` without renaming Git, so later PR discovery
+ * searched GitHub for the new environment name while the agent had pushed and
+ * opened a PR from the old live branch.
+ */
+export async function renameEnvironmentToName(
+  environment: Environment,
+  newName: string,
+  newBranch: string,
+  context: CommandContext,
+): Promise<Environment> {
+  const oldBranch = environment.branch;
   const branchChanged = oldBranch !== newBranch;
 
   // Rename any live git branch before persisting, and only advance the stored branch
@@ -809,7 +828,7 @@ export async function renameEnvironmentFromPrompt(
   const persistBranch =
     branchChanged && (await renameLiveGitBranch(environment, oldBranch, newBranch));
 
-  const updated = await context.storage.updateEnvironment(environmentId, {
+  const updated = await context.storage.updateEnvironment(environment.id, {
     name: newName,
     ...(persistBranch
       ? { branch: newBranch, prUrl: null, prState: null, hasMergeConflicts: null }
@@ -822,4 +841,5 @@ export async function renameEnvironmentFromPrompt(
     new_name: updated.name,
     new_branch: updated.branch,
   });
+  return updated;
 }

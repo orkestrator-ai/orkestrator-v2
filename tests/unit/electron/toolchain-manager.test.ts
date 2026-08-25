@@ -466,6 +466,64 @@ describe("pinned desktop toolchain cache", () => {
     expect(await readFile(lazyChunkPath)).toEqual(lazyChunk);
   });
 
+  test("retains a repairable launcher without counting it twice in bundle integrity", async () => {
+    const dataDir = await createDataDir();
+    const launcher = Buffer.from("#!/bin/sh\nexit 0\n");
+    const runtime = Buffer.from("bundled runtime");
+    const lazyChunk = Buffer.from("lazy runtime");
+    const archive = await tarGzip([
+      { name: "dist-package/pi", body: launcher },
+      { name: "dist-package/node", body: runtime },
+      { name: "dist-package/chunks/lazy.js", body: lazyChunk },
+    ]);
+    const artifact: ToolchainArtifact = {
+      ...artifactWithBody(
+        artifacts[1]!,
+        archive,
+        {
+          entryPath: "dist-package/pi",
+          bundleRoot: "dist-package/",
+          bundleIntegrity: {
+            fileCount: 2,
+            totalSize: 27,
+            sha256: "46ed76bffe64e3672843d3c536ff0fbd0d91e3dd3528b12e1c870264856d8855",
+          },
+          url: "https://downloads.example.test/pi.tar.gz",
+        },
+        {
+          fileName: "pi",
+          size: launcher.byteLength,
+          sha256: sha256(launcher),
+          repairInvalidMacSignature: true,
+        },
+      ),
+      name: "pi",
+    };
+    let downloads = 0;
+    const install = () =>
+      ensurePinnedToolchains({
+        dataDir,
+        artifacts: [artifact],
+        fetchImpl: async () => {
+          downloads += 1;
+          return new Response(archive, {
+            status: 200,
+            headers: { "content-length": String(archive.byteLength) },
+          });
+        },
+        skipExecutableProbeForTests: true,
+      });
+
+    const result = await install();
+    const installedPath = await readlink(path.join(result.binDir, "pi"));
+    const upstreamPath = path.join(path.dirname(installedPath), ".upstream-pi");
+    expect(await readFile(installedPath)).toEqual(launcher);
+    expect(await readFile(upstreamPath)).toEqual(launcher);
+
+    await install();
+    expect(downloads).toBe(1);
+  });
+
   test("installs ZIP and tar.gz artifacts once, activates them, and reuses verified files", async () => {
     const dataDir = await createDataDir();
     const fetchImpl = createFetch();

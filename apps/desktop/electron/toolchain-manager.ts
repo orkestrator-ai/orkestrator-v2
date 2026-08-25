@@ -414,9 +414,16 @@ type BundleTreeEntry = {
 
 async function bundleTreeEntries(
   directory: string,
-  executableFileName: string,
+  artifact: ToolchainArtifact,
 ): Promise<BundleTreeEntry[]> {
   const entries: BundleTreeEntry[] = [];
+  const excludedExecutablePaths = new Set<string>([artifact.executable.fileName]);
+  if (artifact.executable.repairInvalidMacSignature) {
+    // Repairable artifacts retain the manifest-pinned upstream launcher beside
+    // the locally signed runnable copy. Both represent the primary executable,
+    // which the bundle digest deliberately excludes and validates separately.
+    excludedExecutablePaths.add(`.upstream-${artifact.executable.fileName}`);
+  }
   const visit = async (currentDirectory: string, prefix = ""): Promise<void> => {
     for (const entry of await readdir(currentDirectory, { withFileTypes: true })) {
       const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -424,7 +431,7 @@ async function bundleTreeEntries(
       if (entry.isDirectory()) {
         await visit(filePath, relativePath);
       } else if (entry.isFile() && !entry.isSymbolicLink()) {
-        if (relativePath === executableFileName) continue;
+        if (excludedExecutablePaths.has(relativePath)) continue;
         const info = await lstat(filePath);
         entries.push({
           path: relativePath,
@@ -468,7 +475,7 @@ async function hasValidBundleIntegrity(
 ): Promise<boolean> {
   const expected = artifact.archive.bundleIntegrity;
   if (!expected) return true;
-  const actual = bundleTreeDigest(await bundleTreeEntries(directory, artifact.executable.fileName));
+  const actual = bundleTreeDigest(await bundleTreeEntries(directory, artifact));
   return (
     actual.fileCount === expected.fileCount &&
     actual.totalSize === expected.totalSize &&

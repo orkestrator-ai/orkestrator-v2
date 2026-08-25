@@ -21,16 +21,17 @@ path has been updated.
 ### Local desktop environments
 
 `apps/desktop/electron/toolchain-manifest.ts` is the authoritative artifact
-manifest for Claude, Codex, and OpenCode. It contains one entry per supported
-platform and architecture:
+manifest for managed agent command-line tools. It contains one entry per
+supported platform and architecture:
 
 - macOS arm64 and x64
 - Linux arm64 and x64
 
 Each entry pins the archive URL, allowed hosts, archive size and SHA-256, archive
-member to extract, and extracted executable size and SHA-256. OpenCode's macOS
-entries additionally set `repairInvalidMacSignature`; the manager retains the
-verified upstream bytes and creates a locally ad-hoc-signed executable.
+member to extract, and extracted executable size and SHA-256. The macOS entries
+for OpenCode and Pi additionally set `repairInvalidMacSignature`; the manager
+retains the verified upstream bytes and creates a locally ad-hoc-signed
+executable.
 
 An entry may also declare `companions`: further executables the primary one
 spawns from its own directory. They are installed into the same version

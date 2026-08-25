@@ -582,14 +582,17 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
       }
     }
 
-    // OpenCode ships unsigned macOS binaries on both architectures, so both must
-    // opt into repair or installation fails on that architecture.
-    const darwinOpenCode = PINNED_TOOLCHAIN_ARTIFACTS.filter(
-      (artifact) => artifact.name === "opencode" && artifact.platform === "darwin",
-    );
-    expect(darwinOpenCode).toHaveLength(2);
-    for (const artifact of darwinOpenCode) {
-      expect(artifact.executable.repairInvalidMacSignature).toBe(true);
+    // OpenCode ships unsigned macOS binaries, and Pi 0.84.3 ships binaries with
+    // invalid linker signatures. Both architectures must opt into repair or
+    // installation fails before the executable can be probed.
+    for (const name of ["opencode", "pi"] as const) {
+      const darwinArtifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter(
+        (artifact) => artifact.name === name && artifact.platform === "darwin",
+      );
+      expect(darwinArtifacts).toHaveLength(2);
+      for (const artifact of darwinArtifacts) {
+        expect(artifact.executable.repairInvalidMacSignature).toBe(true);
+      }
     }
   });
 

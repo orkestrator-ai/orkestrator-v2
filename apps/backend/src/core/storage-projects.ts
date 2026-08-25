@@ -490,6 +490,7 @@ export abstract class StorageProjects extends StorageBase {
         "codexBridgePid",
         "cursorBridgePid",
         "grokBridgePid",
+        "piBridgePid",
       ] as const;
       for (const field of pidFields) {
         if (!(field in updates)) continue;
@@ -504,6 +505,7 @@ export abstract class StorageProjects extends StorageBase {
         "localCodexPort",
         "localCursorPort",
         "localGrokPort",
+        "localPiPort",
         "entryPort",
         "hostEntryPort",
       ] as const;

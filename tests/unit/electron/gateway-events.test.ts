@@ -49,7 +49,6 @@ import {
   createRendererRoot,
   createTempDir,
   decodeResponseBody,
-  emitEventClientDrain,
   eventClients,
   eventFrames,
   frameId,
@@ -3086,14 +3085,18 @@ describe("remote gateway", () => {
 
     pinBufferedBytes(stream.response, 2 * 1024 * 1024);
     gateway.emit("terminal-output-session-a", { bytesBase64: "eA==" });
-    // Still at the hard limit when the socket drains: the notice itself no
+    // "drain" only follows a refused write, so refuse one for real rather than
+    // synthesizing the event the gateway listens for. Release first: the refusal
+    // has to come from the socket, not from the pinned count.
+    releaseBufferedBytes(stream.response);
+    const refused = stream.response.write(`: ${"filler".repeat(700_000)}\n\n`);
+    expect(refused).toBe(false);
+    // Still past the hard limit when that drain lands: the notice itself no
     // longer fits, and a client that cannot even be told it desynced is beyond
-    // recovering in place.
+    // recovering in place. Re-pinning in the same tick is safe because "drain"
+    // is emitted asynchronously, and a loopback socket drains far faster than a
+    // test could park 8MB on it for real.
     pinBufferedBytes(stream.response, 8 * 1024 * 1024);
-    // The preceding test covers a real refused write producing a drain event.
-    // Trigger the drain directly here so this case isolates the hard-limit
-    // recovery branch from runtime-specific loopback socket buffering.
-    emitEventClientDrain(stream.response);
 
     await waitUntil(() => stream.aborted(), "Hopeless stream was never disconnected");
     expect(eventClients(gateway).size).toBe(0);

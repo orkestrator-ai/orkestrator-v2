@@ -31,6 +31,21 @@ function lockfilePaths(): string[] {
   return found;
 }
 
+/** Every tracked `package.json`: the workspace root plus each workspace member. */
+function packageManifestPaths(): string[] {
+  const found = ["package.json"];
+  for (const group of ["apps", "bridges", "packages"]) {
+    const groupDir = join(repoRoot, group);
+    if (!existsSync(groupDir)) continue;
+    for (const entry of readdirSync(groupDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const rel = `${group}/${entry.name}/package.json`;
+      if (existsSync(join(repoRoot, rel))) found.push(rel);
+    }
+  }
+  return found;
+}
+
 /** `bun.lock` is JSONC — trailing commas are legal and `JSON.parse` rejects them. */
 function lockfileRootDependencies(rel: string): Record<string, string> {
   const lock = JSON.parse(read(rel).replace(/,(\s*[}\]])/g, "$1")) as {
@@ -356,12 +371,43 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(cliPackage.engines?.bun).toBe(`>=${hostPin}`);
   });
 
+  test("Bun: every declared @types/bun range tracks the pinned runtime's minor", () => {
+    // `@types/bun` is published in lockstep with the runtime, so a manifest left
+    // on the previous minor types a Bun the bridges no longer run on. `^x.y.0`
+    // rather than the exact pin: a types patch is a safe float, a minor is not.
+    //
+    // The manifests are discovered rather than listed. Four declare the
+    // dependency today and the rest inherit the root pin, so listing them would
+    // reproduce the drift this guards against the moment a package adds its own.
+    const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
+    const [major, minor] = hostPin.split(".");
+    const expected = `^${major}.${minor}.0`;
+
+    const declared = packageManifestPaths().flatMap((rel) => {
+      const pkg = JSON.parse(read(rel)) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const spec = pkg.devDependencies?.["@types/bun"] ?? pkg.dependencies?.["@types/bun"];
+      return spec === undefined ? [] : [{ rel, spec }];
+    });
+
+    // A repo-wide rename that dropped every declaration would otherwise pass.
+    expect(declared.length).toBeGreaterThan(0);
+    for (const { rel, spec } of declared) {
+      expect(
+        spec,
+        `${rel} declares @types/bun ${spec}, which is not the pinned Bun ${hostPin} minor`,
+      ).toBe(expected);
+    }
+  });
+
   test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {
     // The claude-bridge build vendors the SDK into dist/node_modules, which is the
     // tree the SDK actually resolves its native binary from at runtime. Stripping
     // musl from top-level node_modules (the historical location) is a no-op against
     // that runtime path. This guards against regressing to the ineffective form.
-    // The Debian/glibc image must resolve the gnu binary from this vendored tree.
+    // Verified in oven/bun:1.4.0-debian: the bridge resolves the gnu binary from this tree.
     const dockerfile = read("docker/Dockerfile");
     expect(dockerfile).toContain(
       "rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",

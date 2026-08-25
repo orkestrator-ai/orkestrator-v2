@@ -277,7 +277,9 @@ WORKDIR /opt/bridge-build/bridges/claude-bridge
 # resolved at runtime — the old top-level rm never touched it) to make resolution
 # unambiguous and drop ~225MB of dead weight. If switching to an Alpine/musl
 # base, keep musl and strip gnu instead.
-# The Debian/glibc image must boot the bridge and resolve the gnu binary.
+# Verified in oven/bun:1.4.0-debian (linux/arm64): the bridge boots, /global/health
+# returns 200, and the SDK resolves the gnu binary from dist/node_modules with no
+# musl variant and no top-level node_modules left behind.
 RUN bun run build \
  && rm -rf node_modules \
  && rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl

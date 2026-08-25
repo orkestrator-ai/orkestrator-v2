@@ -18,6 +18,7 @@ import {
   toClientEnvironment,
   type CommandContext,
 } from "./commands.js";
+import { appendTerminalOutputBuffer } from "./commands-terminal.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
 import { NativeAgentService, nativeAgentSessionStorageKey } from "./native-agent-service.js";
@@ -1764,6 +1765,54 @@ describe("setup session wait command", () => {
           timeoutMs: 60_001,
         }),
       ).rejects.toThrow("between 0 and 60000");
+    });
+  });
+
+  test("reports a retained transcript on a rehydrated setup session", async () => {
+    // The renderer retires a completed setup tab only when the backend proves
+    // its transcript is gone, so the durable-rehydration branch has to answer
+    // `hasOutput` from the retained buffer rather than always reporting false.
+    await withCommands(async (invoke, storage) => {
+      try {
+        await storage.updateEnvironment("e1", {
+          setupPhase: "ready",
+          setupSessionId: "e1:setup",
+          setupStartedAt: "2026-08-05T10:00:00.000Z",
+          setupCompletedAt: "2026-08-05T10:01:00.000Z",
+        });
+        await expect(
+          invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            sessionId: "e1:setup",
+            running: false,
+            success: true,
+            terminalRunning: false,
+            hasOutput: false,
+          }),
+        );
+
+        appendTerminalOutputBuffer("e1:setup", "cloning repository...\r\n");
+        await expect(
+          invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            sessionId: "e1:setup",
+            running: false,
+            terminalRunning: false,
+            hasOutput: true,
+          }),
+        );
+
+        // Freeing the retained buffer is what flips the answer back, which is
+        // the transition that makes the tab retirable minutes after setup ends.
+        commandTesting.deleteRetainedTerminalOutputBuffer("e1:setup");
+        await expect(
+          invoke("await_environment_setup_session", { environmentId: "e1", timeoutMs: 0 }),
+        ).resolves.toEqual(expect.objectContaining({ hasOutput: false }));
+      } finally {
+        commandTesting.deleteRetainedTerminalOutputBuffer("e1:setup");
+      }
     });
   });
 

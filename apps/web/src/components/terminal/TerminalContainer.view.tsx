@@ -242,10 +242,21 @@ export function TerminalContainer({
   const setupSessionBindSettledTabsRef = useRef(new Set<string>());
   const setupSessionPostSetupCheckedTabsRef = useRef(new Set<string>());
   const setupSessionUnavailableTabsRef = useRef(new Set<string>());
+  // A bind requested while another is already in flight for the same tab cannot
+  // be answered by that lookup: the in-flight one may have read the backend
+  // before setup finished. Record the ask so the settling bind re-dispatches
+  // instead of the request being dropped and the tab never re-checked.
+  const setupSessionRecheckPendingTabsRef = useRef(new Set<string>());
   const setupSessionBindAttemptsRef = useRef(new Map<string, number>());
   const setupSessionBindRetryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const setupSessionBindLifecycleGenerationRef = useRef(0);
   const setupSessionReconnectGenerationRef = useRef(0);
+  // Read by the async bind rather than closing over `backendSetupRunning`: a
+  // lookup dispatched while setup was running must not settle against the value
+  // it captured, or a turn that finished mid-flight is recorded as if it had
+  // been checked after setup completed.
+  const backendSetupRunningRef = useRef(backendSetupRunning);
+  backendSetupRunningRef.current = backendSetupRunning;
   const durableLaunchClearInFlightRef = useRef(false);
   // Keyed by environment, not a single "last handed off" id: this component is
   // reused across environment selections (see the container-change effect
@@ -271,6 +282,23 @@ export function TerminalContainer({
     [setupSessionKeyForTab],
   );
 
+  /**
+   * Whether this renderer can still paint the tab's setup transcript on its own.
+   *
+   * PersistentTerminal replays `serializedBuffer` for a backend-managed setup
+   * tab without asking the backend for anything, so "the backend has no bytes"
+   * is not the same as "there is nothing to show". The backend frees a retained
+   * setup buffer a few minutes after the PTY exits; retiring the tab on that
+   * alone would run `cleanupTerminalTab`, drop this buffer with it, and destroy
+   * setup history the user was still reading.
+   */
+  const hasReplayableSetupTranscript = useCallback(
+    (tabId: string) =>
+      !!useTerminalSessionStore.getState().sessions.get(setupSessionKeyForTab(tabId))
+        ?.serializedBuffer,
+    [setupSessionKeyForTab],
+  );
+
   const bindBackendSetupSession = useCallback(
     async (tabId = "default") => {
       // Tracked per tab, not globally: a global latch made a second unbound
@@ -279,6 +307,11 @@ export function TerminalContainer({
       // neither connect nor be retired.
       if (setupSessionBindInFlightRef.current.has(tabId)) {
         const alreadyBound = hasBoundSetupSession(tabId);
+        // The in-flight lookup may have read the backend before setup finished,
+        // so it cannot answer this request. Park it: the settling bind
+        // re-dispatches rather than letting the ask disappear, which is what
+        // left a completed tab bound to a session nothing ever re-checked.
+        setupSessionRecheckPendingTabsRef.current.add(tabId);
         console.info("[setup-terminal] setup session bind skipped: already in flight", {
           environmentId,
           tabId,
@@ -287,6 +320,8 @@ export function TerminalContainer({
         return alreadyBound;
       }
       const requestToken = Symbol(tabId);
+      const startedWhileSetupRunning = backendSetupRunningRef.current;
+      let lookupFailed = false;
       const lifecycleGeneration = setupSessionBindLifecycleGenerationRef.current;
       const reconnectGeneration = setupSessionReconnectGenerationRef.current;
       const existingTimer = setupSessionBindRetryTimersRef.current.get(tabId);
@@ -310,10 +345,19 @@ export function TerminalContainer({
         lookupSettled = true;
         setupSessionBindAttemptsRef.current.delete(tabId);
         if (!setupSession?.sessionId) {
-          setupSessionUnavailableTabsRef.current.add(tabId);
+          // Retiring an already-bound tab here is new, so it has to respect the
+          // same rule as the completed-but-empty case below: a locally replayable
+          // transcript still outranks the backend having forgotten the session.
+          // Without a transcript this falls through to the sessionId comparison
+          // in stale-tab cleanup, which retires the tab exactly as before.
+          const hasReplayableTranscript = hasReplayableSetupTranscript(tabId);
+          if (!hasReplayableTranscript) {
+            setupSessionUnavailableTabsRef.current.add(tabId);
+          }
           console.info("[setup-terminal] no backend setup session available", {
             environmentId,
             tabId,
+            hasReplayableTranscript,
           });
           return false;
         }
@@ -337,10 +381,14 @@ export function TerminalContainer({
         // input, and there are no bytes to replay. Older backends do not report
         // `hasOutput`, so retain their session conservatively during rolling
         // upgrades rather than discarding setup history we cannot prove empty.
+        // `hasReplayableSetupTranscript` is the other half of that proof: the
+        // backend drops a retained setup buffer minutes after the PTY exits,
+        // long before this renderer forgets what it already painted.
         if (
           !setupSession.running &&
           !setupSession.terminalRunning &&
-          setupSession.hasOutput === false
+          setupSession.hasOutput === false &&
+          !hasReplayableSetupTranscript(tabId)
         ) {
           setupSessionUnavailableTabsRef.current.add(tabId);
           return false;
@@ -356,6 +404,7 @@ export function TerminalContainer({
           return false;
         }
         console.error("[TerminalContainer] Failed to bind backend setup session:", error);
+        lookupFailed = true;
         // A failed existence probe is not evidence that the backend-owned setup
         // session is gone. Retry without requiring a reconnect or remount, while
         // retaining a finite budget so a dead backend cannot pin a blank tab.
@@ -383,12 +432,17 @@ export function TerminalContainer({
         if (setupSessionBindInFlightRef.current.get(tabId) === requestToken) {
           setupSessionBindInFlightRef.current.delete(tabId);
         }
+        const recheckPending = setupSessionRecheckPendingTabsRef.current.delete(tabId);
         if (
           lookupSettled &&
           setupSessionBindLifecycleGenerationRef.current === lifecycleGeneration
         ) {
           setupSessionBindSettledTabsRef.current.add(tabId);
-          if (!backendSetupRunning) {
+          // Only a lookup that both started and settled after setup finished
+          // counts as the post-setup check. One dispatched mid-run read a
+          // backend that had not reached its final state, so recording it would
+          // suppress the very re-check this flag exists to schedule.
+          if (!startedWhileSetupRunning && !backendSetupRunningRef.current && !recheckPending) {
             setupSessionPostSetupCheckedTabsRef.current.add(tabId);
           }
           // The terminal store update itself rerenders PersistentTerminal. This
@@ -396,9 +450,20 @@ export function TerminalContainer({
           // (including "no session") from the initial empty renderer store.
           setSetupSessionBindNonce((value) => value + 1);
         }
+        // Re-dispatch the request the in-flight guard turned away. Skipped when
+        // the lookup failed: the bounded retry above already owns re-arming, and
+        // re-arming here too would hand a permanently failing backend a fresh
+        // attempt budget on every round.
+        if (
+          recheckPending &&
+          !lookupFailed &&
+          setupSessionBindLifecycleGenerationRef.current === lifecycleGeneration
+        ) {
+          setSetupSessionBindRetryNonce((value) => value + 1);
+        }
       }
     },
-    [backendSetupRunning, environmentId, hasBoundSetupSession, setupSessionKeyForTab],
+    [environmentId, hasBoundSetupSession, hasReplayableSetupTranscript, setupSessionKeyForTab],
   );
 
   useEffect(
@@ -413,6 +478,7 @@ export function TerminalContainer({
       setupSessionBindSettledTabsRef.current.clear();
       setupSessionPostSetupCheckedTabsRef.current.clear();
       setupSessionUnavailableTabsRef.current.clear();
+      setupSessionRecheckPendingTabsRef.current.clear();
     },
     [environmentId],
   );

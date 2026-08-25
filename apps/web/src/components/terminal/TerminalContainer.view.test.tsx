@@ -1815,6 +1815,151 @@ describe("TerminalContainer", () => {
     expect(setupTabIds()).toEqual(["default"]);
   });
 
+  test("keeps a completed setup tab when an older backend does not report hasOutput", async () => {
+    // A backend that predates `hasOutput` says nothing about its transcript.
+    // Unknown is not empty, so a rolling upgrade must not discard setup history
+    // it cannot prove is gone.
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
+      ).toBe("env-hidden:setup");
+    });
+    expect(setupTabIds()).toEqual(["default"]);
+  });
+
+  test("keeps a setup tab this renderer can still replay after the backend frees its buffer", async () => {
+    // The backend drops a retained setup buffer minutes after the PTY exits, so
+    // `hasOutput` goes false while PersistentTerminal can still paint the
+    // transcript from `serializedBuffer`. Retiring the tab would run
+    // cleanupTerminalTab and take that buffer with it.
+    useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
+      sessionId: "env-hidden:setup",
+      serializedBuffer: "cloning repository...\r\nsetup complete\r\n",
+    });
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: false,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    await waitFor(() => {
+      expect(setupTabIds()).toEqual(["default"]);
+    });
+    expect(
+      useTerminalSessionStore
+        .getState()
+        .sessions.get(createSessionKey(null, "default", "env-hidden"))?.serializedBuffer,
+    ).toBe("cloning repository...\r\nsetup complete\r\n");
+  });
+
+  test("keeps a replayable setup tab when the backend has forgotten the session entirely", async () => {
+    // A restarted backend can lose the session record for an environment whose
+    // `setupSessionId` was never persisted. That is not evidence the transcript
+    // this renderer already holds is worthless.
+    useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
+      sessionId: "env-hidden:setup",
+      serializedBuffer: "setup complete\r\n",
+    });
+    getEnvironmentSetupSessionMock.mockResolvedValue(null);
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    await waitFor(() => {
+      expect(setupTabIds()).toEqual(["default"]);
+    });
+  });
+
+  test("re-dispatches a post-setup recheck that the in-flight guard turned away", async () => {
+    // Setup finishing while a bind is still in flight used to lose the recheck:
+    // the guard returned early without scheduling anything, and the settling
+    // lookup had read the backend mid-run, so nothing ever re-examined the tab.
+    let releaseFirstLookup: (() => void) | undefined;
+    let lookups = 0;
+    getEnvironmentSetupSessionMock.mockImplementation(async () => {
+      lookups += 1;
+      if (lookups === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirstLookup = resolve;
+        });
+        return {
+          environmentId: "env-hidden",
+          sessionId: "env-hidden:setup",
+          running: true,
+          startedAt: "2026-01-01T00:00:00.000Z",
+          terminalRunning: true,
+          hasOutput: false,
+        };
+      }
+      return {
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        running: false,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:01:00.000Z",
+        success: true,
+        terminalRunning: false,
+        hasOutput: false,
+      };
+    });
+
+    restoreBackendSetupTabLayout({
+      setupPhase: "running",
+      setupScriptsComplete: false,
+    });
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+      expect(releaseFirstLookup).toBeDefined();
+    });
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      });
+    });
+
+    await act(async () => {
+      releaseFirstLookup!();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(setupTabIds()).toEqual([]);
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain" },
+    ]);
+  });
+
   test("binds every restored backend-managed setup tab, not just the first", async () => {
     // Binding one tab per effect run relied on the run repeating to reach the
     // next. A tab it never reached was also never settled, and stale-tab

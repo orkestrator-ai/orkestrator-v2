@@ -1721,6 +1721,74 @@ describe("GlobalSettings", () => {
     expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
   });
 
+  test("keeps later log-storage results when an earlier walk finishes last", async () => {
+    const first = deferred<{ totalBytes: number; fileCount: number }>();
+    const second = deferred<{ totalBytes: number; fileCount: number }>();
+    let statsCalls = 0;
+    mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
+    mockGetLogStorageStats.mockImplementation(() => {
+      statsCalls += 1;
+      return statsCalls === 1 ? first.promise : second.promise;
+    });
+
+    const { rerender } = render(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(1));
+
+    rerender(<GlobalSettings activeSection="general" />);
+    rerender(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Calculating storage used…")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve({ totalBytes: 1536, fileCount: 2 });
+      await first.promise;
+    });
+    expect(screen.getByText("Calculating storage used…")).toBeTruthy();
+    expect(screen.queryByText("1.5 KB across 2 files")).toBeNull();
+
+    await act(async () => {
+      second.resolve({ totalBytes: 2048, fileCount: 4 });
+      await second.promise;
+    });
+    expect(await screen.findByText("2 KB across 4 files")).toBeTruthy();
+  });
+
+  test("does not let a stale storage walk overwrite a cleanup", async () => {
+    const first = deferred<{ totalBytes: number; fileCount: number }>();
+    const second = deferred<{ totalBytes: number; fileCount: number }>();
+    let statsCalls = 0;
+    mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
+    mockGetLogStorageStats.mockImplementation(() => {
+      statsCalls += 1;
+      return statsCalls === 1 ? first.promise : second.promise;
+    });
+
+    const { rerender } = render(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(1));
+
+    rerender(<GlobalSettings activeSection="general" />);
+    rerender(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      second.resolve({ totalBytes: 1536, fileCount: 2 });
+      await second.promise;
+    });
+    expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean up logs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete logs" }));
+    await waitFor(() => expect(mockCleanupLogs).toHaveBeenCalled());
+    expect(await screen.findByText("0 B across 0 files")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve({ totalBytes: 4096, fileCount: 8 });
+      await first.promise;
+    });
+    expect(screen.getByText("0 B across 0 files")).toBeTruthy();
+    expect(screen.queryByText("4 KB across 8 files")).toBeNull();
+  });
+
   test("names the blocking reason when an invalid retention disables Save from another section", async () => {
     const { rerender } = render(<GlobalSettings activeSection="debug" />);
     const retention = await screen.findByLabelText("Log retention days");

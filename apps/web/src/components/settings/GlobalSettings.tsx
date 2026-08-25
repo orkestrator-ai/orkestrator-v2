@@ -187,6 +187,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   const [isTesting, setIsTesting] = useState(false);
   const [testResults, setTestResults] = useState<DomainTestResult[] | null>(null);
   const webClientStatusRequestRef = useRef(0);
+  const logStorageRequestRef = useRef(0);
   // The last `global` this form synced itself from, as a value rather than an
   // object identity. `null` until the first sync so a fresh mount always runs.
   const syncedGlobalSignatureRef = useRef<string | null>(null);
@@ -302,13 +303,17 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
   // `get_log_storage_stats` stats every file under the log tree, so it is kept
   // off the mount path of unrelated sections. The directory itself is a path
-  // join on the backend and stays cheap enough to fetch eagerly.
+  // join on the backend and stays cheap enough to fetch eagerly. Walks and
+  // cleanups share one generation so a slower earlier request cannot replace
+  // newer stats or clear the spinner while a later walk is still in flight.
   const refreshLogStorage = useCallback(async () => {
+    const requestId = ++logStorageRequestRef.current;
     setIsLoadingLogStorage(true);
     const [directory, stats] = await Promise.allSettled([
       backend.getLogDirectory(),
       backend.getLogStorageStats(),
     ]);
+    if (requestId !== logStorageRequestRef.current) return;
     if (directory.status === "fulfilled") setLogDirectory(directory.value);
     setLogStorageStats(stats.status === "fulfilled" ? stats.value : null);
     setIsLoadingLogStorage(false);
@@ -323,15 +328,22 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
 
   useEffect(() => {
     if (activeSection === "debug") void refreshLogStorage();
+    return () => {
+      logStorageRequestRef.current += 1;
+    };
   }, [activeSection, refreshLogStorage]);
 
   const handleCleanupLogs = useCallback(async () => {
+    const requestId = ++logStorageRequestRef.current;
     setIsCleaningLogs(true);
+    setIsLoadingLogStorage(false);
     try {
       const stats = await backend.cleanupLogs();
+      if (requestId !== logStorageRequestRef.current) return;
       setLogStorageStats(stats);
       toast.success("Logs cleaned up");
     } catch (error) {
+      if (requestId !== logStorageRequestRef.current) return;
       toast.error("Failed to clean up logs", {
         description: error instanceof Error ? error.message : "Unknown error",
       });

@@ -70,6 +70,36 @@ const closingSessions = new WeakSet<SessionState>();
 /** One in-flight adoption per canonical Pi session file. */
 const sessionResumptions = new Map<string, Promise<SessionState>>();
 
+/**
+ * Narrow dependency seam for lifecycle tests and HTTP contract fakes.
+ *
+ * Production never sets this. Tests may replace the expensive SDK construction
+ * while still exercising this module's attach ownership, subscription,
+ * composer reconciliation and disposal paths.
+ */
+export interface AgentSessionTestHooks {
+  createAgentSession?: (state: SessionState) => Promise<AgentSession>;
+  hydrateComposer?: typeof hydrateComposer;
+  resolveModel?: typeof resolveModel;
+}
+
+let agentSessionTestHooks: AgentSessionTestHooks = {};
+
+export function setAgentSessionTestHooks(hooks: AgentSessionTestHooks | undefined): void {
+  agentSessionTestHooks = hooks ?? {};
+}
+
+function hydrateComposerForSession(
+  composer: SessionState["composer"],
+  defaults?: ThinkingLevelDefaults,
+): ReturnType<typeof hydrateComposer> {
+  return (agentSessionTestHooks.hydrateComposer ?? hydrateComposer)(composer, defaults);
+}
+
+function resolveModelForSession(modelId: string | undefined): ReturnType<typeof resolveModel> {
+  return (agentSessionTestHooks.resolveModel ?? resolveModel)(modelId);
+}
+
 export function newSessionState(clientSessionKey?: string): SessionState {
   return {
     id: randomBytes(16).toString("hex"),
@@ -122,7 +152,7 @@ export async function createSession(
   const work = (async () => {
     const state = newSessionState(clientSessionKey);
     applyComposerPatch(state, patch);
-    state.composer = await hydrateComposer(state.composer);
+    state.composer = await hydrateComposerForSession(state.composer);
     sessions.set(state.id, state);
     if (clientSessionKey) clientSessionKeys.set(clientSessionKey, state.id);
     return state;
@@ -157,6 +187,14 @@ export async function ensureSession(state: SessionState): Promise<AgentSession> 
 }
 
 async function attach(state: SessionState): Promise<AgentSession> {
+  const session = agentSessionTestHooks.createAgentSession
+    ? await agentSessionTestHooks.createAgentSession(state)
+    : await createPiAgentSession(state);
+
+  return publishAttachedSession(state, session);
+}
+
+async function createPiAgentSession(state: SessionState): Promise<AgentSession> {
   // Checked before anything expensive: an environment with no authenticated
   // provider must say so, rather than failing inside the first turn the user
   // paid to start.
@@ -175,18 +213,19 @@ async function attach(state: SessionState): Promise<AgentSession> {
     // opts in. The gate is on every project-local resource family rather than
     // extensions alone, because a skill and a prompt template are also
     // repository-controlled text the model is told to act on.
-    noExtensions: !projectResourcesEnabled,
-    noSkills: !projectResourcesEnabled,
-    noPromptTemplates: !projectResourcesEnabled,
+    ...projectResourceDiscoveryOptions(),
     // The approval gate. Always loaded, discovery setting or not.
     extensionFactories: [{ name: "orkestrator", factory: approvalExtension(state) }],
   });
   await resourceLoader.reload();
 
-  const model = await resolveModel(state.composer.selectedModelId);
+  const model = await resolveModelForSession(state.composer.selectedModelId);
   // Rebuilt with this workspace's settings now that there are some. A session
   // created before any catalogue read still gets the user's `/thinking` choice.
-  state.composer = await hydrateComposer(state.composer, thinkingDefaults(settingsManager));
+  state.composer = await hydrateComposerForSession(
+    state.composer,
+    thinkingDefaults(settingsManager),
+  );
   const created = await createAgentSession({
     cwd: workingDirectory,
     agentDir,
@@ -198,7 +237,10 @@ async function attach(state: SessionState): Promise<AgentSession> {
     thinkingLevel: thinkingLevel(state.composer.selectedReasoningId, model) as never,
   });
 
-  const session = created.session;
+  return created.session;
+}
+
+function publishAttachedSession(state: SessionState, session: AgentSession): AgentSession {
   // DELETE can land while createAgentSession is awaiting credentials, resource
   // loading or a session-file open. Never publish a session after its bridge
   // owner has gone away: it would sit outside `sessions`, so neither idle
@@ -234,6 +276,17 @@ async function attach(state: SessionState): Promise<AgentSession> {
   return session;
 }
 
+/** Project-local resource switches passed to Pi's default loader. */
+export function projectResourceDiscoveryOptions(
+  enabled: boolean = projectResourcesEnabled,
+): { noExtensions: boolean; noSkills: boolean; noPromptTemplates: boolean } {
+  return {
+    noExtensions: !enabled,
+    noSkills: !enabled,
+    noPromptTemplates: !enabled,
+  };
+}
+
 /**
  * Pi's stored thinking-level preferences, as the catalogue's two lookups.
  *
@@ -257,7 +310,7 @@ function thinkingDefaults(settingsManager: SettingsManager): ThinkingLevelDefaul
  * conversation with the transcript we already hold is a far better outcome
  * than a tab that can never send again.
  */
-function sessionManagerFor(state: SessionState): SessionManager {
+export function sessionManagerFor(state: SessionState): SessionManager {
   const directory = sessionDirectory();
   if (state.sessionFile) {
     try {
@@ -390,7 +443,7 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
 export async function applyComposerToSession(state: SessionState): Promise<void> {
   const session = state.session;
   if (!session) return;
-  const model = await resolveModel(state.composer.selectedModelId);
+  const model = await resolveModelForSession(state.composer.selectedModelId);
   if (model && (session.model?.id !== model.id || session.model?.provider !== model.provider)) {
     await session.setModel(model as never).catch(() => undefined);
   }
@@ -528,7 +581,7 @@ export async function resumeSession(
     const state = newSessionState();
     state.sessionFile = resolved;
     applyComposerPatch(state, patch);
-    state.composer = await hydrateComposer(state.composer);
+    state.composer = await hydrateComposerForSession(state.composer);
     hydrateHistory(state);
     sessions.set(state.id, state);
     return state;

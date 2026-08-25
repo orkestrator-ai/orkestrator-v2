@@ -47,6 +47,8 @@ export const NOT_AUTHENTICATED_MESSAGE =
   "Pi has no authenticated model provider. Sign in with /login in a Pi terminal tab, " +
   "or set the provider's API key, then reopen this tab.";
 
+let authProbeTimeoutMs = CATALOG_TIMEOUT_MS;
+
 /**
  * Report which providers are usable, without disclosing any credential.
  *
@@ -57,48 +59,56 @@ export const NOT_AUTHENTICATED_MESSAGE =
  */
 export async function authStatus(): Promise<BridgeAuthStatus> {
   const runtime = await modelRuntime();
-  const providers: ProviderAuthStatus[] = [];
-
-  for (const provider of runtime.getProviders()) {
-    const configured = runtime.hasConfiguredAuth(provider.id);
-    // Bounded per provider: `checkAuth` can reach the network for an OAuth
-    // refresh, and one slow provider must not hold the whole status read.
-    const check = configured
-      ? await withTimeout(
-          runtime.checkAuth(provider.id),
-          CATALOG_TIMEOUT_MS,
-          `Pi auth check for ${provider.id} timed out`,
-        ).catch(() => undefined)
-      : undefined;
-    const models = configured
-      ? await withTimeout(
-          runtime.getAvailable(provider.id),
-          CATALOG_TIMEOUT_MS,
-          `Pi model list for ${provider.id} timed out`,
-        ).catch(() => [])
-      : [];
-    providers.push({
-      id: provider.id,
-      label: provider.name || provider.id,
-      // Asked of the runtime rather than inferred from a stored credential
-      // being present, which is what this module promises. A key that was
-      // revoked after it was written still has `hasConfiguredAuth` true, and
-      // reporting that as signed in tells the user their empty model picker is
-      // someone else's problem. `checkAuth` resolves undefined for a
-      // credential it cannot resolve, and rejects — caught above — when a
-      // refresh fails, so either way the models it can actually serve is the
-      // corroborating answer.
-      authenticated: configured && (Boolean(check) || models.length > 0),
-      ...(check?.source ? { source: check.source } : {}),
-      ...(check?.type ? { type: check.type } : {}),
-      modelCount: models.length,
-    });
-  }
+  // Providers are independent, as are their auth and model probes. Running
+  // both dimensions concurrently keeps the route bounded by one timeout
+  // window rather than two windows multiplied by every configured provider.
+  const providers = await Promise.all(
+    runtime.getProviders().map(async (provider): Promise<ProviderAuthStatus> => {
+      const configured = runtime.hasConfiguredAuth(provider.id);
+      // Bounded per provider: `checkAuth` can reach the network for an OAuth
+      // refresh, and one slow provider must not hold the whole status read.
+      const [check, models] = configured
+        ? await Promise.all([
+            withTimeout(
+              runtime.checkAuth(provider.id),
+              authProbeTimeoutMs,
+              `Pi auth check for ${provider.id} timed out`,
+            ).catch(() => undefined),
+            withTimeout(
+              runtime.getAvailable(provider.id),
+              authProbeTimeoutMs,
+              `Pi model list for ${provider.id} timed out`,
+            ).catch(() => []),
+          ])
+        : [undefined, []];
+      return {
+        id: provider.id,
+        label: provider.name || provider.id,
+        // Asked of the runtime rather than inferred from a stored credential
+        // being present, which is what this module promises. A key that was
+        // revoked after it was written still has `hasConfiguredAuth` true, and
+        // reporting that as signed in tells the user their empty model picker is
+        // someone else's problem. `checkAuth` resolves undefined for a
+        // credential it cannot resolve, and rejects — caught above — when a
+        // refresh fails, so either way the models it can actually serve is the
+        // corroborating answer.
+        authenticated: configured && (Boolean(check) || models.length > 0),
+        ...(check?.source ? { source: check.source } : {}),
+        ...(check?.type ? { type: check.type } : {}),
+        modelCount: models.length,
+      };
+    }),
+  );
 
   return {
     authenticated: providers.some((provider) => provider.authenticated && provider.modelCount > 0),
     providers,
   };
+}
+
+/** Shorten the external auth probe budget for deterministic timeout tests. */
+export function setAuthProbeTimeoutForTests(timeoutMs?: number): void {
+  authProbeTimeoutMs = timeoutMs ?? CATALOG_TIMEOUT_MS;
 }
 
 /**

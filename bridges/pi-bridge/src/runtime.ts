@@ -17,6 +17,8 @@ import { withTimeout } from "./timeout.js";
 
 let runtime: ModelRuntime | null = null;
 let creation: Promise<ModelRuntime> | null = null;
+type RuntimeFactory = () => Promise<ModelRuntime>;
+let runtimeFactory: RuntimeFactory = createSdkRuntime;
 
 export async function modelRuntime(): Promise<ModelRuntime> {
   if (runtime) return runtime;
@@ -30,8 +32,14 @@ export async function modelRuntime(): Promise<ModelRuntime> {
 }
 
 async function create(): Promise<ModelRuntime> {
+  const created = await runtimeFactory();
+  runtime = created;
+  return created;
+}
+
+async function createSdkRuntime(): Promise<ModelRuntime> {
   const directory = agentDirectory();
-  const created = await ModelRuntime.create({
+  return ModelRuntime.create({
     ...(directory
       ? { authPath: `${directory}/auth.json`, modelsPath: `${directory}/models.json` }
       : {}),
@@ -42,8 +50,6 @@ async function create(): Promise<ModelRuntime> {
     allowModelNetwork: true,
     modelRefreshTimeoutMs: CATALOG_TIMEOUT_MS,
   });
-  runtime = created;
-  return created;
 }
 
 /**
@@ -63,4 +69,10 @@ export async function refreshRuntimeCatalog(): Promise<void> {
 export function resetModelRuntime(): void {
   runtime = null;
   creation = null;
+}
+
+/** Replace SDK construction for deterministic bridge tests. */
+export function setModelRuntimeFactoryForTests(factory?: RuntimeFactory): void {
+  resetModelRuntime();
+  runtimeFactory = factory ?? createSdkRuntime;
 }

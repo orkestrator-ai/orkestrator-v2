@@ -5,6 +5,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 // `config.ts` reads its environment once, at import. Everything below is
 // therefore loaded dynamically, after the environment this suite needs is in
@@ -21,7 +23,9 @@ const { server, start, shutdown } = await import("./server.js");
 // froze a different token and every request here would 401 — a failure that
 // looks like broken routing rather than a test that was never self-sufficient.
 const { authToken: TOKEN } = await import("./config.js");
-const { newSessionState } = await import("./agent-session.js");
+const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
+const { refreshModels } = await import("./models.js");
+const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
 const { sessions, clientSessionKeys } = await import("./state.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
@@ -60,6 +64,67 @@ function seedSession(): ReturnType<typeof newSessionState> {
   return state;
 }
 
+function testModel(overrides: Partial<Model<Api>> = {}): Model<Api> {
+  return {
+    id: "test-model",
+    name: "Test Model",
+    api: "openai-completions",
+    provider: "test-provider",
+    baseUrl: "https://example.invalid",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 100_000,
+    maxTokens: 4_000,
+    ...overrides,
+  } as Model<Api>;
+}
+
+function installRuntime(
+  overrides: Record<string, unknown> = {},
+  models: Model<Api>[] = [testModel()],
+): void {
+  const runtime = {
+    getProviders: () => [{ id: "test-provider", name: "Test Provider" }],
+    hasConfiguredAuth: () => true,
+    checkAuth: async () => ({ source: "environment", type: "api_key" }),
+    getAvailable: async () => models,
+    getProvider: () => ({ id: "test-provider", name: "Test Provider" }),
+    getModel: (providerId: string, modelId: string) =>
+      models.find((model) => model.provider === providerId && model.id === modelId),
+    refresh: async () => undefined,
+    ...overrides,
+  } as unknown as ModelRuntime;
+  setModelRuntimeFactoryForTests(async () => runtime);
+  refreshModels();
+}
+
+function resetTestDependencies(): void {
+  setAgentSessionTestHooks(undefined);
+  setModelRuntimeFactoryForTests();
+  refreshModels();
+}
+
+function fakeAgentSession(overrides: Record<string, unknown> = {}): AgentSession {
+  return {
+    sessionId: "pi-session-test",
+    sessionFile: "/tmp/pi-session-test.jsonl",
+    promptTemplates: [],
+    subscribe: () => () => undefined,
+    dispose: () => undefined,
+    prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+      options.preflightResult?.(true);
+      return Promise.resolve();
+    },
+    abort: async () => undefined,
+    setModel: async () => undefined,
+    setThinkingLevel: () => undefined,
+    getContextUsage: () => undefined,
+    getSessionStats: () => ({ cost: 0 }),
+    ...overrides,
+  } as unknown as AgentSession;
+}
+
 describe("authentication", () => {
   test("accepts the configured bearer token", async () => {
     const response = await call("/global/auth-check");
@@ -83,6 +148,88 @@ describe("authentication", () => {
       headers: { authorization: "Bearer short" },
     });
     expect(response.status).toBe(401);
+  });
+});
+
+describe("authorized global routes", () => {
+  test("reports provider authentication without credential material", async () => {
+    installRuntime();
+    try {
+      const response = await call("/global/auth");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        authenticated: true,
+        providers: [
+          {
+            id: "test-provider",
+            label: "Test Provider",
+            authenticated: true,
+            source: "environment",
+            type: "api_key",
+            modelCount: 1,
+          },
+        ],
+      });
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("serves the normalized global model catalogue", async () => {
+    installRuntime();
+    try {
+      const response = await call("/global/models");
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        models: [
+          {
+            platform: "pi",
+            id: "test-provider/test-model",
+            label: "Test Model",
+            providerLabel: "Test Provider",
+            supportsSpeed: false,
+            supportsMode: false,
+          },
+        ],
+      });
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("refreshes the runtime before rebuilding the model catalogue", async () => {
+    let refreshed = 0;
+    const models = [testModel({ id: "before", name: "Before" })];
+    installRuntime(
+      {
+        refresh: async () => {
+          refreshed += 1;
+          models.splice(0, models.length, testModel({ id: "after", name: "After" }));
+        },
+      },
+      models,
+    );
+    try {
+      const refresh = await call("/global/refresh-catalog", { method: "POST" });
+      expect(refresh.status).toBe(200);
+      expect(await refresh.json()).toEqual({ ok: true });
+      expect(refreshed).toBe(1);
+
+      const catalogue = await (await call("/global/models")).json();
+      expect(catalogue.models.map((model: { id: string }) => model.id)).toEqual([
+        "test-provider/after",
+      ]);
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("serves bridge-owned commands before a session exists", async () => {
+    const response = await call("/plugins/commands");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      commands: [{ name: "/compact", description: "Summarize the conversation to free context" }],
+    });
   });
 });
 

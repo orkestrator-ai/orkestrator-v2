@@ -9,6 +9,7 @@
 import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-output";
 import type { SDKAgent, SDKImage } from "@cursor/sdk";
 import {
+  CANCEL_ACK_TIMEOUT_MS,
   MAX_PROMPT_JOURNAL,
   MAX_STRUCTURED_RESULT_BYTES,
   MAX_STRUCTURED_RESULTS,
@@ -129,6 +130,7 @@ export async function followRun(
   promptSequence: number,
   input: DispatchInput,
   timeoutMs: number = PROMPT_TIMEOUT_MS,
+  cancelAckTimeoutMs: number = CANCEL_ACK_TIMEOUT_MS,
 ): Promise<void> {
   const terminal = run.wait();
   const drained = (async () => {
@@ -156,7 +158,9 @@ export async function followRun(
     // A timeout asks the SDK to cancel, but the SDK's terminal result remains
     // authoritative. Until it arrives the process may still be writing to the
     // workspace, so keep the turn running and keep its cancel handle exposed.
-    // This intentionally stays pending when cancellation cannot be confirmed.
+    // Cancellation is given a bounded grace period; if the SDK never produces a
+    // terminal result, the turn is failed explicitly rather than held running
+    // forever.
     if (error instanceof TurnTimeoutError) {
       void run.cancel().catch(() => undefined);
       if (!turnStillOwned(state, promptSequence)) return;
@@ -165,12 +169,24 @@ export async function followRun(
       schedulePersist();
 
       try {
-        const result = await terminal;
+        const result = await withTimeout(terminal, cancelAckTimeoutMs);
         await drained;
         if (!turnStillOwned(state, promptSequence)) return;
         finishTurn(state, result, input);
       } catch (terminalError) {
         if (!turnStillOwned(state, promptSequence)) return;
+        // The cancellation was requested but the SDK never produced a terminal
+        // result. Holding the session "running" forever would wedge the
+        // environment, so fail explicitly — and say why — rather than pretend
+        // the turn stopped when it provably did not.
+        if (terminalError instanceof TurnTimeoutError) {
+          failTurn(
+            state,
+            new Error("The Cursor turn did not stop after cancellation was requested"),
+            input,
+          );
+          return;
+        }
         failTurn(state, terminalError, input);
       }
       return;

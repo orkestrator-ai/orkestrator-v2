@@ -99,6 +99,19 @@ export const PROMPT_TIMEOUT_MS = parseBoundedInteger(
   60 * 1000,
   24 * 60 * 60 * 1000,
 );
+/**
+ * How long to wait for the SDK to acknowledge a cancellation before the bridge
+ * fails the turn anyway. The run's terminal result stays authoritative for as
+ * long as this window is open; only when the SDK produces nothing at all does
+ * the bridge report an explicit failure rather than holding the session
+ * "running" forever.
+ */
+export const CANCEL_ACK_TIMEOUT_MS = parseBoundedInteger(
+  process.env.CURSOR_BRIDGE_CANCEL_ACK_TIMEOUT_MS,
+  30 * 1000,
+  1_000,
+  5 * 60 * 1000,
+);
 /** Bounded budget for catalogue and account reads, which are never on a turn. */
 export const CATALOG_TIMEOUT_MS = 30_000;
 /** Interactive browser login is a human-paced flow; give it room but bound it. */

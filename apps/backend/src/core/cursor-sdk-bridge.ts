@@ -127,6 +127,14 @@ export interface CursorSdkLoginHandle {
 }
 
 /**
+ * How long to wait for the one-shot login child to emit its login URL. The
+ * child opens a browser and prints one JSON line, so it should be near
+ * instant; a child that has not produced a URL after this is wedged and must
+ * not leave the login flow stranded as "pending".
+ */
+export const LOGIN_START_TIMEOUT_MS = 30_000;
+
+/**
  * Run an interactive login in a short-lived bridge process.
  *
  * The SDK is a five-megabyte bundle with native helpers, and it lives in the
@@ -144,6 +152,8 @@ export async function beginCursorSdkLogin(
     spawnImpl?: typeof spawn;
     /** Lets the backend cancel a login before the child has emitted its URL. */
     signal?: AbortSignal;
+    /** Bounds how long to wait for the child's login URL; tests lower this. */
+    startupTimeoutMs?: number;
   },
 ): Promise<CursorSdkLoginHandle> {
   const credentialPath = cursorSdkCredentialPath(context);
@@ -192,6 +202,19 @@ export async function beginCursorSdkLogin(
   const removeAbortListener = (): void => {
     options.signal?.removeEventListener("abort", abortLogin);
   };
+  // A child that never emits its URL must not strand the login flow as
+  // "pending" with no way forward. The timer only guards the pre-URL window;
+  // once the URL is out it is cleared and the human-paced browser flow runs
+  // under its own (longer) bounds.
+  const startupError = new Error(
+    "The Cursor sign-in process timed out before producing a login URL",
+  );
+  const startupTimer = setTimeout(() => {
+    abortLogin();
+    rejectUrl(startupError);
+    settleCompletion(startupError);
+  }, options.startupTimeoutMs ?? LOGIN_START_TIMEOUT_MS);
+  startupTimer.unref();
 
   let buffered = "";
   let failure = "";
@@ -209,8 +232,10 @@ export async function beginCursorSdkLogin(
       if (!line) continue;
       try {
         const event = JSON.parse(line) as Record<string, unknown>;
-        if (typeof event.loginUrl === "string") resolveUrl(event.loginUrl);
-        else if (event.ok === true) settleCompletion();
+        if (typeof event.loginUrl === "string") {
+          clearTimeout(startupTimer);
+          resolveUrl(event.loginUrl);
+        } else if (event.ok === true) settleCompletion();
         else if (typeof event.error === "string") failure = event.error;
       } catch {
         // Not our protocol. Ignored rather than failed: a stray line from the
@@ -222,11 +247,13 @@ export async function beginCursorSdkLogin(
   child.stderr?.resume();
 
   child.once("error", (error) => {
+    clearTimeout(startupTimer);
     removeAbortListener();
     rejectUrl(error);
     settleCompletion(error);
   });
   child.once("exit", (code) => {
+    clearTimeout(startupTimer);
     removeAbortListener();
     const error = new Error(
       failure || `Cursor sign-in did not complete (exit code ${code ?? "null"})`,

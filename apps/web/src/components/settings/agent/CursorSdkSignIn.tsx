@@ -173,28 +173,36 @@ export function CursorSdkSignIn({ credentialRevision }: CursorSdkSignInProps) {
         )}
       </div>
 
-      {pending && progress?.loginUrl && (
+      {pending && (
         <div className="space-y-2 rounded-md border border-border/60 bg-muted/30 p-3">
-          <p className="text-xs text-muted-foreground">
-            Waiting for you to finish signing in. If the browser did not open, copy this link:
-          </p>
-          {/*
-            Selectable text plus a copy button rather than a link. The desktop
-            window denies `window.open` and `target="_blank"` outright, so an
-            anchor here would look clickable and do nothing.
-          */}
-          <p className="select-all break-all font-mono text-xs text-muted-foreground">
-            {progress.loginUrl}
-          </p>
+          {progress?.loginUrl ? (
+            <>
+              <p className="text-xs text-muted-foreground">
+                Waiting for you to finish signing in. If the browser did not open, copy this link:
+              </p>
+              {/*
+                Selectable text plus a copy button rather than a link. The desktop
+                window denies `window.open` and `target="_blank"` outright, so an
+                anchor here would look clickable and do nothing.
+              */}
+              <p className="select-all break-all font-mono text-xs text-muted-foreground">
+                {progress.loginUrl}
+              </p>
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">Starting Cursor sign-in…</p>
+          )}
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" size="sm" onClick={copyLoginUrl}>
-              {copied ? (
-                <Check className="mr-1.5 h-3.5 w-3.5" />
-              ) : (
-                <Copy className="mr-1.5 h-3.5 w-3.5" />
-              )}
-              {copied ? "Copied" : "Copy link"}
-            </Button>
+            {progress?.loginUrl && (
+              <Button type="button" variant="outline" size="sm" onClick={copyLoginUrl}>
+                {copied ? (
+                  <Check className="mr-1.5 h-3.5 w-3.5" />
+                ) : (
+                  <Copy className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                {copied ? "Copied" : "Copy link"}
+              </Button>
+            )}
             <Button type="button" variant="ghost" size="sm" onClick={cancel}>
               Cancel
             </Button>

@@ -23,6 +23,8 @@ function runningSession(): SessionState {
 interface FakeRun extends FollowableRun {
   readonly cancels: () => number;
   readonly finish: (result?: { status: string }) => void;
+  readonly finishTerminal: (result?: { status: string }) => void;
+  readonly closeStream: () => void;
 }
 
 /** A run whose terminal acknowledgement is controlled by the test. */
@@ -49,6 +51,12 @@ function controlledRun(onCancel?: () => void): FakeRun {
     cancels: () => cancels,
     finish: (result = { status: "cancelled" }) => {
       finishRun(result);
+      finishStream();
+    },
+    finishTerminal: (result = { status: "cancelled" }) => {
+      finishRun(result);
+    },
+    closeStream: () => {
       finishStream();
     },
   };
@@ -99,7 +107,7 @@ describe("a turn that outlives its budget", () => {
     expect(sessionIsWorking(state)).toBe(false);
   });
 
-  test("does not claim a terminal state when cancellation cannot be confirmed", async () => {
+  test("recovers with an explicit error when cancellation is never acknowledged", async () => {
     const state = runningSession();
     const run: FollowableRun = {
       // eslint-disable-next-line require-yield
@@ -107,19 +115,50 @@ describe("a turn that outlives its budget", () => {
         await new Promise<void>(() => undefined);
       },
       wait: () => new Promise(() => undefined),
-      // A cancel that never settles must not strand the session as running,
-      // which is the state the timeout exists to get it out of.
+      // A cancel that never settles: the SDK never produces a terminal result.
       cancel: () => new Promise(() => undefined),
     };
 
-    const settled = await Promise.race([
-      followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5).then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
-    ]);
+    const completion = followRun(
+      state,
+      run,
+      state.promptSequence,
+      { prompt: "x", images: [] },
+      5,
+      50,
+    );
 
-    expect(settled).toBe(false);
+    // Still running while the cancellation acknowledgement is outstanding.
+    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(state.status).toBe("running");
+    expect(state.error).toContain("time budget");
     expect(sessionIsWorking(state)).toBe(true);
+
+    // Once the grace period elapses with no terminal, it fails explicitly
+    // rather than holding the environment busy forever.
+    await completion;
+    expect(state.status).toBe("error");
+    expect(state.error).toContain("did not stop");
+    expect(sessionIsWorking(state)).toBe(false);
+  });
+
+  test("waits for the stream to drain before settling a timed-out turn", async () => {
+    const state = runningSession();
+    const run = controlledRun();
+
+    const completion = followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5);
+    await waitFor(() => run.cancels() === 1);
+
+    // The run reports terminal, but its stream is still open. The turn must not
+    // settle until the stream drains — a run that never closes its stream has
+    // not actually finished.
+    run.finishTerminal();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(state.status).toBe("running");
+
+    run.closeStream();
+    await completion;
+    expect(state.status).toBe("idle");
   });
 
   test("leaves a turn that was already superseded alone", async () => {

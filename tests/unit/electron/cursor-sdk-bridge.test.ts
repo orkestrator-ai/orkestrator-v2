@@ -224,6 +224,45 @@ describe("interactive login lifecycle", () => {
     await expect(started).rejects.toThrow("cancelled");
   });
 
+  test("rejects a concurrent waiter when the shared startup is cancelled", async () => {
+    const child = fakeLoginChild();
+    const options = await loginOptions(child);
+    let spawned = false;
+    options.spawnImpl = (() => {
+      spawned = true;
+      return child;
+    }) as unknown as typeof spawn;
+
+    const first = startCursorSdkLogin(contextWith(), options);
+    const second = startCursorSdkLogin(contextWith(), options);
+    await waitFor(() => spawned);
+
+    // Settle both promises before cancelling so neither can reject unobserved
+    // while the other is being awaited.
+    const firstMessage = first.then(
+      () => "",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    const secondMessage = second.then(
+      () => "",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    cancelCursorSdkLogin();
+
+    expect(await firstMessage).toContain("cancelled");
+    expect(await secondMessage).toContain("cancelled");
+  });
+
+  test("rejects when the child never emits a login URL", async () => {
+    const child = fakeLoginChild();
+    const options = await loginOptions(child);
+
+    await expect(
+      beginCursorSdkLogin(contextWith(), { ...options, startupTimeoutMs: 20 }),
+    ).rejects.toThrow("timed out before producing a login URL");
+    expect(child.kills).toBe(1);
+  });
+
   test("handles completion rejection when the child fails before emitting a URL", async () => {
     const child = fakeLoginChild();
     const options = await loginOptions(child);

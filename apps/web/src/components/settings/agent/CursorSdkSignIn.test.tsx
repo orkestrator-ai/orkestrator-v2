@@ -145,6 +145,16 @@ describe("the pending fallback", () => {
     );
   });
 
+  test("offers cancel while the login is still starting", async () => {
+    progress = { state: "pending", auth: { authenticated: false, source: "none" } };
+    await mount();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(invokeCalls.some((call) => call.command === "cursor_sdk_login_cancel")).toBe(true),
+    );
+  });
+
   test("polls a pending flow through to authenticated", async () => {
     progress = pendingProgress;
     await mount();

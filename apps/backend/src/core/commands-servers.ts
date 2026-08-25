@@ -315,13 +315,26 @@ export async function fetchAcpNormalizedModels(
         : null;
   if (!bridge) return [];
   const port = "port" in bridge ? bridge.port : bridge.hostPort;
+  return fetchAcpNormalizedModelsAt(port, bridge.authToken, kind);
+}
+
+/** Read the normalized model rows from a known bridge endpoint. */
+export async function fetchAcpNormalizedModelsAt(
+  port: number,
+  authToken: string,
+  kind: "cursor" | "grok" | "pi",
+): Promise<AgentModel[]> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/global/models`, {
       headers: {
-        Authorization: `Bearer ${bridge.authToken}`,
-        "X-Orkestrator-Acp-Token": bridge.authToken,
+        Authorization: `Bearer ${authToken}`,
+        "X-Orkestrator-Acp-Token": authToken,
       },
-      signal: AbortSignal.timeout(8_000),
+      // Pi may spend up to 30 seconds refreshing a dynamic provider on its
+      // first catalogue read. The generic ACP bridges answer from local state,
+      // so retain their tighter bound while allowing Pi's own bounded refresh
+      // to finish instead of aborting it just before it can seed the cache.
+      signal: AbortSignal.timeout(kind === "pi" ? 35_000 : 8_000),
     });
     if (!response.ok) return [];
     const body = (await response.json()) as { models?: unknown };

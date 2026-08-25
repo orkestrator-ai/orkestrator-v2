@@ -108,7 +108,7 @@ describe("resolveAgentDefaults", () => {
     useClaudeStore.setState({ models: defaultClaudeModels });
     useCodexStore.setState({ models: defaultCodexModels });
     useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
-    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
+    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_preferences") {
@@ -1045,6 +1045,52 @@ describe("resolveAgentDefaults", () => {
         }),
       );
     });
+  });
+
+  test("seeds the Pi catalogue before creating the first environment", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      defaultAgent: "pi",
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        pi: { mode: "native" },
+      },
+    };
+    config.global.enabledAgentPlatforms = ["pi"];
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "ensure_host_pi_model_catalog") {
+        return Promise.resolve([
+          {
+            platform: "pi",
+            id: "openai-codex/gpt-5.4",
+            label: "GPT-5.4",
+            providerLabel: "OpenAI Codex",
+            reasoning: [{ id: "high", label: "High" }],
+            defaultReasoningId: "high",
+            supportsSpeed: false,
+            supportsMode: false,
+          },
+        ]);
+      }
+      if (command === "get_opencode_model_catalog_cache") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.some(([command]) => command === "ensure_host_pi_model_catalog"),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("GPT-5.4"));
+    expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
+      "openai-codex/gpt-5.4",
+    ]);
   });
 
   test("keeps a still-supported effort when switching models within one agent", async () => {

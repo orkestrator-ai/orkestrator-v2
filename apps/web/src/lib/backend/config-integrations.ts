@@ -62,16 +62,27 @@ export interface AgentModelCatalogCache {
   };
 }
 
-/** Load the host-wide last-known-good catalogues before any bridge starts. */
+/** Load the host-wide last-known-good catalogues, seeding Pi on first use. */
 export async function getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
   return invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
+}
+
+/** Discover Pi models without requiring an environment or persistent bridge. */
+export async function ensureHostPiModelCatalog(): Promise<
+  import("@orkestrator/protocol/native-agent").AgentModel[]
+> {
+  return invoke("ensure_host_pi_model_catalog");
 }
 
 /** Backend-normalized model catalogue consumed by the provider-neutral composer. */
 export async function getNativeAgentModelCatalog(
   environmentId: string,
+  ensureAgent?: "cursor" | "grok" | "pi",
 ): Promise<import("@orkestrator/protocol/native-agent").AgentModel[]> {
-  return invoke("get_native_agent_model_catalog", { environmentId });
+  return invoke("get_native_agent_model_catalog", {
+    environmentId,
+    ...(ensureAgent ? { ensureAgent } : {}),
+  });
 }
 
 /** Persist an authoritative catalogue for the next application launch. */

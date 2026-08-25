@@ -22,6 +22,7 @@ import type {
   AgentModel,
   AgentReasoningOption,
 } from "./commands-dependencies.js";
+import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import {
   syncDiffStatsTracking,
   asString,
@@ -48,7 +49,7 @@ export function registerProjectCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  const { conditionalManifestSnapshot, runProjectCreationCommand } = dependencies;
+  const { commands, conditionalManifestSnapshot, runProjectCreationCommand } = dependencies;
   register(
     "greet",
     ({ name }) =>
@@ -125,15 +126,68 @@ export function registerProjectCommands(
       redactAppConfig(await storage.loadConfig()),
     ),
   );
-  register("get_agent_model_catalog_cache", (_args, { storage }) =>
-    storage.getAgentModelCatalogCache(),
-  );
-  register("get_native_agent_model_catalog", async ({ environmentId }, context) => {
+  register("ensure_host_pi_model_catalog", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    const cached = (await context.storage.getAgentModelCatalogCache()).pi?.models;
+    if (cached?.length) return cached;
+    const models = await discoverHostPiModelCatalog(context);
+    if (models.length > 0) await context.storage.cacheAgentModelCatalog("pi", models);
+    return models;
+  });
+  register("get_agent_model_catalog_cache", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    let cache = await context.storage.getAgentModelCatalogCache();
+    if (!cache.pi?.models.length) {
+      const config = await context.storage.loadConfig();
+      if (config.global.enabledAgentPlatforms?.includes("pi")) {
+        const ensure = commands.get("ensure_host_pi_model_catalog");
+        if (ensure) {
+          try {
+            await ensure({}, context);
+            cache = await context.storage.getAgentModelCatalogCache();
+          } catch {
+            // Keep startup non-fatal and return every last-known-good catalogue.
+            // The next application launch can retry a transient provider error.
+          }
+        }
+      }
+    }
+    return cache;
+  });
+  register("get_native_agent_model_catalog", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "ensureAgent"], "arguments");
     const { storage } = context;
-    const id = asNonBlankString(environmentId, "environmentId");
+    const id = asNonBlankString(args.environmentId, "environmentId");
+    const ensureAgent = args.ensureAgent;
+    if (
+      ensureAgent !== undefined &&
+      ensureAgent !== "cursor" &&
+      ensureAgent !== "grok" &&
+      ensureAgent !== "pi"
+    ) {
+      throw new Error("ensureAgent must be one of: cursor, grok, pi");
+    }
     const environment = await storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
     const cache = await storage.getAgentModelCatalogCache();
+    if (ensureAgent && !cache[ensureAgent]?.models.length) {
+      // The empty-tab picker is the first consumer on a fresh installation, so
+      // there may be neither a live bridge nor a durable last-known-good list.
+      // Start only the platform the user is trying to select; eagerly starting
+      // every enabled bridge would create unused processes in every environment.
+      const awaitBridgeReady = commands.get("await_bridge_ready");
+      if (awaitBridgeReady) {
+        try {
+          await awaitBridgeReady(
+            { environmentId: id, agent: ensureAgent, timeoutMs: 60_000 },
+            context,
+          );
+        } catch {
+          // The catalogue response still carries every durable fallback. A
+          // bridge startup error belongs to its normal launch diagnostics.
+        }
+      }
+    }
     const claudeModels = environment.claudeModelCatalog?.models ?? cache.claude?.models ?? [];
     const codexModels = cache.codex?.models ?? [];
     // The live catalogue is already filtered by the provider, but a cache

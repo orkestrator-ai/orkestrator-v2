@@ -1166,7 +1166,9 @@ describe("AgentNativeTab", () => {
 
     render(<AgentNativeTab tabId="tab-cursor-models" data={{ environmentId: "env-1" }} isActive />);
 
-    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
+    await waitFor(() =>
+      expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "cursor"),
+    );
     expect(awaitBridgeReadyMock).not.toHaveBeenCalled();
     const picker = await screen.findByTitle(/Choose model/);
     fireEvent.pointerDown(picker);
@@ -1177,9 +1179,48 @@ describe("AgentNativeTab", () => {
     ]);
   });
 
+  test("requests a first-use Pi catalogue when the selected platform has no cached list", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["pi"],
+    });
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Pi models",
+          order: 0,
+        } as never,
+      ],
+    });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-pi-models"), { platform: "pi" });
+    getNativeAgentModelCatalogMock.mockImplementation(async () => [
+      {
+        id: "openai-codex/gpt-5.4",
+        platform: "pi",
+        label: "GPT-5.4",
+        providerLabel: "OpenAI Codex",
+        reasoning: [{ id: "high", label: "High" }],
+        defaultReasoningId: "high",
+        supportsSpeed: false,
+        supportsMode: false,
+      },
+    ]);
+
+    render(<AgentNativeTab tabId="tab-pi-models" data={{ environmentId: "env-1" }} isActive />);
+
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "pi"));
+    expect((await screen.findByTitle(/Choose model/)).textContent).toContain("GPT-5.4");
+    expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
+      "openai-codex/gpt-5.4",
+    ]);
+  });
+
   // The catalogue is environment-scoped and already holds every platform, so a
-  // platform switch must filter what is loaded rather than clearing the list and
-  // re-issuing a command that probes both ACP bridges.
+  // platform switch must filter what is loaded rather than clearing the list or
+  // refetching a platform the current snapshot already contains.
   test("does not refetch the catalogue when the composer platform changes", async () => {
     useEnvironmentStore.setState({
       environments: [

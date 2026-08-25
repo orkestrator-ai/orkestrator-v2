@@ -280,6 +280,91 @@ describe("create-environment agent preference command", () => {
 });
 
 describe("native agent model catalogue command", () => {
+  test("seeds the host Pi catalogue before an environment exists", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        enabledAgentPlatforms: [...(config.global.enabledAgentPlatforms ?? []), "pi"],
+      });
+      const models = [
+        {
+          platform: "pi" as const,
+          id: "openai-codex/gpt-5.4",
+          label: "GPT-5.4",
+          providerLabel: "OpenAI Codex",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ];
+      const refresh = mock(async () => {
+        await storage.cacheAgentModelCatalog("pi", models);
+        return models;
+      });
+      commands.set("ensure_host_pi_model_catalog", refresh);
+
+      const first = (await invoke("get_agent_model_catalog_cache", {})) as {
+        pi?: { models: typeof models };
+      };
+      expect(first.pi?.models).toEqual(models);
+      expect(refresh).toHaveBeenCalledTimes(1);
+
+      await invoke("get_agent_model_catalog_cache", {});
+      expect(refresh).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test("starts a requested bridge once when its durable catalogue is missing", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const awaitReady = mock(async () => ({
+        status: "ready" as const,
+        port: 4321,
+        authToken: "bridge-token",
+      }));
+      commands.set("await_bridge_ready", awaitReady);
+
+      await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+        ensureAgent: "pi",
+      });
+
+      expect(awaitReady).toHaveBeenCalledWith(
+        { environmentId: "e1", agent: "pi", timeoutMs: 60_000 },
+        expect.anything(),
+      );
+
+      await storage.cacheAgentModelCatalog("pi", [
+        {
+          platform: "pi",
+          id: "openai-codex/gpt-5.4",
+          label: "GPT-5.4",
+          providerLabel: "OpenAI Codex",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ]);
+      awaitReady.mockClear();
+
+      await invoke("get_native_agent_model_catalog", {
+        environmentId: "e1",
+        ensureAgent: "pi",
+      });
+
+      expect(awaitReady).not.toHaveBeenCalled();
+    });
+  });
+
+  test("rejects an unsupported first-use catalogue agent", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "claude",
+        }),
+      ).rejects.toThrow("ensureAgent must be one of: cursor, grok, pi");
+    });
+  });
+
   test("normalizes provider catalogues and filters OpenCode to the configured providers", async () => {
     await withCommands(async (invoke, storage) => {
       await storage.updateEnvironment("e1", {

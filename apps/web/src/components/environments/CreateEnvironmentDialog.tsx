@@ -73,7 +73,11 @@ import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachme
 import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
 import { effortLabel, modelsForAgent } from "@/lib/agent-launch";
 import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-agent-defaults";
-import { getCachedOpenCodeModelCatalog, type CachedOpenCodeModel } from "@/lib/backend";
+import {
+  getCachedOpenCodeModelCatalog,
+  ensureHostPiModelCatalog,
+  type CachedOpenCodeModel,
+} from "@/lib/backend";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
   firstEnabledAgentPlatform,
@@ -84,7 +88,7 @@ import {
   normalizeOpenCodeModelProviders,
   openCodeModelDisplayLabel,
 } from "@orkestrator/protocol/native-agent";
-import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
+import { syncCachedAcpModels, useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 // Stable empty array reference to prevent infinite re-renders when no default port mappings are provided
 const EMPTY_PORT_MAPPINGS: PortMapping[] = [];
@@ -253,7 +257,29 @@ export function CreateEnvironmentDialog({
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
   const piModels = useAgentModelCatalogStore((state) => state.piModels);
+  const piCatalogSeedAttemptedRef = useRef(false);
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<CachedOpenCodeModel[]>([]);
+  useEffect(() => {
+    if (!open) {
+      piCatalogSeedAttemptedRef.current = false;
+      return;
+    }
+    if (
+      !enabledAgentPlatforms.includes("pi") ||
+      piModels.length > 0 ||
+      piCatalogSeedAttemptedRef.current
+    ) {
+      return;
+    }
+    piCatalogSeedAttemptedRef.current = true;
+    void ensureHostPiModelCatalog()
+      .then((models) => {
+        if (Array.isArray(models) && models.length > 0) syncCachedAcpModels(models);
+      })
+      .catch((error) => {
+        console.warn("[CreateEnvironmentDialog] Failed to seed the Pi model catalogue:", error);
+      });
+  }, [enabledAgentPlatforms, open, piModels.length]);
   const {
     favorites: favoriteModels,
     toggleFavorite: toggleFavoriteModel,

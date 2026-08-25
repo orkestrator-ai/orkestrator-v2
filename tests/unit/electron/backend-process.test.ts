@@ -3,6 +3,7 @@ import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { nativeWebPlatform } from "../../register-dom";
 import { defaultConfig } from "../../../apps/backend/src/core/storage";
 import {
   BackendHttpClient,
@@ -19,6 +20,14 @@ import {
 const directories: string[] = [];
 const processes: BackendProcess[] = [];
 const browserFetch = globalThis.fetch;
+const browserAbortController = globalThis.AbortController;
+const browserAbortSignal = globalThis.AbortSignal;
+
+function useNativeWebPlatform(): void {
+  globalThis.fetch = nativeWebPlatform.fetch;
+  globalThis.AbortController = nativeWebPlatform.AbortController;
+  globalThis.AbortSignal = nativeWebPlatform.AbortSignal;
+}
 
 async function waitForWebClientStatus(
   client: BackendHttpClient,
@@ -67,6 +76,8 @@ async function waitForCapturedLine(
 
 afterEach(async () => {
   globalThis.fetch = browserFetch;
+  globalThis.AbortController = browserAbortController;
+  globalThis.AbortSignal = browserAbortSignal;
   await Promise.all(
     processes.splice(0).map(async (backend) => {
       const child = (
@@ -411,7 +422,7 @@ describe("Electron backend process supervisor", () => {
       // start -> launch -> createBackendProcessEnvironment is the only path that
       // gives the backend and both bridges their version; deleting the argument
       // from the call site broke nothing that any test could see.
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const resourceRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-fake-backend-"));
       directories.push(resourceRoot);
       const marker = path.join(resourceRoot, "version-marker");
@@ -543,7 +554,7 @@ sleep 5
   });
 
   test("HTTP client covers commands, settings, errors, and event delivery", async () => {
-    globalThis.fetch = Bun.fetch;
+    useNativeWebPlatform();
     const server = createServer(async (request, response) => {
       if (request.url === "/__orkestrator/events") {
         response.writeHead(200, { "content-type": "text/event-stream" });
@@ -680,7 +691,7 @@ sleep 5
     async () => {
       // The shared DOM test setup installs a browser fetch with CORS enforcement;
       // Electron's main process uses the native server-side fetch implementation.
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const root = path.resolve(import.meta.dir, "../../..");
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       directories.push(dataDir);
@@ -708,11 +719,14 @@ sleep 5
 
       if (!info) throw new Error("Expected shared backend start information");
       const auth = JSON.parse(await readFile(info.authFile, "utf8")) as { token: string };
-      const browserResponse = await Bun.fetch(new URL("/__orkestrator/invoke", info.browserUrl), {
-        method: "POST",
-        headers: { authorization: `Bearer ${auth.token}`, "content-type": "application/json" },
-        body: JSON.stringify({ command: "greet", args: { name: "Browser" } }),
-      });
+      const browserResponse = await nativeWebPlatform.fetch(
+        new URL("/__orkestrator/invoke", info.browserUrl),
+        {
+          method: "POST",
+          headers: { authorization: `Bearer ${auth.token}`, "content-type": "application/json" },
+          body: JSON.stringify({ command: "greet", args: { name: "Browser" } }),
+        },
+      );
       expect(browserResponse.status).toBe(200);
       expect(await browserResponse.json()).toEqual({
         result: "Hello, Browser! You've been greeted from the Orkestrator backend!",
@@ -724,7 +738,7 @@ sleep 5
   test(
     "forwards the explicit managed toolchain directory through backend startup",
     async () => {
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const root = path.resolve(import.meta.dir, "../../..");
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       const toolchainBinDir = await mkdtemp(
@@ -759,7 +773,7 @@ sleep 5
   test(
     "manages hosted web access without stopping the Electron backend",
     async () => {
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const root = path.resolve(import.meta.dir, "../../..");
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
@@ -819,7 +833,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
   );
 
   test("reports backend readiness before slow managed Serve initialization finishes", async () => {
-    globalThis.fetch = Bun.fetch;
+    useNativeWebPlatform();
     const root = path.resolve(import.meta.dir, "../../..");
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
     const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
@@ -871,7 +885,7 @@ printf 'Available within your tailnet:\\nhttps://slow.example.ts.net\\n'
   test(
     "honors a persisted disabled setting without invoking Tailscale",
     async () => {
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const root = path.resolve(import.meta.dir, "../../..");
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
@@ -916,7 +930,7 @@ exit 1
   test(
     "keeps backend commands available when managed Serve initialization fails",
     async () => {
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const root = path.resolve(import.meta.dir, "../../..");
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       directories.push(dataDir);
@@ -949,7 +963,7 @@ exit 1
   test(
     "adopts and removes an owned Serve route after an ungraceful backend restart",
     async () => {
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const root = path.resolve(import.meta.dir, "../../..");
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       const toolsDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-tailscale-"));
@@ -1046,7 +1060,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
   test(
     "shares concurrent startup and clears stale state when the child exits",
     async () => {
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const root = path.resolve(import.meta.dir, "../../..");
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       directories.push(dataDir);
@@ -1087,7 +1101,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
   test(
     "rotates the shared HTTP credential without losing command access",
     async () => {
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const root = path.resolve(import.meta.dir, "../../..");
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       directories.push(dataDir);
@@ -1117,7 +1131,7 @@ printf 'Available within your tailnet:\\nhttps://workstation.example.ts.net\\n'
   test(
     "cleans up state when the child exits before readiness",
     async () => {
-      globalThis.fetch = Bun.fetch;
+      useNativeWebPlatform();
       const missingRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-missing-backend-"));
       const dataDir = await mkdtemp(path.join(os.tmpdir(), "orkestrator-electron-backend-"));
       directories.push(missingRoot, dataDir);

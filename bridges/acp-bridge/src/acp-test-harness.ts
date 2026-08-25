@@ -36,10 +36,46 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const here = dirname(fileURLToPath(import.meta.url));
 
-// The repository-wide test preload installs a browser-like fetch for UI tests.
-// Use Bun's native client for loopback bridge integration requests so browser
-// CORS rules cannot turn these GETs into preflight requests.
-export const nativeFetch = Bun.fetch;
+type NativeWebPlatform = {
+  fetch: typeof fetch;
+  AbortController: typeof AbortController;
+};
+
+// The repository-wide test preload installs Happy DOM's browser-like fetch and
+// abort classes. Keep Bun's matching native pair for loopback integration
+// requests: Bun 1.4 rejects Happy DOM's AbortSignal at the native fetch boundary.
+//
+// The key is spelled out here rather than imported from `tests/register-dom.ts`:
+// importing that module from a bridge package evaluates it a second time, and
+// `GlobalRegistrator.register()` throws once Happy DOM is already registered.
+// Duplication means the two spellings can drift, so a miss is reported rather
+// than absorbed — silently falling back to Happy DOM's constructor puts these
+// tests straight back to aborting requests that were never sent, which surfaces
+// as an unattributable five-second `waitFor` timeout instead of a failure that
+// names its own cause.
+const NATIVE_WEB_PLATFORM_KEY = Symbol.for("orkestrator.tests.native-web-platform");
+
+const nativeWebPlatform = (
+  globalThis as typeof globalThis & {
+    [key: symbol]: NativeWebPlatform | undefined;
+  }
+)[NATIVE_WEB_PLATFORM_KEY];
+
+// `happyDOM` is the registrator's own marker global, so it answers "was the
+// preload applied?" without depending on which classes it chose to replace.
+// Identity checks cannot: `globalThis.fetch` is never `Bun.fetch` even in a
+// plain Bun process.
+if (!nativeWebPlatform && "happyDOM" in globalThis) {
+  throw new Error(
+    `Happy DOM is registered but ${String(NATIVE_WEB_PLATFORM_KEY)} is missing. ` +
+      "tests/register-dom.ts must publish Bun's pre-registration fetch and abort " +
+      "constructors under that key, or every aborting request here is rejected " +
+      "before it is sent.",
+  );
+}
+
+export const nativeFetch = nativeWebPlatform?.fetch ?? Bun.fetch;
+export const NativeAbortController = nativeWebPlatform?.AbortController ?? AbortController;
 
 export const children = new Set<ChildProcessWithoutNullStreams>();
 

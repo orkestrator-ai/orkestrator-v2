@@ -69,9 +69,9 @@ history rather than two partial ones.
   the complete assertion and surrounding worker output before changing the
   dispatch reconciliation logic or its expectations.
 
-## `ACP bridge > counts in-flight creation reservations against the session cap` (`bridges/acp-bridge/src/acp-http.test.ts`)
+## `ACP bridge > counts in-flight creation reservations against the session cap` (`bridges/acp-bridge/src/acp-server.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-25
 - **Original command:** `bun run test:logged -- --name full-suite -- bun run test` (complete concurrent cross-platform suite)
 - **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was inside the bridges group, 3,091 tests across 115 files in 61.63 s.
@@ -92,14 +92,17 @@ history rather than two partial ones.
   3,111 passed, 11 skipped, and 2 failed across 115 files in 60.65 s. The
   isolated rerun `bun test ./src/acp-server.test.ts` from
   `bridges/acp-bridge` passed all 9 tests in 0.884 s, with the target taking
-  47.74 ms. The change in flight touches Electron logging, backend log-file
+  47.74 ms. The change in flight touched Electron logging, backend log-file
   management, shared retention validation, and the Settings UI; none is in
-  the ACP bridge process path. This recurrence strengthens the existing
-  process-contention hypothesis without adding a new mechanism.
+  the ACP bridge process path.
+- **Bun 1.4 reproduction:** after the test moved to `acp-server.test.ts`, `bun test bridges/acp-bridge/src/acp-server.test.ts` reproduced the timeout in isolation at 5,044.75 ms (8 passed, 1 failed). The related disconnect case also reproduced in isolation in `acp-http.test.ts` at 5,043.46 ms (5 passed, 1 failed).
+- **Root cause:** the repository preload replaces the Web APIs with Happy DOM's implementations. These two tests passed Happy DOM `AbortSignal` instances to `Bun.fetch`; Bun 1.4 validates the signal's native brand, rejects before sending either request, and leaves the lifecycle-file waits polling empty files until timeout.
+- **Fix:** preserve Bun's native fetch and abort constructors before Happy DOM registration, then use that matched pair for the aborting ACP integration requests.
+- **Verification:** `bun test bridges/acp-bridge/src/acp-http.test.ts` passed 6 tests with 40 assertions in 589 ms, and `bun test bridges/acp-bridge/src/acp-server.test.ts` passed 9 tests with 28 assertions in 853 ms under Bun 1.4.0. The subsequent complete `bun run test` passed all four concurrent groups in 87.3 s.
 
 ## `ACP bridge > reaps a session process when the creating HTTP client disconnects` (`bridges/acp-bridge/src/acp-http.test.ts`)
 
-- **Status:** open
+- **Status:** resolved
 - **Date observed:** 2026-08-25
 - **Original command:** `bun run test` (complete concurrent cross-platform
   suite).
@@ -117,32 +120,26 @@ history rather than two partial ones.
   disconnected creator and reap its session. Its isolated runtime is two
   orders of magnitude below the fixed aggregate deadline, while the sibling
   reservation test failed at the same five-second boundary in the same run.
-  This is consistent with group-level process starvation. Capture the child
-  exit and poll timings on another recurrence before changing the lifecycle
-  assertion.
-
-## `ACP bridge > reaps a session process when the creating HTTP client disconnects` (`bridges/acp-bridge/src/acp-http.test.ts`)
-
-- **Status:** open
-- **Date observed:** 2026-08-25
-- **Original command:** `bun run test`
-- **Worker configuration:** `scripts/test-all.ts` ran the workspace,
-  root/agent-support, bridges, and protocol-lockfile groups concurrently; the
-  bridges group used two Bun workers.
-- **Failure:** `Timed out waiting for ACP state: ""` from
-  `acp-test-harness.ts:160` while waiting for the disconnected client session
-  to be reaped (duration: 5,049.72 ms).
-- **Suite counts:** bridges group — 3,111 passed, 11 skipped, 2 failed; 9,997
-  `expect()` calls across 115 files in 59.89 s.
-- **Isolated rerun:**
+  This was initially consistent with group-level process starvation.
+- **Recurrence (setup-terminal retry-loop fix, 2026-08-25):** the same test
+  timed out after 5,049.72 ms in a `bun run test` bridges group with 3,111
+  passed, 11 skipped, and 2 failed across 115 files. The isolated rerun
   `bun test ./src/acp-http.test.ts ./src/acp-server.test.ts --only-failures`
   from `bridges/acp-bridge` -> 15 passed, 0 failed, 68 `expect()` calls in 1.23
   s.
-- **Hypothesis:** the earlier observation in this log reproduced under an
-  isolated owner run, but this recurrence did not. The failure still lands at
-  the generic five-second state deadline while the bridges group is under
-  process contention. Capture whether the child exit or registry removal is
-  late on the next recurrence before changing the reap assertion.
+- **Bun 1.4 reproduction:** `bun test bridges/acp-bridge/src/acp-http.test.ts`
+  reproduced the timeout in isolation at 5,043.46 ms (5 passed, 1 failed).
+- **Root cause:** the repository preload replaces the Web APIs with Happy DOM's
+  implementations. This test passed a Happy DOM `AbortSignal` to `Bun.fetch`;
+  Bun 1.4 validates the signal's native brand, rejects before sending the
+  request, and leaves the lifecycle-file wait polling an empty file until
+  timeout.
+- **Fix:** preserve Bun's native fetch and abort constructors before Happy DOM
+  registration, then use that matched pair for the aborting ACP integration
+  request.
+- **Verification:** `bun test bridges/acp-bridge/src/acp-http.test.ts` passed 6
+  tests with 40 assertions in 589 ms under Bun 1.4.0. The subsequent complete
+  `bun run test` passed all four concurrent groups in 87.3 s.
 
 ## `ACP bridge > announces overflow when earlier stream chunks leave no room for the marker` (`bridges/acp-bridge/src/acp-http.test.ts:191`)
 

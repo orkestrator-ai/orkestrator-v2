@@ -33,7 +33,7 @@ A desktop application for managing isolated Docker-based development environment
 ## Prerequisites
 
 - macOS or Linux. Windows is not supported because terminal sessions use Bun's native PTY.
-- [Bun](https://bun.sh) 1.3.14 or newer - JavaScript runtime, package manager, and native PTY provider
+- [Bun](https://bun.sh) 1.4.0 or newer - JavaScript runtime, package manager, and native PTY provider
 - [Docker](https://docker.com) - Container runtime
 - [Tailscale](https://tailscale.com) - Optional, required for remote browser access through the gateway
 

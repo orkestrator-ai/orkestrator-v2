@@ -1,0 +1,84 @@
+name: Validate Bun runtime
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/validate-bun-runtime.yml"
+      - "bridges/**"
+      - "docker/**"
+      - "packages/protocol/**"
+      - "bun.lock"
+      - "package.json"
+      - "scripts/download-bun.sh"
+  pull_request:
+    paths:
+      - ".github/workflows/validate-bun-runtime.yml"
+      - "bridges/**"
+      - "docker/**"
+      - "packages/protocol/**"
+      - "bun.lock"
+      - "package.json"
+      - "scripts/download-bun.sh"
+  workflow_dispatch:
+
+concurrency:
+  group: validate-bun-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundled-bun:
+    name: Bundled Bun (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            runner: ubuntu-24.04
+          - name: linux-arm64
+            runner: ubuntu-24.04-arm
+          - name: macos-x64
+            runner: macos-15-intel
+          - name: macos-arm64
+            runner: macos-15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Download and verify bundled Bun
+        run: ./scripts/download-bun.sh
+
+  container:
+    name: Container (linux/amd64 + linux/arm64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build both published architectures
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          cache-from: type=gha,scope=orkestrator-container-validation
+          cache-to: type=gha,mode=max,scope=orkestrator-container-validation

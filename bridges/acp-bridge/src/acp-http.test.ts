@@ -2,7 +2,14 @@ import { describe, expect, test } from "bun:test";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 
-import { here, nativeFetch, spawnBridge, temporaryDirectory, waitFor } from "./acp-test-harness.js";
+import {
+  here,
+  nativeFetch,
+  NativeAbortController,
+  spawnBridge,
+  temporaryDirectory,
+  waitFor,
+} from "./acp-test-harness.js";
 
 describe("ACP bridge", () => {
   // The fake agent records its own argv, so these assert the exact command line
@@ -136,7 +143,7 @@ describe("ACP bridge", () => {
         ACP_RPC_TIMEOUT_MS: "100",
       },
     });
-    const controller = new AbortController();
+    const controller = new NativeAbortController();
     const request = nativeFetch(`${bridge.base}/session/create`, {
       method: "POST",
       headers: bridge.headers,

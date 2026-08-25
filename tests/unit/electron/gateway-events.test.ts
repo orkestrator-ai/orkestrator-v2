@@ -3085,11 +3085,18 @@ describe("remote gateway", () => {
 
     pinBufferedBytes(stream.response, 2 * 1024 * 1024);
     gateway.emit("terminal-output-session-a", { bytesBase64: "eA==" });
-    // Still at the hard limit when the socket drains: the notice itself no
+    // "drain" only follows a refused write, so refuse one for real rather than
+    // synthesizing the event the gateway listens for. Release first: the refusal
+    // has to come from the socket, not from the pinned count.
+    releaseBufferedBytes(stream.response);
+    const refused = stream.response.write(`: ${"filler".repeat(700_000)}\n\n`);
+    expect(refused).toBe(false);
+    // Still past the hard limit when that drain lands: the notice itself no
     // longer fits, and a client that cannot even be told it desynced is beyond
-    // recovering in place.
+    // recovering in place. Re-pinning in the same tick is safe because "drain"
+    // is emitted asynchronously, and a loopback socket drains far faster than a
+    // test could park 8MB on it for real.
     pinBufferedBytes(stream.response, 8 * 1024 * 1024);
-    stream.response.write(": nudge\n\n");
 
     await waitUntil(() => stream.aborted(), "Hopeless stream was never disconnected");
     expect(eventClients(gateway).size).toBe(0);
@@ -3378,7 +3385,7 @@ describe("remote gateway", () => {
     const prefix = `/__orkestrator/browser/loopback/${targetAddress.port}`;
     const headers = { authorization: `Bearer ${info.token}`, origin: "null" };
 
-    const page = await requestUrl(`${info.url}${prefix}/`, { headers });
+    const page = await requestUrl(new URL(`${prefix}/`, info.url).toString(), { headers });
     expect(page.status).toBe(200);
     expect(page.body).toBe(`<script type="module" src="${prefix}/src/main.js"></script>`);
     expect(page.headers["x-frame-options"]).toBeUndefined();
@@ -3386,7 +3393,9 @@ describe("remote gateway", () => {
     expect(page.headers["access-control-allow-origin"]).toBe("null");
     expect(page.headers["access-control-allow-credentials"]).toBe("true");
 
-    const script = await requestUrl(`${info.url}${prefix}/src/main.js`, { headers });
+    const script = await requestUrl(new URL(`${prefix}/src/main.js`, info.url).toString(), {
+      headers,
+    });
     expect(script.body).toBe(`import "${prefix}/src/dependency.js";`);
   });
 
@@ -3414,7 +3423,7 @@ describe("remote gateway", () => {
 
     const { info } = await startGateway({ compression: "body" });
     const prefix = `/__orkestrator/browser/loopback/${address.port}`;
-    const result = await requestUrl(`${info.url}${prefix}/`, {
+    const result = await requestUrl(new URL(`${prefix}/`, info.url).toString(), {
       headers: {
         authorization: `Bearer ${info.token}`,
         origin: "null",
@@ -3454,7 +3463,7 @@ describe("remote gateway", () => {
 
     const { info } = await startGateway();
     const prefix = `/__orkestrator/browser/loopback/${targetAddress.port}`;
-    const result = await requestUrl(`${info.url}${prefix}/`, {
+    const result = await requestUrl(new URL(`${prefix}/`, info.url).toString(), {
       headers: { authorization: `Bearer ${info.token}`, origin: "null" },
     });
     expect(result.status).toBe(200);

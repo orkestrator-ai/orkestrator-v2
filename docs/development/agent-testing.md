@@ -7,7 +7,7 @@ binds only to `127.0.0.1` and never configures Tailscale Serve.
 
 ## Prerequisites
 
-- macOS or Linux, Bun 1.3.14+, and repository dependencies installed.
+- macOS or Linux, Bun 1.4.0+, and repository dependencies installed.
 - Docker only for container fixture environments. The default fixture and local
   smoke path do not require a Docker image.
 - The first TypeScript compilation and Vite startup normally take under a minute.

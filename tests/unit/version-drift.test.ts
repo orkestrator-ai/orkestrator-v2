@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { semver } from "bun";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -25,6 +26,21 @@ function lockfilePaths(): string[] {
     for (const entry of readdirSync(groupDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const rel = `${group}/${entry.name}/bun.lock`;
+      if (existsSync(join(repoRoot, rel))) found.push(rel);
+    }
+  }
+  return found;
+}
+
+/** Every tracked `package.json`: the workspace root plus each workspace member. */
+function packageManifestPaths(): string[] {
+  const found = ["package.json"];
+  for (const group of ["apps", "bridges", "packages"]) {
+    const groupDir = join(repoRoot, group);
+    if (!existsSync(groupDir)) continue;
+    for (const entry of readdirSync(groupDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const rel = `${group}/${entry.name}/package.json`;
       if (existsSync(join(repoRoot, rel))) found.push(rel);
     }
   }
@@ -345,12 +361,79 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(getShellVar("scripts/download-bun.sh", "BUN_VERSION")).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
+  test("Bun: package metadata requires the pinned runtime version", () => {
+    const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
+    const rootPackage = JSON.parse(read("package.json")) as { packageManager?: string };
+    const cliPackage = JSON.parse(read("packages/cli/package.json")) as {
+      engines?: { bun?: string };
+    };
+
+    expect(rootPackage.packageManager).toBe(`bun@${hostPin}`);
+    expect(cliPackage.engines?.bun).toBe(`>=${hostPin}`);
+  });
+
+  test("Bun: every declared @types/bun range tracks the pinned runtime's minor", () => {
+    // `@types/bun` is published in lockstep with the runtime, so a manifest left
+    // on the previous minor types a Bun the bridges no longer run on. `~x.y.0`
+    // rather than the exact pin: a types patch is a safe float, a minor is not.
+    //
+    // The manifests are discovered rather than listed. Four declare the
+    // dependency today and the rest inherit the root pin, so listing them would
+    // reproduce the drift this guards against the moment a package adds its own.
+    const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
+    const [major, minor] = hostPin.split(".");
+    const expected = `~${major}.${minor}.0`;
+    const nextMinor = `${major}.${Number(minor) + 1}.0`;
+
+    const declared = packageManifestPaths().flatMap((rel) => {
+      const pkg = JSON.parse(read(rel)) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const spec = pkg.devDependencies?.["@types/bun"] ?? pkg.dependencies?.["@types/bun"];
+      return spec === undefined ? [] : [{ rel, spec }];
+    });
+
+    // A repo-wide rename that dropped every declaration would otherwise pass.
+    expect(declared.length).toBeGreaterThan(0);
+    for (const { rel, spec } of declared) {
+      expect(
+        spec,
+        `${rel} declares @types/bun ${spec}, which is not the pinned Bun ${hostPin} minor`,
+      ).toBe(expected);
+      expect(semver.satisfies(hostPin, spec), `${spec} must accept the pinned runtime`).toBe(true);
+      expect(
+        semver.satisfies(`${major}.${minor}.999999`, spec),
+        `${spec} must allow patch-only type updates`,
+      ).toBe(true);
+      expect(
+        semver.satisfies(nextMinor, spec),
+        `${spec} must reject the next Bun minor ${nextMinor}`,
+      ).toBe(false);
+    }
+  });
+
+  test("Bun: CI validates every supported host download and container architecture", () => {
+    const workflow = read(".github/workflows/validate-bun-runtime.yml");
+    const configuredRunners = workflow
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("runner: "))
+      .map((line) => line.slice("runner: ".length));
+
+    expect(configuredRunners.sort()).toEqual(
+      ["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15-intel", "macos-15"].sort(),
+    );
+    expect(workflow).toContain("run: ./scripts/download-bun.sh");
+    expect(workflow).toContain("platforms: linux/amd64,linux/arm64");
+  });
+
   test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {
     // The claude-bridge build vendors the SDK into dist/node_modules, which is the
     // tree the SDK actually resolves its native binary from at runtime. Stripping
     // musl from top-level node_modules (the historical location) is a no-op against
     // that runtime path. This guards against regressing to the ineffective form.
-    // Verified in oven/bun:1.3.14-debian: the bridge boots and resolves the gnu binary.
+    // Verified in oven/bun:1.4.0-debian: the bridge resolves the gnu binary from this tree.
     const dockerfile = read("docker/Dockerfile");
     expect(dockerfile).toContain(
       "rm -rf dist/node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",

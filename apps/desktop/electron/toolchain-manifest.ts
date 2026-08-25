@@ -636,6 +636,7 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       fileName: "pi",
       size: 74_393_570,
       sha256: "e844dc14981fc70c7f4c45c5ba5f8c237199891bd8520d1ed21fe78be6479dac",
+      repairInvalidMacSignature: true,
     },
   },
   {
@@ -664,6 +665,7 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       fileName: "pi",
       size: 80_035_920,
       sha256: "9b060399789096551d069142cf903dccfb8205642bb4c162e5b7509a2049fc43",
+      repairInvalidMacSignature: true,
     },
   },
   {

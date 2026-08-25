@@ -78,9 +78,10 @@ contains one entry per supported platform and architecture:
 - Linux arm64 and x64
 
 Each entry pins the archive URL, allowed hosts, archive size and SHA-256, archive
-member to extract, and extracted executable size and SHA-256. OpenCode's macOS
-entries additionally set `repairInvalidMacSignature`; the manager retains the
-verified upstream bytes and creates a locally ad-hoc-signed executable.
+member to extract, and extracted executable size and SHA-256. The macOS entries
+for OpenCode and Pi additionally set `repairInvalidMacSignature`; the manager
+retains the verified upstream bytes and creates a locally ad-hoc-signed
+executable.
 
 An entry may also declare `companions`: further executables the primary one
 spawns from its own directory. They are installed into the same version

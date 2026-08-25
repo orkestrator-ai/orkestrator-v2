@@ -359,6 +359,8 @@ export interface EnvironmentSetupSession {
   success?: boolean;
   error?: string;
   terminalRunning: boolean;
+  /** Absent on older backends; unknown must be treated conservatively. */
+  hasOutput?: boolean;
 }
 
 // Session types - Terminal session tracking for environments

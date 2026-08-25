@@ -430,6 +430,7 @@ export function registerEnvironmentCommands(
                 ? false
                 : undefined,
           terminalRunning: terminalProcesses.has(environment.setupSessionId),
+          hasOutput: terminalOutputBufferLength(environment.setupSessionId) > 0,
         };
       }
       logSetupTerminal("renderer requested setup session: none", {
@@ -440,12 +441,14 @@ export function registerEnvironmentCommands(
     const payload = {
       ...session,
       terminalRunning: terminalProcesses.has(session.sessionId),
+      hasOutput: terminalOutputBufferLength(session.sessionId) > 0,
     };
     logSetupTerminal("renderer requested setup session", {
       environmentId: id,
       sessionId: session.sessionId,
       running: session.running,
       terminalRunning: payload.terminalRunning,
+      hasOutput: payload.hasOutput,
       success: session.success ?? null,
       bufferChars: terminalOutputBufferLength(session.sessionId),
     });

@@ -39,6 +39,8 @@ const mockSetAnthropicApiKey = mock(async (apiKey: string | null) => ({
   repositories: {},
 }));
 const mockGetLogDirectory = mock(async () => null);
+const mockGetLogStorageStats = mock(async () => ({ totalBytes: 1536, fileCount: 2 }));
+const mockCleanupLogs = mock(async () => ({ totalBytes: 0, fileCount: 0 }));
 const mockPropagateGithubCredentialsToContainers = mock(
   async (): Promise<{ updated: string[]; failed: [string, string][] }> => ({
     updated: [],
@@ -88,6 +90,8 @@ mock.module("@/lib/backend", () => ({
   setCursorApiKey: mockSetCursorApiKey,
   setAnthropicApiKey: mockSetAnthropicApiKey,
   getLogDirectory: mockGetLogDirectory,
+  getLogStorageStats: mockGetLogStorageStats,
+  cleanupLogs: mockCleanupLogs,
   propagateGithubCredentialsToContainers: mockPropagateGithubCredentialsToContainers,
   getWebClientStatus: mockGetWebClientStatus,
   setWebClientEnabled: mockSetWebClientEnabled,
@@ -132,6 +136,11 @@ describe("GlobalSettings", () => {
     mockSetCursorApiKey.mockClear();
     mockSetAnthropicApiKey.mockClear();
     mockGetLogDirectory.mockClear();
+    mockGetLogDirectory.mockImplementation(async () => null);
+    mockGetLogStorageStats.mockClear();
+    mockGetLogStorageStats.mockImplementation(async () => ({ totalBytes: 1536, fileCount: 2 }));
+    mockCleanupLogs.mockClear();
+    mockCleanupLogs.mockImplementation(async () => ({ totalBytes: 0, fileCount: 0 }));
     mockPropagateGithubCredentialsToContainers.mockClear();
     mockPropagateGithubCredentialsToContainers.mockImplementation(async () => ({
       updated: [],
@@ -205,6 +214,7 @@ describe("GlobalSettings", () => {
           terminalScrollback: 5000,
           experimentalCodexRawEventLogging: true,
           debugLogging: false,
+          debugLogRetentionDays: 7,
           webClientEnabled: true,
         },
         repositories: {},
@@ -1657,11 +1667,13 @@ describe("GlobalSettings", () => {
     expect(mockPropagateGithubCredentialsToContainers).toHaveBeenCalledWith();
   });
 
-  test("saves debug logging and opens its log directory", async () => {
-    mockGetLogDirectory.mockResolvedValueOnce("/tmp/orkestrator-logs");
+  test("saves debug logging retention, reports storage, and cleans up its log directory", async () => {
+    mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
     render(<GlobalSettings activeSection="debug" />);
 
+    expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Disabled" }));
+    fireEvent.change(screen.getByLabelText("Log retention days"), { target: { value: "30" } });
     const logDirectory = await screen.findByRole("button", { name: "/tmp/orkestrator-logs" });
     fireEvent.click(logDirectory);
     fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
@@ -1669,9 +1681,142 @@ describe("GlobalSettings", () => {
     expect(mockRevealInFileManager).toHaveBeenCalledWith("/tmp/orkestrator-logs");
     await waitFor(() =>
       expect(mockUpdateGlobalConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ debugLogging: true }),
+        expect.objectContaining({ debugLogging: true, debugLogRetentionDays: 30 }),
       ),
     );
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean up logs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete logs" }));
+    await waitFor(() => expect(mockCleanupLogs).toHaveBeenCalled());
+    expect(await screen.findByText("0 B across 0 files")).toBeTruthy();
+  });
+
+  test("keeps the recursive log-storage walk off sections that do not show it", async () => {
+    const { rerender } = render(<GlobalSettings activeSection="general" />);
+    await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
+    expect(mockGetLogStorageStats).not.toHaveBeenCalled();
+
+    rerender(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalled());
+  });
+
+  test("still reports the log directory when the storage walk fails", async () => {
+    mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
+    mockGetLogStorageStats.mockRejectedValue(new Error("too many entries"));
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("Storage usage unavailable")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "/tmp/orkestrator-logs" })).toBeTruthy();
+  });
+
+  test("surfaces a cleanup failure without claiming the logs were removed", async () => {
+    mockCleanupLogs.mockRejectedValue(new Error("permission denied"));
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clean up logs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete logs" }));
+
+    await waitFor(() => expect(mockCleanupLogs).toHaveBeenCalled());
+    expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
+  });
+
+  test("keeps later log-storage results when an earlier walk finishes last", async () => {
+    const first = deferred<{ totalBytes: number; fileCount: number }>();
+    const second = deferred<{ totalBytes: number; fileCount: number }>();
+    let statsCalls = 0;
+    mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
+    mockGetLogStorageStats.mockImplementation(() => {
+      statsCalls += 1;
+      return statsCalls === 1 ? first.promise : second.promise;
+    });
+
+    const { rerender } = render(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(1));
+
+    rerender(<GlobalSettings activeSection="general" />);
+    rerender(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("Calculating storage used…")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve({ totalBytes: 1536, fileCount: 2 });
+      await first.promise;
+    });
+    expect(screen.getByText("Calculating storage used…")).toBeTruthy();
+    expect(screen.queryByText("1.5 KB across 2 files")).toBeNull();
+
+    await act(async () => {
+      second.resolve({ totalBytes: 2048, fileCount: 4 });
+      await second.promise;
+    });
+    expect(await screen.findByText("2 KB across 4 files")).toBeTruthy();
+  });
+
+  test("does not let a stale storage walk overwrite a cleanup", async () => {
+    const first = deferred<{ totalBytes: number; fileCount: number }>();
+    const second = deferred<{ totalBytes: number; fileCount: number }>();
+    let statsCalls = 0;
+    mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
+    mockGetLogStorageStats.mockImplementation(() => {
+      statsCalls += 1;
+      return statsCalls === 1 ? first.promise : second.promise;
+    });
+
+    const { rerender } = render(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(1));
+
+    rerender(<GlobalSettings activeSection="general" />);
+    rerender(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      second.resolve({ totalBytes: 1536, fileCount: 2 });
+      await second.promise;
+    });
+    expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clean up logs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete logs" }));
+    await waitFor(() => expect(mockCleanupLogs).toHaveBeenCalled());
+    expect(await screen.findByText("0 B across 0 files")).toBeTruthy();
+
+    await act(async () => {
+      first.resolve({ totalBytes: 4096, fileCount: 8 });
+      await first.promise;
+    });
+    expect(screen.getByText("0 B across 0 files")).toBeTruthy();
+    expect(screen.queryByText("4 KB across 8 files")).toBeNull();
+  });
+
+  test("names the blocking reason when an invalid retention disables Save from another section", async () => {
+    const { rerender } = render(<GlobalSettings activeSection="debug" />);
+    const retention = await screen.findByLabelText("Log retention days");
+
+    // Clearing the field is the ordinary way into the invalid state.
+    fireEvent.change(retention, { target: { value: "" } });
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    // The inline message lives in the Debug pane, so without a shared reason
+    // the block would be invisible from every other section.
+    rerender(<GlobalSettings activeSection="general" />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Log retention in Debug");
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    rerender(<GlobalSettings activeSection="debug" />);
+    fireEvent.change(await screen.findByLabelText("Log retention days"), {
+      target: { value: "30" },
+    });
+    rerender(<GlobalSettings activeSection="general" />);
+    await waitFor(() => expect(screen.queryAllByRole("alert").length).toBe(0));
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("uses and restores the default terminal scrollback when legacy config omits it", () => {

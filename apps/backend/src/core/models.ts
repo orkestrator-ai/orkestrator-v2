@@ -694,6 +694,8 @@ export interface AppConfig {
      */
     experimentalCursorSdkBridge?: boolean;
     debugLogging?: boolean;
+    /** Number of days production application logs remain on disk. */
+    debugLogRetentionDays?: number;
     webClientEnabled?: boolean;
     /** Editable preference embedded inside Orkestrator's fixed review contract. */
     reviewInstruction?: string;

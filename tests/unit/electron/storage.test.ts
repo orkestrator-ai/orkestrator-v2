@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { paneLayoutRevisionConflictMessage } from "@orkestrator/protocol/pane-layout";
 import { REVIEW_INSTRUCTION_MAX_LENGTH } from "../../../packages/protocol/src/review-prompt";
+import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "../../../packages/protocol/src/debug-logging";
 import {
   createEnvironment,
   createProject,
@@ -235,6 +236,46 @@ describe("Electron StorageService", () => {
     expect(persisted.cursorApiKey).toBeUndefined();
     expect(persisted.anthropicApiKey).toBeUndefined();
     expect(persisted.githubToken).toBe("stored-github-token");
+  });
+
+  test("coerces an out-of-range debug log retention from any client", async () => {
+    // The renderer disables Save on an invalid value, but a browser client or a
+    // hand-edited config.json reaches this same path, so the clamp has to live
+    // here rather than in the form.
+    const dataDir = await createTempDir("ork-storage-log-retention-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const base = (await storage.loadConfig()).global;
+
+    for (const invalid of [0, -5, 3651, 1.5, Number.NaN, "30", null, undefined]) {
+      await storage.updateGlobalConfig({
+        ...base,
+        debugLogRetentionDays: invalid as never,
+      });
+      expect((await storage.loadConfig()).global.debugLogRetentionDays).toBe(
+        DEFAULT_DEBUG_LOG_RETENTION_DAYS,
+      );
+    }
+
+    await storage.updateGlobalConfig({ ...base, debugLogRetentionDays: 30 });
+    expect((await storage.loadConfig()).global.debugLogRetentionDays).toBe(30);
+  });
+
+  test("normalizes a persisted debug log retention written outside the app", async () => {
+    const dataDir = await createTempDir("ork-storage-log-retention-persisted-");
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    const config = await storage.loadConfig();
+    await storage.saveConfig({
+      ...config,
+      global: { ...config.global, debugLogRetentionDays: 99999 as never },
+    });
+
+    const reloaded = new StorageService(dataDir);
+    await reloaded.init();
+    expect((await reloaded.loadConfig()).global.debugLogRetentionDays).toBe(
+      DEFAULT_DEBUG_LOG_RETENTION_DAYS,
+    );
   });
 
   test("preserves write-only credentials through a whole-config renderer write", async () => {

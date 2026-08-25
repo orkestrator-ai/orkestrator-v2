@@ -58,6 +58,22 @@ async function waitForPath(target: string, timeoutMs = 2_000): Promise<void> {
   throw new Error(`Timed out waiting for ${target}`);
 }
 
+/**
+ * Waits until `lines` contains an entry that includes `substring`.
+ */
+async function waitForCapturedLine(
+  lines: string[],
+  substring: string,
+  timeoutMs = 2_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (lines.some((line) => line.includes(substring))) return;
+    await Bun.sleep(10);
+  }
+  throw new Error(`Timed out waiting for console line containing ${JSON.stringify(substring)}`);
+}
+
 afterEach(async () => {
   globalThis.fetch = browserFetch;
   globalThis.AbortController = browserAbortController;
@@ -444,6 +460,66 @@ sleep 5
 
         expect(await readFile(marker, "utf8")).toBe("9.9.9-threaded");
       } finally {
+        console.error = realError;
+      }
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
+    "forwards backend stdio through console as complete lines",
+    async () => {
+      // Production logging tees `console`, so stderr/stdout have to reach it as
+      // reassembled lines. A chunk-based forwarder would prefix each fragment.
+      globalThis.fetch = Bun.fetch;
+      const resourceRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-backend-stdio-"));
+      directories.push(resourceRoot);
+      const authFile = path.join(resourceRoot, "auth.json");
+      await writeFile(authFile, JSON.stringify({ token: "fake-backend-token-1234567890" }));
+      await mkdir(path.join(resourceRoot, "bin"), { recursive: true });
+      const fakeBun = path.join(resourceRoot, "bin", "bun");
+      await writeFile(
+        fakeBun,
+        `#!/bin/sh
+printf '{"type":"orkestrator-backend-ready","url":"http://127.0.0.1:1/","authFile":"%s","bindAddress":"127.0.0.1","port":1}\\n' ${JSON.stringify(authFile)}
+printf 'partial-'
+printf 'stdout line\\n'
+printf 'partial-' >&2
+printf 'stderr line\\n' >&2
+sleep 5
+`,
+      );
+      await chmod(fakeBun, 0o755);
+
+      const logs: string[] = [];
+      const errors: string[] = [];
+      const realLog = console.log;
+      const realError = console.error;
+      console.log = ((...args: unknown[]) => {
+        logs.push(args.map(String).join(" "));
+      }) as typeof console.log;
+      console.error = ((...args: unknown[]) => {
+        errors.push(args.map(String).join(" "));
+      }) as typeof console.error;
+      try {
+        const backendProcess = new BackendProcess();
+        processes.push(backendProcess);
+        await backendProcess.start({
+          isDev: false,
+          appVersion: "9.9.9-stdio",
+          appRoot: resourceRoot,
+          resourceRoot,
+          dataDir: resourceRoot,
+          gatewayPort: 0,
+          onEvent: () => undefined,
+        });
+
+        await waitForCapturedLine(logs, "[Backend] partial-stdout line");
+        await waitForCapturedLine(errors, "[Backend] partial-stderr line");
+        expect(logs.some((line) => line === "[Backend] partial-")).toBe(false);
+        expect(errors.some((line) => line === "[Backend] partial-")).toBe(false);
+      } finally {
+        console.log = realLog;
         console.error = realError;
       }
     },

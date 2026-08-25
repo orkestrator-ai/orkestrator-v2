@@ -45,6 +45,10 @@ import {
 import { isEmptyAgentSettings, type AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import {
+  DEFAULT_DEBUG_LOG_RETENTION_DAYS,
+  normalizeDebugLogRetentionDays,
+} from "@orkestrator/protocol/debug-logging";
+import {
   LEGACY_GLOBAL_AGENT_KEYS,
   LEGACY_REPOSITORY_AGENT_KEYS,
   migrateGlobalAgentSettings,
@@ -1519,6 +1523,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   const codexMaxConcurrentThreads = resolveCodexMaxConcurrentThreads(
     global.codexMaxConcurrentThreads,
   );
+  const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
   const hasExplicitGitHubCredentialSource = typeof global.useHostGitHubCredentials === "boolean";
   const hasLegacyGitHubToken =
     typeof global.githubToken === "string" && global.githubToken.trim().length > 0;
@@ -1608,6 +1613,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
   if (
     repositories === reviewInstructionSanitized.repositories &&
     global.codexMaxConcurrentThreads === codexMaxConcurrentThreads &&
+    global.debugLogRetentionDays === debugLogRetentionDays &&
     global.useHostGitHubCredentials === useHostGitHubCredentials &&
     JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
     JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels) &&
@@ -1623,6 +1629,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global: {
       ...nextGlobal,
       codexMaxConcurrentThreads,
+      debugLogRetentionDays,
       useHostGitHubCredentials,
       enabledAgentPlatforms,
       favoriteModels,
@@ -1747,6 +1754,7 @@ export function defaultConfig(): AppConfig {
       experimentalCodexRawEventLogging: true,
       experimentalCursorSdkBridge: false,
       debugLogging: false,
+      debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
       webClientEnabled: true,
     },
     repositories: {},

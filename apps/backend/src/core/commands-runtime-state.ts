@@ -458,6 +458,8 @@ export type EnvironmentSetupSession = {
   completedAt?: string;
   success?: boolean;
   error?: string;
+  /** Whether the retained setup session has any transcript to replay. */
+  hasOutput?: boolean;
 };
 
 export type EnvironmentSetupStartResult = {

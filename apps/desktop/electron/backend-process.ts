@@ -546,7 +546,13 @@ export class BackendProcess {
     }
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
-    child.stderr?.on("data", (chunk) => process.stderr.write(`[Backend] ${chunk}`));
+    // Line-oriented: production logging tees `console`, so a chunk boundary
+    // must not become a log-entry boundary or double-prefix a single diagnostic.
+    if (child.stderr) {
+      createInterface({ input: child.stderr }).on("line", (line) => {
+        console.error(`[Backend] ${line}`);
+      });
+    }
 
     let startupComplete = false;
     let unexpectedExitReported = false;
@@ -605,7 +611,7 @@ export class BackendProcess {
               return;
             finish(message as ReadyMessage);
           } catch {
-            process.stdout.write(`[Backend] ${line}\n`);
+            console.log(`[Backend] ${line}`);
           }
         });
       });

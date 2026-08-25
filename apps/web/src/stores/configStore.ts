@@ -4,6 +4,7 @@ import type { AppConfig, EnvironmentType, GlobalConfig, RepositoryConfig } from 
 import { DEFAULT_TERMINAL_SCROLLBACK, TERMINAL_BACKGROUND_COLOR } from "@/constants/terminal";
 import { LEGACY_ENABLED_AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
+import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "@orkestrator/protocol/debug-logging";
 
 const DEFAULT_CONFIG: AppConfig = {
   version: "1.0",
@@ -93,6 +94,7 @@ const DEFAULT_CONFIG: AppConfig = {
     },
     terminalScrollback: DEFAULT_TERMINAL_SCROLLBACK,
     experimentalCodexRawEventLogging: true,
+    debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
     experimentalCursorSdkBridge: false,
     webClientEnabled: true,
   },

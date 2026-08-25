@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useCallback, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
 import { writeText } from "@/lib/native/clipboard";
+import { createTerminalTargetIdentity } from "@/hooks/terminal-target-identity";
 import { useTerminal } from "@/hooks/useTerminal";
 import { useAgentState } from "@/hooks/useAgentState";
 import { useClipboardImagePaste } from "@/hooks/useClipboardImagePaste";
@@ -66,6 +67,12 @@ const BUFFER_SIZE_THRESHOLD = 0.5;
 const MAX_PENDING_DURABLE_REPLAY_BYTES = 1024 * 1024;
 const TERMINAL_BOOTSTRAP_DELAY_MS = 300;
 const TERMINAL_BOOTSTRAP_MAX_ATTEMPTS = 3;
+// A connection can fail while the desktop event stream or backend process is
+// recovering. Give the same target a small bounded retry budget, with backoff,
+// without returning to the unbounded isConnecting-driven loop this gate
+// replaced.
+const TERMINAL_CONNECT_MAX_ATTEMPTS = 3;
+const TERMINAL_CONNECT_RETRY_BASE_MS = 250;
 // Backoff for re-listing an environment's persisted sessions. Retrying rather
 // than falling open matters: proceeding without an authoritative snapshot would
 // create a duplicate persistent session for a tab that already has one.
@@ -156,7 +163,15 @@ export function PersistentTerminal({
   const setupCompleteRef = useRef(false);
   const workspaceReadySignaledRef = useRef(false);
   const bootstrapRequestedForSessionRef = useRef<string | null>(null);
-  const hasInitiatedConnectionRef = useRef(false);
+  // A failed attachment leaves the hook disconnected. Remember the exact
+  // target and its bounded retry budget so the fallback effect does not turn a
+  // settled failure into a tight renderer/backend loop. A new session or target
+  // gets a different key and is still allowed an immediate attempt.
+  const connectionAttemptTargetRef = useRef<string | null>(null);
+  const connectionAttemptCountRef = useRef(0);
+  const connectionAttemptInFlightRef = useRef<symbol | null>(null);
+  const connectionRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [connectionAttemptSettledRevision, setConnectionAttemptSettledRevision] = useState(0);
   const hasRenderedOutputRef = useRef(false);
   // Render-visible, not a ref: the redraw effect below is a different effect
   // from the one that moves the DOM node, so a ref mutation would not schedule
@@ -414,9 +429,15 @@ export function PersistentTerminal({
     initialRestorationCompleteRef.current = false;
     return () => {
       // React Strict Mode cancels the first development-only connection before
-      // replaying mount effects. Rearm the one-shot connection gate for that
+      // replaying mount effects. Rearm the bounded connection gate for that
       // replay; a genuine remount receives a fresh ref and behaves the same way.
-      hasInitiatedConnectionRef.current = false;
+      connectionAttemptTargetRef.current = null;
+      connectionAttemptCountRef.current = 0;
+      connectionAttemptInFlightRef.current = null;
+      if (connectionRetryTimerRef.current !== null) {
+        clearTimeout(connectionRetryTimerRef.current);
+        connectionRetryTimerRef.current = null;
+      }
     };
   }, [tabId, environmentId]);
 
@@ -426,7 +447,13 @@ export function PersistentTerminal({
       setIsEnvironmentReady(false);
       dataBufferRef.current = "";
       workspaceReadySignaledRef.current = false;
-      hasInitiatedConnectionRef.current = false;
+      connectionAttemptTargetRef.current = null;
+      connectionAttemptCountRef.current = 0;
+      connectionAttemptInFlightRef.current = null;
+      if (connectionRetryTimerRef.current !== null) {
+        clearTimeout(connectionRetryTimerRef.current);
+        connectionRetryTimerRef.current = null;
+      }
       hasRenderedOutputRef.current = false;
       initialRestorationCompleteRef.current = false;
       previousContainerIdRef.current = containerId;
@@ -724,6 +751,94 @@ export function PersistentTerminal({
   useEffect(() => {
     connectRef.current = connect;
   }, [connect]);
+
+  const connectionAttemptTarget = JSON.stringify({
+    // Built from the same fields useTerminal invalidates a connection on. A
+    // field that resets the hook but is missing here would strand a terminal
+    // disconnected behind a gate that never reopens, so there is one builder.
+    target: createTerminalTargetIdentity({
+      containerId,
+      environmentId,
+      isLocal: isLocalEnvironment,
+      terminalKey: tabId,
+      user: terminalUser,
+      replayOutputBuffer: shouldReplayBackendOutputBuffer,
+      attachExistingOnly: isBackendManagedSetupTab,
+      trackEnvironmentActivity,
+    }),
+    // The session this attempt would attach to. The stored id is preferred so
+    // that a store rewrite which drops `sessionId` — the persistent-session
+    // metadata restore below does exactly that — falls back to the hook's own
+    // session instead of reading as a brand new target. A genuinely different
+    // session id *is* a new target: the fallback effect only runs while
+    // disconnected, so attaching to it is the work that still needs doing.
+    sessionId: existingSessionId ?? sessionId ?? null,
+  });
+  // Read through a ref so this callback keeps a stable identity. The
+  // DOM/attachment effect below depends on it, and that effect's cleanup
+  // serializes the entire scrollback into the session store — re-running it
+  // every time the hook publishes a freshly created session id is work nobody
+  // asked for, on the most side-effect-heavy effect in this file.
+  const currentConnectionTargetRef = useRef(connectionAttemptTarget);
+  useEffect(() => {
+    currentConnectionTargetRef.current = connectionAttemptTarget;
+    if (connectionAttemptTargetRef.current !== connectionAttemptTarget) {
+      connectionAttemptCountRef.current = 0;
+      connectionAttemptInFlightRef.current = null;
+      if (connectionRetryTimerRef.current !== null) {
+        clearTimeout(connectionRetryTimerRef.current);
+        connectionRetryTimerRef.current = null;
+      }
+    }
+  }, [connectionAttemptTarget]);
+  const connectToCurrentTarget = useCallback(() => {
+    const target = currentConnectionTargetRef.current;
+    if (connectionAttemptTargetRef.current !== target) {
+      connectionAttemptTargetRef.current = target;
+      connectionAttemptCountRef.current = 0;
+      connectionAttemptInFlightRef.current = null;
+    }
+    if (
+      connectionAttemptInFlightRef.current ||
+      connectionAttemptCountRef.current >= TERMINAL_CONNECT_MAX_ATTEMPTS
+    ) {
+      return false;
+    }
+
+    connectionAttemptCountRef.current += 1;
+    const attemptToken = Symbol(target);
+    connectionAttemptInFlightRef.current = attemptToken;
+    void connectRef
+      .current()
+      // useTerminal currently reports failures through state and resolves, but
+      // keep an unexpected rejection from becoming an unhandled promise while
+      // still letting the retry budget observe that the attempt settled.
+      .catch(() => undefined)
+      .finally(() => {
+        if (
+          connectionAttemptTargetRef.current !== target ||
+          connectionAttemptInFlightRef.current !== attemptToken
+        ) {
+          return;
+        }
+        connectionAttemptInFlightRef.current = null;
+        setConnectionAttemptSettledRevision((revision) => revision + 1);
+      });
+    return true;
+  }, []);
+
+  // A later loss of a healthy connection is a new recovery episode even when
+  // it points at the same backend PTY, so grant it a fresh bounded budget.
+  useEffect(() => {
+    if (!isConnected) return;
+    connectionAttemptTargetRef.current = null;
+    connectionAttemptCountRef.current = 0;
+    connectionAttemptInFlightRef.current = null;
+    if (connectionRetryTimerRef.current !== null) {
+      clearTimeout(connectionRetryTimerRef.current);
+      connectionRetryTimerRef.current = null;
+    }
+  }, [isConnected]);
 
   // Persistent session tracking
   const persistentSessionCreatedRef = useRef(false);
@@ -1156,12 +1271,11 @@ export function PersistentTerminal({
       // portal store update has not yet exposed terminalIsOpened to the
       // fallback effect. The mount-lifecycle cleanup rearms this under Strict
       // Mode after useTerminal cancels the probe connection.
-      if (!hasInitiatedConnectionRef.current) {
-        hasInitiatedConnectionRef.current = true;
+      if (connectionAttemptTargetRef.current !== currentConnectionTargetRef.current) {
         if (!isReconnecting) {
           initialRestorationCompleteRef.current = true;
         }
-        void connectRef.current();
+        connectToCurrentTarget();
       }
     } else if (containerElement) {
       // Terminal already opened - reuse the stored container element
@@ -1415,6 +1529,7 @@ export function PersistentTerminal({
     handlePaste,
     handleSelectAll,
     toggleComposeBar,
+    connectToCurrentTarget,
     sessionKey,
     savePersistentSessionBuffer,
   ]);
@@ -1532,11 +1647,53 @@ export function PersistentTerminal({
 
   // Connect when terminal is opened to DOM
   // This is a fallback - primary connection happens immediately after terminal.open()
+  //
+  // `connectionAttemptTarget` is a dependency because it is what re-arms this
+  // effect. `connectToCurrentTarget` is deliberately identity-stable, so a
+  // terminal that is already disconnected when it starts pointing at a
+  // different backend PTY — a new container, say — would otherwise never see
+  // an attempt: none of the other dependencies change in that case.
   useEffect(() => {
-    if (terminalIsOpened && !isConnected && !isConnecting) {
-      connect();
+    if (!terminalIsOpened) return;
+    if (isConnected || isConnecting) return;
+    if (connectionAttemptTargetRef.current !== connectionAttemptTarget) {
+      connectToCurrentTarget();
+      return;
     }
-  }, [terminalIsOpened, isConnected, isConnecting, connect, tabId]);
+    if (connectionAttemptInFlightRef.current) return;
+    if (connectionAttemptCountRef.current >= TERMINAL_CONNECT_MAX_ATTEMPTS) return;
+
+    // Backend-managed setup tabs are rearmed only when their binding publishes
+    // a different session/target. Retrying the same stopped setup id was the
+    // original log flood; unlike an ordinary terminal, this view must never
+    // create a replacement PTY itself.
+    if (isBackendManagedSetupTab) return;
+    if (connectionRetryTimerRef.current !== null) return;
+
+    const delay =
+      TERMINAL_CONNECT_RETRY_BASE_MS * 2 ** Math.max(0, connectionAttemptCountRef.current - 1);
+    connectionRetryTimerRef.current = setTimeout(() => {
+      connectionRetryTimerRef.current = null;
+      if (currentConnectionTargetRef.current !== connectionAttemptTarget) return;
+      connectToCurrentTarget();
+    }, delay);
+
+    return () => {
+      if (connectionRetryTimerRef.current !== null) {
+        clearTimeout(connectionRetryTimerRef.current);
+        connectionRetryTimerRef.current = null;
+      }
+    };
+  }, [
+    terminalIsOpened,
+    isConnected,
+    isConnecting,
+    isBackendManagedSetupTab,
+    connectionAttemptTarget,
+    connectionAttemptSettledRevision,
+    connectToCurrentTarget,
+    tabId,
+  ]);
 
   /**
    * The launch payload, keyed on its contents rather than its props' identity.

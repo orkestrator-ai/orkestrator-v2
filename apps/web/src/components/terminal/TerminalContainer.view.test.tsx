@@ -34,7 +34,7 @@ import {
   type PersistedPaneLayout,
 } from "@/types/paneLayout";
 
-import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
+import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession, Session } from "@/types";
 
 import type { CollisionDetection } from "@dnd-kit/core";
 
@@ -205,6 +205,10 @@ const awaitEnvironmentSetupSessionMock = mock(
     getEnvironmentSetupSessionMock(environmentId),
 );
 
+const getSessionsByEnvironmentMock = mock(async (_environmentId: string): Promise<Session[]> => []);
+
+const loadSessionBufferMock = mock(async (_sessionId: string): Promise<string | null> => null);
+
 const setEnvironmentPendingAgentLaunchMock = mock(
   async (environmentId: string, pending: boolean) => ({
     ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
@@ -359,6 +363,8 @@ mock.module("@/lib/backend", () => ({
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
   awaitEnvironmentSetupSession: awaitEnvironmentSetupSessionMock,
+  getSessionsByEnvironment: getSessionsByEnvironmentMock,
+  loadSessionBuffer: loadSessionBufferMock,
   setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
   acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
   setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
@@ -522,6 +528,10 @@ describe("TerminalContainer", () => {
     getEnvironmentSetupSessionMock.mockReset();
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
     awaitEnvironmentSetupSessionMock.mockClear();
+    getSessionsByEnvironmentMock.mockReset();
+    getSessionsByEnvironmentMock.mockResolvedValue([]);
+    loadSessionBufferMock.mockReset();
+    loadSessionBufferMock.mockResolvedValue(null);
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(
       async (environmentId: string, pending: boolean) => ({
@@ -1716,6 +1726,344 @@ describe("TerminalContainer", () => {
     });
     expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
       { id: "default", type: "plain", isSetupTab: true },
+    ]);
+  });
+
+  test("replaces a completed setup tab that has neither a PTY nor replayable output", async () => {
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: false,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(setupTabIds()).toEqual([]);
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain" },
+    ]);
+  });
+
+  test("rechecks an already-bound setup tab after setup finishes", async () => {
+    getEnvironmentSetupSessionMock
+      .mockResolvedValueOnce({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        running: true,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        terminalRunning: false,
+        hasOutput: false,
+      })
+      .mockResolvedValue({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        running: false,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:01:00.000Z",
+        success: true,
+        terminalRunning: false,
+        hasOutput: false,
+      });
+
+    restoreBackendSetupTabLayout({
+      setupPhase: "running",
+      setupScriptsComplete: false,
+    });
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
+      ).toBe("env-hidden:setup");
+    });
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(setupTabIds()).toEqual([]);
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain" },
+    ]);
+  });
+
+  test("keeps a completed setup transcript after its PTY exits", async () => {
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: true,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
+      ).toBe("env-hidden:setup");
+    });
+    expect(setupTabIds()).toEqual(["default"]);
+  });
+
+  test("keeps a completed setup tab when an older backend does not report hasOutput", async () => {
+    // A backend that predates `hasOutput` says nothing about its transcript.
+    // Unknown is not empty, so a rolling upgrade must not discard setup history
+    // it cannot prove is gone.
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
+      ).toBe("env-hidden:setup");
+    });
+    expect(setupTabIds()).toEqual(["default"]);
+  });
+
+  test("keeps a setup tab this renderer can still replay after the backend frees its buffer", async () => {
+    // The backend drops a retained setup buffer minutes after the PTY exits, so
+    // `hasOutput` goes false while PersistentTerminal can still paint the
+    // transcript from `serializedBuffer`. Retiring the tab would run
+    // cleanupTerminalTab and take that buffer with it.
+    useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
+      sessionId: "env-hidden:setup",
+      serializedBuffer: "cloning repository...\r\nsetup complete\r\n",
+    });
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: false,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    await waitFor(() => {
+      expect(setupTabIds()).toEqual(["default"]);
+    });
+    expect(
+      useTerminalSessionStore
+        .getState()
+        .sessions.get(createSessionKey(null, "default", "env-hidden"))?.serializedBuffer,
+    ).toBe("cloning repository...\r\nsetup complete\r\n");
+  });
+
+  test("waits for durable setup history to hydrate before retiring a cold setup tab", async () => {
+    let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: false,
+    });
+    getSessionsByEnvironmentMock.mockResolvedValue([
+      {
+        id: "persisted-setup",
+        environmentId: "env-hidden",
+        containerId: "",
+        tabId: "default",
+        sessionType: "plain",
+        status: "disconnected",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:01:00.000Z",
+        order: 0,
+      },
+    ]);
+    loadSessionBufferMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePersistentBuffer = resolve;
+        }),
+    );
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(getSessionsByEnvironmentMock).toHaveBeenCalledWith("env-hidden");
+      expect(loadSessionBufferMock).toHaveBeenCalledWith("persisted-setup");
+    });
+    // An empty renderer-local store is not authoritative while the durable
+    // buffer lookup remains unresolved.
+    expect(setupTabIds()).toEqual(["default"]);
+
+    await act(async () => {
+      resolvePersistentBuffer?.("cold setup history\r\n");
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey(null, "default", "env-hidden")),
+      ).toMatchObject({
+        persistentSessionId: "persisted-setup",
+        serializedBuffer: "cold setup history\r\n",
+      });
+    });
+    expect(setupTabIds()).toEqual(["default"]);
+  });
+
+  test("keeps a setup tab when durable history cannot be checked", async () => {
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: false,
+    });
+    getSessionsByEnvironmentMock.mockResolvedValue([
+      {
+        id: "persisted-setup",
+        environmentId: "env-hidden",
+        containerId: "",
+        tabId: "default",
+        sessionType: "plain",
+        status: "disconnected",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:01:00.000Z",
+        order: 0,
+      },
+    ]);
+    loadSessionBufferMock.mockRejectedValue(new Error("buffer store unavailable"));
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(
+      () => {
+        expect(loadSessionBufferMock).toHaveBeenCalledTimes(MAX_SETUP_SESSION_BIND_ATTEMPTS);
+      },
+      { timeout: 2_000 },
+    );
+    expect(setupTabIds()).toEqual(["default"]);
+  });
+
+  test("keeps a replayable setup tab when the backend has forgotten the session entirely", async () => {
+    // A restarted backend can lose the session record for an environment whose
+    // `setupSessionId` was never persisted. That is not evidence the transcript
+    // this renderer already holds is worthless.
+    useTerminalSessionStore.getState().setSession(createSessionKey(null, "default", "env-hidden"), {
+      sessionId: "env-hidden:setup",
+      serializedBuffer: "setup complete\r\n",
+    });
+    getEnvironmentSetupSessionMock.mockResolvedValue(null);
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledWith("env-hidden");
+    });
+    await waitFor(() => {
+      expect(setupTabIds()).toEqual(["default"]);
+    });
+  });
+
+  test("re-dispatches a post-setup recheck that the in-flight guard turned away", async () => {
+    // Setup finishing while a bind is still in flight used to lose the recheck:
+    // the guard returned early without scheduling anything, and the settling
+    // lookup had read the backend mid-run, so nothing ever re-examined the tab.
+    let releaseFirstLookup: (() => void) | undefined;
+    let lookups = 0;
+    getEnvironmentSetupSessionMock.mockImplementation(async () => {
+      lookups += 1;
+      if (lookups === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirstLookup = resolve;
+        });
+        return {
+          environmentId: "env-hidden",
+          sessionId: "env-hidden:setup",
+          running: true,
+          startedAt: "2026-01-01T00:00:00.000Z",
+          terminalRunning: true,
+          hasOutput: false,
+        };
+      }
+      return {
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        running: false,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:01:00.000Z",
+        success: true,
+        terminalRunning: false,
+        hasOutput: false,
+      };
+    });
+
+    restoreBackendSetupTabLayout({
+      setupPhase: "running",
+      setupScriptsComplete: false,
+    });
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(1);
+      expect(releaseFirstLookup).toBeDefined();
+    });
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      });
+    });
+
+    await act(async () => {
+      releaseFirstLookup!();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(setupTabIds()).toEqual([]);
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain" },
     ]);
   });
 

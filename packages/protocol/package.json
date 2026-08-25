@@ -16,6 +16,7 @@
     "./connections": "./src/connections.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./diff-stats": "./src/diff-stats.ts",
+    "./debug-logging": "./src/debug-logging.ts",
     "./feature-planning": "./src/feature-planning.ts",
     "./gateway-token": "./src/gateway-token.ts",
     "./model-id": "./src/model-id.ts",

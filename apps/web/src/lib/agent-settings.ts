@@ -63,25 +63,20 @@ export function resolvedDefaultAgent(
   return resolveDefaultAgent(agentSettingsTiers(config, projectId, environment));
 }
 
-/** Resolve one action while preserving the generic default-agent precedence. */
+/** Resolve one action through the same environment → repository → app cascade as Settings. */
 export function resolvedActionDefault(
   tiers: AgentSettingsTiers,
   key: ActionDefaultKey,
   enabledAgents: readonly AgentPlatform[],
 ): { agent: AgentPlatform; model?: string; reasoningEffort?: string } {
-  const environmentEntry = tiers.environment?.actionDefaults?.[key];
-  const repositoryEntry = tiers.repository?.actionDefaults?.[key];
-  const overrideAgent =
-    !environmentEntry && tiers.environment?.defaultAgent
-      ? tiers.environment.defaultAgent
-      : !environmentEntry && !repositoryEntry && tiers.repository?.defaultAgent
-        ? tiers.repository.defaultAgent
-        : undefined;
+  const configuredFallback = resolveDefaultAgent(tiers);
+  const fallbackAgent = enabledAgents.includes(configuredFallback)
+    ? configuredFallback
+    : (enabledAgents[0] ?? configuredFallback);
 
   return resolveActionDefault(resolveActionDefaults(tiers), key, {
-    fallbackAgent: resolveDefaultAgent(tiers),
+    fallbackAgent,
     enabledAgents,
-    overrideAgent,
   });
 }
 

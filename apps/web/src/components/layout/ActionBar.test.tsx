@@ -4169,13 +4169,14 @@ describe("ActionBar configured action defaults", () => {
     );
   });
 
-  test("keeps the environment's own agent ahead of an application-level default", async () => {
+  test("keeps a plain review click aligned with the configured Review default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
-      // The user created this environment with Codex explicitly.
+      // The environment's generic tab default is Codex, but the action-specific
+      // Review default is the value shown by the right-click selector.
       agentSettings: { defaultAgent: "codex" },
     };
     currentActionDefaults = {
@@ -4183,15 +4184,29 @@ describe("ActionBar configured action defaults", () => {
     };
 
     render(<ActionBar />);
-    fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+    const reviewButton = screen.getByRole("button", { name: "Code review" });
+    fireEvent.contextMenu(reviewButton);
 
-    // Action defaults are application-level, so the narrower per-environment
-    // choice wins — and Claude's model cannot travel to Codex with it.
-    expect(createTabMock).toHaveBeenLastCalledWith(
-      "codex",
-      expect.objectContaining({ displayTitle: "Review" }),
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Configure code review" })).toBeTruthy(),
     );
-    expect(createTabMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialAgentModel");
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    expect(picker.textContent).toContain("Opus");
+    expect(picker.textContent).toContain("Max");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(reviewButton);
+
+    // A plain click must launch exactly the same platform, model and effort as
+    // the populated right-click selector.
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        displayTitle: "Review",
+        initialAgentModel: "opus[1m]",
+        initialReasoningEffort: "max",
+      }),
+    );
   });
 
   test("applies a default whose platform matches the environment's own agent", () => {
@@ -4257,6 +4272,7 @@ describe("ActionBar configured action defaults", () => {
   test("applies the configured PR default to a plain Create PR click", () => {
     currentEnvironment = {
       ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -4281,6 +4297,7 @@ describe("ActionBar configured action defaults", () => {
   test("applies the configured Resolve and Push defaults", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
       prState: "open",
       hasMergeConflicts: true,
     };
@@ -4304,6 +4321,7 @@ describe("ActionBar configured action defaults", () => {
 
     currentEnvironment = {
       ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
       prState: "open",
       hasMergeConflicts: false,
     };
@@ -4345,30 +4363,41 @@ describe("ActionBar configured action defaults", () => {
     expect(createTabMock.mock.calls.at(-1)?.[1]).not.toHaveProperty("initialAgentModel");
   });
 
-  test("opens the Create PR dialog on the configured PR default", async () => {
+  test("keeps a plain Create PR click aligned with the configured PR default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      // Environments always persist the agent they were created with. A plain
-      // click still honours that; the configure dialog must not, or Settings'
-      // PR default never appears.
+      // The generic environment default must not displace the action-specific
+      // value shown in the right-click dialog.
       agentSettings: { defaultAgent: "codex" },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
     };
     currentActionDefaults = {
-      pr: { platform: "claude", model: "haiku" },
+      pr: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
 
     render(<ActionBar />);
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Create PR" }));
+    const createPrButton = screen.getByRole("button", { name: "Create PR" });
+    fireEvent.contextMenu(createPrButton);
 
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "Configure pull request" })).toBeTruthy(),
     );
-    expect(
-      screen.getByRole("combobox", { name: "Agent, model and reasoning" }).textContent,
-    ).toContain("Haiku");
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    expect(picker.textContent).toContain("Sonnet");
+    expect(picker.textContent).toContain("High");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(createPrButton);
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        displayTitle: "PR",
+        initialAgentModel: "sonnet",
+        initialReasoningEffort: "high",
+      }),
+    );
   });
 
   test("opens the Code review dialog on the configured Review default", async () => {
@@ -4394,7 +4423,7 @@ describe("ActionBar configured action defaults", () => {
     expect(picker.textContent).toContain("High");
   });
 
-  test("opens the Resolve dialog on the configured Resolve default", async () => {
+  test("keeps a plain Resolve click aligned with the configured Resolve default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       agentSettings: { defaultAgent: "codex" },
@@ -4402,18 +4431,32 @@ describe("ActionBar configured action defaults", () => {
       hasMergeConflicts: true,
     };
     currentActionDefaults = {
-      resolve: { platform: "claude", model: "haiku" },
+      resolve: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
     };
 
     render(<ActionBar />);
-    fireEvent.contextMenu(screen.getByRole("button", { name: "Resolve" }));
+    const resolveButton = screen.getByRole("button", { name: "Resolve" });
+    fireEvent.contextMenu(resolveButton);
 
     await waitFor(() =>
       expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy(),
     );
-    expect(
-      screen.getByRole("combobox", { name: "Agent, model and reasoning" }).textContent,
-    ).toContain("Haiku");
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    expect(picker.textContent).toContain("Sonnet");
+    expect(picker.textContent).toContain("High");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(resolveButton);
+    await waitFor(() =>
+      expect(createTabMock).toHaveBeenLastCalledWith(
+        "claude",
+        expect.objectContaining({
+          displayTitle: "Resolve",
+          initialAgentModel: "sonnet",
+          initialReasoningEffort: "high",
+        }),
+      ),
+    );
   });
 
   test("launches a looped review from the configured Review default", async () => {

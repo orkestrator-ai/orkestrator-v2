@@ -86,9 +86,28 @@ export async function dispatchPrompt(
     await run.cancel().catch(() => undefined);
   };
 
+  // The user cancelled while `send` was still open, so this turn was stopped
+  // before it had anything to stop. Honour it now rather than letting a turn
+  // the user already abandoned run to completion.
+  if (state.pendingCancelPromptSequence === promptSequence) {
+    state.pendingCancelPromptSequence = undefined;
+    await run.cancel().catch(() => undefined);
+  }
+
   // Never rejects: every terminal path is recorded on the session, and an
   // unobserved rejection here would take the whole bridge down.
   return { completion: followRun(state, run, promptSequence, input) };
+}
+
+export interface FollowableRun {
+  stream(): AsyncGenerator<unknown, void>;
+  cancel(): Promise<void>;
+  wait(): Promise<{
+    status: string;
+    result?: string;
+    error?: { message: string };
+    durationMs?: number;
+  }>;
 }
 
 /**
@@ -97,20 +116,19 @@ export async function dispatchPrompt(
  * The stream is drained even though `onDelta` is what builds the transcript.
  * Draining is what guarantees the run makes progress in SDK versions where the
  * stream is the consumer that pulls it, and it costs nothing when it is not.
+ *
+ * `timeoutMs` is a parameter rather than a direct read of `PROMPT_TIMEOUT_MS`
+ * because the budget is a policy input, and one with a deliberate one-minute
+ * floor: a test cannot lower it through the environment, and the branch it
+ * guards — abandoning a run that is still executing — is the one that most
+ * needs proving.
  */
-async function followRun(
+export async function followRun(
   state: SessionState,
-  run: {
-    stream(): AsyncGenerator<unknown, void>;
-    wait(): Promise<{
-      status: string;
-      result?: string;
-      error?: { message: string };
-      durationMs?: number;
-    }>;
-  },
+  run: FollowableRun,
   promptSequence: number,
   input: DispatchInput,
+  timeoutMs: number = PROMPT_TIMEOUT_MS,
 ): Promise<void> {
   const drained = (async () => {
     try {
@@ -124,13 +142,31 @@ async function followRun(
   })();
 
   try {
-    const result = await withTimeout(run.wait(), PROMPT_TIMEOUT_MS);
+    const result = await withTimeout(run.wait(), timeoutMs);
     await drained;
     if (!turnStillOwned(state, promptSequence)) return;
     finishTurn(state, result, input);
   } catch (error) {
+    // Giving up on the wait is not the same as the run stopping. Failing the
+    // turn here clears `cancelTurn` and settles every background child, so a
+    // run left alive would keep writing to the workspace while `/activity`
+    // answers idle and the user has lost the only control that could stop it.
+    //
+    // Deliberately not awaited: the turn is over either way, and a `cancel`
+    // that hangs must not pin the session as running — which is the state the
+    // timeout exists to get it out of.
+    if (error instanceof TurnTimeoutError) void run.cancel().catch(() => undefined);
     if (!turnStillOwned(state, promptSequence)) return;
     failTurn(state, error, input);
+  }
+}
+
+/** The turn outlived its budget, as opposed to the run reporting a failure. */
+export class TurnTimeoutError extends Error {
+  override readonly name = "TurnTimeoutError";
+
+  constructor() {
+    super("The Cursor turn exceeded its time budget");
   }
 }
 
@@ -141,6 +177,7 @@ function finishTurn(
 ): void {
   settleBackgroundChildren(state);
   state.cancelTurn = undefined;
+  state.pendingCancelPromptSequence = undefined;
 
   if (result.status === "error") {
     failTurn(state, new Error(result.error?.message ?? "The Cursor turn failed"), input);
@@ -162,6 +199,7 @@ function finishTurn(
 function failTurn(state: SessionState, error: unknown, input: DispatchInput): void {
   settleBackgroundChildren(state);
   state.cancelTurn = undefined;
+  state.pendingCancelPromptSequence = undefined;
   state.status = "error";
   state.error = errorText(error);
   recordUsage(state, undefined);
@@ -290,10 +328,7 @@ async function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
     return await Promise.race([
       work,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error("The Cursor turn exceeded its time budget")),
-          timeoutMs,
-        );
+        timer = setTimeout(() => reject(new TurnTimeoutError()), timeoutMs);
         timer.unref();
       }),
     ]);

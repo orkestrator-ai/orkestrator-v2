@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { newSessionState } from "./agent-session.js";
 import { drainPersistence, loadPersistedState } from "./persistence.js";
-import { clientSessionKeys, sessions } from "./state.js";
+import { clientSessionKeys, sessionIsWorking, sessions, type BridgeToolPart } from "./state.js";
 
 let stateRoot: string;
 let stateFile: string;
@@ -133,6 +133,87 @@ describe("the prompt journal across a restart", () => {
     // A settled outcome is knowledge and survives as itself.
     expect(journal.get("done")!.state).toBe("completed");
     expect(journal.get("failed")!.state).toBe("failed");
+  });
+});
+
+describe("sub-agent cards after a restart", () => {
+  function sessionWithSubagentCard(
+    toolState: "pending" | "success",
+    agentState: "active" | "finished",
+    toolOutput?: string,
+  ) {
+    const state = newSessionState();
+    state.messages.push({
+      id: "m1",
+      role: "assistant",
+      content: "",
+      createdAt: new Date(0).toISOString(),
+      parts: [
+        {
+          type: "tool-invocation",
+          content: "Task",
+          sourcePartId: "m1:0",
+          sourceMessageId: "m1",
+          toolUseId: "call-1",
+          toolName: "task",
+          toolState,
+          agentState,
+          ...(toolOutput === undefined ? {} : { toolOutput }),
+        },
+      ],
+    });
+    sessions.set(state.id, state);
+    return state;
+  }
+
+  async function reload(id: string) {
+    await persist();
+    sessions.clear();
+    clientSessionKeys.clear();
+    await loadPersistedState();
+    return sessions.get(id)!;
+  }
+
+  /**
+   * `activeSubagentDescriptors` is not persisted — a live child belongs to the
+   * process that launched it — so nothing after a restart can ever settle a
+   * card left at `active`. Left alone it renders as a sub-agent that has been
+   * running since before the bridge started, and disagrees with `/activity`,
+   * which correctly reports the session idle.
+   */
+  test("a card left active by a dead process is settled as detached", async () => {
+    const state = sessionWithSubagentCard("pending", "active");
+
+    const part = (await reload(state.id)).messages[0]!.parts[0] as BridgeToolPart;
+    expect(part.agentState).toBe("finished");
+    expect(part.toolState).toBe("success");
+    // Detached, not completed: claiming it finished would be a claim about work
+    // this process never observed.
+    expect(part.toolOutput).toContain("still running in the background");
+  });
+
+  test("the settled card does not make the session look busy", async () => {
+    const state = sessionWithSubagentCard("pending", "active");
+    const restored = await reload(state.id);
+
+    expect(sessionIsWorking(restored)).toBe(false);
+    expect(restored.activeSubagentDescriptors.size).toBe(0);
+  });
+
+  test("appends its note rather than discarding output the child produced", async () => {
+    const state = sessionWithSubagentCard("pending", "active", "partial output");
+
+    const part = (await reload(state.id)).messages[0]!.parts[0] as BridgeToolPart;
+    expect(part.toolOutput).toStartWith("partial output");
+    expect(part.toolOutput).toContain("still running in the background");
+  });
+
+  test("a card that already settled is left exactly as it was", async () => {
+    const state = sessionWithSubagentCard("success", "finished", "done");
+
+    const part = (await reload(state.id)).messages[0]!.parts[0] as BridgeToolPart;
+    expect(part.toolOutput).toBe("done");
+    expect(part.agentState).toBe("finished");
   });
 });
 

@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import { MAX_STATE_FILE_BYTES, stateFilePath } from "./config.js";
 import { emptyComposer } from "./models.js";
 import { readTodos } from "./tool-rendering.js";
+import { settleDetachedSubagentPart } from "./translate.js";
 import {
   clientSessionKeys,
   isObject,
@@ -168,7 +169,26 @@ function restoreSession(entry: unknown): SessionState | undefined {
     }
   }
   state.todos = restoreTodos(state);
+  settleRestoredSubagents(state);
   return state;
+}
+
+/**
+ * Close out sub-agent cards that were live when the previous process died.
+ *
+ * `activeSubagentDescriptors` is deliberately not persisted — a live child
+ * belongs to the process that launched it — so nothing after a restart can
+ * ever settle a card left at `agentState: "active"`. Left alone it renders as
+ * a sub-agent that has been running since before the bridge started, and
+ * disagrees with `/activity`, which correctly reports the session idle.
+ */
+function settleRestoredSubagents(state: SessionState): void {
+  for (const message of state.messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-invocation" || part.agentState !== "active") continue;
+      settleDetachedSubagentPart(part);
+    }
+  }
 }
 
 /**

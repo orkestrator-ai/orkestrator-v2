@@ -34,12 +34,14 @@ import {
   applyComposerPatch,
   createSession,
   CredentialError,
+  detachAgent,
   ensureAgent,
   listResumableSessions,
   parseComposerPatch,
   resumeSession,
 } from "./agent-session.js";
 import {
+  clientSessionKeys,
   isObject,
   nonBlank,
   sessions,
@@ -67,6 +69,12 @@ export async function route(
   clientSignal: AbortSignal,
 ): Promise<void> {
   const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
+  // Read once, here, so every `json` below answers in a representation this
+  // client actually asked for. Stashed on the response rather than threaded
+  // through every call site, which is how the ACP bridge carries it too.
+  (response as GzipCapableResponse)[RESPONSE_ACCEPTS_GZIP] = acceptsGzip(
+    request.headers["accept-encoding"],
+  );
 
   // Health is unauthenticated on purpose: the launcher polls it to decide the
   // bridge is up, before it has a reason to trust it with a token.
@@ -265,7 +273,38 @@ async function routeSession(
   if (action === "prompt" && request.method === "POST") {
     return await handlePrompt(request, response, state, clientSignal);
   }
-  return json(response, 404, { error: "Not found" });
+  if (!action && request.method === "DELETE") {
+    return await handleDelete(response, state);
+  }
+  // The path named a session this bridge has; only the method was wrong. A 404
+  // here would read as "session gone" and let a real gap — a route the backend
+  // speaks and this bridge does not — be mistaken for an absent session.
+  return json(response, 405, { error: "Method not allowed" });
+}
+
+/**
+ * Close a session and release everything it holds.
+ *
+ * The backend's tab teardown is the only caller, and it treats a 404 as "the
+ * transcript is already gone" — so a bridge that simply did not answer DELETE
+ * would leak a session, its transcript and its attached SDK agent on every
+ * closed tab, silently. `sessions` and the persisted state file are both
+ * unbounded in the number of sessions they hold, and once that file outgrows
+ * `MAX_STATE_FILE_BYTES` every later write is skipped, taking live sessions
+ * down with the dead ones.
+ *
+ * Deleting is deliberately local. The SDK agent is disposed, not deleted: the
+ * user's Cursor-side conversation is theirs, and closing a tab is not a request
+ * to destroy it.
+ */
+async function handleDelete(response: ServerResponse, state: SessionState): Promise<void> {
+  await detachAgent(state);
+  sessions.delete(state.id);
+  if (state.clientSessionKey && clientSessionKeys.get(state.clientSessionKey) === state.id) {
+    clientSessionKeys.delete(state.clientSessionKey);
+  }
+  schedulePersist();
+  return json(response, 200, { deleted: true });
 }
 
 async function handleConfig(
@@ -274,9 +313,9 @@ async function handleConfig(
   state: SessionState,
 ): Promise<void> {
   const body = await readJson(request);
-  // Claimed before the first await, exactly as the prompt route does: applying
-  // a patch detaches the agent, and a prompt admitted in that window would
-  // plan against a composer that is about to change under it.
+  // Claimed before the first await, exactly as the prompt route does: a prompt
+  // admitted in this window would plan against a composer that is about to
+  // change under it.
   if (state.status === "running" || state.dispatching) {
     throw new HttpError(409, "Session is already running");
   }
@@ -296,11 +335,24 @@ async function handleConfig(
 
 async function handleCancel(response: ServerResponse, state: SessionState): Promise<void> {
   const cancel = state.cancelTurn;
-  if (cancel) await cancel();
-  // The run's own terminal path settles the transcript. Reporting idle here
-  // would race it and let a caller start a second turn into a run that has not
-  // actually stopped yet.
-  return json(response, 200, { cancelled: Boolean(cancel) });
+  if (cancel) {
+    await cancel();
+    // The run's own terminal path settles the transcript. Reporting idle here
+    // would race it and let a caller start a second turn into a run that has
+    // not actually stopped yet.
+    return json(response, 200, { cancelled: true });
+  }
+
+  // A turn is claimed but its run handle does not exist yet — the request is
+  // still inside `ensureAgent`'s cold start or `agent.send`. Park the cancel
+  // against the sequence of the turn it meant to stop rather than answering
+  // 200: the caller must not read "no handle" as "already stopped".
+  if (state.status === "running" || state.dispatching) {
+    state.pendingCancelPromptSequence =
+      state.status === "running" ? state.promptSequence : state.promptSequence + 1;
+    return json(response, 202, { cancelled: false, pending: true });
+  }
+  return json(response, 200, { cancelled: false });
 }
 
 async function handlePrompt(
@@ -348,6 +400,10 @@ async function handlePrompt(
   // fast path, so a second request would otherwise pass both the duplicate and
   // the busy check and dispatch the same prompt twice.
   state.dispatching = true;
+  // Cleared here, at the claim, because a cancel can only be parked once this
+  // flag is set — so nothing that arrives for *this* turn is lost, and nothing
+  // left over from a previous one can cancel it.
+  state.pendingCancelPromptSequence = undefined;
   if (requestId) {
     setPromptJournal(state, { requestId, state: "prepared", acceptedAt: Date.now() });
   }
@@ -472,33 +528,81 @@ async function readJson(request: IncomingMessage): Promise<JsonObject> {
   }
 }
 
+/**
+ * Whether this client will actually accept a gzipped body.
+ *
+ * Compressing regardless is not safe: this repository already has a hop that
+ * asks for `identity` on purpose (`gateway-proxy` keeps the loopback leg
+ * decoded so preview rewriting can bound it), and a body labelled `gzip` that
+ * the caller never asked for is one it will hand to `JSON.parse` as binary.
+ * Parsed the same way the ACP bridge parses it, `q=0` and wildcards included.
+ */
+export function acceptsGzip(value: string | string[] | undefined): boolean {
+  const header = Array.isArray(value) ? value.join(",") : (value ?? "");
+  let wildcardQuality: number | undefined;
+  for (const entry of header.split(",")) {
+    const [name, ...parameters] = entry.trim().toLowerCase().split(";");
+    if (name !== "gzip" && name !== "*") continue;
+    const qualityParameter = parameters
+      .map((parameter) => parameter.trim())
+      .find((parameter) => parameter.startsWith("q="));
+    const rawQuality = qualityParameter?.slice(2);
+    const quality =
+      rawQuality === undefined
+        ? 1
+        : /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(rawQuality)
+          ? Number(rawQuality)
+          : 0;
+    // An explicit coding always overrides a wildcard, including `q=0`.
+    if (name === "gzip") return quality > 0;
+    wildcardQuality = quality;
+  }
+  return (wildcardQuality ?? 0) > 0;
+}
+
+export const RESPONSE_ACCEPTS_GZIP = Symbol("responseAcceptsGzip");
+type GzipCapableResponse = ServerResponse & { [RESPONSE_ACCEPTS_GZIP]?: boolean };
+
+/**
+ * Write the response, or do nothing if it is already gone.
+ *
+ * The guard is load-bearing because compression defers the write past the
+ * caller's return: a renderer that navigated away in that window leaves a
+ * destroyed socket, and writing headers to it throws from a zlib callback that
+ * no `catch` in this process covers.
+ */
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: Buffer,
+  compressed: boolean,
+): void {
+  if (response.headersSent || response.destroyed) return;
+  response.writeHead(status, {
+    "content-type": "application/json",
+    "content-length": String(body.byteLength),
+    // The body varies by encoding, so anything caching it has to key on that.
+    vary: "Accept-Encoding",
+    ...(compressed ? { "content-encoding": "gzip" } : {}),
+  });
+  response.end(body);
+}
+
 export function json(response: ServerResponse, status: number, body: unknown): void {
+  if (response.headersSent || response.destroyed) return;
   const payload = Buffer.from(JSON.stringify(body) ?? "null");
   // A whole transcript is the largest thing this bridge returns and it is
   // highly compressible. Below the threshold the round trip through zlib costs
   // more than the bytes it saves.
-  if (payload.length < 4096) {
-    response.writeHead(status, {
-      "content-type": "application/json",
-      "content-length": String(payload.length),
-    });
-    response.end(payload);
+  const shouldCompress =
+    payload.length >= 4096 && (response as GzipCapableResponse)[RESPONSE_ACCEPTS_GZIP] === true;
+  if (!shouldCompress) {
+    sendJson(response, status, payload, false);
     return;
   }
   gzip(payload, (error, compressed) => {
-    if (error) {
-      response.writeHead(status, {
-        "content-type": "application/json",
-        "content-length": String(payload.length),
-      });
-      response.end(payload);
-      return;
-    }
-    response.writeHead(status, {
-      "content-type": "application/json",
-      "content-encoding": "gzip",
-      "content-length": String(compressed.length),
-    });
-    response.end(compressed);
+    // Losing the bandwidth win beats losing the response.
+    if (error) sendJson(response, status, payload, false);
+    else sendJson(response, status, compressed, true);
   });
 }

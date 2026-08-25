@@ -440,6 +440,147 @@ describe("cancellation", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ cancelled: false });
   });
+
+  /**
+   * `cancelTurn` cannot exist until `agent.send` resolves, and that call sits
+   * open for as long as the SDK takes to start a run. Answering 200/`cancelled`
+   * there told the user the turn had stopped while it went on writing files.
+   */
+  test("a cancel sent before the run handle exists still stops the turn", async () => {
+    const state = await createSession();
+    let releaseSend = () => undefined as void;
+    const agent = attachFake(state, {
+      holdSend: new Promise<void>((resolve) => (releaseSend = () => resolve())),
+    });
+
+    const prompt = call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "long", requestId: "r1" }),
+    });
+    await waitFor(() => agent.sends.length > 0);
+
+    const cancel = await call(`/session/${state.id}/cancel`, { method: "POST" });
+    // Parked, not honoured: saying `cancelled` here would be a claim about a
+    // run that does not exist yet.
+    expect(cancel.status).toBe(202);
+    expect(await cancel.json()).toEqual({ cancelled: false, pending: true });
+
+    releaseSend();
+    await prompt;
+    await waitFor(() => agent.cancels > 0);
+    expect(agent.cancels).toBe(1);
+  });
+
+  test("a parked cancel does not carry over to the next turn", async () => {
+    const state = await createSession();
+    const agent = attachFake(state);
+    state.pendingCancelPromptSequence = state.promptSequence + 1;
+
+    await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "hello", requestId: "r1" }),
+    });
+    await waitFor(() => state.status !== "running");
+    // The claim clears the park, so a cancel left over from an earlier turn
+    // cannot stop one the user did ask for.
+    expect(agent.cancels).toBe(0);
+    expect(state.pendingCancelPromptSequence).toBeUndefined();
+  });
+});
+
+describe("closing a session", () => {
+  /**
+   * Backend tab teardown DELETEs and treats a 404 as "already gone", so a
+   * bridge that did not answer this leaked a session, its transcript and its
+   * attached agent on every closed tab — silently, and without bound.
+   */
+  test("releases the agent and forgets the session", async () => {
+    const state = await createSession({ clientSessionKey: "tab-1" });
+    const agent = attachFake(state);
+    let disposed = 0;
+    (agent as unknown as Record<symbol, () => Promise<void>>)[Symbol.asyncDispose] = async () => {
+      disposed += 1;
+    };
+
+    const response = await call(`/session/${state.id}`, { method: "DELETE" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: true });
+    expect(disposed).toBe(1);
+    expect(sessions.has(state.id)).toBe(false);
+    expect(clientSessionKeys.has("tab-1")).toBe(false);
+
+    // Gone means gone: a later read must not resurrect it, and activity has to
+    // answer in band so the backend can tell this from an older bridge.
+    expect((await call(`/session/${state.id}`)).status).toBe(404);
+    expect(await (await call(`/session/${state.id}/activity`)).json()).toEqual({
+      activity: "missing",
+    });
+  });
+
+  test("deleting the same session twice is not an error the caller must handle", async () => {
+    const state = await createSession();
+    expect((await call(`/session/${state.id}`, { method: "DELETE" })).status).toBe(200);
+    expect((await call(`/session/${state.id}`, { method: "DELETE" })).status).toBe(404);
+  });
+
+  /**
+   * A method this bridge does not serve on a session it does have is 405, not
+   * 404 — otherwise a genuine gap (a route the backend speaks and this bridge
+   * does not) is indistinguishable from a session that no longer exists.
+   */
+  test("an unsupported method on a live session is 405, not 404", async () => {
+    const state = await createSession();
+    expect((await call(`/session/${state.id}`, { method: "PUT" })).status).toBe(405);
+    expect((await call(`/session/${state.id}/status`, { method: "POST" })).status).toBe(405);
+  });
+});
+
+describe("response encoding", () => {
+  /** Big enough to cross the 4KiB compression threshold. */
+  async function largeTranscriptSession(): Promise<SessionState> {
+    const state = await createSession();
+    attachFake(state, {
+      updates: [{ type: "text-delta", text: "x".repeat(8_192) }],
+    });
+    await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "hi", requestId: "r1" }),
+    });
+    await waitFor(() => state.status !== "running");
+    return state;
+  }
+
+  test("compresses a large body for a client that asked for gzip", async () => {
+    const state = await largeTranscriptSession();
+    const response = await call(`/session/${state.id}`, {
+      headers: { "accept-encoding": "gzip" },
+    });
+    expect(response.headers.get("content-encoding")).toBe("gzip");
+    expect(response.headers.get("vary")).toContain("Accept-Encoding");
+    expect((await response.json()).messages).toHaveLength(2);
+  });
+
+  /**
+   * This repository already has a hop that asks for `identity` on purpose, and
+   * a body labelled `gzip` that the caller never asked for is one it hands to
+   * `JSON.parse` as binary.
+   */
+  test("never compresses for a client that asked for identity", async () => {
+    const state = await largeTranscriptSession();
+    const response = await call(`/session/${state.id}`, {
+      headers: { "accept-encoding": "identity" },
+    });
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect((await response.json()).messages).toHaveLength(2);
+  });
+
+  test("honours an explicit gzip;q=0 over a permissive wildcard", async () => {
+    const state = await largeTranscriptSession();
+    const response = await call(`/session/${state.id}`, {
+      headers: { "accept-encoding": "gzip;q=0, *" },
+    });
+    expect(response.headers.get("content-encoding")).toBeNull();
+  });
 });
 
 describe("routes the SDK has no surface for", () => {

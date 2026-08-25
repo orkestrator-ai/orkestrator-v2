@@ -194,11 +194,13 @@ export function parseComposerPatch(body: unknown): ComposerPatch | undefined {
 }
 
 /**
- * Apply a composer selection, dropping the agent when the change needs a new one.
+ * Record a composer selection. Deliberately does not touch the attached agent.
  *
- * Model and mode are fixed at `Agent.create`, and the SDK's per-send overrides
- * are sticky rather than scoped, so the honest way to honour a change is to
- * re-attach. Detaching keeps the agent id, so the conversation continues.
+ * Model and mode are fixed at `Agent.create`, but `dispatchPrompt` sends both
+ * explicitly on every turn, so a change takes effect on the next prompt without
+ * throwing away a warm agent — or the conversation it holds. That per-send
+ * override in `prompt.ts` is the only thing applying the user's choice: remove
+ * it as redundant and model and mode selections silently stop working.
  */
 export function applyComposerPatch(state: SessionState, patch: ComposerPatch | undefined): boolean {
   if (!patch) return false;

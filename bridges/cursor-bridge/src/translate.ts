@@ -237,13 +237,29 @@ export function settleBackgroundChildren(state: SessionState): void {
   for (const message of state.messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-invocation" || !active.has(part.toolUseId)) continue;
-      part.agentState = "finished";
-      if (part.toolState === "pending") part.toolState = "success";
-      const note = "The turn ended while this sub-agent was still running in the background.";
-      part.toolOutput = part.toolOutput ? `${part.toolOutput}\n\n${note}` : note;
+      settleDetachedSubagentPart(part);
     }
   }
   state.revision += 1;
+}
+
+/** What a card says once nothing can observe its child any more. */
+export const DETACHED_SUBAGENT_NOTE =
+  "The turn ended while this sub-agent was still running in the background.";
+
+/**
+ * Close one sub-agent card, saying it was detached rather than that it finished.
+ *
+ * Shared with the restart path: a card persisted as `active` describes a child
+ * of a process that no longer exists, so nothing will ever arrive to settle it
+ * and the tab would show a sub-agent spinning forever.
+ */
+export function settleDetachedSubagentPart(part: BridgeToolPart): void {
+  part.agentState = "finished";
+  if (part.toolState === "pending") part.toolState = "success";
+  part.toolOutput = part.toolOutput
+    ? `${part.toolOutput}\n\n${DETACHED_SUBAGENT_NOTE}`
+    : DETACHED_SUBAGENT_NOTE;
 }
 
 function applyShellOutputDelta(

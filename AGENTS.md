@@ -468,12 +468,41 @@ When touching the SDK bridge:
 - Project settings (`.cursor/`) are read inside containers and not on the host,
   the same boundary `ACP_APPROVE_PROJECT_MCPS` draws: cloning a repository must
   not be enough to run its code on the user's machine.
+- `DELETE /session/:id` is not optional. Backend tab teardown reads a 404 there
+  as "already gone", so a bridge that does not answer it leaks a session, its
+  transcript and its attached agent on every closed tab — and once the state
+  file outgrows `MAX_STATE_FILE_BYTES` every later write is skipped, taking
+  live sessions down with the dead ones. A method the bridge does not serve on
+  a session it *does* have answers 405, so a real gap cannot hide as a missing
+  session.
+- Never compress a response the client did not ask for. `json` reads
+  `Accept-Encoding` once per request; this repository already has a hop that
+  asks for `identity` on purpose. Compression defers the write past the
+  caller's return, so every write also has to survive a socket that is already
+  gone.
+- Giving up on a turn is not the same as the run stopping. Anything that fails
+  a turn without the run acknowledging it — the prompt timeout above all — has
+  to cancel that run, or it keeps writing to the workspace while `/activity`
+  answers idle and `cancelTurn` has already been cleared.
+- A cancel that arrives before `agent.send` resolves has no run to act on. It
+  parks against the sequence of the turn it meant to stop and is honoured the
+  moment the handle exists; answering it as `cancelled` would tell the user a
+  turn stopped while it carried on.
+- Every bridge that builds has to be listed in the root `package.json`'s
+  `build.extraResources`. `getBridgePath` falls back to `resourceRoot/<name>`
+  outside development and fails only at the moment a user selects it, while
+  containers carry on working from `/opt/<name>`.
+  `tests/unit/bridge-packaging.test.ts` enumerates them so the next one cannot
+  be forgotten.
 
 A background sub-agent is settled when its parent run ends. The SDK reports
 children only through nested updates on that run, so once it is over there is
 no channel left to observe them on — the card says the child was detached
 rather than claiming it completed, because holding it active would report the
-environment as permanently busy.
+environment as permanently busy. The same applies across a restart: the live
+child registry is deliberately not persisted, so a card restored at `active`
+would spin forever with nothing left that could settle it, and `loadPersistedState`
+closes those out on the way in.
 
 ### Backend
 

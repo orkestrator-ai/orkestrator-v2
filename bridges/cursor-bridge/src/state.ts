@@ -155,6 +155,17 @@ export interface SessionState {
   /** Cancels the turn in flight. Never persisted. */
   cancelTurn?: () => Promise<void>;
   /**
+   * A turn the user cancelled before its run handle existed.
+   *
+   * `cancelTurn` is only assignable once `agent.send` has resolved, and that
+   * call can sit open for as long as the SDK takes to start a run. A cancel
+   * arriving in that window has nothing to act on, so it records the sequence
+   * of the turn it meant to stop and `dispatchPrompt` honours it the moment
+   * the handle exists. Without this the user is told the turn stopped while it
+   * carries on writing to the workspace.
+   */
+  pendingCancelPromptSequence?: number;
+  /**
    * A turn accepted but not yet handed to the agent. Transient and deliberately
    * not persisted: a restart answers the same question through the prompt
    * journal, which records an unfinished turn as ambiguous.

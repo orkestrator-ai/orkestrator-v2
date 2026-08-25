@@ -29,6 +29,16 @@ export async function runLogin(emit: (line: string) => void): Promise<number> {
   process.once("SIGTERM", onSignal);
   process.once("SIGINT", onSignal);
 
+  // Observed here, before the URL is awaited, rather than after. A login that
+  // fails before it ever publishes a URL rejects `completion` as well, and at
+  // that point the only handler attached is the one on `loginUrl` — leaving an
+  // unhandled rejection that takes this process down with a bare exit code
+  // instead of letting it report the reason the user actually needs.
+  const outcome = handle.completion.then(
+    () => undefined,
+    (error: unknown) => errorText(error),
+  );
+
   try {
     emit(JSON.stringify({ loginUrl: await handle.loginUrl }));
   } catch (error) {
@@ -36,10 +46,9 @@ export async function runLogin(emit: (line: string) => void): Promise<number> {
     return 1;
   }
 
-  try {
-    await handle.completion;
-  } catch (error) {
-    emit(JSON.stringify({ error: errorText(error) }));
+  const failure = await outcome;
+  if (failure) {
+    emit(JSON.stringify({ error: failure }));
     return 1;
   }
 

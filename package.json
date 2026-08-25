@@ -157,6 +157,15 @@
         ]
       },
       {
+        "from": "bridges/cursor-bridge",
+        "to": "cursor-bridge",
+        "filter": [
+          "dist/**",
+          "package.json",
+          "node_modules/**"
+        ]
+      },
+      {
         "from": "binaries",
         "to": "bin",
         "filter": [

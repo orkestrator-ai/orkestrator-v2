@@ -30,9 +30,15 @@ describe("the build script", () => {
 });
 
 /**
- * Only meaningful once the bridge has been built. Skipping keeps a clean
- * checkout's suite green without weakening the check where it counts — CI and
- * the image build both build this package before anything runs it.
+ * Only meaningful once the bridge has been built, so a clean checkout skips it
+ * rather than failing on an absence that is not a defect.
+ *
+ * Be aware of what that costs: there is no CI job that runs this suite, so on
+ * a machine that has never built this package these assertions do not run at
+ * all and the block above is the whole check. Run `bun run build:cursor-bridge`
+ * before trusting a green result here, and treat the packaging guard in
+ * `tests/unit/bridge-packaging.test.ts` — which is unconditional — as the one
+ * that holds the shape of this package in place.
  */
 describe.if(existsSync(distEntry))("the built bundle", () => {
   test("imports the SDK rather than inlining it", async () => {

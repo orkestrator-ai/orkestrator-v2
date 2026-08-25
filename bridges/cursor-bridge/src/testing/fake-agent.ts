@@ -20,6 +20,12 @@ export interface FakeRunScript {
   hold?: Promise<void>;
   /** Rejects `send` itself, standing in for a run that never started. */
   failToStart?: Error;
+  /**
+   * Holds `send` open, standing in for the SDK taking its time to start a run.
+   * This is the window in which the session is already `running` but no run
+   * handle exists yet, so a cancel arriving here has nothing to act on.
+   */
+  holdSend?: Promise<void>;
 }
 
 export interface FakeAgent extends SDKAgent {
@@ -37,6 +43,7 @@ export function fakeAgent(script: FakeRunScript = {}): FakeAgent {
     model: undefined,
     async send(message: unknown, options: { onDelta?: (args: { update: unknown }) => void } = {}) {
       sends.push({ message, options });
+      if (script.holdSend) await script.holdSend;
       if (script.failToStart) throw script.failToStart;
 
       // Delivered synchronously, exactly as the translator's no-await contract

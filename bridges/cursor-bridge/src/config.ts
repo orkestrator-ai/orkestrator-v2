@@ -22,12 +22,20 @@ export const authToken =
  *
  * `Agent.create({ local: { cwd } })` is the SDK workspace for indexing and its
  * "default shell", but the model-facing Shell tool falls back to the process
- * cwd when that argument is omitted. The local launcher used to spawn this
- * process inside the bridge package, which is not the git worktree.
+ * cwd when that argument is omitted. The launcher spawns this process inside
+ * the bridge package, which is not the git worktree, so entering the workspace
+ * is this bridge's own job.
  *
- * Called at module load so `@cursor/sdk` (imported after this file from
- * `index.ts`) observes the workspace rather than a snapshot of the package
- * directory. `start()` calls it again so a later cwd change cannot stick.
+ * It has to stay that way round. `bun` reads `bunfig.toml` — `preload` and
+ * all — plus `.env` from its working directory *before* this module runs, so a
+ * launcher that started us in the worktree would let a cloned repository
+ * execute code in this process. Bootstrapping from the trusted package
+ * directory and moving afterwards is what keeps both properties.
+ *
+ * Called at module load, which `index.ts` puts ahead of every other module by
+ * exporting this file first — so `@cursor/sdk` is evaluated after the process
+ * is already in the workspace. `start()` calls it again so a later cwd change
+ * cannot stick.
  *
  * @param directory - Workspace to enter. Defaults to {@link workingDirectory}.
  */

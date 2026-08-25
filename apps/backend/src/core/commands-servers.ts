@@ -770,15 +770,6 @@ export async function startLocalServerUnlocked(
   let command = "";
   let cwd = environment.worktreePath;
   /**
-   * Directory that contains `dist/index.js` when that is not the process cwd.
-   *
-   * The Cursor SDK Shell tool defaults to `process.cwd()` when the model omits
-   * `workingDirectory`, so this engine must keep `cwd` on the worktree. Other
-   * bridges still run from their package directory; only the SDK path splits
-   * the two.
-   */
-  let bridgePackageRoot: string | undefined;
-  /**
    * Whether this Cursor session is being served by the SDK bridge.
    *
    * Recorded when the branch below selects it, because the token variable and
@@ -862,7 +853,18 @@ export async function startLocalServerUnlocked(
   } else if (kind === "cursor" && (await cursorSdkBridgeEnabled(context))) {
     useCursorSdkBridge = true;
     command = resolveBunBinary(context);
-    bridgePackageRoot = getBridgePath(context, "cursor-bridge");
+    // Every bridge is spawned from its own package directory, and this one is
+    // no exception. `bun` bootstraps from its working directory — it reads
+    // `bunfig.toml` (including `preload`) and `.env` before the entrypoint
+    // runs — so starting it in the worktree would let a cloned repository
+    // execute code in a host process holding the Cursor credential path, the
+    // bridge token and the agent MCP token. That is the boundary
+    // `CURSOR_BRIDGE_PROJECT_SETTINGS=0` below exists to hold.
+    //
+    // The SDK's Shell tool still defaults to `process.cwd()` when the model
+    // omits `workingDirectory`, so the bridge enters `CWD` itself once bun has
+    // bootstrapped: see `applyWorkingDirectory` in the bridge's `config.ts`.
+    cwd = getBridgePath(context, "cursor-bridge");
     // The SDK bridge keeps its own session store, deliberately separate from
     // the ACP bridge's: the two engines produce different agent ids and a
     // shared directory would have each read the other's sessions as its own.
@@ -928,11 +930,9 @@ export async function startLocalServerUnlocked(
     }
   }
 
-  const packageRoot = bridgePackageRoot ?? cwd;
-  const bridgeEntrypoint = path.join(packageRoot, "dist", "index.js");
+  const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
   if (kind !== "opencode") {
-    if (!existsSync(packageRoot))
-      throw new Error(`${kind} bridge directory not found: ${packageRoot}`);
+    if (!existsSync(cwd)) throw new Error(`${kind} bridge directory not found: ${cwd}`);
     if (!existsSync(bridgeEntrypoint))
       throw new Error(`${kind} bridge entrypoint not found: ${bridgeEntrypoint}`);
   }

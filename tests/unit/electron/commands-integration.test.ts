@@ -1154,6 +1154,7 @@ exit 0
             sessionId: `${environment.id}:setup`,
             running: true,
             terminalRunning: true,
+            hasOutput: true,
           }),
         );
 
@@ -1171,6 +1172,7 @@ exit 0
             running: false,
             success: true,
             terminalRunning: true,
+            hasOutput: true,
           }),
         );
 
@@ -1185,6 +1187,7 @@ exit 0
             running: false,
             success: true,
             terminalRunning: false,
+            hasOutput: true,
           }),
         );
         expect(

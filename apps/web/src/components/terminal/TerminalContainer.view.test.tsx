@@ -1719,6 +1719,102 @@ describe("TerminalContainer", () => {
     ]);
   });
 
+  test("replaces a completed setup tab that has neither a PTY nor replayable output", async () => {
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: false,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(setupTabIds()).toEqual([]);
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain" },
+    ]);
+  });
+
+  test("rechecks an already-bound setup tab after setup finishes", async () => {
+    getEnvironmentSetupSessionMock
+      .mockResolvedValueOnce({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        running: true,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        terminalRunning: false,
+        hasOutput: false,
+      })
+      .mockResolvedValue({
+        environmentId: "env-hidden",
+        sessionId: "env-hidden:setup",
+        running: false,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:01:00.000Z",
+        success: true,
+        terminalRunning: false,
+        hasOutput: false,
+      });
+
+    restoreBackendSetupTabLayout({
+      setupPhase: "running",
+      setupScriptsComplete: false,
+    });
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
+      ).toBe("env-hidden:setup");
+    });
+
+    act(() => {
+      useEnvironmentStore.getState().updateEnvironment("env-hidden", {
+        setupPhase: "ready",
+        setupScriptsComplete: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(getEnvironmentSetupSessionMock).toHaveBeenCalledTimes(2);
+      expect(setupTabIds()).toEqual([]);
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-hidden")).toEqual([
+      { id: "default", type: "plain" },
+    ]);
+  });
+
+  test("keeps a completed setup transcript after its PTY exits", async () => {
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: true,
+    });
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey(null, "default", "env-hidden"))?.sessionId,
+      ).toBe("env-hidden:setup");
+    });
+    expect(setupTabIds()).toEqual(["default"]);
+  });
+
   test("binds every restored backend-managed setup tab, not just the first", async () => {
     // Binding one tab per effect run relied on the run repeating to reach the
     // next. A tab it never reached was also never settled, and stale-tab

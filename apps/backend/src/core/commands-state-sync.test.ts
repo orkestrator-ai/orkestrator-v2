@@ -1749,6 +1749,7 @@ describe("setup session wait command", () => {
           sessionId: "e1:setup",
           running: true,
           terminalRunning: false,
+          hasOutput: false,
         }),
       );
       await expect(

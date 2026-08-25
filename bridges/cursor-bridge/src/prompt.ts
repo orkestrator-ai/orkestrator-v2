@@ -143,7 +143,7 @@ export async function followRun(
   cancelAckTimeoutMs: number = CANCEL_ACK_TIMEOUT_MS,
 ): Promise<void> {
   const terminal = run.wait();
-  let streamedUsage: TurnUsage | undefined;
+  const streamed: StreamedUsage = {};
   const drained = (async () => {
     try {
       for await (const event of run.stream()) {
@@ -151,7 +151,13 @@ export async function followRun(
         // keeps a pull-driven stream advancing. Usage is the exception: it also
         // has a first-class SDK message shape, and some local runtimes publish
         // that without a usage-bearing delta.
-        streamedUsage = sumTurnUsage(streamedUsage, streamMessageUsage(event));
+        const message = streamMessageUsage(event);
+        if (!message) continue;
+        streamed.total = sumTurnUsage(streamed.total, message);
+        // Kept separately because the two answer different questions: the sum
+        // is what the turn spent, the last message is what the context window
+        // held when it ended.
+        streamed.last = message;
       }
     } catch {
       // A stream failure is reported authoritatively by `wait()` below.
@@ -162,7 +168,7 @@ export async function followRun(
     const result = await withTimeout(terminal, timeoutMs);
     await drained;
     if (!turnStillOwned(state, promptSequence)) return;
-    finishTurn(state, result, input, streamedUsage);
+    finishTurn(state, result, input, streamed);
   } catch (error) {
     // Giving up on the wait is not the same as the run stopping. Failing the
     // turn here clears `cancelTurn` and settles every background child, so a
@@ -186,7 +192,7 @@ export async function followRun(
         const result = await withTimeout(terminal, cancelAckTimeoutMs);
         await drained;
         if (!turnStillOwned(state, promptSequence)) return;
-        finishTurn(state, result, input, streamedUsage);
+        finishTurn(state, result, input, streamed);
       } catch (terminalError) {
         if (!turnStillOwned(state, promptSequence)) return;
         // The cancellation was requested but the SDK never produced a terminal
@@ -199,16 +205,16 @@ export async function followRun(
             new Error("The Cursor turn did not stop after cancellation was requested"),
             input,
             undefined,
-            streamedUsage,
+            streamed,
           );
           return;
         }
-        failTurn(state, terminalError, input, undefined, streamedUsage);
+        failTurn(state, terminalError, input, undefined, streamed);
       }
       return;
     }
     if (!turnStillOwned(state, promptSequence)) return;
-    failTurn(state, error, input, undefined, streamedUsage);
+    failTurn(state, error, input, undefined, streamed);
   }
 }
 
@@ -225,7 +231,7 @@ function finishTurn(
   state: SessionState,
   result: TerminalRunResult,
   input: DispatchInput,
-  streamedUsage: TurnUsage | undefined,
+  streamed: StreamedUsage,
 ): void {
   settleBackgroundChildren(state);
   state.cancelTurn = undefined;
@@ -237,7 +243,7 @@ function finishTurn(
       new Error(result.error?.message ?? "The Cursor turn failed"),
       input,
       result,
-      streamedUsage,
+      streamed,
     );
     return;
   }
@@ -246,7 +252,7 @@ function finishTurn(
   // transcript is the honest record of what ran.
   state.status = "idle";
   state.error = undefined;
-  recordUsage(state, result, streamedUsage);
+  recordUsage(state, result, streamed);
   recordStructuredOutput(state, result.result, input);
   journal(state, input.requestId, "completed");
   state.revision += 1;
@@ -259,14 +265,14 @@ function failTurn(
   error: unknown,
   input: DispatchInput,
   result?: TerminalRunResult,
-  streamedUsage?: TurnUsage,
+  streamed: StreamedUsage = {},
 ): void {
   settleBackgroundChildren(state);
   state.cancelTurn = undefined;
   state.pendingCancelPromptSequence = undefined;
   state.status = "error";
   state.error = errorText(error);
-  recordUsage(state, result, streamedUsage);
+  recordUsage(state, result, streamed);
   recordStructuredOutput(state, undefined, input);
   journal(state, input.requestId, "failed");
   state.revision += 1;
@@ -274,23 +280,45 @@ function failTurn(
   schedulePersist();
 }
 
+/**
+ * Usage observed on the run's own message stream.
+ *
+ * The two fields are different quantities and neither substitutes for the
+ * other: `total` is what the whole turn spent, `last` is what the context
+ * window held when it ended.
+ */
+interface StreamedUsage {
+  total?: TurnUsage;
+  last?: TurnUsage;
+}
+
 function recordUsage(
   state: SessionState,
   result: TerminalRunResult | undefined,
-  streamedUsage: TurnUsage | undefined,
+  streamed: StreamedUsage,
 ): void {
   // `RunResult.usage` is the SDK's authoritative cumulative usage for the run.
   // Local runs may omit usage from the `turn-ended` delta while still
   // publishing it here, which used to leave the bridge with no snapshot at
   // all. Prefer the terminal value when it exists and retain the delta
   // accumulator as a compatibility fallback for older SDK/runtime pairs.
-  const turn = terminalTurnUsage(result?.usage) ?? streamedUsage ?? state.currentTurnUsage;
+  const turn = terminalTurnUsage(result?.usage) ?? streamed.total ?? state.currentTurnUsage;
+  // The occupancy figure, which is a different question from the spend above:
+  // `RunResult.usage` sums every model call the run made, so on a run with
+  // several calls it is a multiple of anything the window ever held. Only a
+  // single call's own snapshot answers "how full is the context", and the last
+  // one is the one still standing when the turn ended.
+  const context = streamed.last ?? state.currentTurnUsage;
   const elapsed =
     result?.durationMs ?? (state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined);
   const modelId = result?.model?.id ?? state.composer.selectedModelId;
   if (turn && Object.keys(turn).length > 0) {
     state.usage = {
       turn,
+      // Recorded only when it is genuinely a second reading. A run that
+      // reported one snapshot hands the same object to both, and persisting a
+      // duplicate would invite the two to drift apart across a trim.
+      ...(context && context !== turn && Object.keys(context).length > 0 ? { context } : {}),
       ...(modelId ? { modelId } : {}),
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
       updatedAt: new Date().toISOString(),
@@ -300,14 +328,15 @@ function recordUsage(
   state.turnStartedAt = undefined;
 }
 
-const TURN_USAGE_KEYS = [
+/** The categories `totalTokens` summarises, per the SDK's own `toTokenUsage`. */
+const USAGE_CATEGORY_KEYS = [
   "inputTokens",
   "outputTokens",
   "cacheReadTokens",
   "cacheWriteTokens",
-  "reasoningTokens",
-  "totalTokens",
 ] as const;
+
+const TURN_USAGE_KEYS = [...USAGE_CATEGORY_KEYS, "reasoningTokens", "totalTokens"] as const;
 
 function terminalTurnUsage(usage: unknown): TurnUsage | undefined {
   if (!isObject(usage)) return undefined;
@@ -333,9 +362,21 @@ function sumTurnUsage(
   if (!current) return next;
   const total: TurnUsage = {};
   for (const key of TURN_USAGE_KEYS) {
+    if (key === "totalTokens") continue;
     if (current[key] !== undefined || next[key] !== undefined) {
       total[key] = (current[key] ?? 0) + (next[key] ?? 0);
     }
+  }
+  // Recomputed rather than added. `terminalTurnUsage` accepts a partial usage
+  // object on purpose, so a message that omitted `totalTokens` would otherwise
+  // leave the running total covering a different subset of messages than the
+  // categories it claims to summarise — and `publicContextUsage` trusts it
+  // over those categories.
+  const summed = USAGE_CATEGORY_KEYS.filter((key) => total[key] !== undefined);
+  if (summed.length > 0) {
+    total.totalTokens = summed.reduce((sum, key) => sum + (total[key] ?? 0), 0);
+  } else if (current.totalTokens !== undefined || next.totalTokens !== undefined) {
+    total.totalTokens = (current.totalTokens ?? 0) + (next.totalTokens ?? 0);
   }
   return total;
 }

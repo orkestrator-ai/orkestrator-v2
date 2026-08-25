@@ -108,7 +108,19 @@ export interface TurnUsage {
 }
 
 export interface PersistedUsage {
+  /**
+   * What the whole turn spent, cumulative across every model call the run made.
+   * This is the billing figure, and for a run with several calls it is a
+   * multiple of what the context window ever held.
+   */
   turn: TurnUsage;
+  /**
+   * The final model call's own snapshot, which is what the context window
+   * actually held when the turn ended. Absent when the provider reported only a
+   * cumulative figure, in which case `turn` is the best available occupancy
+   * estimate too.
+   */
+  context?: TurnUsage;
   modelId?: string;
   durationMs?: number;
   updatedAt: string;

@@ -2809,6 +2809,75 @@ exit 1
     },
   );
 
+  test("starts the local Cursor SDK bridge from packaged resources with isolated state", async () => {
+    const appRoot = await createTempDir("ork-electron-cursor-sdk-app-");
+    const resourceRoot = await createTempDir("ork-electron-cursor-sdk-resources-");
+    const toolchainBinDir = await createTempDir("ork-electron-cursor-sdk-bin-");
+    const worktreePath = await createTempDir("ork-electron-cursor-sdk-worktree-");
+    const dataDir = await createTempDir("ork-electron-cursor-sdk-data-");
+    const markerPath = path.join(resourceRoot, "cursor-sdk-env.json");
+    const bridgeDist = path.join(resourceRoot, "cursor-bridge", "dist");
+    await fs.mkdir(bridgeDist, { recursive: true });
+    await fs.writeFile(
+      path.join(bridgeDist, "index.js"),
+      `
+        const http = require("node:http");
+        require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, JSON.stringify({
+          cwd: process.cwd(),
+          stateDir: process.env.CURSOR_BRIDGE_STATE_DIR ?? "",
+          authFile: process.env.CURSOR_BRIDGE_AUTH_FILE ?? "",
+          projectSettings: process.env.CURSOR_BRIDGE_PROJECT_SETTINGS ?? "",
+          hasApiKey: Boolean(process.env.CURSOR_API_KEY),
+          hostname: process.env.HOSTNAME ?? "",
+        }));
+        http.createServer((req, res) => {
+          if (req.url === "/global/health") {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify({ ok: true }));
+            return;
+          }
+          res.writeHead(404).end();
+        }).listen(Number(process.env.PORT), "127.0.0.1");
+      `,
+    );
+
+    const environment = createEnvironment({ id: "env-local-cursor-sdk", worktreePath });
+    const { context } = createContext(environment, {
+      globalConfig: {
+        experimentalCursorSdkBridge: true,
+        cursorApiKey: "configured-cursor-key",
+      },
+      dataDir,
+    });
+    context.runtimeFlavor = "agent-test";
+    context.credentialSources = new Set(["cursor"]);
+    context.appRoot = appRoot;
+    context.resourceRoot = resourceRoot;
+    context.toolchainBinDir = toolchainBinDir;
+    const commands = createCommandRegistry();
+
+    const started = (await commands.get("start_local_cursor_server_cmd")?.(
+      { environmentId: environment.id },
+      context,
+    )) as { port: number; wasRunning: boolean };
+    try {
+      expect(started.wasRunning).toBe(false);
+      const marker = JSON.parse(await fs.readFile(markerPath, "utf8")) as Record<string, unknown>;
+      expect(marker.cwd).toBe(await fs.realpath(path.join(resourceRoot, "cursor-bridge")));
+      expect(marker.stateDir).toContain(path.join("cursor-bridge-state"));
+      expect(marker.stateDir).not.toContain(path.join("acp-bridge-state"));
+      expect(marker.authFile).toBe(path.join(dataDir, "cursor-sdk", "auth.json"));
+      expect(marker.projectSettings).toBe("0");
+      expect(marker.hasApiKey).toBe(true);
+      expect(marker.hostname).toBe("127.0.0.1");
+    } finally {
+      await commands.get("stop_local_cursor_server_cmd")?.(
+        { environmentId: environment.id },
+        context,
+      );
+    }
+  });
+
   test(
     "brokers only Claude's macOS credential into the local Claude bridge",
     async () => {

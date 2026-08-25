@@ -142,6 +142,8 @@ export async function beginCursorSdkLogin(
     runtime: string;
     /** Injected by tests; defaults to the real spawn. */
     spawnImpl?: typeof spawn;
+    /** Lets the backend cancel a login before the child has emitted its URL. */
+    signal?: AbortSignal;
   },
 ): Promise<CursorSdkLoginHandle> {
   const credentialPath = cursorSdkCredentialPath(context);
@@ -178,6 +180,18 @@ export async function beginCursorSdkLogin(
   const completion = new Promise<void>((resolve, reject) => {
     settleCompletion = (error) => (error ? reject(error) : resolve());
   });
+  // A child can fail before it emits the URL, in which case this function
+  // rejects without returning the handle that normally observes completion.
+  // Mark that sibling promise handled immediately so the backend process does
+  // not terminate on its otherwise-unhandled rejection.
+  void completion.catch(() => undefined);
+
+  const abortLogin = (): void => {
+    child.kill("SIGTERM");
+  };
+  const removeAbortListener = (): void => {
+    options.signal?.removeEventListener("abort", abortLogin);
+  };
 
   let buffered = "";
   let failure = "";
@@ -208,10 +222,12 @@ export async function beginCursorSdkLogin(
   child.stderr?.resume();
 
   child.once("error", (error) => {
+    removeAbortListener();
     rejectUrl(error);
     settleCompletion(error);
   });
   child.once("exit", (code) => {
+    removeAbortListener();
     const error = new Error(
       failure || `Cursor sign-in did not complete (exit code ${code ?? "null"})`,
     );
@@ -219,14 +235,14 @@ export async function beginCursorSdkLogin(
     rejectUrl(error);
     settleCompletion(code === 0 ? undefined : error);
   });
+  if (options.signal?.aborted) abortLogin();
+  else options.signal?.addEventListener("abort", abortLogin, { once: true });
 
   const loginUrl = await urlPromise;
   return {
     loginUrl,
     completion,
-    cancel: () => {
-      child.kill("SIGTERM");
-    },
+    cancel: abortLogin,
   };
 }
 
@@ -250,14 +266,47 @@ export interface CursorSdkLoginProgress {
 let activeLogin:
   | { handle: CursorSdkLoginHandle; state: CursorSdkLoginState; error?: string }
   | undefined;
+interface CursorSdkLoginStartup {
+  promise: Promise<CursorSdkLoginHandle>;
+  controller: AbortController;
+  cancelled: boolean;
+}
+let activeLoginStartup: CursorSdkLoginStartup | undefined;
 
 export async function startCursorSdkLogin(
   context: CommandContext,
   options: { bridgeEntrypoint: string; runtime: string; spawnImpl?: typeof spawn },
 ): Promise<{ loginUrl: string }> {
   if (activeLogin?.state === "pending") return { loginUrl: activeLogin.handle.loginUrl };
+  if (activeLoginStartup) {
+    const startup = activeLoginStartup;
+    try {
+      const handle = await startup.promise;
+      if (startup.cancelled) throw new Error("Cursor sign-in was cancelled");
+      return { loginUrl: handle.loginUrl };
+    } catch (error) {
+      if (startup.cancelled) throw new Error("Cursor sign-in was cancelled");
+      throw error;
+    }
+  }
 
-  const handle = await beginCursorSdkLogin(context, options);
+  const controller = new AbortController();
+  const startup: CursorSdkLoginStartup = {
+    promise: beginCursorSdkLogin(context, { ...options, signal: controller.signal }),
+    controller,
+    cancelled: false,
+  };
+  activeLoginStartup = startup;
+  let handle: CursorSdkLoginHandle;
+  try {
+    handle = await startup.promise;
+  } catch (error) {
+    if (activeLoginStartup === startup) activeLoginStartup = undefined;
+    if (startup.cancelled) throw new Error("Cursor sign-in was cancelled");
+    throw error;
+  }
+  if (activeLoginStartup === startup) activeLoginStartup = undefined;
+  if (startup.cancelled) throw new Error("Cursor sign-in was cancelled");
   const entry = {
     handle,
     state: "pending" as CursorSdkLoginState,
@@ -281,6 +330,7 @@ export async function cursorSdkLoginProgress(
   storedApiKey: string | undefined,
 ): Promise<CursorSdkLoginProgress> {
   const auth = await cursorSdkAuthStatus(context, storedApiKey);
+  if (activeLoginStartup) return { state: "pending", auth };
   if (!activeLogin) return { state: "idle", auth };
   return {
     state: activeLogin.state,
@@ -291,6 +341,10 @@ export async function cursorSdkLoginProgress(
 }
 
 export function cancelCursorSdkLogin(): void {
+  if (activeLoginStartup) {
+    activeLoginStartup.cancelled = true;
+    activeLoginStartup.controller.abort();
+  }
   activeLogin?.handle.cancel();
   activeLogin = undefined;
 }

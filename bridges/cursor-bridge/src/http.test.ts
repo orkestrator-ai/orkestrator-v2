@@ -359,6 +359,32 @@ describe("transcript reads", () => {
     };
     expect(payload.baseIndex).toBe(10);
   });
+
+  test("carries provider errors and truncation metadata on the shared wire shape", async () => {
+    const state = await createSession();
+    state.status = "error";
+    state.error = "model unavailable";
+    state.droppedMessages = 3;
+    state.droppedParts = 2;
+    state.transcriptTruncated = true;
+
+    const payload = (await (await call(`/session/${state.id}/messages`)).json()) as {
+      error?: string;
+      messageWindow?: {
+        truncated?: boolean;
+        omittedMessages?: number;
+        omittedParts?: number;
+      };
+      totalMessages?: number;
+    };
+    expect(payload.error).toBe("model unavailable");
+    expect(payload.messageWindow).toEqual({
+      truncated: true,
+      omittedMessages: 3,
+      omittedParts: 2,
+    });
+    expect(payload.totalMessages).toBe(3);
+  });
 });
 
 describe("composer configuration", () => {

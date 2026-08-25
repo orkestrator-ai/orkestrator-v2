@@ -130,6 +130,7 @@ export async function followRun(
   input: DispatchInput,
   timeoutMs: number = PROMPT_TIMEOUT_MS,
 ): Promise<void> {
+  const terminal = run.wait();
   const drained = (async () => {
     try {
       for await (const _event of run.stream()) {
@@ -142,7 +143,7 @@ export async function followRun(
   })();
 
   try {
-    const result = await withTimeout(run.wait(), timeoutMs);
+    const result = await withTimeout(terminal, timeoutMs);
     await drained;
     if (!turnStillOwned(state, promptSequence)) return;
     finishTurn(state, result, input);
@@ -152,10 +153,28 @@ export async function followRun(
     // run left alive would keep writing to the workspace while `/activity`
     // answers idle and the user has lost the only control that could stop it.
     //
-    // Deliberately not awaited: the turn is over either way, and a `cancel`
-    // that hangs must not pin the session as running — which is the state the
-    // timeout exists to get it out of.
-    if (error instanceof TurnTimeoutError) void run.cancel().catch(() => undefined);
+    // A timeout asks the SDK to cancel, but the SDK's terminal result remains
+    // authoritative. Until it arrives the process may still be writing to the
+    // workspace, so keep the turn running and keep its cancel handle exposed.
+    // This intentionally stays pending when cancellation cannot be confirmed.
+    if (error instanceof TurnTimeoutError) {
+      void run.cancel().catch(() => undefined);
+      if (!turnStillOwned(state, promptSequence)) return;
+      state.error = error.message;
+      state.revision += 1;
+      schedulePersist();
+
+      try {
+        const result = await terminal;
+        await drained;
+        if (!turnStillOwned(state, promptSequence)) return;
+        finishTurn(state, result, input);
+      } catch (terminalError) {
+        if (!turnStillOwned(state, promptSequence)) return;
+        failTurn(state, terminalError, input);
+      }
+      return;
+    }
     if (!turnStillOwned(state, promptSequence)) return;
     failTurn(state, error, input);
   }

@@ -49,6 +49,7 @@ type ElectronReady = {
   backendPid?: number;
   authFile?: string;
   browserUrl?: string;
+  invokeUrl?: string;
 };
 
 export type BoundedLogWriter = {
@@ -339,20 +340,23 @@ export async function seedAgentTestProfileState(
  * desktop dev run, with a message that blamed a gateway which was in fact
  * listening.
  *
- * It is required for the two cases that genuinely drive the app over HTTP:
- * `agent-test`, which disables the managed web client precisely so its
- * readiness carries the URL a browser suite needs, and any run seeding a
- * fixture, which talks to the app whatever the flavor.
+ * `agent-test` requires the public browser URL because its browser suite drives
+ * that surface. Fixture seeding can instead use the backend's authenticated
+ * invoke listener, which remains available when the managed desktop web client
+ * deliberately suppresses `browserUrl`.
  */
 export function assertElectronReadiness(
-  ready: Pick<ElectronReady, "authFile" | "backendPid" | "browserUrl">,
+  ready: Pick<ElectronReady, "authFile" | "backendPid" | "browserUrl" | "invokeUrl">,
   run: { flavor: "development" | "agent-test"; fixture: boolean },
 ): asserts ready is typeof ready & { authFile: string; backendPid: number } {
   if (!ready.authFile || !ready.backendPid) {
     throw new Error("Electron readiness did not include the backend gateway");
   }
-  if ((run.flavor === "agent-test" || run.fixture) && !ready.browserUrl) {
+  if (run.flavor === "agent-test" && !ready.browserUrl) {
     throw new Error("Electron readiness did not include the loopback browser gateway");
+  }
+  if (run.fixture && !ready.browserUrl && !ready.invokeUrl) {
+    throw new Error("Electron readiness did not include a gateway for fixture seeding");
   }
 }
 
@@ -550,11 +554,12 @@ export async function startDevelopment(
     });
     assertElectronReadiness(ready, { flavor, fixture: args.fixture });
     let testProject: string | undefined;
-    if (args.fixture && ready.browserUrl) {
+    const fixtureUrl = ready.browserUrl ?? ready.invokeUrl;
+    if (args.fixture && fixtureUrl) {
       testProject = await seedFixture({
         profile,
         templateRoot: fixtureTemplateRoot,
-        browserUrl: ready.browserUrl,
+        browserUrl: fixtureUrl,
         authFile: ready.authFile,
         environments: args.fixtureEnvironments,
       });

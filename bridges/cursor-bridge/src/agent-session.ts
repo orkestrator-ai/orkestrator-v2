@@ -9,7 +9,6 @@
  */
 import { randomBytes } from "node:crypto";
 import { Agent, type SDKAgent } from "@cursor/sdk";
-import type { NativeAgentResumeEntry } from "@orkestrator/protocol/native-agent";
 import {
   CATALOG_TIMEOUT_MS,
   MAX_RESUME_ENTRIES,
@@ -29,6 +28,7 @@ import {
   sessions,
   type BridgeMessage,
   type BridgeMessagePart,
+  type JsonObject,
   type SessionState,
 } from "./state.js";
 
@@ -237,7 +237,7 @@ export function applyComposerPatch(state: SessionState, patch: ComposerPatch | u
  * Scoped to `cwd` so the picker offers this environment's own history rather
  * than every agent the user has ever run on this machine.
  */
-export async function listResumableSessions(): Promise<NativeAgentResumeEntry[]> {
+export async function listResumableSessions(): Promise<JsonObject[]> {
   const { apiKey } = await resolveCredential();
   if (!apiKey) return [];
   const listed = await Agent.list({
@@ -247,7 +247,10 @@ export async function listResumableSessions(): Promise<NativeAgentResumeEntry[]>
   }).catch(() => ({ items: [] }));
 
   return listed.items.slice(0, MAX_RESUME_ENTRIES).map((item) => ({
-    sessionId: item.agentId,
+    // This is the bridge wire shape, not the normalized service shape. The
+    // shared backend provider reads `id` here and turns it into `sessionId` for
+    // the renderer; returning `sessionId` directly makes it discard every row.
+    id: item.agentId,
     ...(item.name?.trim() ? { title: item.name.trim() } : {}),
     ...(item.createdAt ? { createdAt: new Date(item.createdAt).toISOString() } : {}),
     ...(item.lastModified ? { updatedAt: new Date(item.lastModified).toISOString() } : {}),

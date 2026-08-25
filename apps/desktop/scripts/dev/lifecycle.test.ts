@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import { assertElectronReadiness } from "./lifecycle.js";
 
-const complete = { authFile: "/tmp/gateway-auth.json", backendPid: 42, browserUrl: "http://x/" };
+const complete = {
+  authFile: "/tmp/gateway-auth.json",
+  backendPid: 42,
+  browserUrl: "http://x/",
+  invokeUrl: "http://internal/",
+};
 
 describe("Electron readiness", () => {
   test("always requires the backend gateway", () => {
@@ -41,15 +46,22 @@ describe("Electron readiness", () => {
     ).toThrow(/loopback browser gateway/);
   });
 
-  test("seeding a fixture requires it whatever the flavor", () => {
-    // The seed drives the running app over HTTP, so an absent URL would have it
-    // request `undefined` rather than fail with something actionable.
+  test("a desktop fixture can use the authenticated invoke URL", () => {
     expect(() =>
       assertElectronReadiness(
         { ...complete, browserUrl: undefined },
         { flavor: "development", fixture: true },
       ),
-    ).toThrow(/loopback browser gateway/);
+    ).not.toThrow();
+  });
+
+  test("seeding a fixture still requires one reachable gateway", () => {
+    expect(() =>
+      assertElectronReadiness(
+        { ...complete, browserUrl: undefined, invokeUrl: undefined },
+        { flavor: "development", fixture: true },
+      ),
+    ).toThrow(/fixture seeding/);
   });
 
   test("accepts a fully populated readiness message in every mode", () => {

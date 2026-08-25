@@ -166,7 +166,7 @@ describe("listResumableSessions", () => {
     };
     expect(await listResumableSessions()).toEqual([
       {
-        sessionId: "a1",
+        id: "a1",
         title: "Fix the parser",
         createdAt: new Date(1_000).toISOString(),
         updatedAt: new Date(2_000).toISOString(),
@@ -178,7 +178,7 @@ describe("listResumableSessions", () => {
 
   test("maps an unrecognized status to idle rather than passing it through", async () => {
     listed = { items: [{ agentId: "a1", status: "something-new" }] };
-    expect(await listResumableSessions()).toEqual([{ sessionId: "a1", status: "idle" }]);
+    expect(await listResumableSessions()).toEqual([{ id: "a1", status: "idle" }]);
   });
 });
 

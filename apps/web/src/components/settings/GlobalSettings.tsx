@@ -50,7 +50,7 @@ function getSavedReviewInstruction(value: unknown): string {
  * with no indication and leave Save Changes disabled, so the sync is keyed on
  * the values instead. Any field the sync effect below reads belongs here.
  */
-function globalFormSignature(global: GlobalConfig): string {
+export function globalFormSignature(global: GlobalConfig): string {
   return JSON.stringify([
     global.containerResources.cpuCores,
     global.containerResources.memoryGb,
@@ -67,6 +67,7 @@ function globalFormSignature(global: GlobalConfig): string {
     global.terminalAppearance?.backgroundColor ?? "",
     global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
     global.experimentalCodexRawEventLogging ?? true,
+    global.experimentalCursorSdkBridge ?? false,
     global.debugLogging ?? false,
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),

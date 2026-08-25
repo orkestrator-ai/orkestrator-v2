@@ -1005,7 +1005,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             Each engine keeps its own sessions, so a session started on one stays there. Restart an
             environment after changing this for its next Cursor session to use the new engine.
           </p>
-          <CursorSdkSignIn />
+          <CursorSdkSignIn
+            credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
+          />
         </div>
       </>,
     );

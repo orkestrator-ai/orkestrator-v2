@@ -23,7 +23,12 @@ import type { CursorSdkLoginProgress } from "@/types";
 /** How often to ask the backend whether the browser flow has finished. */
 const POLL_INTERVAL_MS = 1_500;
 
-export function CursorSdkSignIn() {
+interface CursorSdkSignInProps {
+  /** Changes after a stored API key is saved or cleared. */
+  credentialRevision: string;
+}
+
+export function CursorSdkSignIn({ credentialRevision }: CursorSdkSignInProps) {
   const [progress, setProgress] = useState<CursorSdkLoginProgress | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,7 +47,10 @@ export function CursorSdkSignIn() {
   const refresh = useCallback(async () => {
     try {
       const next = await cursorSdkLoginStatus();
-      if (mounted.current) setProgress(next);
+      if (mounted.current) {
+        setProgress(next);
+        setError(null);
+      }
       return next;
     } catch (cause) {
       if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause));
@@ -52,7 +60,7 @@ export function CursorSdkSignIn() {
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [credentialRevision, refresh]);
 
   // Polls only while a login is actually in flight, so an idle settings pane
   // costs nothing.

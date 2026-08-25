@@ -14,11 +14,14 @@ let progress: CursorSdkLoginProgress = {
   state: "idle",
   auth: { authenticated: false, source: "none" },
 };
+let statusError: Error | null = null;
 
 mock.module("@/lib/native/backend", () => ({
   invoke: mock((command: string) => {
     invokeCalls.push({ command });
-    if (command === "cursor_sdk_login_status") return Promise.resolve(progress);
+    if (command === "cursor_sdk_login_status") {
+      return statusError ? Promise.reject(statusError) : Promise.resolve(progress);
+    }
     if (command === "cursor_sdk_login_start") {
       return Promise.resolve({ loginUrl: LOGIN_URL });
     }
@@ -45,10 +48,12 @@ const { CursorSdkSignIn } = await import("./CursorSdkSignIn");
  * The component fetches on mount, so rendering bare leaves a pending setState
  * that React reports as an unwrapped act() update.
  */
-async function mount(): Promise<void> {
+async function mount(credentialRevision = "false:none"): Promise<ReturnType<typeof render>> {
+  let view!: ReturnType<typeof render>;
   await act(async () => {
-    render(<CursorSdkSignIn />);
+    view = render(<CursorSdkSignIn credentialRevision={credentialRevision} />);
   });
+  return view;
 }
 
 const LOGIN_URL = "https://cursor.com/login?challenge=abc";
@@ -62,6 +67,7 @@ const pendingProgress: CursorSdkLoginProgress = {
 beforeEach(() => {
   invokeCalls.length = 0;
   copied.length = 0;
+  statusError = null;
   progress = { state: "idle", auth: { authenticated: false, source: "none" } };
 });
 
@@ -128,6 +134,29 @@ describe("the pending fallback", () => {
       expect((button as HTMLButtonElement).disabled).toBe(true);
     });
   });
+
+  test("cancels the backend-owned login flow", async () => {
+    progress = pendingProgress;
+    await mount();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await waitFor(() =>
+      expect(invokeCalls.some((call) => call.command === "cursor_sdk_login_cancel")).toBe(true),
+    );
+  });
+
+  test("polls a pending flow through to authenticated", async () => {
+    progress = pendingProgress;
+    await mount();
+    progress = {
+      state: "authenticated",
+      auth: { authenticated: true, source: "stored-login", email: "user@example.com" },
+    };
+
+    await waitFor(() => expect(screen.getByText(/Signed in as user@example.com/)).toBeDefined(), {
+      timeout: 2_500,
+    });
+  });
 });
 
 describe("reporting which credential is in play", () => {
@@ -139,7 +168,10 @@ describe("reporting which credential is in play", () => {
     await mount();
 
     await waitFor(() => expect(screen.getByText(/Signed in as user@example.com/)).toBeDefined());
-    expect(screen.getByRole("button", { name: /Sign out/ })).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: /Sign out/ }));
+    await waitFor(() =>
+      expect(invokeCalls.some((call) => call.command === "cursor_sdk_logout")).toBe(true),
+    );
   });
 
   test("says when an API key is being used instead, and offers no sign-out", async () => {
@@ -167,5 +199,30 @@ describe("reporting which credential is in play", () => {
 
     await waitFor(() => expect(screen.getByText(/did not complete/)).toBeDefined());
     expect(screen.queryByText(/Waiting for you to finish/) === null).toBe(true);
+  });
+
+  test("refreshes when the stored API-key configuration changes", async () => {
+    const view = await mount("false:none");
+    await waitFor(() => expect(screen.getByText("Not signed in")).toBeDefined());
+
+    progress = {
+      state: "idle",
+      auth: { authenticated: true, source: "api-key-config" },
+    };
+    view.rerender(<CursorSdkSignIn credentialRevision="true:config" />);
+
+    await waitFor(() => expect(screen.getByText("Using the stored Cursor API key")).toBeDefined());
+  });
+
+  test("clears a transient status error after a successful refresh", async () => {
+    statusError = new Error("backend restarting");
+    const view = await mount("false:none");
+    await waitFor(() => expect(screen.getByText("backend restarting")).toBeDefined());
+
+    statusError = null;
+    progress = { state: "idle", auth: { authenticated: false, source: "none" } };
+    view.rerender(<CursorSdkSignIn credentialRevision="false:cleared" />);
+
+    await waitFor(() => expect(screen.queryByText("backend restarting") === null).toBe(true));
   });
 });

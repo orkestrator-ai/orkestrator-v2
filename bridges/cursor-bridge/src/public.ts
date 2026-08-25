@@ -46,31 +46,30 @@ export function publicStatus(state: SessionState): JsonObject {
 }
 
 export function messageWindow(state: SessionState, fromIndex: number | null): JsonObject {
-  const baseIndex = state.droppedMessages;
-  if (fromIndex === null || fromIndex < baseIndex) {
-    // The caller's anchor was evicted, so an incremental reply would silently
-    // skip messages. Hand back the whole retained window instead.
-    return {
-      messages: state.messages,
-      baseIndex,
-      revision: state.revision,
-      status: state.status,
-      truncated: state.transcriptTruncated,
-    };
-  }
+  const start =
+    fromIndex === null
+      ? 0
+      : Math.min(Math.max(fromIndex - state.droppedMessages, 0), state.messages.length);
+  const baseIndex = state.droppedMessages + start;
   return {
-    messages: state.messages.slice(fromIndex - baseIndex),
-    baseIndex: Math.max(fromIndex, baseIndex),
+    messages: state.messages.slice(start),
+    baseIndex,
+    totalMessages: state.droppedMessages + state.messages.length,
+    messageWindow: {
+      truncated: state.transcriptTruncated || baseIndex > 0,
+      ...(baseIndex > 0 ? { omittedMessages: baseIndex } : {}),
+      ...(state.droppedParts > 0 ? { omittedParts: state.droppedParts } : {}),
+    },
     revision: state.revision,
     status: state.status,
-    truncated: state.transcriptTruncated,
+    error: state.error,
   };
 }
 
 export function parseFromIndex(value: string | null): number | null {
   if (value === null) return null;
-  const parsed = Number.parseInt(value, 10);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
 /**

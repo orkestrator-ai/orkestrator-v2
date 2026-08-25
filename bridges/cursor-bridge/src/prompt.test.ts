@@ -22,50 +22,84 @@ function runningSession(): SessionState {
 
 interface FakeRun extends FollowableRun {
   readonly cancels: () => number;
+  readonly finish: (result?: { status: string }) => void;
 }
 
-/** A run that never settles, which is the shape a timeout has to survive. */
-function stalledRun(onCancel?: () => void): FakeRun {
+/** A run whose terminal acknowledgement is controlled by the test. */
+function controlledRun(onCancel?: () => void): FakeRun {
   let cancels = 0;
+  let finishRun!: (result: { status: string }) => void;
+  let finishStream!: () => void;
+  const terminal = new Promise<{ status: string }>((resolve) => {
+    finishRun = resolve;
+  });
+  const streamClosed = new Promise<void>((resolve) => {
+    finishStream = resolve;
+  });
   return {
     // eslint-disable-next-line require-yield
     async *stream() {
-      await new Promise<void>(() => undefined);
+      await streamClosed;
     },
-    wait: () => new Promise(() => undefined),
+    wait: () => terminal,
     cancel: async () => {
       cancels += 1;
       onCancel?.();
     },
     cancels: () => cancels,
+    finish: (result = { status: "cancelled" }) => {
+      finishRun(result);
+      finishStream();
+    },
   };
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for the test condition");
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
 }
 
 describe("a turn that outlives its budget", () => {
   test("cancels the run it is about to abandon", async () => {
     const state = runningSession();
-    const run = stalledRun();
+    const run = controlledRun();
 
-    await followRun(state, run, state.promptSequence, { prompt: "forever", images: [] }, 5);
+    const completion = followRun(
+      state,
+      run,
+      state.promptSequence,
+      { prompt: "forever", images: [] },
+      5,
+    );
+    await waitFor(() => run.cancels() === 1);
 
-    // Failing the turn clears `cancelTurn` and settles every child, so a run
-    // left alive would keep writing to the workspace with nothing able to stop
-    // it and `/activity` answering idle.
     expect(run.cancels()).toBe(1);
-    expect(state.status).toBe("error");
+    expect(state.status).toBe("running");
     expect(state.error).toContain("time budget");
+
+    run.finish();
+    await completion;
+    expect(state.status).toBe("idle");
   });
 
-  test("does not report the session as working once it has given up", async () => {
+  test("reports the session as working until cancellation is acknowledged", async () => {
     const state = runningSession();
     state.activeSubagentDescriptors.set("tool-1", { description: "child" });
+    const run = controlledRun();
 
-    await followRun(state, stalledRun(), state.promptSequence, { prompt: "x", images: [] }, 5);
+    const completion = followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5);
+    await waitFor(() => run.cancels() === 1);
 
+    expect(sessionIsWorking(state)).toBe(true);
+    run.finish();
+    await completion;
     expect(sessionIsWorking(state)).toBe(false);
   });
 
-  test("still fails the turn when the cancel itself hangs", async () => {
+  test("does not claim a terminal state when cancellation cannot be confirmed", async () => {
     const state = runningSession();
     const run: FollowableRun = {
       // eslint-disable-next-line require-yield
@@ -80,36 +114,51 @@ describe("a turn that outlives its budget", () => {
 
     const settled = await Promise.race([
       followRun(state, run, state.promptSequence, { prompt: "x", images: [] }, 5).then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 50)),
     ]);
 
-    expect(settled).toBe(true);
-    expect(state.status).toBe("error");
+    expect(settled).toBe(false);
+    expect(state.status).toBe("running");
+    expect(sessionIsWorking(state)).toBe(true);
   });
 
   test("leaves a turn that was already superseded alone", async () => {
     const state = runningSession();
-    const run = stalledRun();
+    const run = controlledRun();
 
     // A cancelled or superseded turn keeps emitting for a while; writing its
     // outcome onto the session would overwrite the live turn's.
-    await followRun(state, run, state.promptSequence - 1, { prompt: "x", images: [] }, 5);
+    const completion = followRun(
+      state,
+      run,
+      state.promptSequence - 1,
+      { prompt: "x", images: [] },
+      5,
+    );
+    await waitFor(() => run.cancels() === 1);
 
     expect(state.status).toBe("running");
     expect(state.error).toBeUndefined();
+    run.finish();
+    await completion;
   });
 
-  test("records a failed journal entry so the id is never replayed", async () => {
+  test("does not settle the journal until the run itself is terminal", async () => {
     const state = runningSession();
+    const run = controlledRun();
 
-    await followRun(
+    const completion = followRun(
       state,
-      stalledRun(),
+      run,
       state.promptSequence,
       { prompt: "x", images: [], requestId: "r1" },
       5,
     );
+    await waitFor(() => run.cancels() === 1);
 
-    expect(state.promptJournal.get("r1")?.state).toBe("failed");
+    expect(state.promptJournal.get("r1")).toBeUndefined();
+    run.finish();
+    await completion;
+    expect(state.promptJournal.get("r1")?.state).toBe("completed");
   });
 });

@@ -18,7 +18,13 @@ import {
   PINNED_TOOLCHAIN_ARTIFACTS,
   PINNED_TOOLCHAIN_VERSIONS,
 } from "../../apps/desktop/electron/toolchain-manifest";
-import { downloadAgent, hostTarget, parseAgent } from "../../scripts/download-agent";
+import {
+  downloadAgent,
+  hostTarget,
+  parseAgent,
+  parseCliArguments,
+  promotePaths,
+} from "../../scripts/download-agent";
 import { hashBundleIntegrity } from "../../scripts/verify-toolchain-artifacts";
 
 const AGENT_NAMES = Object.keys(PINNED_TOOLCHAIN_VERSIONS);
@@ -83,6 +89,44 @@ describe("download-agent", () => {
     // The failure names the valid set, because the alternative is a user
     // guessing at which of six spellings this command wants.
     expect(() => parseAgent("nope")).toThrow(new RegExp(AGENT_NAMES[0]!));
+  });
+
+  test("accepts both spellings of --dir and rejects anything else", () => {
+    // `--dir=<path>` silently parsed as "no directory given" in the first
+    // version of this parser, which installed into the repository's
+    // `binaries/` while reporting the path the user asked for as fetched.
+    expect(parseCliArguments(["grok"])).toEqual({ agent: "grok", directory: undefined });
+    expect(parseCliArguments(["grok", "--dir", "/tmp/probe"])).toEqual({
+      agent: "grok",
+      directory: "/tmp/probe",
+    });
+    expect(parseCliArguments(["grok", "--dir=/tmp/probe"])).toEqual({
+      agent: "grok",
+      directory: "/tmp/probe",
+    });
+    // Order is not significant: `bun run download:agent -- --dir X grok` works.
+    expect(parseCliArguments(["--dir", "/tmp/probe", "grok"])).toEqual({
+      agent: "grok",
+      directory: "/tmp/probe",
+    });
+
+    // A directory whose name happens to be an agent name is still a directory.
+    expect(parseCliArguments(["--dir", "claude", "grok"])).toEqual({
+      agent: "grok",
+      directory: "claude",
+    });
+
+    // Silently ignoring an unknown flag is how a typo becomes a wrong install.
+    expect(() => parseCliArguments(["grok", "--into", "/tmp/probe"])).toThrow(/Unknown option/);
+    expect(() => parseCliArguments(["grok", "-d", "/tmp/probe"])).toThrow(/Unknown option/);
+    expect(() => parseCliArguments(["grok", "--dir"])).toThrow(/--dir requires a directory path/);
+    expect(() => parseCliArguments(["grok", "--dir="])).toThrow(/--dir requires a directory path/);
+    expect(() => parseCliArguments(["grok", "--dir", "--other"])).toThrow(
+      /--dir requires a directory path/,
+    );
+    expect(() => parseCliArguments(["grok", "codex"])).toThrow(/Unexpected extra argument: codex/);
+    expect(() => parseCliArguments([])).toThrow(/Expected one of/);
+    expect(() => parseCliArguments(["--dir", "/tmp/probe"])).toThrow(/Expected one of/);
   });
 
   test("maps the host onto the manifest's platform vocabulary", () => {
@@ -672,5 +716,140 @@ describe("download-agent", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  describe("promotePaths", () => {
+    /**
+     * A staging tree holding `install/<name>` for each named file, beside a
+     * destination directory. Mirrors the layout `downloadAgent` builds.
+     */
+    async function stage(
+      root: string,
+      staged: Record<string, string>,
+      existing: Record<string, string>,
+    ): Promise<{ staging: string; destination: string }> {
+      const staging = path.join(root, "staging");
+      const destination = path.join(root, "out");
+      await mkdir(path.join(staging, "install"), { recursive: true });
+      await mkdir(destination, { recursive: true });
+      for (const [name, contents] of Object.entries(staged)) {
+        await Bun.write(path.join(staging, "install", name), contents);
+      }
+      for (const [name, contents] of Object.entries(existing)) {
+        await Bun.write(path.join(destination, name), contents);
+      }
+      return { staging, destination };
+    }
+
+    test("restores every previous file when a later promotion fails", async () => {
+      // Codex promotes two paths: the binary and the code-mode host it spawns
+      // from its own directory. Half-promoting them leaves an install whose
+      // helper is from a different release than the binary that spawns it.
+      const root = await mkdtemp(path.join(tmpdir(), "ork-promote-test-"));
+      try {
+        const { staging, destination } = await stage(
+          root,
+          { codex: "new codex" },
+          { codex: "old codex", "codex-code-mode-host": "old host" },
+        );
+
+        await expect(
+          promotePaths(
+            [
+              {
+                source: path.join(staging, "install", "codex"),
+                destination: path.join(destination, "codex"),
+              },
+              // Never staged, so its rename fails after the first succeeded.
+              {
+                source: path.join(staging, "install", "codex-code-mode-host"),
+                destination: path.join(destination, "codex-code-mode-host"),
+              },
+            ],
+            staging,
+          ),
+        ).rejects.toThrow(/ENOENT/);
+
+        expect(await Bun.file(path.join(destination, "codex")).text()).toBe("old codex");
+        expect(await Bun.file(path.join(destination, "codex-code-mode-host")).text()).toBe(
+          "old host",
+        );
+        // The staged file goes back where it came from, so the `finally` that
+        // deletes staging is what cleans it up rather than the destination.
+        expect(await Bun.file(path.join(staging, "install", "codex")).text()).toBe("new codex");
+        expect((await readdir(staging)).filter((entry) => entry.startsWith(".previous-"))).toEqual(
+          [],
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test("leaves a first-time install absent rather than half-promoted", async () => {
+      // The `existed: false` branch: nothing was backed up because nothing was
+      // there, so rollback must not conjure a file the destination never had.
+      const root = await mkdtemp(path.join(tmpdir(), "ork-promote-test-"));
+      try {
+        const { staging, destination } = await stage(root, { codex: "new codex" }, {});
+
+        await expect(
+          promotePaths(
+            [
+              {
+                source: path.join(staging, "install", "codex"),
+                destination: path.join(destination, "codex"),
+              },
+              {
+                source: path.join(staging, "install", "codex-code-mode-host"),
+                destination: path.join(destination, "codex-code-mode-host"),
+              },
+            ],
+            staging,
+          ),
+        ).rejects.toThrow(/ENOENT/);
+
+        expect(await Bun.file(path.join(destination, "codex")).exists()).toBe(false);
+        expect(await Bun.file(path.join(destination, "codex-code-mode-host")).exists()).toBe(false);
+        expect(await readdir(destination)).toEqual([]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    test("promotes every path and discards the backups on success", async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "ork-promote-test-"));
+      try {
+        const { staging, destination } = await stage(
+          root,
+          { codex: "new codex", "codex-code-mode-host": "new host" },
+          { codex: "old codex" },
+        );
+
+        await promotePaths(
+          [
+            {
+              source: path.join(staging, "install", "codex"),
+              destination: path.join(destination, "codex"),
+            },
+            {
+              source: path.join(staging, "install", "codex-code-mode-host"),
+              destination: path.join(destination, "codex-code-mode-host"),
+            },
+          ],
+          staging,
+        );
+
+        expect(await Bun.file(path.join(destination, "codex")).text()).toBe("new codex");
+        expect(await Bun.file(path.join(destination, "codex-code-mode-host")).text()).toBe(
+          "new host",
+        );
+        // A retained backup is a second copy of a ~250MB binary per download.
+        expect((await readdir(staging)).filter((entry) => entry.startsWith(".previous-"))).toEqual(
+          [],
+        );
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
   });
 });

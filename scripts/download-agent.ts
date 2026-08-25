@@ -78,6 +78,46 @@ export function parseAgent(value: string | undefined): ToolchainName {
   return value as ToolchainName;
 }
 
+export interface CliArguments {
+  agent: ToolchainName;
+  directory?: string;
+}
+
+/**
+ * Both `--dir <path>` and `--dir=<path>`, and nothing else.
+ *
+ * Rejecting the unknown rather than skipping it is the load-bearing part. The
+ * first version of this matched only the space-separated form and dropped
+ * anything else beginning with `--`, so `--dir=/tmp/probe` parsed as "no
+ * directory given" and wrote a few hundred megabytes into the repository's
+ * `binaries/` while reporting success.
+ */
+export function parseCliArguments(argv: readonly string[]): CliArguments {
+  let directory: string | undefined;
+  let agent: string | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index]!;
+    if (argument === "--dir") {
+      const value = argv[index + 1];
+      if (value === undefined || value.startsWith("--")) {
+        throw new Error("--dir requires a directory path");
+      }
+      directory = value;
+      index += 1;
+    } else if (argument.startsWith("--dir=")) {
+      directory = argument.slice("--dir=".length);
+      if (!directory) throw new Error("--dir requires a directory path");
+    } else if (argument.startsWith("-")) {
+      throw new Error(`Unknown option: ${argument}. Use --dir <path>.`);
+    } else if (agent !== undefined) {
+      throw new Error(`Unexpected extra argument: ${argument}`);
+    } else {
+      agent = argument;
+    }
+  }
+  return { agent: parseAgent(agent), directory };
+}
+
 function run(command: string, args: string[], cwd?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
@@ -131,10 +171,21 @@ function probeVersion(executable: string, timeoutMs: number): Promise<string> {
   });
 }
 
-type Promotion = { source: string; destination: string };
+export type Promotion = { source: string; destination: string };
 
-/** Promote a complete staged install, restoring the previous files on failure. */
-async function promotePaths(promotions: readonly Promotion[], staging: string): Promise<void> {
+/**
+ * Promote a complete staged install, restoring the previous files on failure.
+ *
+ * Exported for its own tests: this is the one routine whose failure branch
+ * cannot be reached through `downloadAgent`, because every check that rejects
+ * an install — digests, bundle integrity, the `--version` probe — deliberately
+ * runs before promotion begins. Reaching the rollback path through the public
+ * entry point would mean breaking a rename mid-flight, so it is driven here.
+ */
+export async function promotePaths(
+  promotions: readonly Promotion[],
+  staging: string,
+): Promise<void> {
   const backups: Array<Promotion & { backup: string; existed: boolean }> = [];
   const promoted: Promotion[] = [];
   try {
@@ -314,10 +365,7 @@ export async function downloadAgent(options: DownloadOptions): Promise<string> {
 }
 
 if (import.meta.main) {
-  const argv = process.argv.slice(2);
-  const dirFlag = argv.indexOf("--dir");
-  const directory = dirFlag >= 0 ? argv[dirFlag + 1] : undefined;
-  const agent = parseAgent(argv.find((value) => !value.startsWith("--") && value !== directory));
+  const { agent, directory } = parseCliArguments(process.argv.slice(2));
   const { platform, architecture } = hostTarget();
   await downloadAgent({ agent, platform, architecture, directory });
 }

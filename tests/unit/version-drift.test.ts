@@ -502,6 +502,67 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
   });
 
+  // The three tests below assert URL *shape*, which nothing else does.
+  // `every managed artifact URL carries its own pinned version` only checks
+  // that the version string appears somewhere in the URL, so a manifest
+  // pointing at the wrong org, the wrong asset name or the wrong archive
+  // format still passes it: the size and digest beside it would agree with
+  // each other, and the installer would verify and install the wrong release.
+  // They previously lived inside tests that also asserted properties of
+  // `scripts/download-opencode.sh` and `scripts/download-claude.sh`; when the
+  // shell downloaders were replaced by `scripts/download-agent.ts` those tests
+  // were deleted whole, taking the manifest halves with them.
+
+  test("OpenCode: every managed artifact URL derives from the pinned release base", () => {
+    // OpenCode moved from the `sst` org to `anomalyco`. Without this, the
+    // release base could be edited back and every other test would stay green
+    // while the manifest shipped binaries from a different repository.
+    expect(OPENCODE_RELEASE_BASE).toBe(
+      `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}`,
+    );
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter(
+      (entry) => entry.name === "opencode",
+    )) {
+      expect(artifact.archive.url.startsWith(`${OPENCODE_RELEASE_BASE}/`)).toBe(true);
+    }
+  });
+
+  test("OpenCode: darwin ships zips and linux ships tarballs, named like the release assets", () => {
+    // The two platforms publish different container formats under different
+    // extensions. A record that names one and declares the other extracts with
+    // the wrong tool and fails at install time rather than in review.
+    const artifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode");
+    expect(artifacts.length).toBe(4);
+    for (const artifact of artifacts) {
+      const extension = artifact.platform === "linux" ? ".tar.gz" : ".zip";
+      expect(
+        artifact.archive.url.endsWith(
+          `opencode-${artifact.platform}-${artifact.architecture}${extension}`,
+        ),
+        `${artifact.platform}/${artifact.architecture} is not named like its release asset`,
+      ).toBe(true);
+      expect(artifact.archive.format).toBe(artifact.platform === "linux" ? "tar.gz" : "zip");
+      expect(artifact.archive.entryPath).toBe("opencode");
+    }
+  });
+
+  test("Claude: every managed artifact URL is the pinned npm tarball for its platform", () => {
+    // Claude is fetched from the registry rather than a release page, so the
+    // URL encodes the platform package name twice and the version once. All
+    // three have to agree or the download is another platform's build.
+    const artifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "claude");
+    expect(artifacts.length).toBe(4);
+    for (const artifact of artifacts) {
+      const pkg = `claude-code-${artifact.platform}-${artifact.architecture}`;
+      expect(artifact.archive.url).toBe(
+        `https://registry.npmjs.org/@anthropic-ai/${pkg}/-/${pkg}-${PINNED_TOOLCHAIN_VERSIONS.claude}.tgz`,
+      );
+      // npm tarballs root everything under `package/`.
+      expect(artifact.archive.entryPath).toBe("package/claude");
+      expect(artifact.archive.format).toBe("tar.gz");
+    }
+  });
+
   test("Codex: every managed platform ships the code-mode host next to codex", () => {
     // Codex spawns `codex-code-mode-host` from its own directory for every
     // code-mode turn. 0.147.0 shipped without it, which made every model that

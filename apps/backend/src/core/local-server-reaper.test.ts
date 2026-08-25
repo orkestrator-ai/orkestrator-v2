@@ -18,6 +18,11 @@ const COMMAND_LINES = {
   codex: "/app/bin/bun /app/bridges/codex-bridge/dist/index.js",
   claude: "/app/bin/bun /app/bridges/claude-bridge/dist/index.js",
   opencode: "/toolchains/opencode serve --port 5000 --hostname 127.0.0.1",
+  pi: "/app/bin/bun /app/bridges/pi-bridge/dist/index.js",
+  // Cursor is served by whichever engine the installation selected, so both
+  // satisfy its markers; Grok is always the shared ACP bridge.
+  cursorSdk: "/app/bin/bun /app/bridges/cursor-bridge/dist/index.js",
+  acp: "/app/bin/bun /app/bridges/acp-bridge/dist/index.js",
 } as const;
 
 /** An orphaned process that leads its own group — what a real bridge looks like. */
@@ -229,20 +234,81 @@ describe("reapOrphanedLocalServers", () => {
 
   test("reaps each recorded kind independently within one environment", async () => {
     const { options, updates, terminated } = makeOptions(
-      [environment({ opencodePid: 901, claudeBridgePid: 902, codexBridgePid: 903 })],
+      [
+        environment({
+          opencodePid: 901,
+          claudeBridgePid: 902,
+          codexBridgePid: 903,
+          cursorBridgePid: 904,
+          grokBridgePid: 905,
+          piBridgePid: 906,
+        }),
+      ],
       {
         identities: new Map([
           [901, orphanedLeader(901, COMMAND_LINES.opencode)],
           [902, orphanedLeader(902, COMMAND_LINES.claude)],
           [903, orphanedLeader(903, COMMAND_LINES.codex)],
+          [904, orphanedLeader(904, COMMAND_LINES.cursorSdk)],
+          [905, orphanedLeader(905, COMMAND_LINES.acp)],
+          [906, orphanedLeader(906, COMMAND_LINES.pi)],
         ]),
       },
     );
 
     const reaped = await reapOrphanedLocalServers(options);
-    expect(terminated.sort()).toEqual([901, 902, 903]);
-    expect(reaped.map((entry) => entry.kind).sort()).toEqual(["claude", "codex", "opencode"]);
-    expect(updates).toHaveLength(3);
+    expect(terminated.sort()).toEqual([901, 902, 903, 904, 905, 906]);
+    expect(reaped.map((entry) => entry.kind).sort()).toEqual([
+      "claude",
+      "codex",
+      "cursor",
+      "grok",
+      "opencode",
+      "pi",
+    ]);
+    expect(updates).toHaveLength(6);
+  });
+
+  test("reaps an orphaned pi bridge and clears both of its coordinates", async () => {
+    const { options, updates, terminated } = makeOptions(
+      [environment({ piBridgePid: 4243, localPiPort: 57103 })],
+      { identities: new Map([[4243, orphanedLeader(4243, COMMAND_LINES.pi)]]) },
+    );
+
+    const reaped = await reapOrphanedLocalServers(options);
+    expect(terminated).toEqual([4243]);
+    expect(updates).toEqual([
+      { environmentId: "env-1", fields: { piBridgePid: null, localPiPort: null } },
+    ]);
+    expect(reaped).toEqual([{ environmentId: "env-1", kind: "pi", pid: 4243, outcome: "reaped" }]);
+  });
+
+  test("accepts either engine behind a recorded cursor pid", async () => {
+    for (const commandLine of [COMMAND_LINES.cursorSdk, COMMAND_LINES.acp]) {
+      const { options, terminated } = makeOptions([environment({ cursorBridgePid: 4244 })], {
+        identities: new Map([[4244, orphanedLeader(4244, commandLine)]]),
+      });
+
+      const reaped = await reapOrphanedLocalServers(options);
+      expect(terminated).toEqual([4244]);
+      expect(reaped.map((entry) => entry.outcome)).toEqual(["reaped"]);
+    }
+  });
+
+  test("does not accept a pi bridge command line under a cursor or grok record", async () => {
+    const { options, terminated } = makeOptions(
+      [environment({ cursorBridgePid: 4245, grokBridgePid: 4246 })],
+      {
+        identities: new Map([
+          [4245, orphanedLeader(4245, COMMAND_LINES.pi)],
+          [4246, orphanedLeader(4246, COMMAND_LINES.pi)],
+        ]),
+      },
+    );
+
+    const reaped = await reapOrphanedLocalServers(options);
+    expect(terminated).toEqual([]);
+    expect(reaped.map((entry) => entry.outcome)).toEqual(["cleared", "cleared"]);
   });
 
   test("ignores environments with no recorded PIDs", async () => {

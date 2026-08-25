@@ -2481,6 +2481,17 @@ printf '%s\\n' '{}' > "$out"
       opencodePid: 40,
       claudeBridgePid: 41,
       codexBridgePid: 42,
+      cursorBridgePid: 43,
+      grokBridgePid: 44,
+      piBridgePid: 45,
+      tabTeardownIntents: {
+        "tab-1": {
+          tabId: "tab-1",
+          kind: "pi-native",
+          sessionId: "session-1",
+          createdAt: new Date().toISOString(),
+        },
+      },
       claudeModelCatalog: {
         environmentId: "env-1",
         models: [],
@@ -2502,6 +2513,7 @@ printf '%s\\n' '{}' > "$out"
         },
       },
       pendingRenamePrompt: "private launch instruction",
+      prRecheckAfterAgentCompletionArmedAt: new Date().toISOString(),
       pendingAgentLaunch: false,
       initialAgentModel: "launch-only-model",
       initialReasoningEffort: "high",
@@ -2526,13 +2538,22 @@ printf '%s\\n' '{}' > "$out"
       projectId: environment.projectId,
       status: "running",
     });
+    // Every key `ClientEnvironment` omits. TypeScript cannot enforce this —
+    // excess-property checking does not apply to the spread `toClientEnvironment`
+    // returns — so a backend-only field left in the projection reaches clients
+    // silently, and this list is the only thing that catches it.
     for (const field of [
       "opencodePid",
       "claudeBridgePid",
       "codexBridgePid",
+      "cursorBridgePid",
+      "grokBridgePid",
+      "piBridgePid",
+      "tabTeardownIntents",
       "claudeModelCatalog",
       "agentActivitySources",
       "frontendAgentActivityObservers",
+      "prRecheckAfterAgentCompletionArmedAt",
       "pendingRenamePrompt",
       "initialAgentModel",
       "initialReasoningEffort",

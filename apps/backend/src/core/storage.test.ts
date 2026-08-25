@@ -592,14 +592,24 @@ describe("SDK and ACP bridge runtime persistence", () => {
         localGrokPort: null,
         localPiPort: null,
       });
-      expect(await restarted.getEnvironment(environment.id)).not.toMatchObject({
-        cursorBridgePid: expect.any(Number),
-        grokBridgePid: expect.any(Number),
-        piBridgePid: expect.any(Number),
-        localCursorPort: expect.any(Number),
-        localGrokPort: expect.any(Number),
-        localPiPort: expect.any(Number),
-      });
+      // Asserted per field rather than through one `not.toMatchObject`: that
+      // matcher fails only when *every* listed key matches, so a single field
+      // that cleared would have vouched for the five that did not.
+      const cleared = await restarted.getEnvironment(environment.id);
+      expect(cleared?.cursorBridgePid).toBeUndefined();
+      expect(cleared?.grokBridgePid).toBeUndefined();
+      expect(cleared?.piBridgePid).toBeUndefined();
+      expect(cleared?.localCursorPort).toBeUndefined();
+      expect(cleared?.localGrokPort).toBeUndefined();
+      expect(cleared?.localPiPort).toBeUndefined();
+
+      // The clearing write must also survive a restart, not just the cache the
+      // instance that performed it is serving from.
+      const reopened = new StorageService(dataDir);
+      await reopened.init();
+      const persisted = await reopened.getEnvironment(environment.id);
+      expect(persisted?.piBridgePid).toBeUndefined();
+      expect(persisted?.localPiPort).toBeUndefined();
     });
   });
 });

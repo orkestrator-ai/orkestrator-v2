@@ -39,6 +39,16 @@ import type {
 } from "./commands-runtime-state.js";
 import type { CommandContext, BackendEmit } from "./commands-context.js";
 
+/**
+ * Every key `ClientEnvironment` omits must be destructured away here.
+ *
+ * TypeScript will not catch a miss: excess-property checking does not apply to
+ * spread properties, so a field left in `client` is returned to the renderer
+ * while the declared return type says it was removed. The
+ * `get_environment_snapshots` case in
+ * `tests/unit/electron/commands-registry-environments.test.ts` asserts the
+ * absence of each one, because that is the only place the drift shows up.
+ */
 export function toClientEnvironment(environment: Environment): ClientEnvironment {
   const {
     agentActivitySources: _agentActivitySources,
@@ -50,6 +60,8 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     codexBridgePid: _codexBridgePid,
     cursorBridgePid: _cursorBridgePid,
     grokBridgePid: _grokBridgePid,
+    piBridgePid: _piBridgePid,
+    tabTeardownIntents: _tabTeardownIntents,
     pendingRenamePrompt: _pendingRenamePrompt,
     prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,
     ...client

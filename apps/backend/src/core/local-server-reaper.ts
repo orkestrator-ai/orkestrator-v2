@@ -10,8 +10,9 @@
  *
  * A recorded PID is killed only when it can be positively identified:
  *
- *   - its command line must contain *every* marker for the recorded server
- *     kind (a recycled PID belonging to a stranger must never be signalled),
+ *   - its command line must contain every marker of one of the marker sets for
+ *     the recorded server kind (a recycled PID belonging to a stranger must
+ *     never be signalled),
  *   - it must actually be orphaned (`ppid == 1`). A bridge whose parent is
  *     still alive belongs to another live backend sharing this data dir, and
  *     killing it would break that instance, and
@@ -39,7 +40,7 @@ import {
 } from "./tmux.js";
 import type { Environment } from "./models.js";
 
-export type LocalServerReapKind = "opencode" | "claude" | "codex";
+export type LocalServerReapKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
 
 /**
  * claude-tmux is deliberately *not* in `REAPABLE_SERVERS`.
@@ -236,21 +237,49 @@ export async function reapOrphanedClaudeTmuxRuntimes(
 
 interface ReapableServer {
   kind: LocalServerReapKind;
-  pidField: "opencodePid" | "claudeBridgePid" | "codexBridgePid";
-  portField: "localOpencodePort" | "localClaudePort" | "localCodexPort";
+  pidField:
+    | "opencodePid"
+    | "claudeBridgePid"
+    | "codexBridgePid"
+    | "cursorBridgePid"
+    | "grokBridgePid"
+    | "piBridgePid";
+  portField:
+    | "localOpencodePort"
+    | "localClaudePort"
+    | "localCodexPort"
+    | "localCursorPort"
+    | "localGrokPort"
+    | "localPiPort";
   /**
-   * Substrings that must *all* appear in the process's command line.
+   * Alternative marker sets. A process matches when *every* substring in *any
+   * one* set appears in its command line.
    *
-   * These mirror what `startLocalServerUnlocked` actually spawns:
+   * These mirror what `startLocalServerUnlocked` actually spawns — the bridge
+   * entrypoint is an absolute path (`path.join(bridgeDir, "dist", "index.js")`),
+   * so the bridge's directory name is part of the command line:
    *   opencode → `<binary> serve --port N --hostname 127.0.0.1`
    *   claude   → `<bun> <…>/claude-bridge/dist/index.js`
    *   codex    → `<bun> <…>/codex-bridge/dist/index.js`
+   *   pi       → `<bun> <…>/pi-bridge/dist/index.js`
+   *   grok     → `<bun> <…>/acp-bridge/dist/index.js`
+   *   cursor   → either bridge: `<…>/cursor-bridge/…` when the experimental SDK
+   *              engine is selected, `<…>/acp-bridge/…` otherwise. The engine can
+   *              be toggled between the crash and this sweep, so both are accepted
+   *              rather than resolving the setting here.
    *
    * A bare `"opencode"` was too weak on its own: it matches a hand-started
    * `opencode` in any mode, or any command line that merely mentions the word,
    * which is exactly the stranger a recycled PID would land on.
+   *
+   * Cursor-over-ACP and Grok are indistinguishable by command line — they run
+   * the same entrypoint and differ only by `ACP_PROVIDER`, which `ps` does not
+   * show. That costs attribution, not safety: the orphan and group-leader
+   * checks below still hold, so the worst case is reaping one of *our* orphaned
+   * bridges under the other's record, and the record that actually owned it
+   * then finds the PID gone and clears itself.
    */
-  markers: readonly string[];
+  markerSets: readonly (readonly string[])[];
 }
 
 const REAPABLE_SERVERS: readonly ReapableServer[] = [
@@ -258,21 +287,47 @@ const REAPABLE_SERVERS: readonly ReapableServer[] = [
     kind: "opencode",
     pidField: "opencodePid",
     portField: "localOpencodePort",
-    markers: ["opencode", "serve", "--hostname"],
+    markerSets: [["opencode", "serve", "--hostname"]],
   },
   {
     kind: "claude",
     pidField: "claudeBridgePid",
     portField: "localClaudePort",
-    markers: ["claude-bridge", "dist/index.js"],
+    markerSets: [["claude-bridge", "dist/index.js"]],
   },
   {
     kind: "codex",
     pidField: "codexBridgePid",
     portField: "localCodexPort",
-    markers: ["codex-bridge", "dist/index.js"],
+    markerSets: [["codex-bridge", "dist/index.js"]],
+  },
+  {
+    kind: "cursor",
+    pidField: "cursorBridgePid",
+    portField: "localCursorPort",
+    markerSets: [
+      ["cursor-bridge", "dist/index.js"],
+      ["acp-bridge", "dist/index.js"],
+    ],
+  },
+  {
+    kind: "grok",
+    pidField: "grokBridgePid",
+    portField: "localGrokPort",
+    markerSets: [["acp-bridge", "dist/index.js"]],
+  },
+  {
+    kind: "pi",
+    pidField: "piBridgePid",
+    portField: "localPiPort",
+    markerSets: [["pi-bridge", "dist/index.js"]],
   },
 ];
+
+/** True when every marker of at least one set appears in the command line. */
+function matchesMarkers(markerSets: readonly (readonly string[])[], commandLine: string): boolean {
+  return markerSets.some((markers) => markers.every((marker) => commandLine.includes(marker)));
+}
 
 /**
  * Orphans get a shorter grace than an owned shutdown: their descendants are
@@ -436,10 +491,7 @@ export async function reapOrphanedLocalServers(
           record("skipped-unreadable");
           continue;
         }
-        if (
-          identity === null ||
-          !server.markers.every((marker) => identity.commandLine.includes(marker))
-        ) {
+        if (identity === null || !matchesMarkers(server.markerSets, identity.commandLine)) {
           // Dead, or a recycled PID now owned by a stranger. Either way the
           // record is stale and must not be trusted again.
           await clearRecord();

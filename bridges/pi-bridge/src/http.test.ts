@@ -1,12 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 
 // `config.ts` reads its environment once, at import. Everything below is
 // therefore loaded dynamically, after the environment this suite needs is in
@@ -230,6 +229,129 @@ describe("authorized global routes", () => {
     expect(await response.json()).toEqual({
       commands: [{ name: "/compact", description: "Summarize the conversation to free context" }],
     });
+  });
+});
+
+describe("successful lifecycle routes", () => {
+  test("creates a session with the requested client key and composer selection", async () => {
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    try {
+      const response = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({
+          clientSessionKey: "tab-create-success",
+          model: "test-provider/test-model",
+          reasoningEffort: "high",
+        }),
+      });
+
+      expect(response.status).toBe(201);
+      const body = await response.json();
+      expect(body).toMatchObject({
+        provider: "pi",
+        status: "idle",
+        composer: {
+          selectedModelId: "test-provider/test-model",
+          selectedReasoningId: "high",
+        },
+      });
+      expect(clientSessionKeys.get("tab-create-success")).toBe(body.sessionId);
+      expect(sessions.has(body.sessionId)).toBe(true);
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("cold-attaches a lazily created SDK session", async () => {
+    const state = seedSession();
+    let creations = 0;
+    const attached = fakeAgentSession({
+      sessionId: "cold-pi-session",
+      sessionFile: "/tmp/cold-pi-session.jsonl",
+    });
+    setAgentSessionTestHooks({
+      createAgentSession: async () => {
+        creations += 1;
+        return attached;
+      },
+    });
+    try {
+      const response = await call(`/session/${state.id}/attach`, { method: "POST" });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ attached: true });
+      expect(creations).toBe(1);
+      expect(state.session).toBe(attached);
+      expect(state.piSessionId).toBe("cold-pi-session");
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("accepts and completes a prompt through the HTTP route", async () => {
+    const state = seedSession();
+    const prompts: string[] = [];
+    state.session = fakeAgentSession({
+      prompt: (text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        prompts.push(text);
+        options.preflightResult?.(true);
+        return Promise.resolve();
+      },
+    });
+    installRuntime();
+    try {
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "ship it", requestId: "req-success" }),
+      });
+
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ accepted: true });
+      expect(prompts).toEqual(["ship it"]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(state.messages.at(-1)).toMatchObject({ role: "user", content: "ship it" });
+      expect(state.status).toBe("idle");
+      expect(state.promptJournal.get("req-success")?.state).toBe("completed");
+    } finally {
+      resetTestDependencies();
+    }
+  });
+
+  test("forks through a new persisted Pi conversation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-fork-"));
+    const forkedFile = join(directory, "forked.jsonl");
+    await writeFile(
+      forkedFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "forked-pi-session",
+        timestamp: "2026-08-25T00:00:00.000Z",
+        cwd: process.cwd(),
+      })}\n`,
+      "utf8",
+    );
+    process.env.PI_SESSION_DIR = directory;
+    const state = seedSession();
+    state.session = fakeAgentSession({
+      sessionManager: { createBranchedSession: (entryId: string) => (entryId ? forkedFile : null) },
+    });
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    try {
+      const response = await call(`/session/${state.id}/fork`, {
+        method: "POST",
+        body: JSON.stringify({ upToMessageId: "entry-1" }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.sessionId).not.toBe(state.id);
+      expect(sessions.get(body.sessionId)?.sessionFile).toBe(await realpath(forkedFile));
+    } finally {
+      delete process.env.PI_SESSION_DIR;
+      resetTestDependencies();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

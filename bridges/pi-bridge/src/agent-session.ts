@@ -277,9 +277,11 @@ function publishAttachedSession(state: SessionState, session: AgentSession): Age
 }
 
 /** Project-local resource switches passed to Pi's default loader. */
-export function projectResourceDiscoveryOptions(
-  enabled: boolean = projectResourcesEnabled,
-): { noExtensions: boolean; noSkills: boolean; noPromptTemplates: boolean } {
+export function projectResourceDiscoveryOptions(enabled: boolean = projectResourcesEnabled): {
+  noExtensions: boolean;
+  noSkills: boolean;
+  noPromptTemplates: boolean;
+} {
   return {
     noExtensions: !enabled,
     noSkills: !enabled,

@@ -223,6 +223,7 @@ function restoreUsage(value: unknown): SessionState["usage"] {
     "cacheReadTokens",
     "cacheWriteTokens",
     "reasoningTokens",
+    "totalTokens",
   ] as const) {
     const count = value.turn[key];
     if (typeof count === "number" && Number.isFinite(count)) turn[key] = count;

@@ -103,6 +103,8 @@ export interface TurnUsage {
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
   reasoningTokens?: number;
+  /** Provider-calculated total; preferred over reconstructing vendor accounting. */
+  totalTokens?: number;
 }
 
 export interface PersistedUsage {

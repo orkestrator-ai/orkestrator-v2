@@ -105,10 +105,11 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
   if (!usage) return undefined;
   const turn = usage.turn;
   const used =
+    turn.totalTokens ??
     (turn.inputTokens ?? 0) +
-    (turn.outputTokens ?? 0) +
-    (turn.cacheReadTokens ?? 0) +
-    (turn.cacheWriteTokens ?? 0);
+      (turn.outputTokens ?? 0) +
+      (turn.cacheReadTokens ?? 0) +
+      (turn.cacheWriteTokens ?? 0);
   if (used === 0) return undefined;
   const model = state.composer.models.find((entry) => entry.id === usage.modelId);
   return {

@@ -46,6 +46,11 @@ describe("round trip", () => {
     const state = newSessionState("client-key");
     state.agentId = "agent-1";
     state.composer = { ...state.composer, selectedModelId: "composer-2.5", selectedModeId: "plan" };
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      modelId: "composer-2.5",
+      updatedAt: new Date(1).toISOString(),
+    };
     state.messages.push({
       id: "m0",
       role: "user",
@@ -69,6 +74,7 @@ describe("round trip", () => {
     expect(restored.revision).toBe(7);
     expect(restored.composer.selectedModelId).toBe("composer-2.5");
     expect(restored.composer.selectedModeId).toBe("plan");
+    expect(restored.usage).toEqual(state.usage);
     // The catalogue is a live read; a stale one would offer models the account
     // may no longer have.
     expect(restored.composer.models).toEqual([]);

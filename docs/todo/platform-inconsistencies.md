@@ -67,7 +67,7 @@ verified. **partial** = present but weaker, different, or vendor-dependent.
 | File attachments | full | **none** (image paths typed into pane) | none | none | none | full |
 | Images | full (SDK blocks) | **partial** (workspace path prose) | full | full | full | full |
 | Queue | full (backend) | full (own `PromptQueueDrainer`) | full | full | full | full |
-| Resume | full | full (own picker + `--resume`) | full | full (verified) | **partial** (1.0.4 verified; shipping 1.0.3 unverified) | full |
+| Resume | full | full (own picker + `--resume`) | full | full (verified) | full (verified) | full |
 | Fork | full | **none** | full | none | none | full |
 | Slash commands | full (discovered) | **partial** (hardcoded TUI list) | full | none | none | full |
 | Background tasks UI | full | **none** | none | none* | none | none |
@@ -101,14 +101,13 @@ Grok lets the parent go idle with live children and reports `/activity` as
 
 Cursor/Grok resume was previously recorded here as partial, on the assumption
 that ACP would answer **410** because the vendor might not announce
-`session/list` **and** `loadSession`. Direct probes disprove that for the
-shipping Cursor pin and for Grok 1.0.4, but the repository currently ships Grok
-1.0.3 and that exact version was not probed:
+`session/list` **and** `loadSession`. Direct probes disprove that for both
+shipping pins:
 
 | Agent | `loadSession` | `sessionCapabilities` |
 | --- | --- | --- |
 | `cursor-agent` 2026.08.11-e8db854 | `true` | `list` |
-| `grok` 1.0.4 (newer than shipping 1.0.3) | `true` | `list`, `resume`, `close` |
+| `grok` 1.0.10 | `true` | `list`, `resume`, `close` |
 
 Both return well-formed rows (`sessionId`, `cwd`, `title`, `updatedAt`) from
 `session/list` for a cwd with history, and both replay the full conversation
@@ -117,18 +116,17 @@ real binaries, `GET /session/list` answers 200 with signed session tokens and
 `POST /session/resume` answers a hydrated transcript — user turns, assistant
 turns, thinking parts — plus the model/mode catalog. Listing keeps working while
 a session is live on the bridge. So the whole path (capability table → UI →
-`listResumableSessions`/`resumeSession` → bridge → vendor) is verified for the
-shipping Cursor build and Grok 1.0.4. It does not establish the capability for
-the Grok 1.0.3 binary pinned in `toolchain-manifest.ts` and `docker/Dockerfile`.
+`listResumableSessions`/`resumeSession` → bridge → vendor) is verified for both
+shipping builds. The Grok row was promoted to full when the pin moved to 1.0.10
+and that exact binary — the one in `toolchain-manifest.ts` and
+`docker/Dockerfile` — was probed directly, which is what the earlier 1.0.4 probe
+could not establish.
 
-Two caveats this does **not** retire:
+One caveat this does **not** retire:
 
-- The shipping Grok 1.0.3 binary must be probed before its matrix entry can be
-  promoted to full. Alternatively, a complete upgrade to 1.0.4 would make the
-  recorded Grok probe apply to the shipped toolchain.
 - The 410 branch in `acp-session.ts:106` and `:221` is still correct defensive
   code, and `acp-session.test.ts` still covers it through the fake agent. It does
-  not fire for the shipping Cursor build or the probed Grok 1.0.4 build.
+  not fire for either shipping build.
 - If a future build did drop the capability, `NativeResumeSessionDialog.tsx:95`
   collapses the bridge’s specific reason into a generic “Failed to load
   sessions”, so the user would see a broken-looking control rather than an
@@ -397,10 +395,9 @@ cheap to fix relative to vendor protocol work.
    `composer.executionProfiles` (§5.1(5)).
 5. `composer.provider: true` for everyone; native picker is
    `platformSelectionLocked`.
-6. Resume is accurately advertised for the shipping Cursor build, which
-   announces `loadSession` + `session/list`. Grok 1.0.4 does too, but the shipping
-   Grok 1.0.3 pin remains unverified (see §2). A 410 also surfaces as a generic
-   “Failed to load sessions”, hiding the bridge’s reason.
+6. Resume is accurately advertised for both shipping ACP builds: Cursor and
+   Grok 1.0.10 each announce `loadSession` + `session/list` (see §2). A 410 still
+   surfaces as a generic “Failed to load sessions”, hiding the bridge’s reason.
 7. Agent Info dual-gates on provider string, not only capabilities.
 8. Slash menu is wired for every native tab; `slashCommands: false` only empties
    the list.
@@ -454,8 +451,9 @@ cheap to fix relative to vendor protocol work.
 7. Gate `useSlashCommandMenu` on `capabilities.slashCommands` (plus injected
    `/steer`).
 8. Resume button for ACP: if `/session/list` 410s, hide/disable with the bridge
-   reason rather than leaving a dead Resume control. This remains relevant to
-   the unverified shipping Grok 1.0.3 build and to future capability regressions.
+   reason rather than leaving a dead Resume control. Both shipping builds are now
+   verified, so this remains relevant to future capability regressions rather
+   than to a known-unverified pin.
    The concrete change is to stop discarding the bridge’s error text in
    `NativeResumeSessionDialog.tsx:95-102`.
 9. Re-check attachments in dispatch against `nativeCapabilities(agent).attachments`
@@ -489,7 +487,7 @@ review. Cheap work is UI wiring, not new vendor RPCs.
 | Cursor/Grok fork | Not exposed on the ACP bridge. Do not claim the vendor lacks `session/fork`. |
 | Cursor/Grok slash discovery | Bridge returns `[]`. Unknown whether Cursor/Grok ACP has a command list. |
 | Cursor/Grok session actions | Provider rejects all. Compact/steer/review would need ACP methods. |
-| Cursor/Grok resume | **No known vendor blocker.** Cursor's shipping pin and Grok 1.0.4 announce `session/list` + `loadSession`, and the full path works for both; the shipping Grok 1.0.3 pin still needs an exact-version probe (see §2). |
+| Cursor/Grok resume | **No known vendor blocker.** Both shipping pins — Cursor and Grok 1.0.10 — announce `session/list` + `loadSession`, and the full path is verified for both (see §2). |
 | Cursor/Grok speed | Needs vendor config option / `supportsSpeed`. |
 | Cursor background-task UI | Tasks already run; a hold/stop card would be product work on existing continuation. |
 | OpenCode conversation mode | SDK has agents, not Claude-style permission mode. Don’t fake it with Build/Plan. |
@@ -559,9 +557,8 @@ research. Close the honesty gaps first.
    label, different safety and resume story. Product decision before code.
 2. **Stop overclaiming composer flags.** OpenCode mode and the composer-control
    gates are done (§5.1(1)(2)(4)). Still open: `provider: true` and the Agent
-   Info provider-string fallbacks. Cursor resume is accurately advertised;
-   verify the shipping Grok 1.0.3 pin before making the same claim there (see
-   §2).
+   Info provider-string fallbacks. Cursor and Grok resume are both accurately
+   advertised against their shipping pins (see §2).
 3. **Attachment honesty** (menu copy + dispatch re-check) for Codex / ACP /
    Tmux.
 4. **Decide whether Cursor/Grok should grow compact / slash / fork** after

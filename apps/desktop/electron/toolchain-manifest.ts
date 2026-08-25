@@ -1,9 +1,9 @@
 export const PINNED_TOOLCHAIN_VERSIONS = {
-  claude: "2.1.228",
-  codex: "0.147.0",
+  claude: "2.1.245",
+  codex: "0.149.1",
   cursor: "2026.08.11-e8db854",
-  grok: "1.0.3",
-  opencode: "1.18.16",
+  grok: "1.0.10",
+  opencode: "1.18.23",
   pi: "0.84.3",
 } as const;
 
@@ -101,9 +101,10 @@ const CURSOR_DOWNLOAD_HOSTS = ["downloads.cursor.com"] as const;
 const GROK_DOWNLOAD_HOSTS = ["x.ai", "storage.googleapis.com", "storage.cloud.google.com"] as const;
 
 // Release bases are derived from PINNED_TOOLCHAIN_VERSIONS so a version bump
-// cannot leave a stale version behind in a URL. `scripts/download-codex.sh` and
-// `scripts/download-opencode.sh` build the same URLs; tests/unit/version-drift.test.ts
-// asserts the two stay in step.
+// cannot leave a stale version behind in a URL. This file is the only place
+// these URLs are built: `scripts/download-agent.ts` reads them from here rather
+// than reconstructing them, which is what the three shell downloaders used to
+// do and what needed drift tests to police.
 export const CODEX_RELEASE_BASE =
   `https://github.com/openai/codex/releases/download/rust-v${PINNED_TOOLCHAIN_VERSIONS.codex}` as const;
 export const PI_RELEASE_BASE =
@@ -154,27 +155,27 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${CODEX_RELEASE_BASE}/codex-aarch64-apple-darwin.tar.gz`,
       entryPath: "codex-aarch64-apple-darwin",
-      size: 87_984_231,
-      sha256: "75984b81f92a71b0c0f4b3b5cad80e5c57177e4d8c8b4b1e13db703b20dc4358",
+      size: 88_207_725,
+      sha256: "ed60f475c6dda6044c2c00fd7f33273cc3f3f98900ccd1204bfdf2fe935f3405",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     companions: [
       codexCodeModeHost(
         "aarch64-apple-darwin",
         {
-          size: 17_556_525,
-          sha256: "56cdbf6187bf914108d3b7feeea5a34ffba15e5c162bedce69e062ee92ddfb5e",
+          size: 20_201_053,
+          sha256: "aae1c0c9459700a2e897adadd647351140ae7933ad73bd8d3af6505c69a4f3fd",
         },
         {
-          size: 49_991_616,
-          sha256: "a059beb029cdbc989e72e23f8680be9f703cb6cf83d9598d91041f82178d018d",
+          size: 57_149_920,
+          sha256: "c9340c2cc50c86193cc670aa9130980d6982059a0965aeae41bf4e85952fc43e",
         },
       ),
     ],
     executable: {
       fileName: "codex",
-      size: 219_997_536,
-      sha256: "19c4f144c5226a9f17c58e6f0fa854843b0f77a6eb420f40e2745a12f10f5d37",
+      size: 220_552_944,
+      sha256: "f0d8762236594359b60cfbe17f4c7e945a3ce8d1c91e74778838c968d250fb6c",
     },
   },
   {
@@ -186,27 +187,27 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${CODEX_RELEASE_BASE}/codex-x86_64-apple-darwin.tar.gz`,
       entryPath: "codex-x86_64-apple-darwin",
-      size: 95_851_149,
-      sha256: "36e782f71d8164cc37c2b89c64948f2180e9a2f8456b27e660da75bc6b5574e2",
+      size: 96_349_749,
+      sha256: "85fe7a837eb739dd5e1cc59a9c95b7b682048e5aacdc261505bae768fb1288ef",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     companions: [
       codexCodeModeHost(
         "x86_64-apple-darwin",
         {
-          size: 18_876_257,
-          sha256: "7131a0508de4dea60f79c816188b0b06b17f6ed417d9b3a1865b0a4927fbc48a",
+          size: 21_718_654,
+          sha256: "3a24bc342ea0e609e707f6211987d499c33c09a4f75891a94dd46bef8f7c5bbe",
         },
         {
-          size: 52_496_608,
-          sha256: "2a52ebc47c255e6b7284f674453030981a38ae7ba09467b998b2c2ebbb595259",
+          size: 59_873_808,
+          sha256: "ec4dc6a7822d87de76fa1050b5176b93953617d4cc3d76debff35089f79eb8dc",
         },
       ),
     ],
     executable: {
       fileName: "codex",
-      size: 238_056_656,
-      sha256: "8080a42da4cef9c4216dace512f29acfe2e526aeeec2a0ce450e5a2b18b84d8a",
+      size: 237_981_344,
+      sha256: "19ad079130409e2d32cbb4b02b3d622ab44e7de93a2898ce58908a0f2f5d7a06",
     },
   },
   {
@@ -218,27 +219,27 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${CODEX_RELEASE_BASE}/codex-aarch64-unknown-linux-musl.tar.gz`,
       entryPath: "codex-aarch64-unknown-linux-musl",
-      size: 91_607_658,
-      sha256: "eb677c80f666b1ab8b4b1d083b66e8d614b1281d960bb6f9fd8ca98f58b38b90",
+      size: 91_899_352,
+      sha256: "14df6802e39a956de994e844b90d51d8254bcc8057b6e66f0f3e3b8f7e2da5b0",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     companions: [
       codexCodeModeHost(
         "aarch64-unknown-linux-musl",
         {
-          size: 17_260_137,
-          sha256: "dfd4ff98ea4db30ed078af9c31b6f86e3da4836d0573aa87e225e5a5b54d3c7c",
+          size: 19_857_866,
+          sha256: "962e029df772b53cb977a0204ec4284d0c693207a25a491106e8294aae8dfa04",
         },
         {
-          size: 46_976_328,
-          sha256: "c8fd26e2ddb0243d79d7c3dfa8bcd47b6a30b14695083790fc51884e82e8ebc2",
+          size: 53_792_072,
+          sha256: "ec4b629328ec0d5f70bd78ec7ce095c3677833d72afa8b7199910a421840ff05",
         },
       ),
     ],
     executable: {
       fileName: "codex",
-      size: 222_231_296,
-      sha256: "e23d0be344d2496986c985cd3db61e6f649b1ddd900e6afc1b5aaabbffcbb4e2",
+      size: 222_824_000,
+      sha256: "2447e3fef519401ff6d6e90759ab1bf66082da48966fc6e4fe9a77108f9c20d8",
     },
   },
   {
@@ -250,27 +251,27 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${CODEX_RELEASE_BASE}/codex-x86_64-unknown-linux-musl.tar.gz`,
       entryPath: "codex-x86_64-unknown-linux-musl",
-      size: 98_970_270,
-      sha256: "0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36",
+      size: 99_479_490,
+      sha256: "e24fb784c7d71140d67afb620f56e9137496cf7f6c9e19217fa3666dcf306278",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     companions: [
       codexCodeModeHost(
         "x86_64-unknown-linux-musl",
         {
-          size: 18_267_855,
-          sha256: "0146adfaac8363ec9fcdb5895f7624db5b2e8617a283887938b7fb97a1dd4356",
+          size: 21_210_506,
+          sha256: "62fa2c3e5d4bc58720bd72b2ee2ab8636e1aaa9d8236ddae41a1cce628b59aeb",
         },
         {
-          size: 49_682_360,
-          sha256: "00ecf5d040865b97884c488883abd342581c2a432debe7a54e4646bceee3d2d6",
+          size: 57_886_648,
+          sha256: "48f3a0d48033039cc7caccd209edb0ee350b81f82ca851a7b129e146e4bec6fb",
         },
       ),
     ],
     executable: {
       fileName: "codex",
-      size: 258_278_208,
-      sha256: "cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
+      size: 258_227_840,
+      sha256: "73dc5888888f411c1f0fa7b81d866e721dcc86b527ce8e3b2cf4708661e823ba",
     },
   },
   {
@@ -282,14 +283,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "zip",
       url: `${OPENCODE_RELEASE_BASE}/opencode-darwin-arm64.zip`,
       entryPath: "opencode",
-      size: 46_053_503,
-      sha256: "1e670c94341a374824dc6700b6f38b2cb6634baf3ca20e645084c33ce6639320",
+      size: 46_201_817,
+      sha256: "373cf36673836f2ce8847295a0bb2cd2447d03c769b44d84185916bd471b4274",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable: {
       fileName: "opencode",
-      size: 143_149_538,
-      sha256: "a41776bf64c75786d6baf531b840ffb873c090d7c44793ae2dd4b1896de56a1f",
+      size: 144_024_674,
+      sha256: "f7c45939a895e5a9febf141ab16307418bc41da31879aa0b2e65223190ca1c1a",
       repairInvalidMacSignature: true,
     },
   },
@@ -302,14 +303,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "zip",
       url: `${OPENCODE_RELEASE_BASE}/opencode-darwin-x64.zip`,
       entryPath: "opencode",
-      size: 48_254_566,
-      sha256: "4cfa1d11e665ffb83b68dbefc4cadee0559d008e7ab40c92d14fc371c8b13595",
+      size: 48_398_167,
+      sha256: "6b617da75b5773836fcdc7247d7ea2bd39aec942a58b89a041bafb3d4d2a8c23",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable: {
       fileName: "opencode",
-      size: 148_652_112,
-      sha256: "aa43d42388a47e280b2f346db155fad622418c48591c7bd1484293be203f0ba4",
+      size: 149_504_080,
+      sha256: "00f71a32da3c05c9170380f673100a9dc4aea7f0e5cce90daad847d7cd8d3641",
       repairInvalidMacSignature: true,
     },
   },
@@ -322,14 +323,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${OPENCODE_RELEASE_BASE}/opencode-linux-arm64.tar.gz`,
       entryPath: "opencode",
-      size: 60_189_672,
-      sha256: "4fdce5f9bc877d977304d71c0c90ad6e83efa381fe0edf0a61e6142a625e1c41",
+      size: 60_331_289,
+      sha256: "86d3afaf4e8784f9adab189be2a315c12b27ec40a04b70defbe70595c3cc7c65",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable: {
       fileName: "opencode",
-      size: 183_216_272,
-      sha256: "8905e02aaf94e6a3824bd7e14d388a6c97d7f0a2141434cb9ce7656b137abb4a",
+      size: 184_068_240,
+      sha256: "ef8514274321679d97f1c7f2ad251890d7f073f2fca743859f379bff55085ac8",
     },
   },
   {
@@ -341,14 +342,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: `${OPENCODE_RELEASE_BASE}/opencode-linux-x64.tar.gz`,
       entryPath: "opencode",
-      size: 60_379_356,
-      sha256: "286e07355df06738c1905955be15b7fbc10a7b12d931de9394a6f7597246750b",
+      size: 60_522_055,
+      sha256: "ab7015cd8113e011a461f30a0c2b77d8299a144ff688cb62e93e8802835d7288",
       allowedHosts: GITHUB_RELEASE_HOSTS,
     },
     executable: {
       fileName: "opencode",
-      size: 183_724_160,
-      sha256: "8e4ac80fe535537e6ee03cee1a8e23af3d0da56db1ae0ce3fffad3ea188a1768",
+      size: 184_584_320,
+      sha256: "de0724a36eaf3166e7f1ff38d0f4478b95ccc47725e9597b3fe66d3d3e18baa2",
     },
   },
   {
@@ -360,14 +361,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: claudeArchiveUrl("darwin-arm64"),
       entryPath: "package/claude",
-      size: 82_675_003,
-      sha256: "7dce9d03bf3f61ee983fb7e35c38e26314699a44b9054cb8fea8da9c7e1ffafc",
+      size: 112_854_859,
+      sha256: "d06dafb33a7eb1213a21ab44b14e84391b2c527a49ba6ae1e821b81b5c3f6844",
       allowedHosts: NPM_REGISTRY_HOSTS,
     },
     executable: {
       fileName: "claude",
-      size: 289_298_144,
-      sha256: "43484b1352cef03a08346f36ef0437755b1aad646ab9313ce187857b794b7247",
+      size: 376_109_392,
+      sha256: "9f7c2260251765a18d0b35198669dacc1912f6e8129a3b01f6b58d93365ff1f1",
     },
   },
   {
@@ -379,14 +380,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: claudeArchiveUrl("darwin-x64"),
       entryPath: "package/claude",
-      size: 87_525_235,
-      sha256: "6c1dcc4302bd2ef3b993011a46fa62115a2a34b00538a86885fcb45eaf717d73",
+      size: 115_662_410,
+      sha256: "12a8d767d78179cdbf21833e2629a27d256aaf426295b07a54b5993027e76533",
       allowedHosts: NPM_REGISTRY_HOSTS,
     },
     executable: {
       fileName: "claude",
-      size: 298_977_312,
-      sha256: "7852f1ae0efb64d46d77a57d8852daddc4a6ffb58aeda6267bd3f3428adc09b3",
+      size: 385_137_136,
+      sha256: "de044bb543e826352f31587a74356e1b2dae94dc1b9c960a362d9f07df96c2a7",
     },
   },
   {
@@ -398,14 +399,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: claudeArchiveUrl("linux-arm64"),
       entryPath: "package/claude",
-      size: 93_060_201,
-      sha256: "31295a318aef235b1b818a8b46982757467fb4d13030520ac66d16a58c0d7e27",
+      size: 119_751_172,
+      sha256: "668662e7b5d91a93cff6c75736e60f3d5d3bed4cbe077ae4feefc63ad1253f4d",
       allowedHosts: NPM_REGISTRY_HOSTS,
     },
     executable: {
       fileName: "claude",
-      size: 305_118_136,
-      sha256: "2664006219497bf7021ac43156519cd42eda64ceb2a66f434ecab83e7831f942",
+      size: 389_077_224,
+      sha256: "d0da299303d710a7cc5cdece9629958f5128ce1a727e15463c651ed5cf385c7f",
     },
   },
   {
@@ -417,14 +418,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "tar.gz",
       url: claudeArchiveUrl("linux-x64"),
       entryPath: "package/claude",
-      size: 93_656_712,
-      sha256: "0c304edad9753e2efeb88ddb76c5a13c06160d67c980b9d849ad65bfadde3fd8",
+      size: 121_422_431,
+      sha256: "310c8bb769c6699458807d25c389dd74bb10c335f17ae1fb7ced73d41fa268a7",
       allowedHosts: NPM_REGISTRY_HOSTS,
     },
     executable: {
       fileName: "claude",
-      size: 308_521_992,
-      sha256: "d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99",
+      size: 391_948_592,
+      sha256: "16ad2b94deaf7b29abed966d981c9991a47af0420f5be8ed4a3f83bea9f678bc",
     },
   },
   {
@@ -542,14 +543,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "raw",
       url: `https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${PINNED_TOOLCHAIN_VERSIONS.grok}-macos-aarch64`,
       entryPath: "",
-      size: 133_563_584,
-      sha256: "09deaf06804955ff2d6ccef2042af4031c659c47fd16eb3c72664a8f533832da",
+      size: 132_177_488,
+      sha256: "c66b8b44b670d55bd20022e0ade5c8b449f76699d81f9861f3ad21992f604446",
       allowedHosts: GROK_DOWNLOAD_HOSTS,
     },
     executable: {
       fileName: "grok",
-      size: 133_563_584,
-      sha256: "09deaf06804955ff2d6ccef2042af4031c659c47fd16eb3c72664a8f533832da",
+      size: 132_177_488,
+      sha256: "c66b8b44b670d55bd20022e0ade5c8b449f76699d81f9861f3ad21992f604446",
     },
   },
   {
@@ -561,14 +562,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "raw",
       url: `https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${PINNED_TOOLCHAIN_VERSIONS.grok}-macos-x86_64`,
       entryPath: "",
-      size: 149_279_776,
-      sha256: "b5eef73b94fdc72b8c67218f19abe2b2728db38f1f0e66903de8fb931948bd26",
+      size: 148_190_160,
+      sha256: "893531af896528472dfbbfe3f44202952cd9a887cfb28a19e362dddb37a287fe",
       allowedHosts: GROK_DOWNLOAD_HOSTS,
     },
     executable: {
       fileName: "grok",
-      size: 149_279_776,
-      sha256: "b5eef73b94fdc72b8c67218f19abe2b2728db38f1f0e66903de8fb931948bd26",
+      size: 148_190_160,
+      sha256: "893531af896528472dfbbfe3f44202952cd9a887cfb28a19e362dddb37a287fe",
     },
   },
   {
@@ -580,14 +581,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "raw",
       url: `https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${PINNED_TOOLCHAIN_VERSIONS.grok}-linux-aarch64`,
       entryPath: "",
-      size: 135_542_760,
-      sha256: "ed44950eab90573b6f475191f5791713a56943939b3b9a62e3f4e95edd14acd9",
+      size: 134_150_920,
+      sha256: "050a0e35a8aa612cdf1ed9ea15d2733e05413db2b20f2cbb39a26b66e51f2b4d",
       allowedHosts: GROK_DOWNLOAD_HOSTS,
     },
     executable: {
       fileName: "grok",
-      size: 135_542_760,
-      sha256: "ed44950eab90573b6f475191f5791713a56943939b3b9a62e3f4e95edd14acd9",
+      size: 134_150_920,
+      sha256: "050a0e35a8aa612cdf1ed9ea15d2733e05413db2b20f2cbb39a26b66e51f2b4d",
     },
   },
   {
@@ -599,14 +600,14 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       format: "raw",
       url: `https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${PINNED_TOOLCHAIN_VERSIONS.grok}-linux-x86_64`,
       entryPath: "",
-      size: 165_768_512,
-      sha256: "2a7d46dea3fbed067e4072258b835d401e017d6848dc996279f0fb3d668a0961",
+      size: 164_241_504,
+      sha256: "d698a2dfa7ea37043f1c70cdca7da12ca51a5e124ffb4fc9a7b12bd26d0e2752",
       allowedHosts: GROK_DOWNLOAD_HOSTS,
     },
     executable: {
       fileName: "grok",
-      size: 165_768_512,
-      sha256: "2a7d46dea3fbed067e4072258b835d401e017d6848dc996279f0fb3d668a0961",
+      size: 164_241_504,
+      sha256: "d698a2dfa7ea37043f1c70cdca7da12ca51a5e124ffb4fc9a7b12bd26d0e2752",
     },
   },
   {

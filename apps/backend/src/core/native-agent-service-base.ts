@@ -118,6 +118,15 @@ export abstract class NativeAgentServiceBase {
   protected readonly providerConnections = new Map<string, string>();
   /** Bounded, reconstructible view cache; providers remain authoritative. */
   protected readonly projectionCache = new Map<string, NativeAgentProjectionCacheEntry>();
+  /**
+   * When each projection key's current run of `missing` provider reads began.
+   *
+   * Dates the `connecting` overlay so the grace can expire into a reportable
+   * failure. Cleared by any read that finds the session, and by every path that
+   * drops the key's cache entry, so it stays bounded by `projectionCache`
+   * rather than growing with key churn.
+   */
+  protected readonly projectionMissingSince = new Map<string, number>();
   /** Heavy, reconstructible fields omitted from ordinary renderer snapshots. */
   protected readonly toolDetailCache = new Map<
     string,

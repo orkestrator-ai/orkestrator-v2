@@ -3,10 +3,7 @@ import {
   resolvedActionDefault,
   resolvedDefaultAgent,
 } from "@/lib/agent-settings";
-import {
-  resolveActionDefaults,
-  resolveAgentPlatformSettings,
-} from "@orkestrator/protocol/agent-settings";
+import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
@@ -21,7 +18,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalContext, MAX_TABS, type AgentLaunchModeOverride } from "@/contexts";
 import type { DefaultAgent } from "@/types";
-import { resolveActionDefault, type ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
+import type { ActionDefaultKey } from "@orkestrator/protocol/action-defaults";
 import { usePullRequest, useProjects, useEnvironments } from "@/hooks";
 import {
   createPRPrompt,
@@ -313,14 +310,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const defaultAgent: DefaultAgent = enabledAgents.has(configuredDefaultAgent)
     ? configuredDefaultAgent
     : (enabledAgents.values().next().value ?? "claude");
-  /**
-   * The configured default for a toolbar action launched with a plain click.
-   *
-   * Right-clicking opens a launch dialog whose selection is authoritative, so
-   * an explicit `launchOptions` always wins over this. An agent chosen for this
-   * specific environment is narrower than an application-level default and wins
-   * over it too.
-   */
+  /** The one configured default shared by plain clicks and launch dialogs. */
   const settingsTiers = useMemo(
     () => agentSettingsTiers(config, selectedEnvironment?.projectId, selectedEnvironment),
     [config, selectedEnvironment],
@@ -339,23 +329,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     }
     return { preferredModelsByPlatform: models, preferredEffortsByPlatform: efforts };
   }, [enabledAgentList, settingsTiers]);
-  /**
-   * Settings action defaults as launch-dialog preferences.
-   *
-   * A plain click still uses `actionDefaultFor`, so an environment created with
-   * Codex is not retargeted. The configure dialog is the place the user asked
-   * to pick a run, and it must open on what Settings named for this action —
-   * including its model — even when the environment's own agent is different.
-   */
+  /** Settings action defaults as launch-dialog preferences. */
   const launchDialogDefaultsFor = useCallback(
     (key: ActionDefaultKey) => {
-      // Deliberately not `actionDefaultFor`: that keeps a narrower tier's own
-      // `defaultAgent` ahead of the action default, which is right for a click
-      // and wrong for the dialog the user opened to choose a run.
-      const actionDefault = resolveActionDefault(resolveActionDefaults(settingsTiers), key, {
-        fallbackAgent: defaultAgent,
-        enabledAgents: enabledAgentList,
-      });
+      const actionDefault = actionDefaultFor(key);
       return {
         defaultAgent: actionDefault.agent,
         // Each platform's own resolved model, so the dialog opens on what that
@@ -373,13 +350,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         },
       };
     },
-    [
-      defaultAgent,
-      enabledAgentList,
-      preferredEffortsByPlatform,
-      preferredModelsByPlatform,
-      settingsTiers,
-    ],
+    [actionDefaultFor, preferredEffortsByPlatform, preferredModelsByPlatform],
   );
   const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } = useLoopedReviewStore(
     useShallow((state) => ({

@@ -20,7 +20,7 @@
   "dependencies": {
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "@opencode-ai/sdk": "1.18.16",
+    "@opencode-ai/sdk": "1.18.23",
     "@orkestrator/protocol": "workspace:*",
     "sharp": "^0.35.1",
     "ws": "8.20.0",

@@ -34,6 +34,7 @@ import {
 import type { Environment } from "./models.js";
 
 import {
+  NATIVE_MISSING_SESSION_GRACE_MS,
   NATIVE_PROJECTION_CACHE_LIMIT,
   NATIVE_PROJECTION_MAX_BYTES,
   NativeAgentService,
@@ -495,6 +496,188 @@ describe("NativeAgentService", () => {
           cursor: "in-process:cursor:2",
         });
         expect(stub.interactiveSnapshot).toHaveBeenCalledTimes(3);
+      },
+    );
+  });
+
+  test("keeps a missing provider session connecting instead of failed", async () => {
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () => ({ status: "missing", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-pi-recovering-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi",
+        };
+        await service.ensureSession(identity);
+
+        const projection = await service.getProjection(identity);
+        expect(projection).toMatchObject({
+          platform: "pi",
+          connection: "connecting",
+          turn: { phase: "recovering" },
+        });
+        expect(projection?.turn.error).toBeUndefined();
+      },
+    );
+  });
+
+  test("reports a session that stays missing once the connecting grace expires", async () => {
+    // `connecting` renders a spinner with no retry control and nothing on the
+    // read path re-creates a provider session, so an unbounded grace would
+    // leave a tab on an overlay it has no way to leave.
+    let clock = 1_000;
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () => ({ status: "missing", messages: [] }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-pi-grace-expiry-",
+        provider: async () => stub.provider,
+        now: () => clock,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi",
+        };
+        await service.ensureSession(identity);
+
+        // Reads alone never spend the grace: the read rate says nothing about
+        // how long the bridge has actually been unreachable.
+        for (let read = 0; read < 5; read += 1) {
+          const projection = await service.getProjection(identity);
+          expect(projection?.connection).toBe("connecting");
+          expect(projection?.turn.error).toBeUndefined();
+        }
+
+        clock += NATIVE_MISSING_SESSION_GRACE_MS;
+        const settled = await service.getProjection(identity);
+        expect(settled?.connection).toBe("error");
+        expect(settled?.turn.phase).toBe("recovering");
+        expect(settled?.turn.error).toContain("no longer holds this session");
+      },
+    );
+  });
+
+  test("keeps the transcript a recovering session already had", async () => {
+    // The overlay hides it, but a reconnect that succeeds must not have to
+    // rebuild a transcript this backend still holds — and the cached
+    // projection is what the next committed revision is built from.
+    let missing = false;
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () =>
+        missing
+          ? { status: "missing", messages: [] }
+          : {
+              status: "idle",
+              messages: [
+                {
+                  id: "assistant-1",
+                  role: "assistant",
+                  content: "already answered",
+                  parts: [{ type: "text", content: "already answered" }],
+                  createdAt: "2026-08-25T00:00:00.000Z",
+                },
+              ],
+            },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-pi-recovering-transcript-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi",
+        };
+        await service.ensureSession(identity);
+        const connected = await service.getProjection(identity);
+        expect(connected?.connection).toBe("connected");
+        expect(connected?.messages).toHaveLength(1);
+
+        missing = true;
+        const recovering = await service.getProjection(identity);
+
+        expect(recovering?.connection).toBe("connecting");
+        expect(recovering?.messages).toEqual(connected!.messages);
+        expect(recovering?.sessionId).toBe(connected!.sessionId);
+        // Revisions only ever advance. A renderer that adopted the connected
+        // revision must not be handed a lower one it would ignore.
+        expect(recovering!.revision).toBeGreaterThan(connected!.revision);
+      },
+    );
+  });
+
+  test("returns to connected when the provider finds the session again", async () => {
+    let missing = true;
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () =>
+        missing ? { status: "missing", messages: [] } : { status: "idle", messages: [] },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-pi-recovered-",
+        provider: async () => stub.provider,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi",
+        };
+        await service.ensureSession(identity);
+        expect((await service.getProjection(identity))?.connection).toBe("connecting");
+
+        missing = false;
+        const recovered = await service.getProjection(identity);
+        expect(recovered?.connection).toBe("connected");
+        expect(recovered?.turn.phase).toBe("idle");
+        expect(recovered?.notices ?? []).toEqual([]);
+      },
+    );
+  });
+
+  test("gives a later transient miss a full grace window of its own", async () => {
+    // A spent deadline must not outlive the read that cleared it: an idle
+    // detach hours after an earlier reconnect deserves the same benefit of the
+    // doubt, not an instant failure inherited from the previous outage.
+    let clock = 1_000;
+    let missing = true;
+    const stub = createProviderStub("pi", {
+      interactiveSnapshot: async () =>
+        missing ? { status: "missing", messages: [] } : { status: "idle", messages: [] },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-pi-grace-reset-",
+        provider: async () => stub.provider,
+        now: () => clock,
+      },
+      async ({ service }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi",
+        };
+        await service.ensureSession(identity);
+        expect((await service.getProjection(identity))?.connection).toBe("connecting");
+
+        missing = false;
+        clock += NATIVE_MISSING_SESSION_GRACE_MS * 4;
+        expect((await service.getProjection(identity))?.connection).toBe("connected");
+
+        missing = true;
+        expect((await service.getProjection(identity))?.connection).toBe("connecting");
       },
     );
   });

@@ -153,6 +153,180 @@ function findCrossArtifactIntegrityCollisions(artifacts: ArtifactIntegrityValues
   return collisions;
 }
 
+/**
+ * Every agent Orkestrator ships, and how each one's version reaches a running
+ * environment.
+ *
+ * This table exists because the per-agent checks below grew one at a time, and
+ * each new agent got whatever subset its author remembered. That asymmetry was
+ * not cosmetic: Pi's container digests were bound to the manifest while
+ * Cursor's and Grok's were not, and `@cursor/sdk` had no pin check at all — so
+ * a hand-edited `GROK_SHA` or a `^`-ranged Cursor SDK would have shipped
+ * unnoticed. The tests that follow iterate this table, and one of them asserts
+ * the table covers every name in `PINNED_TOOLCHAIN_VERSIONS`, so a seventh
+ * agent cannot be added with less coverage than the six here.
+ */
+interface AgentPins {
+  /** `ARG <name>=` in docker/Dockerfile. */
+  dockerArg: string;
+  /**
+   * How the image gets the binary, which decides whether the Dockerfile
+   * carries its own digests:
+   *  - `npm`/`installer` resolve the version through a package manager, which
+   *    does its own integrity checking, so there is nothing to pin here.
+   *  - `pinned-archive` curls an exact URL and verifies it with `sha256sum`.
+   *    Those digest literals are a *second* copy of the manifest's, and are
+   *    what `container digests` below proves cannot drift.
+   */
+  containerInstall: "npm" | "installer" | "pinned-archive";
+  /**
+   * SDK packages pinned in a package.json.
+   *
+   * `tracksCli` is the load-bearing field. Pi and OpenCode publish the SDK and
+   * the binary as the same program two ways, so a split gives the user two
+   * different agents behind one platform name. Claude's Agent SDK and Cursor's
+   * SDK are on their own release trains and deliberately do *not* track the
+   * CLI — asserting they did would be wrong, not stricter.
+   */
+  sdkPins?: { file: string; dep: string; tracksCli: boolean }[];
+}
+
+const AGENT_PINS: Record<string, AgentPins> = {
+  claude: {
+    dockerArg: "CLAUDE_CLI_VERSION",
+    containerInstall: "npm",
+    sdkPins: [
+      {
+        file: "bridges/claude-bridge/package.json",
+        dep: "@anthropic-ai/claude-agent-sdk",
+        tracksCli: false,
+      },
+      { file: "bridges/claude-bridge/package.json", dep: "@anthropic-ai/sdk", tracksCli: false },
+      // The published `orkestrator` CLI pins the Agent SDK a second time. Its
+      // dependencies are only what the bundler leaves external, so this is a
+      // real runtime pin for npm users rather than a stale duplicate.
+      {
+        file: "packages/cli/package.json",
+        dep: "@anthropic-ai/claude-agent-sdk",
+        tracksCli: false,
+      },
+    ],
+  },
+  codex: {
+    dockerArg: "CODEX_CLI_VERSION",
+    containerInstall: "npm",
+    // No SDK by design; `Codex: the bridge does not depend on the Codex SDK`
+    // is what keeps it that way.
+  },
+  opencode: {
+    dockerArg: "OPENCODE_CLI_VERSION",
+    containerInstall: "installer",
+    sdkPins: [
+      { file: "apps/web/package.json", dep: "@opencode-ai/sdk", tracksCli: true },
+      // The backend drives build pipelines through the same SDK. Checking only
+      // the web workspace is how native chat can look healthy while pipelines
+      // still speak the previous contract.
+      { file: "apps/backend/package.json", dep: "@opencode-ai/sdk", tracksCli: true },
+    ],
+  },
+  cursor: {
+    dockerArg: "CURSOR_AGENT_VERSION",
+    containerInstall: "pinned-archive",
+    sdkPins: [
+      // The experimental SDK bridge. Independent of the cursor-agent CLI: a
+      // session is served by one engine or the other, and the two ship on
+      // separate release trains.
+      { file: "bridges/cursor-bridge/package.json", dep: "@cursor/sdk", tracksCli: false },
+    ],
+  },
+  grok: {
+    dockerArg: "GROK_BUILD_VERSION",
+    containerInstall: "pinned-archive",
+  },
+  pi: {
+    dockerArg: "PI_CLI_VERSION",
+    containerInstall: "pinned-archive",
+    sdkPins: [
+      {
+        file: "bridges/pi-bridge/package.json",
+        dep: "@earendil-works/pi-coding-agent",
+        tracksCli: true,
+      },
+      { file: "bridges/pi-bridge/package.json", dep: "@earendil-works/pi-ai", tracksCli: true },
+      {
+        file: "bridges/pi-bridge/package.json",
+        dep: "@earendil-works/pi-agent-core",
+        tracksCli: true,
+      },
+    ],
+  },
+};
+
+describe("every shipped agent, uniformly", () => {
+  test("the coverage table names every agent the manifest pins", () => {
+    // The guarantee the rest of this block rests on. Without it, a seventh
+    // agent silently gets zero of the checks below.
+    expect(Object.keys(AGENT_PINS).sort()).toEqual(Object.keys(PINNED_TOOLCHAIN_VERSIONS).sort());
+  });
+
+  for (const [agent, pins] of Object.entries(AGENT_PINS)) {
+    describe(agent, () => {
+      const pinned = PINNED_TOOLCHAIN_VERSIONS[agent as keyof typeof PINNED_TOOLCHAIN_VERSIONS];
+
+      test("the image installs the version the manifest pins", () => {
+        expect(getDockerfileArg(pins.dockerArg)).toBe(pinned);
+      });
+
+      test("every managed artifact is present and carries the pinned version", () => {
+        const artifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === agent);
+        // Four targets: darwin/linux x arm64/x64. A missing one is an agent
+        // that cannot be installed on that host at all.
+        expect(artifacts.length).toBe(4);
+        for (const artifact of artifacts) expect(artifact.version).toBe(pinned);
+      });
+
+      if (pins.containerInstall === "pinned-archive") {
+        test("container digests cannot drift from the manifest", () => {
+          // The image does not read the manifest; it curls an exact URL and
+          // checks it with `sha256sum`, so these digests are a second copy.
+          // Both have to be the same literal or a container and a local
+          // worktree are running different builds of the same agent.
+          const dockerfile = read("docker/Dockerfile");
+          for (const architecture of ["arm64", "x64"] as const) {
+            const artifact = PINNED_TOOLCHAIN_ARTIFACTS.find(
+              (candidate) =>
+                candidate.name === agent &&
+                candidate.platform === "linux" &&
+                candidate.architecture === architecture,
+            );
+            expect(artifact, `no linux/${architecture} artifact for ${agent}`).toBeDefined();
+            expect(
+              dockerfile.includes(artifact!.archive.sha256),
+              `docker/Dockerfile does not pin the manifest's linux/${architecture} ` +
+                `${agent} digest ${artifact!.archive.sha256}`,
+            ).toBe(true);
+          }
+        });
+      }
+
+      for (const { file, dep, tracksCli } of pins.sdkPins ?? []) {
+        test(`${dep} in ${file} is exact-pinned`, () => {
+          // Exact, never a range: a `^` here means two machines installing the
+          // same commit can drive different agent code.
+          const version = expectExactVersion(file, dep);
+          if (tracksCli) {
+            expect(
+              version,
+              `${dep} and the ${agent} CLI are the same program published twice; ` +
+                `they must not split`,
+            ).toBe(pinned);
+          }
+        });
+      }
+    });
+  }
+});
+
 describe("version drift between SDK pins and managed/container CLIs", () => {
   test("Bun: host-bundled runtime matches the container base image", () => {
     // The bridges run on Bun both on the host (bundled binary) and inside the
@@ -184,30 +358,6 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(dockerfile).not.toContain(
       "rm -rf node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl",
     );
-  });
-
-  test("Claude: managed binary, download script, and Docker CLI match", () => {
-    const downloadScriptPin = getShellVar("scripts/download-claude.sh", "CLAUDE_VERSION");
-    const dockerfilePin = getDockerfileArg("CLAUDE_CLI_VERSION");
-
-    expect(dockerfilePin).toBe(downloadScriptPin);
-    expect(PINNED_TOOLCHAIN_VERSIONS.claude).toBe(downloadScriptPin);
-  });
-
-  test("Claude: agent SDK dependency is exact-pinned", () => {
-    expectExactVersion("bridges/claude-bridge/package.json", "@anthropic-ai/claude-agent-sdk");
-  });
-
-  test("Codex: managed binary, download script, and Docker CLI all match", () => {
-    // The bridge no longer depends on @openai/codex-sdk — it talks to
-    // `codex app-server` over JSON-RPC — so config/codex-version.json is the only
-    // pin, and the CLI version still matters for the binary and the image.
-    const configPin = (JSON.parse(read("config/codex-version.json")) as { version: string })
-      .version;
-
-    expect(getShellVar("scripts/download-codex.sh", "CODEX_VERSION")).toBe(configPin);
-    expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(configPin);
-    expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(configPin);
   });
 
   test("Codex: the bridge does not depend on the Codex SDK", () => {
@@ -267,7 +417,6 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(config.appServerProtocol.outputDir).toBe(
       "bridges/codex-bridge/src/app-server/generated",
     );
-    expect(getShellVar("scripts/download-codex.sh", "CODEX_VERSION")).toBe(config.version);
     expect(getDockerfileArg("CODEX_CLI_VERSION")).toBe(config.version);
     expect(PINNED_TOOLCHAIN_VERSIONS.codex).toBe(config.version);
   });
@@ -332,129 +481,16 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     expect(manifest.serverRequestMethods.length).toBeGreaterThan(0);
   });
 
-  test("Codex: bundled binary download uses the Rust release artifact URL", () => {
-    const script = read("scripts/download-codex.sh");
-
-    expect(script).toContain(
-      'CODEX_URL="https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/${CODEX_FILENAME}.tar.gz"',
-    );
-    expect(script).toContain('CODEX_FILENAME="codex-${CODEX_TARGET}"');
-  });
-
-  test("Codex: Linux download target uses the musl triple, not gnu", () => {
-    // The Codex Rust releases only publish Linux binaries under the musl
-    // triple. Using the gnu triple makes the download 404 (curl -fsSL fails).
-    const script = read("scripts/download-codex.sh");
-
-    expect(script).toContain('CODEX_TARGET="${CODEX_ARCH}-unknown-linux-musl"');
-    expect(script).not.toContain("unknown-linux-gnu");
-  });
-
-  test("Codex: download script maps darwin and both CPU arches", () => {
-    const script = read("scripts/download-codex.sh");
-
-    // Darwin target and the arch normalisation the target string depends on.
-    expect(script).toContain('CODEX_TARGET="${CODEX_ARCH}-apple-darwin"');
-    expect(script).toContain('CODEX_ARCH="x86_64"');
-    expect(script).toContain('CODEX_ARCH="aarch64"');
-  });
-
-  test("OpenCode: SDK pin, managed binary, download script, and Docker CLI all match", () => {
-    const sdkPin = expectExactVersion("apps/web/package.json", "@opencode-ai/sdk");
-    // The backend drives build pipelines through the same SDK. Checking only the
-    // web workspace is how native chat can look healthy while pipelines still
-    // speak the previous contract — the exact split docs/upgrade-agents.md warns
-    // about, which was documented as enforced here long before it actually was.
-    const backendPin = expectExactVersion("apps/backend/package.json", "@opencode-ai/sdk");
-    const downloadScriptPin = getShellVar("scripts/download-opencode.sh", "OPENCODE_VERSION");
-    const dockerfilePin = getDockerfileArg("OPENCODE_CLI_VERSION");
-
-    expect(backendPin).toBe(sdkPin);
-    expect(downloadScriptPin).toBe(sdkPin);
-    expect(dockerfilePin).toBe(sdkPin);
-    expect(PINNED_TOOLCHAIN_VERSIONS.opencode).toBe(sdkPin);
-  });
-
-  test("Pi: SDK pin, managed binary, and Docker CLI all match", () => {
-    // Pi is the second platform where Orkestrator ships both an SDK and the CLI
-    // that SDK is published alongside: the bridge drives `@earendil-works/pi-coding-agent`
-    // in process, while a terminal tab runs the `pi` binary from the toolchain.
-    // They are the same program, so a bump that moves one and not the other
-    // would give a user two different agents behind one platform name.
-    const sdkPin = expectExactVersion(
-      "bridges/pi-bridge/package.json",
-      "@earendil-works/pi-coding-agent",
-    );
-    expect(expectExactVersion("bridges/pi-bridge/package.json", "@earendil-works/pi-ai")).toBe(
-      sdkPin,
-    );
-    expect(
-      expectExactVersion("bridges/pi-bridge/package.json", "@earendil-works/pi-agent-core"),
-    ).toBe(sdkPin);
-    expect(getDockerfileArg("PI_CLI_VERSION")).toBe(sdkPin);
-    expect(PINNED_TOOLCHAIN_VERSIONS.pi).toBe(sdkPin);
-  });
-
   test("Pi: the container downloads the same release the manifest pins", () => {
     const dockerfile = readFileSync("docker/Dockerfile", "utf8");
-    // The image and the desktop toolchain install the same two Linux archives,
-    // so their digests have to be the same literals. A mismatch means a
-    // container and a local worktree are running different builds of Pi.
-    for (const architecture of ["arm64", "x64"] as const) {
-      const artifact = PINNED_TOOLCHAIN_ARTIFACTS.find(
-        (candidate) =>
-          candidate.name === "pi" &&
-          candidate.platform === "linux" &&
-          candidate.architecture === architecture,
-      );
-      expect(artifact).toBeDefined();
-      expect(dockerfile).toContain(artifact!.archive.sha256);
-    }
+    // Digest agreement with the manifest is checked for every pinned-archive
+    // agent by `every shipped agent, uniformly`. What is Pi-specific, and
+    // checked here, is the URL shape those digests belong to.
     expect(dockerfile).toContain(
       'curl -fsSL "https://github.com/earendil-works/pi/releases/download/v${PI_CLI_VERSION}/pi-linux-${PI_ARCH}.tar.gz"',
     );
     expect(dockerfile).toContain("ENV PI_CLI_PATH=/usr/local/bin/pi");
     expect(dockerfile).toContain('&& "$PI_CLI_PATH" --version');
-  });
-
-  test("OpenCode: bundled binary download uses the same release base as the managed manifest", () => {
-    // The managed manifest and the bundling script must resolve to the same
-    // GitHub org. OpenCode moved from `sst` to `anomalyco`; without this the two
-    // could be updated independently and silently ship binaries from different
-    // repositories while every other test stayed green.
-    const script = read("scripts/download-opencode.sh");
-
-    expect(script).toContain(
-      'OPENCODE_URL="https://github.com/anomalyco/opencode/releases/download/v${OPENCODE_VERSION}/${OPENCODE_ARCHIVE}"',
-    );
-    expect(OPENCODE_RELEASE_BASE).toBe(
-      `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}`,
-    );
-    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter(
-      (entry) => entry.name === "opencode",
-    )) {
-      expect(artifact.archive.url.startsWith(`${OPENCODE_RELEASE_BASE}/`)).toBe(true);
-    }
-  });
-
-  test("OpenCode: download script names macOS zips and Linux tarballs like the release assets", () => {
-    const script = read("scripts/download-opencode.sh");
-
-    expect(script).toContain('OPENCODE_FILENAME="opencode-${PLATFORM}-${OPENCODE_ARCH}"');
-    expect(script).toContain('OPENCODE_ARCHIVE="$OPENCODE_FILENAME.tar.gz"');
-    expect(script).toContain('OPENCODE_ARCHIVE="$OPENCODE_FILENAME.zip"');
-
-    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter(
-      (entry) => entry.name === "opencode",
-    )) {
-      const expectedExtension = artifact.platform === "linux" ? ".tar.gz" : ".zip";
-      expect(
-        artifact.archive.url.endsWith(
-          `opencode-${artifact.platform}-${artifact.architecture}${expectedExtension}`,
-        ),
-      ).toBe(true);
-      expect(artifact.archive.format).toBe(artifact.platform === "linux" ? "tar.gz" : "zip");
-    }
   });
 
   test("Codex: managed manifest and download script share one release base", () => {
@@ -466,13 +502,74 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     }
   });
 
+  // The three tests below assert URL *shape*, which nothing else does.
+  // `every managed artifact URL carries its own pinned version` only checks
+  // that the version string appears somewhere in the URL, so a manifest
+  // pointing at the wrong org, the wrong asset name or the wrong archive
+  // format still passes it: the size and digest beside it would agree with
+  // each other, and the installer would verify and install the wrong release.
+  // They previously lived inside tests that also asserted properties of
+  // `scripts/download-opencode.sh` and `scripts/download-claude.sh`; when the
+  // shell downloaders were replaced by `scripts/download-agent.ts` those tests
+  // were deleted whole, taking the manifest halves with them.
+
+  test("OpenCode: every managed artifact URL derives from the pinned release base", () => {
+    // OpenCode moved from the `sst` org to `anomalyco`. Without this, the
+    // release base could be edited back and every other test would stay green
+    // while the manifest shipped binaries from a different repository.
+    expect(OPENCODE_RELEASE_BASE).toBe(
+      `https://github.com/anomalyco/opencode/releases/download/v${PINNED_TOOLCHAIN_VERSIONS.opencode}`,
+    );
+    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter(
+      (entry) => entry.name === "opencode",
+    )) {
+      expect(artifact.archive.url.startsWith(`${OPENCODE_RELEASE_BASE}/`)).toBe(true);
+    }
+  });
+
+  test("OpenCode: darwin ships zips and linux ships tarballs, named like the release assets", () => {
+    // The two platforms publish different container formats under different
+    // extensions. A record that names one and declares the other extracts with
+    // the wrong tool and fails at install time rather than in review.
+    const artifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "opencode");
+    expect(artifacts.length).toBe(4);
+    for (const artifact of artifacts) {
+      const extension = artifact.platform === "linux" ? ".tar.gz" : ".zip";
+      expect(
+        artifact.archive.url.endsWith(
+          `opencode-${artifact.platform}-${artifact.architecture}${extension}`,
+        ),
+        `${artifact.platform}/${artifact.architecture} is not named like its release asset`,
+      ).toBe(true);
+      expect(artifact.archive.format).toBe(artifact.platform === "linux" ? "tar.gz" : "zip");
+      expect(artifact.archive.entryPath).toBe("opencode");
+    }
+  });
+
+  test("Claude: every managed artifact URL is the pinned npm tarball for its platform", () => {
+    // Claude is fetched from the registry rather than a release page, so the
+    // URL encodes the platform package name twice and the version once. All
+    // three have to agree or the download is another platform's build.
+    const artifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "claude");
+    expect(artifacts.length).toBe(4);
+    for (const artifact of artifacts) {
+      const pkg = `claude-code-${artifact.platform}-${artifact.architecture}`;
+      expect(artifact.archive.url).toBe(
+        `https://registry.npmjs.org/@anthropic-ai/${pkg}/-/${pkg}-${PINNED_TOOLCHAIN_VERSIONS.claude}.tgz`,
+      );
+      // npm tarballs root everything under `package/`.
+      expect(artifact.archive.entryPath).toBe("package/claude");
+      expect(artifact.archive.format).toBe("tar.gz");
+    }
+  });
+
   test("Codex: every managed platform ships the code-mode host next to codex", () => {
     // Codex spawns `codex-code-mode-host` from its own directory for every
     // code-mode turn. 0.147.0 shipped without it, which made every model that
     // defaults to code mode fail with "failed to spawn code-mode host".
-    const script = read("scripts/download-codex.sh");
-    expect(script).toContain('CODEX_HOST_FILENAME="codex-code-mode-host-${CODEX_TARGET}"');
-    expect(script).toContain("$BINARIES_DIR/codex-code-mode-host");
+    // The downloader installs companions generically from the manifest, so what
+    // is left to assert is that the manifest still declares this one and that
+    // the image still ships it.
     expect(read("docker/Dockerfile")).toContain("-name codex-code-mode-host");
 
     const codexArtifacts = PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "codex");
@@ -525,24 +622,6 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         );
         expect(companion.archive.entryPath).toBe(`${companion.fileName}-${target}`);
       }
-    }
-  });
-
-  test("Claude: managed manifest and download script build the same npm tarball URL", () => {
-    const script = read("scripts/download-claude.sh");
-
-    expect(script).toContain('PACKAGE_NAME="claude-code-${PLATFORM}-${CLAUDE_ARCH}"');
-    expect(script).toContain(
-      'CLAUDE_URL="https://registry.npmjs.org/@anthropic-ai/${PACKAGE_NAME}/-/${PACKAGE_NAME}-${CLAUDE_VERSION}.tgz"',
-    );
-    expect(script).toContain('cp "$TEMP_DIR/package/claude" "$BINARIES_DIR/claude"');
-
-    for (const artifact of PINNED_TOOLCHAIN_ARTIFACTS.filter((entry) => entry.name === "claude")) {
-      const pkg = `claude-code-${artifact.platform}-${artifact.architecture}`;
-      expect(artifact.archive.url).toBe(
-        `https://registry.npmjs.org/@anthropic-ai/${pkg}/-/${pkg}-${PINNED_TOOLCHAIN_VERSIONS.claude}.tgz`,
-      );
-      expect(artifact.archive.entryPath).toBe("package/claude");
     }
   });
 

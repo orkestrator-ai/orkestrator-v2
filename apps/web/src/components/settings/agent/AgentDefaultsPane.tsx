@@ -306,10 +306,10 @@ export function AgentDefaultsPane({
             opens on the default set here, and confirming it never changes these settings.
           </p>
           <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            A one-click launch in an environment created with a specific agent keeps that agent, so
-            the model and reasoning level set here apply only when they name that same agent. The
-            configure dialog still opens on this action default, so you can change the run before it
-            starts.
+            An action default is what that action uses, whichever agent the environment was created
+            with — the click and the configure dialog read the same value, so you can still change
+            the run before it starts. The Default agent above applies only to actions left on
+            Inherit at every level.
           </p>
         </div>
         <div className="space-y-3">

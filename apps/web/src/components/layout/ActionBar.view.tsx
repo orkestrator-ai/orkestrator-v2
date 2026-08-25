@@ -324,8 +324,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     sourceBranch,
   } = useActionBarController({ presentation });
 
-  // Configure dialogs open on the Settings action default. A plain click still
-  // keeps the environment's own agent via `actionDefaultFor`.
+  // Configure dialogs open on the Settings action default, which is the same
+  // value `actionDefaultFor` gives a plain click on the same button.
   const reviewLaunchDefaults = launchDialogDefaultsFor("review");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");

@@ -117,49 +117,26 @@ describe("resolveActionDefault", () => {
     ).toEqual({ agent: "claude" });
   });
 
-  it("lets a narrower scope's agent outrank the application-level default", () => {
-    // These defaults are application-level. An environment the user
-    // deliberately created with Codex must not be retargeted by them, and
-    // Claude's model cannot travel to Codex.
+  it("applies the entry whatever the caller's fallback agent is", () => {
+    // The caller's fallback is the generic cascade, which is wider than the
+    // choice this action names. It answers only when the action does not.
     expect(
       resolveActionDefault(
         { review: { platform: "claude", model: "opus", reasoningEffort: "max" } },
         "review",
-        { fallbackAgent: "codex", overrideAgent: "codex", enabledAgents },
+        { fallbackAgent: "codex", enabledAgents },
       ),
-    ).toEqual({ agent: "codex" });
+    ).toEqual({ agent: "claude", model: "opus", reasoningEffort: "max" });
   });
 
-  it("still applies the model when the narrower scope names the same agent", () => {
+  it("carries the model when the entry and the fallback name the same agent", () => {
     expect(
       resolveActionDefault(
         { review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" } },
         "review",
-        { fallbackAgent: "codex", overrideAgent: "codex", enabledAgents },
+        { fallbackAgent: "codex", enabledAgents },
       ),
     ).toEqual({ agent: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" });
-  });
-
-  it("ignores a narrower scope naming a platform that is not enabled", () => {
-    // A stale environment agent cannot strand the action on a disabled
-    // platform; the configured default is still the better answer.
-    expect(
-      resolveActionDefault({ review: { platform: "codex", model: "gpt-5.4" } }, "review", {
-        fallbackAgent: "claude",
-        overrideAgent: "opencode",
-        enabledAgents,
-      }),
-    ).toEqual({ agent: "codex", model: "gpt-5.4" });
-  });
-
-  it("falls back to the narrower scope when nothing is configured", () => {
-    expect(
-      resolveActionDefault({}, "push", {
-        fallbackAgent: "claude",
-        overrideAgent: "codex",
-        enabledAgents,
-      }),
-    ).toEqual({ agent: "codex" });
   });
 
   it("reads only the requested action's entry", () => {

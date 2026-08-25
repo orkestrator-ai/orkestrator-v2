@@ -46,7 +46,10 @@ import { createBrowserPreviewMainAdapters } from "./browser-preview-main-adapter
 import { claimSingleInstanceLock, registerSecondInstanceFocus } from "./single-instance.js";
 import { createApplicationMenuTemplate } from "./application-menu.js";
 import { runtimeProfileFromEnvironment } from "./runtime-profile.js";
-import { installProductionApplicationLogging } from "./application-logging.js";
+import {
+  installProductionApplicationLogging,
+  registerApplicationLoggingShutdown,
+} from "./application-logging.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -316,6 +319,4 @@ app.on("window-all-closed", () => {
 });
 
 registerBackendShutdown(app, backendProcess);
-app.on("will-quit", () => {
-  void applicationLogging?.flush();
-});
+registerApplicationLoggingShutdown(app, applicationLogging);

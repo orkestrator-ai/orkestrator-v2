@@ -8,7 +8,16 @@ export type LogStorageStats = {
   fileCount: number;
 };
 
-export async function getLogStorageStats(logDirectory: string): Promise<LogStorageStats> {
+/**
+ * Walks the log directory without following symlinks, so a link planted inside
+ * it cannot make this report — or later delete — anything outside the tree.
+ * `maxEntries` is injectable because the production bound is far past what a
+ * test can build.
+ */
+export async function getLogStorageStats(
+  logDirectory: string,
+  maxEntries = MAX_LOG_STORAGE_ENTRIES,
+): Promise<LogStorageStats> {
   const stats: LogStorageStats = { totalBytes: 0, fileCount: 0 };
   const pending = [logDirectory];
   let visitedEntries = 0;
@@ -23,7 +32,7 @@ export async function getLogStorageStats(logDirectory: string): Promise<LogStora
       });
     for (const entry of entries) {
       visitedEntries += 1;
-      if (visitedEntries > MAX_LOG_STORAGE_ENTRIES) {
+      if (visitedEntries > maxEntries) {
         throw new Error("Log directory contains too many entries to inspect safely");
       }
       if (entry.isSymbolicLink()) continue;
@@ -46,7 +55,10 @@ export async function getLogStorageStats(logDirectory: string): Promise<LogStora
   return stats;
 }
 
-export async function cleanupLogStorage(logDirectory: string): Promise<LogStorageStats> {
+export async function cleanupLogStorage(
+  logDirectory: string,
+  maxEntries = MAX_LOG_STORAGE_ENTRIES,
+): Promise<LogStorageStats> {
   const entries = await fs
     .readdir(logDirectory, { withFileTypes: true })
     .catch((error: NodeJS.ErrnoException) => {
@@ -59,5 +71,5 @@ export async function cleanupLogStorage(logDirectory: string): Promise<LogStorag
       force: true,
     });
   }
-  return getLogStorageStats(logDirectory);
+  return getLogStorageStats(logDirectory, maxEntries);
 }

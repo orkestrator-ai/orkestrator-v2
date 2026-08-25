@@ -1656,7 +1656,9 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          Expired production logs are removed at startup and periodically while the app runs.
+          Expired production logs are removed at startup and periodically while the app runs. Logs
+          also roll over to a new file once one grows large, and the oldest are dropped if the
+          directory as a whole gets too big.
         </p>
       </div>
 

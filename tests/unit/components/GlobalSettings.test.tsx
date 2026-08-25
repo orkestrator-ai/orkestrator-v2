@@ -136,8 +136,11 @@ describe("GlobalSettings", () => {
     mockSetCursorApiKey.mockClear();
     mockSetAnthropicApiKey.mockClear();
     mockGetLogDirectory.mockClear();
+    mockGetLogDirectory.mockImplementation(async () => null);
     mockGetLogStorageStats.mockClear();
+    mockGetLogStorageStats.mockImplementation(async () => ({ totalBytes: 1536, fileCount: 2 }));
     mockCleanupLogs.mockClear();
+    mockCleanupLogs.mockImplementation(async () => ({ totalBytes: 0, fileCount: 0 }));
     mockPropagateGithubCredentialsToContainers.mockClear();
     mockPropagateGithubCredentialsToContainers.mockImplementation(async () => ({
       updated: [],
@@ -1665,7 +1668,7 @@ describe("GlobalSettings", () => {
   });
 
   test("saves debug logging retention, reports storage, and cleans up its log directory", async () => {
-    mockGetLogDirectory.mockResolvedValueOnce("/tmp/orkestrator-logs");
+    mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
     render(<GlobalSettings activeSection="debug" />);
 
     expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
@@ -1686,6 +1689,66 @@ describe("GlobalSettings", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Delete logs" }));
     await waitFor(() => expect(mockCleanupLogs).toHaveBeenCalled());
     expect(await screen.findByText("0 B across 0 files")).toBeTruthy();
+  });
+
+  test("keeps the recursive log-storage walk off sections that do not show it", async () => {
+    const { rerender } = render(<GlobalSettings activeSection="general" />);
+    await waitFor(() => expect(mockGetLogDirectory).toHaveBeenCalled());
+    expect(mockGetLogStorageStats).not.toHaveBeenCalled();
+
+    rerender(<GlobalSettings activeSection="debug" />);
+    await waitFor(() => expect(mockGetLogStorageStats).toHaveBeenCalled());
+  });
+
+  test("still reports the log directory when the storage walk fails", async () => {
+    mockGetLogDirectory.mockResolvedValue("/tmp/orkestrator-logs");
+    mockGetLogStorageStats.mockRejectedValue(new Error("too many entries"));
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("Storage usage unavailable")).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "/tmp/orkestrator-logs" })).toBeTruthy();
+  });
+
+  test("surfaces a cleanup failure without claiming the logs were removed", async () => {
+    mockCleanupLogs.mockRejectedValue(new Error("permission denied"));
+    render(<GlobalSettings activeSection="debug" />);
+
+    expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Clean up logs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Delete logs" }));
+
+    await waitFor(() => expect(mockCleanupLogs).toHaveBeenCalled());
+    expect(await screen.findByText("1.5 KB across 2 files")).toBeTruthy();
+  });
+
+  test("names the blocking reason when an invalid retention disables Save from another section", async () => {
+    const { rerender } = render(<GlobalSettings activeSection="debug" />);
+    const retention = await screen.findByLabelText("Log retention days");
+
+    // Clearing the field is the ordinary way into the invalid state.
+    fireEvent.change(retention, { target: { value: "" } });
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    // The inline message lives in the Debug pane, so without a shared reason
+    // the block would be invisible from every other section.
+    rerender(<GlobalSettings activeSection="general" />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Log retention in Debug");
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    rerender(<GlobalSettings activeSection="debug" />);
+    fireEvent.change(await screen.findByLabelText("Log retention days"), {
+      target: { value: "30" },
+    });
+    rerender(<GlobalSettings activeSection="general" />);
+    await waitFor(() => expect(screen.queryAllByRole("alert").length).toBe(0));
+    expect(
+      (screen.getByRole("button", { name: "Save Changes" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("uses and restores the default terminal scrollback when legacy config omits it", () => {

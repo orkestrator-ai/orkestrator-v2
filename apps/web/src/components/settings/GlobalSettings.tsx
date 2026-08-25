@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Check, Loader2 } from "lucide-react";
@@ -28,6 +28,8 @@ import {
 } from "@orkestrator/protocol/agent-settings";
 import { normalizeOpenCodeModelProviders } from "@orkestrator/protocol/native-agent";
 import {
+  MAX_DEBUG_LOG_RETENTION_DAYS,
+  MIN_DEBUG_LOG_RETENTION_DAYS,
   isValidDebugLogRetentionDays,
   normalizeDebugLogRetentionDays,
 } from "@orkestrator/protocol/debug-logging";
@@ -298,23 +300,30 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     };
   }, [activeSection, refreshWebClientStatus]);
 
+  // `get_log_storage_stats` stats every file under the log tree, so it is kept
+  // off the mount path of unrelated sections. The directory itself is a path
+  // join on the backend and stays cheap enough to fetch eagerly.
   const refreshLogStorage = useCallback(async () => {
     setIsLoadingLogStorage(true);
-    try {
-      const directory = await backend.getLogDirectory();
-      setLogDirectory(directory);
-      const stats = await backend.getLogStorageStats();
-      setLogStorageStats(stats);
-    } catch {
-      setLogStorageStats(null);
-    } finally {
-      setIsLoadingLogStorage(false);
-    }
+    const [directory, stats] = await Promise.allSettled([
+      backend.getLogDirectory(),
+      backend.getLogStorageStats(),
+    ]);
+    if (directory.status === "fulfilled") setLogDirectory(directory.value);
+    setLogStorageStats(stats.status === "fulfilled" ? stats.value : null);
+    setIsLoadingLogStorage(false);
   }, []);
 
   useEffect(() => {
-    void refreshLogStorage();
-  }, [refreshLogStorage]);
+    backend
+      .getLogDirectory()
+      .then(setLogDirectory)
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === "debug") void refreshLogStorage();
+  }, [activeSection, refreshLogStorage]);
 
   const handleCleanupLogs = useCallback(async () => {
     setIsCleaningLogs(true);
@@ -841,6 +850,44 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     handleBackgroundColorChange,
     handleTestDomains,
   };
+
+  // The Save button is shared by every section, so a validation failure in one
+  // section blocks saving in all of them. Each blocker carries the section that
+  // owns it so the save bar can name the reason when the user is looking
+  // somewhere else, rather than leaving the disabled button unexplained.
+  const saveBlocker = useMemo(() => {
+    const blockers: Array<{ section: string; message: string }> = [];
+    if (domainErrors.length > 0) {
+      blockers.push({
+        section: "network",
+        message: "Fix the allowed-domain errors in Network before saving.",
+      });
+    }
+    if (colorError) blockers.push({ section: "terminal", message: colorError });
+    if (!isValidDebugLogRetentionDays(debugLogRetentionDays)) {
+      blockers.push({
+        section: "debug",
+        message: `Log retention in Debug must be a whole number from ${MIN_DEBUG_LOG_RETENTION_DAYS} to ${MAX_DEBUG_LOG_RETENTION_DAYS} days.`,
+      });
+    }
+    if (gatewayTokenValidationError) {
+      blockers.push({ section: "web-client", message: gatewayTokenValidationError });
+    }
+    if (reviewInstructionValidationError) {
+      blockers.push({ section: "review", message: reviewInstructionValidationError });
+    }
+    return blockers[0] ?? null;
+  }, [
+    domainErrors,
+    colorError,
+    debugLogRetentionDays,
+    gatewayTokenValidationError,
+    reviewInstructionValidationError,
+  ]);
+  // The owning section already renders its own inline message; repeating it
+  // here would show the same error twice.
+  const saveBlockedReason =
+    saveBlocker && saveBlocker.section !== activeSection ? saveBlocker.message : null;
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1">
@@ -848,22 +895,18 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       </div>
 
       {/* Sticky save bar */}
-      <div className="flex justify-end gap-2 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
+      <div className="flex items-center justify-end gap-3 pt-6 pb-2 border-t border-zinc-800/50 mt-8">
+        {saveBlockedReason && (
+          <p role="alert" className="text-xs text-destructive text-right">
+            {saveBlockedReason}
+          </p>
+        )}
         <Button variant="outline" onClick={handleReset} disabled={!hasChanges}>
           Reset
         </Button>
         <Button
           onClick={handleSave}
-          disabled={
-            !hasChanges ||
-            isSaving ||
-            saveSuccess ||
-            domainErrors.length > 0 ||
-            !!colorError ||
-            !isValidDebugLogRetentionDays(debugLogRetentionDays) ||
-            !!gatewayTokenValidationError ||
-            !!reviewInstructionValidationError
-          }
+          disabled={!hasChanges || isSaving || saveSuccess || saveBlocker !== null}
         >
           {saveSuccess ? (
             <>

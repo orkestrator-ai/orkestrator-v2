@@ -86,6 +86,10 @@ describe("buildAgentLaunchCommand", () => {
     expect(buildAgentLaunchCommand({ tabType: "pi", initialPrompt: "Review" })).toBe('pi "Review"');
   });
 
+  test("omits the shared default reasoning id from the Pi CLI", () => {
+    expect(buildAgentLaunchCommand({ tabType: "pi", reasoningEffort: "default" })).toBe("pi");
+  });
+
   test("preserves multiline and CRLF prompt structure", () => {
     expect(
       buildAgentLaunchCommand({

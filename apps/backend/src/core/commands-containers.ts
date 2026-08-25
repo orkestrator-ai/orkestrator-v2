@@ -338,14 +338,7 @@ export async function startContainerServer(
   if (await checkHttpHealth(hostPort)) return { hostPort, wasRunning: true };
   await dockerExecDetached(containerId, command, redactValues);
   await waitForLocalServerHealth(hostPort, processName).catch(async (error) => {
-    const logFile =
-      processName === "opencode"
-        ? "/tmp/opencode-serve.log"
-        : processName === "claude"
-          ? "/tmp/claude-bridge.log"
-          : processName === "codex"
-            ? "/tmp/codex-bridge.log"
-            : `/tmp/${processName}-acp-bridge.log`;
+    const logFile = containerServerLogFile(processName);
     const log = await dockerExec(
       containerId,
       `cat ${logFile} 2>/dev/null || true`,
@@ -357,6 +350,21 @@ export async function startContainerServer(
     );
   });
   return { hostPort, wasRunning: false };
+}
+
+export function containerServerLogFile(processName: LocalServerKind): string {
+  switch (processName) {
+    case "opencode":
+      return "/tmp/opencode-serve.log";
+    case "claude":
+      return "/tmp/claude-bridge.log";
+    case "codex":
+      return "/tmp/codex-bridge.log";
+    case "pi":
+      return "/tmp/pi-bridge.log";
+    default:
+      return `/tmp/${processName}-acp-bridge.log`;
+  }
 }
 
 /**

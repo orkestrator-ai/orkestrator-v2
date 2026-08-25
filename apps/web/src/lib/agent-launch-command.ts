@@ -59,7 +59,9 @@ export function buildAgentLaunchCommand(options: {
       }
     }
     // Pi calls the reasoning axis "thinking", and `off` is one of its levels.
-    if (reasoningEffort) args.push("--thinking", shellArg(reasoningEffort));
+    if (reasoningEffort && reasoningEffort !== "default") {
+      args.push("--thinking", shellArg(reasoningEffort));
+    }
     if (initialPrompt) args.push(shellArg(initialPrompt));
     return args.join(" ");
   }

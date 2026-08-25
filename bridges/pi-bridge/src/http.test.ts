@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 
 // `config.ts` reads its environment once, at import. Everything below is
 // therefore loaded dynamically, after the environment this suite needs is in
@@ -56,6 +61,12 @@ function seedSession(): ReturnType<typeof newSessionState> {
 }
 
 describe("authentication", () => {
+  test("accepts the configured bearer token", async () => {
+    const response = await call("/global/auth-check");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+  });
+
   test("serves health without a token, because the launcher polls it first", async () => {
     const response = await call("/global/health", { authorize: false });
     expect(response.status).toBe(200);
@@ -332,6 +343,27 @@ describe("cancel", () => {
     });
     expect(cancelled).toBe(true);
   });
+
+  test("denies parked approvals before aborting the run", async () => {
+    const state = seedSession();
+    const order: string[] = [];
+    state.approvals.set("a1", {
+      id: "a1",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "make release" },
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      settle: (decision) => order.push(decision),
+    });
+    state.cancelTurn = async () => {
+      order.push("abort");
+    };
+
+    await call(`/session/${state.id}/cancel`, { method: "POST" });
+
+    expect(order).toEqual(["deny", "abort"]);
+  });
 });
 
 describe("steering", () => {
@@ -474,6 +506,102 @@ describe("at-most-once dispatch", () => {
     });
     expect(response.status).toBe(400);
   });
+
+  test("durably records prepared before handing the prompt to Pi", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-journal-"));
+    process.env.PI_BRIDGE_STATE_DIR = directory;
+    try {
+      const state = seedSession();
+      let journalAtDispatch: unknown;
+      state.session = {
+        prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+          const persisted = JSON.parse(readFileSync(join(directory, "state.json"), "utf8"));
+          journalAtDispatch = persisted.sessions
+            .find((entry: { id: string }) => entry.id === state.id)
+            ?.promptJournal.find(
+              (entry: { requestId: string }) => entry.requestId === "req-durable",
+            );
+          options.preflightResult?.(true);
+          return Promise.resolve();
+        },
+        abort: async () => undefined,
+        getContextUsage: () => undefined,
+        getSessionStats: () => ({ cost: 0 }),
+        setModel: async () => undefined,
+        setThinkingLevel: () => undefined,
+      } as unknown as AgentSession;
+
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "go", requestId: "req-durable" }),
+      });
+
+      expect(response.status).toBe(202);
+      // Prepared is serialized as ambiguous on disk: that is the conservative
+      // state a successor needs if this process dies as Pi accepts the prompt.
+      expect(journalAtDispatch).toMatchObject({ requestId: "req-durable", state: "ambiguous" });
+      const { persistBarrier } = await import("./persistence.js");
+      await persistBarrier();
+    } finally {
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("does not dispatch when the prepared journal cannot be made durable", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-journal-failure-"));
+    const notDirectory = join(directory, "not-a-directory");
+    await writeFile(notDirectory, "occupied", "utf8");
+    process.env.PI_BRIDGE_STATE_DIR = notDirectory;
+    try {
+      const state = seedSession();
+      let prompts = 0;
+      state.session = {
+        prompt: () => {
+          prompts += 1;
+          return Promise.resolve();
+        },
+        setModel: async () => undefined,
+        setThinkingLevel: () => undefined,
+      } as unknown as AgentSession;
+
+      const response = await call(`/session/${state.id}/prompt`, {
+        method: "POST",
+        body: JSON.stringify({ prompt: "must not run", requestId: "req-undurable" }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(prompts).toBe(0);
+      expect(state.promptJournal.has("req-undurable")).toBe(false);
+      expect(state.dispatching).toBe(false);
+    } finally {
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("removes the optimistic user message when Pi rejects preflight", async () => {
+    const state = seedSession();
+    state.session = {
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        options.preflightResult?.(false);
+        return Promise.resolve();
+      },
+      setModel: async () => undefined,
+      setThinkingLevel: () => undefined,
+    } as unknown as AgentSession;
+
+    const response = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "never accepted", requestId: "req-refused" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(state.messages).toHaveLength(0);
+    expect(state.status).toBe("error");
+    expect(state.dispatching).toBe(false);
+    expect(state.promptJournal.has("req-refused")).toBe(false);
+  });
 });
 
 describe("approvals", () => {
@@ -556,5 +684,30 @@ describe("request handling", () => {
     });
     expect(response.headers.get("content-encoding")).toBeNull();
     expect((await response.json()).messages).toHaveLength(200);
+  });
+
+  test("honours gzip quality values and explicit refusal over a wildcard", async () => {
+    const state = seedSession();
+    state.messages = Array.from({ length: 200 }, (_unused, index) => ({
+      id: `quality-${index}`,
+      role: "user" as const,
+      content: "x".repeat(64),
+      parts: [],
+      createdAt: "2026-01-01T00:00:00Z",
+    }));
+
+    for (const encoding of ["gzip;q=0", "gzip;q=0, *;q=1", "gzip;q=bogus"]) {
+      const response = await nativeFetch(`${origin}/session/${state.id}/messages`, {
+        headers: { authorization: `Bearer ${TOKEN}`, "accept-encoding": encoding },
+      });
+      expect(response.headers.get("content-encoding"), encoding).toBeNull();
+      await response.arrayBuffer();
+    }
+
+    const accepted = await nativeFetch(`${origin}/session/${state.id}/messages`, {
+      headers: { authorization: `Bearer ${TOKEN}`, "accept-encoding": "br, gzip;q=0.5" },
+    });
+    expect(accepted.headers.get("content-encoding")).toBe("gzip");
+    await accepted.arrayBuffer();
   });
 });

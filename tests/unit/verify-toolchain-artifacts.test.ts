@@ -1,12 +1,13 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ToolchainArtifact } from "../../apps/desktop/electron/toolchain-manifest";
 import {
   expectDigest,
   fetchArtifact,
+  hashBundleIntegrity,
   hashExecutable,
   parseArguments,
   parseFilters,
@@ -213,6 +214,134 @@ describe("verify-toolchain-artifacts", () => {
             archive.buffer.slice(archive.byteOffset, archive.byteOffset + archive.byteLength),
           ),
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("verifies a complete bundle without extracting it to disk", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-bundle-test-"));
+    try {
+      const bundle = join(root, "pi");
+      const executable = Buffer.from("#!/bin/sh\nprintf 'pi\\n'\n");
+      const runtime = Buffer.from("export const runtime = true;\n");
+      await mkdir(bundle);
+      await writeFile(join(bundle, "pi"), executable);
+      await chmod(join(bundle, "pi"), 0o755);
+      await writeFile(join(bundle, "runtime.js"), runtime);
+      const archivePath = join(root, "fixture.tar.gz");
+      const packed = Bun.spawn(["tar", "-czf", archivePath, "pi"], {
+        cwd: root,
+        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(await packed.exited).toBe(0);
+      const archive = await readFile(archivePath);
+      const digest = (contents: Uint8Array) => ({
+        size: contents.byteLength,
+        sha256: createHash("sha256").update(contents).digest("hex"),
+      });
+      const treeHash = createHash("sha256");
+      treeHash.update("runtime.js\0");
+      treeHash.update(`${runtime.byteLength}\0-\0`);
+      treeHash.update(digest(runtime).sha256);
+      treeHash.update("\n");
+      const artifact = testArtifact({
+        name: "pi",
+        archive: {
+          format: "tar.gz",
+          url: "https://downloads.example.test/pi.tar.gz",
+          entryPath: "pi/pi",
+          bundleRoot: "pi/",
+          bundleIntegrity: {
+            fileCount: 1,
+            totalSize: runtime.byteLength,
+            sha256: treeHash.digest("hex"),
+          },
+          allowedHosts: ["downloads.example.test"],
+          ...digest(archive),
+        },
+        executable: { fileName: "pi", ...digest(executable) },
+      });
+
+      expect(await hashBundleIntegrity(artifact.archive, archivePath)).toEqual(
+        artifact.archive.bundleIntegrity!,
+      );
+      await verifyArtifact(artifact, root, {
+        fetchImpl: async () => new Response(archive),
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects a substituted bundle before attempting to parse it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-bundle-test-"));
+    try {
+      const body = Buffer.from("not a gzip stream");
+      const base = testArtifact();
+      await expect(
+        verifyArtifact(
+          testArtifact({
+            name: "pi",
+            archive: {
+              ...base.archive,
+              entryPath: "pi/pi",
+              bundleRoot: "pi/",
+              bundleIntegrity: { fileCount: 1, totalSize: 1, sha256: "a".repeat(64) },
+              size: body.byteLength,
+              sha256: "f".repeat(64),
+            },
+          }),
+          root,
+          { fetchImpl: async () => new Response(body) },
+        ),
+      ).rejects.toThrow("pi:linux:x64 archive SHA-256 mismatch");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("bounded bundle hashing rejects links and excessive expansion", async () => {
+    const root = await mkdtemp(join(tmpdir(), "ork-bundle-test-"));
+    try {
+      const bundle = join(root, "pi");
+      await mkdir(bundle);
+      await writeFile(join(bundle, "pi"), "launcher");
+      await symlink("pi", join(bundle, "linked"));
+      const linkedArchive = join(root, "linked.tar.gz");
+      const linked = Bun.spawn(["tar", "-czf", linkedArchive, "pi"], {
+        cwd: root,
+        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(await linked.exited).toBe(0);
+      const descriptor = {
+        ...testArtifact().archive,
+        entryPath: "pi/pi",
+        bundleRoot: "pi/",
+        bundleIntegrity: { fileCount: 1, totalSize: 1, sha256: "a".repeat(64) },
+      };
+      await expect(hashBundleIntegrity(descriptor, linkedArchive)).rejects.toThrow(
+        "unsupported link or entry type",
+      );
+
+      await rm(bundle, { recursive: true, force: true });
+      await mkdir(bundle);
+      await writeFile(join(bundle, "pi"), Buffer.alloc(128 * 1024));
+      const expandedArchive = join(root, "expanded.tar.gz");
+      const expanded = Bun.spawn(["tar", "-czf", expandedArchive, "pi"], {
+        cwd: root,
+        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(await expanded.exited).toBe(0);
+      await expect(hashBundleIntegrity(descriptor, expandedArchive)).rejects.toThrow(
+        "exceeded its extraction bounds",
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

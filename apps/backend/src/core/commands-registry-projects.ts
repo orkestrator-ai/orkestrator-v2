@@ -285,6 +285,7 @@ export function registerProjectCommands(
       ...favoriteOpenCodeModels,
       ...(cursorModels.length > 0 ? cursorModels : (cache.cursor?.models ?? [])),
       ...(grokModels.length > 0 ? grokModels : (cache.grok?.models ?? [])),
+      ...(piModels.length > 0 ? piModels : (cache.pi?.models ?? [])),
     ];
     return result;
   });
@@ -302,7 +303,10 @@ export function registerProjectCommands(
     if (agent === "codex") {
       return storage.cacheAgentModelCatalog("codex", asCachedCodexModels(args.models));
     }
-    throw new Error("Expected agent to be claude or codex");
+    if (agent === "pi") {
+      return storage.cacheAgentModelCatalog("pi", args.models as AgentModel[]);
+    }
+    throw new Error("Expected agent to be claude, codex, or pi");
   });
   register("save_config", async ({ config }, context) => {
     const { storage } = context;

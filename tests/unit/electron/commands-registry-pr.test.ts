@@ -2344,6 +2344,8 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       claudeBridgePid: 94002,
       localCodexPort: 40103,
       codexBridgePid: 94003,
+      localPiPort: 40104,
+      piBridgePid: 94004,
     });
     const { context } = createContext(environment);
     const commands = createCommandRegistry();
@@ -2351,6 +2353,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       opencode: createFakeChild(94001),
       claude: createFakeChild(94002),
       codex: createFakeChild(94003),
+      pi: createFakeChild(94004),
     };
     for (const [kind, child] of Object.entries(children)) {
       commandTesting.setLocalServerProcess(`${kind}:${environment.id}`, child);
@@ -2368,11 +2371,13 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
           context,
         ),
         commands.get("get_local_codex_server_status")?.({ environmentId: environment.id }, context),
+        commands.get("get_local_pi_server_status")?.({ environmentId: environment.id }, context),
       ]),
     ).resolves.toEqual([
       { running: true, port: 40101, pid: 94001 },
       { running: true, port: 40102, pid: 94002 },
       { running: true, port: 40103, pid: 94003 },
+      { running: true, port: 40104, pid: 94004 },
     ]);
 
     await expect(
@@ -2383,8 +2388,9 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         ),
         commands.get("stop_local_claude_server_cmd")?.({ environmentId: environment.id }, context),
         commands.get("stop_local_codex_server_cmd")?.({ environmentId: environment.id }, context),
+        commands.get("stop_local_pi_server_cmd")?.({ environmentId: environment.id }, context),
       ]),
-    ).resolves.toEqual([undefined, undefined, undefined]);
+    ).resolves.toEqual([undefined, undefined, undefined, undefined]);
 
     expect(environment).toMatchObject({
       localOpencodePort: null,
@@ -2393,6 +2399,8 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       claudeBridgePid: null,
       localCodexPort: null,
       codexBridgePid: null,
+      localPiPort: null,
+      piBridgePid: null,
     });
     for (const kind of Object.keys(children)) {
       expect(commandTesting.getLocalServerProcess(`${kind}:${environment.id}`)).toBeUndefined();

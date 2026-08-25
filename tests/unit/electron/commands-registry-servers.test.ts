@@ -606,6 +606,104 @@ exit 0
     },
   );
 
+  test("starts, inspects, and stops the in-container Pi bridge", async () => {
+    const hostPort = await reserveFreePort();
+    const pidFile = path.join(await createTempDir("ork-pi-bridge-pid-"), "pid");
+    const environment = createEnvironment({
+      id: "env-container-pi",
+      environmentType: "containerized",
+      containerId: "container-pi",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    const tokenFile = path.join(path.dirname(pidFile), "token");
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+
+    const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"cat /tmp/pi-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"cat /tmp/pi-bridge.log"*)
+        printf 'pi bridge log\\n'
+        exit 0 ;;
+      *pkill*)
+        rm -f "$FAKE_BRIDGE_TOKEN_FILE"
+        pid=$(cat "$FAKE_BRIDGE_PID_FILE" 2>/dev/null || true)
+        if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*PI_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const [first, second] = (await Promise.all([
+          commands.get("start_pi_server")?.({ containerId: "container-pi" }, context),
+          commands.get("start_pi_server")?.({ containerId: "container-pi" }, context),
+        ])) as Array<{ hostPort: number; wasRunning: boolean; authToken: string }>;
+        expect(first).toMatchObject({ hostPort, wasRunning: false });
+        expect(second).toMatchObject({ hostPort, wasRunning: true });
+        expect(first.authToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+        expect(second.authToken).toBe(first.authToken);
+
+        await expect(
+          commands.get("get_pi_server_status")?.({ containerId: "container-pi" }, context),
+        ).resolves.toEqual({ running: true, hostPort, authToken: first.authToken });
+        await expect(
+          commands.get("get_pi_server_log")?.({ containerId: "container-pi" }, context),
+        ).resolves.toBe("pi bridge log\n");
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        expect(execLog.split("\n").filter((line) => line.startsWith("exec -d "))).toHaveLength(1);
+        expect(execLog).toContain("export PI_AGENT_DIR=/home/node/.pi/agent");
+        expect(execLog).toContain("export PI_SESSION_DIR=/home/node/.pi/agent/sessions");
+        expect(execLog).toContain("export PI_BRIDGE_STATE_DIR=/tmp/orkestrator-pi-state");
+        expect(execLog).toContain("export PI_BRIDGE_PROJECT_RESOURCES=1");
+        expect(execLog).toContain("setsid bun /opt/pi-bridge/dist/index.js");
+        expect(execLog).toContain("umask 077");
+
+        await commands.get("stop_pi_server")?.({ containerId: "container-pi" }, context);
+        const afterStop = await fs.readFile(logs.exec, "utf8");
+        expect(afterStop).toContain("pkill -f '[p]i-bridge/dist/index.js'");
+        expect(afterStop).toContain("rm -f /tmp/pi-bridge-token");
+      });
+    } finally {
+      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      if (previousHostPort === undefined) delete process.env.FAKE_BRIDGE_HOST_PORT;
+      else process.env.FAKE_BRIDGE_HOST_PORT = previousHostPort;
+      if (previousPidFile === undefined) delete process.env.FAKE_BRIDGE_PID_FILE;
+      else process.env.FAKE_BRIDGE_PID_FILE = previousPidFile;
+      if (previousTokenFile === undefined) delete process.env.FAKE_BRIDGE_TOKEN_FILE;
+      else process.env.FAKE_BRIDGE_TOKEN_FILE = previousTokenFile;
+    }
+  });
+
   test("persists the container Cursor fingerprint when no API key was ever configured", async () => {
     // The cold-start path nothing else covers: with no key, the credential
     // sync only removes a file, so /tmp/orkestrator-ai is never created for

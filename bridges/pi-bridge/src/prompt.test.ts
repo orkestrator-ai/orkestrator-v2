@@ -33,7 +33,7 @@ interface StubSession {
  * `preflightResult` is how the bridge learns a prompt was accepted, so the
  * stub exposes it directly instead of inferring acceptance from the run.
  */
-function stubSession(options: { autoAccept?: boolean } = {}): StubSession {
+function stubSession(options: { autoAccept?: boolean; onAbort?: () => void } = {}): StubSession {
   let settleRun: () => void = () => undefined;
   let rejectRun: (error: unknown) => void = () => undefined;
   let announce: (accepted: boolean) => void = () => undefined;
@@ -51,6 +51,7 @@ function stubSession(options: { autoAccept?: boolean } = {}): StubSession {
       return run;
     },
     abort: async () => {
+      options.onAbort?.();
       abortCount += 1;
       // A real abort ends the run; the bridge must not depend on that, but it
       // is the honest stub.
@@ -152,7 +153,20 @@ describe("dispatchPrompt", () => {
   test("aborts a run that outlived its budget before reporting the turn failed", async () => {
     process.env.PI_BRIDGE_PROMPT_TIMEOUT_MS = "60000";
     const state = runningState();
-    const stub = stubSession();
+    const order: string[] = [];
+    const stub = stubSession({ onAbort: () => order.push("abort") });
+    state.approvals.set("a1", {
+      id: "a1",
+      toolCallId: "call-1",
+      toolName: "bash",
+      input: { command: "deploy" },
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+      settle: (decision) => {
+        state.approvals.delete("a1");
+        order.push(decision);
+      },
+    });
 
     const handle = await dispatchPrompt(state, stub.session, input({ requestId: "req-1" }));
     // Stand in for the timeout firing: the wait rejects while the run is still
@@ -165,6 +179,7 @@ describe("dispatchPrompt", () => {
     await handle.completion;
 
     expect(stub.aborted()).toBe(1);
+    expect(order).toEqual(["deny", "abort"]);
     expect(state.status).toBe("error");
     expect(state.cancelTurn).toBeUndefined();
   });

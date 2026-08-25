@@ -42,6 +42,7 @@ import { requestToolApproval } from "./interactions.js";
 import {
   emptyComposer,
   hydrateComposer,
+  reconcileComposerSelection,
   resolveModel,
   thinkingLevel,
   type ThinkingLevelDefaults,
@@ -62,6 +63,12 @@ import {
   type JsonObject,
   type SessionState,
 } from "./state.js";
+
+/** Bridge sessions that have been permanently closed by their owner. */
+const closingSessions = new WeakSet<SessionState>();
+
+/** One in-flight adoption per canonical Pi session file. */
+const sessionResumptions = new Map<string, Promise<SessionState>>();
 
 export function newSessionState(clientSessionKey?: string): SessionState {
   return {
@@ -141,6 +148,7 @@ export async function createSession(
  * rather than a corner case.
  */
 export async function ensureSession(state: SessionState): Promise<AgentSession> {
+  if (closingSessions.has(state)) throw new Error("This Pi session is closed");
   if (state.session) return state.session;
   state.attaching ??= attach(state).finally(() => {
     state.attaching = undefined;
@@ -191,6 +199,19 @@ async function attach(state: SessionState): Promise<AgentSession> {
   });
 
   const session = created.session;
+  // DELETE can land while createAgentSession is awaiting credentials, resource
+  // loading or a session-file open. Never publish a session after its bridge
+  // owner has gone away: it would sit outside `sessions`, so neither idle
+  // detaching nor shutdown could ever release it.
+  if (closingSessions.has(state)) {
+    try {
+      session.dispose();
+    } catch {
+      // The state is already closed. Disposal is best-effort, and the attach
+      // still fails authoritatively below rather than resurrecting it.
+    }
+    throw new Error("This Pi session was closed while it was attaching");
+  }
   state.session = session;
   state.piSessionId = session.sessionId;
   state.sessionFile = session.sessionFile;
@@ -203,10 +224,11 @@ async function attach(state: SessionState): Promise<AgentSession> {
   // Re-selecting from the live session is what makes the picker agree with what
   // the turn will actually use.
   if (session.model) {
-    state.composer = {
-      ...state.composer,
-      selectedModelId: `${session.model.provider}/${session.model.id}`,
-    };
+    state.composer = reconcileComposerSelection(
+      state.composer,
+      session.model,
+      session.thinkingLevel,
+    );
   }
   state.revision += 1;
   return session;
@@ -291,6 +313,21 @@ export async function detachSession(state: SessionState): Promise<void> {
   }
 }
 
+/**
+ * Permanently close a bridge session, including an attach still in flight.
+ *
+ * Idle detaching deliberately does not use this path: an idle session is meant
+ * to attach again. DELETE does, because a session removed from the registry has
+ * no future owner. Marking it before the first await closes the cold-attach
+ * race; awaiting the shared attach gives the late session a chance to observe
+ * the mark and dispose itself before this function returns.
+ */
+export async function closeSession(state: SessionState): Promise<void> {
+  closingSessions.add(state);
+  await state.attaching?.catch(() => undefined);
+  await detachSession(state);
+}
+
 export interface ComposerPatch {
   modelId?: string;
   reasoningId?: string;
@@ -360,8 +397,25 @@ export async function applyComposerToSession(state: SessionState): Promise<void>
   // `off` is a level like any other here — Pi's own `ThinkingLevel` includes it,
   // and skipping it made "Off" the one selection in the picker that could never
   // be applied.
-  const level = thinkingLevel(state.composer.selectedReasoningId, model);
+  // `resolveModel` falls back when a persisted or requested id is stale. A
+  // failed `setModel` also leaves the session on its previous model. In both
+  // cases the live session is authoritative: using `model` here would clamp
+  // thinking against a model the turn is not actually going to run.
+  const actualModel = session.model ?? model;
+  const level = thinkingLevel(state.composer.selectedReasoningId, actualModel);
   if (session.thinkingLevel !== level) session.setThinkingLevel(level as never);
+
+  // Echo what Pi will really run. Without this, an unknown selection silently
+  // executes the first available model while the picker, transcript and usage
+  // continue naming the unavailable one.
+  const reconciled = reconcileComposerSelection(state.composer, actualModel, session.thinkingLevel);
+  if (
+    reconciled.selectedModelId !== state.composer.selectedModelId ||
+    reconciled.selectedReasoningId !== state.composer.selectedReasoningId
+  ) {
+    state.composer = reconciled;
+    state.revision += 1;
+  }
 }
 
 /**
@@ -457,13 +511,34 @@ export async function resumeSession(
       return existing;
     }
   }
-  const state = newSessionState();
-  state.sessionFile = resolved;
-  applyComposerPatch(state, patch);
-  state.composer = await hydrateComposer(state.composer);
-  hydrateHistory(state);
-  sessions.set(state.id, state);
-  return state;
+
+  // The scan above and the eventual insertion are separated by a catalogue
+  // await. Share that whole adoption window, otherwise two concurrent resume
+  // requests both see no owner and create distinct sessions that later append
+  // to the same JSONL file.
+  const inFlight = sessionResumptions.get(resolved);
+  if (inFlight) {
+    const existing = await inFlight;
+    applyComposerPatch(existing, patch);
+    existing.lastAccessed = Date.now();
+    return existing;
+  }
+
+  const work = (async () => {
+    const state = newSessionState();
+    state.sessionFile = resolved;
+    applyComposerPatch(state, patch);
+    state.composer = await hydrateComposer(state.composer);
+    hydrateHistory(state);
+    sessions.set(state.id, state);
+    return state;
+  })();
+  sessionResumptions.set(resolved, work);
+  try {
+    return await work;
+  } finally {
+    if (sessionResumptions.get(resolved) === work) sessionResumptions.delete(resolved);
+  }
 }
 
 /**

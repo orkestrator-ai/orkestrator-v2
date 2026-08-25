@@ -21,7 +21,7 @@ describe("hydrateAgentModelCatalogCache", () => {
   beforeEach(() => {
     useClaudeStore.setState({ models: [] });
     useCodexStore.setState({ models: CODEX_MODELS });
-    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
+    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
     invokeMock.mockReset();
   });
 
@@ -57,12 +57,21 @@ describe("hydrateAgentModelCatalogCache", () => {
         label: "Grok Cached",
       },
     ];
+    const piModels = [
+      {
+        platform: "pi" as const,
+        id: "anthropic/claude-pi",
+        label: "Claude Pi",
+        reasoning: [{ id: "high", label: "High" }],
+      },
+    ];
     invokeMock.mockResolvedValue({
       schemaVersion: 1,
       claude: { updatedAt: "2026-07-30T10:00:00.000Z", models: claudeModels },
       codex: { updatedAt: "2026-07-30T10:00:00.000Z", models: codexModels },
       cursor: { updatedAt: "2026-07-30T10:00:00.000Z", models: cursorModels },
       grok: { updatedAt: "2026-07-30T10:00:00.000Z", models: grokModels },
+      pi: { updatedAt: "2026-07-30T10:00:00.000Z", models: piModels },
     });
 
     await hydrateAgentModelCatalogCache();
@@ -72,6 +81,7 @@ describe("hydrateAgentModelCatalogCache", () => {
     expect(useCodexStore.getState().models).toEqual(codexModels);
     expect(useAgentModelCatalogStore.getState().cursorModels).toEqual(cursorModels);
     expect(useAgentModelCatalogStore.getState().grokModels).toEqual(grokModels);
+    expect(useAgentModelCatalogStore.getState().piModels).toEqual(piModels);
   });
 
   test("leaves fallback stores intact when a catalogue is absent", async () => {
@@ -83,6 +93,7 @@ describe("hydrateAgentModelCatalogCache", () => {
     expect(useCodexStore.getState().models).toEqual(CODEX_MODELS);
     expect(useAgentModelCatalogStore.getState().cursorModels).toEqual([]);
     expect(useAgentModelCatalogStore.getState().grokModels).toEqual([]);
+    expect(useAgentModelCatalogStore.getState().piModels).toEqual([]);
   });
 
   test("hydrates an available agent without disturbing the absent agent", async () => {

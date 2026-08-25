@@ -323,6 +323,21 @@ describe("native agent model catalogue command", () => {
           supportsMode: true,
         },
       ]);
+      await storage.cacheAgentModelCatalog("pi", [
+        {
+          platform: "pi",
+          id: "anthropic/claude-opus-4-5",
+          label: "Claude Opus 4.5",
+          providerLabel: "Anthropic",
+          reasoning: [
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+          ],
+          defaultReasoningId: "high",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ]);
       await storage.cacheOpenCodeModelCatalog("proj-1", [
         { id: "opencode/a", name: "OpenCode A", provider: "opencode" },
         { id: "opencode-go/b", name: "OpenCode Go B", provider: "opencode-go" },
@@ -347,6 +362,7 @@ describe("native agent model catalogue command", () => {
         "opencode/a",
         "composer-cached",
         "grok-cached",
+        "anthropic/claude-opus-4-5",
       ]);
       expect(models.slice(2, 4).map((model) => model.providerLabel)).toEqual([
         "opencode-go",

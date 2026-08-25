@@ -21,6 +21,7 @@ interface ConfiguredCreateEnvironmentAgentDefaults {
   codexMode: CodexMode;
   cursorMode: AgentStyle;
   grokMode: AgentStyle;
+  piMode: AgentStyle;
   models: Partial<Record<LaunchAgent, string>>;
   reasoningEfforts: Partial<Record<LaunchAgent, string>>;
 }
@@ -32,6 +33,7 @@ export interface CreateEnvironmentAgentDefaults {
   codexMode: CodexMode;
   cursorMode: AgentStyle;
   grokMode: AgentStyle;
+  piMode: AgentStyle;
   model: string;
   reasoningEffort: string;
 }
@@ -41,7 +43,7 @@ function withRememberedMode(
   remembered: LastEnvironmentAgentSelection | undefined,
 ): Pick<
   CreateEnvironmentAgentDefaults,
-  "claudeMode" | "opencodeMode" | "codexMode" | "cursorMode" | "grokMode"
+  "claudeMode" | "opencodeMode" | "codexMode" | "cursorMode" | "grokMode" | "piMode"
 > {
   const modes = {
     claudeMode: configured.claudeMode,
@@ -49,6 +51,7 @@ function withRememberedMode(
     codexMode: configured.codexMode,
     cursorMode: configured.cursorMode,
     grokMode: configured.grokMode,
+    piMode: configured.piMode,
   };
   if (!remembered) return modes;
 
@@ -57,6 +60,7 @@ function withRememberedMode(
   if (remembered.platform === "codex") modes.codexMode = remembered.mode;
   if (remembered.platform === "cursor") modes.cursorMode = remembered.mode;
   if (remembered.platform === "grok") modes.grokMode = remembered.mode;
+  if (remembered.platform === "pi") modes.piMode = remembered.mode;
   return modes;
 }
 
@@ -112,6 +116,7 @@ export function selectedAgentMode(
     codexMode: CodexMode;
     cursorMode?: AgentStyle;
     grokMode?: AgentStyle;
+    piMode?: AgentStyle;
   },
 ): AgentStyle {
   return platform === "claude"
@@ -122,5 +127,7 @@ export function selectedAgentMode(
         ? modes.codexMode
         : platform === "cursor"
           ? (modes.cursorMode ?? SHIPPED_PLATFORM_MODES.cursor)
-          : (modes.grokMode ?? SHIPPED_PLATFORM_MODES.grok);
+          : platform === "grok"
+            ? (modes.grokMode ?? SHIPPED_PLATFORM_MODES.grok)
+            : (modes.piMode ?? SHIPPED_PLATFORM_MODES.pi);
 }

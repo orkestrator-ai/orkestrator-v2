@@ -19,7 +19,7 @@ import {
   resolveApproval,
 } from "./interactions.js";
 import { listModels, refreshModels } from "./models.js";
-import { schedulePersist } from "./persistence.js";
+import { persistBarrier, schedulePersist } from "./persistence.js";
 import { dispatchPrompt, errorText, journal, setPromptJournal } from "./prompt.js";
 import {
   parsePromptAttachments,
@@ -44,8 +44,8 @@ import { boundTranscript, boundTranscriptForRead, chargeTranscript } from "./tra
 import {
   applyComposerPatch,
   applyComposerToSession,
+  closeSession,
   createSession,
-  detachSession,
   ensureSession,
   forkSession,
   listResumableSessions,
@@ -329,7 +329,7 @@ async function handleDelete(response: ServerResponse, state: SessionState): Prom
     // Best-effort: a cancel handle that throws must not strand the session in
     // the map, which is the leak this route exists to close.
   }
-  await detachSession(state);
+  await closeSession(state);
   sessions.delete(state.id);
   if (state.clientSessionKey) clientSessionKeys.delete(state.clientSessionKey);
   schedulePersist();
@@ -367,6 +367,10 @@ async function handleConfig(
 
 async function handleCancel(response: ServerResponse, state: SessionState): Promise<void> {
   const cancel = state.cancelTurn;
+  // A parked tool hook is part of the run being aborted. Answer it first so
+  // the SDK never observes a disappearing run as implicit permission, and so
+  // abort cannot leave the hook awaiting a promise nobody will settle.
+  denyAllApprovals(state, "The turn was cancelled before this tool call was approved.");
   if (cancel) await cancel();
   // The run's own terminal path settles the transcript. Reporting idle here
   // would race it and let a caller start a second turn into a run that has not
@@ -527,15 +531,22 @@ async function handlePrompt(
     applyComposerPatch(state, parseComposerPatch(body));
     session = await ensureSession(state);
     await applyComposerToSession(state);
+    // The prepared record must be on disk before Pi can possibly accept the
+    // prompt. After this point a crash is ambiguous, so restart must refuse to
+    // dispatch the same request id rather than infer that it never ran.
+    if (requestId) await persistBarrier();
   } catch (error) {
     // The turn provably did not run, so release the claim and let the caller
     // retry under the same request id.
     state.dispatching = false;
     if (requestId) state.promptJournal.delete(requestId);
+    schedulePersist();
     throw error;
   }
 
   const text = prompt + promptFileReferences(files);
+  const messageStart = state.messages.length;
+  const uncheckedBeforePrompt = state.uncheckedTranscriptBytes;
   appendUserMessage(state, prompt, images, files);
   state.status = "running";
   state.error = undefined;
@@ -545,8 +556,6 @@ async function handlePrompt(
   state.currentTurnOutput = schema ? "" : null;
   state.currentAssistantMessageId = undefined;
   state.revision += 1;
-  boundTranscript(state);
-  schedulePersist();
 
   let handle: Awaited<ReturnType<typeof dispatchPrompt>>;
   try {
@@ -558,10 +567,20 @@ async function handlePrompt(
     });
   } catch (error) {
     // Pi refused the prompt before the run started, so nothing ran. Roll the
-    // turn back rather than leaving the session wedged as running.
+    // turn back rather than leaving the session wedged as running or showing
+    // a user message for work the agent never accepted.
+    state.messages.splice(messageStart);
+    state.uncheckedTranscriptBytes = uncheckedBeforePrompt;
     state.status = "error";
     state.error = errorText(error);
     state.dispatching = false;
+    state.cancelTurn = undefined;
+    state.currentAssistantMessageId = undefined;
+    state.openTextParts.clear();
+    state.toolInputs.clear();
+    state.currentTurnUsage = undefined;
+    state.turnStartedAt = undefined;
+    state.currentTurnOutput = null;
     if (requestId) state.promptJournal.delete(requestId);
     state.revision += 1;
     schedulePersist();
@@ -572,6 +591,8 @@ async function handlePrompt(
   // probe positively and the busy check is authoritative again.
   journal(state, requestId, "accepted");
   state.dispatching = false;
+  boundTranscript(state);
+  schedulePersist();
   // The turn outlives this request. `clientSignal` deliberately does not
   // cancel it: a renderer that navigated away has not asked the agent to stop.
   void handle.completion;
@@ -645,7 +666,27 @@ async function readJson(request: IncomingMessage): Promise<JsonObject> {
 function acceptsGzip(request: IncomingMessage): boolean {
   const header = request.headers["accept-encoding"];
   const value = Array.isArray(header) ? header.join(",") : header;
-  return typeof value === "string" && /(^|,)\s*(gzip|\*)\s*(;|,|$)/i.test(value);
+  if (typeof value !== "string") return false;
+
+  let wildcard: number | undefined;
+  for (const item of value.split(",")) {
+    const [rawCoding, ...rawParameters] = item.split(";");
+    const coding = rawCoding?.trim().toLowerCase();
+    if (coding !== "gzip" && coding !== "*") continue;
+
+    let quality = 1;
+    for (const rawParameter of rawParameters) {
+      const [rawName, rawValue] = rawParameter.split("=", 2);
+      if (rawName?.trim().toLowerCase() !== "q") continue;
+      const parsed = Number(rawValue?.trim());
+      quality = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0;
+    }
+    // A named coding takes precedence over a wildcard, including an explicit
+    // refusal (`gzip;q=0, *;q=1`).
+    if (coding === "gzip") return quality > 0;
+    wildcard = quality;
+  }
+  return (wildcard ?? 0) > 0;
 }
 
 export function json(response: ServerResponse, status: number, body: unknown): void {

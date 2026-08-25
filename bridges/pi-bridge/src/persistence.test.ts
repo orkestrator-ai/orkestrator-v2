@@ -236,6 +236,41 @@ describe("loading", () => {
     expect(sessions.get("session-1")!.promptJournal.get("req-1")!.state).toBe("ambiguous");
   });
 
+  test("skips a structurally malformed session while restoring valid siblings", async () => {
+    await writeState({
+      version: 1,
+      provider: "pi",
+      sessions: [
+        {
+          id: "malformed",
+          status: "idle",
+          revision: 0,
+          // `restoreTodos` walks parts. This used to throw here and abandon
+          // every valid session that followed this entry in the shared file.
+          messages: [{ id: "broken", role: "assistant" }],
+          structured: [],
+          promptJournal: [],
+        },
+        {
+          id: "valid",
+          clientSessionKey: "tab-valid",
+          sessionFile: "/sessions/valid.jsonl",
+          status: "idle",
+          revision: 4,
+          messages: [],
+          structured: [],
+          promptJournal: [],
+        },
+      ],
+    });
+
+    await loadPersistedState();
+
+    expect(sessions.has("malformed")).toBe(false);
+    expect(sessions.get("valid")?.sessionFile).toBe("/sessions/valid.jsonl");
+    expect(clientSessionKeys.get("tab-valid")).toBe("valid");
+  });
+
   test("loads a corrupt file as no sessions rather than throwing", async () => {
     await writeFile(join(directory, "state.json"), "{not json", "utf8");
     await loadPersistedState();

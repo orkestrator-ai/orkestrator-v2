@@ -7,6 +7,7 @@ import {
   modelLocalId,
   modelProviderId,
   normalizeAgentModel,
+  reconcileComposerSelection,
   thinkingLevel,
 } from "./models.js";
 
@@ -138,5 +139,24 @@ describe("composer", () => {
     expect(composer.fastModeAvailable).toBe(false);
     expect(composer.fastModeEnabled).toBeNull();
     expect(composer.modes).toEqual([]);
+  });
+
+  test("reports the model and thinking level Pi actually accepted", () => {
+    const composer = {
+      ...emptyComposer(),
+      selectedModelId: "signed-out/model",
+      selectedReasoningId: "max",
+    };
+
+    const reconciled = reconcileComposerSelection(
+      composer,
+      model({ provider: "available", id: "fallback" }),
+      "high",
+    );
+
+    // A stale explicit selection may fall back, but the picker and transcript
+    // must never keep claiming the unavailable model actually ran.
+    expect(reconciled.selectedModelId).toBe("available/fallback");
+    expect(reconciled.selectedReasoningId).toBe("high");
   });
 });

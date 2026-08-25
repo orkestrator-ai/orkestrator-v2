@@ -232,7 +232,7 @@ describe("HTTP bridge provider (ACP)", () => {
     ]);
   });
 
-  test("gives Cursor and Grok session creation enough time for initialize plus session/new", async () => {
+  test("gives Cursor, Grok, and Pi enough time for cold session creation", async () => {
     const timeouts: number[] = [];
     const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
     AbortSignal.timeout = ((ms: number) => {
@@ -240,7 +240,7 @@ describe("HTTP bridge provider (ACP)", () => {
       return originalTimeout(ms);
     }) as typeof AbortSignal.timeout;
     try {
-      for (const agent of ["cursor", "grok"] as const) {
+      for (const agent of ["cursor", "grok", "pi"] as const) {
         timeouts.length = 0;
         const { provider } = httpProvider(
           () => Response.json({ sessionId: `${agent}-1` }, { status: 201 }),

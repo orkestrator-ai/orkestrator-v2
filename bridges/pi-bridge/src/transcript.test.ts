@@ -13,9 +13,11 @@ import {
   appendBounded,
   boundText,
   boundTranscript,
+  boundTranscriptDuringStreaming,
   boundTranscriptForRead,
   chargeTranscript,
   sliceToBytes,
+  STREAM_BOUND_INTERVAL_BYTES,
 } from "./transcript.js";
 import type { BridgeMessage, BridgeMessagePart, SessionState } from "./state.js";
 
@@ -188,5 +190,21 @@ describe("boundTranscriptForRead", () => {
     chargeTranscript(state, 0);
     chargeTranscript(state, -5);
     expect(state.uncheckedTranscriptBytes).toBe(0);
+  });
+});
+
+describe("boundTranscriptDuringStreaming", () => {
+  test("enforces the byte budget without waiting for a read or turn end", () => {
+    const chunk = "x".repeat(9 * 1024 * 1024);
+    const state = seed([message("old", [textPart(chunk)]), message("live", [textPart(chunk)])]);
+    state.uncheckedTranscriptBytes = STREAM_BOUND_INTERVAL_BYTES;
+    const before = state.revision;
+
+    boundTranscriptDuringStreaming(state);
+
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]!.id).toBe("live");
+    expect(state.transcriptTruncated).toBe(true);
+    expect(state.revision).toBe(before + 1);
   });
 });

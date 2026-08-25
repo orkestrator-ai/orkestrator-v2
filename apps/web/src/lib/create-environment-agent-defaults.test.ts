@@ -21,6 +21,7 @@ const configured = {
   codexMode: "native" as const,
   cursorMode: "terminal" as const,
   grokMode: "native" as const,
+  piMode: "terminal" as const,
   models: { claude: "sonnet", codex: "gpt-default" },
   reasoningEfforts: { codex: "medium" },
 };
@@ -41,6 +42,7 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
       codexMode: "terminal",
       cursorMode: "terminal",
       grokMode: "native",
+      piMode: "terminal",
       // From `configured`, not from whatever the last create happened to pick.
       model: "gpt-default",
       reasoningEffort: "medium",
@@ -65,6 +67,17 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
         remembered: { platform: "grok", mode: "terminal" },
       }),
     ).toMatchObject({ agent: "grok", cursorMode: "terminal", grokMode: "terminal" });
+  });
+
+  test("restores Pi mode in its own platform column", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog,
+        enabledAgents: ["pi"],
+        configured: { ...configured, agent: "pi" },
+        remembered: { platform: "pi", mode: "native" },
+      }),
+    ).toMatchObject({ agent: "pi", piMode: "native", grokMode: "native" });
   });
 
   test("falls back to configured defaults when the remembered platform is disabled", () => {

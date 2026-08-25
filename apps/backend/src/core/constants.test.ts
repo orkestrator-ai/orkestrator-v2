@@ -50,20 +50,26 @@ describe("requiredAgentNetworkDomains", () => {
     expect(requiredAgentNetworkDomains(["grok"])).toEqual([
       ...AGENT_NETWORK_DOMAINS_BY_PLATFORM.grok,
     ]);
+    expect(requiredAgentNetworkDomains(["pi"])).toEqual([...AGENT_NETWORK_DOMAINS_BY_PLATFORM.pi]);
     expect(requiredAgentNetworkDomains(["cursor"])).not.toContain("auth.x.ai");
     expect(requiredAgentNetworkDomains(["grok"])).not.toContain("cursor.com");
+    expect(requiredAgentNetworkDomains(["pi"])).toContain("radius.pi.dev");
+    expect(requiredAgentNetworkDomains(["pi"])).toContain("api.anthropic.com");
+    expect(requiredAgentNetworkDomains(["pi"])).not.toContain("auth.x.ai");
   });
 
-  test("combines both platforms without overlap", () => {
-    const both = requiredAgentNetworkDomains(["cursor", "grok"]);
-    expect(new Set(both).size).toBe(both.length);
-    expect(both).toContain("api2.cursor.sh");
-    expect(both).toContain("cli-chat-proxy.grok.com");
+  test("combines enabled platforms without overlap", () => {
+    const combined = requiredAgentNetworkDomains(["cursor", "grok", "pi"]);
+    expect(new Set(combined).size).toBe(combined.length);
+    expect(combined).toContain("api2.cursor.sh");
+    expect(combined).toContain("cli-chat-proxy.grok.com");
+    expect(combined).toContain("radius.pi.dev");
   });
 
   test("publishes frozen per-platform host lists", () => {
     expect(Object.isFrozen(AGENT_NETWORK_DOMAINS_BY_PLATFORM)).toBe(true);
     expect(Object.isFrozen(AGENT_NETWORK_DOMAINS_BY_PLATFORM.cursor)).toBe(true);
     expect(Object.isFrozen(AGENT_NETWORK_DOMAINS_BY_PLATFORM.grok)).toBe(true);
+    expect(Object.isFrozen(AGENT_NETWORK_DOMAINS_BY_PLATFORM.pi)).toBe(true);
   });
 });

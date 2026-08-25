@@ -80,6 +80,29 @@ export function composeModelId(providerId: string, modelId: string): string {
   return `${providerId}/${modelId}`;
 }
 
+/**
+ * Reconcile a composer with the model and thinking level Pi actually accepted.
+ *
+ * Requested selections are not authoritative: an old provider can disappear,
+ * `resolveModel` can fall back, and `setModel` can reject after credentials
+ * change. Keeping the reconciliation pure makes every caller use the same
+ * provider/model encoding and makes the silent-fallback case directly testable.
+ */
+export function reconcileComposerSelection(
+  composer: NativeAgentComposerState,
+  model: Pick<Model<Api>, "provider" | "id"> | undefined,
+  reasoningId: string | undefined,
+): NativeAgentComposerState {
+  const selectedModelId = model
+    ? composeModelId(model.provider, model.id)
+    : composer.selectedModelId;
+  return {
+    ...composer,
+    ...(selectedModelId ? { selectedModelId } : {}),
+    ...(reasoningId ? { selectedReasoningId: reasoningId } : {}),
+  };
+}
+
 /** The provider half of `provider/modelId`, or "" when the id names none. */
 export function modelProviderId(id: string): string {
   const separator = id.indexOf("/");

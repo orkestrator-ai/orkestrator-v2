@@ -550,9 +550,26 @@ describe("direct backend command registry coverage", () => {
     ).resolves.toEqual(cachedAgents);
     expect(cacheAgentModelCatalog).toHaveBeenCalledWith("claude", claudeModels);
 
+    const piModels = [
+      {
+        platform: "pi",
+        id: "openrouter/anthropic/claude-opus-4-5",
+        label: "Claude Opus 4.5",
+        providerLabel: "OpenRouter",
+        reasoning: [{ id: "high", label: "High" }],
+        defaultReasoningId: "high",
+        supportsSpeed: false,
+        supportsMode: false,
+      },
+    ];
+    await expect(
+      invoke("cache_agent_model_catalog", { agent: "pi", models: piModels }, context),
+    ).resolves.toEqual(cachedAgents);
+    expect(cacheAgentModelCatalog).toHaveBeenCalledWith("pi", piModels);
+
     await expect(
       invoke("cache_agent_model_catalog", { agent: "unsupported", models: claudeModels }, context),
-    ).rejects.toThrow("Expected agent to be claude or codex");
+    ).rejects.toThrow("Expected agent to be claude, codex, or pi");
     await expect(
       invoke("cache_agent_model_catalog", { agent: "claude", models: [] }, context),
     ).rejects.toThrow("empty model catalog");
@@ -655,7 +672,7 @@ describe("direct backend command registry coverage", () => {
       ),
     ).rejects.toThrow(/[Uu]nexpected/);
 
-    expect(cacheAgentModelCatalog).toHaveBeenCalledTimes(2);
+    expect(cacheAgentModelCatalog).toHaveBeenCalledTimes(3);
   });
 
   test("launches validated browser URLs and returns both DNS resolution outcomes", async () => {

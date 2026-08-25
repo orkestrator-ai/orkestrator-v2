@@ -226,7 +226,7 @@ let configSnapshot: ReturnType<typeof useConfigStore.getState>["config"];
 
 beforeEach(() => {
   configSnapshot = useConfigStore.getState().config;
-  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
+  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
   useEnvironmentStore.setState({
     environments: [
       {

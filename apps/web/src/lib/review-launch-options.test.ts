@@ -18,7 +18,7 @@ afterEach(() => {
   useClaudeStore.setState({ models: originalClaudeModels });
   useCodexStore.setState({ models: originalCodexModels });
   useOpenCodeStore.setState({ models: originalOpenCodeModels });
-  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
+  useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
 });
 
 describe("buildReviewModelCatalog", () => {
@@ -72,6 +72,7 @@ describe("buildReviewModelCatalog", () => {
       ],
       cursor: [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
       grok: [{ id: "default", name: "Grok Build default", reasoningEfforts: [] }],
+      pi: [{ id: "default", name: "Pi default", reasoningEfforts: [] }],
       opencode: [
         {
           id: "provider/model-live",
@@ -131,7 +132,7 @@ describe("buildReviewModelCatalog", () => {
     ]);
   });
 
-  test("uses the shared backend-hydrated Cursor and Grok catalogues", () => {
+  test("uses the shared backend-hydrated Cursor, Grok, and Pi catalogues", () => {
     useAgentModelCatalogStore.getState().setAcpModels([
       {
         platform: "cursor",
@@ -150,6 +151,13 @@ describe("buildReviewModelCatalog", () => {
         label: "Grok 4.6",
         reasoning: [{ id: "xhigh", label: "Extra high" }],
       },
+      {
+        platform: "pi",
+        id: "anthropic/claude-pi",
+        label: "Claude Pi",
+        description: "Pi model",
+        reasoning: [{ id: "high", label: "High" }],
+      },
     ]);
 
     const catalog = buildReviewModelCatalog(null);
@@ -167,6 +175,14 @@ describe("buildReviewModelCatalog", () => {
         name: "Grok 4.6",
         description: undefined,
         reasoningEfforts: ["xhigh"],
+      },
+    ]);
+    expect(catalog.pi).toEqual([
+      {
+        id: "anthropic/claude-pi",
+        name: "Claude Pi",
+        description: "Pi model",
+        reasoningEfforts: ["high"],
       },
     ]);
   });

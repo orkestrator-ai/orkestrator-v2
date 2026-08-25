@@ -60,6 +60,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
   const openCodeModelSources = useOpenCodeStore((state) => state.modelSource);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
+  const piModels = useAgentModelCatalogStore((state) => state.piModels);
   const environments = useEnvironmentStore((state) => state.environments);
   const favoriteModels = useConfigStore((state) => state.config.global.favoriteModels);
   const openCodeModelProviders = useConfigStore(
@@ -133,7 +134,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
       ...baseCatalog,
       opencode: includeMissingOpenCodeModels(mapped, favoriteOpenCodeIds, allowedProviders),
     };
-    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok stores through
+    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok/Pi stores through
     // getState(), which does not subscribe. These selectors are the subscription:
     // the rule sees them as unused because the body never names them, but dropping
     // them freezes the catalog at whatever was loaded on first render.
@@ -144,6 +145,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     cursorModels,
     favoriteModels,
     grokModels,
+    piModels,
     openCodeModelProviders,
     projectOpenCodeModels,
   ]);

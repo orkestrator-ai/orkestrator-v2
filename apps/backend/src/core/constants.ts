@@ -66,13 +66,15 @@ export function requiredAgentNetworkDomains(
   enabledPlatforms: readonly string[] | undefined,
 ): readonly string[] {
   if (!enabledPlatforms) return [];
-  const domains: string[] = [];
+  const domains = new Set<string>();
   for (const platform of ["cursor", "grok", "pi"] as const) {
     if (enabledPlatforms.includes(platform)) {
-      domains.push(...AGENT_NETWORK_DOMAINS_BY_PLATFORM[platform]);
+      for (const domain of AGENT_NETWORK_DOMAINS_BY_PLATFORM[platform]) {
+        domains.add(domain);
+      }
     }
   }
-  return domains;
+  return Array.from(domains);
 }
 
 export const OPENCODE_SERVER_PORT = 4096;

@@ -13,6 +13,7 @@ const catalog: AgentModelCatalog = {
   codex: [{ id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["medium", "high"] }],
   opencode: [{ id: "provider/model", name: "OpenCode", reasoningEfforts: [] }],
   cursor: [{ id: "grok-4.6", name: "Grok 4.6", reasoningEfforts: [] }],
+  pi: [{ id: "anthropic/claude-pi", name: "Claude Pi", reasoningEfforts: ["high"] }],
 };
 
 function setFavorites(favoriteModels: AgentModelRef[]) {
@@ -98,6 +99,30 @@ describe("MultiReviewLaunchDialog", () => {
         { agent: "cursor", model: "grok-4.6" },
       ],
       fixModel: { agent: "claude", model: "opus" },
+    });
+  });
+
+  test("includes Pi models in the cross-provider favourites catalog", () => {
+    setFavorites([{ platform: "pi", modelId: "anthropic/claude-pi" }]);
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        preferredReasoningEfforts={{ pi: "high" }}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    chooseFavorite("Reviewer 1", /Claude Pi/);
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    expect(onConfirm.mock.calls[0]?.[0].reviewers[0]).toEqual({
+      agent: "pi",
+      model: "anthropic/claude-pi",
+      reasoningEffort: "high",
     });
   });
 

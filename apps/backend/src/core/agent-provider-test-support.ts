@@ -51,6 +51,13 @@ export const grokConnection: BridgeConnection = {
   requestTimeoutMs: 25,
 };
 
+export const piConnection: BridgeConnection = {
+  agent: "pi",
+  baseUrl: "http://pi.test",
+  authToken: "pi-token",
+  requestTimeoutMs: 25,
+};
+
 export function httpProvider(
   handler: (url: string, init: RequestInit) => Promise<Response> | Response,
   connection: BridgeConnection = claudeConnection,

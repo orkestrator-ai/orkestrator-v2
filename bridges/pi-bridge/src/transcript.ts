@@ -22,6 +22,8 @@ import {
 } from "./state.js";
 
 const TRUNCATION_NOTICE = "\n\n[output truncated]";
+/** Maximum unchecked growth while no renderer is polling the transcript. */
+export const STREAM_BOUND_INTERVAL_BYTES = Math.min(MAX_TRANSCRIPT_BYTES, 1024 * 1024);
 
 /**
  * Append to a byte-capped buffer, returning the value to store.
@@ -138,6 +140,26 @@ function transcriptBytes(state: SessionState): number {
  */
 export function boundTranscriptForRead(state: SessionState): void {
   if (state.uncheckedTranscriptBytes === 0) return;
+  if (boundTranscript(state)) state.revision += 1;
+}
+
+/**
+ * Periodically enforce bounds from the synchronous SDK event listener.
+ *
+ * A tab can remain inactive for an entire long-running turn, so read-time and
+ * terminal-state trimming are not sufficient memory bounds. The structural
+ * checks are cheap and immediate; byte measurement is amortized so streaming
+ * does not serialize a multi-megabyte transcript for every delta.
+ */
+export function boundTranscriptDuringStreaming(state: SessionState): void {
+  const newest = state.messages.at(-1);
+  if (
+    state.messages.length <= MAX_MESSAGES &&
+    (newest?.parts.length ?? 0) <= MAX_PARTS_PER_MESSAGE &&
+    state.uncheckedTranscriptBytes < STREAM_BOUND_INTERVAL_BYTES
+  ) {
+    return;
+  }
   if (boundTranscript(state)) state.revision += 1;
 }
 

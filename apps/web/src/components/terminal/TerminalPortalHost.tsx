@@ -21,6 +21,7 @@ const TERMINAL_TAB_TYPES: ReadonlySet<string> = new Set<TerminalTabType>([
   "codex",
   "cursor",
   "grok",
+  "pi",
   "root",
 ]);
 

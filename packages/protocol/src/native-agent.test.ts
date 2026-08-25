@@ -74,10 +74,28 @@ describe("native agent capability table", () => {
     expect(nativeAgentCapabilities("opencode").composer.mode).toBe(false);
     expect(nativeAgentCapabilities("opencode").composer.executionProfile).toBe(true);
 
+    expect(nativeAgentCapabilities("pi")).toMatchObject({
+      attachments: { files: true, images: true },
+      queue: true,
+      resume: true,
+      fork: true,
+      slashCommands: true,
+      backgroundTasks: false,
+      composer: {
+        provider: true,
+        model: true,
+        reasoning: true,
+        speed: false,
+        mode: false,
+        executionProfile: false,
+      },
+      actions: { compact: true, steer: true },
+    });
+
     // Only Claude reports execution profiles, local settings or prompt
     // suggestions today, and the projection is now gated on these rather than on
     // whether a provider happened to send them.
-    for (const platform of ["codex", "cursor", "grok"] as const) {
+    for (const platform of ["codex", "cursor", "grok", "pi"] as const) {
       expect(nativeAgentCapabilities(platform).composer.executionProfile).toBe(false);
     }
     for (const platform of AGENT_PLATFORMS) {

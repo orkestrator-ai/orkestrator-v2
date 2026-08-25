@@ -226,6 +226,39 @@ describe("DraggableTabBar", () => {
     });
   });
 
+  test("deletes persisted Pi compose drafts when closing a native tab", async () => {
+    const environmentId = "environment";
+    const sessionKey = createSessionKey(environmentId, "pi-tab");
+    usePaneLayoutStore.getState().initialize("container", environmentId);
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      {
+        id: "pi-tab",
+        type: "agent-native",
+        nativeAgentData: { platform: "pi", environmentId, containerId: "container" },
+      },
+      environmentId,
+    );
+    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+
+    const { container } = render(
+      <DndContext>
+        <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
+      </DndContext>,
+    );
+    const close = container.querySelector("button");
+    if (!close) throw new Error("close button missing");
+    fireEvent.click(close);
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+    });
+    expect(invoke).toHaveBeenCalledWith("delete_compose_draft", {
+      draftKey: `pi:${environmentId}:${encodeURIComponent(sessionKey)}`,
+      expectedRevision: 0,
+    });
+  });
+
   test("close all confirms mixed dirty tabs before removing the complete set", async () => {
     const environmentId = "environment";
     usePaneLayoutStore.getState().initialize("container", environmentId);

@@ -49,6 +49,23 @@ export function schedulePersist(): void {
     });
 }
 
+/**
+ * Publish every mutation made before this call before allowing dispatch.
+ *
+ * A prepared prompt journal is the crash boundary for at-most-once delivery.
+ * Merely scheduling its write is not enough: Pi could accept the prompt while
+ * the state file still described no journal entry, and a restart would then
+ * dispatch the same request id again. Chaining an explicit write behind the
+ * normal persistence tail preserves serialization while surfacing failure to
+ * the caller instead of swallowing it like a best-effort streaming write.
+ */
+export async function persistBarrier(): Promise<void> {
+  if (!stateFilePath()) return;
+  const operation = tail.then(() => persistNow());
+  tail = operation.catch(() => undefined);
+  await operation;
+}
+
 /** Flush and stop accepting further writes. Used on shutdown. */
 export async function drainPersistence(): Promise<void> {
   if (!stateFilePath()) return;
@@ -117,7 +134,11 @@ async function persistNow(): Promise<void> {
   let serialized = JSON.stringify(payload);
   if (Buffer.byteLength(serialized) > MAX_STATE_FILE_BYTES) {
     const order = new Map(live.map((state) => [state.id, state.lastAccessed]));
-    if (!shedToFit(payload, order)) return;
+    if (!shedToFit(payload, order)) {
+      // Best-effort callers swallow this through the queue tail. A durability
+      // barrier does not: dispatch must stop when no state file was published.
+      throw new Error("Pi bridge state exceeds its persistence budget");
+    }
     serialized = JSON.stringify(payload);
   }
   await mkdir(dirname(stateFile), { recursive: true, mode: 0o700 });
@@ -175,10 +196,17 @@ export async function loadPersistedState(): Promise<void> {
   if (!isObject(parsed) || parsed.provider !== "pi" || !Array.isArray(parsed.sessions)) return;
 
   for (const entry of parsed.sessions) {
-    const restored = restoreSession(entry);
-    if (!restored) continue;
-    sessions.set(restored.id, restored);
-    if (restored.clientSessionKey) clientSessionKeys.set(restored.clientSessionKey, restored.id);
+    // Persistence is shared by every Pi session. One structurally malformed
+    // entry must not prevent valid siblings from re-attaching to their own
+    // conversation files after a restart.
+    try {
+      const restored = restoreSession(entry);
+      if (!restored) continue;
+      sessions.set(restored.id, restored);
+      if (restored.clientSessionKey) clientSessionKeys.set(restored.clientSessionKey, restored.id);
+    } catch {
+      continue;
+    }
   }
 }
 

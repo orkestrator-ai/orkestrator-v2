@@ -56,6 +56,7 @@ export function resolveAgentModeSettings(
     codexMode: CodexMode;
     cursorMode?: AgentStyle;
     grokMode?: AgentStyle;
+    piMode?: AgentStyle;
   },
 ): AgentSettingsTier {
   const mode =
@@ -67,7 +68,9 @@ export function resolveAgentModeSettings(
           ? modes.opencodeMode
           : agentType === "cursor"
             ? (modes.cursorMode ?? SHIPPED_PLATFORM_MODES.cursor)
-            : (modes.grokMode ?? SHIPPED_PLATFORM_MODES.grok);
+            : agentType === "grok"
+              ? (modes.grokMode ?? SHIPPED_PLATFORM_MODES.grok)
+              : (modes.piMode ?? SHIPPED_PLATFORM_MODES.pi);
   return { defaultAgent: agentType, platforms: { [agentType]: { mode } } };
 }
 
@@ -95,6 +98,7 @@ export function getBuildEnvironmentAgentSettings(
       claudeMode: "native",
       opencodeMode: "native",
       codexMode: "native",
+      piMode: "native",
     }),
     launchAgent: agentType,
   };

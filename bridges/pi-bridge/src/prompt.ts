@@ -121,7 +121,10 @@ async function followRun(
   } catch (error) {
     // The timeout rejects the wait, not the run: `session.prompt` is still
     // executing, and `settleTurn` is about to drop the only handle that can
-    // stop it. Aborting first is what keeps a timed-out turn from continuing
+    // stop it. Deny parked tool calls before aborting: abort may tear down the
+    // hook that owns their promises, but teardown is never consent to run.
+    denyAllApprovals(state, "The turn ended before this tool call was approved.");
+    // Aborting is what keeps a timed-out turn from continuing
     // to write into the transcript of a session the user has been told
     // failed — and from interleaving its deltas into the next turn's message.
     // Awaited so the abort has landed before the session is reported idle.

@@ -15,7 +15,12 @@
 import { randomBytes } from "node:crypto";
 import { MAX_TOOL_TITLE_BYTES } from "./config.js";
 import { renderToolCall } from "./tool-rendering.js";
-import { appendBounded, boundText, chargeTranscript } from "./transcript.js";
+import {
+  appendBounded,
+  boundText,
+  boundTranscriptDuringStreaming,
+  chargeTranscript,
+} from "./transcript.js";
 import {
   isObject,
   nonBlank,
@@ -112,6 +117,9 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
     default:
       break;
   }
+  // Synchronous by design: this function runs on Pi's SDK listener and must
+  // never await a renderer, persistence or any other downstream consumer.
+  boundTranscriptDuringStreaming(state);
 }
 
 /**

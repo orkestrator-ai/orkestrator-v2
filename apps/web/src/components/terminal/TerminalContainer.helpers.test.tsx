@@ -1402,7 +1402,7 @@ describe("TerminalContainer", () => {
       });
     });
 
-    test.each(["cursor", "grok"] as const)(
+    test.each(["cursor", "grok", "pi"] as const)(
       "creates a %s terminal tab when CLI mode is explicit",
       async (platform) => {
         render(
@@ -1433,6 +1433,36 @@ describe("TerminalContainer", () => {
         });
       },
     );
+
+    test("creates exactly one Pi native tab when native mode is explicit", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="pi"
+            options={{ tabId: "pi-native", agentLaunchMode: "native", initialPrompt: "Review" }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        const matches = usePaneLayoutStore
+          .getState()
+          .getAllTabs("env-visible")
+          .filter((tab) => tab.id === "pi-native");
+        expect(matches).toHaveLength(1);
+        expect(matches[0]).toMatchObject({
+          type: "agent-native",
+          initialPrompt: "Review",
+          nativeAgentData: { platform: "pi", environmentId: "env-visible" },
+        });
+      });
+    });
 
     test("browser tabs receive their initial backend-local address", async () => {
       render(
@@ -2576,7 +2606,7 @@ describe("TerminalContainer", () => {
       });
     });
 
-    test.each(["claude", "codex", "opencode", "cursor", "grok"] as const)(
+    test.each(["claude", "codex", "opencode", "cursor", "grok", "pi"] as const)(
       "seeds an unassigned native composer with the explicitly launched %s provider",
       async (platform) => {
         render(

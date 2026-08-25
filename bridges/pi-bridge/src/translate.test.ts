@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { applySessionEvent } from "./translate.js";
 import { newSessionState } from "./agent-session.js";
+import { MAX_PARTS_PER_MESSAGE } from "./config.js";
 import type { BridgeTextPart, BridgeToolPart, SessionState } from "./state.js";
 
 function running(): SessionState {
@@ -76,6 +77,31 @@ describe("streaming text", () => {
       "first",
       "second",
     ]);
+  });
+
+  test("bounds a long inactive stream from inside the synchronous listener", () => {
+    const state = running();
+    state.messages = [
+      {
+        id: "live",
+        role: "assistant",
+        content: "",
+        parts: Array.from({ length: MAX_PARTS_PER_MESSAGE + 1 }, (_unused, index) => ({
+          type: "text" as const,
+          content: `part-${index}`,
+        })),
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+    state.currentAssistantMessageId = "live";
+
+    // No transcript read and no terminal event follows this frame. The SDK
+    // listener itself must enforce the count bound without awaiting anything.
+    applySessionEvent(state, textDelta("latest"));
+
+    expect(state.messages[0]!.parts.length).toBeLessThanOrEqual(MAX_PARTS_PER_MESSAGE);
+    expect(state.transcriptTruncated).toBe(true);
+    expect(state.droppedParts).toBeGreaterThan(0);
   });
 });
 

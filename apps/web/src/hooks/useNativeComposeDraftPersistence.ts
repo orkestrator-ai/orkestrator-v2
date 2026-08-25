@@ -95,7 +95,8 @@ function effectiveAttachmentNamespace(
     platform === "codex" ||
     platform === "opencode" ||
     platform === "cursor" ||
-    platform === "grok"
+    platform === "grok" ||
+    platform === "pi"
     ? platform
     : namespace;
 }

@@ -127,6 +127,7 @@ export function resolveAgentDefaults(
     codexMode: resolveAgentPlatformSettings(tiers, "codex").mode,
     cursorMode: resolveAgentPlatformSettings(tiers, "cursor").mode,
     grokMode: resolveAgentPlatformSettings(tiers, "grok").mode,
+    piMode: resolveAgentPlatformSettings(tiers, "pi").mode,
   } as const;
 }
 
@@ -165,6 +166,7 @@ export interface ClaudeOptions {
   codexMode: CodexMode;
   cursorMode?: AgentStyle;
   grokMode?: AgentStyle;
+  piMode?: AgentStyle;
   /**
    * One-shot model for the launched agent tab. `undefined` means "no explicit
    * choice" — the agent surface falls back to the user's configured defaults.
@@ -237,6 +239,7 @@ export function CreateEnvironmentDialog({
   const configCodexMode = resolved.codexMode as CodexMode;
   const configCursorMode = resolved.cursorMode;
   const configGrokMode = resolved.grokMode;
+  const configPiMode = resolved.piMode;
   const configEnvironmentType: EnvironmentType = repoConfig?.lastEnvironmentType ?? "containerized";
   const effectiveDefaultEnvironmentType: EnvironmentType =
     !dockerAvailable && localEnvironmentAvailable && configEnvironmentType === "containerized"
@@ -249,6 +252,7 @@ export function CreateEnvironmentDialog({
   const openCodeModels = useOpenCodeStore((state) => state.models);
   const cursorModels = useAgentModelCatalogStore((state) => state.cursorModels);
   const grokModels = useAgentModelCatalogStore((state) => state.grokModels);
+  const piModels = useAgentModelCatalogStore((state) => state.piModels);
   const [cachedOpenCodeModels, setCachedOpenCodeModels] = useState<CachedOpenCodeModel[]>([]);
   const {
     favorites: favoriteModels,
@@ -352,7 +356,7 @@ export function CreateEnvironmentDialog({
         normalizeOpenCodeModelProviders(config.global.openCodeModelProviders),
       ),
     };
-    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok stores through
+    // buildReviewModelCatalog reads the Claude/Codex/Cursor/Grok/Pi stores through
     // getState(), which does not subscribe. These selectors are the subscription:
     // the rule sees them as unused because the body never names them, but dropping
     // them freezes the catalog at whatever was loaded on first render.
@@ -367,6 +371,7 @@ export function CreateEnvironmentDialog({
     cursorModels,
     favoriteModels,
     grokModels,
+    piModels,
     openCodeModels,
   ]);
 
@@ -378,6 +383,7 @@ export function CreateEnvironmentDialog({
       codexMode: configCodexMode,
       cursorMode: configCursorMode,
       grokMode: configGrokMode,
+      piMode: configPiMode,
       // Each platform's own resolved column, so a model is only ever offered to
       // the platform whose catalogue it came from.
       models: {
@@ -399,6 +405,7 @@ export function CreateEnvironmentDialog({
       configDefaultAgent,
       configCursorMode,
       configGrokMode,
+      configPiMode,
       configOpencodeMode,
       newProjectDefault,
     ],
@@ -445,6 +452,7 @@ export function CreateEnvironmentDialog({
   const [codexMode, setCodexMode] = useState<CodexMode>(initialAgentDefaults.codexMode);
   const [cursorMode, setCursorMode] = useState<AgentStyle>(initialAgentDefaults.cursorMode);
   const [grokMode, setGrokMode] = useState<AgentStyle>(initialAgentDefaults.grokMode);
+  const [piMode, setPiMode] = useState<AgentStyle>(initialAgentDefaults.piMode);
   const [model, setModel] = useState(initialAgentDefaults.model);
   const [reasoningEffort, setReasoningEffort] = useState(initialAgentDefaults.reasoningEffort);
   const [initialPrompt, setInitialPrompt] = useState("");
@@ -541,6 +549,7 @@ export function CreateEnvironmentDialog({
     setCodexMode(initialAgentDefaults.codexMode);
     setCursorMode(initialAgentDefaults.cursorMode);
     setGrokMode(initialAgentDefaults.grokMode);
+    setPiMode(initialAgentDefaults.piMode);
     setModel(initialAgentDefaults.model);
     setReasoningEffort(initialAgentDefaults.reasoningEffort);
     agentSelectionTouchedRef.current = false;
@@ -664,6 +673,7 @@ export function CreateEnvironmentDialog({
     setCodexMode(initialAgentDefaults.codexMode);
     setCursorMode(initialAgentDefaults.cursorMode);
     setGrokMode(initialAgentDefaults.grokMode);
+    setPiMode(initialAgentDefaults.piMode);
     setModel(initialAgentDefaults.model);
     setReasoningEffort(initialAgentDefaults.reasoningEffort);
   }, [initialAgentDefaults, open]);
@@ -677,7 +687,9 @@ export function CreateEnvironmentDialog({
           ? codexMode
           : agentType === "cursor"
             ? cursorMode
-            : grokMode;
+            : agentType === "grok"
+              ? grokMode
+              : piMode;
   const availableModels = modelsForAgent(modelCatalog, agentType);
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
     modelsForAgent(modelCatalog, platform).map((option) => ({
@@ -744,8 +756,10 @@ export function CreateEnvironmentDialog({
         setCodexMode(nextMode);
       } else if (agentType === "cursor") {
         setCursorMode(nextMode);
-      } else {
+      } else if (agentType === "grok") {
         setGrokMode(nextMode);
+      } else {
+        setPiMode(nextMode);
       }
     },
     [agentType],
@@ -882,6 +896,7 @@ export function CreateEnvironmentDialog({
           codexMode,
           cursorMode,
           grokMode,
+          piMode,
           model:
             agentType === "opencode" && model === "default" && !hasAvailableOpenCodeModels
               ? undefined
@@ -915,6 +930,7 @@ export function CreateEnvironmentDialog({
       codexMode,
       cursorMode,
       grokMode,
+      piMode,
       model,
       hasAvailableOpenCodeModels,
       reasoningEffort,

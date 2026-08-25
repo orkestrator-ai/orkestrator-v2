@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachments";
 import type { ClaudeNativeBackend } from "@/types";
 
-export type AgentType = "claude" | "opencode" | "codex" | "cursor" | "grok";
+export type AgentType = "claude" | "opencode" | "codex" | "cursor" | "grok" | "pi";
 
 export interface ClaudeOptions {
   launchAgent: boolean;

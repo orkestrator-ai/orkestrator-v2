@@ -1,4 +1,4 @@
-export type AgentExtensionId = "claude" | "codex" | "cursor" | "grok" | "opencode";
+export type AgentExtensionId = "claude" | "codex" | "cursor" | "grok" | "opencode" | "pi";
 
 export type ExtensionStatus = "connected" | "configured" | "disabled" | "failed" | "pending";
 
@@ -507,6 +507,61 @@ async function discoverCursor(run: ExtensionCommandRunner): Promise<AgentExtensi
   };
 }
 
+/**
+ * Parse `pi list`, which prints packages as plain lines rather than JSON.
+ *
+ * Pi has no `--json` on this command, so the output is read as text: the empty
+ * case says so in a sentence, and every other line is one package. Anything
+ * that does not look like a package name is dropped rather than rendered — a
+ * heading or a diagnostic line shown as an installed package would be a lie
+ * about what the environment is running.
+ */
+export function parsePiPackages(output: string): ExtensionItem[] {
+  const trimmed = output.trim();
+  if (!trimmed || /^no packages installed/i.test(trimmed)) return [];
+  const items: ExtensionItem[] = [];
+  for (const rawLine of trimmed.split("\n")) {
+    const line = rawLine.trim().replace(/^[-*•]\s*/, "");
+    if (!line || line.endsWith(":")) continue;
+    // `<source>` or `<source> (<scope>)`, which is what the package manager
+    // prints. The scope is the settings file it came from, so it is the source
+    // label the pane already has a slot for.
+    const match = /^(\S+)(?:\s+\(([^)]+)\))?/.exec(line);
+    if (!match) continue;
+    items.push({
+      name: match[1]!,
+      status: "configured",
+      ...(match[2] ? { source: match[2] } : {}),
+    });
+  }
+  return items;
+}
+
+/**
+ * Pi's extension surface is its packages.
+ *
+ * There is no MCP list to read: Pi ships no MCP client of its own — MCP is
+ * something a package adds — so the servers list is empty rather than an error,
+ * which would tell the user something is broken when nothing is. Packages are
+ * read with `--no-approve`, because this discovery runs against whatever
+ * repository happens to be open and a project-local package must not be
+ * trusted just because someone opened a settings pane.
+ */
+async function discoverPi(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
+  const [packages] = await Promise.allSettled([run("pi", ["list", "--no-approve"])]);
+  const packageResult = parseCommandResult(
+    packages,
+    parsePiPackages,
+    "Could not read Pi packages.",
+  );
+  return {
+    agent: "pi",
+    mcpServers: [],
+    plugins: packageResult.items,
+    ...(packageResult.error ? { pluginError: packageResult.error } : {}),
+  };
+}
+
 async function discoverGrok(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
   const [mcp, plugins] = await Promise.allSettled([
     run("grok", ["mcp", "list", "--json"]),
@@ -563,6 +618,7 @@ export async function discoverAgentExtensions(
     discoverCursor(run),
     discoverGrok(run),
     discoverOpenCode(run),
+    discoverPi(run),
   ]);
 }
 

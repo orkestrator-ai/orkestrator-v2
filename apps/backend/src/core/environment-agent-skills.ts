@@ -26,7 +26,7 @@ const maxHeadBytes = 16 * 1024;
 const maxFileBytes = 1024 * 1024;
 const maxErrors = 100;
 
-if (!["claude", "codex", "cursor", "grok", "opencode"].includes(provider)) {
+if (!["claude", "codex", "cursor", "grok", "opencode", "pi"].includes(provider)) {
   throw new Error("Unknown agent skill provider");
 }
 
@@ -260,6 +260,24 @@ async function rootPlan() {
           { path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true },
           { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
           { path: path.join(cursorCodexHome, "skills"), scope: "shared", skip: [".system"], recursive: true },
+        ]),
+      ].slice(0, maxRoots),
+      targetOnly: [],
+    };
+  }
+
+  if (provider === "pi") {
+    return {
+      specs: [
+        ...projects.flatMap((dir) => [
+          { path: path.join(dir, ".pi", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+          { path: path.join(dir, ".agents", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+          { path: path.join(dir, ".claude", "skills"), scope: "project", projectBoundary: dir, recursive: true },
+        ]),
+        { path: path.join(home, ".pi", "agent", "skills"), scope: "user", recursive: true },
+        ...(isolatedAgentTest ? [] : [
+          { path: path.join(home, ".agents", "skills"), scope: "shared", recursive: true },
+          { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
         ]),
       ].slice(0, maxRoots),
       targetOnly: [],

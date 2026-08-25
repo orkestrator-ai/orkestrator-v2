@@ -14,6 +14,7 @@ import {
   DOCKER_LABEL_PROJECT_ID,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
+  PI_BRIDGE_PORT,
   requiredAgentNetworkDomains,
   dockerContainerRuntimeName,
   dockerOwnerNamespace,
@@ -241,6 +242,16 @@ export async function createDockerContainer(
     await bindIfExists(path.join(grokHome, ".grok"), "/grok-home");
     await bindIfExists(path.join(grokHome, ".config", "grok"), "/grok-config");
   }
+  // Pi has no vendor account: its credentials are the user's own provider keys
+  // in `~/.pi/agent/auth.json`, alongside the model cache and settings. The
+  // whole directory is mounted as a portable input rather than over the home,
+  // because the bridge writes session transcripts back into it — entrypoint.sh
+  // copies the bounded allowlist, exactly as it does for Cursor and Grok.
+  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("pi")) {
+    const piHome =
+      context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
+    await bindIfExists(path.join(piHome, ".pi"), "/pi-config");
+  }
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("opencode")) {
     const configHome =
       context.runtimeFlavor === "agent-test"
@@ -284,6 +295,7 @@ export async function createDockerContainer(
   args.push("-p", `127.0.0.1::${CODEX_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CURSOR_ACP_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${GROK_ACP_BRIDGE_PORT}/tcp`);
+  args.push("-p", `127.0.0.1::${PI_BRIDGE_PORT}/tcp`);
   if (repoConfig.entryPort) args.push("-p", `127.0.0.1::${repoConfig.entryPort}/tcp`);
   args.push(context.dockerImage ?? DOCKER_IMAGE);
 

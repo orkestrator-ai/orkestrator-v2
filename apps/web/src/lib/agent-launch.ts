@@ -27,7 +27,7 @@ export interface AgentModelOption {
 }
 
 export type AgentModelCatalog = Record<"claude" | "codex" | "opencode", AgentModelOption[]> &
-  Partial<Record<"cursor" | "grok", AgentModelOption[]>>;
+  Partial<Record<"cursor" | "grok" | "pi", AgentModelOption[]>>;
 
 export function modelsForAgent(catalog: AgentModelCatalog, agent: LaunchAgent): AgentModelOption[] {
   return catalog[agent] ?? [{ id: "default", name: "Default", reasoningEfforts: [] }];
@@ -39,6 +39,7 @@ export const LAUNCH_AGENT_OPTIONS: Array<{ value: LaunchAgent; label: string }> 
   { value: "cursor", label: "Cursor Agent" },
   { value: "grok", label: "Grok Build" },
   { value: "opencode", label: "OpenCode" },
+  { value: "pi", label: "Pi" },
 ];
 
 /**

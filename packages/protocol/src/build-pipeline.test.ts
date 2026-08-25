@@ -1812,6 +1812,7 @@ describe("execution mode policy", () => {
       "cursor",
       "grok",
       "opencode",
+      "pi",
     ]);
     expect(Object.isFrozen(BUILD_PIPELINE_AGENTS)).toBe(true);
     // Every published agent must satisfy the snapshot guard, or the list and

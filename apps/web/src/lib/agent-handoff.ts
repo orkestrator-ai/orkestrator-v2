@@ -55,6 +55,7 @@ export const AGENT_PROVIDER_LABELS: Record<AgentProvider, string> = {
   cursor: "Cursor",
   grok: "Grok",
   opencode: "OpenCode",
+  pi: "Pi",
 };
 
 export interface AgentHandoffStats {

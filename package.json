@@ -32,6 +32,7 @@
     "build:claude-bridge": "turbo --cwd . run build --filter=claude-bridge --cache-dir .turbo",
     "build:codex-bridge": "turbo --cwd . run build --filter=codex-bridge --cache-dir .turbo",
     "build:acp-bridge": "turbo --cwd . run build --filter=acp-bridge --cache-dir .turbo",
+    "build:pi-bridge": "turbo --cwd . run build --filter=pi-bridge --cache-dir .turbo",
     "download:bun": "./scripts/download-bun.sh",
     "download:claude": "./scripts/download-claude.sh",
     "download:opencode": "./scripts/download-opencode.sh",
@@ -39,7 +40,7 @@
     "download:binaries": "bun run download:bun && bun run download:claude && bun run download:opencode && bun run download:codex",
     "codex:protocol": "bun scripts/generate-codex-app-server-protocol.ts",
     "codex:protocol:check": "bun scripts/generate-codex-app-server-protocol.ts --check",
-    "setup": "bun install && bun run build:claude-bridge && bun run build:codex-bridge && bun run build:acp-bridge",
+    "setup": "bun install && bun run build:claude-bridge && bun run build:codex-bridge && bun run build:acp-bridge && bun run build:pi-bridge",
     "build:all": "turbo --cwd . run build --cache-dir .turbo",
     "pack:cli": "bun pm pack --cwd packages/cli",
     "smoke:cli": "bun run --cwd packages/cli smoke:pack",
@@ -149,6 +150,15 @@
       {
         "from": "bridges/acp-bridge",
         "to": "acp-bridge",
+        "filter": [
+          "dist/**",
+          "package.json",
+          "node_modules/**"
+        ]
+      },
+      {
+        "from": "bridges/pi-bridge",
+        "to": "pi-bridge",
         "filter": [
           "dist/**",
           "package.json",

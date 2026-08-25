@@ -210,7 +210,7 @@ describe("SkillsSettings", () => {
     });
   }
 
-  test("wraps the provider tab strip so all five agents stay reachable", async () => {
+  test("wraps the provider tab strip so every agent stays reachable", async () => {
     render(<SkillsSettings />);
 
     const tabList = await screen.findByRole("tablist");
@@ -221,6 +221,7 @@ describe("SkillsSettings", () => {
       "Cursor",
       "Grok",
       "OpenCode",
+      "Pi",
     ]);
     // Every tab keeps an accessible name, so the wrapped strip is still
     // navigable by keyboard and by name rather than by position.

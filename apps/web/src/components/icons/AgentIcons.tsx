@@ -74,6 +74,26 @@ export function GrokBuildIcon({ className }: IconProps) {
   );
 }
 
+/**
+ * Pi's mark is the letter it is named after.
+ *
+ * Drawn as geometry rather than set as text so it inherits `currentColor` and
+ * scales with the others; a `<text>` element would pick up whatever font the
+ * host happens to have and land at a different weight in every tab strip.
+ */
+export function PiIcon({ className }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 32 32"
+      fill="currentColor"
+      className={cn("h-4 w-4", className)}
+      aria-hidden="true"
+    >
+      <path d="M4 7h24v4H23v12a2 2 0 0 0 2 2h2v4h-3a5 5 0 0 1-5-5V11h-6v18h-4V11H4z" />
+    </svg>
+  );
+}
+
 /** The one accent colour each agent platform is drawn in across the app. */
 export const PLATFORM_ICON_CLASS: Record<AgentPlatform, string> = {
   claude: "text-orange-400",
@@ -81,6 +101,7 @@ export const PLATFORM_ICON_CLASS: Record<AgentPlatform, string> = {
   opencode: "text-green-500",
   cursor: "text-violet-400",
   grok: "text-sky-400",
+  pi: "text-amber-400",
 };
 
 /**
@@ -101,6 +122,7 @@ export function AgentPlatformIcon({
   if (platform === "codex") return <CodexIcon className={resolved} />;
   if (platform === "opencode") return <OpenCodeIcon className={resolved} />;
   if (platform === "cursor") return <CursorAgentIcon className={resolved} />;
+  if (platform === "pi") return <PiIcon className={resolved} />;
   return <GrokBuildIcon className={resolved} />;
 }
 

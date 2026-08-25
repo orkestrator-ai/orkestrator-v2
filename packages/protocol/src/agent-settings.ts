@@ -92,6 +92,7 @@ export const SHIPPED_PLATFORM_MODES: Readonly<Record<AgentPlatform, AgentLaunchM
     cursor: "terminal",
     grok: "terminal",
     opencode: "terminal",
+    pi: "terminal",
   });
 
 function tierPlatform(

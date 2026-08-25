@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -39,7 +39,10 @@ export function parseFilters(args: string[]): Filters {
     const separator = argument.indexOf("=");
     const flag = separator === -1 ? argument : argument.slice(0, separator);
     const value = separator === -1 ? "" : argument.slice(separator + 1);
-    if (flag === "--tool" && ["claude", "codex", "opencode"].includes(value)) {
+    if (
+      flag === "--tool" &&
+      ["claude", "codex", "cursor", "grok", "opencode", "pi"].includes(value)
+    ) {
       filters.tool = value as ToolchainName;
     } else if (flag === "--platform" && ["darwin", "linux"].includes(value)) {
       filters.platform = value as ToolchainPlatform;
@@ -47,7 +50,7 @@ export function parseFilters(args: string[]): Filters {
       filters.architecture = value as ToolchainArchitecture;
     } else {
       throw new Error(
-        `Unknown filter ${argument}. Use --tool=claude|codex|opencode, ` +
+        `Unknown filter ${argument}. Use --tool=claude|codex|cursor|grok|opencode|pi, ` +
           "--platform=darwin|linux, or --arch=arm64|x64.",
       );
     }
@@ -181,6 +184,92 @@ function formatManifestSize(size: number): string {
   return size.toLocaleString("en-US").replace(/,/g, "_");
 }
 
+export type BundleIntegrity = {
+  fileCount: number;
+  totalSize: number;
+  sha256: string;
+};
+
+/**
+ * Reproduce the bundle digest `toolchain-manager.ts` checks on every startup.
+ *
+ * It has to agree byte for byte with `bundleTreeEntries` and `bundleTreeDigest`
+ * there, including the two details that are easy to lose: the primary
+ * executable is excluded, and a file counts as executable when the *archive*
+ * header carries any exec bit — which is precisely what the extractor turns
+ * into `0o500` on disk. Reading it from the archive rather than from an
+ * extracted copy keeps this independent of the umask of whoever runs it.
+ */
+export async function hashBundleIntegrity(
+  archive: ToolchainArchive,
+  archivePath: string,
+): Promise<BundleIntegrity> {
+  const root = archive.bundleRoot!;
+  const executableRelativePath = archive.entryPath.slice(root.length);
+  const extractionRoot = await mkdtemp(join(tmpdir(), "orkestrator-bundle-"));
+  try {
+    // Extracted and walked rather than parsed out of `tar -tv`, whose column
+    // layout differs between BSD and GNU tar. Walking the tree is also what
+    // `toolchain-manager.ts` does, so the two cannot drift on how a file is
+    // measured — only on where the bytes came from.
+    const extractor = Bun.spawn(
+      ["tar", "-xzf", archivePath, "-C", extractionRoot, "--strip-components=1", root.slice(0, -1)],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const [stderr, exitCode] = await Promise.all([
+      new Response(extractor.stderr).text(),
+      extractor.exited,
+    ]);
+    if (exitCode !== 0) {
+      throw new Error(`Could not extract ${archive.url}: ${stderr.slice(0, 2_000)}`);
+    }
+
+    const entries: Array<{ path: string; size: number; executable: boolean; sha256: string }> = [];
+    const visit = async (directory: string, prefix = ""): Promise<void> => {
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        const filePath = join(directory, entry.name);
+        if (entry.isDirectory()) {
+          await visit(filePath, relativePath);
+          continue;
+        }
+        if (!entry.isFile() || entry.isSymbolicLink()) {
+          throw new Error(`${archive.url} contains an unsupported entry: ${relativePath}`);
+        }
+        // The manager excludes the primary executable from the tree digest and
+        // pins it separately, so it must be skipped here too.
+        if (relativePath === executableRelativePath) continue;
+        const info = await lstat(filePath);
+        entries.push({
+          path: relativePath,
+          size: info.size,
+          executable: (info.mode & 0o111) !== 0,
+          sha256: (await hashFile(filePath)).sha256,
+        });
+      }
+    };
+    await visit(extractionRoot);
+
+    entries.sort((left, right) => left.path.localeCompare(right.path));
+    const hash = createHash("sha256");
+    let totalSize = 0;
+    for (const entry of entries) {
+      totalSize += entry.size;
+      hash.update(entry.path);
+      hash.update("\0");
+      hash.update(String(entry.size));
+      hash.update("\0");
+      hash.update(entry.executable ? "x" : "-");
+      hash.update("\0");
+      hash.update(entry.sha256);
+      hash.update("\n");
+    }
+    return { fileCount: entries.length, totalSize, sha256: hash.digest("hex") };
+  } finally {
+    await rm(extractionRoot, { recursive: true, force: true });
+  }
+}
+
 /**
  * Downloads one archive, hashes it and its pinned entry, then either prints the
  * digests in manifest form or asserts them. Used for an artifact's primary
@@ -202,6 +291,11 @@ async function verifyArchive(
 
   const archiveDigest = await hashFile(archivePath);
   const executableDigest = await hashArchiveEntry(archive, archivePath);
+  // Only bundle artifacts have one, and computing it costs a hash of every file
+  // in the tree — so it is skipped entirely for the single-file archives.
+  const bundleIntegrity = archive.bundleIntegrity
+    ? await hashBundleIntegrity(archive, archivePath)
+    : undefined;
 
   if (options.emit) {
     // A version bump changes all four digests per archive. Printing them in
@@ -213,6 +307,13 @@ async function verifyArchive(
         `  archive.sha256:    "${archiveDigest.sha256}",`,
         `  executable.size:   ${formatManifestSize(executableDigest.size)},`,
         `  executable.sha256: "${executableDigest.sha256}",`,
+        ...(bundleIntegrity
+          ? [
+              `  bundleIntegrity.fileCount: ${formatManifestSize(bundleIntegrity.fileCount)},`,
+              `  bundleIntegrity.totalSize: ${formatManifestSize(bundleIntegrity.totalSize)},`,
+              `  bundleIntegrity.sha256:    "${bundleIntegrity.sha256}",`,
+            ]
+          : []),
       ].join("\n"),
     );
   } else {
@@ -221,6 +322,20 @@ async function verifyArchive(
       sha256: archive.sha256,
     });
     expectDigest(`${label} executable`, executableDigest, executable);
+    if (bundleIntegrity && archive.bundleIntegrity) {
+      const expected = archive.bundleIntegrity;
+      if (
+        bundleIntegrity.fileCount !== expected.fileCount ||
+        bundleIntegrity.totalSize !== expected.totalSize ||
+        bundleIntegrity.sha256 !== expected.sha256
+      ) {
+        throw new Error(
+          `${label} bundle integrity mismatch: expected ${expected.fileCount} files / ` +
+            `${expected.totalSize} bytes / ${expected.sha256}, got ${bundleIntegrity.fileCount} / ` +
+            `${bundleIntegrity.totalSize} / ${bundleIntegrity.sha256}`,
+        );
+      }
+    }
   }
 
   await rm(archivePath, { force: true });

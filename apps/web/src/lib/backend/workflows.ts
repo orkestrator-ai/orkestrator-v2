@@ -1,4 +1,5 @@
 import { invoke } from "@/lib/native/backend";
+import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   AgentInteractionApplyOutcome,
   AgentInteractionOrigin,
@@ -51,6 +52,16 @@ import {
   type TerminalSessionCreateResult,
 } from "./shared";
 import type { KanbanTask } from "./kanban";
+
+/**
+ * The platform a native-agent command names.
+ *
+ * Every command in this module took its own inline copy of the same union,
+ * which meant adding a platform was twenty edits that had to agree. It is the
+ * full platform list — the backend rejects a platform it cannot serve, and
+ * doing that here as well would put the same rule in two places.
+ */
+type NativeAgentClientPlatform = AgentPlatform;
 
 export async function startLoopedReview(
   input: StartLoopedReviewInput,
@@ -201,7 +212,7 @@ export async function deleteMultiReviewWorkflow(workflowId: string): Promise<voi
 
 export async function ensureNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -224,7 +235,7 @@ export async function ensureNativeAgentSession(input: {
 
 export async function adoptNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -241,7 +252,7 @@ export async function adoptNativeAgentSession(input: {
 
 export async function getNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
 }): Promise<PersistedNativeAgentSession | null> {
   return invoke<PersistedNativeAgentSession | null>("get_native_agent_session", input);
@@ -249,7 +260,7 @@ export async function getNativeAgentSession(input: {
 
 export async function getNativeAgentProjection<TMessage = unknown>(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   /** Omit to keep the window this session already has; never to shrink it. */
   messageLimit?: number;
@@ -259,7 +270,7 @@ export async function getNativeAgentProjection<TMessage = unknown>(input: {
 
 export async function getNativeAgentToolDetails(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   detailRef: string;
 }): Promise<NativeAgentToolDetails> {
@@ -268,7 +279,7 @@ export async function getNativeAgentToolDetails(input: {
 
 export async function refreshNativeAgentModels<TMessage = unknown>(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
   return invoke("refresh_native_agent_models", input);
@@ -276,7 +287,7 @@ export async function refreshNativeAgentModels<TMessage = unknown>(input: {
 
 export async function stopNativeAgentSession<TMessage = unknown>(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
   return invoke("stop_native_agent_session", input);
@@ -284,7 +295,7 @@ export async function stopNativeAgentSession<TMessage = unknown>(input: {
 
 export async function stopNativeAgentBackgroundTask<TMessage = unknown>(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   taskId: string;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
@@ -293,7 +304,7 @@ export async function stopNativeAgentBackgroundTask<TMessage = unknown>(input: {
 
 export async function dismissNativeAgentSuggestedPrompt<TMessage = unknown>(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
   return invoke("dismiss_native_agent_suggested_prompt", input);
@@ -301,7 +312,7 @@ export async function dismissNativeAgentSuggestedPrompt<TMessage = unknown>(inpu
 
 export async function listNativeAgentResumableSessions(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
 }): Promise<NativeAgentResumeEntry[]> {
   return invoke("list_native_agent_resumable_sessions", input);
@@ -309,7 +320,7 @@ export async function listNativeAgentResumableSessions(input: {
 
 export async function resumeNativeAgentSession<TMessage = unknown>(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   providerSessionId: string;
   controls?: NativeAgentControlUpdate;
@@ -319,7 +330,7 @@ export async function resumeNativeAgentSession<TMessage = unknown>(input: {
 
 export async function forkNativeAgentSession(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   messageId?: string;
 }): Promise<NativeAgentForkOutcome> {
@@ -328,7 +339,7 @@ export async function forkNativeAgentSession(input: {
 
 export async function updateNativeAgentControls<TMessage = unknown>(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   update: NativeAgentControlUpdate;
 }): Promise<NativeAgentSessionProjection<TMessage> | null> {
@@ -337,7 +348,7 @@ export async function updateNativeAgentControls<TMessage = unknown>(input: {
 
 export async function performNativeAgentSessionAction(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   action: NativeAgentSessionAction;
 }): Promise<NativeAgentSessionActionOutcome> {
@@ -346,7 +357,7 @@ export async function performNativeAgentSessionAction(input: {
 
 export async function resolveNativeAgentInteraction(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   interactionId: string;
   resolution: AgentInteractionResolution;
@@ -356,7 +367,7 @@ export async function resolveNativeAgentInteraction(input: {
 
 export async function dispatchNativeAgentPrompt(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -376,7 +387,7 @@ export async function dispatchNativeAgentPrompt(input: {
 
 export async function dispatchNativeAgentIntent(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   origin?: AgentInteractionOrigin;
   interactionPolicy?: AgentInteractionPolicy;
@@ -406,7 +417,7 @@ export async function dispatchNativeAgentIntent(input: {
 
 export async function retryNativeAgentDispatch(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   requestId: string;
 }): Promise<NativeAgentDispatchOutcome> {
@@ -415,7 +426,7 @@ export async function retryNativeAgentDispatch(input: {
 
 export async function discardNativeAgentDispatch(input: {
   environmentId: string;
-  agent: "claude" | "codex" | "opencode" | "cursor" | "grok";
+  agent: NativeAgentClientPlatform;
   logicalSessionKey: string;
   requestId: string;
 }): Promise<{ discarded: boolean }> {

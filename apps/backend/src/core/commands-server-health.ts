@@ -98,7 +98,11 @@ export async function isHttpServerReachable(
 }
 
 export function localServerHealthAttempts(kind: LocalServerKind): number {
-  return kind === "cursor" || kind === "grok"
+  // Pi joins the ACP agents on the longer budget for the same reason: its cold
+  // start builds a model runtime and may refresh a provider catalogue over the
+  // network before it can answer, which is slower than a bridge that only has
+  // to bind a port.
+  return kind === "cursor" || kind === "grok" || kind === "pi"
     ? ACP_LOCAL_SERVER_HEALTH_ATTEMPTS
     : LOCAL_SERVER_HEALTH_ATTEMPTS;
 }

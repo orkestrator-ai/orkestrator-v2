@@ -76,7 +76,7 @@ export const LOOPED_REVIEW_MAX_ARCHIVED_POOLS = 64;
 export const LOOPED_REVIEW_MAX_REQUEST_IDS = 256;
 export const LOOPED_REVIEW_MAX_TRANSCRIPT_ENTRIES = 64;
 
-export type LoopedReviewAgent = "claude" | "codex" | "opencode" | "cursor" | "grok";
+export type LoopedReviewAgent = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 export type LoopedReviewPhase =
   | "preparing"
   | "discovering"

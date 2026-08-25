@@ -253,6 +253,7 @@ describe("AgentModelPicker", () => {
       opencode: "text-green-500",
       cursor: "text-violet-400",
       grok: "text-sky-400",
+      pi: "text-amber-400",
     });
   });
 

@@ -57,6 +57,35 @@ describe("buildAgentLaunchCommand", () => {
     expect(buildAgentLaunchCommand({ tabType: "grok" })).toBe("grok");
   });
 
+  test("splits Pi's provider/model pair into the two flags it takes", () => {
+    // Passing the flat composer id to `--model` would have Pi read the provider
+    // prefix as part of a model name and fail to resolve it.
+    expect(
+      buildAgentLaunchCommand({
+        tabType: "pi",
+        model: "anthropic/claude-opus-4-5",
+        reasoningEffort: "high",
+      }),
+    ).toBe('pi --provider "anthropic" --model "claude-opus-4-5" --thinking "high"');
+  });
+
+  test("keeps a nested Pi model id intact past the provider", () => {
+    // OpenRouter-style ids carry their own slashes; only the first one names
+    // the provider.
+    expect(
+      buildAgentLaunchCommand({
+        tabType: "pi",
+        model: "openrouter/anthropic/claude-opus-4-5",
+      }),
+    ).toBe('pi --provider "openrouter" --model "anthropic/claude-opus-4-5"');
+  });
+
+  test("launches Pi with no flags when nothing was selected", () => {
+    expect(buildAgentLaunchCommand({ tabType: "pi" })).toBe("pi");
+    expect(buildAgentLaunchCommand({ tabType: "pi", model: "default" })).toBe("pi");
+    expect(buildAgentLaunchCommand({ tabType: "pi", initialPrompt: "Review" })).toBe('pi "Review"');
+  });
+
   test("preserves multiline and CRLF prompt structure", () => {
     expect(
       buildAgentLaunchCommand({

@@ -148,20 +148,23 @@ const CLAUDE_BUILT_IN_SLASH_COMMANDS: readonly NativeAgentSlashCommand[] = [
 ];
 
 /**
- * Drop the staged `dataUrl` before an attachment reaches an ACP bridge.
+ * Drop the staged `dataUrl` before an attachment reaches a bridge that reads
+ * the workspace itself.
  *
- * That bridge reads every attachment's bytes from the workspace itself and
- * ignores `dataUrl`, but it caps a request body at 2MiB. Forwarding the data URL
+ * Those bridges read every attachment's bytes from the workspace and ignore
+ * `dataUrl`, but they cap a request body at 2MiB. Forwarding the data URL
  * spends that whole budget on a copy the bridge discards, so a screenshot much
  * over 1.5MB would come back as HTTP 413 — a terminal rejection of a prompt the
  * bridge is perfectly able to read from disk. The Claude and Codex bridges do
- * consume `dataUrl`, so this is deliberately scoped to the ACP agents.
+ * consume `dataUrl`, so this is deliberately scoped to the ones that do not.
  */
 function bridgePromptAttachments(
   agent: HttpBridgeProvider["agent"],
   attachments: PromptAttachment[] | undefined,
 ): PromptAttachment[] | undefined {
-  if (!attachments || (agent !== "cursor" && agent !== "grok")) return attachments;
+  if (!attachments || (agent !== "cursor" && agent !== "grok" && agent !== "pi")) {
+    return attachments;
+  }
   return attachments.map((attachment) => ({
     type: attachment.type,
     path: attachment.path,
@@ -170,7 +173,7 @@ function bridgePromptAttachments(
 }
 
 export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
-  readonly agent: "claude" | "codex" | "cursor" | "grok";
+  readonly agent: "claude" | "codex" | "cursor" | "grok" | "pi";
   private readonly stageImages?: HttpBridgeProviderDependencies["stageImages"];
   private readonly interactionAdapter: HttpBridgeInteractionAdapter;
   readonly interactions: AgentInteractionProviderCapability;
@@ -201,7 +204,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     private readonly fetchImpl: typeof fetch,
     stageImages?: HttpBridgeProviderDependencies["stageImages"],
   ) {
-    this.agent = connection.agent as "claude" | "codex" | "cursor" | "grok";
+    this.agent = connection.agent as "claude" | "codex" | "cursor" | "grok" | "pi";
     this.stageImages = stageImages;
     this.interactionAdapter = new HttpBridgeInteractionAdapter(this.agent, connection, fetchImpl);
     this.interactions = {
@@ -237,7 +240,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 mode,
                 clientSessionKey,
               }
-            : this.agent === "cursor" || this.agent === "grok"
+            : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
               ? {
                   title: label,
                   clientSessionKey,
@@ -265,14 +268,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   /**
    * Attach the bridge's agent process before the dispatch window opens.
    *
-   * Only the ACP bridges expose this: they are the ones whose prompt route
-   * performs a full spawn plus `initialize` plus `session/load` when no child
-   * is attached, which is the work that used to run inside the at-most-once
-   * window and abort the caller mid-flight. A bridge that predates the route
-   * answers 404 and the prompt request does the work itself, exactly as before.
+   * Only the bridges with a real cold start expose this. The ACP bridges spawn
+   * a CLI child and run `initialize` plus `session/load`; the Pi bridge builds
+   * a model runtime, loads its resources and opens a session file. Either way
+   * that is work which used to run inside the at-most-once window and abort the
+   * caller mid-flight. A bridge that predates the route answers 404 and the
+   * prompt request does the work itself, exactly as before.
    */
   async prepareDispatch(sessionId: string): Promise<void> {
-    if (this.agent !== "cursor" && this.agent !== "grok") return;
+    if (this.agent !== "cursor" && this.agent !== "grok" && this.agent !== "pi") return;
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/attach`,
@@ -340,7 +344,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   promptSuggestions: options.promptSuggestions,
                   permissionMode: options.mode === "plan" ? "plan" : "bypassPermissions",
                 }
-              : this.agent === "cursor" || this.agent === "grok"
+              : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
                 ? {
                     fastMode: options.fastMode,
                     model: options.model ?? this.connection.model,
@@ -658,7 +662,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async interactiveSnapshot(sessionId: string): Promise<ProviderInteractiveSnapshot> {
-    if (this.agent === "cursor" || this.agent === "grok") {
+    if (this.agent === "cursor" || this.agent === "grok" || this.agent === "pi") {
       const [response, transcript] = await Promise.all([
         bridgeFetch(
           this.connection,
@@ -984,7 +988,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       assertOk(response, "Codex session config update");
       return undefined;
     }
-    if (this.agent !== "cursor" && this.agent !== "grok") return undefined;
+    if (this.agent !== "cursor" && this.agent !== "grok" && this.agent !== "pi") {
+      return undefined;
+    }
     const response = await bridgeFetch(
       this.connection,
       `/session/${encodeURIComponent(sessionId)}/config`,
@@ -1114,7 +1120,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
   }
 
   async resumeSession(sessionId: string, controls?: NativeAgentControlUpdate): Promise<string> {
-    if (this.agent === "cursor" || this.agent === "grok") {
+    if (this.agent === "cursor" || this.agent === "grok" || this.agent === "pi") {
       const response = await bridgeFetch(
         this.connection,
         "/session/resume",
@@ -1239,6 +1245,30 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       );
       await assertOkWithErrorDetail(response, "Codex native review");
       return { outcome: "applied" };
+    }
+    if (this.agent === "pi" && action.kind === "steer") {
+      // Pi holds the queue itself and delivers a steering message before the
+      // next model call, so there is no turn id to guard against — the bridge
+      // answers `idle` when nothing is running, which is the same race the
+      // Codex path resolves with `expectedTurnId`.
+      let response: Response;
+      try {
+        response = await bridgeFetch(
+          this.connection,
+          `${base}/steer`,
+          {
+            method: "POST",
+            body: JSON.stringify({ input: action.text, requestId: action.requestId }),
+          },
+          this.fetchImpl,
+        );
+      } catch {
+        return { outcome: "unknown", requestId: action.requestId };
+      }
+      if (response.status === 404) throw new PromptRejectedError("Pi session was not found");
+      await assertOkWithErrorDetail(response, "Pi steer");
+      const payload = asRecord(await boundedJson(response, "Pi steer").catch(() => ({})));
+      return payload?.outcome === "idle" ? { outcome: "idle" } : { outcome: "applied" };
     }
     if (this.agent === "codex" && action.kind === "steer") {
       const statusResponse = await bridgeFetch(

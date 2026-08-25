@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  // The bridge builds with `--target=node` and runs under `node dist/index.js`,
+  // so Bun's ambient globals must stay out of this project: a `Bun.*` call in
+  // shipped source has to fail here rather than at runtime. The test harness is
+  // typechecked by `tsconfig.test.json` instead.
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/testing/**"]
+}

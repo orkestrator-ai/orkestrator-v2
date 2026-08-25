@@ -5,6 +5,7 @@ import {
   CursorAgentIcon,
   GrokBuildIcon,
   OpenCodeIcon,
+  PiIcon,
 } from "@/components/icons/AgentIcons";
 import { LAUNCH_AGENT_OPTIONS, type LaunchAgent } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,7 @@ export function AgentIcon({ agent, className }: { agent: LaunchAgent; className?
   if (agent === "codex") return <CodexIcon className={className} />;
   if (agent === "cursor") return <CursorAgentIcon className={className} />;
   if (agent === "grok") return <GrokBuildIcon className={className} />;
+  if (agent === "pi") return <PiIcon className={className} />;
   return <OpenCodeIcon className={className} />;
 }
 

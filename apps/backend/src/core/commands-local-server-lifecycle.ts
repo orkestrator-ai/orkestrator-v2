@@ -16,6 +16,7 @@ import {
   localCursorBridgeTokens,
   localCursorCredentialFingerprints,
   localGrokBridgeTokens,
+  localPiBridgeTokens,
   localOpenCodeServerPasswords,
   localServerEnvironmentOperations,
   localServerProcesses,
@@ -172,6 +173,7 @@ export function localServerFields(kind: LocalServerKind): {
   if (kind === "claude") return { port: "localClaudePort", pid: "claudeBridgePid" };
   if (kind === "codex") return { port: "localCodexPort", pid: "codexBridgePid" };
   if (kind === "cursor") return { port: "localCursorPort", pid: "cursorBridgePid" };
+  if (kind === "pi") return { port: "localPiPort", pid: "piBridgePid" };
   return { port: "localGrokPort", pid: "grokBridgePid" };
 }
 
@@ -195,6 +197,8 @@ export function releaseLocalServerOwnership(
     localCursorCredentialFingerprints.delete(environmentId);
   } else if (key.startsWith("grok:")) {
     localGrokBridgeTokens.delete(key.slice("grok:".length));
+  } else if (key.startsWith("pi:")) {
+    localPiBridgeTokens.delete(key.slice("pi:".length));
   }
 }
 

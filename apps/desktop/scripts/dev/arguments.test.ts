@@ -10,6 +10,7 @@ describe("development CLI arguments", () => {
       "cursor",
       "grok",
       "opencode",
+      "pi",
     ]);
   });
 
@@ -49,6 +50,7 @@ describe("development CLI arguments", () => {
       "cursor",
       "grok",
       "opencode",
+      "pi",
     ]);
   });
 
@@ -71,6 +73,7 @@ describe("development CLI arguments", () => {
       "cursor",
       "grok",
       "opencode",
+      "pi",
     ]);
   });
 

@@ -14,7 +14,14 @@ import type { FileHandle } from "node:fs/promises";
  * renderer must not be able to turn this into an arbitrary host file reader.
  */
 
-export const AGENT_SKILL_PROVIDERS = ["claude", "codex", "cursor", "grok", "opencode"] as const;
+export const AGENT_SKILL_PROVIDERS = [
+  "claude",
+  "codex",
+  "cursor",
+  "grok",
+  "opencode",
+  "pi",
+] as const;
 export type AgentSkillProvider = (typeof AGENT_SKILL_PROVIDERS)[number];
 
 export function isAgentSkillProvider(value: unknown): value is AgentSkillProvider {
@@ -434,6 +441,18 @@ async function rootSpecsFor(provider: AgentSkillProvider): Promise<RootSpec[]> {
   if (provider === "grok") {
     return [
       { path: path.join(home, ".grok", "skills"), scope: "user", recursive: true },
+      { path: agentsSkills, scope: "shared", recursive: true },
+      { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
+    ];
+  }
+
+  if (provider === "pi") {
+    // Pi resolves its resources from the agent directory rather than the config
+    // directory above it: `~/.pi` holds `agent/`, and everything Pi loads —
+    // skills, prompts, extensions, themes — sits inside that. The shared roots
+    // follow the other platforms so a skill written once is offered everywhere.
+    return [
+      { path: path.join(home, ".pi", "agent", "skills"), scope: "user", recursive: true },
       { path: agentsSkills, scope: "shared", recursive: true },
       { path: path.join(home, ".claude", "skills"), scope: "shared", recursive: true },
     ];

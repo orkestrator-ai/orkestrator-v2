@@ -8,7 +8,7 @@ import {
 
 describe("agent platform registry", () => {
   test("publishes every supported system in product order", () => {
-    expect(AGENT_PLATFORMS).toEqual(["claude", "codex", "cursor", "grok", "opencode"]);
+    expect(AGENT_PLATFORMS).toEqual(["claude", "codex", "cursor", "grok", "opencode", "pi"]);
     expect(Object.isFrozen(AGENT_PLATFORMS)).toBe(true);
   });
 

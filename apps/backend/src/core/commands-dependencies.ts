@@ -91,6 +91,7 @@ export {
   DOCKER_LABEL_PROJECT_ID,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
+  PI_BRIDGE_PORT,
   ORKESTRATOR_PROJECT_CONFIG,
   requiredAgentNetworkDomains,
   resolveCodexMaxConcurrentThreads,

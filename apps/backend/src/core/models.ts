@@ -118,6 +118,7 @@ export interface AgentModelCatalogCache {
   codex?: PersistedAgentModelCatalog<CodexModelCatalogEntry>;
   cursor?: PersistedAgentModelCatalog<AgentModel>;
   grok?: PersistedAgentModelCatalog<AgentModel>;
+  pi?: PersistedAgentModelCatalog<AgentModel>;
 }
 
 export interface OpenCodeModelCatalogEntry {
@@ -246,11 +247,13 @@ export interface Environment {
   codexBridgePid?: number;
   cursorBridgePid?: number;
   grokBridgePid?: number;
+  piBridgePid?: number;
   localOpencodePort?: number;
   localClaudePort?: number;
   localCodexPort?: number;
   localCursorPort?: number;
   localGrokPort?: number;
+  localPiPort?: number;
   /** Last backend-owned Claude model catalog for this environment. */
   claudeModelCatalog?: ClaudeModelCatalogSnapshot;
   /**
@@ -318,6 +321,7 @@ export type ClientEnvironment = Omit<
   | "codexBridgePid"
   | "cursorBridgePid"
   | "grokBridgePid"
+  | "piBridgePid"
   | "pendingRenamePrompt"
   | "tabTeardownIntents"
 > & {
@@ -425,7 +429,7 @@ export interface PersistedBuildPipeline {
   revision: number;
 }
 
-export type NativeAgentProvider = "claude" | "codex" | "opencode" | "cursor" | "grok";
+export type NativeAgentProvider = "claude" | "codex" | "opencode" | "cursor" | "grok" | "pi";
 export const NATIVE_AGENT_SESSION_VERSION = 1 as const;
 
 export interface OpenCodeIncompleteTurnNotice {

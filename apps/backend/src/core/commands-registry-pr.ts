@@ -404,6 +404,15 @@ export function registerPullRequestCommands(
   register("get_local_grok_server_status", ({ environmentId }, context) =>
     getLocalServerStatus(asString(environmentId, "environmentId"), context, "grok"),
   );
+  register("start_local_pi_server_cmd", ({ environmentId }, context) =>
+    startLocalServer(asString(environmentId, "environmentId"), context, "pi"),
+  );
+  register("stop_local_pi_server_cmd", ({ environmentId }, context) =>
+    stopLocalServer(asString(environmentId, "environmentId"), context, "pi"),
+  );
+  register("get_local_pi_server_status", ({ environmentId }, context) =>
+    getLocalServerStatus(asString(environmentId, "environmentId"), context, "pi"),
+  );
   register("cleanup_stale_local_servers_cmd", () => undefined);
 
   register("await_bridge_ready", (args, context) => {

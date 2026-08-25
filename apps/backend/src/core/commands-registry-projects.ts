@@ -185,13 +185,15 @@ export function registerProjectCommands(
     const selectableLiveOpenCodeModels = liveOpenCodeModels.filter((model) =>
       isSelectableOpenCodeModelId(model.id, openCodeModelProviders),
     );
-    const [cursorModels, grokModels] = await Promise.all([
+    const [cursorModels, grokModels, piModels] = await Promise.all([
       fetchAcpNormalizedModels(environment, context, "cursor"),
       fetchAcpNormalizedModels(environment, context, "grok"),
+      fetchAcpNormalizedModels(environment, context, "pi"),
     ]);
     for (const [agent, models] of [
       ["cursor", cursorModels],
       ["grok", grokModels],
+      ["pi", piModels],
     ] as const) {
       if (models.length === 0) continue;
       try {

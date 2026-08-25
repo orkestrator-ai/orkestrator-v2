@@ -119,6 +119,8 @@ else
         "cursor-cdn.com"
         "cursor.com"
         "bedrock.amazonaws.com"
+        "pi.dev"
+        "radius.pi.dev"
 
         # Cloud providers
         "vercel.com"

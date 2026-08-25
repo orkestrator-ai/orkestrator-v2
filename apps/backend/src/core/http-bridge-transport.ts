@@ -120,7 +120,11 @@ function authHeaders(connection: BridgeConnection): Headers {
     headers.set("X-Orkestrator-Claude-Token", connection.authToken);
   } else if (connection.agent === "codex") {
     headers.set("X-Orkestrator-Codex-Token", connection.authToken);
-  } else if (connection.agent === "cursor" || connection.agent === "grok") {
+  } else if (
+    connection.agent === "cursor" ||
+    connection.agent === "grok" ||
+    connection.agent === "pi"
+  ) {
     headers.set("Authorization", `Bearer ${connection.authToken}`);
   }
   return headers;

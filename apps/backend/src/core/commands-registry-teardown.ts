@@ -150,7 +150,9 @@ export function registerTeardownCommands(
               ? "cursor"
               : intent.kind === "grok-native"
                 ? "grok"
-                : null;
+                : intent.kind === "pi-native"
+                  ? "pi"
+                  : null;
     if (!agent) return;
     const logicalSessionKey = `env-${environment.id}:${intent.tabId}`;
     const storageKey = nativeAgentSessionStorageKey(environment.id, agent, logicalSessionKey);
@@ -305,6 +307,7 @@ export function registerTeardownCommands(
       "codex",
       "cursor",
       "grok",
+      "pi",
     ]);
     const collectTabs = (node: unknown, terminals: Set<string>, native: Set<string>): void => {
       if (!node || typeof node !== "object" || Array.isArray(node)) return;
@@ -381,7 +384,9 @@ export function registerTeardownCommands(
                 ? "cursor-native"
                 : startup.agent === "grok"
                   ? "grok-native"
-                  : "opencode-native";
+                  : startup.agent === "pi"
+                    ? "pi-native"
+                    : "opencode-native";
         await teardownTab(
           {
             environmentId: environment.id,
@@ -417,7 +422,9 @@ export function registerTeardownCommands(
                 ? "cursor-native"
                 : session.agent === "grok"
                   ? "grok-native"
-                  : "opencode-native";
+                  : session.agent === "pi"
+                    ? "pi-native"
+                    : "opencode-native";
         console.warn(`[backend] Reaping orphaned native session ${session.environmentId}/${tabId}`);
         await teardownTab(
           {

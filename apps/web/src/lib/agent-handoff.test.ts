@@ -163,6 +163,7 @@ describe("agent handoff serialization", () => {
       cursor: "Cursor",
       grok: "Grok",
       opencode: "OpenCode",
+      pi: "Pi",
     });
     expect(Object.keys(AGENT_PROVIDER_LABELS).sort()).toEqual([...AGENT_PLATFORMS].sort());
   });

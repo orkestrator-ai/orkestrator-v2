@@ -6,6 +6,7 @@ export const TAB_TEARDOWN_KINDS = [
   "codex-native",
   "cursor-native",
   "grok-native",
+  "pi-native",
 ] as const;
 
 export type TabTeardownKind = (typeof TAB_TEARDOWN_KINDS)[number];

@@ -46,6 +46,7 @@ type NativeDraftNamespace =
   | "opencode"
   | "cursor"
   | "grok"
+  | "pi"
   | "agent-native";
 
 function isRecord(value: unknown): value is Record<string, unknown> {

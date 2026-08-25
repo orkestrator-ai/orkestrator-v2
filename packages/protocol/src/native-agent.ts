@@ -492,6 +492,22 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
       actions: { compact: true, undo: true, redo: true, share: true },
     };
   }
+  if (agent === "pi") {
+    return {
+      ...capabilities,
+      composer: {
+        ...capabilities.composer,
+        // Pi's reasoning axis is its thinking level, which every provider it
+        // fronts exposes. There is no speed toggle anywhere in the SDK, and
+        // "no forced features like plan mode" is Pi's stated design — modes
+        // are something an extension adds, not something the harness ships,
+        // so claiming one here would offer a control nothing can honour.
+        speed: false,
+        mode: false,
+      },
+      actions: { compact: true, steer: true },
+    };
+  }
   return {
     ...capabilities,
     attachments: { files: false, images: true },

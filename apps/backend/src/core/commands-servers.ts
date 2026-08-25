@@ -306,6 +306,7 @@ export async function fetchAcpNormalizedModels(
   environment: Environment,
   context: CommandContext,
   kind: "cursor" | "grok" | "pi",
+  timeoutMs?: number,
 ): Promise<AgentModel[]> {
   const bridge =
     environment.environmentType === "local"
@@ -315,7 +316,19 @@ export async function fetchAcpNormalizedModels(
         : null;
   if (!bridge) return [];
   const port = "port" in bridge ? bridge.port : bridge.hostPort;
-  return fetchAcpNormalizedModelsAt(port, bridge.authToken, kind);
+  return fetchAcpNormalizedModelsAt(port, bridge.authToken, kind, timeoutMs);
+}
+
+/**
+ * How long a `/global/models` read may take before it is abandoned.
+ *
+ * Pi may spend up to 30 seconds refreshing a dynamic provider on its first
+ * catalogue read. The generic ACP bridges answer from local state, so they
+ * retain their tighter bound while Pi's own bounded refresh is allowed to
+ * finish instead of being aborted just before it can seed the cache.
+ */
+export function acpModelFetchTimeoutMs(kind: "cursor" | "grok" | "pi"): number {
+  return kind === "pi" ? 35_000 : 8_000;
 }
 
 /** Read the normalized model rows from a known bridge endpoint. */
@@ -323,6 +336,7 @@ export async function fetchAcpNormalizedModelsAt(
   port: number,
   authToken: string,
   kind: "cursor" | "grok" | "pi",
+  timeoutMs?: number,
 ): Promise<AgentModel[]> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/global/models`, {
@@ -330,11 +344,13 @@ export async function fetchAcpNormalizedModelsAt(
         Authorization: `Bearer ${authToken}`,
         "X-Orkestrator-Acp-Token": authToken,
       },
-      // Pi may spend up to 30 seconds refreshing a dynamic provider on its
-      // first catalogue read. The generic ACP bridges answer from local state,
-      // so retain their tighter bound while allowing Pi's own bounded refresh
-      // to finish instead of aborting it just before it can seed the cache.
-      signal: AbortSignal.timeout(kind === "pi" ? 35_000 : 8_000),
+      // A caller working to an overall deadline may narrow this, never widen it.
+      signal: AbortSignal.timeout(
+        Math.min(
+          acpModelFetchTimeoutMs(kind),
+          Math.max(1_000, timeoutMs ?? Number.MAX_SAFE_INTEGER),
+        ),
+      ),
     });
     if (!response.ok) return [];
     const body = (await response.json()) as { models?: unknown };

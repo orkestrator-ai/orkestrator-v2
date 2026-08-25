@@ -45,6 +45,15 @@ import {
   createProjectFromScratch,
 } from "./commands-helpers.js";
 
+/**
+ * Total extra time a first-use catalogue read may spend starting a bridge and
+ * reading its live list before it answers from the durable cache instead.
+ */
+export const FIRST_USE_CATALOG_BUDGET_MS = 45_000;
+
+/** The share of that budget allowed for the bridge to become ready. */
+export const FIRST_USE_BRIDGE_READY_TIMEOUT_MS = 30_000;
+
 export function registerProjectCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
@@ -145,9 +154,13 @@ export function registerProjectCommands(
           try {
             await ensure({}, context);
             cache = await context.storage.getAgentModelCatalogCache();
-          } catch {
+          } catch (error) {
             // Keep startup non-fatal and return every last-known-good catalogue.
             // The next application launch can retry a transient provider error.
+            console.warn(
+              "[ElectronBackend] Failed to seed the host Pi model catalogue:",
+              error instanceof Error ? error.message : "unknown error",
+            );
           }
         }
       }
@@ -170,24 +183,57 @@ export function registerProjectCommands(
     const environment = await storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
     const cache = await storage.getAgentModelCatalogCache();
+    // Bounds the extra work a first-use read may add, so the model picker
+    // cannot be left waiting on a cold bridge for an open-ended time. Only the
+    // first-use branch consumes it; a read served from the durable cache is
+    // unaffected.
+    let firstUseDeadline: number | null = null;
     if (ensureAgent && !cache[ensureAgent]?.models.length) {
       // The empty-tab picker is the first consumer on a fresh installation, so
       // there may be neither a live bridge nor a durable last-known-good list.
       // Start only the platform the user is trying to select; eagerly starting
       // every enabled bridge would create unused processes in every environment.
+      firstUseDeadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
       const awaitBridgeReady = commands.get("await_bridge_ready");
       if (awaitBridgeReady) {
         try {
-          await awaitBridgeReady(
-            { environmentId: id, agent: ensureAgent, timeoutMs: 60_000 },
+          // The bridge's own health budget is what actually bounds a cold
+          // start; waiting longer here only extends the case where the
+          // environment is still being created, which a picker must not block
+          // on.
+          const ready = (await awaitBridgeReady(
+            {
+              environmentId: id,
+              agent: ensureAgent,
+              timeoutMs: FIRST_USE_BRIDGE_READY_TIMEOUT_MS,
+            },
             context,
+          )) as { status?: unknown; error?: { message?: unknown } } | undefined;
+          // `await_bridge_ready` reports failure by returning, not throwing. It
+          // is the launch here, so there are no other launch diagnostics to
+          // inherit: without this the user sees an empty picker and nothing
+          // anywhere records why.
+          if (ready && ready.status !== "ready") {
+            console.warn(
+              `[ElectronBackend] The first-use ${ensureAgent} catalogue bridge did not become ready (${
+                typeof ready.status === "string" ? ready.status : "unknown"
+              }): ${typeof ready.error?.message === "string" ? ready.error.message : "no detail"}`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `[ElectronBackend] The first-use ${ensureAgent} catalogue bridge failed to start:`,
+            error instanceof Error ? error.message : "unknown error",
           );
-        } catch {
-          // The catalogue response still carries every durable fallback. A
-          // bridge startup error belongs to its normal launch diagnostics.
         }
       }
     }
+    // Only the platform this read is trying to seed is held to the remaining
+    // budget. The others are already answering from local bridge state.
+    const firstUseFetchTimeoutMs = (kind: "cursor" | "grok" | "pi"): number | undefined =>
+      firstUseDeadline !== null && kind === ensureAgent
+        ? Math.max(1_000, firstUseDeadline - Date.now())
+        : undefined;
     const claudeModels = environment.claudeModelCatalog?.models ?? cache.claude?.models ?? [];
     const codexModels = cache.codex?.models ?? [];
     // The live catalogue is already filtered by the provider, but a cache
@@ -241,9 +287,9 @@ export function registerProjectCommands(
       isSelectableOpenCodeModelId(model.id, openCodeModelProviders),
     );
     const [cursorModels, grokModels, piModels] = await Promise.all([
-      fetchAcpNormalizedModels(environment, context, "cursor"),
-      fetchAcpNormalizedModels(environment, context, "grok"),
-      fetchAcpNormalizedModels(environment, context, "pi"),
+      fetchAcpNormalizedModels(environment, context, "cursor", firstUseFetchTimeoutMs("cursor")),
+      fetchAcpNormalizedModels(environment, context, "grok", firstUseFetchTimeoutMs("grok")),
+      fetchAcpNormalizedModels(environment, context, "pi", firstUseFetchTimeoutMs("pi")),
     ]);
     for (const [agent, models] of [
       ["cursor", cursorModels],

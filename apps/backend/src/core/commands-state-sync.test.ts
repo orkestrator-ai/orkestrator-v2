@@ -18,6 +18,7 @@ import {
   toClientEnvironment,
   type CommandContext,
 } from "./commands.js";
+import { FIRST_USE_BRIDGE_READY_TIMEOUT_MS } from "./commands-registry-projects.js";
 import { appendTerminalOutputBuffer } from "./commands-terminal.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
@@ -329,7 +330,7 @@ describe("native agent model catalogue command", () => {
       });
 
       expect(awaitReady).toHaveBeenCalledWith(
-        { environmentId: "e1", agent: "pi", timeoutMs: 60_000 },
+        { environmentId: "e1", agent: "pi", timeoutMs: FIRST_USE_BRIDGE_READY_TIMEOUT_MS },
         expect.anything(),
       );
 
@@ -362,6 +363,148 @@ describe("native agent model catalogue command", () => {
           ensureAgent: "claude",
         }),
       ).rejects.toThrow("ensureAgent must be one of: cursor, grok, pi");
+    });
+  });
+
+  // The whole point of making the first-use start opt-in is that the ordinary
+  // read stays side-effect free. A read that started bridges on its own would
+  // spawn a process in every environment the launcher happens to poll.
+  test("does not start any bridge for a read with no requested agent", async () => {
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      const awaitReady = mock(async () => ({ status: "ready" as const }));
+      commands.set("await_bridge_ready", awaitReady);
+
+      await invoke("get_native_agent_model_catalog", { environmentId: "e1" });
+
+      expect(awaitReady).not.toHaveBeenCalled();
+    });
+  });
+
+  test("records why a first-use bridge did not become ready", async () => {
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        commands.set(
+          "await_bridge_ready",
+          mock(async () => ({
+            status: "failed" as const,
+            error: { message: "Environment is not running", retryable: false },
+          })),
+        );
+
+        const catalogue = (await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "pi",
+        })) as unknown[];
+
+        // `await_bridge_ready` reports failure by returning, and this call is
+        // the launch, so nothing else would ever record the reason.
+        expect(
+          warn.mock.calls.some(
+            (call) =>
+              typeof call[0] === "string" &&
+              call[0].includes("first-use pi catalogue bridge did not become ready") &&
+              call[0].includes("Environment is not running"),
+          ),
+        ).toBe(true);
+        // The response still carries every durable fallback.
+        expect(Array.isArray(catalogue)).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  test("records a first-use bridge start that threw", async () => {
+    await withCommands(async (invoke, _storage, _dataDir, commands) => {
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        commands.set(
+          "await_bridge_ready",
+          mock(async () => {
+            throw new Error("bridge start exploded");
+          }),
+        );
+
+        await invoke("get_native_agent_model_catalog", {
+          environmentId: "e1",
+          ensureAgent: "cursor",
+        });
+
+        expect(
+          warn.mock.calls.some(
+            (call) =>
+              typeof call[0] === "string" &&
+              call[0].includes("first-use cursor catalogue bridge failed to start"),
+          ),
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+  });
+
+  test("does not seed the Pi catalogue when Pi is not an enabled platform", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        enabledAgentPlatforms: ["claude", "codex"],
+      });
+      const refresh = mock(async () => []);
+      commands.set("ensure_host_pi_model_catalog", refresh);
+
+      await invoke("get_agent_model_catalog_cache", {});
+
+      // Seeding spawns a real bridge, so a platform the user has turned off
+      // must not pay for it on every launch.
+      expect(refresh).not.toHaveBeenCalled();
+    });
+  });
+
+  test("returns the last-known-good catalogues when Pi seeding fails", async () => {
+    await withCommands(async (invoke, storage, _dataDir, commands) => {
+      const config = await storage.loadConfig();
+      await storage.updateGlobalConfig({
+        ...config.global,
+        enabledAgentPlatforms: [...(config.global.enabledAgentPlatforms ?? []), "pi"],
+      });
+      await storage.cacheAgentModelCatalog("cursor", [
+        {
+          platform: "cursor",
+          id: "composer-2.5",
+          label: "Composer 2.5",
+          providerLabel: "Cursor",
+          supportsSpeed: true,
+          supportsMode: true,
+        },
+      ]);
+      commands.set(
+        "ensure_host_pi_model_catalog",
+        mock(async () => {
+          throw new Error("pi bridge entrypoint not found");
+        }),
+      );
+      const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+
+      try {
+        // Startup must stay non-fatal: a Pi probe that cannot run may not take
+        // the other platforms' catalogues down with it.
+        const cache = (await invoke("get_agent_model_catalog_cache", {})) as {
+          cursor?: { models: { id: string }[] };
+        };
+
+        expect(cache.cursor?.models.map((model) => model.id)).toEqual(["composer-2.5"]);
+        expect(
+          warn.mock.calls.some(
+            (call) =>
+              typeof call[0] === "string" &&
+              call[0].includes("Failed to seed the host Pi model catalogue"),
+          ),
+        ).toBe(true);
+      } finally {
+        warn.mockRestore();
+      }
     });
   });
 

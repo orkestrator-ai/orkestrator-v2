@@ -557,8 +557,8 @@ describe("OpenCode model provider allowlist config", () => {
   });
 });
 
-describe("ACP bridge runtime persistence", () => {
-  test("round-trips and clears Cursor and Grok process coordinates", async () => {
+describe("SDK and ACP bridge runtime persistence", () => {
+  test("round-trips and clears Cursor, Grok, and Pi process coordinates", async () => {
     await withTemporaryStorage(async (storage, dataDir) => {
       const environment = createEnvironment("project-1", { environmentType: "local" });
       environment.id = "env-acp-runtime";
@@ -567,8 +567,10 @@ describe("ACP bridge runtime persistence", () => {
       await storage.updateEnvironment(environment.id, {
         cursorBridgePid: 4101,
         grokBridgePid: 4102,
+        piBridgePid: 4103,
         localCursorPort: 57101,
         localGrokPort: 57102,
+        localPiPort: 57103,
       });
 
       const restarted = new StorageService(dataDir);
@@ -576,21 +578,27 @@ describe("ACP bridge runtime persistence", () => {
       expect(await restarted.getEnvironment(environment.id)).toMatchObject({
         cursorBridgePid: 4101,
         grokBridgePid: 4102,
+        piBridgePid: 4103,
         localCursorPort: 57101,
         localGrokPort: 57102,
+        localPiPort: 57103,
       });
 
       await restarted.updateEnvironment(environment.id, {
         cursorBridgePid: null,
         grokBridgePid: null,
+        piBridgePid: null,
         localCursorPort: null,
         localGrokPort: null,
+        localPiPort: null,
       });
       expect(await restarted.getEnvironment(environment.id)).not.toMatchObject({
         cursorBridgePid: expect.any(Number),
         grokBridgePid: expect.any(Number),
+        piBridgePid: expect.any(Number),
         localCursorPort: expect.any(Number),
         localGrokPort: expect.any(Number),
+        localPiPort: expect.any(Number),
       });
     });
   });

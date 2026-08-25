@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { semver } from "bun";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -373,7 +374,7 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
 
   test("Bun: every declared @types/bun range tracks the pinned runtime's minor", () => {
     // `@types/bun` is published in lockstep with the runtime, so a manifest left
-    // on the previous minor types a Bun the bridges no longer run on. `^x.y.0`
+    // on the previous minor types a Bun the bridges no longer run on. `~x.y.0`
     // rather than the exact pin: a types patch is a safe float, a minor is not.
     //
     // The manifests are discovered rather than listed. Four declare the
@@ -381,7 +382,8 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
     // reproduce the drift this guards against the moment a package adds its own.
     const hostPin = getShellVar("scripts/download-bun.sh", "BUN_VERSION");
     const [major, minor] = hostPin.split(".");
-    const expected = `^${major}.${minor}.0`;
+    const expected = `~${major}.${minor}.0`;
+    const nextMinor = `${major}.${Number(minor) + 1}.0`;
 
     const declared = packageManifestPaths().flatMap((rel) => {
       const pkg = JSON.parse(read(rel)) as {
@@ -399,7 +401,31 @@ describe("version drift between SDK pins and managed/container CLIs", () => {
         spec,
         `${rel} declares @types/bun ${spec}, which is not the pinned Bun ${hostPin} minor`,
       ).toBe(expected);
+      expect(semver.satisfies(hostPin, spec), `${spec} must accept the pinned runtime`).toBe(true);
+      expect(
+        semver.satisfies(`${major}.${minor}.999999`, spec),
+        `${spec} must allow patch-only type updates`,
+      ).toBe(true);
+      expect(
+        semver.satisfies(nextMinor, spec),
+        `${spec} must reject the next Bun minor ${nextMinor}`,
+      ).toBe(false);
     }
+  });
+
+  test("Bun: CI validates every supported host download and container architecture", () => {
+    const workflow = read(".github/workflows/validate-bun-runtime.yml");
+    const configuredRunners = workflow
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("runner: "))
+      .map((line) => line.slice("runner: ".length));
+
+    expect(configuredRunners.sort()).toEqual(
+      ["ubuntu-24.04", "ubuntu-24.04-arm", "macos-15-intel", "macos-15"].sort(),
+    );
+    expect(workflow).toContain("run: ./scripts/download-bun.sh");
+    expect(workflow).toContain("platforms: linux/amd64,linux/arm64");
   });
 
   test("Claude bridge: musl variant is stripped from the vendored runtime tree, not top-level node_modules", () => {

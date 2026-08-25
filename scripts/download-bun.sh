@@ -75,9 +75,15 @@ if [[ "$PLATFORM" == "darwin" ]]; then
     echo "Re-signing bun binary with ad-hoc signature for macOS app bundling..."
     codesign --remove-signature "$BINARIES_DIR/bun" 2>/dev/null || true
     codesign --sign - --force "$BINARIES_DIR/bun"
+    codesign --verify --verbose "$BINARIES_DIR/bun"
 fi
 
 echo "Bun binary downloaded to $BINARIES_DIR/bun"
 
-# Verify it works
-"$BINARIES_DIR/bun" --version
+# Verify the downloaded artifact runs and is exactly the requested release.
+DOWNLOADED_BUN_VERSION=$("$BINARIES_DIR/bun" --version)
+if [[ "$DOWNLOADED_BUN_VERSION" != "$BUN_VERSION" ]]; then
+    echo "Downloaded Bun version $DOWNLOADED_BUN_VERSION does not match expected $BUN_VERSION" >&2
+    exit 1
+fi
+echo "$DOWNLOADED_BUN_VERSION"

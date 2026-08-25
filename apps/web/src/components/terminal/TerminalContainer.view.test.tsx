@@ -34,7 +34,7 @@ import {
   type PersistedPaneLayout,
 } from "@/types/paneLayout";
 
-import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession } from "@/types";
+import type { EnsureEnvironmentSetupResult, EnvironmentSetupSession, Session } from "@/types";
 
 import type { CollisionDetection } from "@dnd-kit/core";
 
@@ -205,6 +205,10 @@ const awaitEnvironmentSetupSessionMock = mock(
     getEnvironmentSetupSessionMock(environmentId),
 );
 
+const getSessionsByEnvironmentMock = mock(async (_environmentId: string): Promise<Session[]> => []);
+
+const loadSessionBufferMock = mock(async (_sessionId: string): Promise<string | null> => null);
+
 const setEnvironmentPendingAgentLaunchMock = mock(
   async (environmentId: string, pending: boolean) => ({
     ...useEnvironmentStore.getState().getEnvironmentById(environmentId)!,
@@ -359,6 +363,8 @@ mock.module("@/lib/backend", () => ({
   runEnvironmentSetup: runEnvironmentSetupMock,
   getEnvironmentSetupSession: getEnvironmentSetupSessionMock,
   awaitEnvironmentSetupSession: awaitEnvironmentSetupSessionMock,
+  getSessionsByEnvironment: getSessionsByEnvironmentMock,
+  loadSessionBuffer: loadSessionBufferMock,
   setEnvironmentPendingAgentLaunch: setEnvironmentPendingAgentLaunchMock,
   acknowledgeStartupAgentSession: acknowledgeStartupAgentSessionMock,
   setEnvironmentInitialPrompt: setEnvironmentInitialPromptMock,
@@ -522,6 +528,10 @@ describe("TerminalContainer", () => {
     getEnvironmentSetupSessionMock.mockReset();
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
     awaitEnvironmentSetupSessionMock.mockClear();
+    getSessionsByEnvironmentMock.mockReset();
+    getSessionsByEnvironmentMock.mockResolvedValue([]);
+    loadSessionBufferMock.mockReset();
+    loadSessionBufferMock.mockResolvedValue(null);
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(
       async (environmentId: string, pending: boolean) => ({
@@ -1874,6 +1884,103 @@ describe("TerminalContainer", () => {
         .getState()
         .sessions.get(createSessionKey(null, "default", "env-hidden"))?.serializedBuffer,
     ).toBe("cloning repository...\r\nsetup complete\r\n");
+  });
+
+  test("waits for durable setup history to hydrate before retiring a cold setup tab", async () => {
+    let resolvePersistentBuffer: ((buffer: string | null) => void) | undefined;
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: false,
+    });
+    getSessionsByEnvironmentMock.mockResolvedValue([
+      {
+        id: "persisted-setup",
+        environmentId: "env-hidden",
+        containerId: "",
+        tabId: "default",
+        sessionType: "plain",
+        status: "disconnected",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:01:00.000Z",
+        order: 0,
+      },
+    ]);
+    loadSessionBufferMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolvePersistentBuffer = resolve;
+        }),
+    );
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(() => {
+      expect(getSessionsByEnvironmentMock).toHaveBeenCalledWith("env-hidden");
+      expect(loadSessionBufferMock).toHaveBeenCalledWith("persisted-setup");
+    });
+    // An empty renderer-local store is not authoritative while the durable
+    // buffer lookup remains unresolved.
+    expect(setupTabIds()).toEqual(["default"]);
+
+    await act(async () => {
+      resolvePersistentBuffer?.("cold setup history\r\n");
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(
+        useTerminalSessionStore
+          .getState()
+          .sessions.get(createSessionKey(null, "default", "env-hidden")),
+      ).toMatchObject({
+        persistentSessionId: "persisted-setup",
+        serializedBuffer: "cold setup history\r\n",
+      });
+    });
+    expect(setupTabIds()).toEqual(["default"]);
+  });
+
+  test("keeps a setup tab when durable history cannot be checked", async () => {
+    getEnvironmentSetupSessionMock.mockResolvedValue({
+      environmentId: "env-hidden",
+      sessionId: "env-hidden:setup",
+      running: false,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:01:00.000Z",
+      success: true,
+      terminalRunning: false,
+      hasOutput: false,
+    });
+    getSessionsByEnvironmentMock.mockResolvedValue([
+      {
+        id: "persisted-setup",
+        environmentId: "env-hidden",
+        containerId: "",
+        tabId: "default",
+        sessionType: "plain",
+        status: "disconnected",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        lastActivityAt: "2026-01-01T00:01:00.000Z",
+        order: 0,
+      },
+    ]);
+    loadSessionBufferMock.mockRejectedValue(new Error("buffer store unavailable"));
+
+    restoreBackendSetupTabLayout();
+
+    await waitFor(
+      () => {
+        expect(loadSessionBufferMock).toHaveBeenCalledTimes(MAX_SETUP_SESSION_BIND_ATTEMPTS);
+      },
+      { timeout: 2_000 },
+    );
+    expect(setupTabIds()).toEqual(["default"]);
   });
 
   test("keeps a replayable setup tab when the backend has forgotten the session entirely", async () => {

@@ -158,10 +158,28 @@ export async function hashArchiveEntry(
   archive: ToolchainArchive,
   archivePath: string,
 ): Promise<Digest> {
-  const command =
-    archive.format === "zip"
-      ? ["unzip", "-p", archivePath, archive.entryPath]
-      : ["tar", "-xOzf", archivePath, archive.entryPath];
+  // Exhaustive on purpose. This was a two-way ternary over a three-member
+  // union, so `raw` fell through to tar, which rejects its empty `entryPath`
+  // with "pattern is empty" -- taking both `--emit` and
+  // `verify:toolchains:live` out for all four Grok targets. A `switch` with a
+  // `never` default makes the next added format a compile error instead.
+  let command: string[];
+  switch (archive.format) {
+    // A `raw` artifact is the executable, not a container holding one: there
+    // is nothing to extract, so the file's own digest is the entry's digest.
+    case "raw":
+      return hashFile(archivePath);
+    case "zip":
+      command = ["unzip", "-p", archivePath, archive.entryPath];
+      break;
+    case "tar.gz":
+      command = ["tar", "-xOzf", archivePath, archive.entryPath];
+      break;
+    default: {
+      const unreachable: never = archive.format;
+      throw new Error(`Unsupported archive format: ${String(unreachable)}`);
+    }
+  }
   const extractor = Bun.spawn(command, {
     stdout: "pipe",
     stderr: "pipe",

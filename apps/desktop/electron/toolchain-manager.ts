@@ -1338,8 +1338,15 @@ async function installArtifact(
         artifact.archive,
         artifact.executable.size,
       );
-    } else {
+    } else if (artifact.archive.format === "raw") {
+      // The download *is* the executable, so it is promoted rather than
+      // extracted. Named explicitly: as an `else` this branch also swallowed
+      // any format added later, renaming an archive into place as though it
+      // were a binary. The `never` below makes that a compile error instead.
       await rename(archivePath, extractedPath);
+    } else {
+      const unreachable: never = artifact.archive.format;
+      throw new Error(`Unsupported archive format: ${String(unreachable)}`);
     }
     if (artifact.archive.format !== "raw") await rm(archivePath, { force: true });
     if (

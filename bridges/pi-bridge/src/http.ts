@@ -273,10 +273,17 @@ async function routeSession(
     // Never dispatches. Attach exists to move the SDK's cold start *outside*
     // the at-most-once window, where a failure is unambiguous: nothing
     // journaled, no prompt written.
+    // Truthiness, not `!== undefined`: an unattached session carries `null`,
+    // which is exactly the check `ensureSession` itself makes.
+    const wasAttached = Boolean(state.session);
     await ensureSession(state);
     // `sessionFile` is what re-attaches to the same Pi conversation after a
-    // restart. Create persists the bridge id; this persists the pointer.
-    await persistBarrier();
+    // restart. Create persists the bridge id; this persists the pointer — but
+    // only on the call that actually minted one. The backend attaches before
+    // every prompt and `ensureSession` returns the existing session untouched,
+    // so barriering unconditionally rewrote the whole state file, up to
+    // `MAX_STATE_FILE_BYTES` of transcript, once per turn for nothing.
+    if (!wasAttached) await persistBarrier();
     return json(response, 200, { attached: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {

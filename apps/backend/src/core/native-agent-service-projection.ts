@@ -2,6 +2,7 @@ import * as shared from "./native-agent-service-shared.js";
 import { recoverBackgroundTaskLaunchId } from "@orkestrator/protocol/native-agent";
 import {
   NATIVE_DISCOVERY_RETRY_MS,
+  NATIVE_MISSING_SESSION_GRACE_MS,
   NATIVE_MODEL_CATALOG_CACHE_LIMIT,
   NATIVE_MODEL_CATALOG_TTL_MS,
   NATIVE_PROJECTION_CACHE_LIMIT,
@@ -654,6 +655,10 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
 
   protected invalidateProjection(key: string): void {
     this.projectionCache.delete(key);
+    // The identity behind this key changed, so the grace the previous session
+    // had spent says nothing about the new one. A tab that resumes into a
+    // different provider session starts its reconnect from a full window.
+    this.projectionMissingSince.delete(key);
     this.projectionEpochs.set(key, (this.projectionEpochs.get(key) ?? 0) + 1);
   }
 
@@ -670,6 +675,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
     if (this.projectionCache.has(key)) return;
     if (this.projectionRefreshes.has(key)) return;
     this.projectionEpochs.delete(key);
+    this.projectionMissingSince.delete(key);
   }
 
   protected refreshProjection(
@@ -714,6 +720,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       if (!resolved) {
         if ((this.projectionEpochs.get(key) ?? 0) === epoch) {
           this.projectionCache.delete(key);
+          this.projectionMissingSince.delete(key);
         }
         return null;
       }
@@ -750,36 +757,60 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
         generation = `${generation}:${String(snapshot.providerGeneration)}`;
       }
       if (snapshot.status === "missing") {
-        // The mapping is real and the bridge is up; it just does not hold this
-        // session yet (a restart that has not finished restoring, an idle
-        // detach). Stamping `connection: "error"` made the renderer flash
-        // Connection Failed on a tab that was about to attach. Stay connecting
-        // so the next poll can reopen it instead of asking the user to Retry.
-        const projection: NativeAgentSessionProjection = {
-          ...(previous?.projection ?? {
-            platform: input.agent,
-            environmentId: input.environmentId,
-            sessionId: resolved.session.providerSessionId,
-            messages: [],
-            interactions: [],
-            composerControls: [],
-            capabilities,
-            revision: 0,
-            generation,
-          }),
-          connection: "connecting",
-          turn: { phase: "recovering" },
-          notices: [
-            {
-              kind: "recovery",
-              message: "Reconnecting to the native agent runtime…",
-            },
-          ],
-          revision: 0,
-          generation,
-        };
+        /*
+         * The mapping is real and the bridge is up; it just does not hold this
+         * session yet (a restart that has not finished restoring, an idle
+         * detach). Stamping `connection: "error"` on the first such read made
+         * the renderer flash Connection Failed on a tab that was about to
+         * attach, so the first few stay connecting and let the next poll find
+         * it.
+         *
+         * The grace is counted, not open-ended. Nothing on this path re-creates
+         * a provider session and the connecting overlay carries no retry
+         * control, so a session that really is gone has to end up reported —
+         * with its detail — rather than on a spinner the user cannot leave.
+         */
+        const since = this.projectionMissingSince.get(key) ?? this.now();
+        this.projectionMissingSince.set(key, since);
+        const projection: NativeAgentSessionProjection =
+          this.now() - since >= NATIVE_MISSING_SESSION_GRACE_MS
+            ? this.unreachableProjection(
+                previous,
+                input,
+                generation,
+                "The native agent runtime no longer holds this session. " +
+                  "Retry to start a new one.",
+                resolved.session.providerSessionId,
+              )
+            : {
+                ...(previous?.projection ?? {
+                  platform: input.agent,
+                  environmentId: input.environmentId,
+                  sessionId: resolved.session.providerSessionId,
+                  messages: [],
+                  interactions: [],
+                  composerControls: [],
+                  capabilities,
+                  revision: 0,
+                  generation,
+                }),
+                connection: "connecting",
+                turn: { phase: "recovering" },
+                notices: [
+                  {
+                    kind: "recovery",
+                    message: "Reconnecting to the native agent runtime…",
+                  },
+                ],
+                revision: 0,
+                generation,
+              };
         return this.commitProjection(key, windowed, projection, generation, epoch);
       }
+      // The session answered, so this key's run of missing reads is over. Left
+      // set, a later transient miss would inherit a spent deadline and report a
+      // reconnect that is still in its first moment as a failure.
+      this.projectionMissingSince.delete(key);
       const blocked = interactionSnapshot.requests.length > 0;
       const composer = await this.projectionComposer(
         input,
@@ -965,33 +996,61 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       };
       return this.commitProjection(key, windowed, projection, generation, epoch);
     } catch (error) {
-      const projection: NativeAgentSessionProjection = {
-        ...(previous?.projection ?? {
-          platform: input.agent,
-          environmentId: input.environmentId,
-          messages: [],
-          interactions: [],
-          composerControls: [],
-          capabilities: nativeCapabilities(input.agent),
-          revision: 0,
+      return this.commitProjection(
+        key,
+        windowed,
+        this.unreachableProjection(
+          previous,
+          input,
           generation,
-        }),
-        connection: "error",
-        turn: {
-          phase: "recovering",
-          error: error instanceof Error ? error.message : "Native agent is unavailable",
-        },
-        notices: [
-          {
-            kind: "recovery",
-            message: "Reconnecting to the native agent runtime…",
-          },
-        ],
+          error instanceof Error ? error.message : "Native agent is unavailable",
+        ),
+        generation,
+        epoch,
+      );
+    }
+  }
+
+  /**
+   * The projection for a session this backend cannot read right now.
+   *
+   * `error` is the only connection state the renderer gives a retry control and
+   * failure text to, so every terminally unreachable path lands here rather
+   * than leaving a tab on an overlay it has no way to leave. Whatever was last
+   * cached stays underneath it: the transcript the user was reading is still
+   * the best description of the conversation, and a reconnect that succeeds
+   * should not have to rebuild it from nothing.
+   */
+  protected unreachableProjection(
+    previous: NativeAgentProjectionCacheEntry | undefined,
+    input: NativeAgentProjectionInput,
+    generation: string,
+    error: string,
+    sessionId?: string,
+  ): NativeAgentSessionProjection {
+    return {
+      ...(previous?.projection ?? {
+        platform: input.agent,
+        environmentId: input.environmentId,
+        ...(sessionId ? { sessionId } : {}),
+        messages: [],
+        interactions: [],
+        composerControls: [],
+        capabilities: nativeCapabilities(input.agent),
         revision: 0,
         generation,
-      };
-      return this.commitProjection(key, windowed, projection, generation, epoch);
-    }
+      }),
+      connection: "error",
+      turn: { phase: "recovering", error },
+      notices: [
+        {
+          kind: "recovery",
+          message: "Reconnecting to the native agent runtime…",
+        },
+      ],
+      revision: 0,
+      generation,
+    };
   }
 
   protected commitProjection(
@@ -1046,6 +1105,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
        */
       if (oldest) {
         this.projectionCache.delete(oldest);
+        this.projectionMissingSince.delete(oldest);
         this.pruneProjectionEpoch(oldest);
       }
     }

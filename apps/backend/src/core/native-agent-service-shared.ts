@@ -290,6 +290,25 @@ export const INTERACTION_MONITOR_DEFAULT_CONCURRENCY = 4;
 export const INTERACTION_MONITOR_DEFAULT_PER_ENVIRONMENT = 8;
 export const INTERACTION_MONITOR_DEFAULT_MAX_RETRIES = 5;
 export const INTERACTION_MONITOR_DEFAULT_RETRY_BASE_MS = 1_000;
+/**
+ * How long a tab stays `connecting` while the provider reports `missing`.
+ *
+ * A bridge that is restarting, restoring its state file or re-attaching an
+ * idle-detached session answers `missing` for a moment on a session that is
+ * about to come back, and reporting that as a failure flashed Connection
+ * Failed on a tab that went on to connect perfectly well.
+ *
+ * The grace has to be bounded, though: `connecting` renders a spinner with no
+ * retry control, and no read path re-creates a provider session, so a session
+ * that is genuinely gone would leave the tab with no way back. Past this the
+ * projection reports the failure, which is the state that carries the control.
+ *
+ * Elapsed time rather than a count of reads, because the read rate is not a
+ * property of the outage: a tab polls at one cadence while `recovering`, a
+ * second reader or a burst of resource-changed events can spend a read budget
+ * in a fraction of the time an ordinary reconnect needs.
+ */
+export const NATIVE_MISSING_SESSION_GRACE_MS = 15_000;
 export const NATIVE_PROJECTION_CACHE_LIMIT = 1_024;
 export const NATIVE_PROJECTION_MAX_MESSAGES = 512;
 /**

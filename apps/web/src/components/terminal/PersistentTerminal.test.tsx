@@ -405,7 +405,8 @@ describe("PersistentTerminal", () => {
     portalTerminalIsOpened = true;
     cleanup();
     resizeMock.mockClear();
-    connectMock.mockClear();
+    connectMock.mockReset();
+    connectMock.mockImplementation(async () => {});
     writeMock.mockClear();
     markBootstrappedMock.mockClear();
     markBootstrappedMock.mockImplementation(() => true);
@@ -696,6 +697,22 @@ describe("PersistentTerminal", () => {
 
   it("retries the terminal connection after the Strict Mode mount probe cancels it", async () => {
     portalTerminalIsOpened = false;
+    useTerminalIsConnected = false;
+    let resolveFirstAttempt: () => void = () => {};
+    let resolveSecondAttempt: () => void = () => {};
+    connectMock
+      .mockImplementationOnce(
+        async () =>
+          new Promise<void>((resolve) => {
+            resolveFirstAttempt = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        async () =>
+          new Promise<void>((resolve) => {
+            resolveSecondAttempt = resolve;
+          }),
+      );
 
     render(
       <StrictMode>
@@ -715,6 +732,21 @@ describe("PersistentTerminal", () => {
     );
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
+
+    // The cancelled probe and its replacement have the same target string. A
+    // target-only completion guard would let the stale first promise clear the
+    // second attempt's in-flight marker and start an overlapping third call.
+    await act(async () => {
+      resolveFirstAttempt();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    expect(connectMock).toHaveBeenCalledTimes(2);
+
+    useTerminalIsConnected = true;
+    await act(async () => {
+      resolveSecondAttempt();
+      await Promise.resolve();
+    });
   });
 
   it("uses the fallback connection for an already-open disconnected terminal", async () => {
@@ -738,8 +770,13 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
   });
 
-  it("does not retry a settled failed connection until the terminal target changes", async () => {
+  it("cancels a pending retry when the terminal target changes", async () => {
     useTerminalIsConnected = false;
+    connectMock.mockImplementation(async () => {
+      if (connectMock.mock.calls.length >= 2) {
+        useTerminalIsConnected = true;
+      }
+    });
     const terminalData = createTerminalData();
     const props = {
       terminalData,
@@ -757,9 +794,9 @@ describe("PersistentTerminal", () => {
 
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
 
-    // useTerminal sets this true while probing the backend, then false when a
-    // dead attach-only session settles. That state transition used to make the
-    // fallback effect start the same probe again indefinitely.
+    // useTerminal sets this true while probing the backend, then false when the
+    // attempt settles. The retry is delayed, so changing targets first must
+    // cancel it and spend the next call on the replacement target.
     useTerminalIsConnecting = true;
     view.rerender(<PersistentTerminal {...props} />);
     useTerminalIsConnecting = false;
@@ -778,6 +815,70 @@ describe("PersistentTerminal", () => {
         });
     });
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    expect(connectMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers from a transient failure against the same terminal target", async () => {
+    useTerminalIsConnected = false;
+    let attempt = 0;
+    connectMock.mockImplementation(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        return;
+      }
+      useTerminalIsConnected = true;
+    });
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(2), { timeout: 2_000 });
+    expect(useTerminalIsConnected).toBe(true);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    expect(connectMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds automatic retries when the same terminal target keeps failing", async () => {
+    useTerminalIsConnected = false;
+
+    render(
+      <PersistentTerminal
+        terminalData={createTerminalData()}
+        tabId="tab-1"
+        tabType="plain"
+        containerId="container-1"
+        environmentId="env-1"
+        isEnvironmentVisible
+        isActive
+        isFocused
+        isFirstTab={false}
+        paneId="pane-1"
+      />,
+    );
+
+    await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(3), { timeout: 2_000 });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    });
+    expect(connectMock).toHaveBeenCalledTimes(3);
   });
 
   it("adopts a freshly published session id without probing again, then reconnects once", async () => {
@@ -870,15 +971,13 @@ describe("PersistentTerminal", () => {
     await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
     expect(lastUseTerminalOptions?.attachExistingOnly).toBe(true);
 
-    for (let round = 0; round < 3; round += 1) {
-      useTerminalIsConnecting = true;
-      view.rerender(<PersistentTerminal {...props} />);
-      useTerminalIsConnecting = false;
-      view.rerender(<PersistentTerminal {...props} />);
-      await act(async () => {
-        await Promise.resolve();
-      });
-    }
+    useTerminalIsConnecting = true;
+    view.rerender(<PersistentTerminal {...props} />);
+    useTerminalIsConnecting = false;
+    view.rerender(<PersistentTerminal {...props} />);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    });
 
     expect(connectMock).toHaveBeenCalledTimes(1);
   });

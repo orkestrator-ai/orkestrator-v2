@@ -67,6 +67,12 @@ const BUFFER_SIZE_THRESHOLD = 0.5;
 const MAX_PENDING_DURABLE_REPLAY_BYTES = 1024 * 1024;
 const TERMINAL_BOOTSTRAP_DELAY_MS = 300;
 const TERMINAL_BOOTSTRAP_MAX_ATTEMPTS = 3;
+// A connection can fail while the desktop event stream or backend process is
+// recovering. Give the same target a small bounded retry budget, with backoff,
+// without returning to the unbounded isConnecting-driven loop this gate
+// replaced.
+const TERMINAL_CONNECT_MAX_ATTEMPTS = 3;
+const TERMINAL_CONNECT_RETRY_BASE_MS = 250;
 // Backoff for re-listing an environment's persisted sessions. Retrying rather
 // than falling open matters: proceeding without an authoritative snapshot would
 // create a duplicate persistent session for a tab that already has one.
@@ -158,10 +164,14 @@ export function PersistentTerminal({
   const workspaceReadySignaledRef = useRef(false);
   const bootstrapRequestedForSessionRef = useRef<string | null>(null);
   // A failed attachment leaves the hook disconnected. Remember the exact
-  // target we already tried so the fallback effect does not turn that settled
-  // failure into a tight renderer/backend retry loop. A new session or target
-  // gets a different key and is still allowed one immediate attempt.
+  // target and its bounded retry budget so the fallback effect does not turn a
+  // settled failure into a tight renderer/backend loop. A new session or target
+  // gets a different key and is still allowed an immediate attempt.
   const connectionAttemptTargetRef = useRef<string | null>(null);
+  const connectionAttemptCountRef = useRef(0);
+  const connectionAttemptInFlightRef = useRef<symbol | null>(null);
+  const connectionRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [connectionAttemptSettledRevision, setConnectionAttemptSettledRevision] = useState(0);
   const hasRenderedOutputRef = useRef(false);
   // Render-visible, not a ref: the redraw effect below is a different effect
   // from the one that moves the DOM node, so a ref mutation would not schedule
@@ -419,9 +429,15 @@ export function PersistentTerminal({
     initialRestorationCompleteRef.current = false;
     return () => {
       // React Strict Mode cancels the first development-only connection before
-      // replaying mount effects. Rearm the one-shot connection gate for that
+      // replaying mount effects. Rearm the bounded connection gate for that
       // replay; a genuine remount receives a fresh ref and behaves the same way.
       connectionAttemptTargetRef.current = null;
+      connectionAttemptCountRef.current = 0;
+      connectionAttemptInFlightRef.current = null;
+      if (connectionRetryTimerRef.current !== null) {
+        clearTimeout(connectionRetryTimerRef.current);
+        connectionRetryTimerRef.current = null;
+      }
     };
   }, [tabId, environmentId]);
 
@@ -432,6 +448,12 @@ export function PersistentTerminal({
       dataBufferRef.current = "";
       workspaceReadySignaledRef.current = false;
       connectionAttemptTargetRef.current = null;
+      connectionAttemptCountRef.current = 0;
+      connectionAttemptInFlightRef.current = null;
+      if (connectionRetryTimerRef.current !== null) {
+        clearTimeout(connectionRetryTimerRef.current);
+        connectionRetryTimerRef.current = null;
+      }
       hasRenderedOutputRef.current = false;
       initialRestorationCompleteRef.current = false;
       previousContainerIdRef.current = containerId;
@@ -760,14 +782,63 @@ export function PersistentTerminal({
   const currentConnectionTargetRef = useRef(connectionAttemptTarget);
   useEffect(() => {
     currentConnectionTargetRef.current = connectionAttemptTarget;
+    if (connectionAttemptTargetRef.current !== connectionAttemptTarget) {
+      connectionAttemptCountRef.current = 0;
+      connectionAttemptInFlightRef.current = null;
+      if (connectionRetryTimerRef.current !== null) {
+        clearTimeout(connectionRetryTimerRef.current);
+        connectionRetryTimerRef.current = null;
+      }
+    }
   }, [connectionAttemptTarget]);
   const connectToCurrentTarget = useCallback(() => {
     const target = currentConnectionTargetRef.current;
-    if (connectionAttemptTargetRef.current === target) return false;
-    connectionAttemptTargetRef.current = target;
-    void connectRef.current();
+    if (connectionAttemptTargetRef.current !== target) {
+      connectionAttemptTargetRef.current = target;
+      connectionAttemptCountRef.current = 0;
+      connectionAttemptInFlightRef.current = null;
+    }
+    if (
+      connectionAttemptInFlightRef.current ||
+      connectionAttemptCountRef.current >= TERMINAL_CONNECT_MAX_ATTEMPTS
+    ) {
+      return false;
+    }
+
+    connectionAttemptCountRef.current += 1;
+    const attemptToken = Symbol(target);
+    connectionAttemptInFlightRef.current = attemptToken;
+    void connectRef
+      .current()
+      // useTerminal currently reports failures through state and resolves, but
+      // keep an unexpected rejection from becoming an unhandled promise while
+      // still letting the retry budget observe that the attempt settled.
+      .catch(() => undefined)
+      .finally(() => {
+        if (
+          connectionAttemptTargetRef.current !== target ||
+          connectionAttemptInFlightRef.current !== attemptToken
+        ) {
+          return;
+        }
+        connectionAttemptInFlightRef.current = null;
+        setConnectionAttemptSettledRevision((revision) => revision + 1);
+      });
     return true;
   }, []);
+
+  // A later loss of a healthy connection is a new recovery episode even when
+  // it points at the same backend PTY, so grant it a fresh bounded budget.
+  useEffect(() => {
+    if (!isConnected) return;
+    connectionAttemptTargetRef.current = null;
+    connectionAttemptCountRef.current = 0;
+    connectionAttemptInFlightRef.current = null;
+    if (connectionRetryTimerRef.current !== null) {
+      clearTimeout(connectionRetryTimerRef.current);
+      connectionRetryTimerRef.current = null;
+    }
+  }, [isConnected]);
 
   // Persistent session tracking
   const persistentSessionCreatedRef = useRef(false);
@@ -1585,13 +1656,41 @@ export function PersistentTerminal({
   useEffect(() => {
     if (!terminalIsOpened) return;
     if (isConnected || isConnecting) return;
-    if (connectionAttemptTargetRef.current === connectionAttemptTarget) return;
-    connectToCurrentTarget();
+    if (connectionAttemptTargetRef.current !== connectionAttemptTarget) {
+      connectToCurrentTarget();
+      return;
+    }
+    if (connectionAttemptInFlightRef.current) return;
+    if (connectionAttemptCountRef.current >= TERMINAL_CONNECT_MAX_ATTEMPTS) return;
+
+    // Backend-managed setup tabs are rearmed only when their binding publishes
+    // a different session/target. Retrying the same stopped setup id was the
+    // original log flood; unlike an ordinary terminal, this view must never
+    // create a replacement PTY itself.
+    if (isBackendManagedSetupTab) return;
+    if (connectionRetryTimerRef.current !== null) return;
+
+    const delay =
+      TERMINAL_CONNECT_RETRY_BASE_MS * 2 ** Math.max(0, connectionAttemptCountRef.current - 1);
+    connectionRetryTimerRef.current = setTimeout(() => {
+      connectionRetryTimerRef.current = null;
+      if (currentConnectionTargetRef.current !== connectionAttemptTarget) return;
+      connectToCurrentTarget();
+    }, delay);
+
+    return () => {
+      if (connectionRetryTimerRef.current !== null) {
+        clearTimeout(connectionRetryTimerRef.current);
+        connectionRetryTimerRef.current = null;
+      }
+    };
   }, [
     terminalIsOpened,
     isConnected,
     isConnecting,
+    isBackendManagedSetupTab,
     connectionAttemptTarget,
+    connectionAttemptSettledRevision,
     connectToCurrentTarget,
     tabId,
   ]);

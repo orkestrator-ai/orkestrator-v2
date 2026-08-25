@@ -949,6 +949,50 @@ describe("steering", () => {
 });
 
 describe("composer configuration", () => {
+  test("applies a config update without waiting out a stalled catalogue", async () => {
+    let release: (() => void) | undefined;
+    setAgentSessionTestHooks({
+      hydrateComposer: async (composer) => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return {
+          ...composer,
+          models: [{ platform: "pi", id: "late/model", label: "Late" }],
+        };
+      },
+    });
+    const state = seedSession();
+    try {
+      const response = await call(`/session/${state.id}/config`, {
+        method: "POST",
+        body: JSON.stringify({ model: "chosen/model", reasoningId: "high" }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        selectedModelId?: string;
+        selectedReasoningId?: string;
+        models: unknown[];
+      };
+      expect(body.selectedModelId).toBe("chosen/model");
+      expect(body.selectedReasoningId).toBe("high");
+      expect(body.models).toEqual([]);
+
+      // The request has completed, but the shared hydration continues. Its
+      // eventual catalogue update must retain the selection the POST applied
+      // while that read was in flight.
+      release!();
+      await waitFor(() => state.composer.models.length === 1);
+      expect(state.composer.selectedModelId).toBe("chosen/model");
+      expect(state.composer.selectedReasoningId).toBe("high");
+    } finally {
+      release?.();
+      sessions.clear();
+      resetTestDependencies();
+    }
+  });
+
   test("records a model and the thinking level sent alongside it", async () => {
     const state = seedSession();
     const response = await call(`/session/${state.id}/config`, {

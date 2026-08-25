@@ -141,8 +141,12 @@ async function routeGlobal(
     return true;
   }
   if (url.pathname === "/global/refresh-catalog" && request.method === "POST") {
-    refreshModels();
     await refreshRuntimeCatalog();
+    // Invalidate after the SDK refresh settles. A catalogue probe that began
+    // before the refresh may still complete while it is running; the model
+    // layer's generation guard stops that probe publishing, and this ordering
+    // ensures even a result that landed just before settlement is discarded.
+    refreshModels();
     // Restored sessions intentionally hold no persisted model rows. A manual
     // refresh must repair those session snapshots too, otherwise the global
     // catalogue changes while the open tab keeps saying no models are
@@ -256,14 +260,16 @@ async function routeSession(
   // authoritative snapshot can stand on its own instead of depending on a
   // renderer-side event or an environment-wide cache happening to be fresh.
   //
-  // How long each route is willing to wait differs, because the callers do.
-  // `/status` and the bare session read are polled — the backend's `status()`
-  // and `interactiveSnapshot()` both sit on `/status` — so they wait only
-  // `COMPOSER_HYDRATION_WAIT_MS` and then answer with the snapshot they have,
-  // leaving the hydration running for the next poll to collect. The config
-  // routes are user-initiated and the backend rejects a composer whose
-  // `models` is absent, so those wait for the real thing.
-  if (request.method === "GET" && (!action || action === "status")) {
+  // Every route that publishes composer state has to stay below the backend's
+  // request ceiling. Config POST is especially important: waiting the full
+  // catalogue timeout before reading its body let the client time out first,
+  // after which the abandoned server request could still apply the selection.
+  // A bounded wait publishes a warm catalogue immediately and otherwise leaves
+  // the shared hydration running for this or the next snapshot to collect.
+  if (
+    (request.method === "GET" && (!action || action === "status")) ||
+    (action === "config" && (request.method === "GET" || request.method === "POST"))
+  ) {
     // `.catch` before the race, not after: the loser of a `Promise.race` still
     // settles, and a hydration that rejects after the wait elapsed would
     // otherwise surface as an unhandled rejection.
@@ -272,8 +278,6 @@ async function routeSession(
       COMPOSER_HYDRATION_WAIT_MS,
       "Pi composer hydration is still running",
     ).catch(() => undefined);
-  } else if (action === "config" && (request.method === "GET" || request.method === "POST")) {
-    await hydrateSessionComposer(state);
   }
 
   if (!action && request.method === "GET") {

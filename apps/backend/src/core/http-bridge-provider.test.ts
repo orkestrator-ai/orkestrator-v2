@@ -830,19 +830,34 @@ describe("HTTP bridge provider", () => {
   });
 
   test("refreshes Pi's bridge-owned model runtime before re-listing", async () => {
-    const { provider, requests } = httpProvider(
-      (url) =>
-        url.endsWith("/global/refresh-catalog")
-          ? Response.json({ ok: true })
-          : new Response(null, { status: 404 }),
-      piConnection,
-    );
+    const timeouts: number[] = [];
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    AbortSignal.timeout = ((ms: number) => {
+      timeouts.push(ms);
+      return originalTimeout(ms);
+    }) as typeof AbortSignal.timeout;
+    try {
+      const refreshConnection = { ...piConnection };
+      delete refreshConnection.requestTimeoutMs;
+      const { provider, requests } = httpProvider(
+        (url) =>
+          url.endsWith("/global/refresh-catalog")
+            ? Response.json({ ok: true })
+            : new Response(null, { status: 404 }),
+        refreshConnection,
+      );
 
-    await expect(provider.refreshCatalog?.()).resolves.toBeUndefined();
-    expect(requests.map((request) => [request.url, request.init.method ?? "GET"])).toContainEqual([
-      "http://pi.test/global/refresh-catalog",
-      "POST",
-    ]);
+      await expect(provider.refreshCatalog?.()).resolves.toBeUndefined();
+      expect(requests.map((request) => [request.url, request.init.method ?? "GET"])).toContainEqual(
+        ["http://pi.test/global/refresh-catalog", "POST"],
+      );
+      // Runtime refresh and the forced session hydration each have an
+      // independent 30s bridge-side ceiling, so this explicit request must not
+      // inherit the generic 30s client budget.
+      expect(timeouts).toEqual([65_000]);
+    } finally {
+      AbortSignal.timeout = originalTimeout;
+    }
   });
 
   test("accepts a 404 from a Pi bridge that predates the refresh route", async () => {

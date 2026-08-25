@@ -1,15 +1,24 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   composeModelId,
   DEFAULT_THINKING_LEVEL,
   emptyComposer,
+  listModels,
   modelLocalId,
   modelProviderId,
   normalizeAgentModel,
   reconcileComposerSelection,
+  refreshModels,
   thinkingLevel,
 } from "./models.js";
+import { setModelRuntimeFactoryForTests } from "./runtime.js";
+
+afterEach(() => {
+  setModelRuntimeFactoryForTests();
+  refreshModels();
+});
 
 describe("model ids", () => {
   test("round-trips a provider and model pair", () => {
@@ -48,6 +57,49 @@ function model(overrides: Partial<Model<Api>> = {}): Model<Api> {
     ...overrides,
   } as Model<Api>;
 }
+
+describe("catalogue cache", () => {
+  test("does not let an invalidated in-flight probe repopulate the cache", async () => {
+    let reads = 0;
+    let releaseFirst: (models: Model<Api>[]) => void = () => undefined;
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const firstResult = new Promise<Model<Api>[]>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const before = model({ id: "before" });
+    const after = model({ id: "after" });
+    setModelRuntimeFactoryForTests(
+      async () =>
+        ({
+          getAvailable: () => {
+            reads += 1;
+            if (reads === 1) {
+              markStarted();
+              return firstResult;
+            }
+            return Promise.resolve([after]);
+          },
+          getProvider: () => undefined,
+        }) as unknown as ModelRuntime,
+    );
+    refreshModels();
+
+    const staleRead = listModels();
+    await started;
+    refreshModels();
+    releaseFirst([before]);
+
+    // The caller that began before invalidation may finish with its own result,
+    // but that result must not become the process-wide answer for the refreshed
+    // generation.
+    expect((await staleRead).map((entry) => entry.id)).toEqual(["test/before"]);
+    expect((await listModels()).map((entry) => entry.id)).toEqual(["test/after"]);
+    expect(reads).toBe(2);
+  });
+});
 
 describe("thinking levels", () => {
   test("passes a level Pi defines straight through when no model narrows it", () => {

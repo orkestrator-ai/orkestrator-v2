@@ -1023,6 +1023,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       "/global/refresh-catalog",
       { method: "POST" },
       this.fetchImpl,
+      "catalog-refresh",
     );
     // Compatibility with a Pi bridge from before the refresh route existed.
     // Not an error: `refreshProjectionModels` has already dropped its own

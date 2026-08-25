@@ -26,6 +26,7 @@ const { newSessionState, setAgentSessionTestHooks } = await import("./agent-sess
 const { refreshModels } = await import("./models.js");
 const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
 const { sessions, clientSessionKeys } = await import("./state.js");
+const { loadPersistedState } = await import("./persistence.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 let origin: string;
@@ -262,6 +263,149 @@ describe("successful lifecycle routes", () => {
     }
   });
 
+  test("create persists the session so a restart can reopen it", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-persist-"));
+    process.env.PI_BRIDGE_STATE_DIR = directory;
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    try {
+      const response = await call("/session/create", {
+        method: "POST",
+        body: JSON.stringify({ clientSessionKey: "tab-durable-create" }),
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { sessionId: string };
+      expect(typeof body.sessionId).toBe("string");
+
+      sessions.clear();
+      clientSessionKeys.clear();
+      await loadPersistedState();
+
+      expect(sessions.has(body.sessionId)).toBe(true);
+      expect(clientSessionKeys.get("tab-durable-create")).toBe(body.sessionId);
+    } finally {
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      sessions.clear();
+      clientSessionKeys.clear();
+      await rm(directory, { recursive: true, force: true });
+      resetTestDependencies();
+    }
+  });
+
+  test("attach persists the Pi session pointer so a restart re-attaches it", async () => {
+    // The bridge id alone is not enough to recover a conversation: `sessionFile`
+    // is what `resumeSession` re-opens. Create publishes the id, attach is the
+    // only moment the pointer exists, so it has to publish that.
+    const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-attach-persist-"));
+    process.env.PI_BRIDGE_STATE_DIR = directory;
+    const state = seedSession();
+    state.clientSessionKey = "tab-durable-attach";
+    clientSessionKeys.set(state.clientSessionKey, state.id);
+    setAgentSessionTestHooks({
+      createAgentSession: async () =>
+        fakeAgentSession({
+          sessionId: "attached-pi-session",
+          sessionFile: "/tmp/attached-pi-session.jsonl",
+        }),
+      hydrateComposer: async (composer) => composer,
+    });
+    try {
+      expect((await call(`/session/${state.id}/attach`, { method: "POST" })).status).toBe(200);
+
+      sessions.clear();
+      clientSessionKeys.clear();
+      await loadPersistedState();
+
+      const restored = sessions.get(state.id);
+      expect(restored?.sessionFile).toBe("/tmp/attached-pi-session.jsonl");
+      expect(restored?.piSessionId).toBe("attached-pi-session");
+      expect(clientSessionKeys.get("tab-durable-attach")).toBe(state.id);
+    } finally {
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      sessions.clear();
+      clientSessionKeys.clear();
+      await rm(directory, { recursive: true, force: true });
+      resetTestDependencies();
+    }
+  });
+
+  test("attach does not rewrite the state file when it is already attached", async () => {
+    // The backend attaches before *every* prompt, and `ensureSession` returns an
+    // already-attached session untouched. A barrier there would serialize and
+    // rewrite every transcript this bridge holds, once per turn, for nothing.
+    const directory = await mkdtemp(join(tmpdir(), "pi-bridge-http-attach-reattach-"));
+    process.env.PI_BRIDGE_STATE_DIR = directory;
+    const stateFile = join(directory, "state.json");
+    const state = seedSession();
+    let creations = 0;
+    setAgentSessionTestHooks({
+      createAgentSession: async () => {
+        creations += 1;
+        return fakeAgentSession({ sessionId: "warm-pi-session" });
+      },
+      hydrateComposer: async (composer) => composer,
+    });
+    try {
+      expect((await call(`/session/${state.id}/attach`, { method: "POST" })).status).toBe(200);
+      expect(creations).toBe(1);
+      // Removing the published file makes a second write unmistakable: only a
+      // barrier that actually ran could put it back.
+      await rm(stateFile, { force: true });
+
+      expect((await call(`/session/${state.id}/attach`, { method: "POST" })).status).toBe(200);
+
+      expect(creations).toBe(1);
+      expect(await Bun.file(stateFile).exists()).toBe(false);
+    } finally {
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      sessions.clear();
+      clientSessionKeys.clear();
+      await rm(directory, { recursive: true, force: true });
+      resetTestDependencies();
+    }
+  });
+
+  test("resume persists the adopted session so a restart can reopen it", async () => {
+    const sessionDir = await mkdtemp(join(tmpdir(), "pi-bridge-http-resume-sessions-"));
+    const stateDir = await mkdtemp(join(tmpdir(), "pi-bridge-http-resume-state-"));
+    const sessionFile = join(sessionDir, "resumable.jsonl");
+    await writeFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "resumed-pi-session",
+        timestamp: "2026-08-25T00:00:00.000Z",
+        cwd: process.cwd(),
+      })}\n`,
+      "utf8",
+    );
+    process.env.PI_SESSION_DIR = sessionDir;
+    process.env.PI_BRIDGE_STATE_DIR = stateDir;
+    setAgentSessionTestHooks({ hydrateComposer: async (composer) => composer });
+    try {
+      const response = await call("/session/resume", {
+        method: "POST",
+        body: JSON.stringify({ sessionId: sessionFile }),
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { sessionId: string };
+
+      sessions.clear();
+      clientSessionKeys.clear();
+      await loadPersistedState();
+
+      expect(sessions.get(body.sessionId)?.sessionFile).toBe(await realpath(sessionFile));
+    } finally {
+      delete process.env.PI_SESSION_DIR;
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      sessions.clear();
+      clientSessionKeys.clear();
+      await rm(sessionDir, { recursive: true, force: true });
+      await rm(stateDir, { recursive: true, force: true });
+      resetTestDependencies();
+    }
+  });
+
   test("cold-attaches a lazily created SDK session", async () => {
     const state = seedSession();
     let creations = 0;
@@ -331,7 +475,9 @@ describe("successful lifecycle routes", () => {
       })}\n`,
       "utf8",
     );
+    const stateDir = await mkdtemp(join(tmpdir(), "pi-bridge-http-fork-state-"));
     process.env.PI_SESSION_DIR = directory;
+    process.env.PI_BRIDGE_STATE_DIR = stateDir;
     const state = seedSession();
     state.session = fakeAgentSession({
       sessionManager: { createBranchedSession: (entryId: string) => (entryId ? forkedFile : null) },
@@ -347,10 +493,22 @@ describe("successful lifecycle routes", () => {
       const body = await response.json();
       expect(body.sessionId).not.toBe(state.id);
       expect(sessions.get(body.sessionId)?.sessionFile).toBe(await realpath(forkedFile));
+
+      // The fork is a real conversation on disk from the moment it is minted.
+      // Losing its pointer to a restart would strand the branched JSONL file
+      // with nothing left that knows how to reopen it.
+      sessions.clear();
+      clientSessionKeys.clear();
+      await loadPersistedState();
+      expect(sessions.get(body.sessionId)?.sessionFile).toBe(await realpath(forkedFile));
     } finally {
       delete process.env.PI_SESSION_DIR;
+      delete process.env.PI_BRIDGE_STATE_DIR;
+      sessions.clear();
+      clientSessionKeys.clear();
       resetTestDependencies();
       await rm(directory, { recursive: true, force: true });
+      await rm(stateDir, { recursive: true, force: true });
     }
   });
 });

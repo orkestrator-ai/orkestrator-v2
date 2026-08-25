@@ -459,6 +459,39 @@ describe("NativeAgentService", () => {
     );
   });
 
+  test("keeps a transient Pi session startup in the connecting request", async () => {
+    let attempts = 0;
+    const delays: number[] = [];
+    const stub = createProviderStub("pi", {
+      createSession: async () => {
+        attempts += 1;
+        if (attempts < 3) throw new ProviderUnavailableError("Pi is still starting");
+        return "pi-session";
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-pi-create-retry-",
+        provider: async () => stub.provider,
+        delay: async (milliseconds) => {
+          delays.push(milliseconds);
+        },
+      },
+      async ({ service }) => {
+        await expect(
+          service.ensureSession({
+            environmentId: "env-1",
+            agent: "pi",
+            logicalSessionKey: "env-env-1:pi-tab",
+          }),
+        ).resolves.toMatchObject({ providerSessionId: "pi-session" });
+
+        expect(stub.createSession).toHaveBeenCalledTimes(3);
+        expect(delays).toEqual([250, 500]);
+      },
+    );
+  });
+
   test("surfaces a Cursor session startup that stays unavailable for every attempt", async () => {
     const delays: number[] = [];
     const stub = createProviderStub("cursor", {

@@ -1785,6 +1785,77 @@ describe("AgentNativeTab", () => {
     expect(screen.queryByText("Connecting to Cursor Agent...") === null).toBe(true);
   });
 
+  test("treats a recovering Pi projection as still connecting", async () => {
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      connection: "connecting" as const,
+      turn: { phase: "recovering" as const },
+    }));
+
+    render(<AgentNativeTab tabId="tab-pi-recovering" data={identity("pi")} isActive />);
+
+    await waitFor(() => expect(screen.getByText("Connecting to Pi...")).toBeTruthy());
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Retry" }) === null).toBe(true);
+  });
+
+  test("surfaces the backend's detail and a retry control once recovery is given up on", async () => {
+    // The counterpart to the test above. `connecting` carries no retry control,
+    // so the backend giving up on a session has to reach the user as a failure
+    // they can act on — with the reason the backend gave, not a generic one.
+    let reads = 0;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      reads += 1;
+      const base = await defaultProjection(input);
+      return reads === 1
+        ? { ...base, connection: "connecting" as const, turn: { phase: "recovering" as const } }
+        : {
+            ...base,
+            connection: "error" as const,
+            turn: {
+              phase: "recovering" as const,
+              error:
+                "The native agent runtime no longer holds this session. Retry to start a new one.",
+            },
+          };
+    });
+
+    render(<AgentNativeTab tabId="tab-pi-given-up" data={identity("pi")} isActive />);
+
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy(), {
+      timeout: 5_000,
+    });
+    expect(
+      screen.getByText(
+        "The native agent runtime no longer holds this session. Retry to start a new one.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+    expect(screen.queryByText("Connecting to Pi...") === null).toBe(true);
+  });
+
+  test("leaves the connecting overlay when the session comes back", async () => {
+    // `recovering` polls at the active cadence, so the tab has to pick the
+    // recovery up on its own. A reconnect the user has to click through would
+    // defeat the point of holding the overlay in the first place.
+    let reads = 0;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => {
+      reads += 1;
+      const base = await defaultProjection(input);
+      return reads === 1
+        ? { ...base, connection: "connecting" as const, turn: { phase: "recovering" as const } }
+        : base;
+    });
+
+    render(<AgentNativeTab tabId="tab-pi-recovered" data={identity("pi")} isActive />);
+
+    await waitFor(() => expect(screen.getByText("Connecting to Pi...")).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText("Connecting to Pi...") === null).toBe(true), {
+      timeout: 5_000,
+    });
+    expect(screen.queryByText("Connection Failed") === null).toBe(true);
+  });
+
   test("stays connecting while an invalidation races a new tab's session creation", async () => {
     // What the backend really answers while `ensure` is still spawning the
     // agent: the logical key has no provider session to resolve yet.

@@ -47,8 +47,10 @@ import {
   RefreshCw,
   RotateCcw,
   X,
+  FlaskConical,
 } from "lucide-react";
 import { AgentIcon } from "@/components/agents/AgentRadioGroup";
+import { CursorSdkSignIn } from "./agent/CursorSdkSignIn";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { getGatewayTokenValidationError } from "@/lib/gateway-token";
@@ -131,6 +133,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
     setCursorApiKey,
     clearCursorApiKey,
     setClearCursorApiKey,
+    experimentalCursorSdkBridge,
+    setExperimentalCursorSdkBridge,
     useHostGitHubCredentials,
     setUseHostGitHubCredentials,
     useHostClaudeCredentials,
@@ -951,6 +955,59 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
             Applied to newly created or recreated containers. Docker receives the key by environment
             name, and its value is redacted from creation errors.
           </p>
+        </div>
+
+        <div className="space-y-3 border-t border-border/60 pt-5">
+          <div>
+            <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <FlaskConical className="h-4 w-4" />
+              Cursor SDK bridge (experimental)
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Runs Cursor sessions on Cursor&apos;s own TypeScript SDK instead of the ACP command
+              line. Both engines stay installed and behave the same way in the app; this only
+              chooses which one new sessions are created on.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={experimentalCursorSdkBridge}
+            aria-label="Use the experimental Cursor SDK bridge"
+            onClick={() => setExperimentalCursorSdkBridge(!experimentalCursorSdkBridge)}
+            className={cn(
+              "max-w-xs w-full p-3 rounded-lg border-2 text-left transition-colors",
+              experimentalCursorSdkBridge
+                ? "border-primary bg-primary/5"
+                : "border-transparent bg-zinc-900 hover:border-zinc-600",
+            )}
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-medium text-sm">
+                {experimentalCursorSdkBridge ? "Enabled" : "Disabled"}
+              </span>
+              <div
+                className={cn(
+                  "w-9 h-5 rounded-full transition-colors relative",
+                  experimentalCursorSdkBridge ? "bg-primary" : "bg-muted-foreground/30",
+                )}
+              >
+                <div
+                  className={cn(
+                    "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
+                    experimentalCursorSdkBridge ? "translate-x-4" : "translate-x-0.5",
+                  )}
+                />
+              </div>
+            </div>
+          </button>
+          <p className="text-xs text-muted-foreground">
+            Each engine keeps its own sessions, so a session started on one stays there. Restart an
+            environment after changing this for its next Cursor session to use the new engine.
+          </p>
+          <CursorSdkSignIn
+            credentialRevision={`${global.cursorApiKeyConfigured === true}:${global.cursorApiKeySource ?? "none"}`}
+          />
         </div>
       </>,
     );

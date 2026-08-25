@@ -50,7 +50,7 @@ function getSavedReviewInstruction(value: unknown): string {
  * with no indication and leave Save Changes disabled, so the sync is keyed on
  * the values instead. Any field the sync effect below reads belongs here.
  */
-function globalFormSignature(global: GlobalConfig): string {
+export function globalFormSignature(global: GlobalConfig): string {
   return JSON.stringify([
     global.containerResources.cpuCores,
     global.containerResources.memoryGb,
@@ -67,6 +67,7 @@ function globalFormSignature(global: GlobalConfig): string {
     global.terminalAppearance?.backgroundColor ?? "",
     global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
     global.experimentalCodexRawEventLogging ?? true,
+    global.experimentalCursorSdkBridge ?? false,
     global.debugLogging ?? false,
     global.webClientEnabled ?? true,
     getSavedReviewInstruction(global.reviewInstruction),
@@ -136,6 +137,9 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [experimentalCodexRawEventLogging, setExperimentalCodexRawEventLogging] = useState(
     global.experimentalCodexRawEventLogging ?? true,
+  );
+  const [experimentalCursorSdkBridge, setExperimentalCursorSdkBridge] = useState(
+    global.experimentalCursorSdkBridge ?? false,
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [webClientEnabled, setWebClientEnabled] = useState(global.webClientEnabled ?? true);
@@ -220,6 +224,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
+    setExperimentalCursorSdkBridge(global.experimentalCursorSdkBridge ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
@@ -320,6 +325,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalBackgroundColor !== terminalAppearance.backgroundColor ||
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
+      experimentalCursorSdkBridge !== (global.experimentalCursorSdkBridge ?? false) ||
       debugLogging !== (global.debugLogging ?? false) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
       reviewInstruction !== getSavedReviewInstruction(global.reviewInstruction) ||
@@ -353,6 +359,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     terminalBackgroundColor,
     terminalScrollback,
     experimentalCodexRawEventLogging,
+    experimentalCursorSdkBridge,
     debugLogging,
     webClientEnabled,
     reviewInstruction,
@@ -453,6 +460,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
         experimentalCodexRawEventLogging: boolean;
+        experimentalCursorSdkBridge: boolean;
         debugLogging: boolean;
         webClientEnabled: boolean;
         reviewInstruction?: string;
@@ -475,6 +483,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         },
         terminalScrollback,
         experimentalCodexRawEventLogging,
+        experimentalCursorSdkBridge,
         debugLogging,
         webClientEnabled,
         // `update_global_config` replaces the stored global wholesale, so this
@@ -664,6 +673,7 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
+    setExperimentalCursorSdkBridge(global.experimentalCursorSdkBridge ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setWebClientEnabled(global.webClientEnabled ?? true);
     setReviewInstruction(getSavedReviewInstruction(global.reviewInstruction));
@@ -727,6 +737,8 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalScrollback,
     experimentalCodexRawEventLogging,
     setExperimentalCodexRawEventLogging,
+    experimentalCursorSdkBridge,
+    setExperimentalCursorSdkBridge,
     debugLogging,
     setDebugLogging,
     webClientEnabled,

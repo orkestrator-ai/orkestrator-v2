@@ -342,6 +342,236 @@ exit 0
     }
   });
 
+  /**
+   * The experimental engine, on the same container port as the ACP one.
+   *
+   * A Cursor session is served by exactly one bridge at a time, which is what
+   * lets the toggle be flipped without recreating a container built before the
+   * SDK bridge existed. That only works if the engine is part of the reuse
+   * fingerprint and the stop pattern reaches whichever bridge holds the port —
+   * both bridges answer `/global/health` identically, so a healthy port is no
+   * evidence that the *selected* engine is the one running.
+   */
+  test("starts the in-container Cursor SDK bridge when the experimental setting is on", async () => {
+    const hostPort = await reserveFreePort();
+    const pidFile = path.join(await createTempDir("ork-cursor-sdk-pid-"), "pid");
+    const dataDir = await createTempDir("ork-cursor-sdk-data-");
+    const environment = createEnvironment({
+      id: "env-container-cursor-sdk",
+      environmentType: "containerized",
+      containerId: "container-cursor-sdk",
+      status: "running",
+    });
+    const globalConfig: Record<string, unknown> = { experimentalCursorSdkBridge: true };
+    const { context } = createContext(environment, { globalConfig, dataDir });
+    const commands = createCommandRegistry();
+
+    // A login-minted credential the bridge is meant to be handed, in the SDK's
+    // own on-disk shape.
+    await fs.mkdir(path.join(dataDir, "cursor-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(dataDir, "cursor-sdk", "auth.json"),
+      JSON.stringify({ apiKey: "minted-sdk-key", email: "dev@example.com" }),
+    );
+
+    const previousHostPort = process.env.FAKE_BRIDGE_HOST_PORT;
+    const previousPidFile = process.env.FAKE_BRIDGE_PID_FILE;
+    const previousTokenFile = process.env.FAKE_BRIDGE_TOKEN_FILE;
+    const previousCursorFingerprintFile = process.env.FAKE_CURSOR_FINGERPRINT_FILE;
+    const previousCursorKeyCapture = process.env.FAKE_CURSOR_KEY_CAPTURE;
+    const previousCursorDirMarker = process.env.FAKE_CURSOR_DIR_MARKER;
+    const previousSdkKeyCapture = process.env.FAKE_CURSOR_SDK_KEY_CAPTURE;
+    const tokenFile = path.join(path.dirname(pidFile), "token");
+    const cursorKeyCapture = path.join(path.dirname(pidFile), "cursor-key");
+    const cursorFingerprintFile = path.join(path.dirname(pidFile), "cursor-fingerprint");
+    const cursorDirMarker = path.join(path.dirname(pidFile), "cursor-credential-dir");
+    const sdkKeyCapture = path.join(path.dirname(pidFile), "cursor-sdk-auth");
+    process.env.FAKE_BRIDGE_HOST_PORT = String(hostPort);
+    process.env.FAKE_BRIDGE_PID_FILE = pidFile;
+    process.env.FAKE_BRIDGE_TOKEN_FILE = tokenFile;
+    process.env.FAKE_CURSOR_FINGERPRINT_FILE = cursorFingerprintFile;
+    process.env.FAKE_CURSOR_KEY_CAPTURE = cursorKeyCapture;
+    process.env.FAKE_CURSOR_DIR_MARKER = cursorDirMarker;
+    process.env.FAKE_CURSOR_SDK_KEY_CAPTURE = sdkKeyCapture;
+
+    const dockerScript = `#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$1" in
+  inspect) printf 'running\\n'; exit 0 ;;
+  port) printf '127.0.0.1:%s\\n' "$FAKE_BRIDGE_HOST_PORT"; exit 0 ;;
+  exec)
+    printf '%s\\n' "$*" >> "$FAKE_DOCKER_EXEC_LOG"
+    case "$*" in
+      *"mkdir -p '/tmp/orkestrator-ai'"*|*'mkdir -p "$credential_dir"'*)
+        : > "$FAKE_CURSOR_DIR_MARKER" ;;
+    esac
+    case "$*" in
+      # The launch script embeds several of the commands below as ordinary
+      # lines, so it has to be recognised first — otherwise the fake answers it
+      # as a one-shot exec and never starts a bridge.
+      *setsid*) ;;
+      *"cat /tmp/cursor-acp-bridge-token"*)
+        cat "$FAKE_BRIDGE_TOKEN_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"cat /tmp/orkestrator-ai/cursor-api-key-fingerprint"*)
+        cat "$FAKE_CURSOR_FINGERPRINT_FILE" 2>/dev/null || true
+        exit 0 ;;
+      *"cat /tmp/cursor-acp-bridge.log"*)
+        printf 'cursor log\\n'; exit 0 ;;
+      *pkill*)
+        rm -f "$FAKE_BRIDGE_TOKEN_FILE"
+        pid=$(cat "$FAKE_BRIDGE_PID_FILE" 2>/dev/null || true)
+        if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi
+        exit 0 ;;
+      *".cursor-sdk-auth.XXXXXX"*)
+        cat > "$FAKE_CURSOR_SDK_KEY_CAPTURE"
+        exit 0 ;;
+      *"rm -f /tmp/orkestrator-ai/cursor-sdk-auth.json"*)
+        rm -f "$FAKE_CURSOR_SDK_KEY_CAPTURE"
+        exit 0 ;;
+      *"rm -f /tmp/orkestrator-ai/cursor-api-key"*)
+        rm -f "$FAKE_CURSOR_KEY_CAPTURE"
+        exit 0 ;;
+      *".cursor-api-key.XXXXXX"*)
+        cat > "$FAKE_CURSOR_KEY_CAPTURE"
+        exit 0 ;;
+    esac
+    token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    if [ -z "$token" ]; then
+      token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    fi
+    printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
+    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
+    if [ -n "$fingerprint" ] && [ -e "$FAKE_CURSOR_DIR_MARKER" ]; then
+      printf '%s' "$fingerprint" > "$FAKE_CURSOR_FINGERPRINT_FILE"
+    fi
+    bun -e 'require("node:http").createServer((q,s)=>{s.writeHead(q.url==="/global/health"?200:404,{"content-type":"application/json"});s.end("{}")}).listen(Number(process.env.FAKE_BRIDGE_HOST_PORT),"127.0.0.1")' >/dev/null 2>&1 &
+    printf '%s' "$!" > "$FAKE_BRIDGE_PID_FILE"
+    exit 0 ;;
+esac
+exit 0
+`;
+
+    try {
+      await withFakeDocker(dockerScript, async (logs) => {
+        const started = (await commands.get("start_cursor_server")?.(
+          { containerId: "container-cursor-sdk" },
+          context,
+        )) as { hostPort: number; wasRunning: boolean; authToken: string };
+        expect(started).toMatchObject({ hostPort, wasRunning: false });
+
+        const execLog = await fs.readFile(logs.exec, "utf8");
+        // The SDK engine, not the ACP one, and nothing left over from it.
+        expect(execLog).toContain("setsid bun /opt/cursor-bridge/dist/index.js");
+        expect(execLog).not.toContain("/opt/acp-bridge/dist/index.js --provider=cursor");
+        expect(execLog).not.toContain("export ACP_PROVIDER=");
+        expect(execLog).not.toContain("export ACP_BRIDGE_TOKEN=");
+        expect(execLog).toContain("export CURSOR_BRIDGE_TOKEN=");
+        expect(execLog).toContain(
+          "export CURSOR_BRIDGE_STATE_DIR=/tmp/orkestrator-cursor-sdk-state",
+        );
+        expect(execLog).toContain(
+          "export CURSOR_BRIDGE_AUTH_FILE=/tmp/orkestrator-ai/cursor-sdk-auth.json",
+        );
+        // Repository-controlled `.cursor/` settings are readable inside a
+        // container and not on the host — the same boundary the ACP path draws
+        // with ACP_APPROVE_PROJECT_MCPS.
+        expect(execLog).toContain("export CURSOR_BRIDGE_PROJECT_SETTINGS=1");
+        expect(execLog).toContain("umask 077");
+        // The minted key is piped over stdin, so it never reaches docker argv
+        // or a process listing.
+        expect(execLog).not.toContain("minted-sdk-key");
+        expect(await fs.readFile(sdkKeyCapture, "utf8")).toContain("minted-sdk-key");
+        // Written by the backend rather than copied, so a host file carrying
+        // extra fields cannot smuggle them into a container.
+        expect(Object.keys(JSON.parse(await fs.readFile(sdkKeyCapture, "utf8")))).toEqual([
+          "version",
+          "backendUrl",
+          "apiKey",
+          "createdAtMs",
+        ]);
+
+        // The engine is part of the fingerprint: both bridges answer health on
+        // this port, so the credential alone cannot say which one is running.
+        expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
+          `sdk:${createHash("sha256").update("").digest("hex")}`,
+        );
+
+        // Several branches of the launch script expand to nothing for this
+        // engine, so parse the exact text with the interpreter the container
+        // runs it under rather than trusting the interpolation.
+        const detachedExec = execLog.slice(execLog.indexOf("exec -d "));
+        const scriptStart = detachedExec.indexOf(" bash -lc ") + " bash -lc ".length;
+        const setsidLine = detachedExec.indexOf(
+          "setsid bun /opt/cursor-bridge/dist/index.js",
+          scriptStart,
+        );
+        const scriptEnd = detachedExec.indexOf("2>&1 &", setsidLine) + "2>&1 &".length;
+        expect(setsidLine).toBeGreaterThan(scriptStart);
+        const parsed = Bun.spawnSync([
+          "bash",
+          "-n",
+          "-c",
+          detachedExec.slice(scriptStart, scriptEnd),
+        ]);
+        expect(parsed.stderr.toString()).toBe("");
+        expect(parsed.exitCode).toBe(0);
+
+        // An unchanged selection reuses the running bridge rather than
+        // restarting the agent's in-flight turn on every prompt dispatch.
+        const reused = (await commands.get("start_cursor_server")?.(
+          { containerId: "container-cursor-sdk" },
+          context,
+        )) as { wasRunning: boolean; authToken: string };
+        expect(reused).toMatchObject({ wasRunning: true });
+        expect(reused.authToken).toBe(started.authToken);
+
+        // Flipping the toggle off has to replace the running bridge, not reuse
+        // it: without the engine in the fingerprint the SDK bridge would keep
+        // serving until something else happened to restart it.
+        globalConfig.experimentalCursorSdkBridge = false;
+        const switched = (await commands.get("start_cursor_server")?.(
+          { containerId: "container-cursor-sdk" },
+          context,
+        )) as { wasRunning: boolean; authToken: string };
+        expect(switched).toMatchObject({ wasRunning: false });
+        expect(switched.authToken).not.toBe(started.authToken);
+
+        const afterSwitch = await fs.readFile(logs.exec, "utf8");
+        // The stop pattern names both bridges, because either may hold the port.
+        expect(afterSwitch).toContain(
+          `pkill -f '[a]cp-bridge/dist/index.js --provider=cursor|[c]ursor-bridge/dist/index.js'`,
+        );
+        expect(afterSwitch).toContain("setsid bun /opt/acp-bridge/dist/index.js --provider=cursor");
+        // A credential left behind would keep working after it was revoked here.
+        expect(afterSwitch).toContain("rm -f /tmp/orkestrator-ai/cursor-sdk-auth.json");
+        expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
+          `acp:${createHash("sha256").update("").digest("hex")}`,
+        );
+      });
+    } finally {
+      const pid = await fs.readFile(pidFile, "utf8").catch(() => "");
+      if (pid) {
+        try {
+          process.kill(Number(pid));
+        } catch {
+          // already gone
+        }
+      }
+      const restore = (name: string, value: string | undefined) => {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      };
+      restore("FAKE_BRIDGE_HOST_PORT", previousHostPort);
+      restore("FAKE_BRIDGE_PID_FILE", previousPidFile);
+      restore("FAKE_BRIDGE_TOKEN_FILE", previousTokenFile);
+      restore("FAKE_CURSOR_FINGERPRINT_FILE", previousCursorFingerprintFile);
+      restore("FAKE_CURSOR_KEY_CAPTURE", previousCursorKeyCapture);
+      restore("FAKE_CURSOR_DIR_MARKER", previousCursorDirMarker);
+      restore("FAKE_CURSOR_SDK_KEY_CAPTURE", previousSdkKeyCapture);
+    }
+  });
+
   test.each(["cursor", "grok"] as const)(
     "starts, inspects, and stops the in-container %s ACP bridge",
     async (provider) => {
@@ -417,8 +647,11 @@ case "$1" in
         exit 0 ;;
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    if [ -z "$token" ]; then
+      token=$(printf '%s' "$*" | sed -n "s/.*CURSOR_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
+    fi
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
-    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([0-9a-f][0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
+    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
     if [ -n "$fingerprint" ] && [ -e "$FAKE_CURSOR_DIR_MARKER" ]; then
       printf '%s' "$fingerprint" > "$FAKE_CURSOR_FINGERPRINT_FILE"
     fi
@@ -532,7 +765,7 @@ exit 0
               "rotated-container-cursor-key",
             );
             expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
-              createHash("sha256").update("rotated-container-cursor-key").digest("hex"),
+              `acp:${createHash("sha256").update("rotated-container-cursor-key").digest("hex")}`,
             );
 
             delete globalConfig.cursorApiKey;
@@ -544,7 +777,7 @@ exit 0
             expect(cleared.authToken).not.toBe(rotated.authToken);
             await expect(fs.readFile(cursorKeyCapture, "utf8")).rejects.toThrow();
             expect(await fs.readFile(cursorFingerprintFile, "utf8")).toBe(
-              createHash("sha256").update("").digest("hex"),
+              `acp:${createHash("sha256").update("").digest("hex")}`,
             );
             const rotatedExecLog = await fs.readFile(logs.exec, "utf8");
             expect(
@@ -575,8 +808,13 @@ exit 0
             context,
           );
           const afterStop = await fs.readFile(logs.exec, "utf8");
+          // Cursor's pattern names both of its bridges, because a Cursor
+          // session may be served by either engine on this same port and
+          // stopping the platform has to reach whichever one is running.
           expect(afterStop).toContain(
-            `pkill -f '[a]cp-bridge/dist/index.js --provider=${provider}'`,
+            provider === "cursor"
+              ? `pkill -f '[a]cp-bridge/dist/index.js --provider=cursor|[c]ursor-bridge/dist/index.js'`
+              : `pkill -f '[a]cp-bridge/dist/index.js --provider=${provider}'`,
           );
           expect(afterStop).toContain(`rm -f /tmp/${provider}-acp-bridge-token`);
         });
@@ -674,7 +912,7 @@ case "$1" in
     esac
     token=$(printf '%s' "$*" | sed -n "s/.*ACP_BRIDGE_TOKEN='\\([^']*\\)'.*/\\1/p")
     printf '%s' "$token" > "$FAKE_BRIDGE_TOKEN_FILE"
-    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([0-9a-f][0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
+    fingerprint=$(printf '%s' "$*" | sed -n "s#.*printf '%s' '\\([a-z][a-z]*:[0-9a-f]*\\)' > /tmp/orkestrator-ai/cursor-api-key-fingerprint.*#\\1#p")
     if [ -n "$fingerprint" ] && [ -e "$FAKE_CURSOR_DIR_MARKER" ]; then
       printf '%s' "$fingerprint" > "$FAKE_CURSOR_FINGERPRINT_FILE"
     fi
@@ -695,7 +933,7 @@ exit 0
 
         // The bridge ran without a key, and still recorded sha256("").
         expect(await fs.readFile(process.env.FAKE_CURSOR_FINGERPRINT_FILE!, "utf8")).toBe(
-          createHash("sha256").update("").digest("hex"),
+          `acp:${createHash("sha256").update("").digest("hex")}`,
         );
         const execLog = await fs.readFile(logs.exec, "utf8");
         expect(execLog).toContain("unset CURSOR_API_KEY");

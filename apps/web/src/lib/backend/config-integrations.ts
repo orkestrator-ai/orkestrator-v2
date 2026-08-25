@@ -11,6 +11,8 @@ import type {
   EnsureEnvironmentSetupResult,
   ClaudeModelCatalogSnapshot,
   LastEnvironmentAgentSelection,
+  CursorSdkAuthStatus,
+  CursorSdkLoginProgress,
 } from "@/types";
 import type {
   LinearCompletionCommentResult,
@@ -101,6 +103,29 @@ export async function setCursorApiKey(apiKey: string | null): Promise<AppConfig>
 
 export async function setAnthropicApiKey(apiKey: string | null): Promise<AppConfig> {
   return invoke<AppConfig>("set_anthropic_api_key", { apiKey });
+}
+
+/**
+ * Experimental Cursor SDK sign-in.
+ *
+ * Start returns the URL to open; the flow itself runs in the backend, which
+ * spawns the bridge, parses its output and stores the credential. Callers open
+ * the URL and poll `cursorSdkLoginStatus` until it leaves `pending`.
+ */
+export async function cursorSdkLoginStart(): Promise<{ loginUrl: string }> {
+  return invoke<{ loginUrl: string }>("cursor_sdk_login_start", {});
+}
+
+export async function cursorSdkLoginStatus(): Promise<CursorSdkLoginProgress> {
+  return invoke<CursorSdkLoginProgress>("cursor_sdk_login_status", {});
+}
+
+export async function cursorSdkLoginCancel(): Promise<void> {
+  await invoke<{ cancelled: boolean }>("cursor_sdk_login_cancel", {});
+}
+
+export async function cursorSdkLogout(): Promise<CursorSdkAuthStatus> {
+  return invoke<CursorSdkAuthStatus>("cursor_sdk_logout", {});
 }
 
 export async function getWebClientStatus(): Promise<WebClientStatus> {

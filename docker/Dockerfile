@@ -232,8 +232,10 @@ COPY --chown=node:node packages/protocol /opt/bridge-build/packages/protocol
 COPY --chown=node:node bridges/claude-bridge /opt/bridge-build/bridges/claude-bridge
 COPY --chown=node:node bridges/codex-bridge /opt/bridge-build/bridges/codex-bridge
 COPY --chown=node:node bridges/acp-bridge /opt/bridge-build/bridges/acp-bridge
+COPY --chown=node:node bridges/cursor-bridge /opt/bridge-build/bridges/cursor-bridge
 WORKDIR /opt/bridge-build
-RUN bun install --filter claude-bridge --filter codex-bridge --filter acp-bridge
+RUN bun install --filter claude-bridge --filter codex-bridge --filter acp-bridge \
+      --filter cursor-bridge
 
 # Build Claude Bridge Server.
 WORKDIR /opt/bridge-build/bridges/claude-bridge
@@ -264,12 +266,23 @@ WORKDIR /opt/bridge-build/bridges/acp-bridge
 RUN bun run build \
  && rm -rf node_modules
 
+# Build the experimental Cursor SDK bridge, the alternative engine for Cursor
+# sessions. Its build bundles @cursor/sdk's JavaScript into dist/index.js and
+# the `vendor` step stages the SDK's Linux platform package — ripgrep, the
+# sandbox helper and the tree-sitter grammars, which cannot be bundled — into
+# dist/node_modules, where the SDK's runtime lookup walks up from dist/index.js
+# to find it. The top-level node_modules is therefore build-only.
+WORKDIR /opt/bridge-build/bridges/cursor-bridge
+RUN bun run build \
+ && rm -rf node_modules
+
 # Preserve the runtime paths expected by the backend, then remove the temporary
 # workspace metadata and shared install.
 USER root
 RUN mv /opt/bridge-build/bridges/claude-bridge /opt/claude-bridge \
  && mv /opt/bridge-build/bridges/codex-bridge /opt/codex-bridge \
  && mv /opt/bridge-build/bridges/acp-bridge /opt/acp-bridge \
+ && mv /opt/bridge-build/bridges/cursor-bridge /opt/cursor-bridge \
  && rm -rf /opt/bridge-build
 USER node
 WORKDIR /workspace

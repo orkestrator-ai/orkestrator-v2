@@ -1743,6 +1743,7 @@ export function defaultConfig(): AppConfig {
       },
       terminalScrollback: 1000,
       experimentalCodexRawEventLogging: true,
+      experimentalCursorSdkBridge: false,
       debugLogging: false,
       webClientEnabled: true,
     },

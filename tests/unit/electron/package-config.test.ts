@@ -22,6 +22,7 @@ describe("Electron packaging configuration", () => {
       devDependencies: Record<string, string>;
       build: {
         directories: { buildResources: string; output: string };
+        electronFuses: { runAsNode: boolean };
         files: string[];
         extraResources: Array<{ from: string; to: string; filter: string[] }>;
         mac: {
@@ -68,6 +69,7 @@ describe("Electron packaging configuration", () => {
       buildResources: "apps/desktop/electron/resources",
       output: "release",
     });
+    expect(packageJson.build.electronFuses).toEqual({ runAsNode: false });
     expect(packageJson.build.mac.icon).toBe("icon.icns");
     expect(packageJson.build.mac.identity).toBe("-");
     expect(packageJson.build.mac.hardenedRuntime).toBe(false);
@@ -123,6 +125,7 @@ describe("Electron packaging configuration", () => {
       "package:release requires Apple notarization credentials",
     );
     expect(releaseConfig.forceCodeSigning).toBe(true);
+    expect(releaseConfig.electronFuses).toEqual({ runAsNode: false });
     expect(releaseConfig.mac?.identity).toBeUndefined();
     expect(releaseConfig.mac?.hardenedRuntime).toBe(true);
     expect(releaseConfig.mac?.notarize).toBe(true);

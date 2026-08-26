@@ -306,20 +306,56 @@ export function SharedNativeAgentController({
     normalizedMessages,
     consumedAgentHandoffId,
   );
-  const visibleUserMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
-  visibleUserMessageIdsRef.current = new Set(
-    [...normalizedMessages, ...handoff.displayMessages]
-      .filter((message) => message.role === "user")
-      .map((message) => message.id),
-  );
-  const transcriptEchoedOptimistic =
-    optimisticPrompt !== null &&
-    normalizedMessages.some(
-      (message) =>
+  /**
+   * The user rows the composer could see at the moment a prompt was submitted.
+   *
+   * Memoized rather than rebuilt per render: this is read once per submit, and
+   * a streaming turn re-renders on every projection frame, where an unmemoized
+   * pass over the whole transcript is pure cost.
+   */
+  const visibleUserMessageIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const message of normalizedMessages) {
+      if (message.role === "user") ids.add(message.id);
+    }
+    for (const message of handoff.displayMessages) {
+      if (message.role === "user") ids.add(message.id);
+    }
+    return ids;
+  }, [handoff.displayMessages, normalizedMessages]);
+  /**
+   * Has an authoritative transcript row appeared that can only be this prompt?
+   *
+   * Two conditions, and both are load-bearing:
+   *
+   * - The row was not visible when the prompt was submitted. Matching on text
+   *   alone confirmed a *previous* identical prompt the instant the user
+   *   pressed Enter, and providers reshape prompts (slash-command expansion,
+   *   handoff history, attachment references) often enough that the text sent
+   *   is not reliably the text echoed.
+   * - The row sits after every prior user row that is still visible. Novelty
+   *   alone is not confirmation: widening the transcript window brings older
+   *   history into view for the first time, and those rows are also ids the
+   *   submit never saw. A prompt's own echo is always appended past the end of
+   *   what the composer could see, so position separates the two without
+   *   depending on a clock or on the provider echoing the text verbatim.
+   */
+  const transcriptEchoedOptimistic = useMemo(() => {
+    if (!optimisticPrompt) return false;
+    let lastPriorUserIndex = -1;
+    for (let index = 0; index < normalizedMessages.length; index += 1) {
+      if (optimisticPrompt.priorUserMessageIds.has(normalizedMessages[index]!.id)) {
+        lastPriorUserIndex = index;
+      }
+    }
+    return normalizedMessages.some(
+      (message, index) =>
+        index > lastPriorUserIndex &&
         message.role === "user" &&
         !isClientOnlyNativeMessage(message) &&
         !optimisticPrompt.priorUserMessageIds.has(message.id),
     );
+  }, [normalizedMessages, optimisticPrompt]);
   const turnStopMarker = useNativeAgentProjectionStore((state) =>
     state.turnStopMarkers.get(sessionKey),
   );
@@ -754,7 +790,7 @@ export function SharedNativeAgentController({
         attachments: submittedAttachments,
         createdAt: new Date().toISOString(),
         requestId: dispatchRequestId,
-        priorUserMessageIds: new Set(visibleUserMessageIdsRef.current),
+        priorUserMessageIds: new Set(visibleUserMessageIds),
       });
       if (
         (projection?.messages.length ?? 0) === 0 &&
@@ -867,6 +903,7 @@ export function SharedNativeAgentController({
       sessionKey,
       tabId,
       updateDraft,
+      visibleUserMessageIds,
     ],
   );
 

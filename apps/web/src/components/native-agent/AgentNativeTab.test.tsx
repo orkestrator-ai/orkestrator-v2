@@ -1694,7 +1694,9 @@ describe("AgentNativeTab", () => {
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
     );
     expect(input.textContent).toBe("");
-    expect(screen.queryByText(/connection dropped before dispatch was confirmed/i)).toBeNull();
+    expect(screen.queryByText(/connection dropped before dispatch was confirmed/i) === null).toBe(
+      true,
+    );
   });
 
   test("does not mistake an older identical prompt for dispatch confirmation", async () => {
@@ -1730,6 +1732,166 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
       "Run the focused tests",
     );
+  });
+
+  test("does not treat widened transcript history as dispatch confirmation", async () => {
+    const tabId = "tab-window-not-confirmation";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const recentPrompt = {
+      id: "recent-user-prompt",
+      role: "user" as const,
+      content: "Earlier question",
+      parts: [{ type: "text" as const, content: "Earlier question" }],
+      createdAt: "2026-08-26T13:30:00.000Z",
+    };
+    const olderPrompt = {
+      id: "older-user-prompt",
+      role: "user" as const,
+      content: "A question from before the window",
+      parts: [{ type: "text" as const, content: "A question from before the window" }],
+      createdAt: "2026-08-26T12:00:00.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messageWindow: { limit: input.messageLimit ?? 512, truncated: true },
+      messages: (input.messageLimit ?? 0) > 512 ? [olderPrompt, recentPrompt] : [recentPrompt],
+    }));
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+      outcome: "unknown" as const,
+      requestId: input.requestId,
+      error: "The response was lost",
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toMatch(/\S/),
+    );
+
+    // Loading earlier history introduces user rows the submit never saw. They
+    // are not this prompt's echo, so they must not clear the composer.
+    fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+    await waitFor(() =>
+      expect(
+        useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messages.length,
+      ).toBe(2),
+    );
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "Run the focused tests",
+    );
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toMatch(/\S/);
+  });
+
+  test("honours a transcript confirmation that lands while the dispatch is still in flight", async () => {
+    const tabId = "tab-echo-before-response";
+    const sessionKey = createSessionKey("env-1", tabId);
+    let releaseDispatch = () => {};
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      (input) =>
+        new Promise<NativeAgentDispatchOutcome>((resolve) => {
+          releaseDispatch = () =>
+            resolve({
+              outcome: "unknown",
+              requestId: input.requestId,
+              error: "The response was lost",
+            });
+        }),
+    );
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+
+    // The authoritative row arrives before the dispatch response does. The
+    // still-pending send must adopt that verdict instead of restoring the
+    // draft and reporting an unconfirmed dispatch over it.
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "echoed-user-prompt",
+            role: "user" as const,
+            content: "Run the focused tests",
+            parts: [{ type: "text" as const, content: "Run the focused tests" }],
+            createdAt: "2026-08-26T14:00:00.000Z",
+          },
+        ],
+      });
+    });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+
+    await act(async () => {
+      releaseDispatch();
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+    expect(screen.queryByText(/connection dropped before dispatch was confirmed/i) === null).toBe(
+      true,
+    );
+  });
+
+  test("keeps a prompt typed after an unconfirmed send when the echo finally arrives", async () => {
+    const tabId = "tab-late-echo-guard";
+    const sessionKey = createSessionKey("env-1", tabId);
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+      outcome: "unknown" as const,
+      requestId: input.requestId,
+      error: "The response was lost",
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toMatch(/\S/),
+    );
+
+    // Editing the composer releases the dispatch's claim on the draft, which
+    // is what stops a late echo deleting the prompt typed in its place.
+    fireEvent.input(input, { target: { textContent: "A different question" } });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId === undefined).toBe(
+        true,
+      ),
+    );
+
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "late-echoed-prompt",
+            role: "user" as const,
+            content: "Run the focused tests",
+            parts: [{ type: "text" as const, content: "Run the focused tests" }],
+            createdAt: "2026-08-26T14:00:00.000Z",
+          },
+        ],
+      });
+    });
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "A different question",
+    );
+    expect(screen.getByText(/connection dropped before dispatch was confirmed/i)).toBeDefined();
   });
 
   test("retries a failed resume provider-lock save before opening the provider dialog", async () => {

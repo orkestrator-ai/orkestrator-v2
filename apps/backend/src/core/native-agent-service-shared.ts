@@ -501,6 +501,8 @@ export type PromptDispatchPreparation =
   | { dispatch: false; notice?: OpenCodeIncompleteTurnNotice }
   | {
       dispatch: true;
+      /** Prompt replacement assembled while the durable dispatch lock is held. */
+      prompt?: string;
       model?: string;
       effort?: string;
       executionAgent?: string;

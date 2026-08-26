@@ -537,6 +537,7 @@ export function isInitialPromptImageAttachment(
     isRecord(value) &&
     isNonBlankString(value.id) &&
     isNonBlankString(value.name) &&
+    (value.type === undefined || value.type === "image" || value.type === "file") &&
     (value.previewUrl === undefined || typeof value.previewUrl === "string") &&
     isNonBlankString(value.base64Data)
   );

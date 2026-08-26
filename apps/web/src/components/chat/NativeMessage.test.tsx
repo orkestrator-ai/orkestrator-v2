@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT } from "@orkestrator/protocol/review-evidence-frames";
 import { TerminalProvider } from "@/contexts";
 import type { NativeMessagePart } from "@/lib/chat/native-message-types";
 import { clearImagePreviewCache } from "@/lib/chat/image-preview-cache";
@@ -601,6 +602,40 @@ describe("NativeMessage task list rendering", () => {
       expect(mockWriteText).toHaveBeenCalledWith("First part\n\nSecond part");
       expect(toastSuccessMock).toHaveBeenCalledWith("copied");
     });
+  });
+
+  test("long-press copies evidence omitted from the visible user prompt", async () => {
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {});
+    const contract = MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT;
+    const source = `${contract.promptPrefix} Backend context follows.\n\n${contract.openMarker}\n[{"summary":"Hidden copy evidence"}]\n${contract.closeMarker}\n\n${contract.continuationPrefix}"main".`;
+    const message = makeMessage([{ type: "text", content: source }], {
+      role: "user",
+      id: "user-filtered-copy",
+    });
+
+    render(<NativeMessage message={message} />);
+
+    expect(document.body.textContent).toContain(contract.omissionText);
+    expect(document.body.textContent).not.toContain("Hidden copy evidence");
+    const prompt = screen.getByText(contract.omissionText);
+    fireEvent.pointerDown(prompt, {
+      pointerType: "touch",
+      isPrimary: true,
+      pointerId: 9,
+      clientX: 20,
+      clientY: 20,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 550));
+    fireEvent.pointerUp(prompt, {
+      pointerType: "touch",
+      isPrimary: true,
+      pointerId: 9,
+      clientX: 20,
+      clientY: 20,
+    });
+
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(source));
   });
 
   test("falls back to message content when long-pressing a user prompt without text parts", async () => {

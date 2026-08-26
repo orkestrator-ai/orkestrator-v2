@@ -1,9 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT,
+  STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
+  type ReviewEvidenceFrameDisplayContract,
+} from "@orkestrator/protocol/review-evidence-frames";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "@/components/build-pipeline/structured-review-test-fixture";
 import { jsonPayloadSearchText, parseJsonPayload } from "@/lib/chat/json-payload";
 import type { JsonPayload } from "@/lib/chat/json-payload";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
+import { mockWriteText } from "../../../../../tests/mocks/clipboard";
+import { TextPart } from "./NativeMessage.file-parts";
 import { NativeMessage } from "./NativeMessage";
 import { getNativeMessageSearchText } from "./native-message-search";
 import { JsonPayloadPart } from "./JsonPayloadPart";
@@ -30,6 +37,14 @@ function makeMessage(content: string, role: "user" | "assistant" = "assistant") 
     createdAt: "2026-07-30T10:00:00.000Z",
     parts: [{ type: "text" as const, content }],
   };
+}
+
+function evidencePrompt(
+  contract: ReviewEvidenceFrameDisplayContract,
+  evidence: string,
+  continuationSuffix = "",
+): string {
+  return `${contract.promptPrefix} The evidence below is backend context.\n\n${contract.openMarker}\n${evidence}\n${contract.closeMarker}\n\n${contract.continuationPrefix}${continuationSuffix}`;
 }
 
 /** Everything find would walk for this message, in DOM order. */
@@ -424,6 +439,79 @@ describe("NativeMessage find-index alignment", () => {
 
     // Not folded for a user, so the index must not fold it either.
     expect(getNativeMessageSearchText(message)).toContain("rationale");
+  });
+
+  test("a Multi Review consolidation prompt omits its structured evidence from display and find", () => {
+    const contract = MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT;
+    const message = makeMessage(
+      evidencePrompt(
+        contract,
+        '[{"reviewerId":"reviewer-1","report":{"summary":"Duplicated evidence"}}]',
+        '"main".',
+      ),
+      "user",
+    );
+    const view = render(<NativeMessage message={message} />);
+    const searchText = getNativeMessageSearchText(message);
+
+    expect(view.container.textContent).toContain(contract.omissionText);
+    expect(view.container.textContent).toContain("Produce one complete structured review report");
+    expect(view.container.textContent).not.toContain("Duplicated evidence");
+    expect(view.container.textContent).not.toContain("multi-review-reports-json");
+    expect(searchText).toContain("Produce one complete structured review report");
+    expect(searchText).not.toContain("Duplicated evidence");
+    expect(searchText).not.toContain("multi-review-reports-json");
+  });
+
+  test("a fix-phase prompt omits its structured findings from display and find", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const message = makeMessage(
+      evidencePrompt(contract, '{"issues":[{"title":"Duplicated finding"}]}'),
+      "user",
+    );
+    const view = render(<NativeMessage message={message} />);
+    const searchText = getNativeMessageSearchText(message);
+
+    expect(view.container.textContent).toContain(contract.omissionText);
+    expect(view.container.textContent).toContain(contract.continuationPrefix);
+    expect(view.container.textContent).not.toContain("Duplicated finding");
+    expect(searchText).toContain(contract.omissionText);
+    expect(searchText).not.toContain("Duplicated finding");
+  });
+
+  test("filters a legacy user message without text parts in display and find", () => {
+    const contract = MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT;
+    const source = evidencePrompt(contract, '[{"summary":"Legacy evidence"}]', '"main".');
+    const message = {
+      id: "user-legacy-evidence",
+      role: "user" as const,
+      content: source,
+      createdAt: "2026-07-30T10:00:00.000Z",
+      parts: [],
+    };
+    const view = render(<NativeMessage message={message} />);
+    const searchText = getNativeMessageSearchText(message);
+
+    expect(view.container.textContent).toContain(contract.omissionText);
+    expect(view.container.textContent).not.toContain("Legacy evidence");
+    expect(searchText).toContain(contract.omissionText);
+    expect(searchText).not.toContain("Legacy evidence");
+  });
+
+  test("TextPart copies the complete source while displaying an omission", async () => {
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {});
+    const contract = MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT;
+    const source = evidencePrompt(contract, '[{"summary":"Copy-only evidence"}]', '"main".');
+
+    const view = render(
+      <TextPart content={source} truncateUserPrompt expansionKey="copy-source/json" />,
+    );
+    expect(view.container.textContent).toContain(contract.omissionText);
+    expect(view.container.textContent).not.toContain("Copy-only evidence");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(source));
   });
 
   test("the payload search text is the trigger's own text", () => {

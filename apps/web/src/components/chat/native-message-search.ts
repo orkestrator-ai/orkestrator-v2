@@ -1,6 +1,7 @@
 import { marked, Renderer, type Tokens } from "marked";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import { jsonPayloadSearchText, parseJsonPayload } from "@/lib/chat/json-payload";
+import { userPromptDisplayText } from "@/lib/chat/user-prompt-display";
 
 class SearchTextRenderer extends Renderer {
   override space(): string {
@@ -156,18 +157,25 @@ export function getNativeMessageSearchText(message: NativeMessage): string {
     return message.content;
   }
 
-  // NativeMessage only folds JSON for non-user roles; a prompt is shown back
-  // as written, so it is indexed as written.
+  // NativeMessage only folds JSON for non-user roles. User prompts are indexed
+  // through the same presentation filter the bubble uses, so backend-only
+  // evidence frames do not create invisible find matches.
   const foldJsonPayload = message.role !== "user";
   const sources = textPartSources(message.parts);
   if (sources.length === 0) {
     // The legacy fallback indexes `content` as written; only the fold is new.
     const payload = foldJsonPayload ? parseJsonPayload(message.content) : null;
-    return payload ? jsonPayloadSearchText(payload) : message.content;
+    if (payload) return jsonPayloadSearchText(payload);
+    return message.role === "user" ? userPromptDisplayText(message.content) : message.content;
   }
 
   return sources
-    .map((source) => textPartSearchText(source, foldJsonPayload))
+    .map((source) =>
+      textPartSearchText(
+        message.role === "user" ? userPromptDisplayText(source) : source,
+        foldJsonPayload,
+      ),
+    )
     .filter(Boolean)
     .join("\n\n");
 }

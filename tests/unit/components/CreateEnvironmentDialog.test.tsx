@@ -13,8 +13,12 @@ import {
 } from "../../mocks/sonner";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 
-const { CreateEnvironmentDialog, getEncodedImageSizeError, resolveAgentDefaults } =
-  await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
+const {
+  CreateEnvironmentDialog,
+  getEncodedImageSizeError,
+  pngFilenameForDroppedImage,
+  resolveAgentDefaults,
+} = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
 const defaultConfig = structuredClone(useConfigStore.getState().config);
 const defaultClaudeModels = useClaudeStore.getState().models;
 const defaultCodexModels = useCodexStore.getState().models;
@@ -49,6 +53,10 @@ function deferred<T>() {
 
 function rgbaBuffer(width: number, height: number): Uint8Array {
   return new Uint8Array(width * height * 4);
+}
+
+function attachmentDataTransfer(files: File[], types: string[] = ["Files"]) {
+  return { files, types, dropEffect: "copy" };
 }
 
 const AGENT_MODEL_PICKER_NAME = "Agent, model and reasoning";
@@ -3206,6 +3214,11 @@ describe("resolveAgentDefaults", () => {
 
     document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
     await waitFor(() => expect(screen.getAllByAltText(/initial-prompt-/)).toHaveLength(1));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
     firstImage.resolve({ rgba: firstRgba, size: firstSize });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -3213,6 +3226,244 @@ describe("resolveAgentDefaults", () => {
     expect(firstSize).not.toHaveBeenCalled();
     expect(screen.getAllByAltText(/initial-prompt-/)).toHaveLength(1);
     expect(toastSuccessMock).toHaveBeenCalledTimes(1);
+  });
+
+  test("suppresses image-size errors after a paste is cancelled", async () => {
+    const pendingSize = deferred<{ width: number; height: number }>();
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: () => pendingSize.promise,
+    }));
+    const onOpenChange = mock(() => {});
+    render(
+      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
+    );
+    screen.getByLabelText(/Initial Prompt/i).focus();
+    document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => pendingSize.resolve({ width: 10_000, height: 10_000 }));
+
+    expect(toastErrorMock).not.toHaveBeenCalled();
+    expect(screen.queryByAltText(/initial-prompt-/) === null).toBe(true);
+  });
+
+  test("converts dropped images to PNG names, including extensionless and dotfiles", async () => {
+    expect(pngFilenameForDroppedImage("photo.jpeg")).toBe("photo.png");
+    expect(pngFilenameForDroppedImage("diagram")).toBe("diagram.png");
+    expect(pngFilenameForDroppedImage(".reference")).toBe(".reference.png");
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    const image = new File(["image"], "photo.jpeg", { type: "image/jpeg" });
+
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([image]),
+    });
+
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledWith(image));
+    expect(await screen.findByAltText("photo.png")).toBeTruthy();
+  });
+
+  test("keeps the drag affordance visible until every nested drag leaves", () => {
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const dataTransfer = attachmentDataTransfer([]);
+
+    fireEvent.dragEnter(dialog, { dataTransfer });
+    fireEvent.dragEnter(dialog, { dataTransfer });
+    expect(screen.getByText("Drop files to attach them to the initial prompt")).toBeTruthy();
+    fireEvent.dragLeave(dialog, { dataTransfer });
+    expect(screen.getByText("Drop files to attach them to the initial prompt")).toBeTruthy();
+    fireEvent.dragLeave(dialog, { dataTransfer });
+    expect(screen.queryByText("Drop files to attach them to the initial prompt") === null).toBe(
+      true,
+    );
+
+    fireEvent.dragEnter(dialog, { dataTransfer });
+    fireEvent.dragLeave(dialog, { dataTransfer });
+    expect(screen.queryByText("Drop files to attach them to the initial prompt") === null).toBe(
+      true,
+    );
+  });
+
+  test("rejects empty, oversized, and over-count drops before reading files", () => {
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    const dialog = screen.getByRole("dialog");
+    const empty = new File([], "empty.txt", { type: "text/plain" });
+    fireEvent.drop(dialog, { dataTransfer: attachmentDataTransfer([empty]) });
+    expect(toastErrorMock).toHaveBeenCalledWith("File is empty", { description: "empty.txt" });
+
+    toastErrorMock.mockClear();
+    const oversized = new File(["x"], "large.bin");
+    Object.defineProperty(oversized, "size", { value: 8 * 1024 * 1024 + 1 });
+    const oversizedRead = mock(async () => new ArrayBuffer(1));
+    Object.defineProperty(oversized, "arrayBuffer", { value: oversizedRead });
+    fireEvent.drop(dialog, { dataTransfer: attachmentDataTransfer([oversized]) });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "File too large",
+      expect.objectContaining({ description: expect.stringContaining("large.bin") }),
+    );
+    expect(oversizedRead).not.toHaveBeenCalled();
+
+    toastErrorMock.mockClear();
+    const tooMany = Array.from({ length: 21 }, (_, index) => new File(["x"], `file-${index}.txt`));
+    fireEvent.drop(dialog, { dataTransfer: attachmentDataTransfer(tooMany) });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Too many attachments",
+      expect.objectContaining({ description: expect.stringContaining("20") }),
+    );
+  });
+
+  test("attaches successful siblings when one dropped file cannot be read", async () => {
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    const failed = new File(["bad"], "bad.txt", { type: "text/plain" });
+    Object.defineProperty(failed, "arrayBuffer", {
+      value: () => Promise.reject(new Error("read failed")),
+    });
+    const good = new File(["good"], "good.txt", { type: "text/plain" });
+
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([failed, good]),
+    });
+
+    expect(await screen.findByText("good.txt")).toBeTruthy();
+    expect(screen.queryByText("bad.txt") === null).toBe(true);
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not attach file", {
+      description: "bad.txt",
+    });
+  });
+
+  test("rejects three 8MB files whose durable base64 JSON exceeds 32MB", async () => {
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    const payload = new ArrayBuffer(8 * 1024 * 1024);
+    const files = Array.from({ length: 3 }, (_, index) => {
+      const file = new File(["x"], `large-${index}.bin`);
+      Object.defineProperty(file, "size", { value: payload.byteLength });
+      Object.defineProperty(file, "arrayBuffer", { value: async () => payload });
+      return file;
+    });
+
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer(files),
+    });
+
+    await waitFor(
+      () => {
+        expect(toastErrorMock).toHaveBeenCalledWith(
+          "Attachments too large",
+          expect.objectContaining({ description: expect.stringContaining("32MB") }),
+        );
+      },
+      { timeout: 10_000 },
+    );
+    for (const file of files) expect(screen.queryByText(file.name) === null).toBe(true);
+  });
+
+  test("blocks submission while a dropped file is being read", async () => {
+    const pendingBuffer = deferred<ArrayBuffer>();
+    const file = new File(["pending"], "pending.txt", { type: "text/plain" });
+    Object.defineProperty(file, "arrayBuffer", { value: () => pendingBuffer.promise });
+    const onCreate = mock(async () => {});
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([file]),
+    });
+    const create = screen.getByRole("button", {
+      name: "Create Environment",
+    }) as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    fireEvent.click(create);
+    expect(onCreate).not.toHaveBeenCalled();
+
+    await act(async () => pendingBuffer.resolve(new TextEncoder().encode("pending").buffer));
+    expect(await screen.findByText("pending.txt")).toBeTruthy();
+    await waitFor(() => expect(create.disabled).toBe(false));
+    fireEvent.click(create);
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+  });
+
+  test("discards a pending drop when the dialog resets", async () => {
+    const pendingBuffer = deferred<ArrayBuffer>();
+    const file = new File(["pending"], "cancelled.txt", { type: "text/plain" });
+    Object.defineProperty(file, "arrayBuffer", { value: () => pendingBuffer.promise });
+    const onOpenChange = mock(() => {});
+    render(
+      <CreateEnvironmentDialog open onOpenChange={onOpenChange} onCreate={mock(async () => {})} />,
+    );
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([file]),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => pendingBuffer.resolve(new TextEncoder().encode("late").buffer));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByText("cancelled.txt") === null).toBe(true);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("discards a pending drop after unmount or disabling agent launch", async () => {
+    const unmountedBuffer = deferred<ArrayBuffer>();
+    const unmountedFile = new File(["pending"], "unmounted.txt");
+    Object.defineProperty(unmountedFile, "arrayBuffer", { value: () => unmountedBuffer.promise });
+    const first = render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([unmountedFile]),
+    });
+    first.unmount();
+    await act(async () => unmountedBuffer.resolve(new TextEncoder().encode("late").buffer));
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+
+    const disabledBuffer = deferred<ArrayBuffer>();
+    const disabledFile = new File(["pending"], "disabled.txt");
+    Object.defineProperty(disabledFile, "arrayBuffer", { value: () => disabledBuffer.promise });
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([disabledFile]),
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    await act(async () => disabledBuffer.resolve(new TextEncoder().encode("late").buffer));
+    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    expect(screen.queryByText("disabled.txt") === null).toBe(true);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+  });
+
+  test("merges concurrent drops without losing the later attachment", async () => {
+    const firstBuffer = deferred<ArrayBuffer>();
+    const first = new File(["first"], "first.txt");
+    Object.defineProperty(first, "arrayBuffer", { value: () => firstBuffer.promise });
+    const second = new File(["second"], "second.txt");
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+    const dialog = screen.getByRole("dialog");
+
+    fireEvent.drop(dialog, { dataTransfer: attachmentDataTransfer([first]) });
+    fireEvent.drop(dialog, { dataTransfer: attachmentDataTransfer([second]) });
+    expect(await screen.findByText("second.txt")).toBeTruthy();
+    await act(async () => firstBuffer.resolve(new TextEncoder().encode("first").buffer));
+
+    expect(await screen.findByText("first.txt")).toBeTruthy();
+    expect(screen.getByText("second.txt")).toBeTruthy();
   });
 
   test("adds, validates, updates, and removes port mappings", async () => {
@@ -3386,6 +3637,9 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not create environment", {
+      description: "creation failed",
+    });
   });
 
   test("keeps the form intact when a creation preflight defers submission", async () => {

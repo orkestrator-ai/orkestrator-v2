@@ -19,6 +19,7 @@
     "./debug-logging": "./src/debug-logging.ts",
     "./feature-planning": "./src/feature-planning.ts",
     "./gateway-token": "./src/gateway-token.ts",
+    "./initial-prompt-attachments": "./src/initial-prompt-attachments.ts",
     "./model-id": "./src/model-id.ts",
     "./multi-review": "./src/multi-review.ts",
     "./native-agent": "./src/native-agent.ts",

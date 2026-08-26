@@ -4,6 +4,10 @@ import {
   resolveDefaultAgent,
   type AgentSettingsTiers,
 } from "@orkestrator/protocol/agent-settings";
+import {
+  MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
+  serializedInitialPromptAttachmentBytes,
+} from "@orkestrator/protocol/initial-prompt-attachments";
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   Dialog,
@@ -32,6 +36,7 @@ import {
   Bot,
   ChevronDown,
   Container,
+  FileText,
   Globe,
   Laptop,
   Loader2,
@@ -142,6 +147,7 @@ const MOBILE_TAB_CONTENT_CLASSES =
   "create-environment-mobile-tab-panel mt-0 data-[state=inactive]:hidden";
 const MAX_IMAGE_SIZE = 8 * 1024 * 1024;
 const MAX_RGBA_SIZE = 32 * 1024 * 1024;
+const MAX_INITIAL_PROMPT_ATTACHMENTS = 20;
 
 export function getEncodedImageSizeError(base64Length: number): string | null {
   const estimatedSize = (base64Length * 3) / 4;
@@ -151,6 +157,7 @@ export function getEncodedImageSizeError(base64Length: number): string | null {
 
 type MobileSection = "prompt" | "environment" | "agent" | "access" | "ports";
 type MobileTabTransitionDirection = "forward" | "backward";
+type AttachmentOperation = { id: number; generation: number };
 
 const MOBILE_SECTION_ORDER: MobileSection[] = ["prompt", "environment", "agent", "access", "ports"];
 
@@ -158,6 +165,21 @@ function generateImageFilename(): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const random = Math.random().toString(36).substring(2, 8);
   return `initial-prompt-${timestamp}-${random}.png`;
+}
+
+export function pngFilenameForDroppedImage(filename: string): string {
+  const dot = filename.lastIndexOf(".");
+  const stem = dot > 0 ? filename.slice(0, dot) : filename;
+  return `${stem || "attachment"}.png`;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  const chunkSize = 32 * 1024;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
 }
 
 export interface ClaudeOptions {
@@ -478,6 +500,8 @@ export function CreateEnvironmentDialog({
   const [initialPromptAttachments, setInitialPromptAttachments] = useState<
     InitialPromptImageAttachment[]
   >([]);
+  const [isDraggingAttachments, setIsDraggingAttachments] = useState(false);
+  const [pendingAttachmentOperations, setPendingAttachmentOperations] = useState(0);
   const [networkAccessMode, setNetworkAccessMode] = useState<NetworkAccessMode>("full");
   const [portMappings, setPortMappings] = useState<PortMapping[]>(defaultPortMappings);
   const [showPortConfig, setShowPortConfig] = useState(defaultPortMappings.length > 0);
@@ -487,6 +511,12 @@ export function CreateEnvironmentDialog({
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const promptPasteRequestIdRef = useRef(0);
+  const initialPromptAttachmentsRef = useRef<InitialPromptImageAttachment[]>([]);
+  const attachmentDragDepthRef = useRef(0);
+  const attachmentProcessingGenerationRef = useRef(0);
+  const nextAttachmentOperationIdRef = useRef(0);
+  const activeAttachmentOperationIdsRef = useRef(new Set<number>());
+  const promptPasteOperationRef = useRef<AttachmentOperation | null>(null);
   const agentSelectionTouchedRef = useRef(false);
 
   useEffect(() => {
@@ -559,6 +589,9 @@ export function CreateEnvironmentDialog({
 
   const resetForm = useCallback(() => {
     promptPasteRequestIdRef.current += 1;
+    attachmentProcessingGenerationRef.current += 1;
+    activeAttachmentOperationIdsRef.current.clear();
+    promptPasteOperationRef.current = null;
     setEnvironmentType(effectiveDefaultEnvironmentType);
     setEnvironmentName("");
     setLaunchAgent(true);
@@ -573,7 +606,11 @@ export function CreateEnvironmentDialog({
     setReasoningEffort(initialAgentDefaults.reasoningEffort);
     agentSelectionTouchedRef.current = false;
     setInitialPrompt("");
+    initialPromptAttachmentsRef.current = [];
     setInitialPromptAttachments([]);
+    setIsDraggingAttachments(false);
+    setPendingAttachmentOperations(0);
+    attachmentDragDepthRef.current = 0;
     setNetworkAccessMode("full");
     setPortMappings(defaultPortMappings);
     setShowPortConfig(defaultPortMappings.length > 0);
@@ -581,13 +618,113 @@ export function CreateEnvironmentDialog({
     setMobileTabTransitionDirection(null);
   }, [defaultPortMappings, effectiveDefaultEnvironmentType, initialAgentDefaults]);
 
+  const beginAttachmentOperation = useCallback(() => {
+    const operation = {
+      id: ++nextAttachmentOperationIdRef.current,
+      generation: attachmentProcessingGenerationRef.current,
+    };
+    activeAttachmentOperationIdsRef.current.add(operation.id);
+    setPendingAttachmentOperations(activeAttachmentOperationIdsRef.current.size);
+    return operation;
+  }, []);
+
+  const finishAttachmentOperation = useCallback((operation: AttachmentOperation) => {
+    if (operation.generation !== attachmentProcessingGenerationRef.current) return;
+    if (!activeAttachmentOperationIdsRef.current.delete(operation.id)) return;
+    setPendingAttachmentOperations(activeAttachmentOperationIdsRef.current.size);
+  }, []);
+
+  const encodeImageAttachment = useCallback(
+    async (
+      blob: Blob | null | undefined,
+      filename?: string,
+      isCurrent: () => boolean = () => true,
+    ): Promise<InitialPromptImageAttachment | null> => {
+      const image = await readImage(blob ?? undefined);
+      if (!isCurrent()) return null;
+      const rgba = await image.rgba();
+      if (!isCurrent()) return null;
+      const { width, height } = await image.size();
+      if (!isCurrent()) return null;
+
+      let canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return null;
+
+      const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
+      ctx.putImageData(imageData, 0, 0);
+      canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
+      canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
+
+      const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
+      if (!encodedImage) {
+        if (isCurrent()) {
+          toast.error("Image too large", {
+            description: "The image could not be resized below the 8MB attachment limit.",
+          });
+        }
+        return null;
+      }
+      if (!isCurrent()) {
+        encodedImage.canvas.width = 0;
+        encodedImage.canvas.height = 0;
+        return null;
+      }
+      canvas = encodedImage.canvas;
+      const { dataUrl: previewUrl, base64Data } = encodedImage;
+      canvas.width = 0;
+      canvas.height = 0;
+
+      return {
+        id: createUuid(),
+        name: filename ? pngFilenameForDroppedImage(filename) : generateImageFilename(),
+        type: "image",
+        previewUrl,
+        base64Data,
+      };
+    },
+    [],
+  );
+
+  const appendInitialPromptAttachments = useCallback(
+    (attachments: InitialPromptImageAttachment[]): boolean => {
+      if (attachments.length === 0) return false;
+      const current = initialPromptAttachmentsRef.current;
+      if (current.length + attachments.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
+        toast.error("Too many attachments", {
+          description: `An initial prompt can include up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} files.`,
+        });
+        return false;
+      }
+      const durableBytes = serializedInitialPromptAttachmentBytes([...current, ...attachments]);
+      if (durableBytes > MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES) {
+        toast.error("Attachments too large", {
+          description: "Initial prompt attachments can use up to 32MB of stored data.",
+        });
+        return false;
+      }
+      const next = [...current, ...attachments];
+      initialPromptAttachmentsRef.current = next;
+      setInitialPromptAttachments(next);
+      return true;
+    },
+    [],
+  );
+
   const handlePromptPaste = useCallback(
     async (event: ClipboardEvent) => {
       if (!open || !launchAgent || document.activeElement !== promptRef.current) return;
 
       const requestId = ++promptPasteRequestIdRef.current;
+      const previousOperation = promptPasteOperationRef.current;
+      if (previousOperation) finishAttachmentOperation(previousOperation);
+      const operation = beginAttachmentOperation();
+      promptPasteOperationRef.current = operation;
       const isCurrentRequest = () =>
         requestId === promptPasteRequestIdRef.current &&
+        operation.generation === attachmentProcessingGenerationRef.current &&
         document.activeElement === promptRef.current;
 
       try {
@@ -597,57 +734,142 @@ export function CreateEnvironmentDialog({
           event.stopImmediatePropagation();
         }
 
-        const image = await readImage(pastedBlob);
+        const attachment = await encodeImageAttachment(pastedBlob, undefined, isCurrentRequest);
         if (!isCurrentRequest()) return;
-        const rgba = await image.rgba();
-        if (!isCurrentRequest()) return;
-        const { width, height } = await image.size();
-        if (!isCurrentRequest()) return;
-
-        let canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const imageData = new ImageData(new Uint8ClampedArray(rgba), width, height);
-        ctx.putImageData(imageData, 0, 0);
-        canvas = resizeCanvasToMaxDimension(canvas, MAX_IMAGE_DIMENSION);
-        canvas = resizeCanvasIfNeeded(canvas, MAX_RGBA_SIZE);
-
-        const encodedImage = encodeCanvasAsPngWithinSize(canvas, MAX_IMAGE_SIZE);
-        if (!encodedImage) {
-          toast.error("Image too large", {
-            description: "The image could not be resized below the 8MB attachment limit.",
-          });
-          return;
-        }
-        canvas = encodedImage.canvas;
-        const { dataUrl: previewUrl, base64Data } = encodedImage;
-        canvas.width = 0;
-        canvas.height = 0;
+        if (!attachment) return;
 
         if (!pastedBlob) {
           event.preventDefault();
           event.stopImmediatePropagation();
         }
 
-        setInitialPromptAttachments((prev) => [
-          ...prev,
-          {
-            id: createUuid(),
-            name: generateImageFilename(),
-            previewUrl,
-            base64Data,
-          },
-        ]);
-        toast.success("Image attached");
+        if (appendInitialPromptAttachments([attachment])) toast.success("Image attached");
       } catch {
         // No image in the clipboard; let normal text paste continue.
+      } finally {
+        if (promptPasteOperationRef.current?.id === operation.id) {
+          promptPasteOperationRef.current = null;
+        }
+        finishAttachmentOperation(operation);
       }
     },
-    [launchAgent, open],
+    [
+      appendInitialPromptAttachments,
+      beginAttachmentOperation,
+      encodeImageAttachment,
+      finishAttachmentOperation,
+      launchAgent,
+      open,
+    ],
   );
+
+  const handleAttachmentDrop = useCallback(
+    async (event: React.DragEvent<HTMLElement>) => {
+      attachmentDragDepthRef.current = 0;
+      setIsDraggingAttachments(false);
+      if (event.dataTransfer.files.length === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!open || !launchAgent || isLoading) return;
+
+      const files = Array.from(event.dataTransfer.files);
+      const currentAttachments = initialPromptAttachmentsRef.current;
+      if (currentAttachments.length + files.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
+        toast.error("Too many attachments", {
+          description: `An initial prompt can include up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} files.`,
+        });
+        return;
+      }
+      const empty = files.find((file) => file.size === 0);
+      if (empty) {
+        toast.error("File is empty", { description: empty.name });
+        return;
+      }
+      const oversized = files.find((file) => file.size > MAX_IMAGE_SIZE);
+      if (oversized) {
+        toast.error("File too large", {
+          description: `${oversized.name} exceeds the 8MB attachment limit.`,
+        });
+        return;
+      }
+      const operation = beginAttachmentOperation();
+      const isCurrentOperation = () =>
+        operation.generation === attachmentProcessingGenerationRef.current;
+      try {
+        const attachments: InitialPromptImageAttachment[] = [];
+        for (const file of files) {
+          try {
+            if (file.type.startsWith("image/")) {
+              const attachment = await encodeImageAttachment(file, file.name, isCurrentOperation);
+              if (!isCurrentOperation()) return;
+              if (attachment) attachments.push(attachment);
+            } else {
+              const buffer = await file.arrayBuffer();
+              if (!isCurrentOperation()) return;
+              attachments.push({
+                id: createUuid(),
+                name: file.name || "attachment",
+                type: "file",
+                base64Data: bytesToBase64(new Uint8Array(buffer)),
+              });
+            }
+          } catch (error) {
+            if (!isCurrentOperation()) return;
+            console.warn("[CreateEnvironmentDialog] Failed to read dropped attachment:", error);
+            toast.error("Could not attach file", { description: file.name });
+          }
+        }
+        if (!isCurrentOperation()) return;
+        if (appendInitialPromptAttachments(attachments)) {
+          toast.success(
+            `${attachments.length} file${attachments.length === 1 ? "" : "s"} attached`,
+          );
+        }
+      } finally {
+        finishAttachmentOperation(operation);
+      }
+    },
+    [
+      appendInitialPromptAttachments,
+      beginAttachmentOperation,
+      encodeImageAttachment,
+      finishAttachmentOperation,
+      isLoading,
+      launchAgent,
+      open,
+    ],
+  );
+
+  const hasDraggedFiles = useCallback(
+    (event: React.DragEvent<HTMLElement>) => Array.from(event.dataTransfer.types).includes("Files"),
+    [],
+  );
+
+  const handleAttachmentDragEnter = useCallback(
+    (event: React.DragEvent<HTMLElement>) => {
+      if (!hasDraggedFiles(event)) return;
+      event.preventDefault();
+      if (!open || !launchAgent || isLoading) return;
+      attachmentDragDepthRef.current += 1;
+      setIsDraggingAttachments(true);
+    },
+    [hasDraggedFiles, isLoading, launchAgent, open],
+  );
+
+  const handleAttachmentDragOver = useCallback(
+    (event: React.DragEvent<HTMLElement>) => {
+      if (!hasDraggedFiles(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = open && launchAgent && !isLoading ? "copy" : "none";
+    },
+    [hasDraggedFiles, isLoading, launchAgent, open],
+  );
+
+  const handleAttachmentDragLeave = useCallback(() => {
+    if (attachmentDragDepthRef.current === 0) return;
+    attachmentDragDepthRef.current = Math.max(0, attachmentDragDepthRef.current - 1);
+    if (attachmentDragDepthRef.current === 0) setIsDraggingAttachments(false);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -662,8 +884,29 @@ export function CreateEnvironmentDialog({
     };
   }, [open, handlePromptPaste]);
 
+  useEffect(() => {
+    if (open && launchAgent) return;
+    promptPasteRequestIdRef.current += 1;
+    attachmentProcessingGenerationRef.current += 1;
+    activeAttachmentOperationIdsRef.current.clear();
+    promptPasteOperationRef.current = null;
+    setPendingAttachmentOperations(0);
+  }, [launchAgent, open]);
+
+  useEffect(
+    () => () => {
+      promptPasteRequestIdRef.current += 1;
+      attachmentProcessingGenerationRef.current += 1;
+      activeAttachmentOperationIdsRef.current.clear();
+      promptPasteOperationRef.current = null;
+    },
+    [],
+  );
+
   const removeInitialPromptAttachment = useCallback((id: string) => {
-    setInitialPromptAttachments((prev) => prev.filter((attachment) => attachment.id !== id));
+    const next = initialPromptAttachmentsRef.current.filter((attachment) => attachment.id !== id);
+    initialPromptAttachmentsRef.current = next;
+    setInitialPromptAttachments(next);
   }, []);
 
   // Sync defaults when dialog opens
@@ -895,6 +1138,8 @@ export function CreateEnvironmentDialog({
     async (e: React.FormEvent) => {
       e.preventDefault();
 
+      if (activeAttachmentOperationIdsRef.current.size > 0) return;
+
       if (environmentType === "containerized" && !dockerAvailable) return;
       if (environmentType === "local" && !localEnvironmentAvailable) return;
 
@@ -936,6 +1181,9 @@ export function CreateEnvironmentDialog({
         onOpenChange(false);
       } catch (err) {
         console.error("Failed to create environment:", err);
+        toast.error("Could not create environment", {
+          description: err instanceof Error ? err.message : "An unexpected error occurred.",
+        });
       }
     },
     [
@@ -971,18 +1219,33 @@ export function CreateEnvironmentDialog({
       // Only handle plain Enter (no modifier keys) to submit the form
       // Shift+Enter allows normal newline behavior
       // Cmd/Ctrl+key combinations (copy, paste, etc.) pass through normally
-      if (e.key === "Enter" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !isLoading) {
+      if (
+        e.key === "Enter" &&
+        !e.shiftKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !isLoading &&
+        pendingAttachmentOperations === 0
+      ) {
         e.preventDefault();
         formRef.current?.requestSubmit();
       }
     },
-    [isLoading],
+    [isLoading, pendingAttachmentOperations],
   );
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="flex max-h-[calc(100dvh-1rem)] flex-col sm:max-h-[85vh] sm:max-w-[700px]"
+        className={cn(
+          "flex max-h-[calc(100dvh-1rem)] flex-col sm:max-h-[85vh] sm:max-w-[700px]",
+          isDraggingAttachments && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+        )}
+        onDragEnter={handleAttachmentDragEnter}
+        onDragOver={handleAttachmentDragOver}
+        onDragLeave={handleAttachmentDragLeave}
+        onDrop={(event) => void handleAttachmentDrop(event)}
         onOpenAutoFocus={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
@@ -1412,18 +1675,40 @@ export function CreateEnvironmentDialog({
                     rows={3}
                     className="resize-y max-h-[calc(15*theme(lineHeight.normal)*1em)] overflow-y-auto"
                   />
+                  {isDraggingAttachments && (
+                    <p className="rounded-md border border-dashed border-primary/70 bg-primary/10 px-3 py-2 text-center text-sm text-primary">
+                      Drop files to attach them to the initial prompt
+                    </p>
+                  )}
                   {initialPromptAttachments.length > 0 && (
                     <div className="flex flex-wrap gap-2">
                       {initialPromptAttachments.map((attachment) => (
                         <div
                           key={attachment.id}
-                          className="group relative h-16 w-16 overflow-hidden rounded-md border border-border bg-muted"
+                          className={cn(
+                            "group relative h-16 overflow-hidden rounded-md border border-border bg-muted",
+                            attachment.type === "file"
+                              ? "flex w-40 items-center gap-2 px-2"
+                              : "w-16",
+                          )}
                         >
-                          <img
-                            src={attachment.previewUrl}
-                            alt={attachment.name}
-                            className="h-full w-full object-cover"
-                          />
+                          {attachment.type === "file" ? (
+                            <>
+                              <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+                              <span
+                                className="min-w-0 truncate pr-4 text-xs"
+                                title={attachment.name}
+                              >
+                                {attachment.name}
+                              </span>
+                            </>
+                          ) : (
+                            <img
+                              src={attachment.previewUrl}
+                              alt={attachment.name}
+                              className="h-full w-full object-cover"
+                            />
+                          )}
                           <button
                             type="button"
                             onClick={() => removeInitialPromptAttachment(attachment.id)}
@@ -1457,6 +1742,7 @@ export function CreateEnvironmentDialog({
             onClick={() => formRef.current?.requestSubmit()}
             disabled={
               isLoading ||
+              pendingAttachmentOperations > 0 ||
               (environmentType === "containerized" &&
                 (!dockerAvailable || !validatePortMappings())) ||
               (environmentType === "local" && !localEnvironmentAvailable)

@@ -2127,8 +2127,15 @@ describe("App terminal overlay actions", () => {
         {
           id: "saved-preview",
           name: "existing.png",
+          type: "image",
           previewUrl: "data:image/webp;base64,REVG",
           base64Data: "REVG",
+        },
+        {
+          id: "saved-file",
+          name: "requirements.md",
+          type: "file",
+          base64Data: "R0hJ",
         },
       ],
     });
@@ -2157,8 +2164,15 @@ describe("App terminal overlay actions", () => {
       {
         id: "saved-preview",
         name: "existing.png",
+        type: "image",
         previewUrl: "data:image/webp;base64,REVG",
         base64Data: "REVG",
+      },
+      {
+        id: "saved-file",
+        name: "requirements.md",
+        type: "file",
+        base64Data: "R0hJ",
       },
     ]);
   });

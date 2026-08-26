@@ -609,10 +609,10 @@ export interface RepositoryConfig {
   prBaseBranch: string;
   lastEnvironmentType?: EnvironmentType;
   /**
-   * Agent and mode used by the most recently created agent-enabled environment.
+   * Legacy last-create state retained for config and older-client compatibility.
+   * Current create dialogs ignore it and resolve every control from Settings.
    *
-   * Model and reasoning are deliberately absent: they come from
-   * `agentSettings`, so the Defaults page is the only place they are decided.
+   * @deprecated
    */
   lastEnvironmentAgentSelection?: {
     platform: DefaultAgent;

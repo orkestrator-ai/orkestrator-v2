@@ -851,7 +851,7 @@ describe("resolveAgentDefaults", () => {
     );
   });
 
-  test("takes model and reasoning from New projects defaults, not remembered selection", async () => {
+  test("takes agent, model, and reasoning from New projects defaults, not the last agent used", async () => {
     useCodexStore.setState({
       models: [
         {
@@ -870,7 +870,7 @@ describe("resolveAgentDefaults", () => {
     });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "claude" };
-    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    config.global.enabledAgentPlatforms = ["claude", "codex", "pi"];
     config.global.agentSettings = {
       ...config.global.agentSettings,
       actionDefaults: {
@@ -880,8 +880,9 @@ describe("resolveAgentDefaults", () => {
     config.repositories["project-1"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
+      // Legacy state from an earlier create must not override Settings.
       lastEnvironmentAgentSelection: {
-        platform: "codex",
+        platform: "pi",
         mode: "native",
       },
     };

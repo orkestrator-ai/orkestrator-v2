@@ -217,7 +217,7 @@ export async function updateRepositoryConfig(
   return invoke<AppConfig>("update_repository_config", { projectId, repoConfig });
 }
 
-/** Persist the create dialog's last successful agent selection. */
+/** @deprecated Compatibility wrapper for older renderers; current create flows do not call it. */
 export async function rememberEnvironmentAgentSelection(
   projectId: string,
   selection: LastEnvironmentAgentSelection,

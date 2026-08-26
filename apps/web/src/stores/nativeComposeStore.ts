@@ -13,6 +13,18 @@ export interface NativeComposeDraft {
   reasoningId?: string;
   /** Stable while one prompt may be between rename and provider acknowledgement. */
   requestId?: string;
+  /**
+   * Renderer correlation for a dispatch whose acknowledgement may be lost.
+   *
+   * This belongs with the draft instead of a mounted tab: environments can
+   * unmount while their provider keeps running, and the next mount still has
+   * to recognize the authoritative transcript row that owns this draft.
+   */
+  pendingTranscriptConfirmation?: {
+    requestId: string;
+    sessionId: string;
+    priorMessageIds: readonly string[];
+  };
   fastMode: boolean;
   mode: AgentConversationMode;
   /**
@@ -141,7 +153,10 @@ export const useNativeComposeStore = create<NativeComposeState>()((set) => ({
         update.mentions !== undefined ||
         update.attachments !== undefined;
       const next = { ...EMPTY_DRAFT, ...existing, ...update };
-      if (contentChanged && update.requestId === undefined) delete next.requestId;
+      if (contentChanged && update.requestId === undefined) {
+        delete next.requestId;
+        delete next.pendingTranscriptConfirmation;
+      }
       drafts.set(sessionKey, next);
       return { drafts };
     }),

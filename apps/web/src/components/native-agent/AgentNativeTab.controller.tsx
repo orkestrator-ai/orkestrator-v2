@@ -80,6 +80,7 @@ import {
   nativeComposeDraft,
   nativeComposePersistenceStore,
   useNativeComposeStore,
+  type NativeComposeDraft,
 } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -156,7 +157,7 @@ export function SharedNativeAgentController({
     attachments: Array<{ path: string; previewUrl?: string; name: string }>;
     createdAt: string;
     requestId?: string;
-    priorUserMessageIds: ReadonlySet<string>;
+    confirmation?: NonNullable<NativeComposeDraft["pendingTranscriptConfirmation"]>;
   } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
@@ -307,22 +308,19 @@ export function SharedNativeAgentController({
     consumedAgentHandoffId,
   );
   /**
-   * The user rows the composer could see at the moment a prompt was submitted.
+   * The authoritative rows the composer could see when a prompt was submitted.
    *
    * Memoized rather than rebuilt per render: this is read once per submit, and
    * a streaming turn re-renders on every projection frame, where an unmemoized
    * pass over the whole transcript is pure cost.
    */
-  const visibleUserMessageIds = useMemo(() => {
+  const visibleAuthoritativeMessageIds = useMemo(() => {
     const ids = new Set<string>();
     for (const message of normalizedMessages) {
-      if (message.role === "user") ids.add(message.id);
-    }
-    for (const message of handoff.displayMessages) {
-      if (message.role === "user") ids.add(message.id);
+      if (!isClientOnlyNativeMessage(message)) ids.add(message.id);
     }
     return ids;
-  }, [handoff.displayMessages, normalizedMessages]);
+  }, [normalizedMessages]);
   /**
    * Has an authoritative transcript row appeared that can only be this prompt?
    *
@@ -333,29 +331,40 @@ export function SharedNativeAgentController({
    *   pressed Enter, and providers reshape prompts (slash-command expansion,
    *   handoff history, attachment references) often enough that the text sent
    *   is not reliably the text echoed.
-   * - The row sits after every prior user row that is still visible. Novelty
-   *   alone is not confirmation: widening the transcript window brings older
-   *   history into view for the first time, and those rows are also ids the
-   *   submit never saw. A prompt's own echo is always appended past the end of
-   *   what the composer could see, so position separates the two without
-   *   depending on a clock or on the provider echoing the text verbatim.
+   * - The row sits after every prior authoritative row that is still visible.
+   *   Novelty alone is not confirmation: widening the transcript window brings
+   *   older history into view for the first time, and a retained window can
+   *   begin on an assistant row. Anchoring to every role keeps those prepended
+   *   user rows behind the old tail. A prompt's own echo is appended past what
+   *   the composer could see, so position separates the two without depending
+   *   on a clock or on the provider echoing the text verbatim.
+   * - The row belongs to the same provider session. Resuming another session
+   *   replaces the transcript and must not turn one of its user rows into an
+   *   acknowledgement for the session the prompt was sent to.
    */
   const transcriptEchoedOptimistic = useMemo(() => {
-    if (!optimisticPrompt) return false;
-    let lastPriorUserIndex = -1;
+    const confirmation = optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
+    if (!confirmation || confirmation.sessionId !== projection?.sessionId) return false;
+    const priorMessageIds = new Set(confirmation.priorMessageIds);
+    let lastPriorMessageIndex = -1;
     for (let index = 0; index < normalizedMessages.length; index += 1) {
-      if (optimisticPrompt.priorUserMessageIds.has(normalizedMessages[index]!.id)) {
-        lastPriorUserIndex = index;
+      if (priorMessageIds.has(normalizedMessages[index]!.id)) {
+        lastPriorMessageIndex = index;
       }
     }
     return normalizedMessages.some(
       (message, index) =>
-        index > lastPriorUserIndex &&
+        index > lastPriorMessageIndex &&
         message.role === "user" &&
         !isClientOnlyNativeMessage(message) &&
-        !optimisticPrompt.priorUserMessageIds.has(message.id),
+        !priorMessageIds.has(message.id),
     );
-  }, [normalizedMessages, optimisticPrompt]);
+  }, [
+    draft.pendingTranscriptConfirmation,
+    normalizedMessages,
+    optimisticPrompt,
+    projection?.sessionId,
+  ]);
   const turnStopMarker = useNativeAgentProjectionStore((state) =>
     state.turnStopMarkers.get(sessionKey),
   );
@@ -616,14 +625,21 @@ export function SharedNativeAgentController({
   );
 
   useEffect(() => {
-    if (!transcriptEchoedOptimistic || !optimisticPrompt) return;
+    if (!transcriptEchoedOptimistic) return;
+    const confirmation = optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
+    if (!confirmation) return;
     // A dispatch response can be lost after the backend accepted the prompt.
     // The new authoritative transcript row is definitive confirmation, so the
     // matching submitted draft must not remain in the composer indefinitely.
-    transcriptConfirmedRequestIdRef.current = optimisticPrompt.requestId ?? null;
-    if (clearConfirmedDraft(optimisticPrompt.requestId)) setSendError(null);
+    transcriptConfirmedRequestIdRef.current = confirmation.requestId;
+    if (clearConfirmedDraft(confirmation.requestId)) setSendError(null);
     setOptimisticPrompt(null);
-  }, [clearConfirmedDraft, optimisticPrompt, transcriptEchoedOptimistic]);
+  }, [
+    clearConfirmedDraft,
+    draft.pendingTranscriptConfirmation,
+    optimisticPrompt,
+    transcriptEchoedOptimistic,
+  ]);
 
   /**
    * OpenCode has no conversation-mode list; Plan/Build are primary agents.
@@ -790,7 +806,6 @@ export function SharedNativeAgentController({
         attachments: submittedAttachments,
         createdAt: new Date().toISOString(),
         requestId: dispatchRequestId,
-        priorUserMessageIds: new Set(visibleUserMessageIds),
       });
       if (
         (projection?.messages.length ?? 0) === 0 &&
@@ -824,6 +839,26 @@ export function SharedNativeAgentController({
           filename: attachment.name,
         })),
       };
+      const transcriptConfirmation =
+        dispatchRequestId && projection?.sessionId
+          ? {
+              requestId: dispatchRequestId,
+              sessionId: projection.sessionId,
+              priorMessageIds: Array.from(visibleAuthoritativeMessageIds),
+            }
+          : undefined;
+      if (transcriptConfirmation) {
+        updateDraft(sessionKey, {
+          requestId: dispatchRequestId,
+          pendingTranscriptConfirmation: transcriptConfirmation,
+        });
+        setOptimisticPrompt((current) =>
+          current && current.requestId === dispatchRequestId
+            ? { ...current, confirmation: transcriptConfirmation }
+            : current,
+        );
+      }
+      let keepTranscriptConfirmation = false;
       try {
         if (canQueue) {
           await enqueue(prompt, options);
@@ -845,6 +880,7 @@ export function SharedNativeAgentController({
           return true;
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
+        keepTranscriptConfirmation = outcome.outcome === "unknown";
         setSendError(
           outcome.outcome === "unknown"
             ? "The connection dropped before dispatch was confirmed. The session is being reconciled; retrying uses the same request id."
@@ -865,6 +901,9 @@ export function SharedNativeAgentController({
         mentions: draft.mentions,
         attachments: submittedAttachments,
         ...(dispatchRequestId ? { requestId: dispatchRequestId } : {}),
+        ...(keepTranscriptConfirmation && transcriptConfirmation
+          ? { pendingTranscriptConfirmation: transcriptConfirmation }
+          : { pendingTranscriptConfirmation: undefined }),
       });
       return false;
     },
@@ -895,6 +934,7 @@ export function SharedNativeAgentController({
       platform,
       projection?.capabilities,
       projection?.messages.length,
+      projection?.sessionId,
       projection?.slashCommands,
       recoverableDispatch,
       send,
@@ -903,7 +943,7 @@ export function SharedNativeAgentController({
       sessionKey,
       tabId,
       updateDraft,
-      visibleUserMessageIds,
+      visibleAuthoritativeMessageIds,
     ],
   );
 

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { JsonPayloadPart } from "@/components/chat/JsonPayloadPart";
+import { userPromptDisplayText } from "@/lib/chat/user-prompt-display";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { parseJsonPayload } from "@/lib/chat/json-payload";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
@@ -331,11 +332,15 @@ export function TextPart({
   expansionKey: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const lineCount = useMemo(() => content.split(/\r\n|\r|\n/).length, [content]);
+  const displayContent = useMemo(
+    () => (truncateUserPrompt ? userPromptDisplayText(content) : content),
+    [content, truncateUserPrompt],
+  );
+  const lineCount = useMemo(() => displayContent.split(/\r\n|\r|\n/).length, [displayContent]);
   const shouldTruncate = truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
   const jsonPayload = useMemo(
-    () => (renderJsonPayload ? parseJsonPayload(content) : null),
-    [content, renderJsonPayload],
+    () => (renderJsonPayload ? parseJsonPayload(displayContent) : null),
+    [displayContent, renderJsonPayload],
   );
 
   if (jsonPayload) {
@@ -378,7 +383,7 @@ export function TextPart({
             : undefined
         }
       >
-        <MessageMarkdown content={content} components={markdownComponents} />
+        <MessageMarkdown content={displayContent} components={markdownComponents} />
       </div>
       {shouldTruncate ? (
         <button

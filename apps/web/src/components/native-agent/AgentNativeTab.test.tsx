@@ -12,6 +12,7 @@ import {
   type AgentInteractionRequest,
 } from "@orkestrator/protocol/agent-interactions";
 import type {
+  NativeAgentDispatchOutcome,
   NativeAgentSessionProjection,
   NativeAgentTabData,
 } from "@orkestrator/protocol/native-agent";
@@ -117,10 +118,12 @@ const dismissNativeAgentSuggestedPromptMock = mock(async () =>
 const updateNativeAgentControlsMock = mock(async (_input: { update: Record<string, unknown> }) =>
   getNativeAgentProjectionMock({ agent: "codex", environmentId: "env-1" }),
 );
-const dispatchNativeAgentIntentMock = mock(async (input: { requestId: string }) => ({
-  outcome: "accepted" as const,
-  requestId: input.requestId,
-}));
+const dispatchNativeAgentIntentMock = mock(
+  async (input: { requestId: string }): Promise<NativeAgentDispatchOutcome> => ({
+    outcome: "accepted" as const,
+    requestId: input.requestId,
+  }),
+);
 const retryNativeAgentDispatchMock = mock(async () => ({
   outcome: "accepted" as const,
   requestId: "recoverable-1",
@@ -1644,6 +1647,401 @@ describe("AgentNativeTab", () => {
     await waitFor(() =>
       expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
     );
+  });
+
+  test("clears a submitted draft when the transcript confirms a dispatch whose response was lost", async () => {
+    const tabId = "tab-transcript-confirmed-send";
+    const sessionKey = createSessionKey("env-1", tabId);
+    useNativeComposeStore.getState().updateDraft(sessionKey, {
+      attachments: [
+        {
+          id: "confirmation-image",
+          type: "image",
+          path: "/workspace/confirmation.png",
+          previewUrl: "blob:confirmation",
+          name: "confirmation.png",
+        },
+      ],
+    });
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+        ...(await defaultProjection(projectionInput)),
+        turn: { phase: "running" as const },
+        messages: [
+          {
+            id: "confirmed-user-prompt",
+            role: "user" as const,
+            content: "Run the focused tests",
+            parts: [{ type: "text" as const, content: "Run the focused tests" }],
+            createdAt: "2026-08-26T14:00:00.000Z",
+          },
+        ],
+      }));
+      return {
+        outcome: "unknown" as const,
+        requestId: input.requestId,
+        error: "The response was lost",
+      };
+    });
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+    expect(input.textContent).toBe("");
+    expect(screen.queryByText(/connection dropped before dispatch was confirmed/i) === null).toBe(
+      true,
+    );
+  });
+
+  test("clears a submitted draft after transcript confirmation lands while the environment is unmounted", async () => {
+    const tabId = "tab-transcript-confirmed-while-unmounted";
+    const sessionKey = createSessionKey("env-1", tabId);
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+      outcome: "unknown" as const,
+      requestId: input.requestId,
+      error: "The response was lost",
+    }));
+
+    const first = render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(
+        useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
+          ?.requestId,
+      ).toMatch(/\S/),
+    );
+    first.unmount();
+
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      turn: { phase: "running" as const },
+      messages: [
+        {
+          id: "confirmed-while-unmounted",
+          role: "user" as const,
+          content: "Run the focused tests",
+          parts: [{ type: "text" as const, content: "Run the focused tests" }],
+          createdAt: "2026-08-26T14:00:00.000Z",
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+    expect((await screen.findByRole("textbox")).textContent).toBe("");
+  });
+
+  test("does not mistake an older identical prompt for dispatch confirmation", async () => {
+    const tabId = "tab-duplicate-prompt";
+    const sessionKey = createSessionKey("env-1", tabId);
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messages: [
+        {
+          id: "older-identical-prompt",
+          role: "user" as const,
+          content: "Run the focused tests",
+          parts: [{ type: "text" as const, content: "Run the focused tests" }],
+          createdAt: "2026-08-26T13:00:00.000Z",
+        },
+      ],
+    }));
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+      outcome: "unknown" as const,
+      requestId: input.requestId,
+      error: "The response was lost",
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toMatch(/\S/),
+    );
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "Run the focused tests",
+    );
+  });
+
+  test("does not treat widened transcript history as dispatch confirmation", async () => {
+    const tabId = "tab-window-not-confirmation";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const recentPrompt = {
+      id: "recent-user-prompt",
+      role: "user" as const,
+      content: "Earlier question",
+      parts: [{ type: "text" as const, content: "Earlier question" }],
+      createdAt: "2026-08-26T13:30:00.000Z",
+    };
+    const olderPrompt = {
+      id: "older-user-prompt",
+      role: "user" as const,
+      content: "A question from before the window",
+      parts: [{ type: "text" as const, content: "A question from before the window" }],
+      createdAt: "2026-08-26T12:00:00.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messageWindow: { limit: input.messageLimit ?? 512, truncated: true },
+      messages: (input.messageLimit ?? 0) > 512 ? [olderPrompt, recentPrompt] : [recentPrompt],
+    }));
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+      outcome: "unknown" as const,
+      requestId: input.requestId,
+      error: "The response was lost",
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toMatch(/\S/),
+    );
+
+    // Loading earlier history introduces user rows the submit never saw. They
+    // are not this prompt's echo, so they must not clear the composer.
+    fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+    await waitFor(() =>
+      expect(
+        useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messages.length,
+      ).toBe(2),
+    );
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "Run the focused tests",
+    );
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toMatch(/\S/);
+  });
+
+  test("does not treat an older user row as confirmation when the visible window starts with an assistant", async () => {
+    const tabId = "tab-assistant-window-not-confirmation";
+    const sessionKey = createSessionKey("env-1", tabId);
+    const recentReply = {
+      id: "recent-assistant-reply",
+      role: "assistant" as const,
+      content: "A reply whose prompt is outside the window",
+      parts: [{ type: "text" as const, content: "A reply whose prompt is outside the window" }],
+      createdAt: "2026-08-26T13:30:00.000Z",
+    };
+    const olderPrompt = {
+      id: "older-user-before-assistant-window",
+      role: "user" as const,
+      content: "A question from before the window",
+      parts: [{ type: "text" as const, content: "A question from before the window" }],
+      createdAt: "2026-08-26T12:00:00.000Z",
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (projectionInput) => ({
+      ...(await defaultProjection(projectionInput)),
+      messageWindow: { limit: projectionInput.messageLimit ?? 512, truncated: true },
+      messages:
+        (projectionInput.messageLimit ?? 0) > 512 ? [olderPrompt, recentReply] : [recentReply],
+    }));
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (dispatchInput) => ({
+      outcome: "unknown" as const,
+      requestId: dispatchInput.requestId,
+      error: "The response was lost",
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toMatch(/\S/),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Load earlier messages" }));
+    await waitFor(() =>
+      expect(
+        useNativeAgentProjectionStore.getState().projections.get(sessionKey)?.messages.length,
+      ).toBe(2),
+    );
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "Run the focused tests",
+    );
+    expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
+        ?.requestId,
+    ).toMatch(/\S/);
+    expect(screen.getByText(/connection dropped before dispatch was confirmed/i)).toBeDefined();
+  });
+
+  test("honours a transcript confirmation that lands while the dispatch is still in flight", async () => {
+    const tabId = "tab-echo-before-response";
+    const sessionKey = createSessionKey("env-1", tabId);
+    let releaseDispatch = () => {};
+    dispatchNativeAgentIntentMock.mockImplementationOnce(
+      (input) =>
+        new Promise<NativeAgentDispatchOutcome>((resolve) => {
+          releaseDispatch = () =>
+            resolve({
+              outcome: "unknown",
+              requestId: input.requestId,
+              error: "The response was lost",
+            });
+        }),
+    );
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+
+    // The authoritative row arrives before the dispatch response does. The
+    // still-pending send must adopt that verdict instead of restoring the
+    // draft and reporting an unconfirmed dispatch over it.
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "echoed-user-prompt",
+            role: "user" as const,
+            content: "Run the focused tests",
+            parts: [{ type: "text" as const, content: "Run the focused tests" }],
+            createdAt: "2026-08-26T14:00:00.000Z",
+          },
+        ],
+      });
+    });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+
+    await act(async () => {
+      releaseDispatch();
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined(),
+    );
+    expect(screen.queryByText(/connection dropped before dispatch was confirmed/i) === null).toBe(
+      true,
+    );
+  });
+
+  test("keeps a prompt typed after an unconfirmed send when the echo finally arrives", async () => {
+    const tabId = "tab-late-echo-guard";
+    const sessionKey = createSessionKey("env-1", tabId);
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+      outcome: "unknown" as const,
+      requestId: input.requestId,
+      error: "The response was lost",
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId).toMatch(/\S/),
+    );
+
+    // Editing the composer releases the dispatch's claim on the draft, which
+    // is what stops a late echo deleting the prompt typed in its place.
+    fireEvent.input(input, { target: { textContent: "A different question" } });
+    await waitFor(() =>
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.requestId === undefined).toBe(
+        true,
+      ),
+    );
+    expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation,
+    ).toBeUndefined();
+
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "late-echoed-prompt",
+            role: "user" as const,
+            content: "Run the focused tests",
+            parts: [{ type: "text" as const, content: "Run the focused tests" }],
+            createdAt: "2026-08-26T14:00:00.000Z",
+          },
+        ],
+      });
+    });
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "A different question",
+    );
+    expect(screen.getByText(/connection dropped before dispatch was confirmed/i)).toBeDefined();
+  });
+
+  test("does not use a resumed session's user row to confirm the previous session's dispatch", async () => {
+    const tabId = "tab-confirmation-session-scope";
+    const sessionKey = createSessionKey("env-1", tabId);
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => ({
+      outcome: "unknown" as const,
+      requestId: input.requestId,
+      error: "The response was lost",
+    }));
+
+    render(<AgentNativeTab tabId={tabId} data={identity("claude")} isActive />);
+    const input = await screen.findByRole("textbox");
+    fireEvent.input(input, { target: { textContent: "Run the focused tests" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() =>
+      expect(
+        useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
+          ?.sessionId,
+      ).toBe("claude-session"),
+    );
+
+    const current = useNativeAgentProjectionStore.getState().projections.get(sessionKey)!;
+    act(() => {
+      useNativeAgentProjectionStore.getState().setProjection(sessionKey, {
+        ...current,
+        sessionId: "resumed-elsewhere",
+        generation: "resumed-generation",
+        revision: current.revision + 1,
+        messages: [
+          {
+            id: "resumed-session-user-row",
+            role: "user" as const,
+            content: "A prompt from the resumed session",
+            parts: [{ type: "text" as const, content: "A prompt from the resumed session" }],
+            createdAt: "2026-08-26T15:00:00.000Z",
+          },
+        ],
+      });
+    });
+
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
+      "Run the focused tests",
+    );
+    expect(
+      useNativeComposeStore.getState().drafts.get(sessionKey)?.pendingTranscriptConfirmation
+        ?.requestId,
+    ).toMatch(/\S/);
+    expect(screen.getByText(/connection dropped before dispatch was confirmed/i)).toBeDefined();
   });
 
   test("retries a failed resume provider-lock save before opening the provider dialog", async () => {
@@ -4363,6 +4761,11 @@ describe("AgentNativeTab", () => {
           createdAt: "2026-08-14T10:00:00.000Z",
         },
       });
+      const sessionKey = createSessionKey("env-1", "tab-recoverable");
+      useNativeComposeStore.getState().updateDraft(sessionKey, {
+        text: "Retry this prompt",
+        requestId: "recoverable-1",
+      });
       render(<AgentNativeTab tabId="tab-recoverable" data={identity("codex")} isActive />);
 
       fireEvent.click(await screen.findByRole("button", { name: "Retry send" }));
@@ -4370,10 +4773,11 @@ describe("AgentNativeTab", () => {
         expect(retryNativeAgentDispatchMock).toHaveBeenCalledWith({
           environmentId: "env-1",
           agent: "codex",
-          logicalSessionKey: createSessionKey("env-1", "tab-recoverable"),
+          logicalSessionKey: sessionKey,
           requestId: "recoverable-1",
         }),
       );
+      expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined();
     });
 
     test("rehydrates a parked dispatch after the environment unmounts and the renderer cache resets", async () => {

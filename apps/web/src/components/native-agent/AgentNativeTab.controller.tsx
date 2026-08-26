@@ -80,6 +80,7 @@ import {
   nativeComposeDraft,
   nativeComposePersistenceStore,
   useNativeComposeStore,
+  type NativeComposeDraft,
 } from "@/stores/nativeComposeStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useNativeAgentProjectionStore } from "@/stores/nativeAgentProjectionStore";
@@ -153,9 +154,10 @@ export function SharedNativeAgentController({
   const requestedResumeSessionIdRef = useRef(data.sessionId);
   const [optimisticPrompt, setOptimisticPrompt] = useState<{
     text: string;
-    providerText: string;
     attachments: Array<{ path: string; previewUrl?: string; name: string }>;
     createdAt: string;
+    requestId?: string;
+    confirmation?: NonNullable<NativeComposeDraft["pendingTranscriptConfirmation"]>;
   } | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [queueDialogOpen, setQueueDialogOpen] = useState(false);
@@ -169,6 +171,7 @@ export function SharedNativeAgentController({
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
   const forkLatchRef = useRef(false);
   const submitInFlightRef = useRef(false);
+  const transcriptConfirmedRequestIdRef = useRef<string | null>(null);
   /** Last session action whose delivery the provider could not confirm. */
   const ambiguousActionRef = useRef<{
     kind: string;
@@ -304,19 +307,64 @@ export function SharedNativeAgentController({
     normalizedMessages,
     consumedAgentHandoffId,
   );
-  const transcriptEchoedOptimistic =
-    optimisticPrompt !== null &&
-    (normalizedMessages.some(
-      (message) =>
-        message.role === "user" && message.content.trim() === optimisticPrompt.providerText.trim(),
-    ) ||
-      handoff.displayMessages.some(
-        (message) =>
-          message.role === "user" && message.content.trim() === optimisticPrompt.text.trim(),
-      ));
-  useEffect(() => {
-    if (transcriptEchoedOptimistic) setOptimisticPrompt(null);
-  }, [transcriptEchoedOptimistic]);
+  /**
+   * The authoritative rows the composer could see when a prompt was submitted.
+   *
+   * Memoized rather than rebuilt per render: this is read once per submit, and
+   * a streaming turn re-renders on every projection frame, where an unmemoized
+   * pass over the whole transcript is pure cost.
+   */
+  const visibleAuthoritativeMessageIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const message of normalizedMessages) {
+      if (!isClientOnlyNativeMessage(message)) ids.add(message.id);
+    }
+    return ids;
+  }, [normalizedMessages]);
+  /**
+   * Has an authoritative transcript row appeared that can only be this prompt?
+   *
+   * Two conditions, and both are load-bearing:
+   *
+   * - The row was not visible when the prompt was submitted. Matching on text
+   *   alone confirmed a *previous* identical prompt the instant the user
+   *   pressed Enter, and providers reshape prompts (slash-command expansion,
+   *   handoff history, attachment references) often enough that the text sent
+   *   is not reliably the text echoed.
+   * - The row sits after every prior authoritative row that is still visible.
+   *   Novelty alone is not confirmation: widening the transcript window brings
+   *   older history into view for the first time, and a retained window can
+   *   begin on an assistant row. Anchoring to every role keeps those prepended
+   *   user rows behind the old tail. A prompt's own echo is appended past what
+   *   the composer could see, so position separates the two without depending
+   *   on a clock or on the provider echoing the text verbatim.
+   * - The row belongs to the same provider session. Resuming another session
+   *   replaces the transcript and must not turn one of its user rows into an
+   *   acknowledgement for the session the prompt was sent to.
+   */
+  const transcriptEchoedOptimistic = useMemo(() => {
+    const confirmation = optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
+    if (!confirmation || confirmation.sessionId !== projection?.sessionId) return false;
+    const priorMessageIds = new Set(confirmation.priorMessageIds);
+    let lastPriorMessageIndex = -1;
+    for (let index = 0; index < normalizedMessages.length; index += 1) {
+      if (priorMessageIds.has(normalizedMessages[index]!.id)) {
+        lastPriorMessageIndex = index;
+      }
+    }
+    return normalizedMessages.some(
+      (message, index) =>
+        index > lastPriorMessageIndex &&
+        message.role === "user" &&
+        !isClientOnlyNativeMessage(message) &&
+        !priorMessageIds.has(message.id),
+    );
+  }, [
+    draft.pendingTranscriptConfirmation,
+    normalizedMessages,
+    optimisticPrompt,
+    projection?.sessionId,
+  ]);
   const turnStopMarker = useNativeAgentProjectionStore((state) =>
     state.turnStopMarkers.get(sessionKey),
   );
@@ -561,6 +609,38 @@ export function SharedNativeAgentController({
     );
   }, [data.environmentId, sessionKey]);
 
+  const clearConfirmedDraft = useCallback(
+    (requestId: string | undefined): boolean => {
+      if (!requestId) return false;
+      const current = useNativeComposeStore.getState().drafts.get(sessionKey);
+      // Editing any content clears requestId in nativeComposeStore. That makes
+      // this comparison the ownership check which prevents a late transcript
+      // echo from deleting the user's next prompt.
+      if (current?.requestId !== requestId) return false;
+      clearDraft(sessionKey);
+      discardProvisionalDraft();
+      return true;
+    },
+    [clearDraft, discardProvisionalDraft, sessionKey],
+  );
+
+  useEffect(() => {
+    if (!transcriptEchoedOptimistic) return;
+    const confirmation = optimisticPrompt?.confirmation ?? draft.pendingTranscriptConfirmation;
+    if (!confirmation) return;
+    // A dispatch response can be lost after the backend accepted the prompt.
+    // The new authoritative transcript row is definitive confirmation, so the
+    // matching submitted draft must not remain in the composer indefinitely.
+    transcriptConfirmedRequestIdRef.current = confirmation.requestId;
+    if (clearConfirmedDraft(confirmation.requestId)) setSendError(null);
+    setOptimisticPrompt(null);
+  }, [
+    clearConfirmedDraft,
+    draft.pendingTranscriptConfirmation,
+    optimisticPrompt,
+    transcriptEchoedOptimistic,
+  ]);
+
   /**
    * OpenCode has no conversation-mode list; Plan/Build are primary agents.
    * Fall back to the built-in pair when the live agent listing has not arrived
@@ -720,11 +800,12 @@ export function SharedNativeAgentController({
         : (requestId ?? draft.requestId ?? crypto.randomUUID());
       if (dispatchRequestId) updateDraft(sessionKey, { requestId: dispatchRequestId });
       setSendError(null);
+      transcriptConfirmedRequestIdRef.current = null;
       setOptimisticPrompt({
         text: userPrompt,
-        providerText: prompt,
         attachments: submittedAttachments,
         createdAt: new Date().toISOString(),
+        requestId: dispatchRequestId,
       });
       if (
         (projection?.messages.length ?? 0) === 0 &&
@@ -758,6 +839,26 @@ export function SharedNativeAgentController({
           filename: attachment.name,
         })),
       };
+      const transcriptConfirmation =
+        dispatchRequestId && projection?.sessionId
+          ? {
+              requestId: dispatchRequestId,
+              sessionId: projection.sessionId,
+              priorMessageIds: Array.from(visibleAuthoritativeMessageIds),
+            }
+          : undefined;
+      if (transcriptConfirmation) {
+        updateDraft(sessionKey, {
+          requestId: dispatchRequestId,
+          pendingTranscriptConfirmation: transcriptConfirmation,
+        });
+        setOptimisticPrompt((current) =>
+          current && current.requestId === dispatchRequestId
+            ? { ...current, confirmation: transcriptConfirmation }
+            : current,
+        );
+      }
+      let keepTranscriptConfirmation = false;
       try {
         if (canQueue) {
           await enqueue(prompt, options);
@@ -768,13 +869,18 @@ export function SharedNativeAgentController({
           return true;
         }
         const outcome = await send(prompt, options);
-        if (outcome.outcome === "accepted") {
+        const transcriptConfirmed =
+          dispatchRequestId !== undefined &&
+          transcriptConfirmedRequestIdRef.current === dispatchRequestId;
+        if (outcome.outcome === "accepted" || transcriptConfirmed) {
+          transcriptConfirmedRequestIdRef.current = null;
           clearDraft(sessionKey);
           discardProvisionalDraft();
           if (agentHandoffId) clearTabAgentHandoff(tabId, data.environmentId);
           return true;
         }
         if (outcome.outcome === "rejected") setOptimisticPrompt(null);
+        keepTranscriptConfirmation = outcome.outcome === "unknown";
         setSendError(
           outcome.outcome === "unknown"
             ? "The connection dropped before dispatch was confirmed. The session is being reconciled; retrying uses the same request id."
@@ -795,6 +901,9 @@ export function SharedNativeAgentController({
         mentions: draft.mentions,
         attachments: submittedAttachments,
         ...(dispatchRequestId ? { requestId: dispatchRequestId } : {}),
+        ...(keepTranscriptConfirmation && transcriptConfirmation
+          ? { pendingTranscriptConfirmation: transcriptConfirmation }
+          : { pendingTranscriptConfirmation: undefined }),
       });
       return false;
     },
@@ -825,6 +934,7 @@ export function SharedNativeAgentController({
       platform,
       projection?.capabilities,
       projection?.messages.length,
+      projection?.sessionId,
       projection?.slashCommands,
       recoverableDispatch,
       send,
@@ -833,6 +943,7 @@ export function SharedNativeAgentController({
       sessionKey,
       tabId,
       updateDraft,
+      visibleAuthoritativeMessageIds,
     ],
   );
 
@@ -1267,6 +1378,7 @@ export function SharedNativeAgentController({
             onClick={() => {
               void retryRecoverableDispatch().then((outcome) => {
                 if (outcome.outcome === "accepted") {
+                  clearConfirmedDraft(recoverableDispatch.requestId);
                   setSendError(null);
                   setOptimisticPrompt(null);
                 } else if (outcome.outcome === "rejected") {

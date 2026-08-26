@@ -37,6 +37,16 @@ import {
  */
 const THINKING_PREVIEW_MAX_CHARS = 400;
 
+function truncateThinkingPreview(content: string): string {
+  const end = Math.min(content.length, THINKING_PREVIEW_MAX_CHARS);
+  // `slice` counts UTF-16 code units. If the budget lands on the high
+  // surrogate of a supplementary code point, include its low surrogate too
+  // rather than handing React an ill-formed string that renders as U+FFFD.
+  const safeEnd =
+    end < content.length && (content.codePointAt(end - 1) ?? 0) > 0xffff ? end + 1 : end;
+  return content.slice(0, safeEnd);
+}
+
 export function ThinkingPart({ content, expansionKey }: { content: string; expansionKey: string }) {
   const hasTaskList = useMemo(() => TASK_LIST_SYNTAX_PATTERN.test(content), [content]);
   // Backed by the shared store using the stable key supplied by MessagePart,
@@ -46,9 +56,7 @@ export function ThinkingPart({ content, expansionKey }: { content: string; expan
   // The collapsed row is a single line, so flatten whitespace for the preview.
   const preview = useMemo(
     () =>
-      hasTaskList
-        ? "task list"
-        : content.trim().replace(/\s+/g, " ").slice(0, THINKING_PREVIEW_MAX_CHARS),
+      hasTaskList ? "task list" : truncateThinkingPreview(content.trim().replace(/\s+/g, " ")),
     [content, hasTaskList],
   );
 

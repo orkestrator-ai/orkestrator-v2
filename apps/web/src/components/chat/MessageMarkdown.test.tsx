@@ -40,6 +40,16 @@ describe("InlineMessageMarkdown", () => {
     expect(container.textContent).toBe("see the docs for more");
   });
 
+  test.each([
+    ["its destination", "[](https://example.com/x)", "https://example.com/x"],
+    ["a literal marker when it has no destination", "[]()", "[]"],
+  ])("keeps an empty-label link visible using %s", (_label, content, expected) => {
+    const container = renderInline(content);
+
+    expect(container.querySelector("a") === null).toBe(true);
+    expect(container.textContent).toBe(expected);
+  });
+
   test("emits no anchor for a GFM autolink literal", () => {
     const container = renderInline("fetched http://example.com/auto just now");
 
@@ -57,6 +67,7 @@ describe("InlineMessageMarkdown", () => {
     ["a code fence", "```ts const x = 1"],
     ["a task list marker", "- [ ] unchecked item"],
     ["table pipes", "| a | b |"],
+    ["a reference definition", "[ref]: https://example.com/x"],
   ])("keeps %s as literal text", (_label, content) => {
     const container = renderInline(content);
 

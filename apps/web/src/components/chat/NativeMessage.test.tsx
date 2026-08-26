@@ -497,6 +497,15 @@ describe("NativeMessage task list rendering", () => {
     expect(trigger.textContent).toContain("sentence about the reducer.");
   });
 
+  test("keeps a supplementary Unicode character intact at the preview boundary", () => {
+    const content = `${"a".repeat(399)}😀tail`;
+    render(<NativeMessage message={makeMessage([{ type: "thinking", content }])} />);
+
+    const trigger = screen.getByRole("button", { name: /thinking/i });
+    expect(trigger.textContent).toBe(`Thinking${"a".repeat(399)}😀`);
+    expect(trigger.textContent).not.toContain("tail");
+  });
+
   test("expands a long thinking part to show the full text", () => {
     const content =
       "First I inspect the reducer.\n\nThen I trace the dispatch path all the way through the bridge before deciding on a fix.";

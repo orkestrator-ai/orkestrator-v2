@@ -42,6 +42,7 @@ const INLINE_ONLY_DISABLED_CONSTRUCTS = [
   "blockQuote",
   "codeFenced",
   "codeIndented",
+  "definition",
   "headingAtx",
   "htmlFlow",
   "labelStartImage",
@@ -67,12 +68,16 @@ function remarkInlineOnly(this: Processor): undefined {
 }
 
 const INLINE_PLUGINS: PluggableList = [remarkGfm, remarkInlineOnly];
-const INLINE_MARKDOWN_ELEMENTS = ["p", "strong", "em", "del", "code"];
+const INLINE_MARKDOWN_ELEMENTS = ["p", "strong", "em", "del", "code", "a"];
 const INLINE_MARKDOWN_COMPONENTS: Components = {
   // The preview sits inside a button, whose content must remain phrasing
   // content. Keep Markdown's paragraph parsing without emitting a block-level
-  // <p>; disallowed block and link nodes are unwrapped below.
+  // <p>; links are replaced with noninteractive phrasing below.
   p: ({ children }) => <>{children}</>,
+  // Links cannot remain interactive inside the preview's button. Unlike
+  // unwrapDisallowed, this also keeps an empty-label link visible by falling
+  // back to its destination (or its literal empty-label marker).
+  a: ({ children, href }) => <>{Children.count(children) > 0 ? children : href || "[]"}</>,
 };
 
 interface TaskListCheckboxProps {

@@ -4528,7 +4528,55 @@ describe("ActionBar configured action defaults", () => {
     );
   });
 
-  test("seeds every Multi Review row from the configured Review default", async () => {
+  test("seeds each Multi Review role from its configured default", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentActionDefaults = {
+      review: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
+      review2: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" },
+      fixReviewIssues: {
+        platform: "claude",
+        model: "claude-fable-5[1m]",
+        reasoningEffort: "xhigh",
+      },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    // Each role keeps its own provider/model/effort decision all the way to the
+    // backend launch intent.
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
+    const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
+      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
+      fixModel: { agent: string; model: string; reasoningEffort?: string };
+    };
+    expect(launch.reviewers).toHaveLength(2);
+    expect(launch.reviewers[0]).toMatchObject({
+      agent: "claude",
+      model: "sonnet",
+      reasoningEffort: "high",
+    });
+    expect(launch.reviewers[1]).toMatchObject({
+      agent: "codex",
+      model: "gpt-5.4",
+      reasoningEffort: "xhigh",
+    });
+    expect(launch.fixModel).toMatchObject({
+      agent: "claude",
+      model: "claude-fable-5[1m]",
+      reasoningEffort: "xhigh",
+    });
+  });
+
+  test("keeps Review as the upgrade fallback for unset Multi Review roles", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       agentSettings: { defaultAgent: "codex" },
@@ -4545,17 +4593,15 @@ describe("ActionBar configured action defaults", () => {
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
-    // Both reviewer rows and the fix model start from the action default; none
-    // of them may fall back to the environment's agent.
     await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
     const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {
       reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
       fixModel: { agent: string; model: string; reasoningEffort?: string };
     };
-    expect(launch.reviewers).toHaveLength(2);
-    for (const reviewer of launch.reviewers) {
-      expect(reviewer).toMatchObject({ agent: "claude", model: "sonnet", reasoningEffort: "high" });
-    }
+    expect(launch.reviewers).toEqual([
+      expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
+      expect.objectContaining({ agent: "claude", model: "sonnet", reasoningEffort: "high" }),
+    ]);
     expect(launch.fixModel).toMatchObject({
       agent: "claude",
       model: "sonnet",

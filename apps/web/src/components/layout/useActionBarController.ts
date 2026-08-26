@@ -3,7 +3,10 @@ import {
   resolvedActionDefault,
   resolvedDefaultAgent,
 } from "@/lib/agent-settings";
-import { resolveAgentPlatformSettings } from "@orkestrator/protocol/agent-settings";
+import {
+  resolveActionDefaults,
+  resolveAgentPlatformSettings,
+} from "@orkestrator/protocol/agent-settings";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
@@ -351,6 +354,15 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       };
     },
     [actionDefaultFor, preferredEffortsByPlatform, preferredModelsByPlatform],
+  );
+  /** Launch-dialog preferences only when this action names an enabled platform. */
+  const configuredLaunchDialogDefaultsFor = useCallback(
+    (key: ActionDefaultKey) => {
+      const configured = resolveActionDefaults(settingsTiers)[key];
+      if (!configured?.platform || !enabledAgents.has(configured.platform)) return undefined;
+      return launchDialogDefaultsFor(key);
+    },
+    [enabledAgents, launchDialogDefaultsFor, settingsTiers],
   );
   const { installLoopedReviewWorkflow, removeLoopedReviewWorkflow } = useLoopedReviewStore(
     useShallow((state) => ({
@@ -1645,6 +1657,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     configuredDefaultAgent,
     defaultAgent,
     launchDialogDefaultsFor,
+    configuredLaunchDialogDefaultsFor,
     installLoopedReviewWorkflow,
     removeLoopedReviewWorkflow,
     handleReview,

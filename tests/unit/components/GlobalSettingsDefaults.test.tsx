@@ -79,7 +79,15 @@ describe("GlobalSettings defaults section", () => {
   test("offers a picker per action, all on the app default until configured", () => {
     render(<GlobalSettings activeSection="defaults" />);
 
-    for (const action of ["New environments", "Review", "PR", "Resolve", "Push"]) {
+    for (const action of [
+      "New environments",
+      "Review",
+      "Review 2",
+      "Fix review issues",
+      "PR",
+      "Resolve",
+      "Push",
+    ]) {
       const picker = screen.getByRole("combobox", {
         name: `${action} default agent, model and reasoning`,
       });
@@ -104,6 +112,37 @@ describe("GlobalSettings defaults section", () => {
     expect(savedActionDefaults()).toEqual({
       review: { platform: "claude", model: "haiku" },
     });
+  });
+
+  test("edits and clears the new Multi Review defaults independently", async () => {
+    render(<GlobalSettings activeSection="defaults" />);
+
+    openPicker("Review 2");
+    fireEvent.click(screen.getByRole("button", { name: "codex models" }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^gpt-5\.4/ }));
+    openPicker("Fix review issues");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Haiku/ }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() =>
+      expect(savedActionDefaults()).toEqual({
+        review2: { platform: "codex", model: "gpt-5.4" },
+        fixReviewIssues: { platform: "claude", model: "haiku" },
+      }),
+    );
+
+    mockUpdateGlobalConfig.mockClear();
+    const review2Picker = screen.getByRole("combobox", {
+      name: "Review 2 default agent, model and reasoning",
+    });
+    fireEvent.click(within(review2Picker.parentElement!).getByRole("button", { name: "Clear" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(savedActionDefaults()).toEqual({
+        fixReviewIssues: { platform: "claude", model: "haiku" },
+      }),
+    );
   });
 
   test("switching provider on the rail drops the previous provider's model", async () => {

@@ -3696,6 +3696,29 @@ describe("runtime health", () => {
     ).toMatchObject({ threadId: "thread-1" });
   });
 
+  test("an unmaterialized session sees global notices but not another thread's notices", async () => {
+    const h = await harness({
+      "mcpServerStatus/list": () => ({ data: [] }),
+      "skills/list": () => ({ data: [] }),
+      "hooks/list": () => ({ data: [] }),
+      "account/rateLimits/read": () => ({ rateLimits: {} }),
+    });
+    const { sessionId } = h.runtime.createSession({ mode: "build" });
+    h.child().notify("warning", { threadId: "thread-other", message: "other thread" });
+    h.child().notify("configWarning", {
+      summary: "Global warning",
+      details: "visible before the first prompt",
+    });
+    await h.drain();
+
+    const health = (await h.runtime.getRuntimeHealth(sessionId)) as {
+      notices: Array<{ detail?: string }>;
+    };
+    expect(health.notices.map((notice) => notice.detail)).toEqual([
+      "Global warning\nvisible before the first prompt",
+    ]);
+  });
+
   test("an unknown session is rejected instead of returning environment-wide data", async () => {
     const h = await harness({
       "mcpServerStatus/list": () => ({ data: [] }),

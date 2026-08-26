@@ -585,7 +585,21 @@ export interface NativeAgentRateLimitWindow {
   windowMinutes?: number;
 }
 
-/** Bounded, content-free runtime inventory for the agent-information panel. */
+export interface NativeAgentRuntimeNoticeOccurrence {
+  /** Redacted, bounded provider diagnostic text. */
+  detail?: string;
+  receivedAt?: string;
+}
+
+export interface NativeAgentRuntimeNotice {
+  message: string;
+  method?: string;
+  count?: number;
+  /** Most recent redacted occurrences, bounded by the provider projection. */
+  occurrences?: NativeAgentRuntimeNoticeOccurrence[];
+}
+
+/** Bounded runtime inventory for the agent-information panel. */
 export interface NativeAgentRuntimeSummary {
   mcpServers?: number;
   plugins?: number;
@@ -598,7 +612,7 @@ export interface NativeAgentRuntimeSummary {
   files?: number;
   state?: string;
   version?: string;
-  notices?: Array<{ message: string; count?: number }>;
+  notices?: NativeAgentRuntimeNotice[];
 }
 
 export type NativeAgentNotice =

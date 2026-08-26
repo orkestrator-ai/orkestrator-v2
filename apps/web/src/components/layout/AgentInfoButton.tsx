@@ -167,6 +167,7 @@ export {
 export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonProps) {
   const [open, setOpen] = useState(false);
   const [handoffOpen, setHandoffOpen] = useState(false);
+  const [runtimeNoticeDialogId, setRuntimeNoticeDialogId] = useState<string | null>(null);
   const [busyState, setBusyState] = useState<SessionActionState | null>(null);
   const [codexHealth, setCodexHealth] = useState<unknown>(null);
   const [cursorAccountUsage, setCursorAccountUsage] = useState<CursorUsageResult | null>(null);
@@ -871,6 +872,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
 
   const close = () => {
     restoreFocusRef.current = true;
+    setRuntimeNoticeDialogId(null);
     setOpen(false);
   };
 
@@ -883,6 +885,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   useEffect(() => {
     setOpen(false);
     setHandoffOpen(false);
+    setRuntimeNoticeDialogId(null);
     shareVersionRef.current += 1;
     codexSteerRetryRef.current = null;
     setShareState({ sessionIdentity, value: false });
@@ -945,12 +948,15 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      // Let the portaled Radix dialog claim the first Escape. Its handler
+      // prevents the same key from reaching the chat tab's abort shortcut.
+      if (runtimeNoticeDialogId !== null) return;
       event.preventDefault();
       close();
     };
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [open]);
+  }, [open, runtimeNoticeDialogId]);
 
   return (
     <div
@@ -1749,7 +1755,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     />
                   </div>
                 ) : activeSession.provider === "codex" ? (
-                  <CodexRuntimePanel health={codexHealth} runtime={neutralProjection?.runtime} />
+                  <CodexRuntimePanel
+                    health={codexHealth}
+                    runtime={neutralProjection?.runtime}
+                    openNoticeId={runtimeNoticeDialogId}
+                    onOpenNoticeChange={setRuntimeNoticeDialogId}
+                  />
                 ) : (
                   <AgentRuntimePanel
                     runtime={neutralProjection?.runtime}

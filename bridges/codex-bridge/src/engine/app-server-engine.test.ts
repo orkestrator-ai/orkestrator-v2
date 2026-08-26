@@ -1422,14 +1422,14 @@ describe("runtime health", () => {
 describe("runtime notices", () => {
   async function noticesFor(
     notifications: Array<[string, unknown]>,
-  ): Promise<Array<{ method: string; message: string }>> {
+  ): Promise<Array<{ method: string; message: string; detail?: string; receivedAt: string }>> {
     const h = harness();
     await h.engine.start();
     for (const [method, params] of notifications) h.child().notify(method, params);
     await settle();
     await h.engine.getSupervisor().notificationQueue.drainAll();
     const health = (await h.engine.getRuntimeHealth()) as {
-      notices: Array<{ method: string; message: string }>;
+      notices: Array<{ method: string; message: string; detail?: string; receivedAt: string }>;
     };
     return health.notices;
   }
@@ -1457,7 +1457,7 @@ describe("runtime notices", () => {
     ]);
   });
 
-  test("does not expose raw provider notice text", async () => {
+  test("exposes only the selected provider detail fields", async () => {
     const captured = await noticesFor([
       ["warning", { message: "m", reason: "r", error: "e", status: "s" }],
       ["warning", { reason: "r", error: "e", status: "s" }],
@@ -1469,6 +1469,80 @@ describe("runtime notices", () => {
       "Codex reported warning",
       "Codex reported warning",
       "Codex reported warning",
+    ]);
+    expect(captured.map((notice) => notice.detail)).toEqual(["m\nr\ne\ns", "r\ne\ns", "e\ns", "s"]);
+  });
+
+  test("turns structured MCP, config, and reroute notifications into readable detail", async () => {
+    const captured = await noticesFor([
+      [
+        "mcpServer/startupStatus/updated",
+        {
+          name: "context7",
+          status: "failed",
+          error: "Connection timed out",
+          failureReason: "reauthenticationRequired",
+        },
+      ],
+      ["configWarning", { summary: "Ignored setting", details: "Use the new key instead" }],
+      [
+        "model/rerouted",
+        {
+          threadId: "thread-1",
+          fromModel: "gpt-5.6",
+          toModel: "gpt-5.6-codex",
+          reason: "The coding model is available",
+        },
+      ],
+    ]);
+
+    expect(Object.fromEntries(captured.map((notice) => [notice.method, notice.detail]))).toEqual({
+      "mcpServer/startupStatus/updated":
+        "context7: failed\nConnection timed out\nreauthenticationRequired",
+      configWarning: "Ignored setting\nUse the new key instead",
+      "model/rerouted": "gpt-5.6 → gpt-5.6-codex\nThe coding model is available",
+    });
+  });
+
+  test("isolates thread notices while retaining engine-global notices", async () => {
+    const h = harness();
+    await h.engine.start();
+    h.child().notify("warning", { threadId: "thread-1", message: "warning for one" });
+    h.child().notify("guardianWarning", {
+      threadId: "thread-2",
+      message: "warning for two",
+    });
+    h.child().notify("warning", { message: "unattributed warning" });
+    h.child().notify("configWarning", {
+      summary: "Global configuration warning",
+      details: "Visible to every thread",
+    });
+    await settle();
+    await h.engine.getSupervisor().notificationQueue.drainAll();
+
+    const detailsFor = async (threadId?: string | null) => {
+      const health = (await h.engine.getRuntimeHealth(threadId)) as {
+        notices: Array<{ detail?: string }>;
+      };
+      return health.notices.map((notice) => notice.detail).sort();
+    };
+
+    expect(await detailsFor("thread-1")).toEqual([
+      "Global configuration warning\nVisible to every thread",
+      "warning for one",
+    ]);
+    expect(await detailsFor("thread-2")).toEqual([
+      "Global configuration warning\nVisible to every thread",
+      "warning for two",
+    ]);
+    expect(await detailsFor(null)).toEqual([
+      "Global configuration warning\nVisible to every thread",
+    ]);
+    expect(await detailsFor()).toEqual([
+      "Global configuration warning\nVisible to every thread",
+      "unattributed warning",
+      "warning for one",
+      "warning for two",
     ]);
   });
 
@@ -1485,9 +1559,10 @@ describe("runtime notices", () => {
     ]);
   });
 
-  test("a very long notice is replaced by a bounded generic label", async () => {
+  test("a very long notice keeps a bounded detail behind its generic label", async () => {
     const captured = await noticesFor([["warning", { message: "x".repeat(5_000) }]]);
     expect(captured[0]?.message).toBe("Codex reported warning");
+    expect(captured[0]?.detail).toHaveLength(1_000);
   });
 
   test("the notice ring keeps only the most recent 100", async () => {
@@ -1518,6 +1593,7 @@ describe("runtime notices", () => {
     expect(message).not.toContain("abcdef123456");
     expect(message).not.toContain("ghp_0123456789abcdefghij");
     expect(message).toBe("Codex reported mcpServer startupStatus updated");
+    expect(captured[0]?.detail).toContain("[redacted]");
   });
 
   /**
@@ -1550,13 +1626,36 @@ describe("runtime notices", () => {
         "warning",
         {
           message:
-            "Failed reading /Users/alice/private-client-name/config.json for alice@example.test",
+            "Failed reading /Users/alice/private-client-name/config.json, " +
+            "file:///Users/alice/app/index.js, c:\\Users\\alice\\AppData\\codex.toml, " +
+            "\\\\fileserver\\share\\alice\\private.json, and ~/Library/private.json " +
+            "for alice@example.test",
         },
       ],
     ]);
     const serialized = JSON.stringify(captured);
     expect(serialized).not.toContain("/Users/alice");
+    expect(serialized).not.toContain("file://");
+    expect(serialized).not.toContain("c:\\Users\\alice");
+    expect(serialized).not.toContain("fileserver");
+    expect(serialized).not.toContain("~/Library");
     expect(serialized).not.toContain("alice@example.test");
     expect(serialized).not.toContain("private-client-name");
+  });
+
+  test("slash commands and bare slashes survive path redaction", async () => {
+    const captured = await noticesFor([
+      [
+        "deprecationNotice",
+        {
+          summary: "The /compact command is deprecated",
+          details: "Use /new instead; codex 0.145.0 / app-server 2 mismatch",
+        },
+      ],
+    ]);
+
+    expect(captured[0]?.detail).toBe(
+      "The /compact command is deprecated\nUse /new instead; codex 0.145.0 / app-server 2 mismatch",
+    );
   });
 });

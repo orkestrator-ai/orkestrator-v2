@@ -18,7 +18,7 @@ import {
   isBackgroundTaskActionTool,
   isBackgroundTaskStopTool,
 } from "@/lib/chat/native-message-adapters";
-import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import { InlineMessageMarkdown, MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { type NativeBackgroundTask } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
@@ -54,9 +54,10 @@ export function ThinkingPart({ content, expansionKey }: { content: string; expan
         <Brain className="h-3.5 w-3.5 shrink-0" />
         <span className="font-medium shrink-0">Thinking</span>
         {!isOpen && (
-          <span className="font-mono text-muted-foreground/80 truncate min-w-0 text-left">
-            {preview}
-          </span>
+          <InlineMessageMarkdown
+            content={preview}
+            className="font-mono text-muted-foreground/80 truncate min-w-0 text-left"
+          />
         )}
       </CollapsibleTrigger>
       <CollapsibleContent>

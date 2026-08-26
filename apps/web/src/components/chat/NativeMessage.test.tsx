@@ -442,6 +442,18 @@ describe("NativeMessage task list rendering", () => {
     );
   });
 
+  test("renders Markdown formatting in the collapsed thinking summary", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([{ type: "thinking", content: "**Preparing bug investigation**" }])}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /preparing bug investigation/i });
+    expect(trigger.textContent).not.toContain("**");
+    expect(container.querySelector("strong")?.textContent).toBe("Preparing bug investigation");
+  });
+
   test("expands a long thinking part to show the full text", () => {
     const content =
       "First I inspect the reducer.\n\nThen I trace the dispatch path all the way through the bridge before deciding on a fix.";

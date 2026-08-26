@@ -23,6 +23,13 @@ const DEFAULT_MARKDOWN_CLASSNAME =
 
 const PLUGINS_WITH_BREAKS: PluggableList = [remarkGfm, remarkBreaks];
 const PLUGINS_WITHOUT_BREAKS: PluggableList = [remarkGfm];
+const INLINE_MARKDOWN_ELEMENTS = ["p", "strong", "em", "del", "code"];
+const INLINE_MARKDOWN_COMPONENTS: Components = {
+  // The preview sits inside a button, whose content must remain phrasing
+  // content. Keep Markdown's paragraph parsing without emitting a block-level
+  // <p>; disallowed block and link nodes are unwrapped below.
+  p: ({ children }) => <>{children}</>,
+};
 
 interface TaskListCheckboxProps {
   checked?: boolean;
@@ -151,6 +158,30 @@ interface MessageMarkdownProps {
   /** When false, single newlines are NOT converted to <br>. Defaults to true. */
   enableBreaks?: boolean;
 }
+
+/** Render Markdown phrasing without introducing block or interactive nodes. */
+export const InlineMessageMarkdown = memo(function InlineMessageMarkdown({
+  content,
+  className,
+}: Pick<MessageMarkdownProps, "content" | "className">) {
+  return (
+    <span
+      className={cn(
+        "[&_strong]:font-semibold [&_em]:italic [&_del]:line-through [&_code]:font-mono",
+        className,
+      )}
+    >
+      <Markdown
+        remarkPlugins={PLUGINS_WITHOUT_BREAKS}
+        allowedElements={INLINE_MARKDOWN_ELEMENTS}
+        unwrapDisallowed
+        components={INLINE_MARKDOWN_COMPONENTS}
+      >
+        {content}
+      </Markdown>
+    </span>
+  );
+});
 
 /**
  * Memoized: a streaming turn re-renders its whole message roughly ten times a

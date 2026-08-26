@@ -36,6 +36,7 @@ import {
   createMultiReviewConsolidationPrompt,
   createMultiReviewerPrompt,
 } from "./multi-review-prompts.js";
+import { MissingMultiReviewAddressSessionError } from "./multi-review-address-dispatch.js";
 import {
   DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
   DEFAULT_STALL_ABANDON_MS,
@@ -55,6 +56,8 @@ const CONTROLLER_LEASE_MS = 15_000;
 const CONTROLLER_RENEW_MS = 5_000;
 const MAX_IDLE_RESULT_POLLS = 5;
 const MAX_SCHEMA_REPAIR_ATTEMPTS = 3;
+const ADDRESS_DISPATCH_RETRY_MS = 5_000;
+const MAX_ADDRESS_DISPATCH_ATTEMPTS = 3;
 /**
  * Caps one transcript response. The reviewer tab polls this read model while a
  * review runs, and the bridge transcript itself is unbounded, so without a cap
@@ -120,6 +123,7 @@ function isSupervisedPhase(phase: MultiReviewPhase): boolean {
 function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
   return (
     isSupervisedPhase(workflow.phase) ||
+    workflow.addressPromptPending === true ||
     workflow.reviewers.some((reviewer) => reviewer.status === "running") ||
     workflow.fixSession?.status === "running"
   );
@@ -153,11 +157,19 @@ export interface MultiReviewServiceOptions {
   progressProbeIntervalMs?: number;
   stallWarningMs?: number;
   stallAbandonMs?: number;
+  addressDispatchRetryMs?: number;
+  maxAddressDispatchAttempts?: number;
   provider?: (
     workflow: MultiReviewWorkflow,
     selection: MultiReviewModelSelection,
   ) => Promise<BuildPipelineProvider>;
   providerDependencies?: Pick<ProviderDependencies, "openCodeClient" | "monitorRetryMs">;
+  /**
+   * Delivers the durable interactive handoff after {@link address} records it.
+   * The supervisor, not a mounted renderer, retries this callback until it
+   * succeeds and acknowledges the persisted intent.
+   */
+  dispatchAddressPrompt?: (workflow: MultiReviewWorkflow) => Promise<void>;
 }
 
 /** Durable backend owner for reviewer fan-out, consolidation, and fixes. */
@@ -171,6 +183,7 @@ export class MultiReviewService {
   private readonly providerReaders = new Map<string, number>();
   private readonly leases = new Map<string, { token: string; expiresAt: string }>();
   private readonly progress: MultiReviewProgressTracker;
+  private readonly addressDispatchRetryAt = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private renewTimer: ReturnType<typeof setInterval> | null = null;
   private tickRun: { pending: boolean; promise: Promise<void> } | null = null;
@@ -228,6 +241,7 @@ export class MultiReviewService {
     this.providerCreations.clear();
     this.providerUsers.clear();
     this.providerReaders.clear();
+    this.addressDispatchRetryAt.clear();
     await Promise.allSettled(
       [...this.leases].map(([workflowId, lease]) =>
         this.storage.releaseMultiReviewController(workflowId, this.ownerId, lease.token),
@@ -354,64 +368,31 @@ export class MultiReviewService {
         // that second half was interrupted, repeating the command must resume it
         // without trying to transition the already-interactive workflow again.
         if (workflow.phase === "interactive" && workflow.addressPromptPending === true) {
+          this.addressDispatchRetryAt.delete(workflow.id);
+          void this.advanceNow(workflow.id);
           return workflow;
         }
         if (workflow.phase !== "ready" || !workflow.consolidatedReport || !workflow.fixSession) {
           throw new Error("The consolidated review is not ready to address");
         }
-        // The whole point of the handoff is that the adopted session already
-        // holds the consolidated report. A renderer that resumes a rollout the
-        // provider has forgotten silently falls back to creating an empty
-        // session, which would then receive "address every finding" with no
-        // findings in context. Prove liveness here, before anything is dispatched.
-        //
-        // Reading status does not register the session, so this cannot pull the
-        // conversation back into the unattended policy the renderer is about to
-        // replace. A failed last turn is not a missing session, and a transport
-        // failure is not evidence of deletion: only `missing` blocks the handoff.
-        const provider = await this.provider(workflow, workflow.fixModel);
-        await this.assertFence(workflow.id, token);
-        const { status } = await readProviderStatus(
-          provider,
-          workflow.fixSession.providerSessionId,
-        );
-        await this.assertFence(workflow.id, token);
-        if (status === "missing") {
-          throw new Error("The consolidation session is no longer available");
-        }
-        // The renderer adopts this idle consolidation session as an interactive
-        // native tab and sends the address prompt there. Supervising a structured
-        // fix turn would steal the same provider session back into unattended mode.
+        // Persist the user's intent before any provider I/O. The backend
+        // supervisor adopts the idle consolidation session and dispatches the
+        // prompt from `advance`; a renderer can disappear immediately after this
+        // save without delaying or losing the work.
         workflow.phase = "interactive";
         workflow.fixSession.status = "idle";
         workflow.addressPromptPending = true;
+        workflow.addressPromptAttempts = 0;
         delete workflow.activeRequest;
         delete workflow.error;
-        return await this.save(workflow, token);
+        const saved = await this.save(workflow, token);
+        this.addressDispatchRetryAt.delete(workflow.id);
+        void this.advanceNow(workflow.id);
+        return saved;
       } finally {
         // This method owns a short-lived transition/dispatch claim. Every exit
         // path must release it, including validation and already-complete errors,
         // or a rejected retry fences out subsequent controllers until expiry.
-        await this.release(workflow, token);
-      }
-    });
-  }
-
-  async acknowledgeAddressPrompt(workflowId: string): Promise<MultiReviewWorkflow> {
-    return this.withLock(workflowId, async () => {
-      const controlled = await this.loadControlled(workflowId);
-      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
-      const { workflow, token } = controlled;
-      try {
-        if (workflow.phase !== "interactive") {
-          throw new Error("The Multi Review address prompt is not awaiting dispatch");
-        }
-        if (workflow.addressPromptPending !== true) return workflow;
-        delete workflow.addressPromptPending;
-        return await this.save(workflow, token);
-      } finally {
-        // Interactive workflows are terminal and must never retain a renewed
-        // controller/provider lease just because dispatch acknowledgement ran.
         await this.release(workflow, token);
       }
     });
@@ -457,6 +438,7 @@ export class MultiReviewService {
         delete workflow.consolidatedReport;
         delete workflow.fixResult;
         delete workflow.addressPromptPending;
+        delete workflow.addressPromptAttempts;
       } else {
         // Reviewer failures are independent, so a single pass can fail several of
         // them at once. Restoring only the first would consolidate from fewer
@@ -503,6 +485,7 @@ export class MultiReviewService {
           workflow.phase = "ready";
           workflow.fixSession.status = "idle";
           delete workflow.addressPromptPending;
+          delete workflow.addressPromptAttempts;
           delete workflow.activeRequest;
         } else {
           await this.abandonSession(
@@ -628,8 +611,11 @@ export class MultiReviewService {
     await Promise.all(
       records.flatMap((record) => {
         if (!isMultiReviewWorkflow(record.snapshot)) return [];
-        const phase = record.snapshot.phase;
-        return isSupervisedPhase(phase) ? [this.runLocked(record.id)] : [];
+        const workflow = record.snapshot;
+        return isSupervisedPhase(workflow.phase) ||
+          (workflow.addressPromptPending === true && this.options.dispatchAddressPrompt)
+          ? [this.runLocked(record.id)]
+          : [];
       }),
     );
   }
@@ -773,22 +759,74 @@ export class MultiReviewService {
     const existing = await this.storage.getMultiReviewWorkflow(workflowId);
     if (!existing || !isMultiReviewWorkflow(existing.snapshot)) return;
     const existingPhase = existing.snapshot.phase;
-    if (
-      existingPhase !== "reviewing" &&
-      existingPhase !== "consolidating" &&
-      existingPhase !== "fixing" &&
-      existingPhase !== "cancelling"
-    )
-      return;
+    const pendingAddress =
+      existingPhase === "interactive" &&
+      existing.snapshot.addressPromptPending === true &&
+      this.options.dispatchAddressPrompt !== undefined;
+    if (!pendingAddress && !isSupervisedPhase(existingPhase)) return;
+    if (pendingAddress && (this.addressDispatchRetryAt.get(workflowId) ?? 0) > Date.now()) return;
     const controlled = await this.loadControlled(workflowId);
     if (!controlled) return;
     const { workflow, token } = controlled;
-    if (workflow.phase === "cancelling") {
+    if (
+      workflow.phase === "interactive" &&
+      workflow.addressPromptPending === true &&
+      this.options.dispatchAddressPrompt
+    ) {
+      await this.advanceAddressPrompt(workflow, token);
+    } else if (workflow.phase === "cancelling") {
       await this.advanceCancellation(workflow, token);
     } else if (workflow.phase === "reviewing") {
       await this.advanceReviewers(workflow, token);
     } else if (workflow.phase === "consolidating" || workflow.phase === "fixing") {
       await this.advanceFixModel(workflow, token);
+    }
+  }
+
+  /** Complete an interactive handoff without relying on a mounted review tab. */
+  private async advanceAddressPrompt(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    try {
+      await this.options.dispatchAddressPrompt!(workflow);
+      await this.assertFence(workflow.id, token);
+      delete workflow.addressPromptPending;
+      delete workflow.addressPromptAttempts;
+      delete workflow.error;
+      this.addressDispatchRetryAt.delete(workflow.id);
+      await this.save(workflow, token);
+    } catch (error) {
+      if (error instanceof ControllerFenceError) throw error;
+      const nextError = errorMessage(error).slice(0, 4_096);
+      const attempts = (workflow.addressPromptAttempts ?? 0) + 1;
+      const missingSession = error instanceof MissingMultiReviewAddressSessionError;
+      if (missingSession || attempts >= this.maxAddressDispatchAttempts()) {
+        // A definitive miss cannot recover under the old provider id. Other
+        // persistent failures stop after a bounded budget so activity and user
+        // controls cannot remain wedged forever.
+        workflow.phase = "failed";
+        delete workflow.addressPromptPending;
+        delete workflow.addressPromptAttempts;
+        delete workflow.activeRequest;
+        if (missingSession) {
+          if (workflow.fixSession?.providerSessionId) {
+            this.progress.forget(workflow.fixSession.providerSessionId);
+          }
+          delete workflow.fixSession;
+        }
+        workflow.error = nextError;
+        this.addressDispatchRetryAt.delete(workflow.id);
+        await this.save(workflow, token);
+      } else {
+        // Keep the exact same durable request pending. The native-agent layer
+        // deduplicates it by request id, so retrying after a lost acknowledgement
+        // cannot create a second turn. Persist the attempt count so restarts do
+        // not reset a permanently failing dispatch to an infinite retry loop.
+        workflow.addressPromptAttempts = attempts;
+        workflow.error = nextError;
+        this.addressDispatchRetryAt.set(workflow.id, Date.now() + this.addressDispatchRetryMs());
+        await this.save(workflow, token);
+      }
+    } finally {
+      await this.release(workflow, token);
     }
   }
 
@@ -1775,6 +1813,14 @@ export class MultiReviewService {
 
   private controllerLeaseMs(): number {
     return this.options.controllerLeaseMs ?? CONTROLLER_LEASE_MS;
+  }
+
+  private addressDispatchRetryMs(): number {
+    return Math.max(0, this.options.addressDispatchRetryMs ?? ADDRESS_DISPATCH_RETRY_MS);
+  }
+
+  private maxAddressDispatchAttempts(): number {
+    return Math.max(1, this.options.maxAddressDispatchAttempts ?? MAX_ADDRESS_DISPATCH_ATTEMPTS);
   }
 
   /** Captures the one durable source identity every review turn must share. */

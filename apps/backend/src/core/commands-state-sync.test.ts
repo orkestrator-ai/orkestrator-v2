@@ -4305,7 +4305,7 @@ describe("multi review commands", () => {
     );
   });
 
-  test("durably dispatches the interactive address prompt before acknowledging handoff", async () => {
+  test("records the address intent without waiting for command-scoped native delivery", async () => {
     const pending = {
       id: "multi-1",
       environmentId: "e1",
@@ -4319,19 +4319,12 @@ describe("multi review commands", () => {
       },
     };
     const address = mock(async () => pending);
-    const acknowledgeAddressPrompt = mock(async () => ({
-      ...pending,
-      addressPromptPending: undefined,
-    }));
     const adoptSession = mock(async () => ({ providerSessionId: "provider-fix" }));
     const dispatchIntent = mock(async () => ({
       outcome: "accepted" as const,
       requestId: "multi-review-address:multi-1",
     }));
-    const supervisor = {
-      address,
-      acknowledgeAddressPrompt,
-    } as unknown as NonNullable<CommandContext["multiReviews"]>;
+    const supervisor = { address } as unknown as NonNullable<CommandContext["multiReviews"]>;
     const nativeAgents = {
       adoptSession,
       dispatchIntent,
@@ -4343,65 +4336,11 @@ describe("multi review commands", () => {
           workflowId: "multi-1",
         })) as Record<string, unknown>;
 
-        expect(adoptSession).toHaveBeenCalledWith({
-          environmentId: "e1",
-          agent: "codex",
-          logicalSessionKey: "multi-review:multi-1:interactive",
-          origin: "interactive-native",
-          interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-          providerSessionId: "provider-fix",
-          title: "Multi Review · Fix",
-          model: "gpt-5.6",
-          reasoningEffort: "high",
-          phase: "fix",
-          sessionMode: "build",
-        });
-        expect(dispatchIntent).toHaveBeenCalledWith(
-          expect.objectContaining({
-            logicalSessionKey: "multi-review:multi-1:interactive",
-            prompt: "Please address all the issues and coverage gaps",
-            requestId: "multi-review-address:multi-1",
-            mode: "build",
-          }),
-        );
-        expect(acknowledgeAddressPrompt).toHaveBeenCalledWith("multi-1");
-        expect(result.addressPromptPending).toBeUndefined();
+        expect(address).toHaveBeenCalledWith("multi-1");
+        expect(adoptSession).not.toHaveBeenCalled();
+        expect(dispatchIntent).not.toHaveBeenCalled();
+        expect(result.addressPromptPending).toBe(true);
         expect(result).not.toHaveProperty("controllerFence");
-      },
-      { multiReviews: supervisor, nativeAgents },
-    );
-  });
-
-  test("keeps the address dispatch pending when native delivery is not confirmed", async () => {
-    const pending = {
-      id: "multi-1",
-      environmentId: "e1",
-      phase: "interactive",
-      addressPromptPending: true,
-      fixModel: { agent: "claude", model: "default" },
-      fixSession: { providerSessionId: "provider-fix", sessionKey: "fix" },
-    };
-    const address = mock(async () => pending);
-    const acknowledgeAddressPrompt = mock(async () => pending);
-    const nativeAgents = {
-      adoptSession: mock(async () => ({ providerSessionId: "provider-fix" })),
-      dispatchIntent: mock(async () => ({
-        outcome: "unknown" as const,
-        requestId: "multi-review-address:multi-1",
-        error: "delivery is ambiguous",
-      })),
-    } as unknown as NonNullable<CommandContext["nativeAgents"]>;
-    const supervisor = {
-      address,
-      acknowledgeAddressPrompt,
-    } as unknown as NonNullable<CommandContext["multiReviews"]>;
-
-    await withCommands(
-      async (invoke) => {
-        await expect(invoke("address_multi_review", { workflowId: "multi-1" })).rejects.toThrow(
-          "delivery is ambiguous",
-        );
-        expect(acknowledgeAddressPrompt).not.toHaveBeenCalled();
       },
       { multiReviews: supervisor, nativeAgents },
     );

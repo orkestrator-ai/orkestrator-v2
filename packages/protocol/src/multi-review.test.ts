@@ -191,6 +191,7 @@ describe("multi review protocol", () => {
       phase: "interactive",
       consolidatedReport: report,
       addressPromptPending: true,
+      addressPromptAttempts: 1,
       createdAt: new Date(0).toISOString(),
       updatedAt: new Date(0).toISOString(),
       backendRevision: 2,
@@ -198,6 +199,14 @@ describe("multi review protocol", () => {
     expect(isMultiReviewWorkflow(workflow)).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, phase: "ready" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, addressPromptPending: "yes" })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...workflow, addressPromptAttempts: -1 })).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...workflow,
+        addressPromptPending: undefined,
+        addressPromptAttempts: 1,
+      }),
+    ).toBe(false);
   });
 
   test("rejects unsafe branches, empty instructions, and duplicate reviewer identities", () => {

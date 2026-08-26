@@ -132,6 +132,8 @@ export interface MultiReviewWorkflow {
   };
   /** The interactive address prompt still needs durable backend dispatch. */
   addressPromptPending?: boolean;
+  /** Persisted failed delivery attempts so backend restarts cannot reset the retry budget. */
+  addressPromptAttempts?: number;
   activeRequest?: {
     kind: "consolidate" | "fix";
     requestId: string;
@@ -391,6 +393,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "consolidatedReport",
       "fixResult",
       "addressPromptPending",
+      "addressPromptAttempts",
       "activeRequest",
       "cancellingSince",
       "error",
@@ -424,6 +427,9 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     !optionalDate(value.cancellingSince) ||
     (value.fixResult !== undefined && !isFixResult(value.fixResult)) ||
     (value.addressPromptPending !== undefined && typeof value.addressPromptPending !== "boolean") ||
+    (value.addressPromptAttempts !== undefined &&
+      (!Number.isSafeInteger(value.addressPromptAttempts) ||
+        (value.addressPromptAttempts as number) < 0)) ||
     !optionalString(value.error, 4_096) ||
     (value.consolidatedReport !== undefined && !isStructuredReviewReport(value.consolidatedReport))
   ) {
@@ -498,6 +504,8 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     if (!isActiveRequest(activeRequest) || activeRequest.kind !== "fix") return false;
   }
   if (value.addressPromptPending === true && value.phase !== "interactive") return false;
+  if (value.addressPromptAttempts !== undefined && value.addressPromptPending !== true)
+    return false;
   if ((value.phase === "cancelling") !== (typeof value.cancellingSince === "string")) return false;
   return true;
 }

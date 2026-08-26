@@ -13,6 +13,7 @@ import {
   type CreateTabOptions,
 } from "@/contexts";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
+import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   MultiReviewTab,
@@ -151,7 +152,10 @@ function TabRegistrar({
   return null;
 }
 
-beforeEach(() => useMultiReviewStore.setState({ workflows: new Map() }));
+beforeEach(() => {
+  useMultiReviewStore.setState({ workflows: new Map() });
+  useMessagePartExpansionStore.getState().reset();
+});
 afterEach(cleanup);
 
 describe("MultiReviewTab backend snapshot viewer", () => {
@@ -282,6 +286,14 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
 
     const consolidated = screen.getByRole("article", { name: "Consolidated Multi Review" });
+    expect(screen.getByRole("button", { name: "Review Scope" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Issues · 1" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Test Coverage Gaps · 1" })).toBeTruthy();
+    expect(consolidated.textContent).not.toContain("Shared finding");
+    expect(consolidated.textContent).not.toContain("The failure branch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Issues · 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Test Coverage Gaps · 1" }));
     expect(consolidated.textContent).toContain("Shared finding");
     expect(consolidated.textContent).toContain("The failure branch");
     fireEvent.click(

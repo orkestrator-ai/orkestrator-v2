@@ -398,6 +398,8 @@ function MultiReviewOverviewTab({
             <StructuredReviewReportView
               report={workflow.consolidatedReport}
               heading="Consolidated Multi Review"
+              collapsibleSections
+              sectionExpansionKey={`multi-review/${workflow.id}/consolidated-report-section`}
             />
           )}
 

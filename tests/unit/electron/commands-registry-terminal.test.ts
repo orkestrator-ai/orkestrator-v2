@@ -1530,49 +1530,53 @@ exit 1
     );
   });
 
-  test("rejects malformed container status framing and invalid encoded sections", async () => {
-    const environment = createEnvironment({
-      id: "env-container",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "running",
-    });
-    const commands = createCommandRegistry();
-    const malformedResponses = [
-      "\u001eORKESTRATOR_NAME_STATUS\u001f",
-      [
+  test(
+    "rejects malformed container status framing and invalid encoded sections",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-container",
+        environmentType: "containerized",
+        containerId: "container-1",
+        status: "running",
+      });
+      const commands = createCommandRegistry();
+      const malformedResponses = [
         "\u001eORKESTRATOR_NAME_STATUS\u001f",
-        "%%%",
-        "\u001eORKESTRATOR_NUMSTAT\u001f",
-        "",
-        "\u001eORKESTRATOR_UNTRACKED\u001f",
-        "",
-        "\u001eORKESTRATOR_END\u001f",
-      ].join(""),
-      `unexpected${framedContainerGitStatus()}`,
-      `${framedContainerGitStatus()}unexpected`,
-    ];
+        [
+          "\u001eORKESTRATOR_NAME_STATUS\u001f",
+          "%%%",
+          "\u001eORKESTRATOR_NUMSTAT\u001f",
+          "",
+          "\u001eORKESTRATOR_UNTRACKED\u001f",
+          "",
+          "\u001eORKESTRATOR_END\u001f",
+        ].join(""),
+        `unexpected${framedContainerGitStatus()}`,
+        `${framedContainerGitStatus()}unexpected`,
+      ];
 
-    for (const response of malformedResponses) {
-      await withFakeDocker(
-        `#!/bin/sh
+      for (const response of malformedResponses) {
+        await withFakeDocker(
+          `#!/bin/sh
 if [ "$1" = "exec" ]; then
   printf '%s' '${response}'
   exit 0
 fi
 exit 1
 `,
-        async () => {
-          await expect(
-            commands.get("get_git_status")?.(
-              { containerId: "container-1", targetBranch: "main" },
-              createContext(environment).context,
-            ),
-          ).rejects.toThrow("Malformed");
-        },
-      );
-    }
-  });
+          async () => {
+            await expect(
+              commands.get("get_git_status")?.(
+                { containerId: "container-1", targetBranch: "main" },
+                createContext(environment).context,
+              ),
+            ).rejects.toThrow("Malformed");
+          },
+        );
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("does not confuse marker-like text in a container path with response framing", async () => {
     const environment = createEnvironment({

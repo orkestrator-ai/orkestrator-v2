@@ -716,7 +716,6 @@ exit 0
             path.join(xdgDataHome, "opencode"),
             path.join(xdgStateHome, "opencode"),
             hostHome,
-            path.join(hostHome, ".cursor"),
             path.join(hostHome, ".grok"),
             path.join(hostHome, ".config", "grok"),
             // Decoys: the developer's real agent homes, which `withFakeDocker`
@@ -751,7 +750,7 @@ exit 0
           expect(log).toContain(
             `-v ${path.join(xdgStateHome, "opencode", "model.json")}:/opencode-state/model.json:ro`,
           );
-          expect(log).toContain(`-v ${path.join(hostHome, ".cursor")}:/cursor-config:ro`);
+          expect(log).not.toContain(":/cursor-config:ro");
           expect(log).toContain(`-v ${path.join(hostHome, ".grok")}:/grok-home:ro`);
           expect(log).toContain(`-v ${path.join(hostHome, ".config", "grok")}:/grok-config:ro`);
           expect(log).toContain("-e CURSOR_API_KEY");

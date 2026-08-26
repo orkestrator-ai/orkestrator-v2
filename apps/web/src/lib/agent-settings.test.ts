@@ -189,9 +189,9 @@ describe("resolvedActionDefault", () => {
  * builds it with `agentSettingsTiers`, while `reconcileInitialLaunchOnce`
  * builds the same triple by hand from its own records.
  *
- * Cursor and Grok are the pair to pin. They gained a mode column of their own
- * in the agent-settings migration, having previously been routed through the
- * OpenCode branch of a mode ternary.
+ * Grok gained a mode column of its own in the agent-settings migration, having
+ * previously been routed through the OpenCode branch of a mode ternary. Cursor
+ * keeps the column only for persisted compatibility and always resolves native.
  */
 describe("agentSettingsTiers matches the backend's own assembly", () => {
   /** Exactly what `native-agent-service-reconciliation.ts` constructs. */
@@ -238,10 +238,11 @@ describe("agentSettingsTiers matches the backend's own assembly", () => {
         );
         // And the answer is the one the tiers actually describe, not merely a
         // matching pair of wrong answers.
+        const expectedMode = platform === "cursor" ? "native" : (environmentMode ?? "native");
         expect(resolveStartupLaunchFromSettings(renderer)).toMatchObject({
           agent: platform,
-          mode: environmentMode ?? "native",
-          dispatchedByBackend: (environmentMode ?? "native") === "native",
+          mode: expectedMode,
+          dispatchedByBackend: expectedMode === "native",
         });
       });
     }

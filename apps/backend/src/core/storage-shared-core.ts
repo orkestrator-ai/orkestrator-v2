@@ -1751,7 +1751,6 @@ export function defaultConfig(): AppConfig {
           // value until the user changes it in settings.
           codex: { mode: "native", model: "gpt-5.4", reasoningEffort: "high" },
           opencode: { mode: "terminal", model: DEFAULT_OPENCODE_MODEL_ID },
-          cursor: { mode: "terminal" },
           grok: { mode: "terminal" },
         },
       },
@@ -1764,7 +1763,6 @@ export function defaultConfig(): AppConfig {
       },
       terminalScrollback: 1000,
       experimentalCodexRawEventLogging: true,
-      experimentalCursorSdkBridge: false,
       debugLogging: false,
       debugLogRetentionDays: DEFAULT_DEBUG_LOG_RETENTION_DAYS,
       webClientEnabled: true,

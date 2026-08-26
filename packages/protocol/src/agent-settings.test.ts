@@ -59,6 +59,12 @@ describe("resolveAgentPlatformSettings", () => {
     ).toBe("terminal");
   });
 
+  test("Cursor is always native even when legacy settings request terminal mode", () => {
+    const global = platformTier("cursor", { mode: "terminal" });
+    expect(resolveAgentPlatformSettings({ global }, "cursor").mode).toBe("native");
+    expect(normalizeAgentSettings(global)).toEqual({});
+  });
+
   test("clearing a tier inherits the tier above rather than the shipped default", () => {
     // The settings UI expresses "inherit" by writing nothing, so an absent
     // environment block must fall through to the repository's `native` and not

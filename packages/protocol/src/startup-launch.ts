@@ -77,11 +77,9 @@ export const DEFAULT_CLAUDE_MODE: StartupLaunchMode = SHIPPED_PLATFORM_MODES.cla
 /**
  * Project a legacy environment/global tier onto the shared settings shape.
  *
- * Cursor and Grok take the OpenCode mode because that is precisely what the
- * mode ternary this function replaced did with them: they fell into its `else`
- * branch. Writing it out here makes the coupling visible without changing a
- * single launch decision, and the settings migration in
- * `storage-shared-core.ts` seeds their stored blocks the same way.
+ * Grok takes the OpenCode mode because that is precisely what the mode ternary
+ * this function replaced did with it. Cursor is SDK-only, so the shared
+ * resolver forces it to native regardless of legacy mode fields.
  */
 function environmentTier(
   tier: StartupLaunchEnvironmentSettings | StartupLaunchGlobalSettings | null | undefined,
@@ -98,7 +96,6 @@ function environmentTier(
       ...(tier.opencodeMode
         ? {
             opencode: { mode: tier.opencodeMode },
-            cursor: { mode: tier.opencodeMode },
             grok: { mode: tier.opencodeMode },
           }
         : {}),

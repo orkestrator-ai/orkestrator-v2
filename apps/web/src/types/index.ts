@@ -131,7 +131,7 @@ export interface Environment {
   localClaudePort?: number;
   /** Host port for codex-bridge server (local mode) */
   localCodexPort?: number;
-  /** Host port for Cursor's ACP bridge (local mode) */
+  /** Host port for Cursor's SDK bridge (local mode) */
   localCursorPort?: number;
   /** Host port for Grok Build's ACP bridge (local mode) */
   localGrokPort?: number;
@@ -447,7 +447,7 @@ export interface TerminalAppearance {
   backgroundColor: string;
 }
 
-/** Which credential the experimental Cursor SDK bridge would actually use. */
+/** Which credential the Cursor SDK bridge is using. */
 export interface CursorSdkAuthStatus {
   authenticated: boolean;
   source: "api-key-env" | "api-key-config" | "stored-login" | "none";
@@ -504,11 +504,6 @@ export interface GlobalConfig {
   terminalScrollback: number;
   /** Capture raw Codex bridge events for subagent transcript debugging */
   experimentalCodexRawEventLogging?: boolean;
-  /**
-   * Run Cursor sessions on the experimental SDK bridge instead of the ACP one.
-   * Off by default; the two run side by side.
-   */
-  experimentalCursorSdkBridge?: boolean;
   /** Enable debug logging to disk (requires app restart) */
   debugLogging?: boolean;
   /** Number of days production application logs remain on disk */

@@ -31,7 +31,6 @@ import {
   environmentLifecycleErrorMessage,
   getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
-  getHostCursorCredentials,
   invalidateDockerContainerStateCache,
   localClaudeBridgeTokens,
   localCodexBridgeTokens,
@@ -65,6 +64,7 @@ import {
   isMissingTargetRefResponse,
   configureOpenCodeAgentTools,
   createExtensionCommandRunner,
+  hasCursorSdkBridge,
   agentToolConnectionFingerprint,
   setOpenCodeAgentToolsMemoWindows,
   setOpenCodeAgentToolsRetryDelays,
@@ -73,7 +73,6 @@ import {
   setSpawnLocalServerCommandImplementation,
   setTerminateProcessTreeImplementation,
   setTerminalOutputRetentionMs,
-  syncAgentTestCursorCredentials,
 } from "./commands-helpers.js";
 
 export const __testing = {
@@ -107,6 +106,7 @@ export const __testing = {
   shouldAddDockerHostGatewayAlias,
   agentToolConnectionFingerprint,
   createExtensionCommandRunner,
+  hasCursorSdkBridge,
   parseOpenCodeEnvironmentSkills,
   runEnvironmentAgentSkills,
   environmentLifecycleErrorMessage,
@@ -132,9 +132,7 @@ export const __testing = {
   buildSyncContainerClaudeCredentialCommand,
   getClaudeOAuthAccessToken,
   getHostClaudeCredentials,
-  getHostCursorCredentials,
   resolveContainerClaudeCredentials,
-  syncAgentTestCursorCredentials,
   buildOpenCodeGitHubEnvironmentPluginSource,
   OPENCODE_GITHUB_ENV_PLUGIN_FINGERPRINT,
   CLAUDE_GITHUB_ENV_FINGERPRINT,

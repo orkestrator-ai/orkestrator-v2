@@ -73,7 +73,6 @@ export function globalFormSignature(global: GlobalConfig): string {
     global.terminalAppearance?.backgroundColor ?? "",
     global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK,
     global.experimentalCodexRawEventLogging ?? true,
-    global.experimentalCursorSdkBridge ?? false,
     global.debugLogging ?? false,
     normalizeDebugLogRetentionDays(global.debugLogRetentionDays),
     global.webClientEnabled ?? true,
@@ -144,9 +143,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
   );
   const [experimentalCodexRawEventLogging, setExperimentalCodexRawEventLogging] = useState(
     global.experimentalCodexRawEventLogging ?? true,
-  );
-  const [experimentalCursorSdkBridge, setExperimentalCursorSdkBridge] = useState(
-    global.experimentalCursorSdkBridge ?? false,
   );
   const [debugLogging, setDebugLogging] = useState(global.debugLogging ?? false);
   const [debugLogRetentionDays, setDebugLogRetentionDays] = useState(
@@ -238,7 +234,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
-    setExperimentalCursorSdkBridge(global.experimentalCursorSdkBridge ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
@@ -383,7 +378,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
       terminalBackgroundColor !== terminalAppearance.backgroundColor ||
       terminalScrollback !== (global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK) ||
       experimentalCodexRawEventLogging !== (global.experimentalCodexRawEventLogging ?? true) ||
-      experimentalCursorSdkBridge !== (global.experimentalCursorSdkBridge ?? false) ||
       debugLogging !== (global.debugLogging ?? false) ||
       debugLogRetentionDays !== normalizeDebugLogRetentionDays(global.debugLogRetentionDays) ||
       webClientEnabled !== (global.webClientEnabled ?? true) ||
@@ -418,7 +412,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     terminalBackgroundColor,
     terminalScrollback,
     experimentalCodexRawEventLogging,
-    experimentalCursorSdkBridge,
     debugLogging,
     debugLogRetentionDays,
     webClientEnabled,
@@ -520,7 +513,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         terminalAppearance: TerminalAppearance;
         terminalScrollback: number;
         experimentalCodexRawEventLogging: boolean;
-        experimentalCursorSdkBridge: boolean;
         debugLogging: boolean;
         debugLogRetentionDays: number;
         webClientEnabled: boolean;
@@ -544,7 +536,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
         },
         terminalScrollback,
         experimentalCodexRawEventLogging,
-        experimentalCursorSdkBridge,
         debugLogging,
         debugLogRetentionDays,
         webClientEnabled,
@@ -735,7 +726,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalBackgroundColor(appearance.backgroundColor);
     setTerminalScrollback(global.terminalScrollback ?? DEFAULT_TERMINAL_SCROLLBACK);
     setExperimentalCodexRawEventLogging(global.experimentalCodexRawEventLogging ?? true);
-    setExperimentalCursorSdkBridge(global.experimentalCursorSdkBridge ?? false);
     setDebugLogging(global.debugLogging ?? false);
     setDebugLogRetentionDays(normalizeDebugLogRetentionDays(global.debugLogRetentionDays));
     setWebClientEnabled(global.webClientEnabled ?? true);
@@ -800,8 +790,6 @@ export function GlobalSettings({ activeSection, onSaveSuccess }: GlobalSettingsP
     setTerminalScrollback,
     experimentalCodexRawEventLogging,
     setExperimentalCodexRawEventLogging,
-    experimentalCursorSdkBridge,
-    setExperimentalCursorSdkBridge,
     debugLogging,
     setDebugLogging,
     debugLogRetentionDays,

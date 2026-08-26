@@ -177,10 +177,10 @@ function findCrossArtifactIntegrityCollisions(artifacts: ArtifactIntegrityValues
  * each new agent got whatever subset its author remembered. That asymmetry was
  * not cosmetic: Pi's container digests were bound to the manifest while
  * Cursor's and Grok's were not, and `@cursor/sdk` had no pin check at all — so
- * a hand-edited `GROK_SHA` or a `^`-ranged Cursor SDK would have shipped
+ * a hand-edited `GROK_SHA` would have shipped
  * unnoticed. The tests that follow iterate this table, and one of them asserts
- * the table covers every name in `PINNED_TOOLCHAIN_VERSIONS`, so a seventh
- * agent cannot be added with less coverage than the six here.
+ * the table covers every name in `PINNED_TOOLCHAIN_VERSIONS`, so another
+ * managed CLI cannot be added with less coverage than the five here.
  */
 interface AgentPins {
   /** `ARG <name>=` in docker/Dockerfile. */
@@ -200,9 +200,8 @@ interface AgentPins {
    *
    * `tracksCli` is the load-bearing field. Pi and OpenCode publish the SDK and
    * the binary as the same program two ways, so a split gives the user two
-   * different agents behind one platform name. Claude's Agent SDK and Cursor's
-   * SDK are on their own release trains and deliberately do *not* track the
-   * CLI — asserting they did would be wrong, not stricter.
+   * different agents behind one platform name. Claude's Agent SDK has its own
+   * release train and deliberately does *not* track the CLI.
    */
   sdkPins?: { file: string; dep: string; tracksCli: boolean }[];
 }
@@ -243,16 +242,6 @@ const AGENT_PINS: Record<string, AgentPins> = {
       // the web workspace is how native chat can look healthy while pipelines
       // still speak the previous contract.
       { file: "apps/backend/package.json", dep: "@opencode-ai/sdk", tracksCli: true },
-    ],
-  },
-  cursor: {
-    dockerArg: "CURSOR_AGENT_VERSION",
-    containerInstall: "pinned-archive",
-    sdkPins: [
-      // The experimental SDK bridge. Independent of the cursor-agent CLI: a
-      // session is served by one engine or the other, and the two ship on
-      // separate release trains.
-      { file: "bridges/cursor-bridge/package.json", dep: "@cursor/sdk", tracksCli: false },
     ],
   },
   grok: {
@@ -344,6 +333,15 @@ describe("every shipped agent, uniformly", () => {
 });
 
 describe("version drift between SDK pins and managed/container CLIs", () => {
+  test("Cursor SDK is exact-pinned without a managed Cursor CLI", () => {
+    expect(expectExactVersion("bridges/cursor-bridge/package.json", "@cursor/sdk")).toMatch(
+      /^\d+\.\d+\.\d+$/,
+    );
+    expect(Object.keys(PINNED_TOOLCHAIN_VERSIONS)).not.toContain("cursor");
+    expect(PINNED_TOOLCHAIN_ARTIFACTS.some((artifact) => artifact.name === "cursor")).toBe(false);
+    expect(dockerfileInstructions()).not.toContain("CURSOR_AGENT_VERSION");
+  });
+
   test("Bun: host-bundled runtime matches the container base image", () => {
     // The bridges run on Bun both on the host (bundled binary) and inside the
     // container (oven/bun base). Pinning both to the same version keeps the two

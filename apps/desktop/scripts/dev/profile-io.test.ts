@@ -170,7 +170,7 @@ describe("development profile lifecycle primitives", () => {
 
   test("toolchain-preserving reset uses the same symlink-safe deletion path", async () => {
     const { root, profile } = await modelCacheFixture();
-    const toolchain = path.join(profile.dataDir, "toolchains", "cursor-agent");
+    const toolchain = path.join(profile.dataDir, "toolchains", "grok");
     await mkdir(path.dirname(toolchain), { recursive: true });
     await writeFile(toolchain, "managed-toolchain");
     const hostKeychains = path.join(root, "host-keychains");
@@ -266,7 +266,7 @@ describe("development profile lifecycle primitives", () => {
    * A stand-in for one pinned artifact. Only the fields the seeder reads to
    * derive a path matter; nothing here is verified against real bytes.
    */
-  function toolchainArtifact(name: "cursor" | "grok", version: string): ToolchainArtifact {
+  function toolchainArtifact(name: "pi" | "grok", version: string): ToolchainArtifact {
     return {
       name,
       version,
@@ -284,12 +284,9 @@ describe("development profile lifecycle primitives", () => {
     };
   }
 
-  async function toolchainFixture(platforms: Array<"cursor" | "grok">) {
+  async function toolchainFixture(platforms: Array<"pi" | "grok">) {
     const fixture = await modelCacheFixture();
-    const artifacts = [
-      toolchainArtifact("cursor", "2026.08.11"),
-      toolchainArtifact("grok", "1.0.3"),
-    ];
+    const artifacts = [toolchainArtifact("pi", "0.84.3"), toolchainArtifact("grok", "1.0.3")];
     const hostDirectory = (name: string, version: string) =>
       path.join(fixture.roots.productionDataDir, "toolchains", name, version, "darwin-arm64");
     const profileDirectory = (name: string, version: string) =>
@@ -310,17 +307,17 @@ describe("development profile lifecycle primitives", () => {
       artifacts,
       hostDirectory,
       profileDirectory,
-    } = await toolchainFixture(["cursor", "grok"]);
+    } = await toolchainFixture(["pi", "grok"]);
     for (const [name, version] of [
-      ["cursor", "2026.08.11"],
+      ["pi", "0.84.3"],
       ["grok", "1.0.3"],
     ] as const) {
       await mkdir(hostDirectory(name, version), { recursive: true });
       await writeFile(path.join(hostDirectory(name, version), name), `${name}-bytes`);
     }
-    // Finder droppings would change Cursor's aggregate bundle digest, which is
+    // Finder droppings would change Pi's aggregate bundle digest, which is
     // exactly the check that would then force the download this avoids.
-    await writeFile(path.join(hostDirectory("cursor", "2026.08.11"), ".DS_Store"), "junk");
+    await writeFile(path.join(hostDirectory("pi", "0.84.3"), ".DS_Store"), "junk");
 
     await expect(
       seedInstalledAgentToolchains(profile, {
@@ -329,15 +326,15 @@ describe("development profile lifecycle primitives", () => {
         platform: "darwin",
         architecture: "arm64",
       }),
-    ).resolves.toEqual({ seeded: ["cursor@2026.08.11", "grok@1.0.3"], failed: [] });
-    expect(
-      await readFile(path.join(profileDirectory("cursor", "2026.08.11"), "cursor"), "utf8"),
-    ).toBe("cursor-bytes");
+    ).resolves.toEqual({ seeded: ["pi@0.84.3", "grok@1.0.3"], failed: [] });
+    expect(await readFile(path.join(profileDirectory("pi", "0.84.3"), "pi"), "utf8")).toBe(
+      "pi-bytes",
+    );
     expect(await readFile(path.join(profileDirectory("grok", "1.0.3"), "grok"), "utf8")).toBe(
       "grok-bytes",
     );
     await expect(
-      access(path.join(profileDirectory("cursor", "2026.08.11"), ".DS_Store")),
+      access(path.join(profileDirectory("pi", "0.84.3"), ".DS_Store")),
     ).rejects.toThrow();
   });
 
@@ -350,7 +347,7 @@ describe("development profile lifecycle primitives", () => {
       profileDirectory,
     } = await toolchainFixture(["grok"]);
     for (const [name, version] of [
-      ["cursor", "2026.08.11"],
+      ["pi", "0.84.3"],
       ["grok", "1.0.3"],
     ] as const) {
       await mkdir(hostDirectory(name, version), { recursive: true });
@@ -365,7 +362,7 @@ describe("development profile lifecycle primitives", () => {
         architecture: "arm64",
       }),
     ).resolves.toEqual({ seeded: ["grok@1.0.3"], failed: [] });
-    await expect(access(profileDirectory("cursor", "2026.08.11"))).rejects.toThrow();
+    await expect(access(profileDirectory("pi", "0.84.3"))).rejects.toThrow();
     // One-way: the profile never writes back into the user's real installation.
     expect(await readFile(path.join(hostDirectory("grok", "1.0.3"), "grok"), "utf8")).toBe(
       "grok-bytes",
@@ -406,7 +403,7 @@ describe("development profile lifecycle primitives", () => {
       profile,
       artifacts,
       profileDirectory,
-    } = await toolchainFixture(["cursor", "grok"]);
+    } = await toolchainFixture(["pi", "grok"]);
 
     // The installer downloads it instead. Seeding is an optimization, so a bare
     // host must not fail the profile start.
@@ -497,20 +494,20 @@ describe("development profile lifecycle primitives", () => {
   });
 
   test("seeds an agent-test profile and reports what Electron still has to download", async () => {
-    const { profile } = await toolchainFixture(["cursor", "grok"]);
+    const { profile } = await toolchainFixture(["pi", "grok"]);
     const logs: string[] = [];
     const warnings: string[] = [];
 
     await seedAgentTestProfileState(profile, "agent-test", {
       seedModelCatalogCaches: async () => [],
       seedProviderCredentials: async () => [],
-      seedAgentToolchains: async () => ({ seeded: ["cursor@2026.08.11"], failed: ["grok@1.0.3"] }),
+      seedAgentToolchains: async () => ({ seeded: ["pi@0.84.3"], failed: ["grok@1.0.3"] }),
       log: (message) => logs.push(message),
       warn: (message) => warnings.push(message),
     });
 
     expect(logs).toEqual([
-      "Seeded toolchains from the host install: cursor@2026.08.11",
+      "Seeded toolchains from the host install: pi@0.84.3",
       // Attributes a slow or hung startup before Electron is even launched.
       "Electron will download managed toolchains for: grok",
     ]);
@@ -518,7 +515,7 @@ describe("development profile lifecycle primitives", () => {
   });
 
   test("seeds nothing for an ordinary development profile", async () => {
-    const { profile } = await toolchainFixture(["cursor", "grok"]);
+    const { profile } = await toolchainFixture(["pi", "grok"]);
     const calls: string[] = [];
 
     // `dev` uses the durable per-installation state; copying host toolchains

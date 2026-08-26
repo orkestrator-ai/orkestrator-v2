@@ -8,7 +8,7 @@ used by Orkestrator. These integrations do not share one upgrade mechanism:
 | Claude | `@anthropic-ai/claude-agent-sdk` drives native sessions; `@anthropic-ai/sdk` supplies message content types | The Agent SDK is pointed at Orkestrator's separately managed `claude` executable | Agent SDK `0.3.245`, Anthropic SDK `0.120.0`, CLI `2.1.245` |
 | Codex | No runtime `@openai/codex-sdk` dependency. The bridge speaks JSON-RPC to `codex app-server` using generated types | The pinned `codex` executable is the app-server and is also used by isolated `codex exec` helpers | CLI and generated protocol `0.149.1` |
 | OpenCode | `@opencode-ai/sdk/v2/client` is used by the renderer and backend build pipeline | The pinned `opencode` executable runs `opencode serve` | SDK and CLI `1.18.23` |
-| Cursor | Two engines. The default ACP bridge has no SDK; the experimental `cursor-bridge` drives `@cursor/sdk` in process | The pinned `cursor-agent` executable runs `cursor-agent … acp`. The SDK bridge does not use it | CLI `2026.08.11-e8db854`, SDK `1.0.28` |
+| Cursor | `cursor-bridge` drives `@cursor/sdk` in process | No CLI; Cursor is SDK-only | SDK `1.0.28` |
 | Grok | No SDK. The ACP bridge spawns the CLI and speaks ACP over its stdio | The pinned `grok` executable runs `grok … agent stdio` | CLI `1.0.10` |
 | Pi | `@earendil-works/pi-coding-agent` drives sessions in process; `@earendil-works/pi-ai` and `@earendil-works/pi-agent-core` supply types | The pinned `pi` bundle is the same program published a second way, and is what a Pi terminal tab runs | SDK and CLI `0.84.3` |
 
@@ -23,45 +23,39 @@ every agent. Two things read it directly and therefore cannot drift from it:
 Two things cannot read it, and are a second copy held in step by tests:
 
 - **`docker/Dockerfile`** — an image build has no access to the manifest, so
-  each agent's version is an `ARG` literal and Cursor's, Grok's and Pi's archive
+  each CLI's version is an `ARG` literal and Grok's and Pi's archive
   digests are `sha256sum` literals.
 - **SDK pins in `package.json`** — resolved by bun, not by the manifest.
 
 `every shipped agent, uniformly` in `tests/unit/version-drift.test.ts` is what
 holds those copies together. It is table-driven over `AGENT_PINS`, and one of
 its cases asserts that table names every agent in `PINNED_TOOLCHAIN_VERSIONS`,
-so a seventh agent cannot be added with less coverage than the six here. Per
+so another managed CLI cannot be added with less coverage. Per
 agent it checks the Dockerfile `ARG`, all four artifact records, every declared
 SDK pin is exact rather than a range, and — for the agents the image fetches as
 pinned archives — that the Dockerfile's digests are the manifest's digests.
 
-That last check did not exist for Cursor or Grok until recently: only Pi's
-digests were bound, so a hand-edited `CURSOR_SHA` or `GROK_SHA` would have
-shipped a container running a different build from the local worktree, silently.
-`@cursor/sdk` likewise had no pin check at all.
+That last check did not exist for Grok until recently: only Pi's digests were
+bound, so a hand-edited `GROK_SHA` would have shipped a container running a
+different build from the local worktree, silently. The SDK-only Cursor pin has
+its own exact-pin assertion.
 
 The `tracksCli` flag in that table is the one piece of real judgement. Pi and
 OpenCode publish the SDK and the binary as the same program two ways, so a split
 gives the user two different agents behind one platform name and the test
-demands they match. Claude's Agent SDK and Cursor's SDK are on their own release
-trains and deliberately do **not** track their CLI — asserting they did would be
-wrong rather than stricter.
+demands they match. Claude's Agent SDK has its own release train and deliberately
+does **not** track its CLI.
 
 Still not enforced anywhere, by nature:
 
-- **CLI argument vectors** for the ACP agents (`--force … acp`,
-  `--always-approve agent stdio`). Nothing in CI can check a flag an upstream
-  binary might rename. See [Cursor and Grok (ACP)](#cursor-and-grok-acp).
-- **Undocumented vendor extension methods**, such as Cursor's `cursor/task`.
+- **CLI argument vectors** for Grok ACP (`--always-approve agent stdio`).
+  Nothing in CI can check a flag an upstream binary might rename. See
+  [Grok (ACP)](#grok-acp).
 - **Whether a new SDK event or tool variant is rendered.** Every bridge degrades
   an unknown one to a plain card or drops it, which is safe but silent.
 
-Cursor is the one provider whose two engines are pinned independently: the
-`@cursor/sdk` dependency and the `cursor-agent` CLI ship on separate release
-trains, and a session is served by exactly one of them. Bumping either alone is
-valid, but leaves the other engine on its old version — see
-[Cursor (SDK bridge)](#cursor-sdk-bridge) and
-[Cursor and Grok (ACP)](#cursor-and-grok-acp).
+Cursor's only agent pin is `@cursor/sdk`; see
+[Cursor (SDK bridge)](#cursor-sdk-bridge).
 
 ## How binaries reach a running environment
 
@@ -71,8 +65,8 @@ path has been updated.
 ### Local desktop environments
 
 `apps/desktop/electron/toolchain-manifest.ts` is the authoritative artifact
-manifest for all six agents — Claude, Codex, OpenCode, Cursor, Grok, and Pi. It
-contains one entry per supported platform and architecture:
+manifest for the five CLI-backed agents — Claude, Codex, OpenCode, Grok, and
+Pi. It contains one entry per supported platform and architecture:
 
 - macOS arm64 and x64
 - Linux arm64 and x64
@@ -131,14 +125,14 @@ only Bun, and `build.extraResources` includes only `binaries/bun` from the
 
 ### Container environments
 
-`docker/Dockerfile` has one exact build argument per agent —
+`docker/Dockerfile` has one exact build argument per CLI-backed agent —
 `CLAUDE_CLI_VERSION`, `CODEX_CLI_VERSION`, `OPENCODE_CLI_VERSION`,
-`CURSOR_AGENT_VERSION`, `GROK_BUILD_VERSION`, and `PI_CLI_VERSION`. It installs:
+`GROK_BUILD_VERSION`, and `PI_CLI_VERSION`. It installs:
 
 - `@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}`
 - `@openai/codex@${CODEX_CLI_VERSION}`
 - OpenCode's installer with `--version "${OPENCODE_CLI_VERSION}"`
-- Cursor Agent, Grok Build, and Pi as pinned archives, each verified against a
+- Grok Build and Pi as pinned archives, each verified against a
   literal SHA-256 in the same `RUN` block. Those digests are a **second,
   independent** set from the manifest's — the image does not read the manifest —
   so a version bumped in only one place fails the build rather than shipping an
@@ -161,13 +155,13 @@ selects it in a packaged desktop build.
 
 `scripts/download-agent.ts` downloads the current host's artifact into
 `binaries/`, verifies it against the manifest's pinned digests, makes it
-executable, probes `--version`, and ad-hoc signs it on macOS. It covers **all
-six** agents and handles every artifact shape they ship: a plain tar entry, a
+executable, probes `--version`, and ad-hoc signs it on macOS. It covers all
+five CLI-backed agents and handles every artifact shape they ship: a plain tar entry, a
 zip entry, a bare `raw` binary, a bundle whose whole tree is kept intact, and
 Codex's companion helper.
 
 ```bash
-bun run download:claude    # or download:codex | :opencode | :cursor | :grok | :pi
+bun run download:claude    # or download:codex | :opencode | :grok | :pi
 bun run download:agent -- grok --dir /tmp/probe
 ```
 
@@ -175,7 +169,7 @@ There is **no version literal to update here.** The manifest is the only input,
 so a bump changes nothing in this file. This replaced three hand-written shell
 scripts that each re-derived the manifest's URL, version and platform mapping in
 bash — a duplication that needed its own drift tests, covered only three of the
-six agents, and installed whatever the URL returned without checking a digest.
+agents, and installed whatever the URL returned without checking a digest.
 
 ## Shared binary upgrade procedure
 
@@ -195,9 +189,8 @@ below.
      bun scripts/verify-toolchain-artifacts.ts --emit --tool=<name>
    ```
 
-   `--tool` accepts any of the six manifest names, including `cursor`, `grok`
-   and `pi` — those have no `scripts/download-*.sh`, but their artifact records
-   are refreshed by exactly this command.
+   `--tool` accepts any of the five manifest names, including `grok` and `pi`.
+   Their artifact records are refreshed by exactly this command.
 
    Paste the emitted archive and executable sizes and SHA-256 values into the
    matching platform/architecture entries in
@@ -216,7 +209,7 @@ below.
    against the records you just pasted:
 
    ```bash
-   bun run download:<claude|codex|opencode|cursor|grok|pi>
+   bun run download:<claude|codex|opencode|grok|pi>
    ```
 
 6. Build the container after the provider-specific checks:
@@ -627,26 +620,14 @@ and [Pi SDK documentation](https://pi.dev/docs/latest/sdk).
 
 ## Cursor (SDK bridge)
 
-`bridges/cursor-bridge` is the experimental second engine for Cursor sessions.
-It drives Cursor's own TypeScript SDK in process instead of spawning
-`cursor-agent`, and an installation selects it with the global
-`experimentalCursorSdkBridge` setting. Both engines serve the same routes on the
-same container port, so the toggle can be flipped without recreating a
-container.
+`bridges/cursor-bridge` is the only engine for Cursor sessions. It drives
+Cursor's TypeScript SDK in process and does not require a Cursor CLI.
 
 ### Where the SDK is used
 
-`bridges/cursor-bridge/package.json` exact-pins one dependency, `@cursor/sdk`.
-It is the **only** agent dependency in this repository with no drift guard:
-`tests/unit/version-drift.test.ts` covers every other pin because every other
-provider has a CLI, a Dockerfile `ARG`, or a manifest entry that has to agree
-with it. The SDK bridge has none of those — it needs no binary — so nothing
-fails when this pin alone goes stale. Check it deliberately.
-
-In particular, the `PINNED_TOOLCHAIN_VERSIONS.cursor` and `CURSOR_AGENT_VERSION`
-pins are **not** this version. They are the `cursor-agent` CLI the ACP bridge
-spawns, on a separate release train. Upgrading one engine does not upgrade the
-other, and a user who flips the toggle gets whatever the other pin says.
+`bridges/cursor-bridge/package.json` exact-pins `@cursor/sdk`.
+`tests/unit/version-drift.test.ts` verifies that the pin is exact and that no
+Cursor CLI artifact or Dockerfile version argument is reintroduced.
 
 The compatibility surface is five files:
 
@@ -732,12 +713,9 @@ trusting a green result.
    bun run docker:build
    ```
 
-6. Smoke-test the SDK engine specifically, with `experimentalCursorSdkBridge`
-   enabled: sign in through the bridge's `--login` child, run a turn with tool
+6. Smoke-test sign-in through the bridge's `--login` child, run a turn with tool
    calls and a diff, switch model and effort, cancel mid-turn, and check the
-   inactive-environment path. Then flip the toggle off and confirm an ACP Cursor
-   session still starts — the reuse fingerprint names the engine, so the toggle
-   must replace a running bridge rather than reuse the wrong one.
+   inactive-environment path.
 
 Sub-agent cards are the one behaviour to re-check by hand on every bump. The SDK
 reports children only through nested updates on the parent run, so a child is
@@ -747,145 +725,54 @@ rather than be widened.
 
 Upstream reference: [`@cursor/sdk` on npm](https://www.npmjs.com/package/@cursor/sdk).
 
-## Cursor and Grok (ACP)
+## Grok (ACP)
 
 ### Where the CLI contract lives
 
-This section covers the `cursor-agent` and `grok` CLIs the shared ACP bridge
-spawns. For Cursor that is the default engine and is pinned entirely separately
-from `@cursor/sdk` above; bumping this does not bump that.
-
-Both are pinned in `apps/desktop/electron/toolchain-manifest.ts` and
-`docker/Dockerfile` like the others, but neither has an SDK: the ACP bridge
-spawns the CLI directly and speaks ACP over its stdio. That makes their
+This section covers the `grok` CLI the ACP bridge spawns. It is pinned in
+`apps/desktop/electron/toolchain-manifest.ts` and `docker/Dockerfile` and has no
+SDK: the ACP bridge speaks ACP with the CLI over stdio. That makes its
 **command-line flags a versioned contract**, and it is the part of an upgrade
 nothing in CI can check. See
-`docs/technical-architecture/agent-engines.md` for how the shared ACP bridge
-drives both of them.
+`docs/technical-architecture/agent-engines.md` for the bridge architecture.
 
-`bridges/acp-bridge/src/index.ts` builds one of two argument vectors:
-
-| Provider | Arguments | Gate |
-| --- | --- | --- |
-| Cursor | `--force [--approve-mcps] acp` | `--approve-mcps` only when `ACP_APPROVE_PROJECT_MCPS=1` |
-| Grok | `--always-approve agent stdio` | always |
+The bridge launches Grok with `--always-approve agent stdio`.
 
 `bridges/acp-bridge/src/acp-server.test.ts` asserts these vectors against
 `bridges/acp-bridge/src/testing/fake-agent.ts`, which records its own argv and
 accepts anything. A
 renamed or removed upstream flag therefore leaves the suite green and breaks
-every ACP session at runtime. After bumping either pin, confirm the real CLI
+every ACP session at runtime. After bumping the pin, confirm the real CLI
 still accepts the flags:
 
 ```bash
-# Each flag must still be listed as a global option, not a subcommand option.
-cursor-agent --help | rg -- '--force|--approve-mcps'
+# The flag must still be listed as a global option, not a subcommand option.
 grok --help | rg -- '--always-approve'
 
 # Each must start and wait for JSON-RPC rather than exiting on an argv error.
 # No output plus a process that stays alive is the passing result.
-cursor-agent --force --approve-mcps acp </dev/null
 grok --always-approve agent stdio </dev/null
 ```
 
 Run these against the pinned version, not whatever is on `PATH` — compare
-`cursor-agent --version` and `grok --version` against
-`PINNED_TOOLCHAIN_VERSIONS`, `CURSOR_AGENT_VERSION`, and `GROK_BUILD_VERSION`
-first. `acp` is an
-undocumented `cursor-agent` subcommand and does not appear in `--help` output,
-so the start check above is the only evidence it still exists.
+`grok --version` against `PINNED_TOOLCHAIN_VERSIONS.grok` and
+`GROK_BUILD_VERSION` first. `--always-approve` is deliberate: an ACP tab is an
+interactive session and matches the Claude bridge's local bypass-permissions
+default.
 
-Note that `--force` and `--always-approve` are deliberate: an ACP tab is an
-interactive session and matches the Claude bridge's local `bypassPermissions`
-default. `--approve-mcps` is deliberately narrower, because `.cursor/mcp.json`
-is repository-controlled and would otherwise execute on the host without any
-model or user involvement. Preserve that asymmetry when adjusting flags.
+### How to upgrade Grok
 
-### Cursor's `cursor/task` extension method
-
-The sub-agent launch card depends on a Cursor extension method that no
-specification covers, so it is a second undocumented contract to re-verify on
-every Cursor bump. As of `2026.08.11-e8db854`, read out of the CLI bundle
-(`src/acp/agent-session.ts` and `src/acp/types.ts`):
-
-| Property | Observed behaviour |
-| --- | --- |
-| Transport | A **request**. Cursor's helper is named `sendNonBlockingExtensionNotification`, but it calls `extMethod`, which is `sendRequest`. `extNotification` is unused. |
-| Response | Discarded — the helper only `.catch()`es, and the SDK does not validate the result. Even `-32601` is just a debug log. |
-| Payload | `toolCallId`, `description`, `prompt`, `subagentType`, `model`, `agentId`, `durationMs`. **No status or outcome field.** `durationMs` is set only when the tool result case is `success`. |
-| Send site | `toolCallCompleted` only, immediately after the `status: "completed"` tool call update — so it is always terminal today. |
-
-The bridge answers it with `{}` for that reason: there is no response schema to
-fill in, and ACP's only structured client answer is the permission outcome
-(`selected` / `cancelled`), which does not describe a child that ended. It also
-accepts the notification form, and treats a `status`/`outcome` that names a
-non-terminal state as a progress report rather than an ending. Both are
-forward-compatibility for a Cursor that changes its mind, not observed
-behaviour — `bridges/acp-bridge/src/testing/fake-agent.ts` labels those fixtures
-as such. If a bump adds a real state field, replace that guess with the
-observed vocabulary rather than widening the regex on a hunch.
-
-Two consequences of that send site drive how the bridge treats sub-agents, and
-both need re-checking on a bump:
-
-- **A foreground `task` is anonymous while it runs.** Its tool call spans the
-  child's whole life, and the frame that carries `description`, `prompt` and
-  `agentId` is sent only as it ends. The launch's own `rawInput` is a bare
-  `{ _toolName: "task" }` (Cursor fills `extractToolCallInput` from args that
-  are still empty at `toolCallStarted`, and that projection omits `agentId`
-  entirely), and the ACP tool result for `taskToolCall` is serialized as
-  `{ durationMs, isBackground }` — the TUI reads `result.agentId`, the ACP path
-  drops it. So nothing on the wire connects a running card to the child's
-  transcript. `acp-cursor-child-discovery.ts` infers that binding from
-  `agent-transcripts/<agentId>/` creation order instead; if a bump starts
-  reporting `agentId` earlier, prefer it and let the inference wither.
-- **The frame arrives after its card has settled.** `applyCursorTask` therefore
-  rejects only calls that were never sub-agent launches (`agentState ===
-  undefined`), not calls that are no longer active. Keep that distinction: the
-  earlier "must still be live" test silently discarded every foreground child's
-  metadata.
-
-Re-derive the table above after a bump by grepping the installed bundle:
-
-```bash
-# Prints the extension-method constants and the single cursor/task send site.
-rg -o '.{200}cursor/task.{200}' ~/.local/share/cursor-agent/versions/<version>/*.js
-# Prints how the ACP layer serializes a completed taskToolCall result.
-rg -o '.{200}taskToolCall.{300}' ~/.local/share/cursor-agent/versions/<version>/*.js
-```
-
-### How to upgrade Cursor or Grok
-
-Neither has an SDK or a lockfile entry, so nothing resolves a version for you.
-Every pin below is a literal that has to be edited by hand, and the container
-digests are not derived from the manifest ones — they are a second, independent
-set.
-
-1. Set the exact version in `PINNED_TOOLCHAIN_VERSIONS.cursor` or
-   `PINNED_TOOLCHAIN_VERSIONS.grok` in
-   `apps/desktop/electron/toolchain-manifest.ts`. Both entries interpolate that
-   value into their download URLs, so the URLs themselves need no edit.
-2. Mirror the same value into `docker/Dockerfile`:
-
-   - `CURSOR_AGENT_VERSION` for Cursor Agent
-   - `GROK_BUILD_VERSION` for Grok Build
-
-3. Update the container digests in the same `RUN` block, which are **not**
-   covered by the manifest refresh in the next step. Each architecture branch
-   pins its own literal: `CURSOR_SHA` for `amd64` and `arm64`, and `GROK_SHA`
-   for the same two. They are verified by `sha256sum -c -` during the image
-   build, so a version bumped without them fails `bun run docker:build` rather
-   than shipping an unverified binary.
+1. Set the exact version in `PINNED_TOOLCHAIN_VERSIONS.grok` in
+   `apps/desktop/electron/toolchain-manifest.ts`.
+2. Mirror it into `GROK_BUILD_VERSION` in `docker/Dockerfile`.
+3. Update the `GROK_SHA` literal for each architecture in the same Dockerfile
+   block.
 4. Refresh and verify the desktop artifact records using the shared binary
-   procedure above. Cursor's entries carry `bundleIntegrity` (file count, total
-   size, and digest for the whole extracted `dist-package/` tree) as well as the
-   archive and executable digests, because its CLI ships an adjacent Node
-   runtime rather than a single file. Grok's entries are `format: "raw"`, so the
-   archive and executable digests are the same value.
-5. Confirm the argv contract by hand using the two checks above. This is the
+   procedure above. Grok's entries are `format: "raw"`, so archive and
+   executable digests are the same value.
+5. Confirm the argv contract by hand using the checks above. This is the
    step nothing else covers.
-6. Smoke-test one interactive tab per upgraded provider, including a permission
-   request and the inactive-environment path.
+6. Smoke-test an interactive tab, including the inactive-environment path.
 
 ## Repository-wide validation
 
@@ -906,9 +793,9 @@ and extracted executable digest rather than only the current host target:
 bun run verify:toolchains:live
 ```
 
-`verify:toolchains:live` covers only what the manifest pins, so it says nothing
-about `@cursor/sdk` — that pin is verified by building the Cursor SDK bridge and
-running its suite, as described in its section.
+`verify:toolchains:live` covers only what the manifest pins. Verify
+`@cursor/sdk` by building the Cursor SDK bridge and running its suite, as
+described in its section.
 
 Then run provider-specific typechecks and tests above, build the Docker image,
 and finish with the full suite:
@@ -934,8 +821,7 @@ both stale production pins and meaningless mechanical fixture churn.
 
 ## Rollback
 
-An agent upgrade should be one reviewable change per provider — and for Cursor,
-one per *engine*, since the SDK bridge and the ACP CLI move independently.
+An agent upgrade should be one reviewable change per provider.
 Revert the SDK manifests/lockfiles, CLI pins, artifact hashes, Docker pin,
 and—only for Codex—the generated protocol as one unit. After reverting, reinstall with Bun,
 rerun the provider's drift/contract tests, and rebuild the container. Cached

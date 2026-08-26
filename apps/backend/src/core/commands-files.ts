@@ -3,7 +3,6 @@ import {
   fs,
   os,
   path,
-  randomUUID,
   inferLanguage,
   runCommand,
   MAX_BINARY_FILE_BYTES,
@@ -1243,12 +1242,6 @@ export function buildSyncContainerClaudeCredentialCommand(
 export const SYNC_CONTAINER_CLAUDE_CREDENTIAL_COMMAND = buildSyncContainerClaudeCredentialCommand();
 
 const MAX_HOST_AGENT_CREDENTIAL_BYTES = 1024 * 1024;
-const HOST_CURSOR_KEYCHAIN_ACCOUNT = "cursor-user";
-const HOST_CURSOR_KEYCHAIN_SERVICES = {
-  accessToken: "cursor-access-token",
-  refreshToken: "cursor-refresh-token",
-  apiKey: "cursor-api-key",
-} as const;
 
 /**
  * Reads one named Keychain record, preferring an explicit login-Keychain path.
@@ -1386,83 +1379,6 @@ export function getClaudeOAuthAccessToken(
       : undefined;
   } catch {
     return undefined;
-  }
-}
-
-export type HostCursorCredentials = {
-  accessToken?: string;
-  refreshToken?: string;
-  apiKey?: string;
-};
-
-export async function getHostCursorCredentials(
-  platform: NodeJS.Platform = process.platform,
-  homeDir: string = os.homedir(),
-): Promise<HostCursorCredentials | undefined> {
-  if (platform !== "darwin") return undefined;
-  const credentials: HostCursorCredentials = {};
-  for (const [key, service] of Object.entries(HOST_CURSOR_KEYCHAIN_SERVICES) as Array<
-    [keyof HostCursorCredentials, string]
-  >) {
-    const value = await readMacKeychainPassword(service, homeDir, HOST_CURSOR_KEYCHAIN_ACCOUNT);
-    if (value) credentials[key] = value;
-  }
-  return Object.keys(credentials).length > 0 ? credentials : undefined;
-}
-
-/**
- * Store only Cursor's explicitly authorized records in its process-specific
- * HOME. Cursor CLI's file credential store owns this exact owner-only format.
- * A missing snapshot removes any prior host import so logout and opt-out revoke
- * access on the next bridge start.
- */
-export async function syncAgentTestCursorCredentials(
-  cursorHome: string,
-  credentials: HostCursorCredentials | undefined,
-): Promise<void> {
-  // The bridge is launched with `cursorHome` as its HOME, and a signed-out or
-  // opted-out profile still launches it. Create the home on every path, not just
-  // the one that writes a snapshot, so the process is never handed a HOME that
-  // does not exist.
-  await fs.mkdir(cursorHome, { recursive: true, mode: 0o700 });
-  const directory = path.join(cursorHome, ".cursor");
-  const target = path.join(directory, "auth.json");
-  const existingDirectory = await fs.lstat(directory).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return undefined;
-    throw error;
-  });
-  if (existingDirectory?.isSymbolicLink()) {
-    if (!credentials) {
-      await fs.rm(directory, { force: true });
-      return;
-    }
-    throw new Error("Cursor credential directory is not a real directory");
-  }
-  if (existingDirectory && !existingDirectory.isDirectory()) {
-    throw new Error("Cursor credential directory is not a real directory");
-  }
-  if (!credentials) {
-    await fs.rm(target, { force: true });
-    return;
-  }
-  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-  const info = await fs.lstat(directory);
-  if (!info.isDirectory() || info.isSymbolicLink()) {
-    throw new Error("Cursor credential directory is not a real directory");
-  }
-  await fs.chmod(directory, 0o700);
-  const temporary = path.join(directory, `.auth.${randomUUID()}.tmp`);
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  try {
-    handle = await fs.open(temporary, "wx", 0o600);
-    await handle.writeFile(`${JSON.stringify(credentials, null, 2)}\n`, "utf8");
-    await handle.close();
-    handle = undefined;
-    await fs.rename(temporary, target);
-    await fs.chmod(target, 0o600);
-  } finally {
-    await handle?.close().catch(() => undefined);
-    await fs.rm(temporary, { force: true }).catch(() => undefined);
   }
 }
 

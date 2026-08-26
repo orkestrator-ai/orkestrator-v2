@@ -43,7 +43,7 @@ describe("native agent capability table", () => {
     }
   });
 
-  test("advertises queueing for every platform, including both ACP agents", () => {
+  test("advertises queueing for every platform, including Cursor and Grok", () => {
     for (const platform of AGENT_PLATFORMS) {
       expect(nativeAgentCapabilities(platform).queue).toBe(true);
     }
@@ -105,7 +105,7 @@ describe("native agent capability table", () => {
     }
 
     for (const platform of ["cursor", "grok"] as const) {
-      // Both ACP agents read inline image content blocks; neither takes files.
+      // Both bridges read inline image content blocks; neither takes files.
       expect(nativeAgentCapabilities(platform).attachments).toEqual({
         files: false,
         images: true,
@@ -114,8 +114,8 @@ describe("native agent capability table", () => {
       expect(nativeAgentCapabilities(platform).fork).toBe(false);
       expect(nativeAgentCapabilities(platform).slashCommands).toBe(false);
       expect(nativeAgentCapabilities(platform).backgroundTasks).toBe(false);
-      // Both are real ACP surfaces — Cursor drives fast through a config
-      // option, Grok through a sibling `…-fast` model id, and both announce
+      // Cursor drives fast through an SDK model parameter, Grok through a
+      // sibling `…-fast` model id, and both announce
       // session modes — so the table permits them and the live composer's
       // `fastModeAvailable` / `modes` decides per agent build.
       expect(nativeAgentCapabilities(platform).composer.speed).toBe(true);

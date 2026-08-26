@@ -1081,10 +1081,8 @@ describe("resolveAgentDefaults", () => {
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Cursor Grok 4.6"));
-    expect(screen.getByRole("checkbox", { name: "Use TUI" }).getAttribute("aria-checked")).toBe(
-      "true",
-    );
-    fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
+    const useTuiCheckbox = screen.queryByRole("checkbox", { name: "Use TUI" });
+    expect(useTuiCheckbox).toBeNull();
     openAgentModelPicker();
     expect(screen.getByRole("menuitemradio", { name: /Cursor Grok 4\.6/ })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ })).toBeTruthy();
@@ -1095,7 +1093,6 @@ describe("resolveAgentDefaults", () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           agentType: "cursor",
-          cursorMode: "native",
           model: "grok-4.6",
           reasoningEffort: "high",
         }),

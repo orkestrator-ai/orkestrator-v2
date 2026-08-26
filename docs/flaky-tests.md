@@ -219,6 +219,16 @@ history rather than two partial ones.
   isolated rerun,
   `bun test ./src/components/layout/ActionBar.test.tsx --only-failures` from
   `apps/web`, passed all 189 tests in 12.37 s.
+- **Recurrence (Cursor SDK-only migration, 2026-08-26):** `bun run test`
+  failed the same keyboard-shortcut case after 23.36 ms on
+  `expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands:
+  ["bun test"] })`. The mock contained the preceding plain, native-agent, and
+  review-tab calls, but not the run-command call. The web workspace group
+  reported 5,466 passed, 1 skipped, and 3 failed across 236 files; the other two
+  failures were stale Cursor CLI expectations fixed in the same change. The
+  isolated rerun `bun test src/components/layout/ActionBar.test.tsx` from
+  `apps/web` passed all 190 tests with 728 assertions in 12.84 s, including the
+  target in 14.89 ms.
 - **Recurrence (retry-gate review follow-up, 2026-08-25):** the same case failed
   again on the next `bun run test` for that branch, at `ActionBar.test.tsx:5170`
   after 51.07 ms, alongside `opens the Resolve modal after a mobile long press
@@ -2028,3 +2038,14 @@ Post-fix stress verification:
 - **Isolated rerun:** `bun run test:logged -- --name features-view-isolated -- bun test tests/unit/components/FeaturesView.test.tsx --only-failures` → passed in 2.7 s.
 - **Attribution:** the change in flight touches native-agent and chat-shell components plus their tests; it does not touch `FeaturesView`, its tests, or their dependencies. The isolated owner passed against the same immutable head.
 - **Hypothesis:** the evidence establishes an aggregate-only worker termination, but not why the worker received `SIGTERM`. A recurrence should capture the runner's process/resource diagnostics and the test reached immediately before termination before changing test budgets or assertions.
+
+## CreateEnvironmentDialog compact agent controls default mode (`tests/unit/components/CreateEnvironmentDialog.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-26
+- **Original command:** `bun test apps/backend/src/core/extension-discovery.test.ts bridges/acp-bridge/src/grok-runtime.test.ts apps/desktop/electron/agent-platform-selection.test.ts tests/unit/electron/toolchain-startup.test.ts tests/unit/electron/commands-registry-tools.test.ts tests/unit/components/CreateEnvironmentDialog.test.tsx tests/unit/components/EnvironmentSettingsDialog.test.tsx`
+- **Worker configuration:** one Bun test process running seven explicitly selected files.
+- **Failure:** `resolveAgentDefaults > shows the project name in the title and presents the compact agent controls in order` expected the Use TUI checkbox `data-state` to be `unchecked`, but received `checked` (duration: 18.29 ms).
+- **Suite counts:** 179 total, 178 passed, 1 failed.
+- **Isolated rerun:** `bun test tests/unit/components/CreateEnvironmentDialog.test.tsx` → 105 passed, 0 failed in 5.62 s.
+- **Hypothesis:** the result depends on state shared with another file in the combined Bun process; the owning file resets enough state to pass in isolation, but the exact leaking state has not been identified.

@@ -4,7 +4,7 @@ import {
   randomBytes,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
-  CURSOR_ACP_BRIDGE_PORT,
+  CURSOR_BRIDGE_PORT,
   DOCKER_IMAGE,
   DOCKER_LABEL_APP,
   DOCKER_LABEL_APP_VALUE,
@@ -170,13 +170,10 @@ export async function createDockerContainer(
     redactValues.push(anthropicApiKey);
     args.push("-e", "ANTHROPIC_API_KEY");
   }
-  // Cursor's macOS login lives in Keychain and cannot be represented by the
-  // read-only ~/.cursor import mounted into a Linux container. Cursor Agent's
-  // documented headless authentication path is CURSOR_API_KEY.
-  //
-  // The host-environment fallback inside `resolveCursorApiKey` is deliberate for
-  // headless runs, and the same helper reports its `source` to the settings pane
-  // so an inherited key is never forwarded invisibly.
+  // Cursor's SDK accepts a headless API key in containers. The host-environment
+  // fallback inside `resolveCursorApiKey` is deliberate for headless runs, and
+  // the same helper reports its `source` to Settings so an inherited key is
+  // never forwarded invisibly.
   const { apiKey: cursorApiKey } =
     context.runtimeFlavor === "agent-test" && !context.credentialSources?.has("cursor")
       ? { apiKey: undefined }
@@ -227,15 +224,9 @@ export async function createDockerContainer(
         : path.join(home, ".codex");
     if (codexHome) await bindIfExists(codexHome, "/codex-home");
   }
-  // Agent homes must remain writable. Cursor creates project/session state and
-  // Grok creates session databases during ACP startup, so mounting the host
-  // directories directly over their homes makes both bridges fail immediately.
-  // Mount portable inputs separately; entrypoint.sh copies a bounded allowlist.
-  if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("cursor")) {
-    const cursorHome =
-      context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
-    await bindIfExists(path.join(cursorHome, ".cursor"), "/cursor-config");
-  }
+  // Grok writes session databases during startup, so its host directory cannot
+  // replace the writable container home. Mount portable inputs separately;
+  // entrypoint.sh copies a bounded allowlist.
   if (context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("grok")) {
     const grokHome =
       context.runtimeFlavor === "agent-test" && agentTestHostHome ? agentTestHostHome : home;
@@ -293,7 +284,7 @@ export async function createDockerContainer(
   args.push("-p", `127.0.0.1::${OPENCODE_SERVER_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CLAUDE_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${CODEX_BRIDGE_PORT}/tcp`);
-  args.push("-p", `127.0.0.1::${CURSOR_ACP_BRIDGE_PORT}/tcp`);
+  args.push("-p", `127.0.0.1::${CURSOR_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${GROK_ACP_BRIDGE_PORT}/tcp`);
   args.push("-p", `127.0.0.1::${PI_BRIDGE_PORT}/tcp`);
   if (repoConfig.entryPort) args.push("-p", `127.0.0.1::${repoConfig.entryPort}/tcp`);
@@ -360,6 +351,8 @@ export function containerServerLogFile(processName: LocalServerKind): string {
       return "/tmp/claude-bridge.log";
     case "codex":
       return "/tmp/codex-bridge.log";
+    case "cursor":
+      return "/tmp/cursor-bridge.log";
     case "pi":
       return "/tmp/pi-bridge.log";
     default:

@@ -6,7 +6,7 @@ import {
   APP_VERSION,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
-  CURSOR_ACP_BRIDGE_PORT,
+  CURSOR_BRIDGE_PORT,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   GROK_ACP_BRIDGE_PORT,
   PI_BRIDGE_PORT,
@@ -45,7 +45,6 @@ import type {
   AgentReasoningOption,
 } from "./commands-dependencies.js";
 import {
-  AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV,
   AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   localServerProcesses,
   localCodexBridgeTokens,
@@ -99,13 +98,8 @@ import {
 import { getHostPort } from "./commands-container-exec.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { conciseError, cleanupErrorMessage } from "./commands-error-text.js";
-import {
-  getClaudeOAuthAccessToken,
-  getHostClaudeCredentials,
-  getHostCursorCredentials,
-  syncAgentTestCursorCredentials,
-} from "./commands-files.js";
-import { cursorSdkBridgeEnabled, cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
+import { getClaudeOAuthAccessToken, getHostClaudeCredentials } from "./commands-files.js";
+import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
 
@@ -224,7 +218,7 @@ export const CONTAINER_BRIDGE_PEEK: Record<
 > = {
   claude: { containerPort: CLAUDE_BRIDGE_PORT, tokenFile: "/tmp/claude-bridge-token" },
   codex: { containerPort: CODEX_BRIDGE_PORT, tokenFile: "/tmp/codex-bridge-token" },
-  cursor: { containerPort: CURSOR_ACP_BRIDGE_PORT, tokenFile: "/tmp/cursor-acp-bridge-token" },
+  cursor: { containerPort: CURSOR_BRIDGE_PORT, tokenFile: "/tmp/cursor-bridge-token" },
   grok: { containerPort: GROK_ACP_BRIDGE_PORT, tokenFile: "/tmp/grok-acp-bridge-token" },
   pi: { containerPort: PI_BRIDGE_PORT, tokenFile: "/tmp/pi-bridge-token" },
   opencode: {
@@ -748,26 +742,12 @@ export async function startLocalServerUnlocked(
       ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
       : undefined;
   const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-  const hostCursorCredentials =
-    kind === "cursor" &&
-    context.runtimeFlavor === "agent-test" &&
-    allowCursorCredentials &&
-    !cursorApiKey &&
-    agentTestHostHome
-      ? await getHostCursorCredentials(process.platform, agentTestHostHome)
-      : undefined;
   const cursorCredentialFingerprint =
     kind === "cursor"
       ? createHash("sha256")
           .update(allowCursorCredentials ? "allowed" : "denied")
           .update("\0")
           .update(cursorApiKeyFingerprint(cursorApiKey))
-          .update("\0")
-          .update(hostCursorCredentials?.accessToken ?? "")
-          .update("\0")
-          .update(hostCursorCredentials?.refreshToken ?? "")
-          .update("\0")
-          .update(hostCursorCredentials?.apiKey ?? "")
           .digest("hex")
       : undefined;
   const existing = localServerProcesses.get(key);
@@ -824,14 +804,6 @@ export async function startLocalServerUnlocked(
   const port = await allocateLocalPort();
   let command = "";
   let cwd = environment.worktreePath;
-  /**
-   * Whether this Cursor session is being served by the SDK bridge.
-   *
-   * Recorded when the branch below selects it, because the token variable and
-   * everything else downstream depend on which *bridge* is running rather than
-   * on the platform: a Cursor session can be served by either.
-   */
-  let useCursorSdkBridge = false;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(port),
@@ -905,8 +877,7 @@ export async function startLocalServerUnlocked(
     // cannot bypass the local trust boundary; the container launcher is the
     // only caller that opts in.
     env.PI_BRIDGE_PROJECT_RESOURCES = "0";
-  } else if (kind === "cursor" && (await cursorSdkBridgeEnabled(context))) {
-    useCursorSdkBridge = true;
+  } else if (kind === "cursor") {
     command = resolveBunBinary(context);
     // Every bridge is spawned from its own package directory, and this one is
     // no exception. `bun` bootstraps from its working directory — it reads
@@ -920,9 +891,6 @@ export async function startLocalServerUnlocked(
     // omits `workingDirectory`, so the bridge enters `CWD` itself once bun has
     // bootstrapped: see `applyWorkingDirectory` in the bridge's `config.ts`.
     cwd = getBridgePath(context, "cursor-bridge");
-    // The SDK bridge keeps its own session store, deliberately separate from
-    // the ACP bridge's: the two engines produce different agent ids and a
-    // shared directory would have each read the other's sessions as its own.
     env.CURSOR_BRIDGE_STATE_DIR = path.join(
       context.storage.getDataDir(),
       "cursor-bridge-state",
@@ -931,8 +899,7 @@ export async function startLocalServerUnlocked(
     env.CURSOR_BRIDGE_AUTH_FILE = cursorSdkCredentialPath(context);
     // A local worktree can contain repository-controlled Cursor settings and
     // MCP commands. Cloning a repository must not be enough to run its code,
-    // so the project settings layer stays off on the host — the same boundary
-    // `ACP_APPROVE_PROJECT_MCPS` draws for the ACP path. Pinned after
+    // so the project settings layer stays off on the host. Pinned after
     // inheriting process.env so an ambient value cannot bypass it.
     env.CURSOR_BRIDGE_PROJECT_SETTINGS = "0";
     if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
@@ -941,10 +908,6 @@ export async function startLocalServerUnlocked(
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "acp-bridge");
     env.ACP_PROVIDER = kind;
-    // Local worktrees can contain repository-controlled Cursor MCP commands.
-    // Pin this explicitly after inheriting process.env so an ambient variable
-    // cannot bypass the local trust boundary.
-    env.ACP_APPROVE_PROJECT_MCPS = "0";
     env.ACP_STATE_DIR = path.join(
       context.storage.getDataDir(),
       "acp-bridge-state",
@@ -965,24 +928,6 @@ export async function startLocalServerUnlocked(
       );
     }
     env.ACP_AGENT_PATH = managedAcpBinary;
-    if (kind === "cursor") {
-      if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
-      else delete env.CURSOR_API_KEY;
-      if (context.runtimeFlavor === "agent-test") {
-        const cursorHome = path.join(
-          context.storage.getDataDir(),
-          "agent-credentials",
-          "provider-homes",
-          "cursor",
-        );
-        env.HOME = cursorHome;
-        env[AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV] = "file";
-        await syncAgentTestCursorCredentials(
-          cursorHome,
-          cursorApiKey ? undefined : hostCursorCredentials,
-        );
-      }
-    }
   }
 
   const bridgeEntrypoint = path.join(cwd, "dist", "index.js");
@@ -1010,7 +955,7 @@ export async function startLocalServerUnlocked(
             ? "OPENCODE_SERVER_PASSWORD"
             : kind === "pi"
               ? "PI_BRIDGE_TOKEN"
-              : useCursorSdkBridge
+              : kind === "cursor"
                 ? "CURSOR_BRIDGE_TOKEN"
                 : "ACP_BRIDGE_TOKEN"
     ] = authToken;

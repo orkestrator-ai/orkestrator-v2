@@ -2566,7 +2566,7 @@ exit 1
     );
   });
 
-  test.each(["cursor", "grok"] as const)(
+  test.each(["grok"] as const)(
     "starts the local %s ACP bridge and refuses until its toolchain exists",
     async (provider) => {
       const appRoot = await createTempDir(`ork-electron-acp-${provider}-`);
@@ -2663,17 +2663,7 @@ exit 1
       }
 
       // Once the managed binary lands, the bridge starts against exactly it.
-      const managedAgentPath = path.join(
-        toolchainBinDir,
-        provider === "cursor" ? "cursor-agent" : "grok",
-      );
-      if (provider === "cursor") {
-        // An activation directory predating the `cursor-agent` alias holds only
-        // the legacy managed name, and that bundle is still launchable — the
-        // upgrade must not strand it. Adding the unambiguous name then wins.
-        await fs.writeFile(path.join(toolchainBinDir, "cursor"), "legacy managed alias");
-        await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
-      }
+      const managedAgentPath = path.join(toolchainBinDir, "grok");
       await fs.writeFile(managedAgentPath, `managed ${provider}`);
       const started = (await commands.get(`start_local_${provider}_server_cmd`)?.(
         { environmentId: environment.id },
@@ -2690,7 +2680,7 @@ exit 1
         expect(marker.envCwd).toBe(worktreePath);
         expect(marker.provider).toBe(provider);
         expect(marker.agentPath).toBe(managedAgentPath);
-        expect(marker.approveProjectMcps).toBe("0");
+        expect(marker.approveProjectMcps).toBe("");
         expect(marker.hasToken).toBe(true);
         expect(marker.hasCursorApiKey).toBe(provider === "cursor");
         if (provider === "cursor") {
@@ -2881,10 +2871,7 @@ exit 1
 
     const environment = createEnvironment({ id: "env-local-cursor-sdk", worktreePath });
     const { context } = createContext(environment, {
-      globalConfig: {
-        experimentalCursorSdkBridge: true,
-        cursorApiKey: "configured-cursor-key",
-      },
+      globalConfig: { cursorApiKey: "configured-cursor-key" },
       dataDir,
     });
     context.runtimeFlavor = "agent-test";
@@ -3176,147 +3163,6 @@ printf '%s' ${JSON.stringify(
         }
         if (previousAnthropicApiKey === undefined) delete process.env.ANTHROPIC_API_KEY;
         else process.env.ANTHROPIC_API_KEY = previousAnthropicApiKey;
-      }
-    },
-    ASYNC_TEST_BUDGET_MS,
-  );
-
-  test(
-    "restarts the Cursor bridge when the host Keychain records rotate",
-    async () => {
-      const appRoot = await createTempDir("ork-electron-cursor-rotation-");
-      const toolchainBinDir = await createTempDir("ork-electron-cursor-rotation-bin-");
-      const worktreePath = await createTempDir("ork-electron-cursor-rotation-worktree-");
-      const dataDir = await createTempDir("ork-electron-cursor-rotation-data-");
-      const hostHome = await createTempDir("ork-electron-cursor-rotation-host-");
-      const binDir = path.join(appRoot, "bin-stub");
-      const securityArgvPath = path.join(appRoot, "security-argv.txt");
-      // The stub reads the current token from a file the test rewrites, which is
-      // how a host `cursor-agent login`/`logout` looks to this lookup.
-      const tokenStatePath = path.join(appRoot, "host-cursor-token.txt");
-      await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(tokenStatePath, "host-access-one");
-      await fs.writeFile(
-        path.join(binDir, "security"),
-        `#!/bin/sh
-printf '%s\\n' "$*" >> ${JSON.stringify(securityArgvPath)}
-case "$*" in
-  *cursor-access-token*) cat ${JSON.stringify(tokenStatePath)} ;;
-  *) exit 1 ;;
-esac
-`,
-      );
-      await fs.chmod(path.join(binDir, "security"), 0o755);
-      const bridgeDist = path.join(appRoot, "bridges", "acp-bridge", "dist");
-      await fs.mkdir(bridgeDist, { recursive: true });
-      await fs.writeFile(
-        path.join(bridgeDist, "index.js"),
-        `
-        const http = require("node:http");
-        http.createServer((req, res) => {
-          res.writeHead(req.url === "/global/health" ? 200 : 404, {
-            "content-type": "application/json",
-          });
-          res.end(JSON.stringify({ ok: true }));
-        }).listen(Number(process.env.PORT), "127.0.0.1");
-      `,
-      );
-      await fs.writeFile(path.join(toolchainBinDir, "cursor-agent"), "managed cursor");
-
-      const environment = createEnvironment({ id: "env-cursor-rotation", worktreePath });
-      const { context } = createContext(environment, { dataDir });
-      context.runtimeFlavor = "agent-test";
-      context.credentialSources = new Set(["cursor"]);
-      context.appRoot = appRoot;
-      context.resourceRoot = appRoot;
-      context.toolchainBinDir = toolchainBinDir;
-      const commands = createCommandRegistry();
-      const authFile = path.join(
-        dataDir,
-        "agent-credentials",
-        "provider-homes",
-        "cursor",
-        ".cursor",
-        "auth.json",
-      );
-      const readAuthFile = async (): Promise<Record<string, unknown> | undefined> =>
-        JSON.parse(await fs.readFile(authFile, "utf8")) as Record<string, unknown>;
-      const previousPath = process.env.PATH;
-      const previousHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
-      process.env.PATH = `${binDir}${path.delimiter}${previousPath ?? ""}`;
-      process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = hostHome;
-
-      try {
-        const started = (await commands.get("start_local_cursor_server_cmd")?.(
-          { environmentId: environment.id },
-          context,
-        )) as { wasRunning: boolean; pid: number };
-        expect(started.wasRunning).toBe(false);
-
-        if (process.platform !== "darwin") {
-          // Off darwin there is no Keychain to broker from, so the host lookup is
-          // never attempted and no snapshot is ever written. Assert that rather
-          // than skipping, so a regression that starts shelling out to `security`
-          // on Linux is caught here.
-          expect(
-            await fs.access(securityArgvPath).then(
-              () => true,
-              () => false,
-            ),
-          ).toBe(false);
-          expect(
-            await fs.access(authFile).then(
-              () => true,
-              () => false,
-            ),
-          ).toBe(false);
-          return;
-        }
-
-        expect(await readAuthFile()).toEqual({ accessToken: "host-access-one" });
-
-        // An unchanged host record must reuse the live bridge rather than
-        // restarting the agent on every start request.
-        const unchanged = (await commands.get("start_local_cursor_server_cmd")?.(
-          { environmentId: environment.id },
-          context,
-        )) as { wasRunning: boolean; pid: number };
-        expect(unchanged.wasRunning).toBe(true);
-        expect(unchanged.pid).toBe(started.pid);
-
-        // A rotated host token is a different credential: the running bridge holds
-        // the old one in its file store, so it has to be replaced.
-        await fs.writeFile(tokenStatePath, "host-access-two");
-        const rotated = (await commands.get("start_local_cursor_server_cmd")?.(
-          { environmentId: environment.id },
-          context,
-        )) as { wasRunning: boolean; pid: number };
-        expect(rotated.wasRunning).toBe(false);
-        expect(rotated.pid).not.toBe(started.pid);
-        expect(await readAuthFile()).toEqual({ accessToken: "host-access-two" });
-
-        // A host logout revokes the snapshot and restarts the bridge signed out.
-        await fs.writeFile(tokenStatePath, "");
-        const loggedOut = (await commands.get("start_local_cursor_server_cmd")?.(
-          { environmentId: environment.id },
-          context,
-        )) as { wasRunning: boolean; pid: number };
-        expect(loggedOut.wasRunning).toBe(false);
-        expect(
-          await fs.access(authFile).then(
-            () => true,
-            () => false,
-          ),
-        ).toBe(false);
-      } finally {
-        await commands.get("stop_local_cursor_server_cmd")?.(
-          { environmentId: environment.id },
-          context,
-        );
-        if (previousPath === undefined) delete process.env.PATH;
-        else process.env.PATH = previousPath;
-        if (previousHostHome === undefined) delete process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME;
-        else process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME = previousHostHome;
       }
     },
     ASYNC_TEST_BUDGET_MS,

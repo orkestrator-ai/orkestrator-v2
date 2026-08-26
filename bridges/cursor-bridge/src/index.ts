@@ -2,7 +2,7 @@
  * Orkestrator's Cursor bridge.
  *
  * A standalone HTTP bridge that drives Cursor's own TypeScript SDK
- * (`@cursor/sdk`) directly, rather than speaking ACP to `cursor-agent`. It
+ * (`@cursor/sdk`) directly. It
  * serves the same routes and the same transcript shape every other Orkestrator
  * bridge serves, so the backend, the store and the renderer cannot tell which
  * engine is behind a Cursor session.

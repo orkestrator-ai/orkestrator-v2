@@ -13,7 +13,8 @@ The main implementation points are:
 - `docker/entrypoint.sh` — bounded host-state import into writable containers.
 - `bridges/codex-bridge/src/models-cache.ts` and
   `bridges/codex-bridge/src/index.ts` — Codex-native cache and refresh order.
-- `bridges/acp-bridge/src/index.ts` — Cursor/Grok live catalogue projection.
+- `bridges/cursor-bridge/src/models.ts` and `bridges/acp-bridge/src/index.ts` —
+  Cursor SDK and Grok ACP live catalogue projection.
 - `apps/desktop/scripts/dev/profile-io.ts` — model-cache seeding for agent-test
   profiles.
 
@@ -192,34 +193,33 @@ is not the source of the complete model catalogue.
 
 #### Credentials
 
-For local environments, the managed Cursor agent can use its normal host login
-where the platform supports it. Orkestrator additionally resolves
-`CURSOR_API_KEY` from either:
+Cursor is SDK-only. For local environments, Orkestrator resolves credentials in
+this order:
 
-1. the stored global Cursor API-key setting; or
-2. the backend process's `CURSOR_API_KEY` environment variable.
+1. the backend process's `CURSOR_API_KEY` environment variable;
+2. the stored global Cursor API-key setting; or
+3. a login minted through the Cursor SDK browser flow and stored in
+   Orkestrator's data directory.
 
 The stored Cursor key is write-only through the renderer API. Reads return only
 whether a key is configured and whether the effective source is `config`,
 `host-env`, or `none`.
 
-For Linux containers, the macOS Cursor login is not portable because it is held
-in Keychain. Cursor therefore requires the headless `CURSOR_API_KEY` path. The
-backend sends the key over stdin to an owner-only temporary container file; the
-ACP bridge reads it into its environment when it starts. The key value is not
-placed in the Docker command line. A fingerprint is used to restart a bridge
-when the effective key changes.
+For containers, the backend sends either the effective API key or the stored SDK
+login over stdin to an owner-only temporary file. The key value is not placed in
+the Docker command line. A fingerprint restarts the SDK bridge when the
+effective credential changes.
 
 Normal containers also import a small, bounded Cursor configuration allowlist,
-but do not import ACP sessions, project state, caches, downloads, or
+but do not import host sessions, project state, caches, downloads, or
 platform-specific binaries.
 
 #### Models
 
-Cursor advertises model and reasoning options through ACP session
-configuration. The ACP bridge keeps the current catalogue in memory and exposes
-it through `/global/models`. The backend normalizes successful live data and
-persists it in the Cursor entry of `agent-model-catalog.json`.
+The Cursor SDK exposes models and their effort/speed parameters. The SDK bridge
+normalizes those into the shared composer contract, keeps the live catalogue in
+memory, and exposes it through `/global/models`. The backend persists successful
+live data in the Cursor entry of `agent-model-catalog.json`.
 
 There is no separate portable Cursor model-cache file in the current host state
 or container import. The shared Orkestrator catalogue is the durable warm-start
@@ -241,8 +241,8 @@ mutable host state are not imported.
 
 #### Models
 
-Like Cursor, Grok publishes live model configuration through ACP. Orkestrator
-normalizes that data and persists it in the Grok entry of
+Grok publishes live model configuration through ACP. Orkestrator normalizes
+that data and persists it in the Grok entry of
 `agent-model-catalog.json`.
 
 Grok also owns `~/.grok/models_cache.json`. Agent-test startup copies that file

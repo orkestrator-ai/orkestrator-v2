@@ -36,10 +36,8 @@ export type RuntimeProfile = {
    * Agent platforms this profile provisions managed toolchains for.
    *
    * Only `agent-test` reads it; the other flavors keep their durable, user-made
-   * selection. Cursor and Grok are the reason it exists: they are ACP-only and
-   * never fall back to a PATH lookup, so a profile that provisions nothing can
-   * launch Claude, Codex and OpenCode from the host but cannot start those two
-   * at all.
+   * selection. Grok never falls back to a PATH lookup, while Cursor's SDK
+   * bridge is packaged independently of the managed toolchain.
    */
   agentPlatforms: AgentPlatform[];
 };

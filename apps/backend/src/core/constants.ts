@@ -80,7 +80,7 @@ export function requiredAgentNetworkDomains(
 export const OPENCODE_SERVER_PORT = 4096;
 export const CLAUDE_BRIDGE_PORT = 4097;
 export const CODEX_BRIDGE_PORT = 4098;
-export const CURSOR_ACP_BRIDGE_PORT = 4099;
+export const CURSOR_BRIDGE_PORT = 4099;
 export const GROK_ACP_BRIDGE_PORT = 4100;
 export const PI_BRIDGE_PORT = 4101;
 export const DEFAULT_CODEX_MAX_CONCURRENT_THREADS = 5;

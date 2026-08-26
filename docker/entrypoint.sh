@@ -768,36 +768,6 @@ fi
 
 log_progress "Codex configuration ready"
 
-# Set up Cursor Agent configuration. The host directory is mounted read-only at
-# /cursor-config, while ~/.cursor stays writable for ACP sessions and per-project
-# runtime state.
-log_progress "Setting up Cursor Agent configuration..."
-mkdir -p "$HOME/.cursor"
-
-if [ -d /cursor-config ]; then
-    for file in \
-        cli-config.json \
-        agent-cli-state.json \
-        mcp.json \
-        argv.json
-    do
-        copy_agent_file /cursor-config "$HOME/.cursor" "$file" Cursor
-    done
-
-    # Preserve user-authored extensions without importing host sessions,
-    # project state, caches, downloads, or platform-specific binaries.
-    for dir in \
-        skills \
-        skills-cursor
-    do
-        copy_agent_directory_entries /cursor-config "$HOME/.cursor" "$dir" Cursor
-    done
-
-    report_agent_copy_skips Cursor
-fi
-
-log_progress "Cursor Agent configuration ready"
-
 # Set up Grok configuration. Grok writes active_sessions.json, SQLite state and
 # logs below ~/.grok as soon as ACP starts, so the host mount cannot live there.
 log_progress "Setting up Grok configuration..."

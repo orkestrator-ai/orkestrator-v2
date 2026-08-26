@@ -54,7 +54,6 @@ export function resolveAgentModeSettings(
     claudeMode: ClaudeMode;
     opencodeMode: OpenCodeMode;
     codexMode: CodexMode;
-    cursorMode?: AgentStyle;
     grokMode?: AgentStyle;
     piMode?: AgentStyle;
   },
@@ -67,7 +66,7 @@ export function resolveAgentModeSettings(
         : agentType === "opencode"
           ? modes.opencodeMode
           : agentType === "cursor"
-            ? (modes.cursorMode ?? SHIPPED_PLATFORM_MODES.cursor)
+            ? "native"
             : agentType === "grok"
               ? (modes.grokMode ?? SHIPPED_PLATFORM_MODES.grok)
               : (modes.piMode ?? SHIPPED_PLATFORM_MODES.pi);

@@ -345,9 +345,8 @@ export function asDispatchNativeAgentPromptInput(args: JsonRecord): DispatchNati
       args.schema && typeof args.schema === "object" && !Array.isArray(args.schema)
         ? (args.schema as import("@orkestrator/protocol/structured-output").JsonSchema)
         : undefined,
-    // Cursor and Grok preserve the ACP session's current mode unless explicit,
-    // and Pi has no mode at all — sending one would be a control the harness
-    // cannot honour. Everything else defaults to the read-only mode.
+    // Cursor and Grok preserve their session's current mode unless explicit,
+    // and Pi has no mode at all. Everything else defaults to read-only mode.
     mode:
       args.mode === "build"
         ? "build"

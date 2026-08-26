@@ -6,7 +6,7 @@ import {
   APP_VERSION,
   CLAUDE_BRIDGE_PORT,
   CODEX_BRIDGE_PORT,
-  CURSOR_ACP_BRIDGE_PORT,
+  CURSOR_BRIDGE_PORT,
   CODEX_MAX_CONCURRENT_THREADS_ENV,
   GROK_ACP_BRIDGE_PORT,
   OPENCODE_SERVER_PORT,
@@ -22,7 +22,6 @@ import {
 import type { ClaudeModelCatalogSnapshot } from "./commands-dependencies.js";
 import {
   CONTAINER_CURSOR_SDK_AUTH_FILE,
-  cursorSdkBridgeEnabled,
   cursorSdkStoredApiKey,
   syncContainerCursorSdkCredentials,
 } from "./cursor-sdk-bridge.js";
@@ -407,54 +406,33 @@ export function registerServerCommands(
     ),
   );
 
-  for (const acpProvider of ["cursor", "grok"] as const) {
-    const containerPort = acpProvider === "cursor" ? CURSOR_ACP_BRIDGE_PORT : GROK_ACP_BRIDGE_PORT;
-    const acpExecutable = acpProvider === "cursor" ? "cursor-agent" : "grok";
-    const tokenFile = `/tmp/${acpProvider}-acp-bridge-token`;
-    const logFile = `/tmp/${acpProvider}-acp-bridge.log`;
-    /**
-     * Both Cursor bridges are matched, and both share port 4099.
-     *
-     * A Cursor session is served by exactly one bridge at a time, so the port
-     * is a property of the platform rather than of the engine — which is what
-     * lets the experimental toggle be flipped without recreating containers
-     * that were started before the SDK bridge existed. Switching engines has
-     * to stop whichever bridge is holding the port, so the pattern names both.
-     */
+  for (const provider of ["cursor", "grok"] as const) {
+    const containerPort = provider === "cursor" ? CURSOR_BRIDGE_PORT : GROK_ACP_BRIDGE_PORT;
+    const tokenFile =
+      provider === "cursor" ? "/tmp/cursor-bridge-token" : "/tmp/grok-acp-bridge-token";
+    const logFile = provider === "cursor" ? "/tmp/cursor-bridge.log" : "/tmp/grok-acp-bridge.log";
     const bridgePattern =
-      acpProvider === "cursor"
-        ? "[a]cp-bridge/dist/index.js --provider=cursor|[c]ursor-bridge/dist/index.js"
-        : `[a]cp-bridge/dist/index.js --provider=${acpProvider}`;
-    register(`start_${acpProvider}_server`, ({ containerId }, context) => {
+      provider === "cursor"
+        ? "[c]ursor-bridge/dist/index.js"
+        : "[a]cp-bridge/dist/index.js --provider=grok";
+    register(`start_${provider}_server`, ({ containerId }, context) => {
       const id = asString(containerId, "containerId");
-      return enqueueContainerBridgeOperation(acpProvider, id, async () => {
+      return enqueueContainerBridgeOperation(provider, id, async () => {
         const cursorApiKey =
-          acpProvider === "cursor"
+          provider === "cursor"
             ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
             : undefined;
-        const useCursorSdk = acpProvider === "cursor" && (await cursorSdkBridgeEnabled(context));
-        // The engine is part of the fingerprint, not just the credential: both
-        // Cursor bridges answer `/global/health` on the same port, so a healthy
-        // bridge is not on its own evidence that the *selected* one is running.
-        // Without this, flipping the toggle would reuse the old engine until
-        // something else happened to restart it.
+        const useCursorSdk = provider === "cursor";
         const expectedCredentialFingerprint =
-          acpProvider === "cursor"
-            ? `${useCursorSdk ? "sdk" : "acp"}:${cursorApiKeyFingerprint(cursorApiKey)}`
-            : undefined;
-        if (acpProvider === "cursor") {
+          provider === "cursor" ? `sdk:${cursorApiKeyFingerprint(cursorApiKey)}` : undefined;
+        if (provider === "cursor") {
           await syncContainerCursorApiKey(id, cursorApiKey);
-          // Only the delivering direction needs its own exec. Removing a stale
-          // credential is folded into the startup script below, so selecting
-          // the ACP engine costs no extra round trip.
-          if (useCursorSdk) {
-            await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
-          }
+          await syncContainerCursorSdkCredentials(id, await cursorSdkStoredApiKey(context));
         }
         const hostPort = await getHostPort(id, containerPort);
         if (hostPort && (await checkHttpHealth(hostPort))) {
           const credentialFingerprint =
-            acpProvider === "cursor"
+            provider === "cursor"
               ? (
                   await dockerExec(
                     id,
@@ -467,7 +445,7 @@ export function registerServerCommands(
           ).trim();
           if (
             BRIDGE_TOKEN_PATTERN.test(existingToken) &&
-            (acpProvider !== "cursor" || credentialFingerprint === expectedCredentialFingerprint)
+            (provider !== "cursor" || credentialFingerprint === expectedCredentialFingerprint)
           ) {
             return { hostPort, wasRunning: true, authToken: existingToken };
           }
@@ -478,7 +456,7 @@ export function registerServerCommands(
         const started = await startContainerServer(
           id,
           containerPort,
-          acpProvider,
+          provider,
           `
           cd /workspace
           rm -f ${logFile}
@@ -498,15 +476,13 @@ export function registerServerCommands(
           # settings are readable here in exactly the way they are not on the
           # host — the same distinction ACP_APPROVE_PROJECT_MCPS draws.
           export CURSOR_BRIDGE_PROJECT_SETTINGS=1`
-              : `${acpProvider === "cursor" ? `rm -f ${CONTAINER_CURSOR_SDK_AUTH_FILE}` : ""}
-          export ACP_PROVIDER=${acpProvider}
-          export ACP_STATE_DIR=/tmp/orkestrator-acp-state/${acpProvider}
-          ${acpProvider === "cursor" ? "export ACP_APPROVE_PROJECT_MCPS=1" : ""}
-          export ACP_AGENT_PATH="$(command -v ${acpExecutable} 2>/dev/null || echo ${acpExecutable})"
+              : `export ACP_PROVIDER=grok
+          export ACP_STATE_DIR=/tmp/orkestrator-acp-state/grok
+          export ACP_AGENT_PATH="$(command -v grok 2>/dev/null || echo grok)"
           export ACP_BRIDGE_TOKEN=${quoteShell(token)}`
           }
           ${
-            acpProvider === "cursor"
+            provider === "cursor"
               ? `mkdir -p ${quoteShell(CONTAINER_CURSOR_CREDENTIAL_DIR)}
           if [ -s ${CONTAINER_CURSOR_API_KEY_FILE} ]; then export CURSOR_API_KEY="$(cat ${CONTAINER_CURSOR_API_KEY_FILE})"; else unset CURSOR_API_KEY; fi
           printf '%s' ${quoteShell(expectedCredentialFingerprint!)} > ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}`
@@ -515,7 +491,7 @@ export function registerServerCommands(
           ${
             useCursorSdk
               ? `setsid bun /opt/cursor-bridge/dist/index.js > ${logFile} 2>&1 &`
-              : `setsid bun /opt/acp-bridge/dist/index.js --provider=${acpProvider} > ${logFile} 2>&1 &`
+              : `setsid bun /opt/acp-bridge/dist/index.js --provider=grok > ${logFile} 2>&1 &`
           }
         `,
           [token],
@@ -523,20 +499,20 @@ export function registerServerCommands(
         return { ...started, authToken: token };
       });
     });
-    register(`stop_${acpProvider}_server`, ({ containerId }) => {
+    register(`stop_${provider}_server`, ({ containerId }) => {
       const id = asString(containerId, "containerId");
-      return enqueueContainerBridgeOperation(acpProvider, id, () =>
+      return enqueueContainerBridgeOperation(provider, id, () =>
         dockerExec(
           id,
           `pkill -f '${bridgePattern}' || true; rm -f ${tokenFile}` +
-            (acpProvider === "cursor"
+            (provider === "cursor"
               ? ` ${CONTAINER_CURSOR_API_KEY_FILE} ${CONTAINER_CURSOR_API_KEY_FINGERPRINT_FILE}` +
                 ` ${CONTAINER_CURSOR_SDK_AUTH_FILE}`
               : ""),
         ).then(() => undefined),
       );
     });
-    register(`get_${acpProvider}_server_status`, async ({ containerId }) => {
+    register(`get_${provider}_server_status`, async ({ containerId }) => {
       const id = asString(containerId, "containerId");
       const hostPort = await getHostPort(id, containerPort);
       const authToken = hostPort
@@ -552,7 +528,7 @@ export function registerServerCommands(
         ...(running ? { authToken } : {}),
       };
     });
-    register(`get_${acpProvider}_server_log`, ({ containerId }) =>
+    register(`get_${provider}_server_log`, ({ containerId }) =>
       dockerExec(asString(containerId, "containerId"), `cat ${logFile} 2>/dev/null || true`),
     );
   }

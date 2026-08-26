@@ -54,13 +54,13 @@ describe("saveInitialPromptAttachments", () => {
 });
 
 describe("buildInitialPromptWithAttachmentReferences", () => {
-  test("appends saved image paths to a text prompt", () => {
+  test("appends saved attachment paths to a text prompt", () => {
     const prompt = buildInitialPromptWithAttachmentReferences("Fix the UI", [
       { name: "screenshot.png", path: "/workspace/.orkestrator/initial-prompt/screenshot.png" },
     ]);
 
     expect(prompt).toContain("Fix the UI");
-    expect(prompt).toContain("Attached images have been saved in the workspace");
+    expect(prompt).toContain("Attached files have been saved in the workspace");
     expect(prompt).toContain(
       "- screenshot.png: /workspace/.orkestrator/initial-prompt/screenshot.png",
     );
@@ -71,7 +71,7 @@ describe("buildInitialPromptWithAttachmentReferences", () => {
       { name: "only-image.png", path: "/tmp/worktree/.orkestrator/initial-prompt/only-image.png" },
     ]);
 
-    expect(prompt.startsWith("Attached images have been saved in the workspace")).toBe(true);
+    expect(prompt.startsWith("Attached files have been saved in the workspace")).toBe(true);
     expect(prompt).toContain("/tmp/worktree/.orkestrator/initial-prompt/only-image.png");
   });
 });

@@ -175,7 +175,7 @@ export interface Environment {
   initialReasoningEffort?: string;
   /** Initial prompt used when this environment was created. */
   initialPrompt?: string;
-  /** Images waiting to be written into the workspace before the first prompt. */
+  /** Files waiting to be written into the workspace before the first prompt. */
   initialPromptAttachments?: InitialPromptImageAttachment[];
   /**
    * Set by the backend's list projection when `initialPromptAttachments` is
@@ -202,6 +202,8 @@ export interface Environment {
 export interface InitialPromptImageAttachment {
   id: string;
   name: string;
+  /** Omitted by older persisted records, where every attachment was an image. */
+  type?: "image" | "file";
   /** Reconstructed from `base64Data` only while a preview is displayed. */
   previewUrl?: string;
   base64Data: string;

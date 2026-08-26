@@ -554,7 +554,7 @@ function App() {
          * than refusing the launch, which is what that backend always did.
          * Only a backend that positively says "there are attachments" earns a
          * blocking failure, because that is the only case where starting anyway
-         * would run a prompt whose images are missing.
+         * would run a prompt whose attachments are missing.
          */
         const attachmentState = environment?.hasInitialPromptAttachments;
         if (existingOptions?.initialPromptAttachments === undefined && attachmentState !== false) {
@@ -581,7 +581,12 @@ function App() {
         const storedAttachments = detailedEnvironment?.initialPromptAttachments?.map(
           (attachment) => ({
             ...attachment,
-            previewUrl: attachment.previewUrl ?? `data:image/png;base64,${attachment.base64Data}`,
+            ...(attachment.type === "file"
+              ? {}
+              : {
+                  previewUrl:
+                    attachment.previewUrl ?? `data:image/png;base64,${attachment.base64Data}`,
+                }),
           }),
         );
         setClaudeOptions(environmentId, {

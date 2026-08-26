@@ -353,6 +353,11 @@ export function UnassignedNativeAgentComposer({
   );
   const [resumePlatformDialogOpen, setResumePlatformDialogOpen] = useState(false);
   const [models, setModels] = useState<AgentModel[]>([]);
+  const modelCatalogRequestsRef = useRef(new Map<string, Promise<AgentModel[]>>());
+  const modelCatalogEnvironmentRef = useRef(environmentId);
+  const modelCatalogMountedRef = useRef(false);
+  const modelCatalogRetriedRef = useRef(new Set<string>());
+  const [modelCatalogRetryRevision, setModelCatalogRetryRevision] = useState(0);
   const platform = draft.platform ?? defaultPlatform;
   const configured = resolvedPlatformSettings(
     config,
@@ -380,29 +385,80 @@ export function UnassignedNativeAgentComposer({
     sessionKey,
     unassignedNativeComposePersistenceStore,
   );
-  // The catalogue is environment-scoped and already carries every platform, so
-  // it must not be refetched when the platform draft changes: `platformModels`
-  // filters it client-side. Re-running here would clear the list and re-issue a
-  // command that probes both ACP bridges, flashing "No models available" on
-  // every switch.
   useEffect(() => {
-    let cancelled = false;
+    modelCatalogMountedRef.current = true;
+    return () => {
+      modelCatalogMountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (modelCatalogEnvironmentRef.current === environmentId) return;
+    modelCatalogEnvironmentRef.current = environmentId;
+    modelCatalogRequestsRef.current.clear();
+    modelCatalogRetriedRef.current.clear();
     setModels([]);
-    void getNativeAgentModelCatalog(environmentId)
+  }, [environmentId]);
+  // A normal read remains side-effect free. On the first selection of a
+  // bridge-backed platform, however, tell the backend which one the user needs:
+  // if its durable list is missing, the backend starts that bridge and seeds the
+  // cache from `/global/models`. Requests are memoized per environment/platform
+  // so switching the picker never clears the catalogue or repeatedly starts a
+  // provider whose account genuinely has no models.
+  useEffect(() => {
+    const ensureAgent =
+      platform === "cursor" || platform === "grok" || platform === "pi" ? platform : undefined;
+    const requestKey = `${environmentId}:${ensureAgent ?? "snapshot"}`;
+    if (ensureAgent && models.some((model) => model.platform === ensureAgent)) return;
+    if (modelCatalogRequestsRef.current.has(requestKey)) return;
+    const request = ensureAgent
+      ? getNativeAgentModelCatalog(environmentId, ensureAgent)
+      : getNativeAgentModelCatalog(environmentId);
+    modelCatalogRequestsRef.current.set(requestKey, request);
+    void request
       .then((catalog) => {
+        modelCatalogRetriedRef.current.delete(requestKey);
         // The backend has already normalized and durably cached these models.
-        // Mirror its response so every other mounted launcher updates without
-        // each picker performing its own storage read.
+        // Mirror its response even if this tab became inactive while first-use
+        // discovery ran, so every other mounted launcher sees the new snapshot.
         syncCachedAcpModels(catalog);
-        if (!cancelled) setModels(catalog);
+        if (
+          !modelCatalogMountedRef.current ||
+          modelCatalogEnvironmentRef.current !== environmentId
+        ) {
+          return;
+        }
+        setModels((current) => {
+          // Two first-use bridge starts can overlap if the user switches quickly.
+          // Preserve a non-empty platform from either response rather than
+          // letting whichever older snapshot settles last erase it.
+          const refreshedPlatforms = new Set(catalog.map((model) => model.platform));
+          return [
+            ...catalog,
+            ...current.filter((model) => !refreshedPlatforms.has(model.platform)),
+          ];
+        });
       })
       .catch((error) => {
+        if (modelCatalogRequestsRef.current.get(requestKey) === request) {
+          modelCatalogRequestsRef.current.delete(requestKey);
+        }
+        // The backend distinguishes a legitimate empty catalogue (which
+        // resolves normally) from a transient bridge/fetch failure (which
+        // rejects here). Retry the latter once automatically; further failures
+        // remain manually retryable by switching platforms, without creating a
+        // background restart loop for an unavailable provider.
+        if (
+          ensureAgent &&
+          modelCatalogMountedRef.current &&
+          modelCatalogEnvironmentRef.current === environmentId &&
+          !modelCatalogRetriedRef.current.has(requestKey)
+        ) {
+          modelCatalogRetriedRef.current.add(requestKey);
+          setModelCatalogRetryRevision((revision) => revision + 1);
+        }
         console.warn("[AgentNativeTab] Failed to load native model catalogue:", error);
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [environmentId]);
+  }, [environmentId, modelCatalogRetryRevision, models, platform]);
   const fileSearch = useFileSearch(containerId, worktreePath);
   const {
     isMenuOpen: fileMentionMenuOpen,

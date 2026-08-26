@@ -62,16 +62,47 @@ export interface AgentModelCatalogCache {
   };
 }
 
-/** Load the host-wide last-known-good catalogues before any bridge starts. */
+/** Load the host-wide last-known-good catalogues, seeding Pi on first use. */
 export async function getAgentModelCatalogCache(): Promise<AgentModelCatalogCache> {
   return invoke<AgentModelCatalogCache>("get_agent_model_catalog_cache");
+}
+
+/** Discover Pi models without requiring an environment or persistent bridge. */
+export async function ensureHostPiModelCatalog(): Promise<
+  import("@orkestrator/protocol/native-agent").AgentModel[]
+> {
+  return invoke("ensure_host_pi_model_catalog");
 }
 
 /** Backend-normalized model catalogue consumed by the provider-neutral composer. */
 export async function getNativeAgentModelCatalog(
   environmentId: string,
+  ensureAgent?: "cursor" | "grok" | "pi",
 ): Promise<import("@orkestrator/protocol/native-agent").AgentModel[]> {
-  return invoke("get_native_agent_model_catalog", { environmentId });
+  if (!ensureAgent) {
+    return invoke("get_native_agent_model_catalog", { environmentId });
+  }
+  const result = await invoke<
+    | import("@orkestrator/protocol/native-agent").AgentModel[]
+    | {
+        models: import("@orkestrator/protocol/native-agent").AgentModel[];
+        status: "ready" | "empty" | "failed";
+      }
+  >("get_native_agent_model_catalog", {
+    environmentId,
+    ensureAgent,
+  });
+  // Older backends return an ensured catalogue directly.
+  if (Array.isArray(result)) return result;
+  if (!result || !Array.isArray(result.models)) {
+    throw new Error("The native model catalogue response was malformed");
+  }
+  if (result.status === "failed") {
+    throw new Error(
+      `The ${ensureAgent ?? "native agent"} model catalogue is temporarily unavailable`,
+    );
+  }
+  return result.models;
 }
 
 /** Persist an authoritative catalogue for the next application launch. */

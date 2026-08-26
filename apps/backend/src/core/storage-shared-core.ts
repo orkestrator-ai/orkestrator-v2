@@ -1326,7 +1326,12 @@ export function normalizeAcpModelCatalogEntries(
       (candidate.description != null && typeof candidate.description !== "string") ||
       (candidate.defaultReasoningId != null && typeof candidate.defaultReasoningId !== "string") ||
       (candidate.supportsSpeed != null && typeof candidate.supportsSpeed !== "boolean") ||
-      (candidate.supportsMode != null && typeof candidate.supportsMode !== "boolean")
+      (candidate.supportsMode != null && typeof candidate.supportsMode !== "boolean") ||
+      (candidate.contextWindow != null &&
+        (typeof candidate.contextWindow !== "number" ||
+          !Number.isSafeInteger(candidate.contextWindow) ||
+          candidate.contextWindow <= 0)) ||
+      (candidate.supportsImageInput != null && typeof candidate.supportsImageInput !== "boolean")
     ) {
       continue;
     }
@@ -1386,6 +1391,12 @@ export function normalizeAcpModelCatalogEntries(
         : {}),
       ...(typeof candidate.supportsMode === "boolean"
         ? { supportsMode: candidate.supportsMode }
+        : {}),
+      ...(typeof candidate.contextWindow === "number"
+        ? { contextWindow: candidate.contextWindow }
+        : {}),
+      ...(typeof candidate.supportsImageInput === "boolean"
+        ? { supportsImageInput: candidate.supportsImageInput }
         : {}),
     });
   }

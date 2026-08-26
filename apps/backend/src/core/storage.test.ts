@@ -2902,11 +2902,24 @@ describe("host agent model catalogue cache", () => {
           supportsMode: true,
         },
       ];
+      const piModels: AgentModel[] = [
+        {
+          platform: "pi",
+          id: "openai-codex/gpt-latest",
+          label: "GPT Latest",
+          providerLabel: "OpenAI Codex",
+          supportsSpeed: false,
+          supportsMode: false,
+          contextWindow: 400_000,
+          supportsImageInput: false,
+        },
+      ];
 
       await storage.cacheAgentModelCatalog("claude", claudeModels);
       await storage.cacheAgentModelCatalog("codex", codexModels);
       await storage.cacheAgentModelCatalog("cursor", cursorModels);
       await storage.cacheAgentModelCatalog("grok", grokModels);
+      await storage.cacheAgentModelCatalog("pi", piModels);
 
       const reopened = new StorageService(dataDir);
       await reopened.init();
@@ -2916,6 +2929,7 @@ describe("host agent model catalogue cache", () => {
         codex: { models: codexModels },
         cursor: { models: cursorModels },
         grok: { models: grokModels },
+        pi: { models: piModels },
       });
     });
   });

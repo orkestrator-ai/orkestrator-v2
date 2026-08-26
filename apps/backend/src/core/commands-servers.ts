@@ -306,27 +306,81 @@ export async function fetchAcpNormalizedModels(
   environment: Environment,
   context: CommandContext,
   kind: "cursor" | "grok" | "pi",
+  timeoutMs?: number,
 ): Promise<AgentModel[]> {
+  return (await fetchAcpNormalizedModelsResult(environment, context, kind, timeoutMs)).models;
+}
+
+export type AcpNormalizedModelsResult = {
+  status: "ok" | "unavailable" | "failed";
+  models: AgentModel[];
+};
+
+/** Preserve failure information for first-use callers that can retry. */
+export async function fetchAcpNormalizedModelsResult(
+  environment: Environment,
+  context: CommandContext,
+  kind: "cursor" | "grok" | "pi",
+  timeoutMs?: number,
+): Promise<AcpNormalizedModelsResult> {
   const bridge =
     environment.environmentType === "local"
       ? await peekLocalAgentBridge(environment.id, context, kind)
       : environment.containerId
         ? await peekContainerAgentBridge(environment.containerId, kind)
         : null;
-  if (!bridge) return [];
+  if (!bridge) return { status: "unavailable", models: [] };
   const port = "port" in bridge ? bridge.port : bridge.hostPort;
+  return fetchAcpNormalizedModelsAtResult(port, bridge.authToken, kind, timeoutMs);
+}
+
+/**
+ * How long a `/global/models` read may take before it is abandoned.
+ *
+ * Pi may spend up to 30 seconds refreshing a dynamic provider on its first
+ * catalogue read. The generic ACP bridges answer from local state, so they
+ * retain their tighter bound while Pi's own bounded refresh is allowed to
+ * finish instead of being aborted just before it can seed the cache.
+ */
+export function acpModelFetchTimeoutMs(kind: "cursor" | "grok" | "pi"): number {
+  return kind === "pi" ? 35_000 : 8_000;
+}
+
+/** Read the normalized model rows from a known bridge endpoint. */
+export async function fetchAcpNormalizedModelsAt(
+  port: number,
+  authToken: string,
+  kind: "cursor" | "grok" | "pi",
+  timeoutMs?: number,
+): Promise<AgentModel[]> {
+  return (await fetchAcpNormalizedModelsAtResult(port, authToken, kind, timeoutMs)).models;
+}
+
+/** Read models while distinguishing a valid empty catalogue from transport failure. */
+export async function fetchAcpNormalizedModelsAtResult(
+  port: number,
+  authToken: string,
+  kind: "cursor" | "grok" | "pi",
+  timeoutMs?: number,
+): Promise<AcpNormalizedModelsResult> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/global/models`, {
       headers: {
-        Authorization: `Bearer ${bridge.authToken}`,
-        "X-Orkestrator-Acp-Token": bridge.authToken,
+        Authorization: `Bearer ${authToken}`,
+        "X-Orkestrator-Acp-Token": authToken,
       },
-      signal: AbortSignal.timeout(8_000),
+      // A caller working to an overall deadline may narrow this, never widen it.
+      signal: AbortSignal.timeout(
+        Math.min(
+          acpModelFetchTimeoutMs(kind),
+          Math.max(1_000, timeoutMs ?? Number.MAX_SAFE_INTEGER),
+        ),
+      ),
     });
-    if (!response.ok) return [];
+    if (!response.ok) return { status: "failed", models: [] };
     const body = (await response.json()) as { models?: unknown };
-    if (!Array.isArray(body.models)) return [];
-    return body.models.flatMap((candidate): AgentModel[] => {
+    if (!Array.isArray(body.models)) return { status: "failed", models: [] };
+    const models = body.models.flatMap((candidate): AgentModel[] => {
       if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
       const model = candidate as Record<string, unknown>;
       if (typeof model.id !== "string" || model.id.length === 0) return [];
@@ -375,8 +429,9 @@ export async function fetchAcpNormalizedModels(
         },
       ];
     });
+    return { status: "ok", models };
   } catch {
-    return [];
+    return { status: "failed", models: [] };
   }
 }
 

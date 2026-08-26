@@ -4,9 +4,9 @@ import { useCodexStore } from "@/stores/codexStore";
 import { useAgentModelCatalogStore } from "@/stores/agentModelCatalogStore";
 
 /**
- * Rehydrate model pickers from disk before React mounts. Network-backed bridge
- * discovery can then refresh these stores without leaving the first new-
- * environment dialog stuck on the bundled fallback catalogue.
+ * Rehydrate model pickers from disk before React mounts. When Pi has no durable
+ * entry yet, the backend may use a short-lived, environment-free bridge to seed
+ * it; startup still bounds this call and lets the stores update when it settles.
  */
 export async function hydrateAgentModelCatalogCache(): Promise<void> {
   const claudeModelsBeforeRead = useClaudeStore.getState().models;

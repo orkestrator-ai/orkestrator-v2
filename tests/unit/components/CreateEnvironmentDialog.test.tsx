@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, test, expect, mock } from "bun:test";
+import { afterEach, beforeEach, describe, test, expect, mock, spyOn } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -108,7 +108,7 @@ describe("resolveAgentDefaults", () => {
     useClaudeStore.setState({ models: defaultClaudeModels });
     useCodexStore.setState({ models: defaultCodexModels });
     useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
-    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [] });
+    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_preferences") {
@@ -1045,6 +1045,126 @@ describe("resolveAgentDefaults", () => {
         }),
       );
     });
+  });
+
+  test("seeds the Pi catalogue before creating the first environment", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      defaultAgent: "pi",
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        pi: { mode: "native" },
+      },
+    };
+    config.global.enabledAgentPlatforms = ["pi"];
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "ensure_host_pi_model_catalog") {
+        return Promise.resolve([
+          {
+            platform: "pi",
+            id: "openai-codex/gpt-5.4",
+            label: "GPT-5.4",
+            providerLabel: "OpenAI Codex",
+            reasoning: [{ id: "high", label: "High" }],
+            defaultReasoningId: "high",
+            supportsSpeed: false,
+            supportsMode: false,
+          },
+        ]);
+      }
+      if (command === "get_opencode_model_catalog_cache") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.some(([command]) => command === "ensure_host_pi_model_catalog"),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(getAgentModelPicker().textContent).toContain("GPT-5.4"));
+    expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
+      "openai-codex/gpt-5.4",
+    ]);
+    // Seeding spawns a real bridge on the backend, so one attempt per opening
+    // is the budget: a re-render must not buy another.
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "ensure_host_pi_model_catalog"),
+    ).toHaveLength(1);
+  });
+
+  test("does not seed the Pi catalogue when Pi is not an enabled platform", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    useConfigStore.setState({ config });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_catalog_cache") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+
+    render(
+      <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+    );
+
+    await waitFor(() => expect(getAgentModelPicker()).toBeTruthy());
+    // Seeding spawns a real bridge, so a platform the user has turned off must
+    // not pay for it every time the dialog opens.
+    expect(
+      invokeMock.mock.calls.some(([command]) => command === "ensure_host_pi_model_catalog"),
+    ).toBe(false);
+  });
+
+  test("retries the Pi seed the next time the dialog is opened", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.enabledAgentPlatforms = ["pi"];
+    useConfigStore.setState({ config });
+    // A failed probe leaves the picker on its fallback rather than breaking the
+    // dialog, and the attempt is not held against the next opening.
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      invokeMock.mockImplementation((command: string) => {
+        if (command === "ensure_host_pi_model_catalog") {
+          return Promise.reject(new Error("pi bridge entrypoint not found"));
+        }
+        if (command === "get_opencode_model_catalog_cache") return Promise.resolve(null);
+        return Promise.resolve(undefined);
+      });
+
+      const { rerender } = render(
+        <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+      );
+
+      await waitFor(() =>
+        expect(
+          invokeMock.mock.calls.filter(([command]) => command === "ensure_host_pi_model_catalog"),
+        ).toHaveLength(1),
+      );
+      expect(useAgentModelCatalogStore.getState().piModels).toEqual([]);
+
+      rerender(
+        <CreateEnvironmentDialog
+          open={false}
+          onOpenChange={() => {}}
+          onCreate={mock(async () => {})}
+        />,
+      );
+      rerender(
+        <CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={mock(async () => {})} />,
+      );
+
+      await waitFor(() =>
+        expect(
+          invokeMock.mock.calls.filter(([command]) => command === "ensure_host_pi_model_catalog"),
+        ).toHaveLength(2),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   test("keeps a still-supported effort when switching models within one agent", async () => {

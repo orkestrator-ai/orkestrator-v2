@@ -4,6 +4,7 @@
  * Every provider exercises the shared authoritative-projection path.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -67,7 +68,10 @@ mock.module("@/components/chat/VirtualizedMessageList", () => ({
 }));
 const flushPaneLayoutNowMock = mock(async (_environmentId: string, _layout: unknown) => {});
 const getNativeAgentModelCatalogMock = mock(
-  async (_environmentId: string): ReturnType<typeof realBackend.getNativeAgentModelCatalog> => [],
+  async (
+    _environmentId: string,
+    _ensureAgent?: "cursor" | "grok" | "pi",
+  ): ReturnType<typeof realBackend.getNativeAgentModelCatalog> => [],
 );
 const awaitBridgeReadyMock = mock(async () => ({
   status: "ready" as const,
@@ -1166,7 +1170,9 @@ describe("AgentNativeTab", () => {
 
     render(<AgentNativeTab tabId="tab-cursor-models" data={{ environmentId: "env-1" }} isActive />);
 
-    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1"));
+    await waitFor(() =>
+      expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "cursor"),
+    );
     expect(awaitBridgeReadyMock).not.toHaveBeenCalled();
     const picker = await screen.findByTitle(/Choose model/);
     fireEvent.pointerDown(picker);
@@ -1177,9 +1183,102 @@ describe("AgentNativeTab", () => {
     ]);
   });
 
+  test("requests a first-use Pi catalogue when the selected platform has no cached list", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["pi"],
+    });
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "Pi models",
+          order: 0,
+        } as never,
+      ],
+    });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-pi-models"), { platform: "pi" });
+    getNativeAgentModelCatalogMock.mockImplementation(async () => [
+      {
+        id: "openai-codex/gpt-5.4",
+        platform: "pi",
+        label: "GPT-5.4",
+        providerLabel: "OpenAI Codex",
+        reasoning: [{ id: "high", label: "High" }],
+        defaultReasoningId: "high",
+        supportsSpeed: false,
+        supportsMode: false,
+      },
+    ]);
+
+    render(<AgentNativeTab tabId="tab-pi-models" data={{ environmentId: "env-1" }} isActive />);
+
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "pi"));
+    expect((await screen.findByTitle(/Choose model/)).textContent).toContain("GPT-5.4");
+    expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
+      "openai-codex/gpt-5.4",
+    ]);
+  });
+
+  test("deduplicates the first-use request across StrictMode effect replay", async () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-pi-strict"), { platform: "pi" });
+    getNativeAgentModelCatalogMock.mockImplementation(async () => []);
+
+    render(
+      <StrictMode>
+        <AgentNativeTab tabId="tab-pi-strict" data={{ environmentId: "env-1" }} isActive />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1));
+    expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "pi");
+  });
+
+  test("retries a transient first-use failure once and publishes the recovered catalogue", async () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-pi-retry"), { platform: "pi" });
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    let attempts = 0;
+    getNativeAgentModelCatalogMock.mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("catalogue temporarily unavailable");
+      return [
+        {
+          id: "openai-codex/gpt-5.4",
+          platform: "pi",
+          label: "GPT-5.4",
+          providerLabel: "OpenAI Codex",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ];
+    });
+
+    try {
+      render(<AgentNativeTab tabId="tab-pi-retry" data={{ environmentId: "env-1" }} isActive />);
+
+      await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(screen.getByTitle(/Choose model/).textContent).toContain("GPT-5.4"),
+      );
+      expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
+        "openai-codex/gpt-5.4",
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   // The catalogue is environment-scoped and already holds every platform, so a
-  // platform switch must filter what is loaded rather than clearing the list and
-  // re-issuing a command that probes both ACP bridges.
+  // platform switch must filter what is loaded rather than clearing the list or
+  // refetching a platform the current snapshot already contains.
   test("does not refetch the catalogue when the composer platform changes", async () => {
     useEnvironmentStore.setState({
       environments: [
@@ -1230,6 +1329,97 @@ describe("AgentNativeTab", () => {
     );
     expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByText("No models available") === null).toBe(true);
+  });
+
+  // A first-use response is scoped to the platform whose bridge just started,
+  // so it legitimately arrives without the platform the picker already had.
+  // Replacing rather than merging would empty the picker the user came from.
+  test("keeps an already-loaded platform when a first-use response omits it", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["cursor", "pi"],
+    });
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "First-use merge",
+          order: 0,
+        } as never,
+      ],
+    });
+    const sessionKey = createSessionKey("env-1", "tab-first-use-merge");
+    useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "cursor" });
+    const cursorModel = {
+      id: "composer-2.5",
+      platform: "cursor" as const,
+      label: "Composer 2.5",
+      providerLabel: "Cursor",
+      supportsSpeed: true,
+      supportsMode: true,
+    };
+    const piModel = {
+      id: "openai-codex/gpt-5.4",
+      platform: "pi" as const,
+      label: "GPT-5.4",
+      providerLabel: "OpenAI Codex",
+      supportsSpeed: false,
+      supportsMode: false,
+    };
+    // The Pi bridge was not running for the first read, so its rows only appear
+    // once the picker asks for that platform by name.
+    getNativeAgentModelCatalogMock.mockImplementation(async (_environmentId, ensureAgent) =>
+      ensureAgent === "pi" ? [piModel] : [cursorModel],
+    );
+
+    render(
+      <AgentNativeTab tabId="tab-first-use-merge" data={{ environmentId: "env-1" }} isActive />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTitle(/Choose model/).textContent).toContain("Composer 2.5"),
+    );
+
+    useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "pi" });
+    await waitFor(() => expect(screen.getByTitle(/Choose model/).textContent).toContain("GPT-5.4"));
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "pi"));
+
+    // Back to Cursor: its rows survived the Pi-only response.
+    useNativeComposeStore.getState().updateDraft(sessionKey, { platform: "cursor" });
+    await waitFor(() =>
+      expect(screen.getByTitle(/Choose model/).textContent).toContain("Composer 2.5"),
+    );
+    expect(screen.queryByText("No models available") === null).toBe(true);
+  });
+
+  // The memo is keyed per environment and platform, so a platform whose bridge
+  // genuinely has no models must not re-trigger a bridge start on every render.
+  test("does not repeat a first-use request that came back without the platform", async () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
+    useEnvironmentStore.setState({
+      environments: [
+        {
+          id: "env-1",
+          projectId: "project-1",
+          name: "First-use empty",
+          order: 0,
+        } as never,
+      ],
+    });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-first-use-empty"), { platform: "pi" });
+    getNativeAgentModelCatalogMock.mockImplementation(async () => []);
+
+    render(
+      <AgentNativeTab tabId="tab-first-use-empty" data={{ environmentId: "env-1" }} isActive />,
+    );
+
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "pi"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1);
   });
 
   test("drops attachments the newly selected platform cannot receive", async () => {

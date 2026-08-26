@@ -22,6 +22,7 @@ import type {
   AgentModel,
   AgentReasoningOption,
 } from "./commands-dependencies.js";
+import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import {
   syncDiffStatsTracking,
   asString,
@@ -36,7 +37,7 @@ import {
   asCachedCodexModels,
   peekLocalAgentBridge,
   peekContainerAgentBridge,
-  fetchAcpNormalizedModels,
+  fetchAcpNormalizedModelsResult,
   parseClaudeBridgeModelCatalog,
   projectPathKey,
   duplicateLocalPathGuard,
@@ -44,11 +45,25 @@ import {
   createProjectFromScratch,
 } from "./commands-helpers.js";
 
+/**
+ * Total extra time a first-use catalogue read may spend starting a bridge and
+ * reading its live list before it answers from the durable cache instead.
+ */
+export const FIRST_USE_CATALOG_BUDGET_MS = 45_000;
+
+/** The share of that budget allowed for the bridge to become ready. */
+export const FIRST_USE_BRIDGE_READY_TIMEOUT_MS = 30_000;
+
+/** The fetch receives only the budget left after bridge readiness work. */
+export function firstUseCatalogFetchTimeoutMs(deadline: number, now = Date.now()): number {
+  return Math.max(1_000, deadline - now);
+}
+
 export function registerProjectCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  const { conditionalManifestSnapshot, runProjectCreationCommand } = dependencies;
+  const { commands, conditionalManifestSnapshot, runProjectCreationCommand } = dependencies;
   register(
     "greet",
     ({ name }) =>
@@ -125,15 +140,105 @@ export function registerProjectCommands(
       redactAppConfig(await storage.loadConfig()),
     ),
   );
-  register("get_agent_model_catalog_cache", (_args, { storage }) =>
-    storage.getAgentModelCatalogCache(),
-  );
-  register("get_native_agent_model_catalog", async ({ environmentId }, context) => {
+  register("ensure_host_pi_model_catalog", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    const cached = (await context.storage.getAgentModelCatalogCache()).pi?.models;
+    if (cached?.length) return cached;
+    const models = await discoverHostPiModelCatalog(context);
+    if (models.length > 0) await context.storage.cacheAgentModelCatalog("pi", models);
+    return models;
+  });
+  register("get_agent_model_catalog_cache", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    let cache = await context.storage.getAgentModelCatalogCache();
+    if (!cache.pi?.models.length) {
+      const config = await context.storage.loadConfig();
+      if (config.global.enabledAgentPlatforms?.includes("pi")) {
+        const ensure = commands.get("ensure_host_pi_model_catalog");
+        if (ensure) {
+          try {
+            await ensure({}, context);
+            cache = await context.storage.getAgentModelCatalogCache();
+          } catch (error) {
+            // Keep startup non-fatal and return every last-known-good catalogue.
+            // The next application launch can retry a transient provider error.
+            console.warn(
+              "[ElectronBackend] Failed to seed the host Pi model catalogue:",
+              error instanceof Error ? error.message : "unknown error",
+            );
+          }
+        }
+      }
+    }
+    return cache;
+  });
+  register("get_native_agent_model_catalog", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "ensureAgent"], "arguments");
     const { storage } = context;
-    const id = asNonBlankString(environmentId, "environmentId");
+    const id = asNonBlankString(args.environmentId, "environmentId");
+    const ensureAgent = args.ensureAgent;
+    if (
+      ensureAgent !== undefined &&
+      ensureAgent !== "cursor" &&
+      ensureAgent !== "grok" &&
+      ensureAgent !== "pi"
+    ) {
+      throw new Error("ensureAgent must be one of: cursor, grok, pi");
+    }
     const environment = await storage.getEnvironment(id);
     if (!environment) throw new Error(`Environment not found: ${id}`);
     const cache = await storage.getAgentModelCatalogCache();
+    // Bounds the extra work a first-use read may add, so the model picker
+    // cannot be left waiting on a cold bridge for an open-ended time. Only the
+    // first-use branch consumes it; a read served from the durable cache is
+    // unaffected.
+    let firstUseDeadline: number | null = null;
+    if (ensureAgent && !cache[ensureAgent]?.models.length) {
+      // The empty-tab picker is the first consumer on a fresh installation, so
+      // there may be neither a live bridge nor a durable last-known-good list.
+      // Start only the platform the user is trying to select; eagerly starting
+      // every enabled bridge would create unused processes in every environment.
+      firstUseDeadline = Date.now() + FIRST_USE_CATALOG_BUDGET_MS;
+      const awaitBridgeReady = commands.get("await_bridge_ready");
+      if (awaitBridgeReady) {
+        try {
+          // The bridge's own health budget is what actually bounds a cold
+          // start; waiting longer here only extends the case where the
+          // environment is still being created, which a picker must not block
+          // on.
+          const ready = (await awaitBridgeReady(
+            {
+              environmentId: id,
+              agent: ensureAgent,
+              timeoutMs: FIRST_USE_BRIDGE_READY_TIMEOUT_MS,
+            },
+            context,
+          )) as { status?: unknown; error?: { message?: unknown } } | undefined;
+          // `await_bridge_ready` reports failure by returning, not throwing. It
+          // is the launch here, so there are no other launch diagnostics to
+          // inherit: without this the user sees an empty picker and nothing
+          // anywhere records why.
+          if (ready && ready.status !== "ready") {
+            console.warn(
+              `[ElectronBackend] The first-use ${ensureAgent} catalogue bridge did not become ready (${
+                typeof ready.status === "string" ? ready.status : "unknown"
+              }): ${typeof ready.error?.message === "string" ? ready.error.message : "no detail"}`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `[ElectronBackend] The first-use ${ensureAgent} catalogue bridge failed to start:`,
+            error instanceof Error ? error.message : "unknown error",
+          );
+        }
+      }
+    }
+    // Only the platform this read is trying to seed is held to the remaining
+    // budget. The others are already answering from local bridge state.
+    const firstUseFetchTimeoutMs = (kind: "cursor" | "grok" | "pi"): number | undefined =>
+      firstUseDeadline !== null && kind === ensureAgent
+        ? firstUseCatalogFetchTimeoutMs(firstUseDeadline)
+        : undefined;
     const claudeModels = environment.claudeModelCatalog?.models ?? cache.claude?.models ?? [];
     const codexModels = cache.codex?.models ?? [];
     // The live catalogue is already filtered by the provider, but a cache
@@ -186,11 +291,19 @@ export function registerProjectCommands(
     const selectableLiveOpenCodeModels = liveOpenCodeModels.filter((model) =>
       isSelectableOpenCodeModelId(model.id, openCodeModelProviders),
     );
-    const [cursorModels, grokModels, piModels] = await Promise.all([
-      fetchAcpNormalizedModels(environment, context, "cursor"),
-      fetchAcpNormalizedModels(environment, context, "grok"),
-      fetchAcpNormalizedModels(environment, context, "pi"),
+    const [cursorFetch, grokFetch, piFetch] = await Promise.all([
+      fetchAcpNormalizedModelsResult(
+        environment,
+        context,
+        "cursor",
+        firstUseFetchTimeoutMs("cursor"),
+      ),
+      fetchAcpNormalizedModelsResult(environment, context, "grok", firstUseFetchTimeoutMs("grok")),
+      fetchAcpNormalizedModelsResult(environment, context, "pi", firstUseFetchTimeoutMs("pi")),
     ]);
+    const cursorModels = cursorFetch.models;
+    const grokModels = grokFetch.models;
+    const piModels = piFetch.models;
     for (const [agent, models] of [
       ["cursor", cursorModels],
       ["grok", grokModels],
@@ -288,7 +401,16 @@ export function registerProjectCommands(
       ...(grokModels.length > 0 ? grokModels : (cache.grok?.models ?? [])),
       ...(piModels.length > 0 ? piModels : (cache.pi?.models ?? [])),
     ];
-    return result;
+    if (!ensureAgent) return result;
+    const ensuredFetch = { cursor: cursorFetch, grok: grokFetch, pi: piFetch }[ensureAgent];
+    return {
+      models: result,
+      status: result.some((model) => model.platform === ensureAgent)
+        ? ("ready" as const)
+        : ensuredFetch.status === "ok"
+          ? ("empty" as const)
+          : ("failed" as const),
+    };
   });
   register("cache_agent_model_catalog", (args, { storage }) => {
     assertOnlyKeys(args, ["agent", "models"], "arguments");

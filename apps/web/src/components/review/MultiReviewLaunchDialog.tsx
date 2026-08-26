@@ -226,7 +226,7 @@ export function MultiReviewLaunchDialog({
         </DialogHeader>
 
         <form
-          className="flex min-h-0 flex-1 flex-col"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
           aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
@@ -235,77 +235,82 @@ export function MultiReviewLaunchDialog({
             onConfirm({ reviewers: reviewers.map(clean), fixModel: clean(fixModel) });
           }}
         >
-          <fieldset
-            disabled={busy}
-            className="min-h-0 flex-1 overflow-y-auto border-0 px-5 py-5 sm:px-6"
+          <div
+            role="region"
+            aria-label="Multi Review model configuration"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold">Review models</h3>
-                <p className="text-xs text-zinc-500">
-                  Each model receives its own isolated review session.
-                </p>
+            <fieldset disabled={busy} className="min-w-0 border-0 px-5 py-5 sm:px-6">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Review models</h3>
+                  <p className="text-xs text-zinc-500">
+                    Each model receives its own isolated review session.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={reviewers.length >= MULTI_REVIEW_MAX_REVIEWERS}
+                  onClick={() =>
+                    setReviewers((rows) =>
+                      rows.length < MULTI_REVIEW_MAX_REVIEWERS ? [...rows, makeRow()] : rows,
+                    )
+                  }
+                >
+                  <Plus className="size-3.5" /> Add model
+                </Button>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={reviewers.length >= MULTI_REVIEW_MAX_REVIEWERS}
-                onClick={() =>
-                  setReviewers((rows) =>
-                    rows.length < MULTI_REVIEW_MAX_REVIEWERS ? [...rows, makeRow()] : rows,
-                  )
-                }
-              >
-                <Plus className="size-3.5" /> Add model
-              </Button>
-            </div>
-            <div className="space-y-2.5">
-              {reviewers.map((row, index) => (
-                <ModelRow
-                  key={row.key}
-                  row={row}
-                  label={`Reviewer ${index + 1}`}
-                  models={models}
-                  catalog={catalog}
-                  preferredReasoningEfforts={preferredReasoningEfforts}
-                  favorites={favorites}
-                  onToggleFavorite={toggleFavorite}
-                  onReorderFavorites={reorderFavorites}
-                  onChange={(next) =>
-                    setReviewers((rows) => rows.map((item) => (item.key === row.key ? next : item)))
-                  }
-                  onRemove={
-                    reviewers.length > 1
-                      ? () => setReviewers((rows) => rows.filter((item) => item.key !== row.key))
-                      : undefined
-                  }
-                />
-              ))}
-            </div>
+              <div className="space-y-2.5">
+                {reviewers.map((row, index) => (
+                  <ModelRow
+                    key={row.key}
+                    row={row}
+                    label={`Reviewer ${index + 1}`}
+                    models={models}
+                    catalog={catalog}
+                    preferredReasoningEfforts={preferredReasoningEfforts}
+                    favorites={favorites}
+                    onToggleFavorite={toggleFavorite}
+                    onReorderFavorites={reorderFavorites}
+                    onChange={(next) =>
+                      setReviewers((rows) =>
+                        rows.map((item) => (item.key === row.key ? next : item)),
+                      )
+                    }
+                    onRemove={
+                      reviewers.length > 1
+                        ? () => setReviewers((rows) => rows.filter((item) => item.key !== row.key))
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
 
-            <div className="my-5 flex items-center gap-3 text-zinc-500" aria-hidden="true">
-              <span className="h-px flex-1 bg-zinc-800" />
-              <Wrench className="size-3.5" />
-              <span className="h-px flex-1 bg-zinc-800" />
-            </div>
-            <ModelRow
-              row={fixModel}
-              label="Consolidation & fix model"
-              models={models}
-              catalog={catalog}
-              preferredReasoningEfforts={preferredReasoningEfforts}
-              favorites={favorites}
-              onToggleFavorite={toggleFavorite}
-              onReorderFavorites={reorderFavorites}
-              onChange={setFixModel}
-            />
-            <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-              This model deduplicates every report and remains attached to address the final issues
-              and coverage gaps.
-            </p>
-          </fieldset>
+              <div className="my-5 flex items-center gap-3 text-zinc-500" aria-hidden="true">
+                <span className="h-px flex-1 bg-zinc-800" />
+                <Wrench className="size-3.5" />
+                <span className="h-px flex-1 bg-zinc-800" />
+              </div>
+              <ModelRow
+                row={fixModel}
+                label="Consolidation & fix model"
+                models={models}
+                catalog={catalog}
+                preferredReasoningEfforts={preferredReasoningEfforts}
+                favorites={favorites}
+                onToggleFavorite={toggleFavorite}
+                onReorderFavorites={reorderFavorites}
+                onChange={setFixModel}
+              />
+              <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+                This model deduplicates every report and remains attached to address the final
+                issues and coverage gaps.
+              </p>
+            </fieldset>
+          </div>
 
           <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
             <Button

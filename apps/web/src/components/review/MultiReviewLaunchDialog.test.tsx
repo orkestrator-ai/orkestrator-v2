@@ -66,6 +66,68 @@ describe("MultiReviewLaunchDialog", () => {
     });
   });
 
+  test("keeps added models and consolidation controls in the scroll region outside the footer", () => {
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+
+    const scrollRegion = screen.getByRole("region", {
+      name: "Multi Review model configuration",
+    });
+    expect(scrollRegion.className).toContain("overflow-y-auto");
+    expect(scrollRegion.contains(screen.getByLabelText("Reviewer 3 model"))).toBe(true);
+    expect(scrollRegion.contains(screen.getByLabelText("Consolidation & fix model model"))).toBe(
+      true,
+    );
+    expect(
+      scrollRegion.contains(screen.getByRole("button", { name: "Start 3-model review" })),
+    ).toBe(false);
+    expect(scrollRegion.getAttribute("tabindex")).toBeNull();
+  });
+
+  test("disables every model control and guards dismissal and submission while busy", () => {
+    const onOpenChange = mock((_open: boolean) => undefined);
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        busy
+        onOpenChange={onOpenChange}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    for (const name of [
+      "Reviewer 1 model",
+      "Reviewer 2 model",
+      "Consolidation & fix model model",
+    ]) {
+      expect(screen.getByLabelText(name).closest("fieldset")?.disabled).toBe(true);
+    }
+
+    const startButton = screen.getByRole("button", { name: "Starting Multi Review…" });
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    const form = startButton.closest("form")!;
+    expect((startButton as HTMLButtonElement).disabled).toBe(true);
+    expect((cancelButton as HTMLButtonElement).disabled).toBe(true);
+    expect(form.getAttribute("aria-busy")).toBe("true");
+
+    fireEvent.submit(form);
+    fireEvent.click(cancelButton);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   /**
    * The favourites view mixes every platform's models into one list, so a row
    * chosen there routinely belongs to a platform other than the row's current

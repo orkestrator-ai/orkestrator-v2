@@ -10,6 +10,7 @@ import type {
   StorageService,
   FeaturePlanningService,
 } from "./commands-dependencies.js";
+import type { ControlMcpSettings } from "./control-mcp-server.js";
 
 export type BackendEmit = (event: string, payload: unknown) => void;
 
@@ -38,6 +39,10 @@ export type CommandContext = {
   loopedReviews?: LoopedReviewService;
   multiReviews?: MultiReviewService;
   featurePlanning?: FeaturePlanningService;
+  controlMcp?: {
+    getSettings(): ControlMcpSettings;
+    rotateToken(): Promise<ControlMcpSettings>;
+  };
   notifyAgentTurnCompleted?: (environmentId: string) => Promise<void>;
   probeAgentCreatedPullRequest?: (environmentId: string) => Promise<void>;
 };

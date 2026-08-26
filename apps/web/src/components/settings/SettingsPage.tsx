@@ -14,6 +14,7 @@ import {
   Sparkles,
   Boxes,
   SlidersHorizontal,
+  Cable,
 } from "lucide-react";
 import {
   ClaudeIcon,
@@ -25,6 +26,7 @@ import {
 } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
+import { McpSettings } from "./McpSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
 
 const MENU_ITEMS: SettingsMenuItem[] = [
@@ -42,6 +44,7 @@ const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
+  { id: "mcp", label: "MCP", icon: <Cable className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
   { id: "experimental", label: "Experimental", icon: <FlaskConical className="h-4 w-4" /> },
   { id: "debug", label: "Debug", icon: <Bug className="h-4 w-4" /> },
@@ -89,6 +92,8 @@ export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
         // config form, so it bypasses GlobalSettings and its Reset/Save bar.
         activeSection === "skills" ? (
           <SkillsSettings />
+        ) : activeSection === "mcp" ? (
+          <McpSettings />
         ) : isLoading && !initialLoadDone ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

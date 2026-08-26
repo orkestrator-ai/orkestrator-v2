@@ -78,6 +78,39 @@ describe("StorageService Kanban mutation serialization", () => {
     });
   });
 
+  test("converges concurrent ticket and comment retries on one durable append", async () => {
+    await withStoragePair(async (first, second) => {
+      const [created, retried] = await Promise.all([
+        first.addKanbanTask("project-1", "Idempotent", "Details", {
+          acceptanceCriteria: "One record",
+          requestId: "ticket-request-1",
+        }),
+        second.addKanbanTask("project-1", "Idempotent", "Details", {
+          acceptanceCriteria: "One record",
+          requestId: "ticket-request-1",
+        }),
+      ]);
+      expect(retried.id).toBe(created.id);
+      expect(await first.getKanbanTasks("project-1")).toHaveLength(1);
+
+      const [firstComment, secondComment] = await Promise.all([
+        first.addKanbanComment(created.id, "Exactly once", "project-1", "comment-request-1"),
+        second.addKanbanComment(created.id, "Exactly once", "project-1", "comment-request-1"),
+      ]);
+      expect(firstComment.comments).toHaveLength(1);
+      expect(secondComment.comments).toHaveLength(1);
+
+      await expect(
+        first.addKanbanTask("project-1", "Changed", "Details", {
+          requestId: "ticket-request-1",
+        }),
+      ).rejects.toThrow("requestId was already used");
+      await expect(
+        second.addKanbanComment(created.id, "Changed", "project-1", "comment-request-1"),
+      ).rejects.toThrow("requestId was already used");
+    });
+  });
+
   test("preserves concurrent updates and comments on the same task", async () => {
     await withStoragePair(async (first, second) => {
       const task = await first.addKanbanTask("project-1", "Initial", "Initial");

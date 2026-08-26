@@ -20,6 +20,9 @@ export const LEGACY_PANE_LAYOUT_VERSION = 1;
 export const PROVIDER_NATIVE_PANE_LAYOUT_VERSION = 2;
 export const PANE_LAYOUT_VERSION = 3;
 
+/** Matches the nine direct tab-selection shortcuts exposed by the renderer. */
+export const MAX_TABS_PER_ENVIRONMENT = 9;
+
 export const PANE_LAYOUT_UNSUPPORTED_VERSION_MARKER = "Unsupported pane layout version:";
 
 export function paneLayoutUnsupportedVersionMessage(version: number): string {

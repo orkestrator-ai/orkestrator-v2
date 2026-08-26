@@ -64,6 +64,7 @@ import {
 import {
   deleteAgentHandoff,
   forkNativeAgentSession,
+  getCursorAccountUsage,
   getNativeAgentProjection,
   performNativeAgentSessionAction,
   stopNativeAgentBackgroundTask,
@@ -77,6 +78,7 @@ import {
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import type { NativeAgentControlUpdate } from "@orkestrator/protocol/native-agent";
+import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
 import {
   AGENT_PLATFORMS,
   AGENT_PLATFORM_LABELS,
@@ -144,6 +146,7 @@ function resolveActiveNativeSession(tab: TabInfo | null): ActiveNativeSession | 
 import {
   AgentRuntimePanel,
   CodexRuntimePanel,
+  CursorAccountUsagePanel,
   type AgentInfoUsageSnapshot,
   Metric,
   UsagePanel,
@@ -166,6 +169,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const [handoffOpen, setHandoffOpen] = useState(false);
   const [busyState, setBusyState] = useState<SessionActionState | null>(null);
   const [codexHealth, setCodexHealth] = useState<unknown>(null);
+  const [cursorAccountUsage, setCursorAccountUsage] = useState<CursorUsageResult | null>(null);
+  const [cursorAccountUsageLoading, setCursorAccountUsageLoading] = useState(false);
   const [steerState, setSteerState] = useState<SessionValueState<string>>({
     sessionIdentity: null,
     value: "",
@@ -491,6 +496,36 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     };
   }, [activeSession?.provider, codexClient, currentSessionId, open]);
   /* oxlint-enable react-hooks/exhaustive-deps */
+
+  useEffect(() => {
+    if (!open || activeSession?.provider !== "cursor") {
+      setCursorAccountUsageLoading(false);
+      if (activeSession?.provider !== "cursor") setCursorAccountUsage(null);
+      return;
+    }
+    let cancelled = false;
+    setCursorAccountUsageLoading(true);
+    void getCursorAccountUsage()
+      .then((result) => {
+        if (!cancelled) setCursorAccountUsage(result);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCursorAccountUsage({
+            ok: false,
+            code: "NETWORK_ERROR",
+            message: "Could not load Cursor account usage.",
+            retryable: true,
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCursorAccountUsageLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSession?.provider, open]);
 
   const openForkTab = (
     sessionId: string,
@@ -981,15 +1016,27 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
         <div className="max-h-[min(76vh,42rem)] overflow-y-auto p-4">
           {activeSession ? (
             <div className="space-y-5">
-              <UsagePanel
-                usage={usage}
-                modelId={modelId}
-                rateLimits={
-                  activeSession.provider === "claude"
-                    ? (claudeRateLimits ?? neutralRateLimits)
-                    : undefined
+              {activeSession.provider === "cursor" ? (
+                <CursorAccountUsagePanel
+                  result={cursorAccountUsage}
+                  loading={cursorAccountUsageLoading}
+                />
+              ) : null}
+              <div
+                className={
+                  activeSession.provider === "cursor" ? "border-t border-border/60 pt-4" : undefined
                 }
-              />
+              >
+                <UsagePanel
+                  usage={usage}
+                  modelId={modelId}
+                  rateLimits={
+                    activeSession.provider === "claude"
+                      ? (claudeRateLimits ?? neutralRateLimits)
+                      : undefined
+                  }
+                />
+              </div>
 
               {(activeSession.provider === "claude" && (claudeInit?.agents?.length ?? 0) > 0) ||
               (activeSession.provider === "opencode" && (openCodeHealth?.agents.length ?? 0) > 0) ||

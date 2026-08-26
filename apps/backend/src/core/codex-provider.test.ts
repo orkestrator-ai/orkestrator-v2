@@ -72,7 +72,20 @@ describe("HTTP bridge provider (codex)", () => {
           mcp: { data: [{ name: "docs" }] },
           skills: { data: [{ skills: [{ name: "review" }] }] },
           hooks: { data: [{ hooks: [{ eventName: "preTurn" }] }] },
-          notices: [{ message: "Using fallback config" }],
+          notices: [
+            {
+              method: "configWarning",
+              message: "Codex reported configWarning",
+              detail: "Using fallback config",
+              receivedAt: "2026-08-26T20:00:00.000Z",
+            },
+            {
+              method: "configWarning",
+              message: "Codex reported configWarning",
+              detail: "The replacement config was loaded",
+              receivedAt: "2026-08-26T20:01:00.000Z",
+            },
+          ],
         });
       }
       return Response.json({
@@ -99,6 +112,23 @@ describe("HTTP bridge provider (codex)", () => {
         hooks: 1,
         state: "ready",
         version: "0.145.0",
+        notices: [
+          {
+            method: "configWarning",
+            message: "Codex reported configWarning",
+            count: 2,
+            occurrences: [
+              {
+                detail: "Using fallback config",
+                receivedAt: "2026-08-26T20:00:00.000Z",
+              },
+              {
+                detail: "The replacement config was loaded",
+                receivedAt: "2026-08-26T20:01:00.000Z",
+              },
+            ],
+          },
+        ],
       },
     });
     expect(requests.map((request) => request.url)).toEqual([
@@ -106,6 +136,61 @@ describe("HTTP bridge provider (codex)", () => {
       "http://codex.test/session/codex-1/messages",
       "http://codex.test/session/codex-1/config",
       "http://codex.test/session/codex-1/runtime-health",
+    ]);
+  });
+
+  test("keeps notice methods separate and retains the five newest occurrences", async () => {
+    const repeatedWarnings = Array.from({ length: 7 }, (_, index) => ({
+      method: "warning",
+      message: "Codex reported advisory",
+      detail: `warning ${index}`,
+      receivedAt: `2026-08-26T20:0${index}:00.000Z`,
+    }));
+    const { provider } = httpProvider((url) => {
+      if (url.endsWith("/messages")) return Response.json({ messages: [] });
+      if (url.endsWith("/config")) return Response.json({ mode: "build" });
+      if (url.endsWith("/runtime-health")) {
+        return Response.json({
+          engine: { state: "ready" },
+          notices: [
+            repeatedWarnings[0],
+            {
+              method: "configWarning",
+              message: "Codex reported advisory",
+              detail: "configuration warning",
+              receivedAt: "2026-08-26T20:00:30.000Z",
+            },
+            ...repeatedWarnings.slice(1),
+          ],
+        });
+      }
+      return Response.json({ status: "idle", phase: "idle", messageRevision: 1 });
+    }, codexConnection);
+
+    const snapshot = await provider.interactiveSnapshot?.("codex-1");
+    expect(snapshot?.runtime?.notices).toEqual([
+      {
+        method: "configWarning",
+        message: "Codex reported advisory",
+        occurrences: [
+          {
+            detail: "configuration warning",
+            receivedAt: "2026-08-26T20:00:30.000Z",
+          },
+        ],
+      },
+      {
+        method: "warning",
+        message: "Codex reported advisory",
+        count: 7,
+        occurrences: [
+          { detail: "warning 2", receivedAt: "2026-08-26T20:02:00.000Z" },
+          { detail: "warning 3", receivedAt: "2026-08-26T20:03:00.000Z" },
+          { detail: "warning 4", receivedAt: "2026-08-26T20:04:00.000Z" },
+          { detail: "warning 5", receivedAt: "2026-08-26T20:05:00.000Z" },
+          { detail: "warning 6", receivedAt: "2026-08-26T20:06:00.000Z" },
+        ],
+      },
     ]);
   });
 

@@ -305,9 +305,54 @@ interface TerminalWaiter {
 }
 
 interface RuntimeNotice {
+  global: boolean;
+  method: string;
+  detail?: string;
+  receivedAt: string;
+  threadId?: string;
+}
+
+interface RuntimeHealthNotice {
   method: string;
   message: string;
+  detail?: string;
   receivedAt: string;
+}
+
+function redactRuntimeNoticeDetail(value: string): string {
+  return redactSecrets(value)
+    .replace(/\bfile:\/\/[^\s"'`),;]+/gi, "[path redacted]")
+    .replace(/\\\\[^\\\s"'`),;]+\\[^\s"'`),;]*/g, "[path redacted]")
+    .replace(/\b[A-Z]:[\\/][^\s"'`),;]*/gi, "[path redacted]")
+    .replace(/(^|[\s("'`=])~\/[^\s"'`),;]*/g, "$1[path redacted]")
+    .replace(/(^|[\s("'`=])\/(?:[^\s"'`),;]+\/)+[^\s"'`),;]*/g, "$1[path redacted]")
+    .replace(
+      /(^|[\s("'`=])\/(?:dev|etc|home|opt|private|proc|run|srv|tmp|usr|var)(?=$|[\s"'`),;])/g,
+      "$1[path redacted]",
+    )
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[identity redacted]")
+    .slice(0, 1_000);
+}
+
+function runtimeNoticeDetail(method: string, params: Record<string, unknown>): string | undefined {
+  const strings = (...values: unknown[]) =>
+    values.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  let parts: string[];
+  if (method === "mcpServer/startupStatus/updated") {
+    const status = strings(params.name, params.status).join(": ");
+    parts = [status, ...strings(params.error, params.failureReason)];
+  } else if (method === "configWarning" || method === "deprecationNotice") {
+    parts = strings(params.summary, params.details);
+  } else if (method === "model/rerouted") {
+    const route = strings(params.fromModel, params.toModel).join(" → ");
+    parts = [route, ...strings(params.reason)];
+  } else {
+    parts = strings(params.message, params.reason, params.error, params.status);
+  }
+
+  const detail = parts.filter(Boolean).join("\n");
+  return detail ? redactRuntimeNoticeDetail(detail) : undefined;
 }
 
 const DEFAULT_INTERRUPT_TIMEOUT_MS = 15_000;
@@ -538,18 +583,21 @@ export class AppServerEngine implements CodexEngine {
         !Array.isArray(notification.params)
           ? (notification.params as Record<string, unknown>)
           : {};
-      const message =
-        [params.message, params.reason, params.error, params.status].find(
-          (value): value is string => typeof value === "string" && value.length > 0,
-        ) ?? notification.method.replaceAll("/", " ");
+      const detail = runtimeNoticeDetail(notification.method, params);
+      const threadId =
+        typeof params.threadId === "string" && params.threadId.length > 0
+          ? params.threadId
+          : undefined;
       this.runtimeNotices.push({
+        global:
+          notification.method === "configWarning" || notification.method === "deprecationNotice",
         method: notification.method,
         // Redacted at *capture*, not on the way out: MCP-server startup errors
         // are the likeliest place for a real token or a credentialed URL to
-        // appear, and `/session/:id/runtime-health` serves these cross-origin
-        // with no auth. Truncate afterwards so redaction sees whole tokens.
-        message: redactSecrets(message).slice(0, 1_000),
+        // appear. Truncate afterwards so redaction sees whole tokens.
+        ...(detail ? { detail } : {}),
         receivedAt: new Date().toISOString(),
+        ...(threadId ? { threadId } : {}),
       });
       if (this.runtimeNotices.length > 100) this.runtimeNotices.shift();
     }
@@ -758,7 +806,7 @@ export class AppServerEngine implements CodexEngine {
   }
 
   /** One authenticated, allowlisted snapshot of the running child. */
-  async getRuntimeHealth(threadId?: string): Promise<{
+  async getRuntimeHealth(threadId?: string | null): Promise<{
     engine: {
       state: string;
       generation: number;
@@ -780,7 +828,7 @@ export class AppServerEngine implements CodexEngine {
     mcp: unknown;
     skills: unknown;
     hooks: unknown;
-    notices: RuntimeNotice[];
+    notices: RuntimeHealthNotice[];
     rateLimits: unknown;
   }> {
     const [mcp, skills, hooks, rateLimits] = await Promise.allSettled([
@@ -816,14 +864,14 @@ export class AppServerEngine implements CodexEngine {
       mcp: allowlistRuntimeInventory(value(mcp), "mcp"),
       skills: allowlistRuntimeInventory(value(skills), "skills"),
       hooks: allowlistRuntimeInventory(value(hooks), "hooks"),
-      notices: this.runtimeNotices.map((notice) => ({
-        method: notice.method,
-        // Provider notice text is an error/log channel and routinely contains
-        // absolute paths, account identity, commands, and filenames. The panel
-        // needs to know that a notice occurred, not receive that raw payload.
-        message: `Codex reported ${notice.method.replaceAll("/", " ")}`,
-        receivedAt: notice.receivedAt,
-      })),
+      notices: this.runtimeNotices
+        .filter((notice) => threadId === undefined || notice.global || notice.threadId === threadId)
+        .map((notice) => ({
+          method: notice.method,
+          message: `Codex reported ${notice.method.replaceAll("/", " ")}`,
+          ...(notice.detail ? { detail: notice.detail } : {}),
+          receivedAt: notice.receivedAt,
+        })),
       rateLimits: allowlistRateLimits(value(rateLimits)),
     };
   }

@@ -1,8 +1,21 @@
 import { useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
-import type { NativeAgentRuntimeSummary } from "@orkestrator/protocol/native-agent";
+import type {
+  NativeAgentRuntimeNotice,
+  NativeAgentRuntimeNoticeOccurrence,
+  NativeAgentRuntimeSummary,
+} from "@orkestrator/protocol/native-agent";
 import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
 
 function formatUsd(value: number): string {
@@ -127,6 +140,133 @@ function inventoryCount(value: unknown): number {
     }, 0);
   }
   return Object.keys(record(value)).filter((key) => key !== "error").length;
+}
+
+function formatNoticeTime(value: string | undefined): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : null;
+}
+
+function runtimeNoticeGroups(
+  health: unknown,
+  runtime?: NativeAgentRuntimeSummary,
+): NativeAgentRuntimeNotice[] {
+  if (runtime) return (runtime.notices ?? []).slice(-5);
+  const snapshot = record(health);
+  const notices = Array.isArray(snapshot.notices) ? snapshot.notices : [];
+  const grouped = new Map<string, NativeAgentRuntimeNotice>();
+  for (const candidate of notices) {
+    const item = record(candidate);
+    if (typeof item.message !== "string" || item.message.length === 0) continue;
+    const method = typeof item.method === "string" ? item.method : undefined;
+    const key = `${method ?? ""}\u0000${item.message}`;
+    const existing = grouped.get(key);
+    const occurrence: NativeAgentRuntimeNoticeOccurrence = {
+      ...(typeof item.detail === "string" && item.detail.length > 0 ? { detail: item.detail } : {}),
+      ...(typeof item.receivedAt === "string" && item.receivedAt.length > 0
+        ? { receivedAt: item.receivedAt }
+        : {}),
+    };
+    const occurrences = [
+      ...(existing?.occurrences ?? []),
+      ...(Object.keys(occurrence).length > 0 ? [occurrence] : []),
+    ].slice(-5);
+    if (existing) grouped.delete(key);
+    grouped.set(key, {
+      message: item.message,
+      ...(method ? { method } : {}),
+      count: (existing?.count ?? 0) + 1,
+      ...(occurrences.length > 0 ? { occurrences } : {}),
+    });
+  }
+  return [...grouped.values()].slice(-5);
+}
+
+function RuntimeNoticeCard({
+  notice,
+  noticeId,
+  openNoticeId,
+  onOpenNoticeChange,
+}: {
+  notice: NativeAgentRuntimeNotice;
+  noticeId: string;
+  openNoticeId: string | null;
+  onOpenNoticeChange: (noticeId: string | null) => void;
+}) {
+  const count = notice.count ?? 1;
+  const occurrences = notice.occurrences ?? [];
+  return (
+    <Dialog
+      open={openNoticeId === noticeId}
+      onOpenChange={(open) => onOpenNoticeChange(open ? noticeId : null)}
+    >
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          className="group flex w-full items-center gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-left text-xs text-amber-100/80 transition-colors hover:border-amber-400/35 hover:bg-amber-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/60"
+          aria-label={`Show details for ${notice.message}`}
+        >
+          <span className="min-w-0 flex-1">
+            {notice.message}
+            {count > 1 ? ` (${count})` : ""}
+          </span>
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform group-hover:translate-x-0.5 group-hover:opacity-90" />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-w-xl border-amber-500/20 bg-zinc-950 sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Codex runtime notice</DialogTitle>
+          <DialogDescription>
+            {count === 1 ? "One occurrence" : `${count} occurrences`}. Sensitive values and local
+            paths are redacted.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+            <div className="text-sm font-medium text-amber-100">{notice.message}</div>
+            {notice.method ? (
+              <div className="mt-1 font-mono text-[11px] text-amber-100/55">{notice.method}</div>
+            ) : null}
+          </div>
+          {occurrences.length > 0 ? (
+            <div className="max-h-[min(55vh,28rem)] space-y-2 overflow-y-auto pr-1">
+              {occurrences.map((occurrence, index) => {
+                const time = formatNoticeTime(occurrence.receivedAt);
+                return (
+                  <div
+                    key={`${occurrence.receivedAt ?? "unknown"}-${index}`}
+                    className="rounded-lg border border-border/70 bg-muted/20 p-3"
+                  >
+                    {time ? (
+                      <time
+                        dateTime={occurrence.receivedAt}
+                        className="mb-1.5 block text-[10px] uppercase tracking-[0.12em] text-muted-foreground"
+                      >
+                        {time}
+                      </time>
+                    ) : null}
+                    <div className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-foreground/85">
+                      {occurrence.detail ?? "Codex did not provide additional detail."}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border/70 bg-muted/20 p-3 text-sm text-muted-foreground">
+              Codex did not provide additional detail for this notice.
+            </div>
+          )}
+          {count > occurrences.length && occurrences.length > 0 ? (
+            <p className="text-[11px] text-muted-foreground">
+              Showing the {occurrences.length} most recent occurrences.
+            </p>
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 /**
@@ -259,10 +399,15 @@ export function codexLimitsFromHealth(health: unknown): {
 export function CodexRuntimePanel({
   health,
   runtime,
+  openNoticeId,
+  onOpenNoticeChange,
 }: {
   health: unknown;
   runtime?: NativeAgentRuntimeSummary;
+  openNoticeId: string | null;
+  onOpenNoticeChange: (noticeId: string | null) => void;
 }) {
+  const notices = runtimeNoticeGroups(health, runtime);
   if (runtime) {
     return (
       <div className="space-y-3">
@@ -275,15 +420,22 @@ export function CodexRuntimePanel({
           <span>{runtime.state ?? "state unavailable"}</span>
           <span>{runtime.version ? `Codex ${runtime.version}` : "version unavailable"}</span>
         </div>
-        {(runtime.notices ?? []).slice(-5).map((notice) => (
-          <div
-            key={notice.message}
-            className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-100/80"
-          >
-            {notice.message}
-            {(notice.count ?? 1) > 1 ? ` (${notice.count})` : ""}
+        {notices.length > 0 ? (
+          <div className="space-y-1.5">
+            {notices.map((notice) => {
+              const noticeId = `${notice.method ?? "notice"}\u0000${notice.message}`;
+              return (
+                <RuntimeNoticeCard
+                  key={noticeId}
+                  notice={notice}
+                  noticeId={noticeId}
+                  openNoticeId={openNoticeId}
+                  onOpenNoticeChange={onOpenNoticeChange}
+                />
+              );
+            })}
           </div>
-        ))}
+        ) : null}
       </div>
     );
   }
@@ -292,25 +444,6 @@ export function CodexRuntimePanel({
   }
   const snapshot = record(health);
   const engine = record(snapshot.engine);
-  const notices = Array.isArray(snapshot.notices)
-    ? snapshot.notices.flatMap((notice) => {
-        const item = record(notice);
-        return typeof item.message === "string" ? [item] : [];
-      })
-    : [];
-  const groupedNotices = new Map<string, { message: string; count: number }>();
-  for (const notice of notices) {
-    const message = String(notice.message);
-    const existing = groupedNotices.get(message);
-    // Reinsert repeated notices so the five-item limit is based on the most
-    // recent occurrence of each distinct announcement.
-    if (existing) groupedNotices.delete(message);
-    groupedNotices.set(message, {
-      message,
-      count: (existing?.count ?? 0) + 1,
-    });
-  }
-  const recentNotices = [...groupedNotices.values()].slice(-5);
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
@@ -326,17 +459,20 @@ export function CodexRuntimePanel({
             : "version unavailable"}
         </span>
       </div>
-      {recentNotices.length > 0 ? (
+      {notices.length > 0 ? (
         <div className="space-y-1.5">
-          {recentNotices.map((notice) => (
-            <div
-              key={notice.message}
-              className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2 text-xs text-amber-100/80"
-            >
-              {notice.message}
-              {notice.count > 1 ? ` (${notice.count})` : ""}
-            </div>
-          ))}
+          {notices.map((notice) => {
+            const noticeId = `${notice.method ?? "notice"}\u0000${notice.message}`;
+            return (
+              <RuntimeNoticeCard
+                key={noticeId}
+                notice={notice}
+                noticeId={noticeId}
+                openNoticeId={openNoticeId}
+                onOpenNoticeChange={onOpenNoticeChange}
+              />
+            );
+          })}
         </div>
       ) : null}
     </div>

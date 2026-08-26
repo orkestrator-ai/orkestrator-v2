@@ -887,7 +887,9 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
   async getRuntimeHealth(sessionId: string): Promise<unknown | null> {
     const session = this.registry.getSession(sessionId);
     if (!session) return null;
-    return this.options.engine.getRuntimeHealth(session.threadId ?? undefined);
+    // A known session without a materialized thread sees engine-global notices
+    // only. `undefined` is reserved for the engine-wide operator snapshot.
+    return this.options.engine.getRuntimeHealth(session.threadId ?? null);
   }
 
   /**

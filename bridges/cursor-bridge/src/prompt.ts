@@ -10,6 +10,7 @@ import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-o
 import type { ModelSelection, SDKAgent, SDKImage, TokenUsage } from "@cursor/sdk";
 import {
   CANCEL_ACK_TIMEOUT_MS,
+  CATALOG_TIMEOUT_MS,
   MAX_PROMPT_JOURNAL,
   MAX_STRUCTURED_RESULT_BYTES,
   MAX_STRUCTURED_RESULTS,
@@ -26,6 +27,7 @@ import {
   type SessionState,
   type TurnUsage,
   isObject,
+  turnTokenTotal,
 } from "./state.js";
 
 export const STRUCTURED_PROMPT_INSTRUCTION_PREFIX = "End your turn with exactly one JSON value";
@@ -312,7 +314,11 @@ function recordUsage(
   const elapsed =
     result?.durationMs ?? (state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined);
   const modelId = result?.model?.id ?? state.composer.selectedModelId;
-  if (turn && Object.keys(turn).length > 0) {
+  const previous = state.usage;
+  const measured = turn !== undefined && Object.keys(turn).length > 0;
+  const previousFloor = Math.max(previous?.sessionTokenFloor ?? 0, previous?.sessionTokens ?? 0);
+  const sessionTokenFloor = previousFloor + (measured ? turnTokenTotal(turn) : 0);
+  if (measured) {
     state.usage = {
       turn,
       // Recorded only when it is genuinely a second reading. A run that
@@ -321,11 +327,160 @@ function recordUsage(
       ...(context && context !== turn && Object.keys(context).length > 0 ? { context } : {}),
       ...(modelId ? { modelId } : {}),
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
+      // Carried forward rather than rebuilt from nothing. These are cumulative
+      // account figures, not per-turn ones: dropping them would blank a number
+      // the user could already see for as long as the supplemental read below
+      // takes to answer, and would leave that read with no baseline to test an
+      // eventually consistent total against.
+      ...(previous?.sessionTokens !== undefined ? { sessionTokens: previous.sessionTokens } : {}),
+      // Durable even before the asynchronous account read settles. A newer turn
+      // or a bridge restart must retain the spend that is not in the displayed
+      // provider snapshot yet.
+      sessionTokenFloor,
+      ...(previous?.costUsd !== undefined ? { costUsd: previous.costUsd } : {}),
       updatedAt: new Date().toISOString(),
     };
   }
   state.currentTurnUsage = undefined;
   state.turnStartedAt = undefined;
+  // The smallest cumulative total that can already account for this turn.
+  // Computed here, once, while both halves are still in hand: the refresh
+  // overwrites `sessionTokens` with the new cumulative, so a retry that
+  // recomputed this from the session would compare against its own answer.
+  scheduleAgentUsageRefresh(state, sessionTokenFloor);
+}
+
+/**
+ * Cursor's run result answers what the latest turn spent. `agent.getUsage()`
+ * answers the other half of the SDK's usage surface: cumulative billed tokens
+ * and the amount actually charged across this durable agent. Keep that account
+ * read off the terminal path — a billing response that is slow or eventually
+ * consistent must not hold the session busy after the run itself ended.
+ */
+const AGENT_USAGE_RETRY_DELAYS_MS = [2_000, 10_000] as const;
+
+type AgentUsageRefreshResult = "complete" | "retry" | "stale";
+
+/**
+ * Start the account read and follow it through its bounded retries.
+ *
+ * `delaysMs` and `timeoutMs` are parameters for the same reason `followRun`
+ * takes its budget: the retry schedule is a policy input, and a test that had
+ * to wait out the real one would spend twelve seconds proving a branch that is
+ * pure control flow. Never awaited — the caller is on the turn's terminal path.
+ */
+export function scheduleAgentUsageRefresh(
+  state: SessionState,
+  minimumSessionTokens: number,
+  delaysMs: readonly number[] = AGENT_USAGE_RETRY_DELAYS_MS,
+  timeoutMs: number = CATALOG_TIMEOUT_MS,
+  previousCostUsd: number | undefined = state.usage?.costUsd,
+): void {
+  const agent = state.agent;
+  const promptSequence = state.promptSequence;
+  if (!agent || !state.usage) return;
+
+  const run = async (retryIndex: number): Promise<void> => {
+    const outcome = await refreshAgentUsage(
+      state,
+      agent,
+      promptSequence,
+      minimumSessionTokens,
+      timeoutMs,
+      previousCostUsd,
+    );
+    if (outcome !== "retry" || retryIndex >= delaysMs.length) return;
+    const timer = setTimeout(() => void run(retryIndex + 1), delaysMs[retryIndex]);
+    timer.unref();
+  };
+  // `refreshAgentUsage` never rejects — every failure of the account read is
+  // already folded into a "retry" — so this cannot leave an unhandled
+  // rejection behind on a path nothing is watching.
+  void run(0);
+}
+
+/**
+ * Merge Cursor's cumulative billed-usage view into the latest turn snapshot.
+ *
+ * `minimumSessionTokens` is the smallest cumulative total that can already
+ * account for the turn that just ended — the previous cumulative plus this
+ * turn's spend. It is supplied rather than derived because by the time a retry
+ * runs, the snapshot may already hold the answer this check exists to validate.
+ *
+ * Exported for a focused contract test. Never rejects, and the parser remains
+ * structural on purpose: an older vendored runtime can return a partial object,
+ * and usage is supplemental information rather than a reason to fail an
+ * otherwise complete turn.
+ */
+export async function refreshAgentUsage(
+  state: SessionState,
+  agent: Pick<SDKAgent, "getUsage">,
+  promptSequence: number,
+  minimumSessionTokens: number,
+  timeoutMs: number = CATALOG_TIMEOUT_MS,
+  previousCostUsd?: number,
+): Promise<AgentUsageRefreshResult> {
+  if (state.promptSequence !== promptSequence || !state.usage) return "stale";
+
+  const report = await withTimeout(
+    Promise.resolve().then(() => agent.getUsage()),
+    timeoutMs,
+  ).catch(() => undefined);
+  if (state.promptSequence !== promptSequence || !state.usage) return "stale";
+  if (!isObject(report)) return "retry";
+
+  const totals = isObject(report.usage) ? report.usage : undefined;
+  const reportedSessionTokens = nonNegativeNumber(totals?.totalTokens);
+  const current = state.usage;
+  const durableFloor = Math.max(
+    minimumSessionTokens,
+    current.sessionTokenFloor ?? 0,
+    current.sessionTokens ?? 0,
+  );
+  // The billed endpoint is eventually consistent too. A cumulative total that
+  // cannot yet account for the turn just recorded is an older view of the
+  // account, so nothing in that report — its charge included — is usable.
+  // A report with no total at all is the partial-object case instead: it says
+  // nothing about freshness, so its charge is still worth taking.
+  const stale = reportedSessionTokens !== undefined && reportedSessionTokens < durableFloor;
+  const sessionTokens = stale ? undefined : reportedSessionTokens;
+  const cost = isObject(report.cost) ? report.cost : undefined;
+  const chargedCents = stale ? undefined : nonNegativeNumber(cost?.chargedCents);
+  if (sessionTokens === undefined && chargedCents === undefined) return "retry";
+
+  const costUsd = chargedCents === undefined ? undefined : chargedCents / 100;
+  const nextSessionTokens = sessionTokens ?? current.sessionTokens;
+  const nextSessionTokenFloor = Math.max(current.sessionTokenFloor ?? 0, sessionTokens ?? 0);
+  const nextCostUsd = costUsd ?? current.costUsd;
+  const publicChanged =
+    nextSessionTokens !== current.sessionTokens || nextCostUsd !== current.costUsd;
+  const floorChanged = nextSessionTokenFloor !== current.sessionTokenFloor;
+  if (publicChanged || floorChanged) {
+    state.usage = {
+      ...current,
+      ...(nextSessionTokens === undefined ? {} : { sessionTokens: nextSessionTokens }),
+      sessionTokenFloor: nextSessionTokenFloor,
+      ...(nextCostUsd === undefined ? {} : { costUsd: nextCostUsd }),
+      ...(publicChanged ? { updatedAt: new Date().toISOString() } : {}),
+    };
+    if (publicChanged) state.revision += 1;
+    schedulePersist();
+  }
+
+  // Cursor documents cost as eventually consistent. A token total with no
+  // charge is a useful snapshot now, but gets bounded follow-ups so a turn's
+  // final charge lands without needing another prompt. A charge carried
+  // forward from an earlier turn is not evidence that this turn's has
+  // arrived, so it settles early only when the cumulative charge advances from
+  // a known baseline.
+  // With no baseline, even zero can be a placeholder returned before the first
+  // billing event lands. Keep the bounded follow-ups in that case too.
+  const costSettled = previousCostUsd !== undefined && costUsd !== previousCostUsd;
+  return sessionTokens === undefined || !costSettled ? "retry" : "complete";
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 /** The categories `totalTokens` summarises, per the SDK's own `toTokenUsage`. */

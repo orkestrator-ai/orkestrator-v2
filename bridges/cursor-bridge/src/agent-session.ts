@@ -154,9 +154,36 @@ async function attach(state: SessionState): Promise<SDKAgent> {
   }
 
   const created = await Agent.create({ ...options, name: "Orkestrator" });
+  // `getUsage()` is scoped to one SDK agent. If resume failed (or a restored
+  // state somehow lost its id), the replacement starts its cumulative token
+  // and cost counters from zero; retaining the previous agent's floor would
+  // reject every valid report from the replacement as stale. Keep the latest
+  // turn/context snapshot, which is still useful history, but detach all
+  // account-scoped figures once the replacement is known to exist.
+  if (clearAgentScopedUsage(state)) state.revision += 1;
   state.agent = created;
   state.agentId = created.agentId;
   return created;
+}
+
+function clearAgentScopedUsage(state: SessionState): boolean {
+  const usage = state.usage;
+  if (
+    !usage ||
+    (usage.sessionTokens === undefined &&
+      usage.sessionTokenFloor === undefined &&
+      usage.costUsd === undefined)
+  ) {
+    return false;
+  }
+  const {
+    sessionTokens: _sessionTokens,
+    sessionTokenFloor: _floor,
+    costUsd: _cost,
+    ...rest
+  } = usage;
+  state.usage = { ...rest, updatedAt: new Date().toISOString() };
+  return true;
 }
 
 /**

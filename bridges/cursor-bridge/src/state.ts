@@ -123,6 +123,10 @@ export interface PersistedUsage {
   context?: TurnUsage;
   modelId?: string;
   durationMs?: number;
+  /** Cumulative billed tokens for this durable Cursor agent. */
+  sessionTokens?: number;
+  /** Amount actually charged by Cursor, including discounts, in US dollars. */
+  costUsd?: number;
   updatedAt: string;
 }
 

@@ -8,7 +8,7 @@
  * untestable at any sane wall-clock cost.
  */
 import { describe, expect, test } from "bun:test";
-import { followRun, type FollowableRun } from "./prompt.js";
+import { followRun, refreshAgentUsage, type FollowableRun } from "./prompt.js";
 import { newSessionState } from "./agent-session.js";
 import { publicContextUsage } from "./public.js";
 import { sessionIsWorking, type SessionState } from "./state.js";
@@ -514,6 +514,161 @@ describe("terminal run usage", () => {
     await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
 
     expect(state.usage?.turn).toEqual({ inputTokens: 8, outputTokens: 2 });
+  });
+});
+
+describe("cumulative agent usage", () => {
+  test("refreshes billed usage off the terminal path after a run finishes", async () => {
+    const state = runningSession();
+    state.agent = {
+      getUsage: async () => ({
+        usage: {
+          inputTokens: 200,
+          outputTokens: 50,
+          cacheReadTokens: 750,
+          cacheWriteTokens: 0,
+          totalTokens: 1_000,
+        },
+        cost: { rawCostCents: 60, chargedCents: 40 },
+        runs: [],
+      }),
+    } as unknown as NonNullable<SessionState["agent"]>;
+    const run: FollowableRun = {
+      async *stream() {},
+      cancel: async () => undefined,
+      wait: async () => ({
+        status: "finished",
+        usage: {
+          inputTokens: 80,
+          outputTokens: 20,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 100,
+        },
+      }),
+    };
+
+    await followRun(state, run, state.promptSequence, { prompt: "x", images: [] });
+    // The run is already terminal; the supplemental account request catches up
+    // independently and advances the authoritative snapshot when it arrives.
+    expect(state.status).toBe("idle");
+    await waitFor(() => state.usage?.sessionTokens === 1_000);
+    expect(publicContextUsage(state)).toMatchObject({ sessionTokens: 1_000, costUsd: 0.4 });
+  });
+
+  test("adds the SDK's billed session total and actual charge to the public snapshot", async () => {
+    const state = runningSession();
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    const outcome = await refreshAgentUsage(
+      state,
+      {
+        getUsage: async () => ({
+          usage: {
+            inputTokens: 800,
+            outputTokens: 200,
+            cacheReadTokens: 2_000,
+            cacheWriteTokens: 0,
+            totalTokens: 3_000,
+          },
+          cost: { rawCostCents: 175, chargedCents: 125 },
+          runs: [],
+        }),
+      },
+      state.promptSequence,
+      100,
+    );
+
+    expect(outcome).toBe("complete");
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 100,
+      lastTurnTokens: 100,
+      sessionTokens: 3_000,
+      // `chargedCents`, not the undiscounted raw cost.
+      costUsd: 1.25,
+    });
+  });
+
+  test("does not let a late usage read overwrite a newer turn", async () => {
+    const state = runningSession();
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      updatedAt: new Date(1).toISOString(),
+    };
+    let resolveUsage!: (value: {
+      usage: {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        totalTokens: number;
+      };
+      runs: [];
+    }) => void;
+    const usage = new Promise<{
+      usage: {
+        inputTokens: number;
+        outputTokens: number;
+        cacheReadTokens: number;
+        cacheWriteTokens: number;
+        totalTokens: number;
+      };
+      runs: [];
+    }>((resolve) => {
+      resolveUsage = resolve;
+    });
+
+    const refresh = refreshAgentUsage(state, { getUsage: () => usage }, state.promptSequence, 100);
+    state.promptSequence += 1;
+    state.usage = {
+      turn: { inputTokens: 180, outputTokens: 20, totalTokens: 200 },
+      updatedAt: new Date(2).toISOString(),
+    };
+    resolveUsage({
+      usage: {
+        inputTokens: 800,
+        outputTokens: 200,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 1_000,
+      },
+      runs: [],
+    });
+
+    expect(await refresh).toBe("stale");
+    expect(state.usage.sessionTokens).toBeUndefined();
+  });
+
+  test("retries an eventually consistent total that is older than the completed turn", async () => {
+    const state = runningSession();
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    const outcome = await refreshAgentUsage(
+      state,
+      {
+        getUsage: async () => ({
+          usage: {
+            inputTokens: 40,
+            outputTokens: 10,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 50,
+          },
+          runs: [],
+        }),
+      },
+      state.promptSequence,
+      100,
+    );
+
+    expect(outcome).toBe("retry");
+    expect(state.usage.sessionTokens).toBeUndefined();
   });
 });
 

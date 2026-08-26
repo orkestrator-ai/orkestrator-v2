@@ -10,6 +10,7 @@ import { tryParseStructuredOutputText } from "@orkestrator/protocol/structured-o
 import type { ModelSelection, SDKAgent, SDKImage, TokenUsage } from "@cursor/sdk";
 import {
   CANCEL_ACK_TIMEOUT_MS,
+  CATALOG_TIMEOUT_MS,
   MAX_PROMPT_JOURNAL,
   MAX_STRUCTURED_RESULT_BYTES,
   MAX_STRUCTURED_RESULTS,
@@ -326,6 +327,125 @@ function recordUsage(
   }
   state.currentTurnUsage = undefined;
   state.turnStartedAt = undefined;
+  scheduleAgentUsageRefresh(state);
+}
+
+/**
+ * Cursor's run result answers what the latest turn spent. `agent.getUsage()`
+ * answers the other half of the SDK's usage surface: cumulative billed tokens
+ * and the amount actually charged across this durable agent. Keep that account
+ * read off the terminal path — a billing response that is slow or eventually
+ * consistent must not hold the session busy after the run itself ended.
+ */
+const AGENT_USAGE_RETRY_DELAYS_MS = [2_000, 10_000] as const;
+
+type AgentUsageRefreshResult = "complete" | "retry" | "stale";
+
+function scheduleAgentUsageRefresh(state: SessionState): void {
+  const agent = state.agent;
+  const promptSequence = state.promptSequence;
+  if (!agent || !state.usage) return;
+
+  const run = async (retryIndex: number): Promise<void> => {
+    const outcome = await refreshAgentUsage(state, agent, promptSequence);
+    if (outcome !== "retry" || retryIndex >= AGENT_USAGE_RETRY_DELAYS_MS.length) return;
+    const timer = setTimeout(
+      () => void run(retryIndex + 1),
+      AGENT_USAGE_RETRY_DELAYS_MS[retryIndex],
+    );
+    timer.unref();
+  };
+  void run(0);
+}
+
+/**
+ * Merge Cursor's cumulative billed-usage view into the latest turn snapshot.
+ *
+ * Exported for a focused contract test. The parser remains structural on
+ * purpose: an older vendored runtime can return a partial object, and usage is
+ * supplemental information rather than a reason to fail an otherwise complete
+ * turn.
+ */
+export async function refreshAgentUsage(
+  state: SessionState,
+  agent: Pick<SDKAgent, "getUsage">,
+  promptSequence: number,
+  timeoutMs: number = CATALOG_TIMEOUT_MS,
+): Promise<AgentUsageRefreshResult> {
+  if (state.promptSequence !== promptSequence || !state.usage) return "stale";
+
+  const report = await optionalWithin(
+    Promise.resolve().then(() => agent.getUsage()),
+    timeoutMs,
+  ).catch(() => undefined);
+  if (state.promptSequence !== promptSequence || !state.usage) return "stale";
+  if (!isObject(report)) return "retry";
+
+  const totals = isObject(report.usage) ? report.usage : undefined;
+  const reportedSessionTokens = nonNegativeNumber(totals?.totalTokens);
+  // The billed endpoint is eventually consistent too. A cumulative total below
+  // the turn already in hand is an older view, not a new session total.
+  const sessionTokens =
+    reportedSessionTokens !== undefined &&
+    reportedSessionTokens >= usageTokenTotal(state.usage.turn)
+      ? reportedSessionTokens
+      : undefined;
+  const cost = isObject(report.cost) ? report.cost : undefined;
+  const chargedCents = nonNegativeNumber(cost?.chargedCents);
+  if (sessionTokens === undefined && chargedCents === undefined) return "retry";
+
+  const costUsd = chargedCents === undefined ? undefined : chargedCents / 100;
+  const current = state.usage;
+  const nextSessionTokens = sessionTokens ?? current.sessionTokens;
+  const nextCostUsd = costUsd ?? current.costUsd;
+  const changed = nextSessionTokens !== current.sessionTokens || nextCostUsd !== current.costUsd;
+  if (changed) {
+    state.usage = {
+      ...current,
+      ...(nextSessionTokens === undefined ? {} : { sessionTokens: nextSessionTokens }),
+      ...(nextCostUsd === undefined ? {} : { costUsd: nextCostUsd }),
+      updatedAt: new Date().toISOString(),
+    };
+    state.revision += 1;
+    schedulePersist();
+  }
+
+  // Cursor documents cost as eventually consistent. A token total with no cost
+  // is a useful snapshot now, but gets two bounded follow-ups so a one-turn
+  // session does not need another prompt before its final charge appears.
+  return sessionTokens === undefined ||
+    (chargedCents === undefined && current.costUsd === undefined)
+    ? "retry"
+    : "complete";
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function usageTokenTotal(usage: TurnUsage): number {
+  return (
+    usage.totalTokens ??
+    (usage.inputTokens ?? 0) +
+      (usage.outputTokens ?? 0) +
+      (usage.cacheReadTokens ?? 0) +
+      (usage.cacheWriteTokens ?? 0)
+  );
+}
+
+async function optionalWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** The categories `totalTokens` summarises, per the SDK's own `toTokenUsage`. */

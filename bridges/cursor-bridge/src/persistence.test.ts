@@ -50,6 +50,8 @@ describe("round trip", () => {
       turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
       context: { inputTokens: 30, outputTokens: 10, totalTokens: 40 },
       modelId: "composer-2.5",
+      sessionTokens: 12_345,
+      costUsd: 1.25,
       updatedAt: new Date(1).toISOString(),
     };
     state.messages.push({
@@ -96,7 +98,14 @@ describe("round trip", () => {
     // A hand-edited or partially-written state file must not put non-numbers
     // into the projection the context gauge divides by.
     const payload = JSON.parse(await readFile(stateFile, "utf8")) as {
-      sessions: Array<{ usage: { turn: Record<string, unknown>; context?: unknown } }>;
+      sessions: Array<{
+        usage: {
+          turn: Record<string, unknown>;
+          context?: unknown;
+          sessionTokens?: unknown;
+          costUsd?: unknown;
+        };
+      }>;
     };
     payload.sessions[0]!.usage.turn = {
       inputTokens: 80,
@@ -105,6 +114,8 @@ describe("round trip", () => {
       totalTokens: Number.NaN,
     };
     payload.sessions[0]!.usage.context = { inputTokens: "nope" };
+    payload.sessions[0]!.usage.sessionTokens = -1;
+    payload.sessions[0]!.usage.costUsd = "free";
     await writeFile(stateFile, JSON.stringify(payload), "utf8");
 
     sessions.clear();
@@ -115,6 +126,8 @@ describe("round trip", () => {
     expect(sessions.get(state.id)!.usage?.turn).toEqual({ inputTokens: 80 });
     // A context snapshot with nothing usable left is dropped, not stored empty.
     expect(sessions.get(state.id)!.usage?.context).toBeUndefined();
+    expect(sessions.get(state.id)!.usage?.sessionTokens).toBeUndefined();
+    expect(sessions.get(state.id)!.usage?.costUsd).toBeUndefined();
   });
 
   test("a session that was mid-turn is restored idle, never running", async () => {

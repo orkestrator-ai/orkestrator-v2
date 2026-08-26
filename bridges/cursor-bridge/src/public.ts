@@ -125,6 +125,8 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     // What the turn cost, as opposed to what the window holds. The category
     // breakdown above is cumulative for the same reason.
     lastTurnTokens: spent,
+    ...(usage.sessionTokens !== undefined ? { sessionTokens: usage.sessionTokens } : {}),
+    ...(usage.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage.durationMs !== undefined ? { durationMs: usage.durationMs } : {}),
     source: "provider",
     updatedAt: usage.updatedAt,

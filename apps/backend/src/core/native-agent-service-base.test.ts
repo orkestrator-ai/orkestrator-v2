@@ -36,6 +36,7 @@ import {
   isAgentTurnEndTransition,
   NATIVE_PROJECTION_MAX_BYTES,
   NativeAgentService,
+  NativeAgentProviderSessionMissingError,
   nativeAgentSessionStorageKey,
   type AgentInteractionObservation,
   type EnsureNativeAgentSessionInput,
@@ -3215,7 +3216,7 @@ describe("NativeAgentService", () => {
           ...base,
           providerSessionId: "missing",
         }),
-      ).rejects.toThrow("not found");
+      ).rejects.toBeInstanceOf(NativeAgentProviderSessionMissingError);
     } finally {
       await service.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });

@@ -1,11 +1,9 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
 import {
-  INTERACTIVE_AGENT_INTERACTION_POLICY,
   LOOPED_REVIEW_WORKFLOW_VERSION,
   isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
   isStartLoopedReviewInput,
-  MULTI_REVIEW_ADDRESS_PROMPT,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
@@ -215,47 +213,7 @@ export function registerReviewWorkflowCommands(
   register("address_multi_review", async ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     const id = asNonBlankString(workflowId, "workflowId");
-    let workflow = await context.multiReviews.address(id);
-    if (workflow.addressPromptPending !== true) {
-      return stripLoopedReviewSnapshotSecrets(workflow);
-    }
-    if (!context.nativeAgents) throw new Error("Native agent service is unavailable");
-    const session = workflow.fixSession;
-    if (!session) throw new Error("The consolidation session is no longer available");
-    const logicalSessionKey = `multi-review:${workflow.id}:interactive`;
-    const model = workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model;
-    await context.nativeAgents.adoptSession({
-      environmentId: workflow.environmentId,
-      agent: workflow.fixModel.agent,
-      logicalSessionKey,
-      origin: "interactive-native",
-      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-      providerSessionId: session.providerSessionId,
-      title: "Multi Review · Fix",
-      model,
-      reasoningEffort: workflow.fixModel.reasoningEffort,
-      phase: "fix",
-      sessionMode: "build",
-    });
-    const outcome = await context.nativeAgents.dispatchIntent({
-      environmentId: workflow.environmentId,
-      agent: workflow.fixModel.agent,
-      logicalSessionKey,
-      origin: "interactive-native",
-      interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-      title: "Multi Review · Fix",
-      model,
-      reasoningEffort: workflow.fixModel.reasoningEffort,
-      phase: "fix",
-      prompt: MULTI_REVIEW_ADDRESS_PROMPT,
-      requestId: `multi-review-address:${workflow.id}`,
-      mode: "build",
-    });
-    if (outcome.outcome !== "accepted") {
-      throw new Error(outcome.error ?? "The address prompt dispatch was not confirmed");
-    }
-    workflow = await context.multiReviews.acknowledgeAddressPrompt(id);
-    return stripLoopedReviewSnapshotSecrets(workflow);
+    return context.multiReviews.address(id).then(stripLoopedReviewSnapshotSecrets);
   });
   register("retry_multi_review", ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");

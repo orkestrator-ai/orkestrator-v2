@@ -84,6 +84,14 @@ import {
 
 export const PROVIDER_REPORTED_INTERACTION_GRACE_MS = 60_000;
 
+/** An authoritative provider probe proved that a session no longer exists. */
+export class NativeAgentProviderSessionMissingError extends Error {
+  constructor() {
+    super("Native agent provider session was not found");
+    this.name = "NativeAgentProviderSessionMissingError";
+  }
+}
+
 export type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 export interface EnsureNativeAgentSessionInput {

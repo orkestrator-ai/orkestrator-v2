@@ -18,7 +18,7 @@ import {
   isBackgroundTaskActionTool,
   isBackgroundTaskStopTool,
 } from "@/lib/chat/native-message-adapters";
-import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
+import { InlineMessageMarkdown, MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { type NativeBackgroundTask } from "@/lib/chat/native-message-types";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 import {
@@ -26,6 +26,26 @@ import {
   TASK_LIST_SYNTAX_PATTERN,
   stringToolArg,
 } from "./NativeMessage.shared";
+
+/**
+ * The collapsed row shows roughly one line — about a hundred characters at the
+ * widest. Reasoning arrives as text deltas, so the preview is re-rendered on
+ * every chunk of a streaming turn, and it is now parsed as Markdown rather
+ * than dropped into a text node. Parsing the whole block each time would make
+ * that cost grow with reasoning nobody can see; this budget is several times
+ * the visible width, so the rendered line is unchanged.
+ */
+const THINKING_PREVIEW_MAX_CHARS = 400;
+
+function truncateThinkingPreview(content: string): string {
+  const end = Math.min(content.length, THINKING_PREVIEW_MAX_CHARS);
+  // `slice` counts UTF-16 code units. If the budget lands on the high
+  // surrogate of a supplementary code point, include its low surrogate too
+  // rather than handing React an ill-formed string that renders as U+FFFD.
+  const safeEnd =
+    end < content.length && (content.codePointAt(end - 1) ?? 0) > 0xffff ? end + 1 : end;
+  return content.slice(0, safeEnd);
+}
 
 export function ThinkingPart({ content, expansionKey }: { content: string; expansionKey: string }) {
   const hasTaskList = useMemo(() => TASK_LIST_SYNTAX_PATTERN.test(content), [content]);
@@ -35,7 +55,8 @@ export function ThinkingPart({ content, expansionKey }: { content: string; expan
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   // The collapsed row is a single line, so flatten whitespace for the preview.
   const preview = useMemo(
-    () => (hasTaskList ? "task list" : content.trim().replace(/\s+/g, " ")),
+    () =>
+      hasTaskList ? "task list" : truncateThinkingPreview(content.trim().replace(/\s+/g, " ")),
     [content, hasTaskList],
   );
 
@@ -54,9 +75,10 @@ export function ThinkingPart({ content, expansionKey }: { content: string; expan
         <Brain className="h-3.5 w-3.5 shrink-0" />
         <span className="font-medium shrink-0">Thinking</span>
         {!isOpen && (
-          <span className="font-mono text-muted-foreground/80 truncate min-w-0 text-left">
-            {preview}
-          </span>
+          <InlineMessageMarkdown
+            content={preview}
+            className="font-mono text-muted-foreground/80 truncate min-w-0 text-left"
+          />
         )}
       </CollapsibleTrigger>
       <CollapsibleContent>

@@ -14,7 +14,7 @@ import { CheckSquare, Square } from "lucide-react";
 import Markdown, { type Components } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import type { PluggableList } from "unified";
+import type { PluggableList, Processor } from "unified";
 import { openInBrowser } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
@@ -23,6 +23,62 @@ const DEFAULT_MARKDOWN_CLASSNAME =
 
 const PLUGINS_WITH_BREAKS: PluggableList = [remarkGfm, remarkBreaks];
 const PLUGINS_WITHOUT_BREAKS: PluggableList = [remarkGfm];
+
+/**
+ * Block constructs that must not fire on a single-line inline render.
+ *
+ * An inline caller has already flattened its text onto one line, so none of
+ * these can carry the meaning they normally would — they can only consume
+ * their own marker. `- read the reducer` would render as `read the reducer`,
+ * `# Plan` as `Plan`, and a line that is exactly `---` as nothing at all,
+ * silently dropping text the caller asked to display. Disabling them keeps the
+ * source characters visible and guarantees the parse yields one paragraph.
+ *
+ * `labelStartImage` is in the list for the same reason: an image is not
+ * phrasing content this renderer emits, so `![alt](url)` would unwrap to an
+ * empty string rather than showing the text the author wrote.
+ */
+const INLINE_ONLY_DISABLED_CONSTRUCTS = [
+  "blockQuote",
+  "codeFenced",
+  "codeIndented",
+  "definition",
+  "headingAtx",
+  "htmlFlow",
+  "labelStartImage",
+  "list",
+  "setextUnderline",
+  "thematicBreak",
+];
+
+/**
+ * `micromarkExtensions` is contributed to unified's `Data` by `remark-parse`,
+ * which reaches this package only as a transitive dependency of react-markdown
+ * and so cannot be imported here for its type augmentation. Name the one field
+ * this plugin touches rather than widening `data` to `any`.
+ */
+type MicromarkExtensionData = {
+  micromarkExtensions?: Array<{ disable?: { null?: Array<string> } }>;
+};
+
+function remarkInlineOnly(this: Processor): undefined {
+  const data = this.data() as MicromarkExtensionData;
+  data.micromarkExtensions ??= [];
+  data.micromarkExtensions.push({ disable: { null: INLINE_ONLY_DISABLED_CONSTRUCTS } });
+}
+
+const INLINE_PLUGINS: PluggableList = [remarkGfm, remarkInlineOnly];
+const INLINE_MARKDOWN_ELEMENTS = ["p", "strong", "em", "del", "code", "a"];
+const INLINE_MARKDOWN_COMPONENTS: Components = {
+  // The preview sits inside a button, whose content must remain phrasing
+  // content. Keep Markdown's paragraph parsing without emitting a block-level
+  // <p>; links are replaced with noninteractive phrasing below.
+  p: ({ children }) => <>{children}</>,
+  // Links cannot remain interactive inside the preview's button. Unlike
+  // unwrapDisallowed, this also keeps an empty-label link visible by falling
+  // back to its destination (or its literal empty-label marker).
+  a: ({ children, href }) => <>{Children.count(children) > 0 ? children : href || "[]"}</>,
+};
 
 interface TaskListCheckboxProps {
   checked?: boolean;
@@ -151,6 +207,30 @@ interface MessageMarkdownProps {
   /** When false, single newlines are NOT converted to <br>. Defaults to true. */
   enableBreaks?: boolean;
 }
+
+/** Render Markdown phrasing without introducing block or interactive nodes. */
+export const InlineMessageMarkdown = memo(function InlineMessageMarkdown({
+  content,
+  className,
+}: Pick<MessageMarkdownProps, "content" | "className">) {
+  return (
+    <span
+      className={cn(
+        "[&_strong]:font-semibold [&_em]:italic [&_del]:line-through [&_code]:font-mono",
+        className,
+      )}
+    >
+      <Markdown
+        remarkPlugins={INLINE_PLUGINS}
+        allowedElements={INLINE_MARKDOWN_ELEMENTS}
+        unwrapDisallowed
+        components={INLINE_MARKDOWN_COMPONENTS}
+      >
+        {content}
+      </Markdown>
+    </span>
+  );
+});
 
 /**
  * Memoized: a streaming turn re-renders its whole message roughly ten times a

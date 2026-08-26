@@ -170,6 +170,8 @@ export interface StartupAgentSessionSnapshot {
 export interface Environment {
   id: string;
   projectId: string;
+  /** Idempotency key for an externally requested environment launch. */
+  controlRequestId?: string;
   /** Persisted association used to recover a build pipeline after renderer remount. */
   buildPipelineId?: string;
   /**
@@ -299,6 +301,8 @@ export interface Environment {
   initialAgentModel?: string;
   /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */
   initialReasoningEffort?: string;
+  /** One-shot conversation mode for the agent tab created from pendingAgentLaunch. */
+  initialConversationMode?: "plan" | "build";
   initialPrompt?: string;
   /** Images waiting to be written into the workspace before the first prompt. */
   initialPromptAttachments?: InitialPromptImageAttachment[];
@@ -315,6 +319,7 @@ export type ClientEnvironment = Omit<
   | "frontendAgentActivityObservers"
   | "prRecheckAfterAgentCompletionArmedAt"
   | "initialPromptAttachments"
+  | "initialConversationMode"
   | "claudeModelCatalog"
   | "opencodePid"
   | "claudeBridgePid"
@@ -324,6 +329,7 @@ export type ClientEnvironment = Omit<
   | "piBridgePid"
   | "pendingRenamePrompt"
   | "tabTeardownIntents"
+  | "controlRequestId"
 > & {
   /**
    * Whether the stripped `initialPromptAttachments` array holds anything.

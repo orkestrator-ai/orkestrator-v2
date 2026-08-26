@@ -1,4 +1,5 @@
 import * as shared from "./storage-shared.js";
+import { createHash } from "node:crypto";
 import {
   FeaturePlanningFenceError,
   fs,
@@ -74,6 +75,11 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageDrafts } from "./storage-drafts.ts";
+
+function stableKanbanId(namespace: string, requestId: string): string {
+  const hex = createHash("sha256").update(namespace).update("\0").update(requestId).digest("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -201,6 +207,7 @@ export class StorageKanban extends StorageDrafts {
     initial: {
       acceptanceCriteria?: string;
       status?: KanbanStatus;
+      requestId?: string;
     } = {},
   ): Promise<KanbanTask> {
     const status = initial.status ?? "backlog";
@@ -209,8 +216,24 @@ export class StorageKanban extends StorageDrafts {
     }
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+      const id = initial.requestId
+        ? stableKanbanId(`ticket:${projectId}`, initial.requestId)
+        : randomUUID();
+      const existing = tasks.find((candidate) => candidate.id === id);
+      if (existing) {
+        if (
+          existing.projectId !== projectId ||
+          existing.title !== title ||
+          existing.description !== description ||
+          existing.acceptanceCriteria !== (initial.acceptanceCriteria ?? "") ||
+          existing.status !== status
+        ) {
+          throw new Error("Kanban ticket requestId was already used with different arguments");
+        }
+        return existing;
+      }
       const task: KanbanTask = {
-        id: randomUUID(),
+        id,
         projectId,
         title,
         description,
@@ -298,6 +321,7 @@ export class StorageKanban extends StorageDrafts {
     taskId: string,
     text: string,
     expectedProjectId?: string,
+    requestId?: string,
   ): Promise<KanbanTask> {
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
@@ -305,7 +329,15 @@ export class StorageKanban extends StorageDrafts {
       if (!task || (expectedProjectId !== undefined && task.projectId !== expectedProjectId)) {
         throw new Error(`Kanban task not found: ${taskId}`);
       }
-      task.comments.push({ id: randomUUID(), text, createdAt: nowIso() });
+      const id = requestId ? stableKanbanId(`comment:${taskId}`, requestId) : randomUUID();
+      const existing = task.comments.find((comment) => comment.id === id);
+      if (existing) {
+        if (existing.text !== text) {
+          throw new Error("Kanban comment requestId was already used with different text");
+        }
+        return task;
+      }
+      task.comments.push({ id, text, createdAt: nowIso() });
       await this.saveJson(this.kanbanFile(), tasks);
       this.announce("kanban", task.projectId);
       return task;

@@ -1,5 +1,6 @@
 // Context for sharing terminal functionality across components
 import { createContext, useContext, useCallback, useMemo, useState, ReactNode } from "react";
+import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 
 // Terminal-specific tab types
 export type TerminalTabType =
@@ -31,7 +32,7 @@ export type TabType =
   | "multi-review";
 
 // Maximum number of tabs allowed (matches Ctrl+1-9 shortcuts)
-export const MAX_TABS = 9;
+export const MAX_TABS = MAX_TABS_PER_ENVIRONMENT;
 
 // Options for creating a tab
 export interface CreateTabOptions {

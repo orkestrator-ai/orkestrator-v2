@@ -690,6 +690,7 @@ export function clearPendingAgentLaunchUpdates(): Partial<Environment> {
     pendingAgentLaunch: false,
     initialAgentModel: undefined,
     initialReasoningEffort: undefined,
+    initialConversationMode: undefined,
     initialPromptAttachments: undefined,
   };
 }

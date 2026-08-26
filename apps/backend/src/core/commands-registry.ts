@@ -19,6 +19,7 @@ import type {
   RegistryDependencies,
 } from "./commands-registry-types.js";
 import { registerBuildPipelineCommands } from "./commands-registry-build.js";
+import { registerControlCommands } from "./commands-registry-control.js";
 import { registerDockerCommands } from "./commands-registry-docker.js";
 import { registerEnvironmentCommands } from "./commands-registry-environments.js";
 import { registerGitHubCommands } from "./commands-registry-github.js";
@@ -129,6 +130,7 @@ export function createCommandRegistry(
   };
 
   registerProjectCommands(register, dependencies);
+  registerControlCommands(register, dependencies);
   registerLinearCommands(register, dependencies);
   registerGitHubCommands(register, dependencies);
   registerEnvironmentCommands(register, dependencies);

@@ -11,6 +11,11 @@ import { reapOrphanedClaudeTmuxRuntimes, reapOrphanedLocalServers } from "./loca
 import { claudeTmuxRuntimeRootPrefix } from "./tmux.js";
 import { StorageService } from "./storage.js";
 import { AgentToolsServer } from "./agent-tools.js";
+import {
+  ControlMcpServer,
+  type ControlMcpInfo,
+  type ControlMcpSettings,
+} from "./control-mcp-server.js";
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
@@ -48,6 +53,10 @@ export class OrkestratorBackend {
     AgentToolsServer,
     "connection" | "revokeEnvironment" | "start" | "stop"
   >;
+  private readonly controlMcp: Pick<
+    ControlMcpServer,
+    "getInfo" | "getSettings" | "rotateToken" | "start" | "stop"
+  >;
 
   constructor(options: {
     dataDir: string;
@@ -65,11 +74,22 @@ export class OrkestratorBackend {
       claudeTmuxRuntimes?: typeof reapOrphanedClaudeTmuxRuntimes;
     };
     agentTools?: Pick<AgentToolsServer, "connection" | "revokeEnvironment" | "start" | "stop">;
+    controlMcp?: Pick<
+      ControlMcpServer,
+      "getInfo" | "getSettings" | "rotateToken" | "start" | "stop"
+    >;
     environmentLifecycleTasks?: EnvironmentLifecycleTaskTracker;
     environmentLifecycleDrainTimeoutMs?: number;
   }) {
     const storage = new StorageService(options.dataDir);
     this.agentTools = options.agentTools ?? new AgentToolsServer(storage);
+    this.controlMcp =
+      options.controlMcp ??
+      new ControlMcpServer(options.dataDir, (command, args) => this.invoke(command, args), {
+        // Fixed in the application, ephemeral in the test runner so concurrently
+        // executing backend fixtures cannot contend for the user-facing port.
+        port: process.env.NODE_ENV === "test" ? 0 : undefined,
+      });
     this.environmentLifecycleTasks =
       options.environmentLifecycleTasks ?? new EnvironmentLifecycleTaskTracker();
     this.environmentLifecycleDrainTimeoutMs =
@@ -92,6 +112,7 @@ export class OrkestratorBackend {
       credentialSources: new Set(options.credentialSources ?? []),
       emit: options.emit,
       agentTools: this.agentTools,
+      controlMcp: this.controlMcp,
       environmentLifecycleTasks: this.environmentLifecycleTasks,
     } as CommandContext;
     context.notifyAgentTurnCompleted = async (environmentId: string) => {
@@ -418,6 +439,16 @@ export class OrkestratorBackend {
       reconcileOrphanedTabResourcesOnce();
     }, 60_000);
     this.tabResourceSweep.unref?.();
+    // This credential persists across restarts, so an already configured MCP
+    // client can reconnect the instant the listener binds. Publish it only
+    // after every authoritative recovery and service initializer above has
+    // completed; accepting mutations earlier would race stale backend state.
+    await this.controlMcp.start().catch((error) => {
+      // MCP is an optional local control surface. A port conflict should be
+      // visible in Settings, but must not prevent the rest of Orkestrator from
+      // opening so the user can diagnose it.
+      console.warn("[backend] Failed to start control MCP:", error);
+    });
   }
 
   /**
@@ -429,6 +460,14 @@ export class OrkestratorBackend {
    */
   hasCommand(command: string): boolean {
     return this.commands.has(command);
+  }
+
+  getControlMcpInfo(): ControlMcpInfo | null {
+    return this.controlMcp.getInfo();
+  }
+
+  getControlMcpSettings(): ControlMcpSettings {
+    return this.controlMcp.getSettings();
   }
 
   async invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -506,6 +545,7 @@ export class OrkestratorBackend {
           operationDrainTimeoutMs: Math.max(0, lifecycleDeadline - Date.now()),
         });
       } finally {
+        await this.controlMcp.stop();
         await this.agentTools.stop();
       }
     })();

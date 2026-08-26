@@ -54,6 +54,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     agentActivitySources: _agentActivitySources,
     frontendAgentActivityObservers: _frontendObservers,
     initialPromptAttachments: _attachments,
+    initialConversationMode: _initialConversationMode,
     claudeModelCatalog: _modelCatalog,
     opencodePid: _opencodePid,
     claudeBridgePid: _claudeBridgePid,
@@ -64,6 +65,7 @@ export function toClientEnvironment(environment: Environment): ClientEnvironment
     tabTeardownIntents: _tabTeardownIntents,
     pendingRenamePrompt: _pendingRenamePrompt,
     prRecheckAfterAgentCompletionArmedAt: _prRecheckArm,
+    controlRequestId: _controlRequestId,
     ...client
   } = environment;
   if (!client.pendingAgentLaunch && client.startupAgentSession?.status !== "starting") {

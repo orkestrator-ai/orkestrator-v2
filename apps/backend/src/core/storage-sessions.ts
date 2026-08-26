@@ -1,4 +1,5 @@
 import * as shared from "./storage-shared.js";
+import { MAX_TABS_PER_ENVIRONMENT } from "@orkestrator/protocol/pane-layout";
 import {
   MAX_SESSIONS_PER_ENVIRONMENT,
   PANE_LAYOUT_VERSION,
@@ -13,6 +14,7 @@ import {
   isRecord,
   mergePersistedPaneLayouts,
   nowIso,
+  paneLayoutLeaves,
   paneLayoutRevisionConflictMessage,
   selectedTabIsSetupHandoffSource,
   suppressLateSetupTabAdditions,
@@ -418,6 +420,102 @@ export abstract class StorageSessions extends StorageConfig {
         environmentId: input.environmentId,
         containerId: environment.containerId,
         activePaneId: target.id,
+        root,
+        updatedAt: nowIso(),
+        revision: (previous?.revision ?? 0) + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[input.environmentId] = saved;
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      this.announce("pane-layout", input.environmentId);
+      return saved;
+    });
+  }
+
+  /**
+   * Publish a backend-owned native agent tab for an independently launched job.
+   *
+   * The request id which produced `tabId` is stable, so retrying an MCP call
+   * converges on this same tab instead of opening a duplicate. The provider
+   * session is bound in a later call because a cold bridge may take long enough
+   * for the client transport to disappear; either side of that boundary is
+   * therefore safe to replay.
+   */
+  async ensureNativeAgentJobTab(input: {
+    environmentId: string;
+    tabId: string;
+    agent: BuildPipelineAgent;
+    providerSessionId?: string;
+    title?: string;
+  }): Promise<PersistedPaneLayout> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const environment = await this.getEnvironment(input.environmentId);
+      if (!environment) throw new Error(`Environment not found: ${input.environmentId}`);
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[input.environmentId];
+      const root = previous
+        ? (JSON.parse(JSON.stringify(previous.root)) as unknown)
+        : { kind: "leaf", id: "default", tabs: [], activeTabId: null };
+      const leaves = paneLayoutLeaves(root);
+      if (leaves.length === 0) throw new Error("Persisted pane layout has no leaf pane");
+
+      const existingLeaf = leaves.find((leaf) => leaf.tabs.some((tab) => tab.id === input.tabId));
+      const existingTab = existingLeaf?.tabs.find((tab) => tab.id === input.tabId);
+      if (existingTab && existingTab.type !== "agent-native") {
+        throw new Error(`Tab ID is already in use: ${input.tabId}`);
+      }
+      const existingPlatform = isRecord(existingTab?.nativeAgentData)
+        ? existingTab.nativeAgentData.platform
+        : undefined;
+      if (existingPlatform !== undefined && existingPlatform !== input.agent) {
+        throw new Error(`Tab belongs to a different agent platform: ${input.tabId}`);
+      }
+      if (!existingTab) {
+        const tabCount = leaves.reduce((count, leaf) => count + leaf.tabs.length, 0);
+        if (tabCount >= MAX_TABS_PER_ENVIRONMENT) {
+          throw new Error(
+            `Environment already has the maximum of ${MAX_TABS_PER_ENVIRONMENT} tabs`,
+          );
+        }
+      }
+
+      const target =
+        existingLeaf ?? leaves.find((leaf) => leaf.id === previous?.activePaneId) ?? leaves[0]!;
+      const previousNativeAgentData = isRecord(existingTab?.nativeAgentData)
+        ? existingTab.nativeAgentData
+        : {};
+      const nativeAgentData: Record<string, unknown> = {
+        ...previousNativeAgentData,
+        platform: input.agent,
+        environmentId: input.environmentId,
+        isLocal: environment.environmentType === "local",
+      };
+      if (environment.environmentType === "local") {
+        delete nativeAgentData.containerId;
+      } else if (environment.containerId) {
+        nativeAgentData.containerId = environment.containerId;
+      }
+      if (input.providerSessionId) nativeAgentData.sessionId = input.providerSessionId;
+
+      const tab: Record<string, unknown> = {
+        ...existingTab,
+        id: input.tabId,
+        type: "agent-native",
+        nativeAgentData,
+        ...(input.title?.trim() ? { displayTitle: input.title.trim() } : {}),
+      };
+      if (existingTab) Object.assign(existingTab, tab);
+      else target.tabs.push(tab);
+      if (!target.activeTabId) target.activeTabId = input.tabId;
+
+      const saved: PersistedPaneLayout = {
+        version: PANE_LAYOUT_VERSION,
+        environmentId: input.environmentId,
+        containerId: environment.environmentType === "local" ? null : environment.containerId,
+        activePaneId: previous?.activePaneId ?? target.id,
         root,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,

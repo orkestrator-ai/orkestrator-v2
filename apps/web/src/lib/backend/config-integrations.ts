@@ -205,6 +205,22 @@ export async function setGatewayToken(token: string): Promise<GatewayTokenSettin
   return window.orkestrator.webClient.setToken(token);
 }
 
+export interface ControlMcpSettings {
+  enabled: boolean;
+  running: boolean;
+  url: string;
+  token: string;
+  error: string | null;
+}
+
+export async function getControlMcpSettings(): Promise<ControlMcpSettings> {
+  return invoke<ControlMcpSettings>("get_control_mcp_settings");
+}
+
+export async function rotateControlMcpToken(): Promise<ControlMcpSettings> {
+  return invoke<ControlMcpSettings>("rotate_control_mcp_token");
+}
+
 export async function getRepositoryConfig(projectId: string): Promise<RepositoryConfig> {
   return invoke<RepositoryConfig>("get_repository_config", { projectId });
 }

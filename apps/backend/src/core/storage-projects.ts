@@ -334,6 +334,14 @@ export abstract class StorageProjects extends StorageBase {
   async addEnvironment(environment: Environment): Promise<Environment> {
     return this.enqueueEnvironmentMutation(async () => {
       const environments = await this.loadEnvironments();
+      if (environment.controlRequestId) {
+        const existing = environments.find(
+          (candidate) =>
+            candidate.projectId === environment.projectId &&
+            candidate.controlRequestId === environment.controlRequestId,
+        );
+        if (existing) return existing;
+      }
       environment.order =
         Math.max(
           -1,

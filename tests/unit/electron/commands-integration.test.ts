@@ -517,6 +517,22 @@ describe("storage-backed command delegation", () => {
       ),
     ).resolves.toEqual(task);
     expect(storage.addKanbanTask).toHaveBeenCalledWith("project-1", "Investigate", "Details");
+    await commands.get("add_kanban_task")?.(
+      {
+        projectId: "project-1",
+        title: "Ship it",
+        description: "Ready",
+        acceptanceCriteria: "All checks pass",
+        status: "review",
+        requestId: "control-ticket-1",
+      },
+      context,
+    );
+    expect(storage.addKanbanTask).toHaveBeenLastCalledWith("project-1", "Ship it", "Ready", {
+      acceptanceCriteria: "All checks pass",
+      status: "review",
+      requestId: "control-ticket-1",
+    });
     await commands.get("update_kanban_task")?.(
       {
         taskId: "task-1",

@@ -37,7 +37,7 @@ import {
   asCachedCodexModels,
   peekLocalAgentBridge,
   peekContainerAgentBridge,
-  fetchAcpNormalizedModels,
+  fetchAcpNormalizedModelsResult,
   parseClaudeBridgeModelCatalog,
   projectPathKey,
   duplicateLocalPathGuard,
@@ -53,6 +53,11 @@ export const FIRST_USE_CATALOG_BUDGET_MS = 45_000;
 
 /** The share of that budget allowed for the bridge to become ready. */
 export const FIRST_USE_BRIDGE_READY_TIMEOUT_MS = 30_000;
+
+/** The fetch receives only the budget left after bridge readiness work. */
+export function firstUseCatalogFetchTimeoutMs(deadline: number, now = Date.now()): number {
+  return Math.max(1_000, deadline - now);
+}
 
 export function registerProjectCommands(
   register: CommandRegistrar,
@@ -232,7 +237,7 @@ export function registerProjectCommands(
     // budget. The others are already answering from local bridge state.
     const firstUseFetchTimeoutMs = (kind: "cursor" | "grok" | "pi"): number | undefined =>
       firstUseDeadline !== null && kind === ensureAgent
-        ? Math.max(1_000, firstUseDeadline - Date.now())
+        ? firstUseCatalogFetchTimeoutMs(firstUseDeadline)
         : undefined;
     const claudeModels = environment.claudeModelCatalog?.models ?? cache.claude?.models ?? [];
     const codexModels = cache.codex?.models ?? [];
@@ -286,11 +291,19 @@ export function registerProjectCommands(
     const selectableLiveOpenCodeModels = liveOpenCodeModels.filter((model) =>
       isSelectableOpenCodeModelId(model.id, openCodeModelProviders),
     );
-    const [cursorModels, grokModels, piModels] = await Promise.all([
-      fetchAcpNormalizedModels(environment, context, "cursor", firstUseFetchTimeoutMs("cursor")),
-      fetchAcpNormalizedModels(environment, context, "grok", firstUseFetchTimeoutMs("grok")),
-      fetchAcpNormalizedModels(environment, context, "pi", firstUseFetchTimeoutMs("pi")),
+    const [cursorFetch, grokFetch, piFetch] = await Promise.all([
+      fetchAcpNormalizedModelsResult(
+        environment,
+        context,
+        "cursor",
+        firstUseFetchTimeoutMs("cursor"),
+      ),
+      fetchAcpNormalizedModelsResult(environment, context, "grok", firstUseFetchTimeoutMs("grok")),
+      fetchAcpNormalizedModelsResult(environment, context, "pi", firstUseFetchTimeoutMs("pi")),
     ]);
+    const cursorModels = cursorFetch.models;
+    const grokModels = grokFetch.models;
+    const piModels = piFetch.models;
     for (const [agent, models] of [
       ["cursor", cursorModels],
       ["grok", grokModels],
@@ -388,7 +401,16 @@ export function registerProjectCommands(
       ...(grokModels.length > 0 ? grokModels : (cache.grok?.models ?? [])),
       ...(piModels.length > 0 ? piModels : (cache.pi?.models ?? [])),
     ];
-    return result;
+    if (!ensureAgent) return result;
+    const ensuredFetch = { cursor: cursorFetch, grok: grokFetch, pi: piFetch }[ensureAgent];
+    return {
+      models: result,
+      status: result.some((model) => model.platform === ensureAgent)
+        ? ("ready" as const)
+        : ensuredFetch.status === "ok"
+          ? ("empty" as const)
+          : ("failed" as const),
+    };
   });
   register("cache_agent_model_catalog", (args, { storage }) => {
     assertOnlyKeys(args, ["agent", "models"], "arguments");

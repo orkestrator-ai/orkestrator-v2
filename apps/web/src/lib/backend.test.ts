@@ -47,6 +47,8 @@ const {
   updateGitHubIssueComment,
   postGitHubCompletionComment,
   getAgentModelCatalogCache,
+  ensureHostPiModelCatalog,
+  getNativeAgentModelCatalog,
   getGatewayTokenSettings,
   getWebClientStatus,
   postLinearCompletionComment,
@@ -426,6 +428,38 @@ describe("backend setup wrappers", () => {
     expect(invokeMock.mock.calls).toEqual([
       ["get_agent_model_catalog_cache"],
       ["cache_agent_model_catalog", { agent: "claude", models: cache.claude.models }],
+    ]);
+  });
+
+  test("distinguishes successful, empty, and failed ensured catalogue outcomes", async () => {
+    const piModels = [
+      {
+        platform: "pi" as const,
+        id: "openai-codex/gpt-5.4",
+        label: "GPT-5.4",
+        supportsSpeed: false,
+        supportsMode: false,
+      },
+    ];
+    invokeMock.mockResolvedValueOnce(piModels);
+    await expect(ensureHostPiModelCatalog()).resolves.toEqual(piModels);
+
+    invokeMock.mockResolvedValueOnce({ models: piModels, status: "ready" });
+    await expect(getNativeAgentModelCatalog("env-1", "pi")).resolves.toEqual(piModels);
+
+    invokeMock.mockResolvedValueOnce({ models: [], status: "empty" });
+    await expect(getNativeAgentModelCatalog("env-1", "pi")).resolves.toEqual([]);
+
+    invokeMock.mockResolvedValueOnce({ models: [], status: "failed" });
+    await expect(getNativeAgentModelCatalog("env-1", "pi")).rejects.toThrow(
+      /temporarily unavailable/,
+    );
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["ensure_host_pi_model_catalog"],
+      ["get_native_agent_model_catalog", { environmentId: "env-1", ensureAgent: "pi" }],
+      ["get_native_agent_model_catalog", { environmentId: "env-1", ensureAgent: "pi" }],
+      ["get_native_agent_model_catalog", { environmentId: "env-1", ensureAgent: "pi" }],
     ]);
   });
 
@@ -1905,6 +1939,7 @@ describe("backend command wrapper coverage", () => {
       "createTerminalSession",
       "getTerminalOutputSnapshot",
       "getResourceRevisionManifest",
+      "getNativeAgentModelCatalog",
     ]);
     const commandWrappers = Object.entries(backendWrappers).flatMap(([name, value]) =>
       typeof value === "function" && !specialWrappers.has(name)

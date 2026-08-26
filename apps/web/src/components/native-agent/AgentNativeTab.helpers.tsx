@@ -356,6 +356,8 @@ export function UnassignedNativeAgentComposer({
   const modelCatalogRequestsRef = useRef(new Map<string, Promise<AgentModel[]>>());
   const modelCatalogEnvironmentRef = useRef(environmentId);
   const modelCatalogMountedRef = useRef(false);
+  const modelCatalogRetriedRef = useRef(new Set<string>());
+  const [modelCatalogRetryRevision, setModelCatalogRetryRevision] = useState(0);
   const platform = draft.platform ?? defaultPlatform;
   const configured = resolvedPlatformSettings(
     config,
@@ -390,8 +392,10 @@ export function UnassignedNativeAgentComposer({
     };
   }, []);
   useEffect(() => {
+    if (modelCatalogEnvironmentRef.current === environmentId) return;
     modelCatalogEnvironmentRef.current = environmentId;
     modelCatalogRequestsRef.current.clear();
+    modelCatalogRetriedRef.current.clear();
     setModels([]);
   }, [environmentId]);
   // A normal read remains side-effect free. On the first selection of a
@@ -412,6 +416,7 @@ export function UnassignedNativeAgentComposer({
     modelCatalogRequestsRef.current.set(requestKey, request);
     void request
       .then((catalog) => {
+        modelCatalogRetriedRef.current.delete(requestKey);
         // The backend has already normalized and durably cached these models.
         // Mirror its response even if this tab became inactive while first-use
         // discovery ran, so every other mounted launcher sees the new snapshot.
@@ -437,9 +442,23 @@ export function UnassignedNativeAgentComposer({
         if (modelCatalogRequestsRef.current.get(requestKey) === request) {
           modelCatalogRequestsRef.current.delete(requestKey);
         }
+        // The backend distinguishes a legitimate empty catalogue (which
+        // resolves normally) from a transient bridge/fetch failure (which
+        // rejects here). Retry the latter once automatically; further failures
+        // remain manually retryable by switching platforms, without creating a
+        // background restart loop for an unavailable provider.
+        if (
+          ensureAgent &&
+          modelCatalogMountedRef.current &&
+          modelCatalogEnvironmentRef.current === environmentId &&
+          !modelCatalogRetriedRef.current.has(requestKey)
+        ) {
+          modelCatalogRetriedRef.current.add(requestKey);
+          setModelCatalogRetryRevision((revision) => revision + 1);
+        }
         console.warn("[AgentNativeTab] Failed to load native model catalogue:", error);
       });
-  }, [environmentId, models, platform]);
+  }, [environmentId, modelCatalogRetryRevision, models, platform]);
   const fileSearch = useFileSearch(containerId, worktreePath);
   const {
     isMenuOpen: fileMentionMenuOpen,

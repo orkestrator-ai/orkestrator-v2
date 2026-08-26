@@ -4,6 +4,7 @@
  * Every provider exercises the shared authoritative-projection path.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { AGENT_PLATFORMS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -1219,6 +1220,60 @@ describe("AgentNativeTab", () => {
     expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
       "openai-codex/gpt-5.4",
     ]);
+  });
+
+  test("deduplicates the first-use request across StrictMode effect replay", async () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-pi-strict"), { platform: "pi" });
+    getNativeAgentModelCatalogMock.mockImplementation(async () => []);
+
+    render(
+      <StrictMode>
+        <AgentNativeTab tabId="tab-pi-strict" data={{ environmentId: "env-1" }} isActive />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(1));
+    expect(getNativeAgentModelCatalogMock).toHaveBeenCalledWith("env-1", "pi");
+  });
+
+  test("retries a transient first-use failure once and publishes the recovered catalogue", async () => {
+    useConfigStore.getState().updateGlobalConfig({ enabledAgentPlatforms: ["pi"] });
+    useNativeComposeStore
+      .getState()
+      .updateDraft(createSessionKey("env-1", "tab-pi-retry"), { platform: "pi" });
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    let attempts = 0;
+    getNativeAgentModelCatalogMock.mockImplementation(async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("catalogue temporarily unavailable");
+      return [
+        {
+          id: "openai-codex/gpt-5.4",
+          platform: "pi",
+          label: "GPT-5.4",
+          providerLabel: "OpenAI Codex",
+          supportsSpeed: false,
+          supportsMode: false,
+        },
+      ];
+    });
+
+    try {
+      render(<AgentNativeTab tabId="tab-pi-retry" data={{ environmentId: "env-1" }} isActive />);
+
+      await waitFor(() => expect(getNativeAgentModelCatalogMock).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(screen.getByTitle(/Choose model/).textContent).toContain("GPT-5.4"),
+      );
+      expect(useAgentModelCatalogStore.getState().piModels.map((model) => model.id)).toEqual([
+        "openai-codex/gpt-5.4",
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   // The catalogue is environment-scoped and already holds every platform, so a

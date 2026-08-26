@@ -10,6 +10,7 @@ import {
   resetPiModelCatalogSeedingState,
   PI_CATALOG_EMPTY_PROBE_BACKOFF_MS,
 } from "./pi-model-catalog-seeding.js";
+import { acpModelFetchTimeoutMs, fetchAcpNormalizedModelsAtResult } from "./commands-servers.js";
 import { __testing as commandTesting } from "./commands.js";
 import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
@@ -360,5 +361,40 @@ describe("discoverHostPiModelCatalog", () => {
 
     expect(models).toEqual([]);
     expect(spawns).toHaveLength(0);
+  });
+});
+
+describe("Pi catalogue fetch outcomes", () => {
+  test("distinguishes empty success from failure and narrows the timeout", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const observedTimeouts: number[] = [];
+    AbortSignal.timeout = ((milliseconds: number) => {
+      observedTimeouts.push(milliseconds);
+      return new AbortController().signal;
+    }) as typeof AbortSignal.timeout;
+
+    try {
+      globalThis.fetch = mock(async () =>
+        Response.json({ models: [] }, { status: 200 }),
+      ) as unknown as typeof fetch;
+      await expect(fetchAcpNormalizedModelsAtResult(4099, "token", "pi", 12_345)).resolves.toEqual({
+        status: "ok",
+        models: [],
+      });
+
+      globalThis.fetch = mock(
+        async () => new Response(null, { status: 503 }),
+      ) as unknown as typeof fetch;
+      await expect(fetchAcpNormalizedModelsAtResult(4099, "token", "pi", 99_999)).resolves.toEqual({
+        status: "failed",
+        models: [],
+      });
+
+      expect(observedTimeouts).toEqual([12_345, acpModelFetchTimeoutMs("pi")]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      AbortSignal.timeout = originalTimeout;
+    }
   });
 });

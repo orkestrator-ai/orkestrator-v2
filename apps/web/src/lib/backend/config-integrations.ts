@@ -79,10 +79,30 @@ export async function getNativeAgentModelCatalog(
   environmentId: string,
   ensureAgent?: "cursor" | "grok" | "pi",
 ): Promise<import("@orkestrator/protocol/native-agent").AgentModel[]> {
-  return invoke("get_native_agent_model_catalog", {
+  if (!ensureAgent) {
+    return invoke("get_native_agent_model_catalog", { environmentId });
+  }
+  const result = await invoke<
+    | import("@orkestrator/protocol/native-agent").AgentModel[]
+    | {
+        models: import("@orkestrator/protocol/native-agent").AgentModel[];
+        status: "ready" | "empty" | "failed";
+      }
+  >("get_native_agent_model_catalog", {
     environmentId,
-    ...(ensureAgent ? { ensureAgent } : {}),
+    ensureAgent,
   });
+  // Older backends return an ensured catalogue directly.
+  if (Array.isArray(result)) return result;
+  if (!result || !Array.isArray(result.models)) {
+    throw new Error("The native model catalogue response was malformed");
+  }
+  if (result.status === "failed") {
+    throw new Error(
+      `The ${ensureAgent ?? "native agent"} model catalogue is temporarily unavailable`,
+    );
+  }
+  return result.models;
 }
 
 /** Persist an authoritative catalogue for the next application launch. */

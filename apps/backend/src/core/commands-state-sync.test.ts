@@ -18,7 +18,11 @@ import {
   toClientEnvironment,
   type CommandContext,
 } from "./commands.js";
-import { FIRST_USE_BRIDGE_READY_TIMEOUT_MS } from "./commands-registry-projects.js";
+import {
+  FIRST_USE_BRIDGE_READY_TIMEOUT_MS,
+  FIRST_USE_CATALOG_BUDGET_MS,
+  firstUseCatalogFetchTimeoutMs,
+} from "./commands-registry-projects.js";
 import { appendTerminalOutputBuffer } from "./commands-terminal.js";
 import { StorageService } from "./storage.js";
 import { ClaudeStatePollManager } from "./tmux.js";
@@ -281,6 +285,14 @@ describe("create-environment agent preference command", () => {
 });
 
 describe("native agent model catalogue command", () => {
+  test("passes only the residual first-use budget to catalogue fetching", () => {
+    const startedAt = 10_000;
+    const deadline = startedAt + FIRST_USE_CATALOG_BUDGET_MS;
+
+    expect(firstUseCatalogFetchTimeoutMs(deadline, startedAt + 30_000)).toBe(15_000);
+    expect(firstUseCatalogFetchTimeoutMs(deadline, deadline + 500)).toBe(1_000);
+  });
+
   test("seeds the host Pi catalogue before an environment exists", async () => {
     await withCommands(async (invoke, storage, _dataDir, commands) => {
       const config = await storage.loadConfig();
@@ -395,7 +407,7 @@ describe("native agent model catalogue command", () => {
         const catalogue = (await invoke("get_native_agent_model_catalog", {
           environmentId: "e1",
           ensureAgent: "pi",
-        })) as unknown[];
+        })) as { models: unknown[]; status: string };
 
         // `await_bridge_ready` reports failure by returning, and this call is
         // the launch, so nothing else would ever record the reason.
@@ -408,7 +420,8 @@ describe("native agent model catalogue command", () => {
           ),
         ).toBe(true);
         // The response still carries every durable fallback.
-        expect(Array.isArray(catalogue)).toBe(true);
+        expect(Array.isArray(catalogue.models)).toBe(true);
+        expect(catalogue.status).toBe("failed");
       } finally {
         warn.mockRestore();
       }

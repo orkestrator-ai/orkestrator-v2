@@ -27,6 +27,16 @@ import {
   stringToolArg,
 } from "./NativeMessage.shared";
 
+/**
+ * The collapsed row shows roughly one line — about a hundred characters at the
+ * widest. Reasoning arrives as text deltas, so the preview is re-rendered on
+ * every chunk of a streaming turn, and it is now parsed as Markdown rather
+ * than dropped into a text node. Parsing the whole block each time would make
+ * that cost grow with reasoning nobody can see; this budget is several times
+ * the visible width, so the rendered line is unchanged.
+ */
+const THINKING_PREVIEW_MAX_CHARS = 400;
+
 export function ThinkingPart({ content, expansionKey }: { content: string; expansionKey: string }) {
   const hasTaskList = useMemo(() => TASK_LIST_SYNTAX_PATTERN.test(content), [content]);
   // Backed by the shared store using the stable key supplied by MessagePart,
@@ -35,7 +45,10 @@ export function ThinkingPart({ content, expansionKey }: { content: string; expan
   const [isOpen, setIsOpen] = useMessagePartExpansion(expansionKey);
   // The collapsed row is a single line, so flatten whitespace for the preview.
   const preview = useMemo(
-    () => (hasTaskList ? "task list" : content.trim().replace(/\s+/g, " ")),
+    () =>
+      hasTaskList
+        ? "task list"
+        : content.trim().replace(/\s+/g, " ").slice(0, THINKING_PREVIEW_MAX_CHARS),
     [content, hasTaskList],
   );
 

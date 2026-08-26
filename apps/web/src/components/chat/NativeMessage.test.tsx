@@ -454,6 +454,49 @@ describe("NativeMessage task list rendering", () => {
     expect(container.querySelector("strong")?.textContent).toBe("Preparing bug investigation");
   });
 
+  test("renders a code span in the collapsed thinking summary", () => {
+    const { container } = render(
+      <NativeMessage
+        message={makeMessage([{ type: "thinking", content: "I will patch `applySessionEvent`" }])}
+      />,
+    );
+
+    expect(container.querySelector("code")?.textContent).toBe("applySessionEvent");
+    expect(screen.getByRole("button", { name: /thinking/i }).textContent).not.toContain("`");
+  });
+
+  // Parsing the preview must not eat text: a leading bullet is a list marker in
+  // block Markdown, and dropping it would shorten the line the user reads.
+  test("keeps leading block markers in the collapsed thinking summary", () => {
+    render(
+      <NativeMessage
+        message={makeMessage([{ type: "thinking", content: "- inspect the reducer first" }])}
+      />,
+    );
+
+    expect(screen.getByText("- inspect the reducer first")).toBeTruthy();
+  });
+
+  // A block that reduces to nothing would render a chevron promising hidden
+  // content beside an empty preview.
+  test("shows a non-empty collapsed preview for a thinking block of only punctuation", () => {
+    render(<NativeMessage message={makeMessage([{ type: "thinking", content: "---" }])} />);
+
+    expect(screen.getByText("---")).toBeTruthy();
+  });
+
+  // The preview is re-parsed on every streaming delta, so its cost must not
+  // grow with reasoning that is clipped off the end of the line anyway.
+  test("bounds the collapsed thinking preview instead of parsing the whole block", () => {
+    const content = "sentence about the reducer. ".repeat(400);
+    render(<NativeMessage message={makeMessage([{ type: "thinking", content }])} />);
+
+    const trigger = screen.getByRole("button", { name: /thinking/i });
+    // "Thinking" plus a bounded preview, not the ~11KB block.
+    expect(trigger.textContent!.length).toBeLessThan(500);
+    expect(trigger.textContent).toContain("sentence about the reducer.");
+  });
+
   test("expands a long thinking part to show the full text", () => {
     const content =
       "First I inspect the reducer.\n\nThen I trace the dispatch path all the way through the bridge before deciding on a fix.";

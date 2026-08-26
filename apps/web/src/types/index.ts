@@ -542,7 +542,7 @@ export interface RepositoryConfig {
   prBaseBranch: string;
   /** Last environment type successfully created in this repository */
   lastEnvironmentType?: EnvironmentType;
-  /** Agent controls used by the most recently created agent-enabled environment. */
+  /** @deprecated Legacy compatibility only; new environments resolve Settings defaults. */
   lastEnvironmentAgentSelection?: LastEnvironmentAgentSelection;
   /** Default port mappings for new environments in this repository */
   defaultPortMappings?: PortMapping[];
@@ -554,12 +554,10 @@ export interface RepositoryConfig {
 }
 
 /**
- * The agent and mode the last successful create used in this repository.
+ * Legacy last-create state retained so older config and renderer versions can
+ * still be decoded. Current create dialogs ignore it and use Settings defaults.
  *
- * Deliberately no model or reasoning level. Those come from settings —
- * `agentSettings.platforms[platform]` — so the value the Defaults page shows is
- * the value a new environment gets. Remembering them here meant a choice made
- * once in a create dialog silently outranked the configured default forever.
+ * @deprecated
  */
 export interface LastEnvironmentAgentSelection {
   platform: DefaultAgent;

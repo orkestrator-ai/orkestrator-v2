@@ -851,7 +851,7 @@ describe("resolveAgentDefaults", () => {
     );
   });
 
-  test("takes model and reasoning from New projects defaults, not remembered selection", async () => {
+  test("takes agent, model, and reasoning from New projects defaults, not the last agent used", async () => {
     useCodexStore.setState({
       models: [
         {
@@ -870,7 +870,7 @@ describe("resolveAgentDefaults", () => {
     });
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "claude" };
-    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    config.global.enabledAgentPlatforms = ["claude", "codex", "pi"];
     config.global.agentSettings = {
       ...config.global.agentSettings,
       actionDefaults: {
@@ -880,8 +880,9 @@ describe("resolveAgentDefaults", () => {
     config.repositories["project-1"] = {
       defaultBranch: "main",
       prBaseBranch: "main",
+      // Legacy state from an earlier create must not override Settings.
       lastEnvironmentAgentSelection: {
-        platform: "codex",
+        platform: "pi",
         mode: "native",
       },
     };
@@ -907,6 +908,53 @@ describe("resolveAgentDefaults", () => {
           model: "codex-b",
           reasoningEffort: "high",
         }),
+      ),
+    );
+  });
+
+  // The agent/model/reasoning case above deliberately parks the legacy platform
+  // somewhere the dialog never renders, so it cannot see a mode regression. This
+  // one puts the legacy platform in the selected column with the *opposite* mode
+  // to Settings, which is the only arrangement where a reinstated
+  // `withRememberedMode` would still be observable.
+  test("takes the mode from Settings even when legacy state names the selected platform", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      platforms: {
+        ...config.global.agentSettings?.platforms,
+        codex: { ...config.global.agentSettings?.platforms?.codex, mode: "terminal" },
+      },
+      actionDefaults: { newProject: { platform: "codex" } },
+    };
+    config.repositories["project-1"] = {
+      defaultBranch: "main",
+      prBaseBranch: "main",
+      lastEnvironmentAgentSelection: { platform: "codex", mode: "native" },
+    };
+    useConfigStore.setState({ config });
+    const onCreate = mock(async () => {});
+
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={onCreate}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "Use TUI" }).getAttribute("data-state")).toBe(
+        "checked",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ agentType: "codex", codexMode: "terminal" }),
       ),
     );
   });

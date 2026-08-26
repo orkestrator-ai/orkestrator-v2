@@ -47,8 +47,7 @@ const ACTION_DEFINITIONS: Record<
 > = {
   newProject: {
     label: "New environments",
-    description:
-      "Preselected when you create an environment here. A project that already remembers a selection keeps it.",
+    description: "Preselected every time you create an environment here.",
     icon: <FolderPlus className="h-4 w-4" />,
   },
   review: {

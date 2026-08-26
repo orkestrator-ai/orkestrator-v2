@@ -7,10 +7,7 @@ import { resolveCreateEnvironmentAgentDefaults } from "./create-environment-agen
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "sonnet", name: "Sonnet", reasoningEfforts: ["low", "high"] }],
-  codex: [
-    { id: "gpt-default", name: "Default Codex", reasoningEfforts: ["medium"] },
-    { id: "gpt-remembered", name: "Remembered Codex", reasoningEfforts: ["high", "xhigh"] },
-  ],
+  codex: [{ id: "gpt-default", name: "Default Codex", reasoningEfforts: ["medium"] }],
   opencode: [{ id: "open/default", name: "Open default", reasoningEfforts: [] }],
 };
 
@@ -27,88 +24,51 @@ const configured = {
 };
 
 describe("resolveCreateEnvironmentAgentDefaults", () => {
-  test("restores the last platform and mode, but takes model and reasoning from settings", () => {
+  test("takes agent, modes, model, and reasoning from configured settings", () => {
     expect(
       resolveCreateEnvironmentAgentDefaults({
         catalog,
         enabledAgents: ["claude", "codex", "opencode"],
         configured,
-        remembered: { platform: "codex", mode: "terminal" },
       }),
     ).toEqual({
-      agent: "codex",
+      agent: "claude",
       claudeMode: "terminal",
       opencodeMode: "terminal",
-      codexMode: "terminal",
+      codexMode: "native",
       cursorMode: "terminal",
       grokMode: "native",
       piMode: "terminal",
-      // From `configured`, not from whatever the last create happened to pick.
-      model: "gpt-default",
-      reasoningEffort: "medium",
-    });
-  });
-
-  test("restores Cursor and Grok modes in their own platform columns", () => {
-    expect(
-      resolveCreateEnvironmentAgentDefaults({
-        catalog,
-        enabledAgents: ["cursor"],
-        configured: { ...configured, agent: "cursor" },
-        remembered: { platform: "cursor", mode: "native" },
-      }),
-    ).toMatchObject({ agent: "cursor", cursorMode: "native", grokMode: "native" });
-
-    expect(
-      resolveCreateEnvironmentAgentDefaults({
-        catalog,
-        enabledAgents: ["grok"],
-        configured: { ...configured, agent: "grok" },
-        remembered: { platform: "grok", mode: "terminal" },
-      }),
-    ).toMatchObject({ agent: "grok", cursorMode: "terminal", grokMode: "terminal" });
-  });
-
-  test("restores Pi mode in its own platform column", () => {
-    expect(
-      resolveCreateEnvironmentAgentDefaults({
-        catalog,
-        enabledAgents: ["pi"],
-        configured: { ...configured, agent: "pi" },
-        remembered: { platform: "pi", mode: "native" },
-      }),
-    ).toMatchObject({ agent: "pi", piMode: "native", grokMode: "native" });
-  });
-
-  test("falls back to configured defaults when the remembered platform is disabled", () => {
-    expect(
-      resolveCreateEnvironmentAgentDefaults({
-        catalog,
-        enabledAgents: ["claude", "opencode"],
-        configured,
-        remembered: { platform: "codex", mode: "terminal" },
-      }),
-    ).toMatchObject({
-      agent: "claude",
-      claudeMode: "terminal",
       model: "sonnet",
       reasoningEffort: "default",
     });
   });
 
-  // Regression: the disabled-platform fallback used to delegate straight to
-  // `firstEnabledAgentPlatform(enabled, remembered.platform)`, which returns
-  // `enabled[0]` for a platform that is not enabled. That silently discarded the
-  // configured default agent. The case above cannot catch it because its
-  // configured agent is also `enabledAgents[0]`, so pick a repository whose
-  // default disagrees with the enabled ordering.
-  test("prefers the configured default agent over the first enabled one when the remembered platform is disabled", () => {
+  test("prefers the configured default agent over the first enabled one", () => {
     expect(
       resolveCreateEnvironmentAgentDefaults({
         catalog,
         enabledAgents: ["claude", "codex"],
         configured: { ...configured, agent: "codex" },
-        remembered: { platform: "opencode", mode: "native" },
+      }),
+    ).toMatchObject({
+      agent: "codex",
+      codexMode: "native",
+      model: "gpt-default",
+      reasoningEffort: "medium",
+    });
+  });
+
+  // The configured default agent is only a preference: `firstEnabledAgentPlatform`
+  // hands back `enabled[0]` when that platform has since been disabled, and the
+  // model and reasoning must then be resolved for the platform actually chosen
+  // rather than left pointing at the disabled one's column.
+  test("falls back to the first enabled platform when the configured agent is disabled", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog,
+        enabledAgents: ["codex", "claude"],
+        configured: { ...configured, agent: "opencode" },
       }),
     ).toMatchObject({
       agent: "codex",
@@ -162,7 +122,6 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
           models: { codex: "retired-model" },
           reasoningEfforts: { codex: "ultra" },
         },
-        remembered: { platform: "codex", mode: "native" },
       }),
     ).toMatchObject({
       agent: "codex",
@@ -189,11 +148,10 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
           // being resolved to a concrete model.
           models: { opencode: "default" },
         },
-        remembered: { platform: "opencode", mode: "native" },
       }),
     ).toMatchObject({
       agent: "opencode",
-      opencodeMode: "native",
+      opencodeMode: "terminal",
       model: "default",
       reasoningEffort: "default",
     });

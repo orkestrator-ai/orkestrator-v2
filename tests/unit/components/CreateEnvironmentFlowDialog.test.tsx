@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import type { Environment, LastEnvironmentAgentSelection } from "@/types";
+import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -21,24 +21,10 @@ const getContainerGitHubCredentialStatusMock = mock(async () => ({
   source: "host-cli" as const,
   available: true,
 }));
-const rememberEnvironmentAgentSelectionMock = mock(
-  async (projectId: string, selection: LastEnvironmentAgentSelection) => {
-    const config = structuredClone(useConfigStore.getState().config);
-    config.repositories[projectId] = {
-      ...(config.repositories[projectId] ?? {
-        defaultBranch: "main",
-        prBaseBranch: "main",
-      }),
-      lastEnvironmentAgentSelection: selection,
-    };
-    return config;
-  },
-);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
-  rememberEnvironmentAgentSelection: rememberEnvironmentAgentSelectionMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
 
@@ -106,18 +92,6 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
 describe("CreateEnvironmentFlowDialog", () => {
   beforeEach(() => {
     updateEnvironmentAgentSettingsMock.mockClear();
-    rememberEnvironmentAgentSelectionMock.mockClear();
-    rememberEnvironmentAgentSelectionMock.mockImplementation(async (projectId, selection) => {
-      const config = structuredClone(useConfigStore.getState().config);
-      config.repositories[projectId] = {
-        ...(config.repositories[projectId] ?? {
-          defaultBranch: "main",
-          prBaseBranch: "main",
-        }),
-        lastEnvironmentAgentSelection: selection,
-      };
-      return config;
-    });
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
       source: "host-cli",
@@ -597,7 +571,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[4]).toBeUndefined();
   });
 
-  test("keeps selected model and effort in launch state while remembering only agent and mode", async () => {
+  test("keeps the selected model and effort as one-shot launch state without changing defaults", async () => {
     const created = { id: "env-selected-options" } as Environment;
     render(
       <CreateEnvironmentFlowDialog
@@ -628,20 +602,6 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[2]).toBe(true);
     expect(call[3]).toBe("gpt-5.4-mini");
     expect(call[4]).toBe("high");
-    expect(rememberEnvironmentAgentSelectionMock).toHaveBeenCalledWith("project-1", {
-      platform: "codex",
-      mode: "native",
-    });
-    // The write is deliberately not awaited by the create flow, so the store
-    // catches up on its own tick.
-    await waitFor(() => {
-      expect(
-        useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentAgentSelection,
-      ).toEqual({
-        platform: "codex",
-        mode: "native",
-      });
-    });
     expect(useClaudeOptionsStore.getState().getOptions("env-selected-options")).toEqual(
       expect.objectContaining({
         agentType: "codex",
@@ -649,88 +609,15 @@ describe("CreateEnvironmentFlowDialog", () => {
         reasoningEffort: "high",
       }),
     );
+    // The durable half of the claim: a per-create choice reaches the launched
+    // tab and nothing else. Creating must not write repository-scoped state
+    // that would then outrank the configured default for the next create.
+    expect(
+      useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentAgentSelection,
+    ).toBeUndefined();
   });
 
-  test("continues creation without publishing local preference state when remembering fails", async () => {
-    const preferenceError = new Error("config storage unavailable");
-    rememberEnvironmentAgentSelectionMock.mockRejectedValueOnce(preferenceError);
-    const onOpenChange = mock(() => {});
-    const startEnvironment = mock(async () => {});
-    const originalConsoleWarn = console.warn;
-    console.warn = mock(() => {});
-    try {
-      render(
-        <CreateEnvironmentFlowDialog
-          open
-          onOpenChange={onOpenChange}
-          projectId="project-1"
-          createEnvironment={mock(async () => ({ id: "env-preference-failed" }) as Environment)}
-          updateEnvironment={() => {}}
-          startEnvironment={startEnvironment}
-        />,
-      );
-
-      fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
-
-      await waitFor(() => {
-        expect(startEnvironment).toHaveBeenCalledWith("env-preference-failed", "", {
-          background: true,
-          silent: true,
-        });
-        expect(onOpenChange).toHaveBeenCalledWith(false);
-      });
-      await waitFor(() => {
-        expect(console.warn).toHaveBeenCalledWith(
-          "[CreateEnvironmentFlowDialog] Failed to remember agent selection:",
-          preferenceError,
-        );
-      });
-      expect(
-        useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentAgentSelection,
-      ).toBeUndefined();
-    } finally {
-      console.warn = originalConsoleWarn;
-    }
-  });
-
-  // The environment already exists by the time the preference is written, so a
-  // config write that never settles must not strand the user in the modal with a
-  // created-but-unstarted environment.
-  test("closes and starts the environment even when the preference write never settles", async () => {
-    rememberEnvironmentAgentSelectionMock.mockImplementationOnce(() => new Promise(() => {}));
-    const onOpenChange = mock(() => {});
-    const startEnvironment = mock(async () => {});
-
-    render(
-      <CreateEnvironmentFlowDialog
-        open
-        onOpenChange={onOpenChange}
-        projectId="project-1"
-        createEnvironment={mock(async () => ({ id: "env-preference-hung" }) as Environment)}
-        updateEnvironment={() => {}}
-        startEnvironment={startEnvironment}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
-
-    await waitFor(() => {
-      expect(startEnvironment).toHaveBeenCalledWith("env-preference-hung", "", {
-        background: true,
-        silent: true,
-      });
-      expect(onOpenChange).toHaveBeenCalledWith(false);
-    });
-    expect(rememberEnvironmentAgentSelectionMock).toHaveBeenCalled();
-    // The create button must not be left spinning behind the pending write.
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "Create Environment" }).hasAttribute("disabled"),
-      ).toBe(false);
-    });
-  });
-
-  test("restores remembered agent and mode while taking model and reasoning from defaults", async () => {
+  test("uses configured defaults instead of a legacy last-agent selection when reopened", async () => {
     function Harness() {
       const [open, setOpen] = useState(true);
       return (
@@ -755,11 +642,19 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(screen.queryByRole("dialog") === null).toBe(true);
     act(() => {
       const config = structuredClone(useConfigStore.getState().config);
+      config.global.enabledAgentPlatforms = ["claude", "codex", "pi"];
+      config.global.agentSettings = {
+        ...config.global.agentSettings,
+        actionDefaults: {
+          ...config.global.agentSettings?.actionDefaults,
+          newProject: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        },
+      };
       config.repositories["project-1"] = {
         defaultBranch: "main",
         prBaseBranch: "main",
         lastEnvironmentAgentSelection: {
-          platform: "codex",
+          platform: "pi",
           mode: "native",
         },
       };
@@ -816,8 +711,7 @@ describe("CreateEnvironmentFlowDialog", () => {
   });
 
   // An untouched dialog keeps resolving its configured default while model
-  // catalogues load asynchronously. Remembered state contributes only the
-  // platform and mode.
+  // catalogues load asynchronously.
   test("applies a configured default once a late catalog makes it resolvable", async () => {
     act(() => {
       const config = structuredClone(useConfigStore.getState().config);

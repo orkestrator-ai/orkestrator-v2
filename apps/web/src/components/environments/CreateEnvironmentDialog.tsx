@@ -442,14 +442,8 @@ export function CreateEnvironmentDialog({
         catalog: modelCatalog,
         enabledAgents: enabledAgentPlatforms,
         configured: configuredAgentDefaults,
-        remembered: repoConfig?.lastEnvironmentAgentSelection,
       }),
-    [
-      configuredAgentDefaults,
-      enabledAgentPlatforms,
-      modelCatalog,
-      repoConfig?.lastEnvironmentAgentSelection,
-    ],
+    [configuredAgentDefaults, enabledAgentPlatforms, modelCatalog],
   );
   const getInitialAgentSelection = useCallback(
     (nextAgent: AgentType) => {
@@ -457,14 +451,13 @@ export function CreateEnvironmentDialog({
         catalog: modelCatalog,
         enabledAgents: [nextAgent],
         configured: { ...configuredAgentDefaults, agent: nextAgent },
-        remembered: repoConfig?.lastEnvironmentAgentSelection,
       });
       return {
         model: defaults.model,
         reasoningEffort: defaults.reasoningEffort,
       };
     },
-    [configuredAgentDefaults, modelCatalog, repoConfig?.lastEnvironmentAgentSelection],
+    [configuredAgentDefaults, modelCatalog],
   );
 
   const [environmentType, setEnvironmentType] = useState<EnvironmentType>(
@@ -689,8 +682,8 @@ export function CreateEnvironmentDialog({
   }, [open]);
 
   // Model catalogues can arrive after the dialog opens (especially OpenCode's
-  // project-scoped cache). Keep applying the remembered/default selection until
-  // the user changes an agent control, then leave their in-progress choice alone.
+  // project-scoped cache). Keep applying the configured selection until the user
+  // changes an agent control, then leave their in-progress choice alone.
   useEffect(() => {
     if (!open || agentSelectionTouchedRef.current) return;
     setAgentType(initialAgentDefaults.agent);

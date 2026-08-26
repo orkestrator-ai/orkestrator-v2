@@ -80,7 +80,6 @@ const {
   startFeaturePlanning,
   updateFeaturePlan,
   updateEnvironmentAgentSettings,
-  rememberEnvironmentAgentSelection,
   writeInitialPromptAttachments,
   applyPaneLayoutIntent,
   listAgentSkills,
@@ -192,26 +191,6 @@ describe("backend setup wrappers", () => {
         },
       ],
     ]);
-  });
-
-  test("persists a repository-scoped create-environment agent selection", async () => {
-    const config = { version: "1.0" } as AppConfig;
-    invokeMock.mockResolvedValueOnce(config);
-
-    await expect(
-      rememberEnvironmentAgentSelection("project-1", {
-        platform: "codex",
-        mode: "terminal",
-      }),
-    ).resolves.toBe(config);
-
-    // Agent and mode only. Model and reasoning come from settings, so a create
-    // dialog choice cannot outrank the configured default for later creates.
-    expect(invokeMock).toHaveBeenCalledWith("remember_environment_agent_selection", {
-      projectId: "project-1",
-      platform: "codex",
-      mode: "terminal",
-    });
   });
 
   test("omits the one-shot option keys when they are absent or blank", async () => {

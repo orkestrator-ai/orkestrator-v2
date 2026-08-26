@@ -19,6 +19,23 @@ export function registerNativeAgentCommands(
   register: CommandRegistrar,
   _dependencies: RegistryDependencies,
 ): void {
+  register("get_cursor_account_usage", async (_args, context) => {
+    const [
+      { accountUsageForResolvedCredential },
+      { cursorSdkStoredApiKey },
+      { resolveCursorApiKey },
+    ] = await Promise.all([
+      import("./cursor-usage.js"),
+      import("./cursor-sdk-bridge.js"),
+      import("./commands-validation.js"),
+    ]);
+    const config = await context.storage.loadConfig();
+    return accountUsageForResolvedCredential({
+      configuredApiKey: resolveCursorApiKey(config.global).apiKey,
+      storedApiKey: () => cursorSdkStoredApiKey(context),
+    });
+  });
+
   register("ensure_native_agent_session", async (args, context) => {
     if (!context.nativeAgents) {
       throw new Error("Native agent service is unavailable");

@@ -3,11 +3,21 @@ import { Progress } from "@/components/ui/progress";
 import type { AgentRateLimitWindow, ContextUsageSnapshot } from "@/lib/context-usage";
 import { formatTokenCount } from "@/lib/context-usage";
 import type { NativeAgentRuntimeSummary } from "@orkestrator/protocol/native-agent";
+import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
 
 function formatUsd(value: number): string {
   if (value === 0) return "$0.00";
   if (value < 0.01) return `$${value.toFixed(4)}`;
   return `$${value.toFixed(2)}`;
+}
+
+/**
+ * An overdrawn allowance reports a negative remainder, and `formatUsd` would
+ * render that as `$-50.0000` through its sub-cent branch. Sign it outside the
+ * currency instead.
+ */
+function formatCents(value: number): string {
+  return value < 0 ? `-${formatUsd(Math.abs(value) / 100)}` : formatUsd(value / 100);
 }
 
 function formatDuration(value: number): string {
@@ -392,6 +402,123 @@ export type AgentInfoUsageSnapshot = Omit<ContextUsageSnapshot, "totalTokens" | 
   percentUsed?: number;
 };
 
+export function CursorAccountUsagePanel({
+  result,
+  loading,
+}: {
+  result: CursorUsageResult | null;
+  loading: boolean;
+}) {
+  if (loading && !result) {
+    return (
+      <div className="rounded-lg border border-dashed border-border/70 px-4 py-4 text-sm text-muted-foreground">
+        Loading Cursor account usage…
+      </div>
+    );
+  }
+  if (!result) return null;
+  if (!result.ok) {
+    return (
+      <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-3">
+        <div className="text-xs font-medium text-amber-100/90">Account usage unavailable</div>
+        <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+          {result.message}
+        </div>
+      </div>
+    );
+  }
+
+  const account = result.data;
+  const limits: AgentRateLimitWindow[] = [
+    ...(account.included.usedPercent === undefined
+      ? []
+      : [
+          {
+            label: "Included usage",
+            usedPercent: account.included.usedPercent,
+            ...(account.cycle.endsAt ? { resetsAt: account.cycle.endsAt } : {}),
+          },
+        ]),
+    ...account.buckets.flatMap((bucket) =>
+      bucket.usedPercent === undefined
+        ? []
+        : [
+            {
+              label: bucket.label,
+              usedPercent: bucket.usedPercent,
+              ...(bucket.resetsAt ? { resetsAt: bucket.resetsAt } : {}),
+            },
+          ],
+    ),
+  ];
+  const hasMoney =
+    account.included.usedCents !== undefined ||
+    account.included.remainingCents !== undefined ||
+    account.included.limitCents !== undefined ||
+    account.onDemand?.usedCents !== undefined ||
+    account.onDemand?.individualLimitCents !== undefined ||
+    account.onDemand?.pooledLimitCents !== undefined;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-end justify-between gap-3">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
+            Cursor account
+          </div>
+          <div className="mt-1 text-sm font-medium text-foreground">
+            {account.plan ?? "Current billing cycle"}
+          </div>
+        </div>
+        {account.cycle.endsAt ? (
+          <div className="max-w-[13rem] text-right text-[10px] text-muted-foreground">
+            Resets {formatResetDateTime(account.cycle.endsAt)}
+          </div>
+        ) : null}
+      </div>
+
+      {hasMoney ? (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-4">
+          {account.included.usedCents !== undefined ? (
+            <Metric label="Included used" value={formatCents(account.included.usedCents)} />
+          ) : null}
+          {account.included.remainingCents !== undefined ? (
+            <Metric
+              label="Included left"
+              value={formatCents(account.included.remainingCents)}
+              {...(account.included.remainingCents < 0 ? { detail: "over allowance" } : {})}
+            />
+          ) : null}
+          {account.included.limitCents !== undefined ? (
+            <Metric label="Included limit" value={formatCents(account.included.limitCents)} />
+          ) : null}
+          {account.onDemand?.usedCents !== undefined ? (
+            <Metric label="On-demand" value={formatCents(account.onDemand.usedCents)} />
+          ) : null}
+          {account.onDemand?.individualLimitCents !== undefined ? (
+            <Metric
+              label="Spend limit"
+              value={formatCents(account.onDemand.individualLimitCents)}
+              detail={account.onDemand.limitType}
+            />
+          ) : account.onDemand?.pooledLimitCents !== undefined ? (
+            <Metric
+              label="Pooled limit"
+              value={formatCents(account.onDemand.pooledLimitCents)}
+              detail={account.onDemand.limitType}
+            />
+          ) : null}
+        </div>
+      ) : null}
+
+      {limits.length > 0 ? <RateLimitsSection rateLimits={limits} /> : null}
+      <div className="border-t border-border/60 pt-3 text-right text-[10px] text-muted-foreground">
+        Cursor dashboard · refreshed {new Date(account.source.retrievedAt).toLocaleTimeString()}
+      </div>
+    </div>
+  );
+}
+
 export function UsagePanel({
   usage,
   modelId,
@@ -555,7 +682,14 @@ export function RateLimitsSection({ rateLimits }: { rateLimits: AgentRateLimitWi
             </div>
             {limit.usedPercent !== undefined ? (
               <div className="relative">
-                <Progress value={limit.usedPercent} className="h-1" />
+                {/*
+                 * The label reports the provider's figure verbatim; the bar is
+                 * clamped. `Progress` positions its indicator with
+                 * `translateX(-(100 - value)%)`, so an over-quota percentage
+                 * pushes the fill out of the clipped track and an account past
+                 * its allowance would read as an empty bar.
+                 */}
+                <Progress value={Math.min(100, Math.max(0, limit.usedPercent))} className="h-1" />
                 {weekPosition !== null ? (
                   <span
                     className="pointer-events-none absolute -inset-y-1 z-10 w-px bg-red-500 shadow-[0_0_2px_rgba(239,68,68,0.8)]"

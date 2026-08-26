@@ -247,6 +247,20 @@ function openCodeTab(overrides: Partial<TabInfo> = {}): TabInfo {
   } as TabInfo;
 }
 
+function cursorTab(overrides: Partial<TabInfo> = {}): TabInfo {
+  return {
+    id: TAB_ID,
+    type: "agent-native",
+    nativeAgentData: {
+      platform: "cursor",
+      environmentId: ENVIRONMENT_ID,
+      containerId: "container-1",
+      isLocal: false,
+    },
+    ...overrides,
+  } as TabInfo;
+}
+
 function usage(overrides: Partial<ContextUsageSnapshot> = {}): ContextUsageSnapshot {
   return {
     usedTokens: 25_000,
@@ -330,7 +344,9 @@ beforeEach(() => {
   clipboardWrites = [];
   clipboardRejection = null;
   nativeInvokeMock.mockClear();
-  nativeInvokeMock.mockImplementation(() => Promise.resolve());
+  nativeInvokeMock.mockImplementation((command: string) =>
+    command === "get_cursor_account_usage" ? new Promise(() => undefined) : Promise.resolve(),
+  );
 
   window.confirm = ((message?: string) => {
     confirmMessages.push(message ?? "");
@@ -698,6 +714,301 @@ describe("AgentInfoButton provider resolution", () => {
 });
 
 describe("AgentInfoButton usage panel", () => {
+  test("loads Cursor account quota and renders included and bucket usage bars", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command !== "get_cursor_account_usage") return undefined;
+      return {
+        ok: true,
+        data: {
+          provider: "cursor",
+          plan: "Ultra",
+          cycle: { endsAt: "2026-09-01T00:00:00.000Z" },
+          included: {
+            usedCents: 23_222,
+            remainingCents: 16_778,
+            limitCents: 40_000,
+            usedPercent: 58.055,
+          },
+          buckets: [
+            {
+              id: "cursor-internal-auto",
+              label: "Cursor Models",
+              window: "billing_cycle",
+              usedPercent: 0,
+              remainingPercent: 100,
+            },
+            {
+              id: "cursor-internal-api",
+              label: "Other Models",
+              window: "billing_cycle",
+              usedPercent: 46.444,
+              remainingPercent: 53.556,
+            },
+          ],
+          onDemand: {
+            usedCents: 0,
+            individualLimitCents: 10_000,
+            individualRemainingCents: 10_000,
+            limitType: "user",
+          },
+          source: {
+            kind: "internal-dashboard-api",
+            retrievedAt: "2026-08-26T16:00:00.000Z",
+          },
+        },
+      };
+    });
+
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+
+    expect(screen.getByText("Loading Cursor account usage…")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
+    expect(screen.getByText("Ultra")).toBeTruthy();
+    expect(metricValue("Included used")).toBe("$232.22");
+    expect(metricValue("Included left")).toBe("$167.78");
+    expect(metricValue("Included limit")).toBe("$400.00");
+    expect(metricValue("On-demand")).toBe("$0.00");
+    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.getByText("Cursor Models")).toBeTruthy();
+    expect(screen.getByText("Other Models")).toBeTruthy();
+    expect(screen.getByText("58% used")).toBeTruthy();
+    expect(screen.getByText("46% used")).toBeTruthy();
+    expect(nativeInvokeMock).toHaveBeenCalledWith("get_cursor_account_usage");
+  });
+
+  test("shows a structured Cursor quota error without reporting zero usage", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_cursor_account_usage"
+        ? {
+            ok: false,
+            code: "MISSING_PLAN_USAGE",
+            message: "Cursor did not expose plan quota for this account.",
+            retryable: false,
+          }
+        : undefined,
+    );
+
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("Account usage unavailable")).toBeTruthy());
+    expect(screen.getByText("Cursor did not expose plan quota for this account.")).toBeTruthy();
+    expect(screen.queryByText("0% used") === null).toBe(true);
+  });
+
+  test("renders the sparse live response shape without inventing a balance", async () => {
+    // The shape a live individual account actually returned: an included limit
+    // and used amount, but no `remaining`, and no percentage buckets.
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_cursor_account_usage"
+        ? {
+            ok: true,
+            data: {
+              provider: "cursor",
+              cycle: { endsAt: "2026-09-01T00:00:00.000Z" },
+              included: { usedCents: 23_222, limitCents: 40_000, usedPercent: 58.055 },
+              buckets: [],
+              onDemand: { pooledLimitCents: 50_000, limitType: "team" },
+              source: {
+                kind: "internal-dashboard-api",
+                retrievedAt: "2026-08-26T16:00:00.000Z",
+              },
+            },
+          }
+        : undefined,
+    );
+
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
+    // No plan name: the panel falls back to naming the period.
+    expect(screen.getByText("Current billing cycle")).toBeTruthy();
+    expect(metricValue("Included used")).toBe("$232.22");
+    expect(screen.queryByText("Included left") === null).toBe(true);
+    // `individualLimitCents` is absent, so the pooled limit is shown instead.
+    expect(metricValue("Pooled limit")).toBe("$500.00");
+    expect(screen.getByText("team")).toBeTruthy();
+    // The included bar still renders; there are simply no bucket bars.
+    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.queryByText("Cursor Models") === null).toBe(true);
+  });
+
+  test("omits the money grid entirely when the response carries only percentages", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_cursor_account_usage"
+        ? {
+            ok: true,
+            data: {
+              provider: "cursor",
+              plan: "Pro",
+              cycle: {},
+              included: { usedPercent: 42 },
+              buckets: [],
+              source: {
+                kind: "internal-dashboard-api",
+                retrievedAt: "2026-08-26T16:00:00.000Z",
+              },
+            },
+          }
+        : undefined,
+    );
+
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("Pro")).toBeTruthy());
+    expect(screen.queryByText("Included used") === null).toBe(true);
+    expect(screen.queryByText("Included limit") === null).toBe(true);
+    expect(screen.queryByText("On-demand") === null).toBe(true);
+    expect(screen.getByText("42% used")).toBeTruthy();
+  });
+
+  test("shows an over-quota account as a saturated bar and a negative balance", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_cursor_account_usage"
+        ? {
+            ok: true,
+            data: {
+              provider: "cursor",
+              plan: "Pro",
+              cycle: { endsAt: "2026-09-01T00:00:00.000Z" },
+              included: {
+                usedCents: 46_000,
+                remainingCents: -6_000,
+                limitCents: 40_000,
+                usedPercent: 115,
+              },
+              buckets: [
+                {
+                  id: "cursor-internal-auto",
+                  label: "Cursor Models",
+                  window: "billing_cycle",
+                  usedPercent: 112.5,
+                  remainingPercent: 0,
+                },
+              ],
+              source: {
+                kind: "internal-dashboard-api",
+                retrievedAt: "2026-08-26T16:00:00.000Z",
+              },
+            },
+          }
+        : undefined,
+    );
+
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
+    expect(metricValue("Included left")).toBe("-$60.00");
+    expect(screen.getByText("over allowance")).toBeTruthy();
+    // The label stays truthful while the bar saturates: `Progress` positions its
+    // fill with translateX, so an unclamped value would leave an empty track.
+    expect(screen.getByText("115% used")).toBeTruthy();
+    expect(screen.getByText("113% used")).toBeTruthy();
+    const bars = popover().querySelectorAll('[role="progressbar"] > div');
+    const transforms = Array.from(bars).map((bar) => (bar as HTMLElement).style.transform);
+    // Unclamped, `100 - 115` produced `translateX(--15%)`, which the browser
+    // drops as invalid and leaves the track empty.
+    expect(transforms.filter((transform) => transform === "translateX(-0%)")).toHaveLength(2);
+    expect(transforms.some((transform) => transform === "")).toBe(false);
+  });
+
+  test("reports a failed account-usage invoke as a network error", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command === "get_cursor_account_usage") throw new Error("backend unreachable");
+      return undefined;
+    });
+
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+
+    await waitFor(() => expect(screen.getByText("Account usage unavailable")).toBeTruthy());
+    expect(screen.getByText("Could not load Cursor account usage.")).toBeTruthy();
+  });
+
+  test("clears the Cursor panel when the active session is no longer Cursor", async () => {
+    nativeInvokeMock.mockImplementation(async (command: string) =>
+      command === "get_cursor_account_usage"
+        ? {
+            ok: true,
+            data: {
+              provider: "cursor",
+              plan: "Ultra",
+              cycle: {},
+              included: { usedPercent: 12 },
+              buckets: [],
+              source: {
+                kind: "internal-dashboard-api",
+                retrievedAt: "2026-08-26T16:00:00.000Z",
+              },
+            },
+          }
+        : undefined,
+    );
+
+    const { rerender } = render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+    await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
+
+    rerender(<AgentInfoButton activeTab={claudeTab({ id: "tab-claude" })} />);
+
+    // One provider's quota must not linger over another provider's session.
+    await waitFor(() => expect(screen.queryByText("Cursor account") === null).toBe(true));
+    expect(screen.queryByText("Ultra") === null).toBe(true);
+  });
+
+  test("discards an account-usage response that arrives after the panel closes", async () => {
+    let settle: ((result: unknown) => void) | undefined;
+    let calls = 0;
+    nativeInvokeMock.mockImplementation(async (command: string) => {
+      if (command !== "get_cursor_account_usage") return undefined;
+      calls += 1;
+      if (calls > 1) return new Promise(() => undefined);
+      return new Promise((resolve) => {
+        settle = resolve;
+      });
+    });
+
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+    expect(screen.getByText("Loading Cursor account usage…")).toBeTruthy();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Close agent information" })[0]!);
+    await act(async () => {
+      settle?.({
+        ok: true,
+        data: {
+          provider: "cursor",
+          plan: "Stale plan",
+          cycle: {},
+          included: {},
+          buckets: [],
+          source: { kind: "internal-dashboard-api", retrievedAt: "2026-08-26T16:00:00.000Z" },
+        },
+      });
+      await Promise.resolve();
+    });
+
+    open();
+    // The in-flight result belonged to a closed panel; reopening waits for its
+    // own read rather than showing what the abandoned one returned.
+    expect(screen.getByText("Loading Cursor account usage…")).toBeTruthy();
+    expect(screen.queryByText("Stale plan") === null).toBe(true);
+  });
+
+  test("asks for account usage without a session argument", async () => {
+    render(<AgentInfoButton activeTab={cursorTab()} />);
+    open();
+
+    await waitFor(() => expect(nativeInvokeMock).toHaveBeenCalledWith("get_cursor_account_usage"));
+    // Account quota is billing-cycle scoped, not session scoped.
+    const call = nativeInvokeMock.mock.calls.find((args) => args[0] === "get_cursor_account_usage");
+    expect(call).toHaveLength(1);
+  });
+
   test("positions the current-week marker relative to the reset boundary", () => {
     const resetMs = Date.parse("2026-08-06T12:00:00.000Z");
     const halfwayMs = resetMs - 3.5 * 24 * 60 * 60 * 1_000;

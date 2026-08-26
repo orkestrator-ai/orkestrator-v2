@@ -14,6 +14,7 @@
     "./bridge-readiness": "./src/bridge-readiness.ts",
     "./build-pipeline": "./src/build-pipeline.ts",
     "./connections": "./src/connections.ts",
+    "./cursor-usage": "./src/cursor-usage.ts",
     "./codex-background-task": "./src/codex-background-task.ts",
     "./diff-stats": "./src/diff-stats.ts",
     "./debug-logging": "./src/debug-logging.ts",

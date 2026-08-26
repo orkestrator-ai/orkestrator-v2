@@ -14,6 +14,8 @@ import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 export const ACTION_DEFAULT_KEYS = Object.freeze([
   "newProject",
   "review",
+  "review2",
+  "fixReviewIssues",
   "pr",
   "resolve",
   "push",

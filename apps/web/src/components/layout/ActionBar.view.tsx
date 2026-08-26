@@ -288,6 +288,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     enabledAgentList,
     enabledAgents,
     launchDialogDefaultsFor,
+    configuredLaunchDialogDefaultsFor,
     handleReview,
     openReviewDialog,
     reviewLongPress,
@@ -327,6 +328,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   // Configure dialogs open on the Settings action default, which is the same
   // value `actionDefaultFor` gives a plain click on the same button.
   const reviewLaunchDefaults = launchDialogDefaultsFor("review");
+  // These roles did not exist in older configs. An unset or disabled entry
+  // keeps the previous behaviour of following Review rather than silently
+  // switching to the environment's generic agent.
+  const review2LaunchDefaults = configuredLaunchDialogDefaultsFor("review2");
+  const fixReviewIssuesLaunchDefaults = configuredLaunchDialogDefaultsFor("fixReviewIssues");
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
 
@@ -1334,6 +1340,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         catalog={reviewModelCatalog}
         preferredModels={reviewLaunchDefaults.preferredModels}
         preferredReasoningEfforts={reviewLaunchDefaults.preferredReasoningEfforts}
+        secondReviewerDefaults={review2LaunchDefaults}
+        fixModelDefaults={fixReviewIssuesLaunchDefaults}
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}
       />

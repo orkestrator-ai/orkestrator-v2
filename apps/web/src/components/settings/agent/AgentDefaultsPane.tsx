@@ -11,7 +11,15 @@
  * reachable from two places rather than two values with a precedence rule.
  */
 import { useMemo } from "react";
-import { AlertTriangle, Eye, FolderPlus, GitPullRequest, RotateCcw, Upload } from "lucide-react";
+import {
+  AlertTriangle,
+  Eye,
+  FolderPlus,
+  GitPullRequest,
+  RotateCcw,
+  Upload,
+  Wrench,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
@@ -52,8 +60,18 @@ const ACTION_DEFINITIONS: Record<
   },
   review: {
     label: "Review",
-    description: "Used by the Code Review button.",
+    description: "Used by the Code Review button and as the first model in Multi Review.",
     icon: <Eye className="h-4 w-4" />,
+  },
+  review2: {
+    label: "Review 2",
+    description: "Used as the second review model in Multi Review.",
+    icon: <Eye className="h-4 w-4" />,
+  },
+  fixReviewIssues: {
+    label: "Fix review issues",
+    description: "Used as the consolidation and fix model in Multi Review.",
+    icon: <Wrench className="h-4 w-4" />,
   },
   pr: {
     label: "PR",

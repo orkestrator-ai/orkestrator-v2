@@ -16,8 +16,14 @@ describe("normalizeActionDefaults", () => {
     expect(
       normalizeActionDefaults({
         review: { platform: "codex", model: " gpt-5.4 ", reasoningEffort: " high " },
+        review2: { platform: "claude", model: " opus " },
+        fixReviewIssues: { platform: "codex", model: " gpt-5.6 " },
       }),
-    ).toEqual({ review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" } });
+    ).toEqual({
+      review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      review2: { platform: "claude", model: "opus" },
+      fixReviewIssues: { platform: "codex", model: "gpt-5.6" },
+    });
   });
 
   it("drops unknown action keys", () => {

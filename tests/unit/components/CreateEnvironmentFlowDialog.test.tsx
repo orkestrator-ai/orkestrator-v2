@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
-import type { Environment, LastEnvironmentAgentSelection } from "@/types";
+import type { Environment } from "@/types";
 import type { GitHubCredentialStatus } from "@/lib/backend";
 import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useClaudeStore } from "@/stores/claudeStore";
@@ -21,24 +21,10 @@ const getContainerGitHubCredentialStatusMock = mock(async () => ({
   source: "host-cli" as const,
   available: true,
 }));
-const rememberEnvironmentAgentSelectionMock = mock(
-  async (projectId: string, selection: LastEnvironmentAgentSelection) => {
-    const config = structuredClone(useConfigStore.getState().config);
-    config.repositories[projectId] = {
-      ...(config.repositories[projectId] ?? {
-        defaultBranch: "main",
-        prBaseBranch: "main",
-      }),
-      lastEnvironmentAgentSelection: selection,
-    };
-    return config;
-  },
-);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
-  rememberEnvironmentAgentSelection: rememberEnvironmentAgentSelectionMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
 }));
 
@@ -106,18 +92,6 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
 describe("CreateEnvironmentFlowDialog", () => {
   beforeEach(() => {
     updateEnvironmentAgentSettingsMock.mockClear();
-    rememberEnvironmentAgentSelectionMock.mockClear();
-    rememberEnvironmentAgentSelectionMock.mockImplementation(async (projectId, selection) => {
-      const config = structuredClone(useConfigStore.getState().config);
-      config.repositories[projectId] = {
-        ...(config.repositories[projectId] ?? {
-          defaultBranch: "main",
-          prBaseBranch: "main",
-        }),
-        lastEnvironmentAgentSelection: selection,
-      };
-      return config;
-    });
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
       source: "host-cli",
@@ -628,7 +602,6 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(call[2]).toBe(true);
     expect(call[3]).toBe("gpt-5.4-mini");
     expect(call[4]).toBe("high");
-    expect(rememberEnvironmentAgentSelectionMock).not.toHaveBeenCalled();
     expect(useClaudeOptionsStore.getState().getOptions("env-selected-options")).toEqual(
       expect.objectContaining({
         agentType: "codex",
@@ -636,6 +609,12 @@ describe("CreateEnvironmentFlowDialog", () => {
         reasoningEffort: "high",
       }),
     );
+    // The durable half of the claim: a per-create choice reaches the launched
+    // tab and nothing else. Creating must not write repository-scoped state
+    // that would then outrank the configured default for the next create.
+    expect(
+      useConfigStore.getState().config.repositories["project-1"]?.lastEnvironmentAgentSelection,
+    ).toBeUndefined();
   });
 
   test("uses configured defaults instead of a legacy last-agent selection when reopened", async () => {

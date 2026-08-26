@@ -535,6 +535,11 @@ export function registerProjectCommands(
     void syncDiffStatsTracking(context).catch(() => undefined);
     return redactAppConfig(updated);
   });
+  // No current renderer calls this: create dialogs resolve every agent control
+  // from Settings. It stays because a cached older web client still sends it,
+  // and this is the only compatibility surface that a shipped bundle can reach —
+  // an old renderer carries its own copy of the client-side wrapper, so keeping
+  // one here would have protected nothing.
   register(
     "remember_environment_agent_selection",
     async ({ projectId, platform, mode }, { storage }) => {

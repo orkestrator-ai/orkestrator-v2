@@ -10,7 +10,6 @@ import type {
   PrState,
   EnsureEnvironmentSetupResult,
   ClaudeModelCatalogSnapshot,
-  LastEnvironmentAgentSelection,
   CursorSdkAuthStatus,
   CursorSdkLoginProgress,
 } from "@/types";
@@ -215,17 +214,6 @@ export async function updateRepositoryConfig(
   repoConfig: RepositoryConfig,
 ): Promise<AppConfig> {
   return invoke<AppConfig>("update_repository_config", { projectId, repoConfig });
-}
-
-/** @deprecated Compatibility wrapper for older renderers; current create flows do not call it. */
-export async function rememberEnvironmentAgentSelection(
-  projectId: string,
-  selection: LastEnvironmentAgentSelection,
-): Promise<AppConfig> {
-  return invoke<AppConfig>("remember_environment_agent_selection", {
-    projectId,
-    ...selection,
-  });
 }
 
 export async function getLogDirectory(): Promise<string> {

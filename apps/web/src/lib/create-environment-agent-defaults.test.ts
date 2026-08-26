@@ -59,6 +59,25 @@ describe("resolveCreateEnvironmentAgentDefaults", () => {
     });
   });
 
+  // The configured default agent is only a preference: `firstEnabledAgentPlatform`
+  // hands back `enabled[0]` when that platform has since been disabled, and the
+  // model and reasoning must then be resolved for the platform actually chosen
+  // rather than left pointing at the disabled one's column.
+  test("falls back to the first enabled platform when the configured agent is disabled", () => {
+    expect(
+      resolveCreateEnvironmentAgentDefaults({
+        catalog,
+        enabledAgents: ["codex", "claude"],
+        configured: { ...configured, agent: "opencode" },
+      }),
+    ).toMatchObject({
+      agent: "codex",
+      codexMode: "native",
+      model: "gpt-default",
+      reasoningEffort: "medium",
+    });
+  });
+
   test("resolves a configured Claude model from its concrete id to the catalog alias", () => {
     expect(
       resolveCreateEnvironmentAgentDefaults({

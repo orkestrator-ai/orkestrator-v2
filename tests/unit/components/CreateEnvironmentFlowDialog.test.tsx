@@ -8,6 +8,7 @@ import { useClaudeStore } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
+import { mockToastError } from "../../mocks/sonner";
 
 // Snapshot the real module before replacing it, and restore it afterwards, so
 // other suites that need the genuine backend wrappers are unaffected.
@@ -560,6 +561,37 @@ describe("CreateEnvironmentFlowDialog", () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+
+  test("surfaces an agent-settings persistence failure and does not start", async () => {
+    const createEnvironment = mock(async () => ({ id: "env-settings-failed" }) as Environment);
+    const startEnvironment = mock(async () => {});
+    const onOpenChange = mock(() => {});
+    updateEnvironmentAgentSettingsMock.mockRejectedValueOnce(
+      new Error("Initial prompt attachments exceed the 32 MB limit"),
+    );
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={onOpenChange}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={startEnvironment}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Could not create environment", {
+        description: "Initial prompt attachments exceed the 32 MB limit",
+      }),
+    );
+    expect(createEnvironment).toHaveBeenCalledTimes(1);
+    expect(startEnvironment).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
   test("persists a cleared launch intent when the user turns the agent off", async () => {

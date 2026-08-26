@@ -185,27 +185,19 @@ function MultiReviewOverviewTab({
     }
   };
 
-  // The backend commits the handoff and durably dispatches the prompt before
-  // this opens a tab. If the tab cannot be created, work still continues in the
-  // provider session and a later mount can recover it from the authoritative
-  // interactive snapshot without relying on component-local state.
+  // The backend commits the handoff intent and owns provider adoption, dispatch,
+  // and retries. Presentation waits for the authoritative acknowledgement so a
+  // missing provider session can never make the tab create an empty fallback.
   const addressAll = async () => {
-    if (pending || !workflow) return;
+    if (pending) return;
     setPending(true);
     setError(null);
     try {
-      if (!multiReviewFixSessionTabOptions(workflow)) {
-        setError("The consolidation session is no longer available");
-        return;
-      }
-      const handedOff = await commands.address(workflow.id);
+      // The workflow id is enough to record the intent. Eligibility, provider
+      // adoption and prompt dispatch all belong to the backend; a stale local
+      // snapshot or an unavailable tab presenter must never suppress the click.
+      const handedOff = await commands.address(data.workflowId);
       replaceWorkflow(handedOff);
-      if (openFixSession(handedOff) !== "opened") {
-        setError(
-          "The fix session is running, but a tab could not be opened. " +
-            "Close a tab, then use Open fix session to continue.",
-        );
-      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -218,13 +210,9 @@ function MultiReviewOverviewTab({
     setPending(true);
     setError(null);
     try {
-      // A crash or transport failure can leave the terminal interactive
-      // snapshot with its idempotent backend dispatch still pending. Resume
-      // that durable half before presenting the session in a new tab.
-      const target =
-        workflow.addressPromptPending === true ? await commands.address(workflow.id) : workflow;
-      if (target !== workflow) replaceWorkflow(target);
-      const outcome = openFixSession(target);
+      // Opening is presentation-only. A pending dispatch is owned and retried
+      // by the backend supervisor even when no review component is mounted.
+      const outcome = openFixSession(workflow);
       if (outcome !== "opened") setError(openFixSessionError(outcome));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -398,6 +386,8 @@ function MultiReviewOverviewTab({
             <StructuredReviewReportView
               report={workflow.consolidatedReport}
               heading="Consolidated Multi Review"
+              collapsibleSections
+              sectionExpansionKey={`multi-review/${workflow.id}/consolidated-report-section`}
             />
           )}
 
@@ -411,6 +401,13 @@ function MultiReviewOverviewTab({
           {(error || workflow.error) && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
               {error ?? workflow.error}
+            </div>
+          )}
+
+          {workflow.addressPromptPending === true && !workflow.error && (
+            <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
+              The fix request was recorded and will be delivered in the background. Open the fix
+              session when delivery completes.
             </div>
           )}
         </div>
@@ -437,19 +434,21 @@ function MultiReviewOverviewTab({
             {workflow.phase === "ready" || workflow.phase === "failed" ? "Abandon" : "Cancel"}
           </Button>
         )}
-        {workflow.phase === "interactive" && workflow.fixSession?.providerSessionId && (
-          <Button
-            variant="outline"
-            disabled={pending || !createTab}
-            onClick={() => {
-              void openInteractiveFixSession();
-            }}
-          >
-            Open fix session
-          </Button>
-        )}
+        {workflow.phase === "interactive" &&
+          workflow.addressPromptPending !== true &&
+          workflow.fixSession?.providerSessionId && (
+            <Button
+              variant="outline"
+              disabled={pending || !createTab}
+              onClick={() => {
+                void openInteractiveFixSession();
+              }}
+            >
+              Open fix session
+            </Button>
+          )}
         {workflow.phase === "ready" && (
-          <Button disabled={pending || !createTab} onClick={() => void addressAll()}>
+          <Button disabled={pending} onClick={() => void addressAll()}>
             <Wrench className="mr-2 size-4" />
             {ADDRESS_ALL_REVIEW_PROMPT}
           </Button>

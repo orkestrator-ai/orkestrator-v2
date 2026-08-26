@@ -195,7 +195,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
               ...(preparation.notice ? { openCodeIncompleteTurnNotice: preparation.notice } : {}),
             };
           }
-          await provider.send(durable.providerSessionId, input.prompt, {
+          await provider.send(durable.providerSessionId, preparation.prompt ?? input.prompt, {
             requestId: input.requestId,
             // Only a person typing into the composer can mean "run this
             // command"; workflow-authored prompts are literal text.

@@ -243,6 +243,19 @@ function restoreUsage(value: unknown): SessionState["usage"] {
     ...(typeof value.durationMs === "number" && Number.isFinite(value.durationMs)
       ? { durationMs: value.durationMs }
       : {}),
+    ...(typeof value.sessionTokens === "number" &&
+    Number.isFinite(value.sessionTokens) &&
+    value.sessionTokens >= 0
+      ? { sessionTokens: value.sessionTokens }
+      : {}),
+    ...(typeof value.sessionTokenFloor === "number" &&
+    Number.isFinite(value.sessionTokenFloor) &&
+    value.sessionTokenFloor >= 0
+      ? { sessionTokenFloor: value.sessionTokenFloor }
+      : {}),
+    ...(typeof value.costUsd === "number" && Number.isFinite(value.costUsd) && value.costUsd >= 0
+      ? { costUsd: value.costUsd }
+      : {}),
     updatedAt: nonBlank(value.updatedAt) ? value.updatedAt : new Date().toISOString(),
   };
 }

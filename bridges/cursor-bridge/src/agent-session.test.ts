@@ -30,6 +30,17 @@ function fakeSdkAgent(agentId: string) {
   return {
     agentId,
     send: async () => undefined,
+    getUsage: async () => ({
+      usage: {
+        inputTokens: 80,
+        outputTokens: 20,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 100,
+      },
+      cost: { rawCostCents: 5, chargedCents: 5 },
+      runs: [],
+    }),
     [Symbol.asyncDispose]: async () => undefined,
   };
 }
@@ -65,6 +76,7 @@ mock.module("@cursor/sdk", () => ({
 
 const { ensureAgent, listResumableSessions, newSessionState, resumeSession } =
   await import("./agent-session.js");
+const { refreshAgentUsage } = await import("./prompt.js");
 const { sessions } = await import("./state.js");
 
 const previousApiKey = process.env.CURSOR_API_KEY;
@@ -141,9 +153,31 @@ describe("ensureAgent", () => {
   test("a resume that fails falls back to a new agent rather than failing the tab", async () => {
     const state = newSessionState();
     state.agentId = "gone";
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      sessionTokens: 1_000,
+      sessionTokenFloor: 1_100,
+      costUsd: 0.4,
+      updatedAt: new Date(1).toISOString(),
+    };
+    const revision = state.revision;
     resumeFails = true;
-    await expect(ensureAgent(state)).resolves.toMatchObject({ agentId: "created-agent" });
+    const replacement = await ensureAgent(state);
+    expect(replacement).toMatchObject({ agentId: "created-agent" });
     expect(state.agentId).toBe("created-agent");
+    expect(state.usage).toMatchObject({
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+    });
+    expect(state.usage?.sessionTokens).toBeUndefined();
+    expect(state.usage?.sessionTokenFloor).toBeUndefined();
+    expect(state.usage?.costUsd).toBeUndefined();
+    expect(state.revision).toBe(revision + 1);
+
+    expect(await refreshAgentUsage(state, replacement, state.promptSequence, 100, 100)).toBe(
+      "retry",
+    );
+    expect(state.usage?.sessionTokens).toBe(100);
+    expect(state.usage?.costUsd).toBe(0.05);
   });
 });
 

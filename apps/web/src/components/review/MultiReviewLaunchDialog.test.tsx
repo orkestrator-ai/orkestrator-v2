@@ -10,7 +10,10 @@ import {
 
 const catalog: AgentModelCatalog = {
   claude: [{ id: "opus", name: "Opus", reasoningEfforts: ["high"] }],
-  codex: [{ id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["medium", "high"] }],
+  codex: [
+    { id: "gpt-5.6", name: "GPT-5.6", reasoningEfforts: ["low", "medium", "high"] },
+    { id: "gpt-5.5", name: "GPT-5.5", reasoningEfforts: ["low", "medium", "high"] },
+  ],
   opencode: [{ id: "provider/model", name: "OpenCode", reasoningEfforts: [] }],
   cursor: [{ id: "grok-4.6", name: "Grok 4.6", reasoningEfforts: [] }],
   pi: [{ id: "anthropic/claude-pi", name: "Claude Pi", reasoningEfforts: ["high"] }],
@@ -66,6 +69,68 @@ describe("MultiReviewLaunchDialog", () => {
     });
   });
 
+  test("keeps added models and consolidation controls in the scroll region outside the footer", () => {
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+
+    const scrollRegion = screen.getByRole("region", {
+      name: "Multi Review model configuration",
+    });
+    expect(scrollRegion.className).toContain("overflow-y-auto");
+    expect(scrollRegion.contains(screen.getByLabelText("Reviewer 3 model"))).toBe(true);
+    expect(scrollRegion.contains(screen.getByLabelText("Consolidation & fix model model"))).toBe(
+      true,
+    );
+    expect(
+      scrollRegion.contains(screen.getByRole("button", { name: "Start 3-model review" })),
+    ).toBe(false);
+    expect(scrollRegion.getAttribute("tabindex")).toBeNull();
+  });
+
+  test("disables every model control and guards dismissal and submission while busy", () => {
+    const onOpenChange = mock((_open: boolean) => undefined);
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        busy
+        onOpenChange={onOpenChange}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    for (const name of [
+      "Reviewer 1 model",
+      "Reviewer 2 model",
+      "Consolidation & fix model model",
+    ]) {
+      expect(screen.getByLabelText(name).closest("fieldset")?.disabled).toBe(true);
+    }
+
+    const startButton = screen.getByRole("button", { name: "Starting Multi Review…" });
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    const form = startButton.closest("form")!;
+    expect((startButton as HTMLButtonElement).disabled).toBe(true);
+    expect((cancelButton as HTMLButtonElement).disabled).toBe(true);
+    expect(form.getAttribute("aria-busy")).toBe("true");
+
+    fireEvent.submit(form);
+    fireEvent.click(cancelButton);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
   /**
    * The favourites view mixes every platform's models into one list, so a row
    * chosen there routinely belongs to a platform other than the row's current
@@ -100,6 +165,108 @@ describe("MultiReviewLaunchDialog", () => {
       ],
       fixModel: { agent: "claude", model: "opus" },
     });
+  });
+
+  test("seeds reviewer 2 and the fix model from their independent defaults", () => {
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        preferredModels={{ claude: "opus" }}
+        preferredReasoningEfforts={{ claude: "high" }}
+        secondReviewerDefaults={{
+          defaultAgent: "codex",
+          preferredModels: { codex: "gpt-5.6" },
+          preferredReasoningEfforts: { codex: "medium" },
+        }}
+        fixModelDefaults={{
+          defaultAgent: "opencode",
+          preferredModels: { opencode: "provider/model" },
+        }}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    expect(onConfirm.mock.calls[0]?.[0]).toEqual({
+      reviewers: [
+        { agent: "claude", model: "opus", reasoningEffort: "high" },
+        { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+      ],
+      fixModel: { agent: "opencode", model: "provider/model" },
+    });
+  });
+
+  test("keeps each role's effort preferences when its model changes", () => {
+    setFavorites([{ platform: "codex", modelId: "gpt-5.6" }]);
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        preferredReasoningEfforts={{ codex: "high" }}
+        secondReviewerDefaults={{
+          defaultAgent: "codex",
+          preferredModels: { codex: "gpt-5.5" },
+          preferredReasoningEfforts: { codex: "medium" },
+        }}
+        fixModelDefaults={{
+          defaultAgent: "codex",
+          preferredModels: { codex: "gpt-5.5" },
+          preferredReasoningEfforts: { codex: "low" },
+        }}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    chooseFavorite("Reviewer 2", /GPT-5\.6/);
+    chooseFavorite("Consolidation & fix model", /GPT-5\.6/);
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    expect(onConfirm.mock.calls[0]?.[0]).toMatchObject({
+      reviewers: [
+        { agent: "claude", model: "opus" },
+        { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+      ],
+      fixModel: { agent: "codex", model: "gpt-5.6", reasoningEffort: "low" },
+    });
+  });
+
+  test("uses Review defaults for added rows and preserves them when rows are renumbered", () => {
+    setFavorites([{ platform: "codex", modelId: "gpt-5.6" }]);
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        preferredReasoningEfforts={{ codex: "high" }}
+        secondReviewerDefaults={{
+          defaultAgent: "codex",
+          preferredModels: { codex: "gpt-5.5" },
+          preferredReasoningEfforts: { codex: "medium" },
+        }}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove reviewer 1" }));
+    // The added row is now Reviewer 2, but it remains a Review-default row.
+    chooseFavorite("Reviewer 1", /GPT-5\.6/);
+    chooseFavorite("Reviewer 2", /GPT-5\.6/);
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    expect(onConfirm.mock.calls[0]?.[0].reviewers).toEqual([
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "medium" },
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    ]);
   });
 
   test("includes Pi models in the cross-provider favourites catalog", () => {

@@ -2643,6 +2643,117 @@ describe("NativeAgentService", () => {
       );
     });
 
+    test("dispatches a file-only startup prompt when persisted text is blank", async () => {
+      const { provider, send } = createProviderStub("codex");
+      const invokeMock = mock(async (command: string, _args?: Record<string, unknown>) => {
+        expect(command).toBe("write_initial_prompt_attachments");
+        return [
+          {
+            name: "requirements.md",
+            path: "/workspace/.orkestrator/initial-prompt/batch/requirements.md",
+          },
+        ];
+      });
+      const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) =>
+        invokeMock(command, args) as Promise<T>;
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-file-only-",
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: "codex",
+            codexMode: "native",
+            initialPrompt: "   ",
+            initialPromptAttachments: [
+              {
+                id: "file-1",
+                name: "requirements.md",
+                type: "file",
+                base64Data: "IyBSZXF1aXJlbWVudHM=",
+              },
+            ],
+          },
+          provider: async () => provider,
+          invoke,
+        },
+        async ({ storage, service }) => {
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(send).toHaveBeenCalledWith(
+            "provider-session",
+            "Attached files have been saved in the workspace. Use these paths as task context:\n" +
+              "- requirements.md: /workspace/.orkestrator/initial-prompt/batch/requirements.md",
+            expect.objectContaining({
+              requestId: "initial-prompt:env-1:startup-agent",
+              images: [],
+            }),
+          );
+          expect(invokeMock).toHaveBeenCalledTimes(1);
+          const converged = await storage.getEnvironment("env-1");
+          expect(converged).toMatchObject({ pendingAgentLaunch: false });
+          expect(converged?.initialPromptAttachments).toBeUndefined();
+        },
+      );
+    });
+
+    test("retries file staging failures without recording or losing the startup dispatch", async () => {
+      const { provider, send } = createProviderStub("codex");
+      let attempts = 0;
+      const invokeMock = mock(async (_command: string, _args?: Record<string, unknown>) => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("workspace is not ready");
+        return [
+          {
+            name: "requirements.md",
+            path: "/workspace/.orkestrator/initial-prompt/batch/requirements.md",
+          },
+        ];
+      });
+      const invoke: Invoke = async <T>(command: string, args?: Record<string, unknown>) =>
+        invokeMock(command, args) as Promise<T>;
+      await withService(
+        {
+          prefix: "orkestrator-native-launch-file-retry-",
+          environment: {
+            pendingAgentLaunch: true,
+            defaultAgent: "codex",
+            codexMode: "native",
+            initialPrompt: "Implement this",
+            initialPromptAttachments: [
+              {
+                id: "file-1",
+                name: "requirements.md",
+                type: "file",
+                base64Data: "IyBSZXF1aXJlbWVudHM=",
+              },
+            ],
+          },
+          provider: async () => provider,
+          invoke,
+        },
+        async ({ storage, service }) => {
+          await expect(service.reconcileInitialLaunch("env-1")).rejects.toThrow(
+            "workspace is not ready",
+          );
+          expect(send).not.toHaveBeenCalled();
+          expect(await storage.getEnvironment("env-1")).toMatchObject({
+            pendingAgentLaunch: true,
+            initialPromptAttachments: [expect.objectContaining({ id: "file-1" })],
+            startupAgentSession: { status: "error" },
+          });
+          expect(internals(service).launchRetryAt.has("env-1")).toBe(true);
+
+          await service.reconcileInitialLaunch("env-1");
+
+          expect(invokeMock).toHaveBeenCalledTimes(2);
+          expect(send).toHaveBeenCalledTimes(1);
+          const converged = await storage.getEnvironment("env-1");
+          expect(converged).toMatchObject({ pendingAgentLaunch: false });
+          expect(converged?.initialPromptAttachments).toBeUndefined();
+        },
+      );
+    });
+
     test.each([
       ["claude", { claudeMode: "native" }] as const,
       ["opencode", { opencodeMode: "native" }] as const,

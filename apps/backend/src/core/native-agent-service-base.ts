@@ -2,6 +2,7 @@ import * as shared from "./native-agent-service-shared.js";
 import {
   BUILD_PIPELINE_AGENTS,
   INTERACTIVE_AGENT_INTERACTION_POLICY,
+  NativeAgentProviderSessionMissingError,
   UNATTENDED_AGENT_INTERACTION_POLICY,
   controlsFromSessionInput,
   isValidInteractionMetadata,
@@ -500,7 +501,7 @@ export abstract class NativeAgentServiceBase {
     const { status } = await readProviderStatus(provider, input.providerSessionId);
     await this.assertEnvironmentLive(input.environmentId);
     if (status === "missing") {
-      throw new Error("Native agent provider session was not found");
+      throw new NativeAgentProviderSessionMissingError();
     }
     const session = await this.storage.adoptNativeAgentSession({
       key,

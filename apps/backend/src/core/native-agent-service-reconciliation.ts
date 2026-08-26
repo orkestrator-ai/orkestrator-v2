@@ -124,6 +124,10 @@ export type NativeAgentServiceLayerTypes = [
 ];
 
 import { NativeAgentServicePrompt } from "./native-agent-service-prompt.ts";
+import {
+  buildInitialPromptWithAttachmentReferences,
+  type SavedInitialPromptAttachment,
+} from "@orkestrator/protocol/initial-prompt-attachments";
 
 export abstract class NativeAgentServiceReconciliation extends NativeAgentServicePrompt {
   reconcileAgentActivity(): Promise<void> {
@@ -1085,27 +1089,52 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       if (!isEnvironmentReadyForAgents(environment)) return;
 
       const prompt = environment.initialPrompt?.trim();
-      // Passed as base64 rather than staged here: the provider stages inside the
-      // durable dispatch lock, so only the supervisor that actually wins the
-      // launch writes the file. Staging first would have every supervisor write
-      // the same path concurrently.
-      const images = environment.initialPromptAttachments?.map((attachment) => ({
-        filename: attachment.name,
-        data: attachment.base64Data,
-      }));
+      const initialAttachments = environment.initialPromptAttachments ?? [];
+      const files = initialAttachments.filter((attachment) => attachment.type === "file");
+      // Images stay as base64 until the provider stages them inside the durable
+      // dispatch lock. Files use the same lock through the preparation callback
+      // below. Staging either kind before dispatch would let every supervisor
+      // write a competing copy of the same startup attachment.
+      const images = initialAttachments
+        .filter((attachment) => attachment.type !== "file")
+        .map((attachment) => ({
+          filename: attachment.name,
+          data: attachment.base64Data,
+        }));
+      const dispatchInput: DispatchNativeAgentPromptInput = {
+        environmentId: environment.id,
+        agent,
+        logicalSessionKey,
+        model,
+        reasoningEffort,
+        ...(conversationMode ? { mode: conversationMode } : {}),
+        // A file-only turn needs non-blank text before its final workspace paths
+        // can be resolved inside the dispatch lock below.
+        prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
+        requestId: `initial-prompt:${environment.id}:startup-agent`,
+        images,
+      };
       const session =
-        prompt || (images?.length ?? 0) > 0
-          ? await this.dispatchPrompt({
-              environmentId: environment.id,
-              agent,
-              logicalSessionKey,
-              model,
-              reasoningEffort,
-              ...(conversationMode ? { mode: conversationMode } : {}),
-              prompt: prompt ?? "",
-              requestId: `initial-prompt:${environment.id}:startup-agent`,
-              images,
-            })
+        prompt || images.length > 0 || files.length > 0
+          ? files.length > 0
+            ? await this.dispatchPromptInternal(dispatchInput, async () => {
+                const saved = await this.invoke<SavedInitialPromptAttachment[]>(
+                  "write_initial_prompt_attachments",
+                  {
+                    environmentId: environment.id,
+                    attachments: files.map(({ id, name, base64Data }) => ({
+                      id,
+                      name,
+                      base64Data,
+                    })),
+                  },
+                );
+                return {
+                  dispatch: true,
+                  prompt: buildInitialPromptWithAttachmentReferences(prompt ?? "", saved),
+                };
+              })
+            : await this.dispatchPrompt(dispatchInput)
           : await this.ensureSession({
               environmentId: environment.id,
               agent,

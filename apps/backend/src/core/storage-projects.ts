@@ -1,5 +1,10 @@
 import * as shared from "./storage-shared.js";
 import {
+  MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES,
+  serializedInitialPromptAttachmentBytes,
+  toDurableInitialPromptAttachments,
+} from "@orkestrator/protocol/initial-prompt-attachments";
+import {
   LEGACY_ENVIRONMENT_AGENT_KEYS,
   migrateEnvironmentAgentSettings,
 } from "./storage-agent-settings.js";
@@ -577,12 +582,14 @@ export abstract class StorageProjects extends StorageBase {
           Array.isArray(updates.initialPromptAttachments) &&
           updates.initialPromptAttachments.every(isInitialPromptImageAttachment)
         ) {
-          const serialized = JSON.stringify(updates.initialPromptAttachments);
-          if (Buffer.byteLength(serialized, "utf8") > 32 * 1024 * 1024) {
+          if (
+            serializedInitialPromptAttachmentBytes(updates.initialPromptAttachments) >
+            MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES
+          ) {
             throw new Error("Initial prompt attachments exceed the 32 MB limit");
           }
-          environment.initialPromptAttachments = updates.initialPromptAttachments.map(
-            ({ previewUrl: _previewUrl, ...attachment }) => attachment,
+          environment.initialPromptAttachments = toDurableInitialPromptAttachments(
+            updates.initialPromptAttachments,
           );
         } else {
           throw new Error("Initial prompt attachments are malformed");

@@ -27,6 +27,7 @@ import {
   type ReviewLaunchSelection,
   type ReviewModelCatalog,
 } from "../../apps/web/src/components/review/ReviewLaunchDialog";
+import { MultiReviewLaunchDialog } from "../../apps/web/src/components/review/MultiReviewLaunchDialog";
 import type { GitFileChange } from "../../apps/web/src/lib/backend";
 
 declare global {
@@ -262,6 +263,25 @@ function ReviewLaunchDialogFixture() {
           setSelection(nextSelection);
           setOpen(false);
         }}
+      />
+    </main>
+  );
+}
+
+function MultiReviewLaunchDialogFixture() {
+  const [open, setOpen] = useState(true);
+
+  return (
+    <main className="min-h-screen bg-background p-4 text-foreground">
+      <button type="button" onClick={() => setOpen(true)}>
+        Reopen Multi Review dialog
+      </button>
+      <MultiReviewLaunchDialog
+        open={open}
+        onOpenChange={setOpen}
+        defaultAgent="claude"
+        catalog={reviewModelCatalog}
+        onConfirm={() => setOpen(false)}
       />
     </main>
   );
@@ -627,6 +647,9 @@ function fixtureForPath() {
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;
   if (window.location.pathname === "/mobile-shell") return <MobileAppShellFixture />;
   if (window.location.pathname === "/path-truncation") return <PathTruncationFixture />;
+  if (window.location.pathname === "/multi-review-launch") {
+    return <MultiReviewLaunchDialogFixture />;
+  }
   if (window.location.pathname === "/review-launch") return <ReviewLaunchDialogFixture />;
   if (window.location.pathname === "/styles") return <GlobalStylesFixture />;
   return <CreateEnvironmentFixture />;

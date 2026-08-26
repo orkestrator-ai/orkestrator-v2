@@ -150,6 +150,8 @@ export interface OpenCodeModelCatalogSnapshot {
 export interface InitialPromptImageAttachment {
   id: string;
   name: string;
+  /** Omitted by records written before startup file attachments were supported. */
+  type?: "image" | "file";
   /** Ephemeral renderer preview; omitted from durable storage. */
   previewUrl?: string;
   base64Data: string;
@@ -304,7 +306,7 @@ export interface Environment {
   /** One-shot conversation mode for the agent tab created from pendingAgentLaunch. */
   initialConversationMode?: "plan" | "build";
   initialPrompt?: string;
-  /** Images waiting to be written into the workspace before the first prompt. */
+  /** Attachments waiting to be delivered or written before the first prompt. */
   initialPromptAttachments?: InitialPromptImageAttachment[];
   /** Backend-owned result of consuming pendingAgentLaunch. */
   startupAgentSession?: StartupAgentSessionSnapshot;
@@ -334,8 +336,8 @@ export type ClientEnvironment = Omit<
   /**
    * Whether the stripped `initialPromptAttachments` array holds anything.
    *
-   * The bodies are excluded from list hydration because they are base64 image
-   * blobs, but the renderer still has to know whether a targeted detail read is
+   * The bodies are excluded from list hydration because they are base64
+   * payloads, but the renderer still has to know whether a targeted detail read is
    * worth making — and whether failing that read should block a launch. Without
    * this flag every launch with a stored prompt pays for the read and is
    * blocked by any transient failure, including the common no-attachment case.

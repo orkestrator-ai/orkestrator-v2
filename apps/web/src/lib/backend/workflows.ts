@@ -44,6 +44,7 @@ import type {
   NativeAgentSessionProjection,
   NativeAgentToolDetails,
 } from "@orkestrator/protocol/native-agent";
+import type { CursorUsageResult } from "@orkestrator/protocol/cursor-usage";
 /** PR detection result containing URL, state, and merge conflict status */
 
 import {
@@ -62,6 +63,10 @@ import type { KanbanTask } from "./kanban";
  * doing that here as well would put the same rule in two places.
  */
 type NativeAgentClientPlatform = AgentPlatform;
+
+export async function getCursorAccountUsage(): Promise<CursorUsageResult> {
+  return invoke<CursorUsageResult>("get_cursor_account_usage");
+}
 
 export async function startLoopedReview(
   input: StartLoopedReviewInput,

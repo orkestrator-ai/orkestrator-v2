@@ -26,6 +26,13 @@ import { createUuid } from "@/lib/uuid";
 
 interface PickerRow extends MultiReviewModelSelection {
   key: string;
+  preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+}
+
+export interface MultiReviewRowDefaults {
+  defaultAgent: LaunchAgent;
+  preferredModels?: Partial<Record<LaunchAgent, string>>;
+  preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
 }
 
 export interface MultiReviewLaunchSelection {
@@ -40,6 +47,8 @@ interface MultiReviewLaunchDialogProps {
   catalog: AgentModelCatalog;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
+  secondReviewerDefaults?: MultiReviewRowDefaults;
+  fixModelDefaults?: MultiReviewRowDefaults;
   busy?: boolean;
   onConfirm: (selection: MultiReviewLaunchSelection) => void;
 }
@@ -65,8 +74,22 @@ function initialRow(
     key: createUuid(),
     agent,
     model,
+    preferredReasoningEfforts: preferredEfforts,
     ...(effort === "default" ? {} : { reasoningEffort: effort }),
   };
+}
+
+function initialConfiguredRow(
+  defaults: MultiReviewRowDefaults | undefined,
+  fallback: MultiReviewRowDefaults,
+  catalog: AgentModelCatalog,
+): PickerRow {
+  return initialRow(
+    defaults?.defaultAgent ?? fallback.defaultAgent,
+    catalog,
+    defaults?.preferredModels ?? fallback.preferredModels,
+    defaults?.preferredReasoningEfforts ?? fallback.preferredReasoningEfforts,
+  );
 }
 
 function flatCatalog(catalog: AgentModelCatalog): AgentModel[] {
@@ -87,7 +110,6 @@ function ModelRow({
   label,
   models,
   catalog,
-  preferredReasoningEfforts,
   favorites,
   onToggleFavorite,
   onReorderFavorites,
@@ -98,7 +120,6 @@ function ModelRow({
   label: string;
   models: AgentModel[];
   catalog: AgentModelCatalog;
-  preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   favorites: ReturnType<typeof useAgentModelFavorites>["favorites"];
   onToggleFavorite: ReturnType<typeof useAgentModelFavorites>["toggleFavorite"];
   onReorderFavorites: ReturnType<typeof useAgentModelFavorites>["reorderFavorites"];
@@ -121,7 +142,7 @@ function ModelRow({
    * agent and the reviewer launched a Codex or Cursor model against Claude.
    */
   const selectModel = (agent: LaunchAgent, modelId: string) => {
-    const effort = defaultEffortFor(agent, modelId, catalog, preferredReasoningEfforts);
+    const effort = defaultEffortFor(agent, modelId, catalog, row.preferredReasoningEfforts);
     onChange({
       ...row,
       agent,
@@ -185,6 +206,8 @@ export function MultiReviewLaunchDialog({
   catalog,
   preferredModels,
   preferredReasoningEfforts,
+  secondReviewerDefaults,
+  fixModelDefaults,
   busy = false,
   onConfirm,
 }: MultiReviewLaunchDialogProps) {
@@ -192,8 +215,17 @@ export function MultiReviewLaunchDialog({
   const models = useMemo(() => flatCatalog(catalog), [catalog]);
   const makeRow = () =>
     initialRow(defaultAgent, catalog, preferredModels, preferredReasoningEfforts);
-  const [reviewers, setReviewers] = useState<PickerRow[]>(() => [makeRow(), makeRow()]);
-  const [fixModel, setFixModel] = useState<PickerRow>(() => makeRow());
+  const fallbackDefaults = useMemo<MultiReviewRowDefaults>(
+    () => ({ defaultAgent, preferredModels, preferredReasoningEfforts }),
+    [defaultAgent, preferredModels, preferredReasoningEfforts],
+  );
+  const [reviewers, setReviewers] = useState<PickerRow[]>(() => [
+    makeRow(),
+    initialConfiguredRow(secondReviewerDefaults, fallbackDefaults, catalog),
+  ]);
+  const [fixModel, setFixModel] = useState<PickerRow>(() =>
+    initialConfiguredRow(fixModelDefaults, fallbackDefaults, catalog),
+  );
   const wasOpen = useRef(false);
 
   // Only the closed -> open edge reconfigures the rows, and it runs as a layout
@@ -204,10 +236,19 @@ export function MultiReviewLaunchDialog({
     wasOpen.current = open;
     if (!justOpened) return;
     const first = initialRow(defaultAgent, catalog, preferredModels, preferredReasoningEfforts);
-    const second = initialRow(defaultAgent, catalog, preferredModels, preferredReasoningEfforts);
+    const second = initialConfiguredRow(secondReviewerDefaults, fallbackDefaults, catalog);
     setReviewers([first, second]);
-    setFixModel(initialRow(defaultAgent, catalog, preferredModels, preferredReasoningEfforts));
-  }, [catalog, defaultAgent, open, preferredModels, preferredReasoningEfforts]);
+    setFixModel(initialConfiguredRow(fixModelDefaults, fallbackDefaults, catalog));
+  }, [
+    catalog,
+    defaultAgent,
+    fallbackDefaults,
+    fixModelDefaults,
+    open,
+    preferredModels,
+    preferredReasoningEfforts,
+    secondReviewerDefaults,
+  ]);
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
@@ -226,86 +267,93 @@ export function MultiReviewLaunchDialog({
         </DialogHeader>
 
         <form
-          className="flex min-h-0 flex-1 flex-col"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
           aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
             if (busy) return;
-            const clean = ({ key: _key, ...selection }: PickerRow) => selection;
+            const clean = (row: PickerRow): MultiReviewModelSelection => ({
+              agent: row.agent,
+              model: row.model,
+              ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
+            });
             onConfirm({ reviewers: reviewers.map(clean), fixModel: clean(fixModel) });
           }}
         >
-          <fieldset
-            disabled={busy}
-            className="min-h-0 flex-1 overflow-y-auto border-0 px-5 py-5 sm:px-6"
+          <div
+            role="region"
+            aria-label="Multi Review model configuration"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold">Review models</h3>
-                <p className="text-xs text-zinc-500">
-                  Each model receives its own isolated review session.
-                </p>
+            <fieldset disabled={busy} className="min-w-0 border-0 px-5 py-5 sm:px-6">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Review models</h3>
+                  <p className="text-xs text-zinc-500">
+                    Each model receives its own isolated review session.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={reviewers.length >= MULTI_REVIEW_MAX_REVIEWERS}
+                  onClick={() =>
+                    setReviewers((rows) =>
+                      rows.length < MULTI_REVIEW_MAX_REVIEWERS ? [...rows, makeRow()] : rows,
+                    )
+                  }
+                >
+                  <Plus className="size-3.5" /> Add model
+                </Button>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="gap-1.5"
-                disabled={reviewers.length >= MULTI_REVIEW_MAX_REVIEWERS}
-                onClick={() =>
-                  setReviewers((rows) =>
-                    rows.length < MULTI_REVIEW_MAX_REVIEWERS ? [...rows, makeRow()] : rows,
-                  )
-                }
-              >
-                <Plus className="size-3.5" /> Add model
-              </Button>
-            </div>
-            <div className="space-y-2.5">
-              {reviewers.map((row, index) => (
-                <ModelRow
-                  key={row.key}
-                  row={row}
-                  label={`Reviewer ${index + 1}`}
-                  models={models}
-                  catalog={catalog}
-                  preferredReasoningEfforts={preferredReasoningEfforts}
-                  favorites={favorites}
-                  onToggleFavorite={toggleFavorite}
-                  onReorderFavorites={reorderFavorites}
-                  onChange={(next) =>
-                    setReviewers((rows) => rows.map((item) => (item.key === row.key ? next : item)))
-                  }
-                  onRemove={
-                    reviewers.length > 1
-                      ? () => setReviewers((rows) => rows.filter((item) => item.key !== row.key))
-                      : undefined
-                  }
-                />
-              ))}
-            </div>
+              <div className="space-y-2.5">
+                {reviewers.map((row, index) => (
+                  <ModelRow
+                    key={row.key}
+                    row={row}
+                    label={`Reviewer ${index + 1}`}
+                    models={models}
+                    catalog={catalog}
+                    favorites={favorites}
+                    onToggleFavorite={toggleFavorite}
+                    onReorderFavorites={reorderFavorites}
+                    onChange={(next) =>
+                      setReviewers((rows) =>
+                        rows.map((item) => (item.key === row.key ? next : item)),
+                      )
+                    }
+                    onRemove={
+                      reviewers.length > 1
+                        ? () => setReviewers((rows) => rows.filter((item) => item.key !== row.key))
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
 
-            <div className="my-5 flex items-center gap-3 text-zinc-500" aria-hidden="true">
-              <span className="h-px flex-1 bg-zinc-800" />
-              <Wrench className="size-3.5" />
-              <span className="h-px flex-1 bg-zinc-800" />
-            </div>
-            <ModelRow
-              row={fixModel}
-              label="Consolidation & fix model"
-              models={models}
-              catalog={catalog}
-              preferredReasoningEfforts={preferredReasoningEfforts}
-              favorites={favorites}
-              onToggleFavorite={toggleFavorite}
-              onReorderFavorites={reorderFavorites}
-              onChange={setFixModel}
-            />
-            <p className="mt-2 text-xs leading-relaxed text-zinc-500">
-              This model deduplicates every report and remains attached to address the final issues
-              and coverage gaps.
-            </p>
-          </fieldset>
+              <div className="my-5 flex items-center gap-3 text-zinc-500" aria-hidden="true">
+                <span className="h-px flex-1 bg-zinc-800" />
+                <Wrench className="size-3.5" />
+                <span className="h-px flex-1 bg-zinc-800" />
+              </div>
+              <ModelRow
+                row={fixModel}
+                label="Consolidation & fix model"
+                models={models}
+                catalog={catalog}
+                favorites={favorites}
+                onToggleFavorite={toggleFavorite}
+                onReorderFavorites={reorderFavorites}
+                onChange={setFixModel}
+              />
+              <p className="mt-2 text-xs leading-relaxed text-zinc-500">
+                This model deduplicates every report and remains attached to address the final
+                issues and coverage gaps.
+              </p>
+            </fieldset>
+          </div>
 
           <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
             <Button

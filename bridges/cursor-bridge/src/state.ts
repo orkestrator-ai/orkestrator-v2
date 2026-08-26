@@ -123,6 +123,18 @@ export interface PersistedUsage {
   context?: TurnUsage;
   modelId?: string;
   durationMs?: number;
+  /** Cumulative billed tokens for this durable Cursor agent. */
+  sessionTokens?: number;
+  /**
+   * Lowest cumulative total that can include every locally measured turn.
+   *
+   * Kept separately from `sessionTokens`: the displayed provider snapshot can
+   * lag, while this floor must survive a newer turn and a bridge restart so an
+   * older account report is never mistaken for the latest one.
+   */
+  sessionTokenFloor?: number;
+  /** Amount actually charged by Cursor, including discounts, in US dollars. */
+  costUsd?: number;
   updatedAt: string;
 }
 
@@ -293,4 +305,24 @@ export function nonBlank(value: unknown): value is string {
  */
 export function sessionIsWorking(state: SessionState): boolean {
   return state.status === "running" || state.activeSubagentDescriptors.size > 0;
+}
+
+/**
+ * The provider's own total when it reported one, and the sum of the categories
+ * it summarises otherwise.
+ *
+ * `reasoningTokens` is deliberately excluded: the SDK documents it as a subset
+ * of `outputTokens`, so adding it would double-count. This lives here rather
+ * than beside either caller because the context gauge and the billed-usage
+ * staleness check both depend on the same accounting, and two copies of the
+ * rule would drift.
+ */
+export function turnTokenTotal(usage: TurnUsage): number {
+  return (
+    usage.totalTokens ??
+    (usage.inputTokens ?? 0) +
+      (usage.outputTokens ?? 0) +
+      (usage.cacheReadTokens ?? 0) +
+      (usage.cacheWriteTokens ?? 0)
+  );
 }

@@ -27,6 +27,7 @@ import {
   ProviderSessionFailedError,
 } from "./build-pipeline-provider.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
+import { MissingMultiReviewAddressSessionError } from "./multi-review-address-dispatch.js";
 import { StorageService } from "./storage.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
 
@@ -374,9 +375,9 @@ test("MultiReviewService hands the idle consolidation session to interactive add
         fixSession: { status: "idle", providerSessionId: ready.fixSession?.providerSessionId },
       });
       expect(addressed.activeRequest).toBeUndefined();
-      // Exactly one liveness read, and no send: proving the rollout still exists
-      // must not pull the conversation back into a supervised turn.
-      expect(provider.statusCalls).toBe(statusCallsAfterReady + 1);
+      // Recording the intent performs no provider I/O. A backend dispatcher
+      // owns adoption and delivery after the durable save.
+      expect(provider.statusCalls).toBe(statusCallsAfterReady);
       expect(provider.sends.size).toBe(sendsAfterReady);
       expect(provider.disposeCalls).toBe(disposalsAfterReady);
 
@@ -412,8 +413,9 @@ test("MultiReviewService releases the controller lease when it hands off", async
   );
 });
 
-test("MultiReviewService resumes and acknowledges an interrupted address dispatch", async () => {
+test("MultiReviewService resumes an interrupted address dispatch through the supervisor", async () => {
   const provider = new Provider();
+  let dispatches = 0;
   await withService(
     "env-address-resume",
     provider,
@@ -427,52 +429,292 @@ test("MultiReviewService resumes and acknowledges an interrupted address dispatc
       const statusCallsBeforeAddress = provider.statusCalls;
       const handedOff = await service.address(started.id);
       expect(handedOff.addressPromptPending).toBe(true);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
 
-      // Repeating the command after a renderer/backend interruption resumes the
-      // durable dispatch half without another provider liveness read.
+      // Repeating the command is idempotent and never asks a renderer to resume
+      // the durable dispatch half.
       const resumed = await service.address(started.id);
       expect(resumed.addressPromptPending).toBe(true);
-      expect(provider.statusCalls).toBe(statusCallsBeforeAddress + 1);
-
-      const acknowledged = await service.acknowledgeAddressPrompt(started.id);
-      expect(acknowledged.addressPromptPending).toBeUndefined();
+      expect(provider.statusCalls).toBe(statusCallsBeforeAddress);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      expect(dispatches).toBe(2);
       await expect(service.address(started.id)).rejects.toThrow("not ready to address");
 
       // Both terminal operations release their short-lived controller claims.
       const claimed = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
       expect(claimed.granted).toBe(true);
     },
+    {
+      serviceOptions: {
+        addressDispatchRetryMs: 60_000,
+        dispatchAddressPrompt: async () => {
+          dispatches += 1;
+          if (dispatches === 1) throw new Error("interrupted");
+        },
+      },
+    },
   );
 });
 
-test("MultiReviewService refuses to hand off a consolidation session the provider forgot", async () => {
+test("MultiReviewService fails recoverably when the consolidation session is missing", async () => {
   const provider = new Provider();
-  await withService("env-address-missing", provider, async ({ service, start, snapshot }) => {
-    const started = await start();
-    await waitUntil(async () => {
-      await service.advanceNow(started.id);
-      return (await snapshot(started.id))?.phase === "ready";
-    });
-    const ready = (await snapshot(started.id))!;
-    const sendsAfterReady = provider.sends.size;
+  await withService(
+    "env-address-missing",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
 
-    // The renderer's adoption falls back to creating an empty session here, so
-    // the handoff has to fail loudly rather than let the address prompt land in
-    // a conversation that never saw the consolidated report.
-    provider.statusOverrides.set(ready.fixSession!.providerSessionId, "missing");
-    await expect(service.address(started.id)).rejects.toThrow(
-      "The consolidation session is no longer available",
-    );
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.phase === "failed");
+      const failed = (await snapshot(started.id))!;
+      expect(failed).toMatchObject({
+        phase: "failed",
+        error: "The consolidation session is no longer available",
+      });
+      expect(failed.addressPromptPending).toBeUndefined();
+      expect(failed.addressPromptAttempts).toBeUndefined();
+      expect(failed.fixSession).toBeUndefined();
+      expect(await storage.getEnvironment("env-address-missing")).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "idle" } },
+      });
 
-    // The refusal is recoverable: the workflow is still addressable, and nothing
-    // was dispatched to the session.
-    expect((await snapshot(started.id))?.phase).toBe("ready");
-    expect(provider.sends.size).toBe(sendsAfterReady);
-    expect(provider.aborted).toEqual([]);
+      const retried = await service.retry(started.id);
+      expect(retried.phase).toBe("consolidating");
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      expect((await snapshot(started.id))?.fixSession?.providerSessionId).toBeDefined();
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async () => {
+          throw new MissingMultiReviewAddressSessionError();
+        },
+      },
+    },
+  );
+});
 
-    provider.statusOverrides.delete(ready.fixSession!.providerSessionId);
-    expect((await service.address(started.id)).phase).toBe("interactive");
+test("MultiReviewService dispatches a durable address intent without a renderer", async () => {
+  const provider = new Provider();
+  let releaseDispatch!: () => void;
+  const dispatchGate = new Promise<void>((resolve) => {
+    releaseDispatch = resolve;
   });
+  let dispatchStarted!: () => void;
+  const startedDispatch = new Promise<void>((resolve) => {
+    dispatchStarted = resolve;
+  });
+  const dispatched: MultiReviewWorkflow[] = [];
+  await withService(
+    "env-address-backend",
+    provider,
+    async ({ service, start, snapshot, storage }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      const addressed = await service.address(started.id);
+      expect(addressed).toMatchObject({ phase: "interactive", addressPromptPending: true });
+      await startedDispatch;
+      // The backend callback is already running, while the command has returned
+      // and the authoritative intent remains recoverable.
+      expect((await snapshot(started.id))?.addressPromptPending).toBe(true);
+      expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "working" } },
+      });
+
+      releaseDispatch();
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      expect(dispatched).toHaveLength(1);
+      expect(await storage.getEnvironment("env-address-backend")).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "idle" } },
+      });
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => {
+          dispatched.push(workflow);
+          dispatchStarted();
+          await dispatchGate;
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService honors address backoff and resumes a transient failure on demand", async () => {
+  const provider = new Provider();
+  let dispatches = 0;
+  await withService(
+    "env-address-transient",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
+      expect((await snapshot(started.id))?.error).toBe("bridge is restarting");
+      await service.advanceNow(started.id);
+      expect(dispatches).toBe(1);
+
+      // Repeating the idempotent command is an explicit request to bypass the
+      // timer while preserving the same workflow/request identity.
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      expect(dispatches).toBe(2);
+      expect((await snapshot(started.id))?.error).toBeUndefined();
+    },
+    {
+      serviceOptions: {
+        addressDispatchRetryMs: 60_000,
+        dispatchAddressPrompt: async () => {
+          dispatches += 1;
+          if (dispatches === 1) throw new Error("bridge is restarting");
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService bounds permanent address failures and retires activity", async () => {
+  const provider = new Provider();
+  let dispatches = 0;
+  await withService(
+    "env-address-permanent",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      await service.address(started.id);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+      expect(dispatches).toBe(3);
+      expect(await snapshot(started.id)).toMatchObject({
+        phase: "failed",
+        error: "credentials are invalid",
+      });
+      expect((await snapshot(started.id))?.addressPromptPending).toBeUndefined();
+      expect(await storage.getEnvironment("env-address-permanent")).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "idle" } },
+      });
+    },
+    {
+      serviceOptions: {
+        addressDispatchRetryMs: 0,
+        maxAddressDispatchAttempts: 3,
+        dispatchAddressPrompt: async () => {
+          dispatches += 1;
+          throw new Error("credentials are invalid");
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService resumes a persisted address attempt after restart", async () => {
+  const provider = new Provider();
+  let dispatches = 0;
+  await withService(
+    "env-address-restart",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      await service.address(started.id);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
+      await service.shutdown();
+
+      const restarted = new MultiReviewService(storage, stableReviewInvoker, {
+        autoAdvance: true,
+        pollIntervalMs: 5,
+        provider: async () => provider,
+        dispatchAddressPrompt: async () => {
+          dispatches += 1;
+        },
+      });
+      try {
+        await restarted.init();
+        await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+        expect((await snapshot(started.id))?.addressPromptPending).toBeUndefined();
+        expect(dispatches).toBe(2);
+        expect(await storage.getEnvironment("env-address-restart")).toMatchObject({
+          agentActivitySources: { "multi-review": { state: "idle" } },
+        });
+      } finally {
+        await restarted.shutdown();
+      }
+    },
+    {
+      serviceOptions: {
+        addressDispatchRetryMs: 60_000,
+        dispatchAddressPrompt: async () => {
+          dispatches += 1;
+          throw new Error("temporary disconnect");
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService leaves a pending address untouched after losing its fence", async () => {
+  const provider = new Provider();
+  let invalidateFence = false;
+  await withService(
+    "env-address-fence",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const validate = storage.validateMultiReviewController.bind(storage);
+      storage.validateMultiReviewController = (async (...args: Parameters<typeof validate>) =>
+        invalidateFence
+          ? false
+          : validate(...args)) as typeof storage.validateMultiReviewController;
+
+      await service.address(started.id);
+      await waitUntil(() => invalidateFence);
+      await service.advanceNow(started.id);
+      const pending = await snapshot(started.id);
+      expect(pending).toMatchObject({
+        phase: "interactive",
+        addressPromptPending: true,
+        addressPromptAttempts: 0,
+      });
+      expect(pending?.error).toBeUndefined();
+      storage.validateMultiReviewController = validate;
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async () => {
+          invalidateFence = true;
+        },
+      },
+    },
+  );
 });
 
 test("MultiReviewService hands off a consolidation session whose last turn failed", async () => {

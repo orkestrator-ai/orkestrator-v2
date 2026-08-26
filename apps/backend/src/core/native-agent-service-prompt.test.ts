@@ -460,7 +460,7 @@ describe("NativeAgentService", () => {
     );
   });
 
-  test("two supervisors consume one startup prompt with its images once", async () => {
+  test("two supervisors consume one startup prompt with its images and files once", async () => {
     const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-native-startup-"));
     const firstStorage = await createStorage(dataDir);
     const secondStorage = await createStorage(dataDir);
@@ -478,6 +478,12 @@ describe("NativeAgentService", () => {
           previewUrl: "data:image/png;base64,cG5n",
           base64Data: "cG5n",
         },
+        {
+          id: "file-1",
+          name: "requirements.md",
+          type: "file",
+          base64Data: "IyBSZXF1aXJlbWVudHM=",
+        },
       ],
     });
     const createSession = mock(async () => "provider-session");
@@ -492,9 +498,29 @@ describe("NativeAgentService", () => {
       structured: async () => null,
       abort: async () => undefined,
     } as AgentSessionProvider;
-    const invoke = async <T>(command: string): Promise<T> => {
-      // Staging happens inside the provider, under the dispatch lock, so the
-      // supervisor that loses the launch must never reach a backend command.
+    let attachmentWrites = 0;
+    const invoke = async <T>(command: string, args?: Record<string, unknown>): Promise<T> => {
+      if (command === "write_initial_prompt_attachments") {
+        attachmentWrites += 1;
+        expect(args).toEqual({
+          environmentId: "env-1",
+          attachments: [
+            {
+              id: "file-1",
+              name: "requirements.md",
+              base64Data: "IyBSZXF1aXJlbWVudHM=",
+            },
+          ],
+        });
+        return [
+          {
+            name: "requirements.md",
+            path: "/workspace/.orkestrator/initial-prompt/batch/requirements.md",
+          },
+        ] as T;
+      }
+      // Image staging happens inside the real provider. This stub only verifies
+      // that the service hands the image through structurally.
       throw new Error(`Unexpected backend command: ${command}`);
     };
     const first = new NativeAgentService(firstStorage, invoke, {
@@ -507,9 +533,12 @@ describe("NativeAgentService", () => {
       await Promise.all([first.init(), second.init()]);
       expect(createSession).toHaveBeenCalledTimes(1);
       expect(send).toHaveBeenCalledTimes(1);
+      expect(attachmentWrites).toBe(1);
       expect(send).toHaveBeenCalledWith(
         "provider-session",
-        "Inspect the screenshots",
+        expect.stringMatching(
+          /Inspect the screenshots[\s\S]*requirements\.md: \/workspace\/\.orkestrator\/initial-prompt\/batch\/requirements\.md/,
+        ),
         expect.objectContaining({
           requestId: "initial-prompt:env-1:startup-agent",
           images: [{ filename: "reference.png", data: "cG5n" }],

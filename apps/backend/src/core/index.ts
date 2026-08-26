@@ -21,6 +21,7 @@ import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-ac
 import { BuildPipelineService } from "./build-pipeline-service.js";
 import { isAgentTurnEndTransition, NativeAgentService } from "./native-agent-service.js";
 import { LoopedReviewService } from "./looped-review-service.js";
+import { dispatchMultiReviewAddressPrompt } from "./multi-review-address-dispatch.js";
 import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
@@ -197,6 +198,10 @@ export class OrkestratorBackend {
         const handler = this.commands.get(command);
         if (!handler) throw new Error(`Unknown backend command: ${command}`);
         return (await handler(args, context)) as T;
+      },
+      {
+        dispatchAddressPrompt: (workflow) =>
+          dispatchMultiReviewAddressPrompt(this.nativeAgents, workflow),
       },
     );
     context.multiReviews = this.multiReviews;

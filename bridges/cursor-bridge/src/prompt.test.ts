@@ -622,7 +622,9 @@ describe("cumulative agent usage", () => {
       100,
     );
 
-    expect(outcome).toBe("complete");
+    // With no earlier charge baseline this useful snapshot is merged, but the
+    // bounded chain still follows up in case billing has not settled.
+    expect(outcome).toBe("retry");
     expect(publicContextUsage(state)).toMatchObject({
       usedTokens: 100,
       lastTurnTokens: 100,
@@ -779,8 +781,30 @@ describe("cumulative agent usage", () => {
       100,
     );
 
-    expect(outcome).toBe("complete");
+    expect(outcome).toBe("retry");
     expect(state.revision).toBe(before);
+  });
+
+  test("never moves a cumulative token total backward on a later retry", async () => {
+    const state = runningSession();
+    state.usage = {
+      turn: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+      sessionTokens: 3_000,
+      sessionTokenFloor: 3_000,
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    const outcome = await refreshAgentUsage(
+      state,
+      usageAgent(async () => usageReport(2_500, 100)),
+      state.promptSequence,
+      100,
+      100,
+    );
+
+    expect(outcome).toBe("retry");
+    expect(state.usage.sessionTokens).toBe(3_000);
+    expect(state.usage.costUsd).toBeUndefined();
   });
 
   test("tolerates an account read that fails", async () => {
@@ -870,19 +894,54 @@ describe("the billed-usage retry chain", () => {
     expect(state.usage?.costUsd).toBe(1.25);
   });
 
-  test("stops as soon as the total and the charge have both landed", async () => {
+  test("stops as soon as the charge advances from a known baseline", async () => {
     let calls = 0;
     const state = refreshableSession(async () => {
       calls += 1;
       return usageReport(3_000, 125);
     });
+    state.usage = { ...state.usage!, costUsd: 0 };
 
-    scheduleAgentUsageRefresh(state, 100, [1, 1], 100);
+    scheduleAgentUsageRefresh(state, 100, [1, 1], 100, 0);
 
     await waitFor(() => state.usage?.sessionTokens === 3_000);
     // Well past both delays: a chain that kept going would have read again.
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(calls).toBe(1);
+  });
+
+  test("follows up a first-turn zero charge when there is no baseline", async () => {
+    let calls = 0;
+    const state = refreshableSession(async () => {
+      calls += 1;
+      return usageReport(100, calls === 1 ? 0 : 5);
+    });
+
+    scheduleAgentUsageRefresh(state, 100, [1, 1], 100);
+
+    await waitFor(() => calls === 3);
+    expect(state.usage?.sessionTokens).toBe(100);
+    expect(state.usage?.costUsd).toBe(0.05);
+  });
+
+  test("keeps retrying when the token total advanced but the cumulative charge did not", async () => {
+    let calls = 0;
+    const state = refreshableSession(async () => {
+      calls += 1;
+      return calls === 1 ? usageReport(1_100, 40) : usageReport(1_100, 45);
+    });
+    state.usage = {
+      ...state.usage!,
+      sessionTokens: 1_000,
+      sessionTokenFloor: 1_100,
+      costUsd: 0.4,
+    };
+
+    scheduleAgentUsageRefresh(state, 1_100, [1, 1], 100, 0.4);
+
+    await waitFor(() => state.usage?.costUsd === 0.45);
+    expect(calls).toBe(2);
+    expect(state.usage?.sessionTokens).toBe(1_100);
   });
 
   test("gives up after the last delay rather than retrying forever", async () => {
@@ -1001,9 +1060,75 @@ describe("billed usage across successive turns", () => {
     expect(state.usage?.sessionTokens).toBe(1_000);
     expect(state.usage?.costUsd).toBe(0.4);
   });
+
+  test("retains an unsettled turn in the floor when the next turn takes over", async () => {
+    let calls = 0;
+    const state = runningSession();
+    attachUsageAgent(state, () => {
+      calls += 1;
+      // Turn A's read never lands. Turn B must still remember A's locally
+      // measured spend when this account snapshot contains A but not B.
+      return calls === 1 ? new Promise(() => undefined) : usageReport(100, 40);
+    });
+
+    await runTurn(state, 100);
+    await waitFor(() => calls === 1);
+    await runTurn(state, 40);
+    await waitFor(() => calls === 2);
+    await tick();
+
+    expect(state.usage?.sessionTokenFloor).toBe(140);
+    expect(state.usage?.sessionTokens).toBeUndefined();
+    expect(state.usage?.costUsd).toBeUndefined();
+  });
+
+  test("adds a new turn to a durable floor restored before billing settled", async () => {
+    const state = runningSession();
+    state.usage = {
+      turn: { inputTokens: 100, outputTokens: 0, totalTokens: 100 },
+      sessionTokens: 1_000,
+      // Represents a prior turn that was persisted before its account read
+      // reached 1,100 and before the bridge restarted.
+      sessionTokenFloor: 1_100,
+      costUsd: 0.4,
+      updatedAt: new Date(1).toISOString(),
+    };
+    attachUsageAgent(state, () => usageReport(1_100, 45));
+
+    await runTurn(state, 100);
+    await tick();
+
+    expect(state.usage?.sessionTokenFloor).toBe(1_200);
+    expect(state.usage?.sessionTokens).toBe(1_000);
+    expect(state.usage?.costUsd).toBe(0.4);
+  });
 });
 
 describe("context occupancy versus turn spend", () => {
+  test("keeps cumulative account figures visible after a zero-token turn", () => {
+    const state = runningSession();
+    state.usage = {
+      turn: {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 0,
+      },
+      sessionTokens: 1_000,
+      sessionTokenFloor: 1_000,
+      costUsd: 0.4,
+      updatedAt: new Date(1).toISOString(),
+    };
+
+    expect(publicContextUsage(state)).toMatchObject({
+      usedTokens: 0,
+      lastTurnTokens: 0,
+      sessionTokens: 1_000,
+      costUsd: 0.4,
+    });
+  });
+
   test("measures the context gauge from the final model call, not the run total", async () => {
     const state = runningSession();
     state.composer.models = [

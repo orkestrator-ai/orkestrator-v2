@@ -248,6 +248,11 @@ function restoreUsage(value: unknown): SessionState["usage"] {
     value.sessionTokens >= 0
       ? { sessionTokens: value.sessionTokens }
       : {}),
+    ...(typeof value.sessionTokenFloor === "number" &&
+    Number.isFinite(value.sessionTokenFloor) &&
+    value.sessionTokenFloor >= 0
+      ? { sessionTokenFloor: value.sessionTokenFloor }
+      : {}),
     ...(typeof value.costUsd === "number" && Number.isFinite(value.costUsd) && value.costUsd >= 0
       ? { costUsd: value.costUsd }
       : {}),

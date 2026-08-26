@@ -125,6 +125,14 @@ export interface PersistedUsage {
   durationMs?: number;
   /** Cumulative billed tokens for this durable Cursor agent. */
   sessionTokens?: number;
+  /**
+   * Lowest cumulative total that can include every locally measured turn.
+   *
+   * Kept separately from `sessionTokens`: the displayed provider snapshot can
+   * lag, while this floor must survive a newer turn and a bridge restart so an
+   * older account report is never mistaken for the latest one.
+   */
+  sessionTokenFloor?: number;
   /** Amount actually charged by Cursor, including discounts, in US dollars. */
   costUsd?: number;
   updatedAt: string;

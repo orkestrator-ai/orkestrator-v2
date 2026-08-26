@@ -1744,7 +1744,7 @@ describe("GlobalSettings", () => {
       await first.promise;
     });
     expect(screen.getByText("Calculating storage used…")).toBeTruthy();
-    expect(screen.queryByText("1.5 KB across 2 files")).toBeNull();
+    expect(screen.queryByText("1.5 KB across 2 files") === null).toBe(true);
 
     await act(async () => {
       second.resolve({ totalBytes: 2048, fileCount: 4 });
@@ -1786,7 +1786,7 @@ describe("GlobalSettings", () => {
       await first.promise;
     });
     expect(screen.getByText("0 B across 0 files")).toBeTruthy();
-    expect(screen.queryByText("4 KB across 8 files")).toBeNull();
+    expect(screen.queryByText("4 KB across 8 files") === null).toBe(true);
   });
 
   test("names the blocking reason when an invalid retention disables Save from another section", async () => {

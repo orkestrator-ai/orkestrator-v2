@@ -111,7 +111,6 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
   // gauge at 100%; `context` is the final call's own snapshot, which is what
   // the window actually held. They are the same number on a single-call run.
   const used = usage.context ? turnTokenTotal(usage.context) : spent;
-  if (used === 0) return undefined;
   const model = state.composer.models.find((entry) => entry.id === usage.modelId);
   return {
     usedTokens: used,

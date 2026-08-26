@@ -51,6 +51,7 @@ describe("round trip", () => {
       context: { inputTokens: 30, outputTokens: 10, totalTokens: 40 },
       modelId: "composer-2.5",
       sessionTokens: 12_345,
+      sessionTokenFloor: 12_445,
       costUsd: 1.25,
       updatedAt: new Date(1).toISOString(),
     };
@@ -103,6 +104,7 @@ describe("round trip", () => {
           turn: Record<string, unknown>;
           context?: unknown;
           sessionTokens?: unknown;
+          sessionTokenFloor?: unknown;
           costUsd?: unknown;
         };
       }>;
@@ -115,6 +117,7 @@ describe("round trip", () => {
     };
     payload.sessions[0]!.usage.context = { inputTokens: "nope" };
     payload.sessions[0]!.usage.sessionTokens = -1;
+    payload.sessions[0]!.usage.sessionTokenFloor = Number.POSITIVE_INFINITY;
     payload.sessions[0]!.usage.costUsd = "free";
     await writeFile(stateFile, JSON.stringify(payload), "utf8");
 
@@ -127,6 +130,7 @@ describe("round trip", () => {
     // A context snapshot with nothing usable left is dropped, not stored empty.
     expect(sessions.get(state.id)!.usage?.context).toBeUndefined();
     expect(sessions.get(state.id)!.usage?.sessionTokens).toBeUndefined();
+    expect(sessions.get(state.id)!.usage?.sessionTokenFloor).toBeUndefined();
     expect(sessions.get(state.id)!.usage?.costUsd).toBeUndefined();
   });
 

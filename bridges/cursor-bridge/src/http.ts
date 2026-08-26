@@ -250,6 +250,10 @@ async function routeSession(
     // the at-most-once window, where a failure is unambiguous: nothing
     // journaled, no prompt written.
     await ensureAgent(state);
+    // A failed resume can replace the underlying SDK agent and rebase its
+    // agent-scoped usage counters. Persist that lifecycle change even when
+    // attach was an explicit warm-up with no prompt following it.
+    schedulePersist();
     return json(response, 200, { attached: true });
   }
   if ((action === "cancel" || action === "abort") && request.method === "POST") {

@@ -69,7 +69,7 @@ export function stateFilePath(): string | null {
  *
  * The SDK defaults to `~/.cursor/sdk/auth.json`. Orkestrator points it at its
  * own application data directory instead, so an environment authenticated
- * through the app cannot be silently revoked by an unrelated `cursor-agent`
+ * through the app cannot be silently changed by unrelated Cursor state
  * logout, and so a container can be handed exactly one credential file.
  */
 export const credentialFile = process.env.CURSOR_BRIDGE_AUTH_FILE?.trim() || undefined;

@@ -98,7 +98,7 @@ export async function isHttpServerReachable(
 }
 
 export function localServerHealthAttempts(kind: LocalServerKind): number {
-  // Pi joins the ACP agents on the longer budget for the same reason: its cold
+  // Cursor, Grok, and Pi use the longer budget because their cold
   // start builds a model runtime and may refresh a provider catalogue over the
   // network before it can answer, which is slower than a bridge that only has
   // to bind a port.

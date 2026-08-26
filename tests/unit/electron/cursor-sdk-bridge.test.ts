@@ -10,7 +10,6 @@ import {
   beginCursorSdkLogin,
   cancelCursorSdkLogin,
   cursorSdkAuthStatus,
-  cursorSdkBridgeEnabled,
   cursorSdkCredentialPath,
   cursorSdkLoginProgress,
   cursorSdkLogout,
@@ -24,11 +23,11 @@ import type { CommandContext } from "../../../apps/backend/src/core/commands-con
 let dataDir: string;
 const previousEnvKey = process.env.CURSOR_API_KEY;
 
-function contextWith(experimentalCursorSdkBridge?: boolean): CommandContext {
+function contextWith(): CommandContext {
   return {
     storage: {
       getDataDir: () => dataDir,
-      loadConfig: async () => ({ global: { experimentalCursorSdkBridge }, repositories: {} }),
+      loadConfig: async () => ({ global: {}, repositories: {} }),
     },
   } as unknown as CommandContext;
 }
@@ -91,14 +90,6 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
 }
-
-describe("engine selection", () => {
-  test("is off unless the setting is explicitly true", async () => {
-    expect(await cursorSdkBridgeEnabled(contextWith(undefined))).toBe(false);
-    expect(await cursorSdkBridgeEnabled(contextWith(false))).toBe(false);
-    expect(await cursorSdkBridgeEnabled(contextWith(true))).toBe(true);
-  });
-});
 
 describe("credential resolution", () => {
   test("reports no credential when nothing is configured", async () => {

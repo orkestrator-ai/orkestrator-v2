@@ -12,7 +12,6 @@ interface ConfiguredCreateEnvironmentAgentDefaults {
   claudeMode: ClaudeMode;
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
-  cursorMode: AgentStyle;
   grokMode: AgentStyle;
   piMode: AgentStyle;
   models: Partial<Record<LaunchAgent, string>>;
@@ -24,7 +23,6 @@ export interface CreateEnvironmentAgentDefaults {
   claudeMode: ClaudeMode;
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
-  cursorMode: AgentStyle;
   grokMode: AgentStyle;
   piMode: AgentStyle;
   model: string;
@@ -59,7 +57,6 @@ export function resolveCreateEnvironmentAgentDefaults(options: {
     claudeMode: configured.claudeMode,
     opencodeMode: configured.opencodeMode,
     codexMode: configured.codexMode,
-    cursorMode: configured.cursorMode,
     grokMode: configured.grokMode,
     piMode: configured.piMode,
     model,

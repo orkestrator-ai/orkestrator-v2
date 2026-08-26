@@ -293,12 +293,10 @@ describe("agent extension discovery commands", () => {
     expect(calls[1]!.args).toEqual(["debug", "config"]);
   });
 
-  // Cursor and Grok never fall back to a PATH lookup — `cursor` on PATH is the
-  // desktop editor — so an unmanaged toolchain makes the launch impossible.
-  // That has to surface as this one agent's failure, not as a spawn of the
-  // wrong executable and not as a failure of the whole catalog.
+  // Cursor has no discovery CLI, and Grok never falls back to PATH. Both must
+  // fail without spawning the wrong executable or taking down sibling agents.
   for (const agent of [
-    { id: "cursor", message: "Cursor Agent is not installed in this backend's toolchain." },
+    { id: "cursor", message: "Cursor SDK extension discovery is not available through a CLI." },
     { id: "grok", message: "Grok Build is not installed in this backend's toolchain." },
   ] as const) {
     test(`fails ${agent.id} discovery locally without spawning anything when it is not installed`, async () => {
@@ -352,7 +350,7 @@ describe("agent extension discovery commands", () => {
     expect(calls[0]!.options).toMatchObject({ timeoutMs: 20_000 });
   });
 
-  test("runs Cursor Agent discovery as cursor-agent inside a container", async () => {
+  test("does not run a Cursor discovery command inside a container", async () => {
     const environment = createEnvironment({
       id: "env-container",
       environmentType: "containerized",
@@ -363,23 +361,10 @@ describe("agent extension discovery commands", () => {
     const { run, calls } = recordingRun("[]");
 
     const runner = commandTesting.createExtensionCommandRunner(environment, context, run);
-    await expect(runner("cursor", ["mcp", "list", "--format", "json"])).resolves.toBe("[]");
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.command).toBe("docker");
-    expect(calls[0]!.args).toEqual([
-      "exec",
-      "-e",
-      "NO_COLOR=1",
-      "-w",
-      "/workspace",
-      "container-1",
-      "cursor-agent",
-      "mcp",
-      "list",
-      "--format",
-      "json",
-    ]);
+    await expect(runner("cursor", ["mcp", "list", "--format", "json"])).rejects.toThrow(
+      "Cursor SDK extension discovery is not available through a CLI.",
+    );
+    expect(calls).toEqual([]);
   });
 
   test("runs environment skill discovery inside the selected container", async () => {
@@ -728,13 +713,11 @@ describe("agent extension discovery commands", () => {
     for (const catalog of catalogs) {
       expect(catalog.mcpServers).toEqual([]);
       expect(catalog.plugins).toEqual([]);
-      expect(catalog.pluginError).toBeTruthy();
-      // Pi ships no MCP client of its own — MCP is something one of its
-      // packages adds — so an unreachable environment has nothing to fail at.
-      // Reporting an error there would tell the user something is broken when
-      // the feature simply does not exist.
+      // Pi has no MCP client. Cursor does have extension settings, but its SDK
+      // exposes no catalogue, so that row must report the list as unavailable.
       if (catalog.agent === "pi") expect(catalog.mcpError).toBeUndefined();
       else expect(catalog.mcpError).toBeTruthy();
+      expect(catalog.pluginError).toBeTruthy();
     }
   });
 
@@ -958,13 +941,10 @@ exit 0
       await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
 
-      // `cursor` is the desktop editor command, and even the real `cursor-agent`
-      // and `grok` CLIs on PATH are not the managed executables this backend
-      // generation activated. Availability has to agree with what
-      // `start_local_*_server_cmd` will actually launch, so PATH answers
-      // nothing for the ACP providers.
+      // PATH executables do not make the packaged Cursor SDK bridge or the
+      // managed Grok toolchain available.
       const pathTools = await createTempDir("ork-electron-cli-path-");
-      for (const name of ["cursor", "cursor-agent", "grok"]) {
+      for (const name of ["cursor", "grok"]) {
         await fs.writeFile(path.join(pathTools, name), "#!/bin/sh\nexit 0\n");
         await fs.chmod(path.join(pathTools, name), 0o755);
       }
@@ -975,27 +955,54 @@ exit 0
       await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(false);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBeNull();
 
-      // An activation directory predating the `cursor-agent` alias still only
-      // holds the legacy managed name. It is the same bundle, so it counts.
-      await fs.writeFile(path.join(root, "cursor"), "legacy managed cursor");
+      const cursorBridgeEntrypoint = path.join(
+        root,
+        "bridges",
+        "cursor-bridge",
+        "dist",
+        "index.js",
+      );
+      await fs.mkdir(path.dirname(cursorBridgeEntrypoint), { recursive: true });
+      await fs.writeFile(cursorBridgeEntrypoint, "// packaged Cursor SDK bridge");
       await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("check_any_ai_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
 
-      await fs.rm(path.join(root, "cursor"), { force: true });
-      await fs.writeFile(path.join(root, "cursor-agent"), "managed cursor-agent");
-      await expect(commands.get("check_cursor_cli")?.({}, context)).resolves.toBe(true);
-      await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
-
-      // Grok has no alias, and Cursor still outranks it.
+      // Cursor still outranks the managed Grok CLI.
       await fs.writeFile(path.join(root, "grok"), "managed grok");
       await expect(commands.get("check_grok_cli")?.({}, context)).resolves.toBe(true);
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("cursor");
-      await fs.rm(path.join(root, "cursor-agent"), { force: true });
+      await fs.rm(cursorBridgeEntrypoint, { force: true });
       await expect(commands.get("get_available_ai_cli")?.({}, context)).resolves.toBe("grok");
     } finally {
       if (previousPath === undefined) delete process.env.PATH;
       else process.env.PATH = previousPath;
     }
+  });
+
+  test("checks the packaged Cursor bridge under resourceRoot in production", async () => {
+    const appRoot = await createTempDir("ork-electron-app-root-");
+    const resourceRoot = await createTempDir("ork-electron-resource-root-");
+    const { context } = createContext(createEnvironment());
+    context.appRoot = appRoot;
+    context.resourceRoot = resourceRoot;
+
+    const developmentEntrypoint = path.join(
+      appRoot,
+      "bridges",
+      "cursor-bridge",
+      "dist",
+      "index.js",
+    );
+    await fs.mkdir(path.dirname(developmentEntrypoint), { recursive: true });
+    await fs.writeFile(developmentEntrypoint, "// development bridge");
+
+    await expect(commandTesting.hasCursorSdkBridge(context, "production")).resolves.toBe(false);
+
+    const packagedEntrypoint = path.join(resourceRoot, "cursor-bridge", "dist", "index.js");
+    await fs.mkdir(path.dirname(packagedEntrypoint), { recursive: true });
+    await fs.writeFile(packagedEntrypoint, "// packaged bridge");
+
+    await expect(commandTesting.hasCursorSdkBridge(context, "production")).resolves.toBe(true);
   });
 });

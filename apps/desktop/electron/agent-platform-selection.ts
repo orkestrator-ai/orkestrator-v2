@@ -34,9 +34,10 @@ async function readJson(filePath: string): Promise<unknown> {
 }
 
 /**
- * Resolve the pre-backend selection used to decide which large toolchains are
- * downloaded. A sidecar exists because this decision has to happen before the
- * backend (and therefore config storage) starts.
+ * Resolve the pre-backend platform selection. CLI-backed platforms use it to
+ * decide which toolchains are downloaded; SDK-only platforms still use it for
+ * product availability. A sidecar exists because this decision happens before
+ * the backend (and therefore config storage) starts.
  */
 export async function loadAgentPlatformSelection(dataDir: string): Promise<{
   enabled: AgentPlatform[];
@@ -83,13 +84,13 @@ export async function saveAgentPlatformSelection(
  * Make a launcher-supplied selection the one an isolated agent-test profile
  * actually runs with.
  *
- * Provisioning the toolchain is only half of launchability: every agent picker
+ * Provisioning the selected platform is only half of launchability: every agent picker
  * in the app reads `config.global.enabledAgentPlatforms`, which the backend
  * derives from this profile's own state. Writing the sidecar covers a fresh
  * profile, whose `config.json` does not exist yet. An existing `config.json`
  * takes precedence over the sidecar, so a profile that has saved settings once
  * would otherwise silently fall back to the legacy three and leave the freshly
- * downloaded Cursor and Grok binaries unofferable — hence the reconcile.
+ * selected platforms unofferable — hence the reconcile.
  *
  * Safe here and nowhere else: the caller has already established that this is an
  * `agent-test` profile, whose data directory is disposable and isolated from the

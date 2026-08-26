@@ -506,24 +506,12 @@ When touching the Pi bridge:
   that moves one and not the other gives a user two different agents behind one
   platform name.
 
-### Cursor bridges
+### Cursor bridge
 
-Cursor sessions can be served by either of two bridge processes. The platform,
-the provider, the transcript shape and every HTTP route are identical; only the
-engine differs, so the backend, the store and the renderer cannot tell them
-apart.
-
-- `bridges/acp-bridge` drives the `cursor-agent` CLI over ACP. This is the
-  default and is shared with Grok Build.
-- `bridges/cursor-bridge` drives Cursor's own TypeScript SDK (`@cursor/sdk`) in
-  process. It is experimental and selected per installation by the global
-  `experimentalCursorSdkBridge` setting, exposed in Settings › Cursor.
-
-Both listen on the same container port (4099), because exactly one of them
-serves a Cursor session at a time — which is what lets the toggle be flipped
-without recreating containers built before the SDK bridge existed. The reuse
-fingerprint therefore names the engine as well as the credential, so flipping
-the toggle replaces a running bridge rather than reusing the wrong one.
+`bridges/cursor-bridge` is the only Cursor engine. It drives Cursor's TypeScript
+SDK (`@cursor/sdk`) in process and serves the shared HTTP session surface on
+container port 4099. Cursor has no managed CLI or terminal mode; the ACP bridge
+is Grok-only.
 
 When touching the SDK bridge:
 
@@ -534,18 +522,13 @@ When touching the SDK bridge:
   an await there would let a large transcript back-pressure a live run.
 - A tool variant the SDK adds must degrade to a plain card, never throw. The
   SDK is a fast-moving dependency and these branches run mid-turn.
-- The two engines keep separate session stores. They mint different agent ids,
-  so a shared state directory would have each read the other's sessions as its
-  own.
 - Sign-in runs the bridge's own `--login` mode as a short-lived child. Keeping
   `@cursor/sdk` out of the backend is deliberate: it is a five-megabyte bundle
   with native helpers, and a login needs no environment and no session.
 - The credential lives in Orkestrator's data directory, not the SDK's default
-  `~/.cursor/sdk/auth.json`, so an unrelated `cursor-agent logout` cannot
-  revoke it and a container can be handed exactly one file.
+  `~/.cursor/sdk/auth.json`, so a container can be handed exactly one file.
 - Project settings (`.cursor/`) are read inside containers and not on the host,
-  the same boundary `ACP_APPROVE_PROJECT_MCPS` draws: cloning a repository must
-  not be enough to run its code on the user's machine.
+  so cloning a repository is not enough to run its code on the user's machine.
 - The host launcher spawns the bridge in its own package directory, never in
   the worktree. `bun` reads `bunfig.toml` — `preload` included — and `.env`
   from its working directory before the entrypoint runs, so spawning there
@@ -628,16 +611,14 @@ Agent CLIs, one per supported platform:
 - Claude Code (`claude`), Codex (`codex`), OpenCode (`opencode`), and Pi
   (`pi`), whose runtime paths the backend reads from `CLAUDE_CLI_PATH`,
   `CODEX_CLI_PATH`, `OPENCODE_CLI_PATH`, and `PI_CLI_PATH`.
-- Cursor Agent (`cursor`/`cursor-agent`) and Grok Build (`grok`), both
-  downloaded as hash-verified pinned artifacts. Pi is downloaded the same way,
-  as a bundle rather than a single file.
-- The image build fails immediately if any of the six is not runnable, and if
+- Grok Build (`grok`) is downloaded as a hash-verified pinned artifact. Pi is
+  downloaded the same way, as a bundle rather than a single file.
+- The image build fails immediately if any managed CLI is not runnable, and if
   Codex did not vendor `codex-code-mode-host` beside its binary.
 
 Prebuilt bridge servers, so a container never builds them at runtime:
-- `/opt/claude-bridge`, `/opt/codex-bridge`, `/opt/pi-bridge`, and
-  `/opt/acp-bridge` (the shared ACP HTTP bridge used by Cursor Agent and Grok
-  Build).
+- `/opt/claude-bridge`, `/opt/codex-bridge`, `/opt/cursor-bridge`,
+  `/opt/pi-bridge`, and `/opt/acp-bridge` (used only by Grok Build).
 
 Developer tooling:
 - Git, GitHub CLI (`gh`), git-delta, and SSH with GitHub/GitLab/Bitbucket host

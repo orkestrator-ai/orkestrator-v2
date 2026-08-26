@@ -1,12 +1,8 @@
 /**
- * The experimental Cursor SDK bridge: selection, credentials and login.
+ * Cursor SDK bridge credentials and login.
  *
- * Cursor sessions can be served by either of two bridge processes — the ACP
- * one that drives `cursor-agent`, or the SDK one that drives `@cursor/sdk`.
- * The platform, the provider, the transcript shape and every route are
- * identical; only the engine differs. This module owns the choice between them
- * and the credential the SDK engine needs, so no caller has to know that two
- * exist.
+ * Cursor sessions are served exclusively by the bridge that drives
+ * `@cursor/sdk` in process.
  */
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -18,9 +14,8 @@ import type { CommandContext } from "./commands-context.js";
  * Where a login minted through Orkestrator is stored.
  *
  * Deliberately inside Orkestrator's own data directory rather than the SDK
- * default of `~/.cursor/sdk/auth.json`: an environment authenticated through
- * the app should not be revoked by an unrelated `cursor-agent` logout, and a
- * container can be handed exactly this one file.
+ * default of `~/.cursor/sdk/auth.json`, so a container can be handed exactly
+ * this one file.
  */
 export function cursorSdkCredentialPath(context: CommandContext): string {
   return path.join(context.storage.getDataDir(), "cursor-sdk", "auth.json");
@@ -28,12 +23,6 @@ export function cursorSdkCredentialPath(context: CommandContext): string {
 
 /** Inside a container, where the same credential is delivered. */
 export const CONTAINER_CURSOR_SDK_AUTH_FILE = "/tmp/orkestrator-ai/cursor-sdk-auth.json";
-
-/** Whether new Cursor sessions should be created on the SDK bridge. */
-export async function cursorSdkBridgeEnabled(context: CommandContext): Promise<boolean> {
-  const config = await context.storage.loadConfig();
-  return config.global.experimentalCursorSdkBridge === true;
-}
 
 export interface CursorSdkAuthStatus {
   authenticated: boolean;

@@ -5,14 +5,14 @@
  * each re-implemented the manifest's URL construction, version literal and
  * platform mapping in bash. That duplication needed its own drift tests to
  * prove the copy still agreed with the manifest, and it still only covered
- * three of the six agents — Cursor, Grok and Pi had no downloader at all, so
- * getting one of those binaries in front of you meant hand-`curl`ing a URL you
+ * three agents — Grok and Pi had no downloader at all, so getting one of those
+ * binaries in front of you meant hand-`curl`ing a URL you
  * reconstructed by eye.
  *
  * Here the manifest is the only input. A version bump changes nothing in this
  * file, and every agent is reachable the same way:
  *
- *   bun run download:claude          # or codex | opencode | cursor | grok | pi
+ *   bun run download:claude          # or codex | opencode | grok | pi
  *   bun scripts/download-agent.ts claude --dir /tmp/probe
  *
  * Unlike the shell scripts it replaces, this verifies what it downloaded

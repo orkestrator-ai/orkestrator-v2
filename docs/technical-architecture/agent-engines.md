@@ -9,7 +9,7 @@ list:
 | `claude` | Claude Code | Bridge process wrapping the Claude Agent SDK |
 | `codex` | Codex | Bridge process speaking JSON-RPC to `codex app-server` |
 | `opencode` | OpenCode | No bridge — the backend drives `opencode serve` through the SDK |
-| `cursor` | Cursor Agent | Bridge process speaking ACP to the CLI over stdio |
+| `cursor` | Cursor Agent | Bridge process wrapping `@cursor/sdk` |
 | `grok` | Grok Build | Bridge process speaking ACP to the CLI over stdio |
 | `pi` | Pi | Bridge process wrapping the Pi coding-agent SDK |
 
@@ -43,8 +43,8 @@ lists are the reason these engines are built the way they are. In short:
    depending on an event it never received.
 5. **Approvals fail closed.** Timeout, disconnect, a malformed answer, or the
    death of the process that asked all deny. None of them approve.
-6. **Executables are pinned and hash-verified.** `apps/desktop/electron/toolchain-manifest.ts`
-   pins every managed binary; the backend passes the resolved path down
+6. **Managed executables are pinned and hash-verified.** `apps/desktop/electron/toolchain-manifest.ts`
+   pins each managed binary; the backend passes the resolved path down
    (`CLAUDE_CLI_PATH`, `CODEX_PATH`, `ACP_AGENT_PATH`) so a packaged app never
    depends on a `PATH` lookup. See [`docs/upgrade-agents.md`](../upgrade-agents.md)
    for the bump procedure.
@@ -154,24 +154,29 @@ theirs too: `message.updated`, `message.part.updated`, `session.updated`,
 The SDK and CLI are pinned to the same exact version, and
 `tests/unit/version-drift.test.ts` enforces that they agree.
 
-## Cursor Agent and Grok Build
+## Cursor Agent
 
-**Bridge:** `bridges/acp-bridge/` (shared) · **Transport:** ACP JSON-RPC over stdio
+**Bridge:** `bridges/cursor-bridge/` · **Transport:** Cursor TypeScript SDK in process
 
-These two have no SDK and no HTTP server. The bridge spawns the vendor CLI
-directly and speaks the Agent Client Protocol over its stdio. One bridge process
-serves the environment, and it spawns **one CLI child per session**, lazily
-re-attaching through `ensureSessionProcess` when a session needs one again. That
-is the main topological difference from Codex, where a single child serves every
-thread.
+Cursor sessions are SDK-only. The bridge owns one `SDKAgent` per attached
+session and translates `InteractionUpdate` events into the shared transcript
+shape. Cursor has no managed CLI, terminal mode, or ACP fallback. Local and
+container sessions use the same bridge and HTTP routes.
 
-The bridge is selected by `ACP_PROVIDER` (`cursor` or `grok`) and builds one of
-two argument vectors:
+The bridge keeps project `.cursor/` resources disabled on the host and enables
+them only inside containers. Its SDK and native runtime closure are vendored
+into the packaged bridge; see `docs/upgrade-agents.md` for the build and upgrade
+checks.
 
-| Provider | Arguments | Gate |
-| --- | --- | --- |
-| Cursor Agent | `--force [--approve-mcps] [--model M] acp` | `--approve-mcps` only when `ACP_APPROVE_PROJECT_MCPS=1` |
-| Grok Build | `--always-approve agent [--model M] [--reasoning-effort E] stdio` | always |
+## Grok Build
+
+**Bridge:** `bridges/acp-bridge/` · **Transport:** ACP JSON-RPC over stdio
+
+The bridge spawns the `grok` CLI and speaks the Agent Client Protocol over its
+stdio. One bridge process serves the environment and spawns one CLI child per
+session, lazily re-attaching through `ensureSessionProcess` when needed. It
+launches Grok as
+`--always-approve agent [--model M] [--reasoning-effort E] stdio`.
 
 Because these are command-line flags rather than a typed SDK, **the argv is a
 versioned contract that nothing in CI can check** — the bridge's own tests run
@@ -179,15 +184,8 @@ against a fake agent that accepts anything, so a renamed upstream flag leaves th
 suite green and breaks every session at runtime. `docs/upgrade-agents.md` has the
 manual verification steps to run after a version bump.
 
-The permissive command flags are deliberate and match the Claude bridge's local
-default. `--approve-mcps` is deliberately *not* unconditional: it is opt-in via
-`ACP_APPROVE_PROJECT_MCPS`, which the backend sets only for container
-environments and explicitly pins to `"0"` for local worktrees. The distinction is
-who chooses the command — a permissive session runs what the *model* decided to
-run, whereas `.cursor/mcp.json` is repository-controlled and would execute on the
-host the moment a tab opened, with no model or user involvement. Cloning a
-repository must not be enough to run its code. The check is `=== "1"`, so every
-other state fails closed.
+The permissive command flag is deliberate and matches the Claude bridge's local
+default.
 
 Protocol handling lives in `index.ts`. The bridge sends `initialize`,
 `session/new`, `session/load`, `session/list`, and `session/prompt`, and
@@ -202,8 +200,7 @@ which costs nothing because notifications expect no reply.
 
 Agent stderr is drained but never logged: it may contain prompts or file
 contents. Vendor wire formats stay inside the adapter — `session-config.ts`
-converts them to the shared `NativeAgentComposerState` that HTTP clients see, so
-Cursor's and Grok's differing config surfaces do not leak into the renderer.
+converts them to the shared `NativeAgentComposerState` that HTTP clients see.
 
 ## Pi
 

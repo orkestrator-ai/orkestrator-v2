@@ -1899,13 +1899,9 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).toHaveBeenLastCalledWith("plain");
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "New terminal tab" }));
-    for (const label of ["Claude CLI", "Codex CLI", "OpenCode CLI", "Cursor CLI", "Grok CLI"]) {
+    for (const label of ["Claude CLI", "Codex CLI", "OpenCode CLI", "Grok CLI"]) {
       expect(screen.getByRole("button", { name: label })).toBeTruthy();
     }
-    fireEvent.click(screen.getByRole("button", { name: "Cursor CLI" }));
-    expect(createTabMock).toHaveBeenLastCalledWith("cursor", { agentLaunchMode: "cli" });
-
-    fireEvent.contextMenu(screen.getByRole("button", { name: "New terminal tab" }));
     fireEvent.click(screen.getByRole("button", { name: "Grok CLI" }));
     expect(createTabMock).toHaveBeenLastCalledWith("grok", { agentLaunchMode: "cli" });
 
@@ -1930,7 +1926,7 @@ describe("ActionBar workflow tabs", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "New terminal tab" }));
     expect(screen.getByRole("button", { name: "Codex CLI" })).toBeTruthy();
-    for (const label of ["Claude CLI", "OpenCode CLI", "Cursor CLI", "Grok CLI"]) {
+    for (const label of ["Claude CLI", "OpenCode CLI", "Grok CLI"]) {
       expect(screen.queryByRole("button", { name: label }) === null).toBe(true);
     }
   });

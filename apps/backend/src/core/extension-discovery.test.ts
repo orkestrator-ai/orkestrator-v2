@@ -541,9 +541,7 @@ describe("parseOpenCodeConfig edge cases", () => {
       parseGrokMcpList,
       parseGrokPlugins,
     ]) {
-      expect(() => parse("cursor-agent: command not found")).toThrow(
-        "The CLI returned invalid JSON",
-      );
+      expect(() => parse("agent command not found")).toThrow("The CLI returned invalid JSON");
     }
   });
 });
@@ -638,10 +636,7 @@ describe("discoverAgentExtensions", () => {
     expect(reported).not.toContain("spawn failed");
   });
 
-  // Locally, Cursor and Grok reject outright when no managed binary exists
-  // rather than falling back to a PATH lookup. That rejection must be contained
-  // to the agent that is missing.
-  test("keeps every other agent readable when Cursor and Grok cannot be launched", async () => {
+  test("keeps every other agent readable when Grok cannot be launched", async () => {
     const { run } = fixtureRunner({
       ...EMPTY_CLAUDE,
       ...EMPTY_CODEX,
@@ -653,19 +648,20 @@ describe("discoverAgentExtensions", () => {
 
     const result = await discoverAgentExtensions(run);
 
-    for (const agent of ["cursor", "grok"] as const) {
-      expect(catalogFor(result, agent)).toEqual({
-        agent,
-        mcpServers: [],
-        plugins: [],
-        mcpError:
-          agent === "cursor"
-            ? "Could not read Cursor MCP servers."
-            : "Could not read Grok MCP servers.",
-        pluginError:
-          agent === "cursor" ? "Could not read Cursor plugins." : "Could not read Grok plugins.",
-      });
-    }
+    expect(catalogFor(result, "cursor")).toEqual({
+      agent: "cursor",
+      mcpServers: [],
+      plugins: [],
+      mcpError: "Cursor's SDK bridge does not expose an MCP server list.",
+      pluginError: "Cursor's SDK bridge does not expose a plugin list.",
+    });
+    expect(catalogFor(result, "grok")).toEqual({
+      agent: "grok",
+      mcpServers: [],
+      plugins: [],
+      mcpError: "Could not read Grok MCP servers.",
+      pluginError: "Could not read Grok plugins.",
+    });
     expect(catalogFor(result, "claude")).toMatchObject({
       mcpServers: [{ name: "docs", status: "connected" }],
     });
@@ -824,12 +820,19 @@ describe("discoverAgentExtensions", () => {
     });
   });
 
-  test("omits error fields entirely when every CLI succeeds", async () => {
+  test("omits error fields for successful CLIs and marks Cursor discovery unavailable", async () => {
     const { run, calls } = fixtureRunner(EMPTY_ALL);
 
     const result = await discoverAgentExtensions(run);
 
     for (const catalog of result) {
+      if (catalog.agent === "cursor") {
+        expect(catalog).toMatchObject({
+          mcpError: "Cursor's SDK bridge does not expose an MCP server list.",
+          pluginError: "Cursor's SDK bridge does not expose a plugin list.",
+        });
+        continue;
+      }
       expect(catalog).not.toHaveProperty("mcpError");
       expect(catalog).not.toHaveProperty("pluginError");
     }
@@ -838,8 +841,6 @@ describe("discoverAgentExtensions", () => {
       "claude plugin list --json",
       "codex mcp list --json",
       "codex plugin list --json",
-      "cursor mcp list --format json",
-      "cursor plugin list --format json",
       "grok mcp list --json",
       "grok plugin list --json",
       "opencode debug config",

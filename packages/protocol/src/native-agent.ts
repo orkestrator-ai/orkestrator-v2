@@ -450,7 +450,8 @@ export function nativeAgentCapabilities(agent: AgentPlatform): NativeAgentCapabi
   if (agent === "cursor" || agent === "grok") {
     return {
       ...capabilities,
-      // Both ACP agents read inline image content blocks; neither takes files.
+      // Cursor's SDK bridge and Grok's ACP bridge read inline image content
+      // blocks; neither takes files.
       attachments: { files: false, images: true },
       fork: false,
       slashCommands: false,

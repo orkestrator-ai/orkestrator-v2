@@ -52,8 +52,8 @@ describe("buildAgentLaunchCommand", () => {
     ).toBe('opencode --prompt "Review"');
   });
 
-  test("launches Cursor Agent and Grok terminal CLIs", () => {
-    expect(buildAgentLaunchCommand({ tabType: "cursor" })).toBe("cursor-agent");
+  test("omits Cursor's removed CLI and launches Grok's terminal CLI", () => {
+    expect(buildAgentLaunchCommand({ tabType: "cursor" })).toBeNull();
     expect(buildAgentLaunchCommand({ tabType: "grok" })).toBe("grok");
   });
 

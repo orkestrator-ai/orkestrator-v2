@@ -495,6 +495,36 @@ describe("EnvironmentSettingsDialog", () => {
     expect(screen.getByText("No plugins configured")).toBeTruthy();
   });
 
+  test("does not describe Cursor's unavailable extension catalogue as empty", async () => {
+    mockSection = "extensions";
+    extensionHandler = async () => [
+      {
+        agent: "cursor",
+        mcpServers: [],
+        plugins: [],
+        mcpError: "Cursor's SDK bridge does not expose an MCP server list.",
+        pluginError: "Cursor's SDK bridge does not expose a plugin list.",
+      },
+    ];
+
+    render(
+      <EnvironmentSettingsDialog
+        open={true}
+        onOpenChange={() => {}}
+        environment={makeEnvironment()}
+        onUpdate={() => {}}
+      />,
+    );
+
+    clickAgentTab("Cursor");
+    await waitFor(() => expect(screen.getByText("Extension discovery unavailable")).toBeTruthy());
+    expect(
+      screen.getByText("Cursor's SDK bridge does not expose an MCP server list."),
+    ).toBeTruthy();
+    expect(screen.getByText("Cursor's SDK bridge does not expose a plugin list.")).toBeTruthy();
+    expect(screen.queryByText("No configured extensions found") === null).toBe(true);
+  });
+
   test("shows an error banner and no stale data when the load fails", async () => {
     mockSection = "extensions";
     const consoleError = spyOn(console, "error").mockImplementation(() => {});

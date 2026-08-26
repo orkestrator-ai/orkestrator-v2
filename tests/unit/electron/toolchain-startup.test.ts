@@ -120,6 +120,30 @@ describe("toolchain startup orchestration", () => {
     expect(quit).not.toHaveBeenCalled();
   });
 
+  test("starts successfully when selected platforms require no managed artifacts", async () => {
+    const ensure = mock(async () => ({
+      rootDir: "/data/toolchains",
+      binDir: "/data/toolchains/bin/empty",
+      executables: {},
+    }));
+
+    await expect(
+      preparePinnedToolchains({
+        dataDir: "/data",
+        ensure,
+        fetchImpl: mock(async () => new Response()),
+        onProgress: mock(() => undefined),
+        showMessageBox: mock(async () => ({ response: 1 })),
+        quit: mock(() => undefined),
+        logError: mock(() => undefined),
+        artifacts: [],
+      }),
+    ).resolves.toBe("/data/toolchains/bin/empty");
+
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect(ensure.mock.calls[0]?.[0].artifacts).toEqual([]);
+  });
+
   test("quits after a rejected retry prompt and handles non-Error failures", async () => {
     const quit = mock(() => undefined);
     const showMessageBox = mock(async () => ({ response: 1 }));

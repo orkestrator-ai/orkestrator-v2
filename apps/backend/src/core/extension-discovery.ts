@@ -483,27 +483,16 @@ async function discoverCodex(run: ExtensionCommandRunner): Promise<AgentExtensio
   };
 }
 
-async function discoverCursor(run: ExtensionCommandRunner): Promise<AgentExtensionCatalog> {
-  const [mcp, plugins] = await Promise.allSettled([
-    run("cursor", ["mcp", "list", "--format", "json"]),
-    run("cursor", ["plugin", "list", "--format", "json"]),
-  ]);
-  const mcpResult = parseCommandResult(
-    mcp,
-    parseCursorMcpList,
-    "Could not read Cursor MCP servers.",
-  );
-  const pluginResult = parseCommandResult(
-    plugins,
-    parseCursorPlugins,
-    "Could not read Cursor plugins.",
-  );
+async function discoverCursor(): Promise<AgentExtensionCatalog> {
+  // The SDK bridge loads Cursor settings for sessions but exposes no stable
+  // extension-discovery surface. Say that the catalogue is unavailable rather
+  // than claiming the user's effective settings contain no extensions.
   return {
     agent: "cursor",
-    mcpServers: mcpResult.items,
-    plugins: pluginResult.items,
-    ...(mcpResult.error ? { mcpError: mcpResult.error } : {}),
-    ...(pluginResult.error ? { pluginError: pluginResult.error } : {}),
+    mcpServers: [],
+    plugins: [],
+    mcpError: "Cursor's SDK bridge does not expose an MCP server list.",
+    pluginError: "Cursor's SDK bridge does not expose a plugin list.",
   };
 }
 
@@ -615,7 +604,7 @@ export async function discoverAgentExtensions(
   return Promise.all([
     discoverClaude(run),
     discoverCodex(run),
-    discoverCursor(run),
+    discoverCursor(),
     discoverGrok(run),
     discoverOpenCode(run),
     discoverPi(run),

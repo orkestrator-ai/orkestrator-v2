@@ -1141,7 +1141,7 @@ describe("AgentNativeTab", () => {
     ).toBeTruthy();
   });
 
-  test("renders the cached Cursor catalogue without starting its ACP bridge", async () => {
+  test("renders the cached Cursor catalogue without starting its SDK bridge", async () => {
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["cursor"],
     });
@@ -1480,7 +1480,7 @@ describe("AgentNativeTab", () => {
     );
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe("review these");
 
-    // Cursor reads inline images over ACP but takes no files, so the same
+    // Cursor reads inline images but takes no files, so the same
     // reconcile applies: back to a provider that accepts both, then across.
     useNativeComposeStore.getState().updateDraft(sessionKey, {
       platform: "claude",
@@ -2508,7 +2508,7 @@ describe("AgentNativeTab", () => {
     ensureNativeAgentSessionMock.mockImplementation(
       () =>
         new Promise((_resolve, reject) => {
-          failEnsure = () => reject(new Error("cursor-agent is enabled but not installed yet"));
+          failEnsure = () => reject(new Error("Cursor SDK bridge is not available"));
         }),
     );
 
@@ -2535,7 +2535,7 @@ describe("AgentNativeTab", () => {
 
     await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
     // The actionable reason, not "Unable to connect".
-    expect(screen.getByText("cursor-agent is enabled but not installed yet")).toBeTruthy();
+    expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
     // And it survives the poll loop, which reads the same absent session again.
@@ -2544,7 +2544,7 @@ describe("AgentNativeTab", () => {
         setTimeout(resolve, 1_700);
       });
     });
-    expect(screen.getByText("cursor-agent is enabled but not installed yet")).toBeTruthy();
+    expect(screen.getByText("Cursor SDK bridge is not available")).toBeTruthy();
   }, 10_000);
 
   test("releases a creation failure once a read finds the session", async () => {

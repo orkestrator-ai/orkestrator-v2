@@ -96,9 +96,7 @@ describe("resolveStartupLaunch", () => {
     ).toBe(true);
   });
 
-  test("routes platforms without their own mode through the OpenCode mode", () => {
-    // Mirrors the backend's own resolution: cursor and grok have no dedicated
-    // mode field, so they follow `opencodeMode`.
+  test("routes Grok through the legacy OpenCode mode and Cursor through its SDK", () => {
     expect(
       resolveStartupLaunch({
         environment: { defaultAgent: "grok" },
@@ -110,8 +108,8 @@ describe("resolveStartupLaunch", () => {
       resolveStartupLaunch({
         environment: { defaultAgent: "cursor" },
         global: { opencodeMode: "terminal" },
-      }).dispatchedByBackend,
-    ).toBe(false);
+      }),
+    ).toMatchObject({ mode: "native", dispatchedByBackend: true });
   });
 
   test("keeps the conservative terminal fallback for non-Claude agents", () => {
@@ -130,48 +128,71 @@ describe("resolveStartupLaunch", () => {
  * this exact function over the same three tiers, and when they disagree either
  * both consume the initial prompt's images or neither delivers them.
  *
- * Cursor and Grok are the two platforms that gained a mode column of their own
- * in the agent-settings migration, so they are the pair most able to drift.
+ * Grok gained a mode column in the agent-settings migration. Cursor is
+ * SDK-only and must stay native even when a legacy tier says terminal.
  */
 describe("resolveStartupLaunchFromSettings", () => {
-  for (const platform of ["cursor", "grok"] as const) {
-    test(`${platform} reads its own mode column across all three tiers`, () => {
-      // Shipped default: neither platform expands what the backend dispatches.
-      expect(resolveStartupLaunchFromSettings({ global: { defaultAgent: platform } })).toEqual({
-        agent: platform,
-        mode: "terminal",
-        claudeNativeBackend: "sdk",
-        dispatchedByBackend: false,
+  test("Cursor stays SDK-native across all three tiers", () => {
+    for (const tiers of [
+      { global: { defaultAgent: "cursor" as const } },
+      {
+        global: {
+          defaultAgent: "cursor" as const,
+          platforms: { cursor: { mode: "terminal" as const } },
+        },
+      },
+      {
+        global: { defaultAgent: "cursor" as const },
+        repository: { platforms: { cursor: { mode: "terminal" as const } } },
+      },
+      {
+        global: { defaultAgent: "cursor" as const },
+        environment: { platforms: { cursor: { mode: "terminal" as const } } },
+      },
+    ]) {
+      expect(resolveStartupLaunchFromSettings(tiers)).toMatchObject({
+        agent: "cursor",
+        mode: "native",
+        dispatchedByBackend: true,
       });
+    }
+  });
 
-      // A tier that opts in hands the launch to the backend...
-      expect(
-        resolveStartupLaunchFromSettings({
-          global: { defaultAgent: platform, platforms: { [platform]: { mode: "native" } } },
-        }),
-      ).toMatchObject({ agent: platform, mode: "native", dispatchedByBackend: true });
-
-      // ...and a narrower tier that opts back out takes it away again.
-      expect(
-        resolveStartupLaunchFromSettings({
-          global: { defaultAgent: platform, platforms: { [platform]: { mode: "native" } } },
-          repository: { platforms: { [platform]: { mode: "terminal" } } },
-        }),
-      ).toMatchObject({ mode: "terminal", dispatchedByBackend: false });
-
-      expect(
-        resolveStartupLaunchFromSettings({
-          global: { defaultAgent: platform, platforms: { [platform]: { mode: "terminal" } } },
-          repository: { platforms: { [platform]: { mode: "terminal" } } },
-          environment: { platforms: { [platform]: { mode: "native" } } },
-        }),
-      ).toMatchObject({ mode: "native", dispatchedByBackend: true });
+  test("Grok reads its own mode column across all three tiers", () => {
+    const platform = "grok" as const;
+    expect(resolveStartupLaunchFromSettings({ global: { defaultAgent: platform } })).toEqual({
+      agent: platform,
+      mode: "terminal",
+      claudeNativeBackend: "sdk",
+      dispatchedByBackend: false,
     });
 
+    // A tier that opts in hands the launch to the backend...
+    expect(
+      resolveStartupLaunchFromSettings({
+        global: { defaultAgent: platform, platforms: { [platform]: { mode: "native" } } },
+      }),
+    ).toMatchObject({ agent: platform, mode: "native", dispatchedByBackend: true });
+
+    // ...and a narrower tier that opts back out takes it away again.
+    expect(
+      resolveStartupLaunchFromSettings({
+        global: { defaultAgent: platform, platforms: { [platform]: { mode: "native" } } },
+        repository: { platforms: { [platform]: { mode: "terminal" } } },
+      }),
+    ).toMatchObject({ mode: "terminal", dispatchedByBackend: false });
+
+    expect(
+      resolveStartupLaunchFromSettings({
+        global: { defaultAgent: platform, platforms: { [platform]: { mode: "terminal" } } },
+        repository: { platforms: { [platform]: { mode: "terminal" } } },
+        environment: { platforms: { [platform]: { mode: "native" } } },
+      }),
+    ).toMatchObject({ mode: "native", dispatchedByBackend: true });
+  });
+
+  for (const platform of ["cursor", "grok"] as const) {
     test(`${platform} does not follow another platform's mode column`, () => {
-      // The migration seeds cursor and grok from the OpenCode mode once. After
-      // that they are independent, so a later OpenCode change must not move
-      // them — which is what the pre-migration mode ternary did.
       expect(
         resolveStartupLaunchFromSettings({
           global: {
@@ -179,7 +200,11 @@ describe("resolveStartupLaunchFromSettings", () => {
             platforms: { opencode: { mode: "native" }, codex: { mode: "native" } },
           },
         }),
-      ).toMatchObject({ mode: "terminal", dispatchedByBackend: false });
+      ).toMatchObject(
+        platform === "cursor"
+          ? { mode: "native", dispatchedByBackend: true }
+          : { mode: "terminal", dispatchedByBackend: false },
+      );
     });
   }
 

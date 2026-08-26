@@ -1095,13 +1095,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
       const initialReasoningEffort =
         launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
-      // ACP tabs are always native unless explicitly opened as a CLI. The
-      // configured workflow likewise forces every provider through its native
-      // surface. Give those launches a stable identity before the tab mounts so
-      // the backend queue can own the turn immediately.
+      // Cursor is SDK-only. Grok is native unless explicitly opened as a CLI.
+      // Give backend-owned launches a stable identity before the tab mounts so
+      // the queue can own the turn immediately.
       const backendOwnsPrompt =
+        agent === "cursor" ||
         launchOptions?.agentLaunchMode === "native" ||
-        ((agent === "cursor" || agent === "grok") && launchOptions?.agentLaunchMode !== "cli");
+        (agent === "grok" && launchOptions?.agentLaunchMode !== "cli");
       const tabId = backendOwnsPrompt ? `tab-${createUuid()}` : undefined;
 
       const created = createTab(agent, {

@@ -1668,7 +1668,8 @@ export function TerminalContainer({
         type === "codex" &&
         (launchModeOverride === "native" || (!launchModeOverride && codexMode === "native"));
       const shouldUseAcpNative =
-        ((type === "cursor" || type === "grok") && launchModeOverride !== "cli") ||
+        type === "cursor" ||
+        (type === "grok" && launchModeOverride !== "cli") ||
         (type === "pi" &&
           (launchModeOverride === "native" || (!launchModeOverride && piMode === "native")));
       const prelockNativePlatform = Boolean(

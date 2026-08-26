@@ -176,12 +176,11 @@ describe("resolveAgentModeSettings", () => {
         claudeMode: "native",
         opencodeMode: "native",
         codexMode: "native",
-        cursorMode: "terminal",
         grokMode: "native",
       }),
     ).toEqual({
       defaultAgent: "cursor",
-      platforms: { cursor: { mode: "terminal" } },
+      platforms: { cursor: { mode: "native" } },
     });
 
     expect(
@@ -189,7 +188,6 @@ describe("resolveAgentModeSettings", () => {
         claudeMode: "native",
         opencodeMode: "native",
         codexMode: "native",
-        cursorMode: "native",
         grokMode: "terminal",
       }),
     ).toEqual({

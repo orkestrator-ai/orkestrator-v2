@@ -12,6 +12,7 @@ import {
   assertOnlyKeys,
   runEnvironmentAgentSkills,
   hasPackagedOrPathBinary,
+  hasCursorSdkBridge,
   hasManagedAcpBinary,
   getContainerGitHubCredentialStatus,
 } from "./commands-helpers.js";
@@ -88,10 +89,9 @@ export function registerToolingCommands(
   });
   register("check_opencode_cli", (_args, context) => hasPackagedOrPathBinary(context, "opencode"));
   register("check_codex_cli", (_args, context) => hasPackagedOrPathBinary(context, "codex"));
-  // Cursor and Grok report only what this backend generation can actually
-  // launch. Answering from PATH would advertise an agent whose bridge start
-  // then refuses it — see `resolveManagedAcpBinary`.
-  register("check_cursor_cli", (_args, context) => hasManagedAcpBinary(context, "cursor"));
+  // Kept under the existing command name for protocol compatibility. Cursor
+  // no longer has a CLI; availability means the SDK bridge is packaged.
+  register("check_cursor_cli", (_args, context) => hasCursorSdkBridge(context));
   register("check_grok_cli", (_args, context) => hasManagedAcpBinary(context, "grok"));
   register("check_pi_cli", (_args, context) => hasPackagedOrPathBinary(context, "pi"));
   register("check_github_cli", () => commandExists("gh"));
@@ -104,7 +104,7 @@ export function registerToolingCommands(
       (await hasPackagedOrPathBinary(context, "claude")) ||
       (await hasPackagedOrPathBinary(context, "opencode")) ||
       (await hasPackagedOrPathBinary(context, "codex")) ||
-      (await hasManagedAcpBinary(context, "cursor")) ||
+      (await hasCursorSdkBridge(context)) ||
       (await hasManagedAcpBinary(context, "grok")) ||
       (await hasPackagedOrPathBinary(context, "pi")),
   );
@@ -115,7 +115,7 @@ export function registerToolingCommands(
         ? "opencode"
         : (await hasPackagedOrPathBinary(context, "codex"))
           ? "codex"
-          : (await hasManagedAcpBinary(context, "cursor"))
+          : (await hasCursorSdkBridge(context))
             ? "cursor"
             : (await hasManagedAcpBinary(context, "grok"))
               ? "grok"

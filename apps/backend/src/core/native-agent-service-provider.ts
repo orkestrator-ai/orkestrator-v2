@@ -437,7 +437,7 @@ export class NativeAgentServiceProvider extends NativeAgentServiceReconciliation
     const record = message as Record<string, unknown>;
     // Native compose queues persist the shared `fastMode` field for every
     // provider. Keep accepting Claude's legacy `fastModeEnabled` shape while
-    // forwarding the shared field to Codex and both ACP agents.
+    // forwarding the shared field to Codex, Cursor, and Grok.
     //
     // Each candidate is type-checked before the next is considered rather than
     // coalesced first: `??` only falls through on null/undefined, so a garbage

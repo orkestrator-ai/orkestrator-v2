@@ -225,9 +225,9 @@ drive a command at all, 81% do. The classifier is reproducible —
 it reads `register("…")` from each `commands-registry-*.ts` and matches
 `commands\.get\(\s*["']([a-z0-9_]+)["']\)` inside each test body. Two caveats:
 
-- `commands-registry-servers.ts:351` registers ACP servers dynamically as
-  `` register(`start_${acpProvider}_server`, …) ``, so `start_cursor_server` and
-  `start_grok_server` do not match a literal and must be mapped by hand.
+- `commands-registry-servers.ts` registers provider servers dynamically, so
+  `start_cursor_server` and `start_grok_server` do not match a literal and must
+  be mapped by hand.
 - The 37 helper tests exercise exported helpers rather than commands. Route them
   by the symbol they import, not by command name.
 

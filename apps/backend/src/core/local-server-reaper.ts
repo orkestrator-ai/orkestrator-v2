@@ -263,21 +263,12 @@ interface ReapableServer {
    *   codex    → `<bun> <…>/codex-bridge/dist/index.js`
    *   pi       → `<bun> <…>/pi-bridge/dist/index.js`
    *   grok     → `<bun> <…>/acp-bridge/dist/index.js`
-   *   cursor   → either bridge: `<…>/cursor-bridge/…` when the experimental SDK
-   *              engine is selected, `<…>/acp-bridge/…` otherwise. The engine can
-   *              be toggled between the crash and this sweep, so both are accepted
-   *              rather than resolving the setting here.
+   *   cursor   → `<bun> <…>/cursor-bridge/dist/index.js`
    *
    * A bare `"opencode"` was too weak on its own: it matches a hand-started
    * `opencode` in any mode, or any command line that merely mentions the word,
    * which is exactly the stranger a recycled PID would land on.
    *
-   * Cursor-over-ACP and Grok are indistinguishable by command line — they run
-   * the same entrypoint and differ only by `ACP_PROVIDER`, which `ps` does not
-   * show. That costs attribution, not safety: the orphan and group-leader
-   * checks below still hold, so the worst case is reaping one of *our* orphaned
-   * bridges under the other's record, and the record that actually owned it
-   * then finds the PID gone and clears itself.
    */
   markerSets: readonly (readonly string[])[];
 }
@@ -305,10 +296,7 @@ const REAPABLE_SERVERS: readonly ReapableServer[] = [
     kind: "cursor",
     pidField: "cursorBridgePid",
     portField: "localCursorPort",
-    markerSets: [
-      ["cursor-bridge", "dist/index.js"],
-      ["acp-bridge", "dist/index.js"],
-    ],
+    markerSets: [["cursor-bridge", "dist/index.js"]],
   },
   {
     kind: "grok",

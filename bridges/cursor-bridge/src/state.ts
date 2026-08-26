@@ -298,3 +298,23 @@ export function nonBlank(value: unknown): value is string {
 export function sessionIsWorking(state: SessionState): boolean {
   return state.status === "running" || state.activeSubagentDescriptors.size > 0;
 }
+
+/**
+ * The provider's own total when it reported one, and the sum of the categories
+ * it summarises otherwise.
+ *
+ * `reasoningTokens` is deliberately excluded: the SDK documents it as a subset
+ * of `outputTokens`, so adding it would double-count. This lives here rather
+ * than beside either caller because the context gauge and the billed-usage
+ * staleness check both depend on the same accounting, and two copies of the
+ * rule would drift.
+ */
+export function turnTokenTotal(usage: TurnUsage): number {
+  return (
+    usage.totalTokens ??
+    (usage.inputTokens ?? 0) +
+      (usage.outputTokens ?? 0) +
+      (usage.cacheReadTokens ?? 0) +
+      (usage.cacheWriteTokens ?? 0)
+  );
+}

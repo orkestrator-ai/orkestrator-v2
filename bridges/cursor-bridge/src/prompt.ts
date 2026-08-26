@@ -27,6 +27,7 @@ import {
   type SessionState,
   type TurnUsage,
   isObject,
+  turnTokenTotal,
 } from "./state.js";
 
 export const STRUCTURED_PROMPT_INSTRUCTION_PREFIX = "End your turn with exactly one JSON value";
@@ -313,7 +314,9 @@ function recordUsage(
   const elapsed =
     result?.durationMs ?? (state.turnStartedAt ? Date.now() - state.turnStartedAt : undefined);
   const modelId = result?.model?.id ?? state.composer.selectedModelId;
-  if (turn && Object.keys(turn).length > 0) {
+  const previous = state.usage;
+  const measured = turn !== undefined && Object.keys(turn).length > 0;
+  if (measured) {
     state.usage = {
       turn,
       // Recorded only when it is genuinely a second reading. A run that
@@ -322,12 +325,26 @@ function recordUsage(
       ...(context && context !== turn && Object.keys(context).length > 0 ? { context } : {}),
       ...(modelId ? { modelId } : {}),
       ...(elapsed !== undefined ? { durationMs: elapsed } : {}),
+      // Carried forward rather than rebuilt from nothing. These are cumulative
+      // account figures, not per-turn ones: dropping them would blank a number
+      // the user could already see for as long as the supplemental read below
+      // takes to answer, and would leave that read with no baseline to test an
+      // eventually consistent total against.
+      ...(previous?.sessionTokens !== undefined ? { sessionTokens: previous.sessionTokens } : {}),
+      ...(previous?.costUsd !== undefined ? { costUsd: previous.costUsd } : {}),
       updatedAt: new Date().toISOString(),
     };
   }
   state.currentTurnUsage = undefined;
   state.turnStartedAt = undefined;
-  scheduleAgentUsageRefresh(state);
+  // The smallest cumulative total that can already account for this turn.
+  // Computed here, once, while both halves are still in hand: the refresh
+  // overwrites `sessionTokens` with the new cumulative, so a retry that
+  // recomputed this from the session would compare against its own answer.
+  scheduleAgentUsageRefresh(
+    state,
+    (previous?.sessionTokens ?? 0) + (measured ? turnTokenTotal(turn) : 0),
+  );
 }
 
 /**
@@ -341,40 +358,65 @@ const AGENT_USAGE_RETRY_DELAYS_MS = [2_000, 10_000] as const;
 
 type AgentUsageRefreshResult = "complete" | "retry" | "stale";
 
-function scheduleAgentUsageRefresh(state: SessionState): void {
+/**
+ * Start the account read and follow it through its bounded retries.
+ *
+ * `delaysMs` and `timeoutMs` are parameters for the same reason `followRun`
+ * takes its budget: the retry schedule is a policy input, and a test that had
+ * to wait out the real one would spend twelve seconds proving a branch that is
+ * pure control flow. Never awaited — the caller is on the turn's terminal path.
+ */
+export function scheduleAgentUsageRefresh(
+  state: SessionState,
+  minimumSessionTokens: number,
+  delaysMs: readonly number[] = AGENT_USAGE_RETRY_DELAYS_MS,
+  timeoutMs: number = CATALOG_TIMEOUT_MS,
+): void {
   const agent = state.agent;
   const promptSequence = state.promptSequence;
   if (!agent || !state.usage) return;
 
   const run = async (retryIndex: number): Promise<void> => {
-    const outcome = await refreshAgentUsage(state, agent, promptSequence);
-    if (outcome !== "retry" || retryIndex >= AGENT_USAGE_RETRY_DELAYS_MS.length) return;
-    const timer = setTimeout(
-      () => void run(retryIndex + 1),
-      AGENT_USAGE_RETRY_DELAYS_MS[retryIndex],
+    const outcome = await refreshAgentUsage(
+      state,
+      agent,
+      promptSequence,
+      minimumSessionTokens,
+      timeoutMs,
     );
+    if (outcome !== "retry" || retryIndex >= delaysMs.length) return;
+    const timer = setTimeout(() => void run(retryIndex + 1), delaysMs[retryIndex]);
     timer.unref();
   };
+  // `refreshAgentUsage` never rejects — every failure of the account read is
+  // already folded into a "retry" — so this cannot leave an unhandled
+  // rejection behind on a path nothing is watching.
   void run(0);
 }
 
 /**
  * Merge Cursor's cumulative billed-usage view into the latest turn snapshot.
  *
- * Exported for a focused contract test. The parser remains structural on
- * purpose: an older vendored runtime can return a partial object, and usage is
- * supplemental information rather than a reason to fail an otherwise complete
- * turn.
+ * `minimumSessionTokens` is the smallest cumulative total that can already
+ * account for the turn that just ended — the previous cumulative plus this
+ * turn's spend. It is supplied rather than derived because by the time a retry
+ * runs, the snapshot may already hold the answer this check exists to validate.
+ *
+ * Exported for a focused contract test. Never rejects, and the parser remains
+ * structural on purpose: an older vendored runtime can return a partial object,
+ * and usage is supplemental information rather than a reason to fail an
+ * otherwise complete turn.
  */
 export async function refreshAgentUsage(
   state: SessionState,
   agent: Pick<SDKAgent, "getUsage">,
   promptSequence: number,
+  minimumSessionTokens: number,
   timeoutMs: number = CATALOG_TIMEOUT_MS,
 ): Promise<AgentUsageRefreshResult> {
   if (state.promptSequence !== promptSequence || !state.usage) return "stale";
 
-  const report = await optionalWithin(
+  const report = await withTimeout(
     Promise.resolve().then(() => agent.getUsage()),
     timeoutMs,
   ).catch(() => undefined);
@@ -383,15 +425,15 @@ export async function refreshAgentUsage(
 
   const totals = isObject(report.usage) ? report.usage : undefined;
   const reportedSessionTokens = nonNegativeNumber(totals?.totalTokens);
-  // The billed endpoint is eventually consistent too. A cumulative total below
-  // the turn already in hand is an older view, not a new session total.
-  const sessionTokens =
-    reportedSessionTokens !== undefined &&
-    reportedSessionTokens >= usageTokenTotal(state.usage.turn)
-      ? reportedSessionTokens
-      : undefined;
+  // The billed endpoint is eventually consistent too. A cumulative total that
+  // cannot yet account for the turn just recorded is an older view of the
+  // account, so nothing in that report — its charge included — is usable.
+  // A report with no total at all is the partial-object case instead: it says
+  // nothing about freshness, so its charge is still worth taking.
+  const stale = reportedSessionTokens !== undefined && reportedSessionTokens < minimumSessionTokens;
+  const sessionTokens = stale ? undefined : reportedSessionTokens;
   const cost = isObject(report.cost) ? report.cost : undefined;
-  const chargedCents = nonNegativeNumber(cost?.chargedCents);
+  const chargedCents = stale ? undefined : nonNegativeNumber(cost?.chargedCents);
   if (sessionTokens === undefined && chargedCents === undefined) return "retry";
 
   const costUsd = chargedCents === undefined ? undefined : chargedCents / 100;
@@ -410,42 +452,16 @@ export async function refreshAgentUsage(
     schedulePersist();
   }
 
-  // Cursor documents cost as eventually consistent. A token total with no cost
-  // is a useful snapshot now, but gets two bounded follow-ups so a one-turn
-  // session does not need another prompt before its final charge appears.
-  return sessionTokens === undefined ||
-    (chargedCents === undefined && current.costUsd === undefined)
-    ? "retry"
-    : "complete";
+  // Cursor documents cost as eventually consistent. A token total with no
+  // charge is a useful snapshot now, but gets bounded follow-ups so a turn's
+  // final charge lands without needing another prompt. A charge carried
+  // forward from an earlier turn is not evidence that this turn's has
+  // arrived, so only one read in this report can settle it.
+  return sessionTokens === undefined || chargedCents === undefined ? "retry" : "complete";
 }
 
 function nonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function usageTokenTotal(usage: TurnUsage): number {
-  return (
-    usage.totalTokens ??
-    (usage.inputTokens ?? 0) +
-      (usage.outputTokens ?? 0) +
-      (usage.cacheReadTokens ?? 0) +
-      (usage.cacheWriteTokens ?? 0)
-  );
-}
-
-async function optionalWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T | undefined> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<undefined>((resolve) => {
-        timer = setTimeout(() => resolve(undefined), timeoutMs);
-        timer.unref();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
 }
 
 /** The categories `totalTokens` summarises, per the SDK's own `toTokenUsage`. */

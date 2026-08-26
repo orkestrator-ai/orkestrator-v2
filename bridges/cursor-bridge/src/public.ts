@@ -11,7 +11,7 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { PROVIDER } from "./config.js";
-import { sessionIsWorking, type JsonObject, type SessionState, type TurnUsage } from "./state.js";
+import { sessionIsWorking, turnTokenTotal, type JsonObject, type SessionState } from "./state.js";
 
 export function publicSession(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
@@ -131,21 +131,6 @@ export function publicContextUsage(state: SessionState): NativeAgentContextUsage
     source: "provider",
     updatedAt: usage.updatedAt,
   };
-}
-
-/**
- * The provider's own total when it reported one, and the sum of the categories
- * it summarises otherwise. `reasoningTokens` is deliberately excluded: the SDK
- * documents it as a subset of `outputTokens`, so adding it would double-count.
- */
-function turnTokenTotal(turn: TurnUsage): number {
-  return (
-    turn.totalTokens ??
-    (turn.inputTokens ?? 0) +
-      (turn.outputTokens ?? 0) +
-      (turn.cacheReadTokens ?? 0) +
-      (turn.cacheWriteTokens ?? 0)
-  );
 }
 
 export function publicRuntime(state: SessionState): NativeAgentRuntimeSummary {

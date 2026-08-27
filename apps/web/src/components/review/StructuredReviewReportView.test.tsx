@@ -107,7 +107,7 @@ describe("StructuredReviewReportView", () => {
       />,
     );
 
-    expect(screen.queryByRole("note")).toBeNull();
+    expect(screen.queryByRole("note") === null).toBe(true);
     expect(screen.getByRole("heading", { name: /Retry state can drift/ })).toBeTruthy();
   });
 

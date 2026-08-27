@@ -3,6 +3,7 @@ import { Eye, Plus, Trash2, Wrench } from "lucide-react";
 import type { MultiReviewModelSelection } from "@orkestrator/protocol/multi-review";
 import { MULTI_REVIEW_MAX_REVIEWERS } from "@orkestrator/protocol/multi-review";
 import type { AgentModel } from "@orkestrator/protocol/native-agent";
+import { openCodeModelDisplayLabel } from "@orkestrator/protocol/native-agent";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,15 +41,18 @@ export interface MultiReviewLaunchSelection {
   fixModel: MultiReviewModelSelection;
 }
 
-interface MultiReviewLaunchDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+export interface MultiReviewLaunchDefaults {
   defaultAgent: LaunchAgent;
   catalog: AgentModelCatalog;
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   secondReviewerDefaults?: MultiReviewRowDefaults;
   fixModelDefaults?: MultiReviewRowDefaults;
+}
+
+interface MultiReviewLaunchDialogProps extends MultiReviewLaunchDefaults {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   busy?: boolean;
   onConfirm: (selection: MultiReviewLaunchSelection) => void;
 }
@@ -90,6 +94,97 @@ function initialConfiguredRow(
     defaults?.preferredModels ?? fallback.preferredModels,
     defaults?.preferredReasoningEfforts ?? fallback.preferredReasoningEfforts,
   );
+}
+
+function cleanRow(row: PickerRow): MultiReviewModelSelection {
+  return {
+    agent: row.agent,
+    model: row.model,
+    ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
+  };
+}
+
+/**
+ * A direct toolbar click can happen before the repository-scoped OpenCode
+ * catalogue has finished loading. Keep explicit action defaults launchable in
+ * that placeholder window; once any concrete catalogue entry exists it remains
+ * authoritative and stale configured ids fall back normally.
+ */
+function catalogWithConfiguredOpenCodeFallbacks(
+  defaults: MultiReviewLaunchDefaults,
+): AgentModelCatalog {
+  if (modelsForAgent(defaults.catalog, "opencode").some((model) => model.id !== "default")) {
+    return defaults.catalog;
+  }
+
+  const configuredRows = [
+    defaults,
+    defaults.secondReviewerDefaults,
+    defaults.fixModelDefaults,
+  ].filter((row): row is MultiReviewRowDefaults => row?.defaultAgent === "opencode");
+  const configuredModels = new Map<string, Set<string>>();
+  for (const row of configuredRows) {
+    const model = row.preferredModels?.opencode;
+    if (!model || model === "default") continue;
+    const efforts = configuredModels.get(model) ?? new Set<string>();
+    const effort = row.preferredReasoningEfforts?.opencode;
+    if (effort && effort !== "default") efforts.add(effort);
+    configuredModels.set(model, efforts);
+  }
+  if (configuredModels.size === 0) return defaults.catalog;
+
+  return {
+    ...defaults.catalog,
+    opencode: [
+      ...modelsForAgent(defaults.catalog, "opencode"),
+      ...Array.from(configuredModels, ([id, efforts]) => ({
+        id,
+        name: openCodeModelDisplayLabel(id),
+        reasoningEfforts: Array.from(efforts),
+      })),
+    ],
+  };
+}
+
+function initialRows({
+  defaultAgent,
+  catalog,
+  preferredModels,
+  preferredReasoningEfforts,
+  secondReviewerDefaults,
+  fixModelDefaults,
+}: MultiReviewLaunchDefaults): { reviewers: PickerRow[]; fixModel: PickerRow } {
+  const resolvedCatalog = catalogWithConfiguredOpenCodeFallbacks({
+    defaultAgent,
+    catalog,
+    preferredModels,
+    preferredReasoningEfforts,
+    secondReviewerDefaults,
+    fixModelDefaults,
+  });
+  const fallbackDefaults: MultiReviewRowDefaults = {
+    defaultAgent,
+    preferredModels,
+    preferredReasoningEfforts,
+  };
+  return {
+    reviewers: [
+      initialRow(defaultAgent, resolvedCatalog, preferredModels, preferredReasoningEfforts),
+      initialConfiguredRow(secondReviewerDefaults, fallbackDefaults, resolvedCatalog),
+    ],
+    fixModel: initialConfiguredRow(fixModelDefaults, fallbackDefaults, resolvedCatalog),
+  };
+}
+
+/** The exact selection shown when the configuration dialog first opens. */
+export function defaultMultiReviewLaunchSelection(
+  defaults: MultiReviewLaunchDefaults,
+): MultiReviewLaunchSelection {
+  const rows = initialRows(defaults);
+  return {
+    reviewers: rows.reviewers.map(cleanRow),
+    fixModel: cleanRow(rows.fixModel),
+  };
 }
 
 export function flatCatalog(catalog: AgentModelCatalog): AgentModel[] {
@@ -235,10 +330,16 @@ export function MultiReviewLaunchDialog({
     const justOpened = open && !wasOpen.current;
     wasOpen.current = open;
     if (!justOpened) return;
-    const first = initialRow(defaultAgent, catalog, preferredModels, preferredReasoningEfforts);
-    const second = initialConfiguredRow(secondReviewerDefaults, fallbackDefaults, catalog);
-    setReviewers([first, second]);
-    setFixModel(initialConfiguredRow(fixModelDefaults, fallbackDefaults, catalog));
+    const rows = initialRows({
+      defaultAgent,
+      catalog,
+      preferredModels,
+      preferredReasoningEfforts,
+      secondReviewerDefaults,
+      fixModelDefaults,
+    });
+    setReviewers(rows.reviewers);
+    setFixModel(rows.fixModel);
   }, [
     catalog,
     defaultAgent,
@@ -272,12 +373,7 @@ export function MultiReviewLaunchDialog({
           onSubmit={(event) => {
             event.preventDefault();
             if (busy) return;
-            const clean = (row: PickerRow): MultiReviewModelSelection => ({
-              agent: row.agent,
-              model: row.model,
-              ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
-            });
-            onConfirm({ reviewers: reviewers.map(clean), fixModel: clean(fixModel) });
+            onConfirm({ reviewers: reviewers.map(cleanRow), fixModel: cleanRow(fixModel) });
           }}
         >
           <div

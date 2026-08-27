@@ -514,6 +514,29 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     Boolean(selectedEnvironment) && canCreateTab,
   );
 
+  const openMultiReviewDialog = useCallback(() => {
+    if (
+      !selectedEnvironment ||
+      !canCreateTab ||
+      !isRunning ||
+      !workspaceReady ||
+      setupRunning ||
+      multiReviewLaunchInFlightRef.current
+    )
+      return;
+    setMultiReviewDialogOpen(true);
+  }, [canCreateTab, isRunning, selectedEnvironment, setupRunning, workspaceReady]);
+
+  const multiReviewLongPress = useLongPressAction(
+    openMultiReviewDialog,
+    Boolean(selectedEnvironment) &&
+      canCreateTab &&
+      isRunning &&
+      workspaceReady &&
+      !setupRunning &&
+      !multiReviewLaunchPending,
+  );
+
   const handleConfiguredReview = useCallback(
     (selection: ReviewLaunchSelection) => {
       const agent = getReviewAgent(selection.tabType);
@@ -1735,6 +1758,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     openReviewDialog,
     reviewLongPress,
     handleConfiguredReview,
+    openMultiReviewDialog,
+    multiReviewLongPress,
     handleMultiReview,
     handleLoopedReview,
     openScriptDialog,

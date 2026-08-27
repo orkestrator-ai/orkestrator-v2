@@ -4,7 +4,9 @@ import type { AgentModelRef } from "@orkestrator/protocol/native-agent";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import { useConfigStore } from "@/stores/configStore";
 import {
+  defaultMultiReviewLaunchSelection,
   MultiReviewLaunchDialog,
+  type MultiReviewLaunchDefaults,
   type MultiReviewLaunchSelection,
 } from "./MultiReviewLaunchDialog";
 
@@ -198,6 +200,37 @@ describe("MultiReviewLaunchDialog", () => {
       ],
       fixModel: { agent: "opencode", model: "provider/model" },
     });
+  });
+
+  test("submits the same initial selection as the direct-launch helper", () => {
+    const defaults: MultiReviewLaunchDefaults = {
+      defaultAgent: "claude",
+      catalog,
+      preferredModels: { claude: "opus" },
+      preferredReasoningEfforts: { claude: "high" },
+      secondReviewerDefaults: {
+        defaultAgent: "codex",
+        preferredModels: { codex: "gpt-5.5" },
+        preferredReasoningEfforts: { codex: "medium" },
+      },
+      fixModelDefaults: {
+        defaultAgent: "opencode",
+        preferredModels: { opencode: "provider/model" },
+      },
+    };
+    const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        {...defaults}
+        onConfirm={onConfirm}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+
+    expect(onConfirm.mock.calls[0]?.[0]).toEqual(defaultMultiReviewLaunchSelection(defaults));
   });
 
   test("keeps each role's effort preferences when its model changes", () => {

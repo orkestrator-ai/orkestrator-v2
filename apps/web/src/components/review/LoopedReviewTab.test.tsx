@@ -280,6 +280,7 @@ describe("LoopedReviewTab backend snapshot viewer", () => {
         expect.objectContaining({
           agentLaunchMode: "native",
           resumeSessionId: "provider-1",
+          requireExistingResumeSession: true,
           isReviewTab: true,
         }),
       ),

@@ -2764,6 +2764,35 @@ describe("AgentNativeTab", () => {
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
+  test("does not replace a missing backend-owned resume session", async () => {
+    adoptNativeAgentSessionMock.mockImplementation(async () => {
+      throw new Error("provider session was not found");
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-strict-resume"
+        data={{ ...identity("codex"), requireExistingResumeSession: true }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("Connection Failed")).toBeTruthy());
+    expect(screen.getByText("provider session was not found")).toBeTruthy();
+    expect(ensureNativeAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  test("retains create-on-missing behavior for ordinary restored tabs", async () => {
+    adoptNativeAgentSessionMock.mockImplementation(async () => {
+      throw new Error("provider session was not found");
+    });
+
+    render(<AgentNativeTab tabId="tab-fallback-resume" data={identity("codex")} isActive />);
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
+  });
+
   test("returns to connecting after Retry on an empty session read", async () => {
     getNativeAgentProjectionMock.mockImplementation(async () => null as never);
     render(<AgentNativeTab tabId="tab-retry-empty" data={identity("cursor")} isActive />);

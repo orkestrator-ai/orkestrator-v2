@@ -33,6 +33,7 @@ interface NativeAgentTabIdentity {
   containerId?: unknown;
   hostPort?: unknown;
   sessionId?: unknown;
+  requireExistingResumeSession?: unknown;
   isLocal?: unknown;
 }
 
@@ -41,6 +42,7 @@ const NATIVE_AGENT_IDENTITY_FIELDS = [
   "containerId",
   "hostPort",
   "sessionId",
+  "requireExistingResumeSession",
   "isLocal",
 ] as const;
 

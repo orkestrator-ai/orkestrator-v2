@@ -38,6 +38,8 @@ export const MAX_TABS = MAX_TABS_PER_ENVIRONMENT;
 export interface CreateTabOptions {
   /** Caller-owned ID used to bind durable backend work to the tab before it mounts. */
   tabId?: string;
+  /** Focus an existing caller-owned tab instead of treating its id as a collision. */
+  activateExistingTab?: boolean;
   /** Initial prompt to send to agent (only for claude/opencode tabs) */
   initialPrompt?: string;
   /** Initial commands to execute (only for plain terminal tabs) */
@@ -64,6 +66,8 @@ export interface CreateTabOptions {
   multiReviewReviewerId?: string;
   /** Existing native provider session opened from a backend-owned workflow. */
   resumeSessionId?: string;
+  /** Refuse to replace a missing resume target with a fresh empty session. */
+  requireExistingResumeSession?: boolean;
 }
 
 // Options for creating a file tab
@@ -85,9 +89,9 @@ interface TerminalContextValue {
 
   // Tab management
   /**
-   * Attempts to create a tab and reports whether it was added. Callers that
-   * create durable state for a tab use the result to roll that state back when
-   * the environment or tab limit changes between rendering and dispatch.
+   * Attempts to present a tab and reports whether it was created or an allowed
+   * existing tab was activated. Callers that create durable state for a new tab
+   * use `false` to roll that state back when presentation is unavailable.
    */
   createTab: ((type: CreatableTabType, options?: CreateTabOptions) => boolean) | null;
   setCreateTab: (

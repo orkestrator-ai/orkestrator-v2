@@ -1,10 +1,12 @@
 import { useMemo, useState, useCallback } from "react";
+import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import { toast } from "sonner";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
-import { usePaneLayoutStore, useFileDirtyStore } from "@/stores";
+import { usePaneLayoutStore, useFileDirtyStore, useMultiReviewStore } from "@/stores";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { createDraggableTabId, getNativeAgentData, parseDraggableTabId } from "@/types/paneLayout";
 import { cn, createSessionKey } from "@/lib/utils";
+import * as backend from "@/lib/backend";
 import {
   discardFileDraft,
   getFileDraftRevisionState,
@@ -156,6 +158,36 @@ export function DraggableTabBar({
   // All tabs can be closed
   const canClose = true;
 
+  const closeParentMultiReviews = useCallback(
+    async (tabIds: string[]): Promise<Set<string>> => {
+      const parents = tabIds.flatMap((tabId) => {
+        const tab = pane.tabs.find((candidate) => candidate.id === tabId);
+        const data = tab?.multiReviewTabData;
+        return tab?.type === "multi-review" && data && !data.reviewerId
+          ? [{ tabId, workflowId: data.workflowId }]
+          : [];
+      });
+      const failedTabIds = new Set<string>();
+      for (const { tabId, workflowId } of parents) {
+        const phase = useMultiReviewStore.getState().workflows.get(workflowId)?.phase;
+        // Active, failed, and not-yet-hydrated reviews remain backend-owned when
+        // hidden. The launcher can reattach them, preserving background work.
+        if (!phase || !isMultiReviewTerminalPhase(phase)) continue;
+        try {
+          await backend.deleteMultiReviewWorkflow(workflowId);
+          useMultiReviewStore.getState().removeWorkflow(workflowId);
+        } catch (error) {
+          failedTabIds.add(tabId);
+          toast.error("Could not close Multi Review", {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      return failedTabIds;
+    },
+    [pane.tabs],
+  );
+
   const isRefreshableAgentTab = useCallback(
     (type: PaneLeaf["tabs"][number]["type"]) =>
       type === "agent-native" ||
@@ -210,12 +242,24 @@ export function DraggableTabBar({
         return;
       }
 
-      for (let i = idsInPane.length - 1; i >= 0; i--) {
-        clearDirty(idsInPane[i]!);
-        removeTab(pane.id, idsInPane[i]!, environmentId);
+      const failedTabIds = await closeParentMultiReviews(idsInPane);
+      const closableTabIds = idsInPane.filter((tabId) => !failedTabIds.has(tabId));
+
+      for (let i = closableTabIds.length - 1; i >= 0; i--) {
+        clearDirty(closableTabIds[i]!);
+        removeTab(pane.id, closableTabIds[i]!, environmentId);
       }
     },
-    [clearDirty, discardTabDraft, environmentId, pane.id, pane.tabs, removeTab, isDirty],
+    [
+      clearDirty,
+      closeParentMultiReviews,
+      discardTabDraft,
+      environmentId,
+      pane.id,
+      pane.tabs,
+      removeTab,
+      isDirty,
+    ],
   );
 
   const handleClose = useCallback(
@@ -256,25 +300,36 @@ export function DraggableTabBar({
     if (pendingCloseTabIds.length === 0) {
       return;
     }
+    const confirmedTabIds = pendingCloseTabIds;
+    setPendingCloseTabIds([]);
+    setPendingCloseTabNames([]);
 
     try {
-      await Promise.all(pendingCloseTabIds.map(discardTabDraft));
+      await Promise.all(confirmedTabIds.map(discardTabDraft));
     } catch (error) {
       console.warn("[DraggableTabBar] Failed to discard file draft:", error);
       return;
     }
 
-    for (const tabId of pendingCloseTabIds) {
+    const failedTabIds = await closeParentMultiReviews(confirmedTabIds);
+    const closableTabIds = confirmedTabIds.filter((tabId) => !failedTabIds.has(tabId));
+
+    for (const tabId of closableTabIds) {
       clearDirty(tabId);
     }
 
-    for (let i = pendingCloseTabIds.length - 1; i >= 0; i--) {
-      removeTab(pane.id, pendingCloseTabIds[i]!, environmentId);
+    for (let i = closableTabIds.length - 1; i >= 0; i--) {
+      removeTab(pane.id, closableTabIds[i]!, environmentId);
     }
-
-    setPendingCloseTabIds([]);
-    setPendingCloseTabNames([]);
-  }, [discardTabDraft, environmentId, pendingCloseTabIds, pane.id, clearDirty, removeTab]);
+  }, [
+    clearDirty,
+    closeParentMultiReviews,
+    discardTabDraft,
+    environmentId,
+    pendingCloseTabIds,
+    pane.id,
+    removeTab,
+  ]);
 
   const handleCancelClose = useCallback(() => {
     setPendingCloseTabIds([]);

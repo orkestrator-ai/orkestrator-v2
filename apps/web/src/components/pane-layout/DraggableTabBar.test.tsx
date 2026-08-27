@@ -4,6 +4,7 @@ import { DndContext } from "@dnd-kit/core";
 import type { PaneLeaf } from "@/types/paneLayout";
 import { useFileDirtyStore } from "@/stores/fileDirtyStore";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { createSessionKey } from "@/lib/utils";
 import { invoke } from "@/lib/native/backend";
@@ -16,6 +17,7 @@ beforeEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
+  useMultiReviewStore.setState({ workflows: new Map() });
   (invoke as unknown as { mockClear: () => void }).mockClear();
   (
     invoke as unknown as {
@@ -159,6 +161,118 @@ describe("DraggableTabBar", () => {
     });
   });
 
+  test("sends one backend teardown intent before closing a Multi Review parent tab", async () => {
+    const environmentId = "environment";
+    usePaneLayoutStore.getState().initialize("container", environmentId);
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      {
+        id: "multi-review",
+        type: "multi-review",
+        multiReviewTabData: {
+          environmentId,
+          workflowId: "workflow-1",
+        },
+      },
+      environmentId,
+    );
+    useMultiReviewStore.setState({
+      workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
+    });
+    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+
+    const { container } = render(
+      <DndContext>
+        <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
+      </DndContext>,
+    );
+    const close = container.querySelector("button");
+    if (!close) throw new Error("close button missing");
+    fireEvent.click(close);
+
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("delete_multi_review_workflow", {
+        workflowId: "workflow-1",
+      });
+      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+    });
+  });
+
+  test.each(["reviewing", "failed"] as const)(
+    "hides a %s Multi Review parent without tearing down its workflow",
+    async (phase) => {
+      const environmentId = "environment";
+      usePaneLayoutStore.getState().initialize("container", environmentId);
+      usePaneLayoutStore.getState().addTab(
+        "default",
+        {
+          id: "multi-review",
+          type: "multi-review",
+          multiReviewTabData: { environmentId, workflowId: "workflow-1" },
+        },
+        environmentId,
+      );
+      useMultiReviewStore.setState({
+        workflows: new Map([["workflow-1", { phase } as never]]),
+      });
+      const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+
+      const { container } = render(
+        <DndContext>
+          <DraggableTabBar
+            pane={pane}
+            environmentId={environmentId}
+            onTabSelect={() => undefined}
+          />
+        </DndContext>,
+      );
+      const close = container.querySelector("button");
+      if (!close) throw new Error("close button missing");
+      fireEvent.click(close);
+
+      await waitFor(() => {
+        expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+      });
+      expect(invoke).not.toHaveBeenCalledWith("delete_multi_review_workflow", expect.anything());
+    },
+  );
+
+  test("closing a reviewer tab never tears down its parent workflow", async () => {
+    const environmentId = "environment";
+    usePaneLayoutStore.getState().initialize("container", environmentId);
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      {
+        id: "multi-reviewer",
+        type: "multi-review",
+        multiReviewTabData: {
+          environmentId,
+          workflowId: "workflow-1",
+          reviewerId: "reviewer-1",
+        },
+      },
+      environmentId,
+    );
+    useMultiReviewStore.setState({
+      workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
+    });
+    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+
+    const { container } = render(
+      <DndContext>
+        <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
+      </DndContext>,
+    );
+    const close = container.querySelector("button");
+    if (!close) throw new Error("close button missing");
+    fireEvent.click(close);
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
+    });
+    expect(invoke).not.toHaveBeenCalledWith("delete_multi_review_workflow", expect.anything());
+  });
+
   test("clears a dirty file buffer after confirming discard", async () => {
     const environmentId = "environment";
     usePaneLayoutStore.getState().initialize("container", environmentId);
@@ -297,6 +411,95 @@ describe("DraggableTabBar", () => {
     await waitFor(() => {
       expect(usePaneLayoutStore.getState().getPane("default", environmentId)?.tabs).toEqual([]);
       expect(useFileDirtyStore.getState().dirtyFiles.has("dirty-file")).toBe(false);
+    });
+  });
+
+  test("a failed review teardown does not block other confirmed tabs from closing", async () => {
+    const environmentId = "environment";
+    (
+      invoke as unknown as {
+        mockImplementation: (implementation: (command: string) => Promise<unknown>) => void;
+      }
+    ).mockImplementation((command) =>
+      command === "delete_multi_review_workflow"
+        ? Promise.reject(new Error("bridge unavailable"))
+        : Promise.resolve(),
+    );
+    usePaneLayoutStore.getState().initialize("container", environmentId);
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      {
+        id: "dirty-file",
+        type: "file",
+        fileData: { filePath: "src/dirty.ts", containerId: "container" },
+      },
+      environmentId,
+    );
+    usePaneLayoutStore.getState().addTab(
+      "default",
+      {
+        id: "multi-review",
+        type: "multi-review",
+        multiReviewTabData: { environmentId, workflowId: "workflow-1" },
+      },
+      environmentId,
+    );
+    usePaneLayoutStore
+      .getState()
+      .addTab("default", { id: "terminal", type: "plain" }, environmentId);
+    useFileDirtyStore.getState().hydrateDraft("dirty-file", "changed", "disk");
+    useMultiReviewStore.setState({
+      workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
+    });
+    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+
+    render(
+      <DndContext>
+        <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
+      </DndContext>,
+    );
+    fireEvent.contextMenu(screen.getByText("Terminal 3"));
+    fireEvent.click(await screen.findByText(/close all/i));
+    fireEvent.click(screen.getByRole("button", { name: "Close Without Saving" }));
+
+    await waitFor(() => {
+      expect(
+        usePaneLayoutStore
+          .getState()
+          .getPane("default", environmentId)
+          ?.tabs.map((tab) => tab.id),
+      ).toEqual(["multi-review"]);
+      expect(useFileDirtyStore.getState().dirtyFiles.has("dirty-file")).toBe(false);
+      expect(screen.queryByText("Unsaved Changes") === null).toBe(true);
+    });
+  });
+
+  test.each([
+    ["Close others", ["selected"]],
+    ["Close to the right", ["left", "selected"]],
+  ])("%s closes exactly its requested tab set", async (action, expectedIds) => {
+    const environmentId = "environment";
+    usePaneLayoutStore.getState().initialize("container", environmentId);
+    for (const id of ["left", "selected", "right"]) {
+      usePaneLayoutStore.getState().addTab("default", { id, type: "plain" }, environmentId);
+    }
+    const pane = usePaneLayoutStore.getState().getPane("default", environmentId)!;
+
+    render(
+      <DndContext>
+        <DraggableTabBar pane={pane} environmentId={environmentId} onTabSelect={() => undefined} />
+      </DndContext>,
+    );
+    fireEvent.contextMenu(screen.getByText("Terminal 2"));
+    fireEvent.click(await screen.findByText(action));
+
+    await waitFor(() => {
+      expect(
+        usePaneLayoutStore
+          .getState()
+          .getPane("default", environmentId)
+          ?.tabs.map((tab) => tab.id),
+      ).toEqual(expectedIds);
     });
   });
 

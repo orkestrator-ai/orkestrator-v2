@@ -239,6 +239,8 @@ export interface AgentSessionProvider {
   messages(sessionId: string, options?: { limit?: number }): Promise<unknown[]>;
   structured<T>(sessionId: string, requestId: string): Promise<StructuredOutputResult<T> | null>;
   abort(sessionId: string): Promise<void>;
+  /** Close the provider-side session and release any process attached to it. */
+  closeSession?(sessionId: string): Promise<void>;
   dispose?(): Promise<void> | void;
 }
 

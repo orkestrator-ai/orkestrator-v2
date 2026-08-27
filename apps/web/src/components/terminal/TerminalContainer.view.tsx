@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useCallback, useState, type MouseEvent } from "react";
 import type { BrowserPreviewOpenLinkEvent } from "@orkestrator/protocol/browser-preview";
+import { isMultiReviewTerminalPhase } from "@orkestrator/protocol/multi-review";
 import {
   DndContext,
   KeyboardSensor,
@@ -1980,9 +1981,25 @@ export function TerminalContainer({
   );
 
   // Handler for closing the active tab
-  const handleCloseActiveTab = useCallback(() => {
+  const handleCloseActiveTab = useCallback(async () => {
     const activePane = getActivePane(environmentId);
     if (activePane && activePane.activeTabId) {
+      const activeTab = activePane.tabs.find((tab) => tab.id === activePane.activeTabId);
+      const reviewData = activeTab?.multiReviewTabData;
+      if (activeTab?.type === "multi-review" && reviewData && !reviewData.reviewerId) {
+        const phase = useMultiReviewStore.getState().workflows.get(reviewData.workflowId)?.phase;
+        if (phase && isMultiReviewTerminalPhase(phase)) {
+          try {
+            await backend.deleteMultiReviewWorkflow(reviewData.workflowId);
+            useMultiReviewStore.getState().removeWorkflow(reviewData.workflowId);
+          } catch (error) {
+            toast.error("Could not close Multi Review", {
+              description: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+        }
+      }
       removeTab(activePane.id, activePane.activeTabId, environmentId);
     }
   }, [environmentId, getActivePane, removeTab]);
@@ -2002,7 +2019,7 @@ export function TerminalContainer({
       rendererClosedTabPendingEchoRef.current = false;
       menuOwnsCloseTabRef.current = true;
       if (echoesRendererClose) return;
-      handleCloseActiveTab();
+      void handleCloseActiveTab();
     });
     return () => {
       void unlisten.then((dispose) => dispose());
@@ -2031,7 +2048,7 @@ export function TerminalContainer({
       event.preventDefault();
       if (menuOwnsCloseTabRef.current) return;
       rendererClosedTabPendingEchoRef.current = true;
-      handleCloseActiveTab();
+      void handleCloseActiveTab();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);

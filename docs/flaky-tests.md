@@ -10,6 +10,28 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `MultiReviewService dispatches a durable address intent without a renderer` (`apps/backend/src/core/multi-review-service.test.ts:614`)
+
+- **Status:** open
+- **Date observed:** 2026-08-27
+- **Original command:** seven focused `bun test` file invocations launched
+  concurrently, including `bun test ./src/core/multi-review-service.test.ts`
+  from `apps/backend`.
+- **Worker configuration:** seven independent Bun processes ran backend and web
+  test files in parallel on the same host.
+- **Failure:** after the durable address dispatch cleared
+  `addressPromptPending`, the environment's `multi-review` activity source was
+  still `working` instead of `idle` (duration: 154.63 ms).
+- **Suite counts:** owning file — 89 total, 88 passed, 1 failed.
+- **Isolated rerun:** `bun test ./src/core/multi-review-service.test.ts` from
+  `apps/backend` -> 89 passed, 0 failed; the target passed in 72.48 ms.
+- **Hypothesis:** the assertion observes the activity projection immediately
+  after a separate durable field becomes settled. The same activity transition
+  passed in isolation, so the evidence currently supports a scheduling-sensitive
+  observation under cross-process contention but does not identify which async
+  boundary is late. A recurrence should capture the save and activity write
+  ordering before changing the expectation.
+
 ## `MultiReviewService resumes a persisted address attempt after restart` (`apps/backend/src/core/multi-review-service.test.ts:632`)
 
 - **Status:** resolved — see the 2026-08-27 resolution sweep below
@@ -289,6 +311,18 @@ history rather than two partial ones.
   not touch ActionBar or its shortcut handler. Evidence:
   `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
   `/var/folders/.../orkestrator-test-run.IB45Lu`.
+- **Recurrence (Multi Review teardown review fixes, 2026-08-27):** `bun run
+  test` failed the same keyboard-shortcut case at `ActionBar.test.tsx:5452`
+  after 23.84 ms. The expected `createTabMock("plain", { initialCommands: ["bun
+  test"] })` call was absent while the mock contained the preceding plain,
+  native-agent, and Codex review-tab calls. The web workspace group reported
+  5,543 passed, 1 skipped, and 1 failed across 242 files in 68.29 s; the backend
+  workspace and every other full-suite group passed. The isolated rerun `bun
+  test src/components/layout/ActionBar.test.tsx --only-failures` from `apps/web`
+  passed all 198 tests with 770 assertions in 14.85 s. The reviewed change does
+  not touch ActionBar or its shortcut handler. Evidence:
+  `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
+  `/var/folders/.../orkestrator-test-run.CkFtcL`.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
 
 ## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)

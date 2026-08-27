@@ -222,6 +222,7 @@ export function eventHarness(signal: AbortSignal): EventHarness {
 
 export type OpenCodeFake = {
   abortCalls: Array<Record<string, unknown> | undefined>;
+  deleteCalls: Array<Record<string, unknown> | undefined>;
   createCalls: Array<Record<string, unknown> | undefined>;
   messageCalls: Array<Record<string, unknown> | undefined>;
   promptCalls: Array<Record<string, unknown>>;
@@ -270,6 +271,7 @@ export type OpenCodeFake = {
     handler: ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>) | null,
   ): void;
   setAbortResponse(response: Record<string, unknown>): void;
+  setDeleteResponse(response: Record<string, unknown>): void;
   setCreateResponse(response: Record<string, unknown>): void;
   setPromptResponse(response: Record<string, unknown>): void;
   setStatusError(error: unknown): void;
@@ -282,6 +284,7 @@ export type OpenCodeFake = {
 
 export function openCodeFake(): OpenCodeFake {
   const abortCalls: Array<Record<string, unknown> | undefined> = [];
+  const deleteCalls: Array<Record<string, unknown> | undefined> = [];
   const createCalls: Array<Record<string, unknown> | undefined> = [];
   const messageCalls: Array<Record<string, unknown> | undefined> = [];
   const permissionReplies: Array<Record<string, unknown>> = [];
@@ -317,6 +320,7 @@ export function openCodeFake(): OpenCodeFake {
     | ((parameters?: Record<string, unknown>) => Promise<Record<string, unknown>>)
     | null = null;
   let abortResponse: Record<string, unknown> = { data: true };
+  let deleteResponse: Record<string, unknown> = { data: true };
   let createResponse: Record<string, unknown> = { data: { id: "owned-session" } };
   let promptResponse: Record<string, unknown> = { data: true };
   let statusError: unknown = null;
@@ -438,6 +442,10 @@ export function openCodeFake(): OpenCodeFake {
         abortCalls.push(parameters);
         return abortResponse;
       },
+      async delete(parameters?: Record<string, unknown>) {
+        deleteCalls.push(parameters);
+        return deleteResponse;
+      },
       async command(parameters: Record<string, unknown>) {
         commandDispatchCalls.push(parameters);
         return promptResponse;
@@ -453,6 +461,7 @@ export function openCodeFake(): OpenCodeFake {
 
   return {
     abortCalls,
+    deleteCalls,
     client,
     commandDispatchCalls,
     commandListCalls,
@@ -539,6 +548,9 @@ export function openCodeFake(): OpenCodeFake {
     },
     setAbortResponse(response) {
       abortResponse = response;
+    },
+    setDeleteResponse(response) {
+      deleteResponse = response;
     },
     setCreateResponse(response) {
       createResponse = response;

@@ -63,7 +63,12 @@ export function registerProjectCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  const { commands, conditionalManifestSnapshot, runProjectCreationCommand } = dependencies;
+  const {
+    commands,
+    conditionalManifestSnapshot,
+    runProjectCreationCommand,
+    refreshHostModelCatalog,
+  } = dependencies;
   register(
     "greet",
     ({ name }) =>
@@ -147,6 +152,49 @@ export function registerProjectCommands(
     const models = await discoverHostPiModelCatalog(context);
     if (models.length > 0) await context.storage.cacheAgentModelCatalog("pi", models);
     return models;
+  });
+  register("refresh_host_agent_model_catalog", async (args, context) => {
+    assertOnlyKeys(args, ["agent", "projectId"], "arguments");
+    const agent = asNonBlankString(args.agent, "agent");
+    if (!isAgentPlatform(agent)) throw new Error(`Unknown agent platform: ${agent}`);
+    const projectId =
+      agent === "opencode" ? asNonBlankString(args.projectId, "projectId") : undefined;
+    if (projectId && !(await context.storage.getProject(projectId))) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+    const catalog = await refreshHostModelCatalog(context, agent);
+
+    if (catalog.agent === "claude") {
+      await context.storage.cacheAgentModelCatalog("claude", catalog.models);
+    } else if (catalog.agent === "codex") {
+      await context.storage.cacheAgentModelCatalog("codex", asCachedCodexModels(catalog.models));
+    } else if (catalog.agent === "cursor" || catalog.agent === "grok" || catalog.agent === "pi") {
+      await context.storage.cacheAgentModelCatalog(catalog.agent, catalog.models);
+    } else {
+      if (!projectId) throw new Error("OpenCode refresh requires a project target");
+      const discoveredModels = catalog.models.map((model) => ({
+        id: model.id,
+        name: model.label,
+        provider: model.id.split("/")[0] || "opencode",
+        variants: model.reasoning?.map((option) => option.id).filter((id) => id !== "default"),
+        ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
+        ...(typeof model.supportsImageInput === "boolean"
+          ? { supportsImageInput: model.supportsImageInput }
+          : {}),
+      }));
+      // Host discovery deliberately runs outside the worktree trust boundary,
+      // so it cannot see repository-defined providers. Augment the existing
+      // project snapshot instead of narrowing it to host-only configuration.
+      const existingModels =
+        (await context.storage.getOpenCodeModelCatalog(projectId))?.models ?? [];
+      const mergedModels = new Map(existingModels.map((model) => [model.id, model]));
+      for (const model of discoveredModels) {
+        mergedModels.set(model.id, model);
+      }
+      await context.storage.cacheOpenCodeModelCatalog(projectId, Array.from(mergedModels.values()));
+    }
+
+    return { agent: catalog.agent, modelCount: catalog.models.length };
   });
   register("get_agent_model_catalog_cache", async (args, context) => {
     assertOnlyKeys(args, [], "arguments");

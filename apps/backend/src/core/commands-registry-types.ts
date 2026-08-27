@@ -11,6 +11,7 @@ import {
 } from "./commands-dependencies.js";
 import type { CommandContext, CommandHandler } from "./commands-context.js";
 import type { LocalServerKind } from "./commands-helpers.js";
+import type { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
 
 export type CommandRegistrar = (name: string, handler: CommandHandler) => void;
 
@@ -19,6 +20,7 @@ export type CommandRegistryOptions = {
   projectCreation?: {
     runCommand?: typeof runCommand;
   };
+  modelCatalogRefresh?: typeof refreshHostModelCatalog;
   tabTeardown?: {
     peekBridge?: (
       environment: Environment,
@@ -45,6 +47,7 @@ export type RegistryDependencies = {
   validatedClaudeModelCatalogs: Set<string>;
   extensionDiscoveryCache: ReturnType<typeof createExtensionDiscoveryCache>;
   runProjectCreationCommand: typeof runCommand;
+  refreshHostModelCatalog: typeof refreshHostModelCatalog;
   conditionalManifestSnapshot: <T>(
     args: Record<string, unknown>,
     storage: StorageService,

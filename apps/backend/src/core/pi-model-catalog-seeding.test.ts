@@ -10,7 +10,11 @@ import {
   resetPiModelCatalogSeedingState,
   PI_CATALOG_EMPTY_PROBE_BACKOFF_MS,
 } from "./pi-model-catalog-seeding.js";
-import { acpModelFetchTimeoutMs, fetchAcpNormalizedModelsAtResult } from "./commands-servers.js";
+import {
+  acpModelFetchTimeoutMs,
+  fetchAcpNormalizedModelsAtResult,
+  HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
+} from "./commands-servers.js";
 import { __testing as commandTesting } from "./commands.js";
 import { setLocalServerShutdownRequested } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
@@ -58,10 +62,10 @@ function createFakeChild(): FakeChild {
 async function listenAsBridge(
   port: number,
   token: string,
-  models: unknown,
+  models: unknown | (() => Promise<unknown>),
   options: { unhealthy?: boolean } = {},
 ): Promise<Server> {
-  const server = createServer((request, response) => {
+  const server = createServer(async (request, response) => {
     if (request.headers.authorization !== `Bearer ${token}`) {
       response.writeHead(401).end();
       return;
@@ -72,7 +76,9 @@ async function listenAsBridge(
     }
     if (request.url === "/global/models") {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ models }));
+      response.end(
+        JSON.stringify({ models: typeof models === "function" ? await models() : models }),
+      );
       return;
     }
     response.writeHead(404).end();
@@ -262,6 +268,35 @@ describe("discoverHostPiModelCatalog", () => {
     expect(first).toEqual(second);
   });
 
+  test("queues a fresh forced probe behind an in-flight automatic probe", async () => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let generation = 0;
+    stubBridgeSpawn(async (spawned) => {
+      generation += 1;
+      return listenAsBridge(
+        Number(spawned.env.PORT),
+        spawned.env.PI_BRIDGE_TOKEN ?? "",
+        generation === 1
+          ? async () => {
+              await firstGate;
+              return [{ id: "provider/old" }];
+            }
+          : [{ id: "provider/fresh" }],
+      );
+    });
+
+    const automatic = discoverHostPiModelCatalog(context());
+    const forced = discoverHostPiModelCatalog(context(), true);
+    releaseFirst();
+
+    expect((await automatic)[0]?.id).toBe("provider/old");
+    expect((await forced)[0]?.id).toBe("provider/fresh");
+    expect(spawns).toHaveLength(2);
+  });
+
   test("does not re-probe within the backoff after an empty catalogue", async () => {
     stubBridgeSpawn(async (spawned) =>
       listenAsBridge(Number(spawned.env.PORT), spawned.env.PI_BRIDGE_TOKEN ?? "", []),
@@ -391,7 +426,24 @@ describe("Pi catalogue fetch outcomes", () => {
         models: [],
       });
 
-      expect(observedTimeouts).toEqual([12_345, acpModelFetchTimeoutMs("pi")]);
+      globalThis.fetch = mock(async () =>
+        Response.json({ models: [] }, { status: 200 }),
+      ) as unknown as typeof fetch;
+      await expect(
+        fetchAcpNormalizedModelsAtResult(
+          4099,
+          "token",
+          "cursor",
+          HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
+          HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
+        ),
+      ).resolves.toEqual({ status: "ok", models: [] });
+
+      expect(observedTimeouts).toEqual([
+        12_345,
+        acpModelFetchTimeoutMs("pi"),
+        HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
       AbortSignal.timeout = originalTimeout;

@@ -70,6 +70,13 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     projectId: string;
     models: CachedOpenCodeModel[];
   } | null>(null);
+  const [catalogRefreshRevision, setCatalogRefreshRevision] = useState(0);
+
+  useEffect(() => {
+    const refresh = () => setCatalogRefreshRevision((revision) => revision + 1);
+    window.addEventListener("orkestrator:model-catalog-refreshed", refresh);
+    return () => window.removeEventListener("orkestrator:model-catalog-refreshed", refresh);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,7 +98,7 @@ export function useProjectModelCatalog(projectId: string, enabled: boolean) {
     return () => {
       cancelled = true;
     };
-  }, [enabled, projectId]);
+  }, [catalogRefreshRevision, enabled, projectId]);
 
   // OpenCode catalogs are repository-scoped. A live catalog may supersede the
   // durable cache only when its environment belongs to this project.

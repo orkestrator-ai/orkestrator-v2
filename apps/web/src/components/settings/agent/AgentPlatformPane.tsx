@@ -13,8 +13,9 @@
  * speed as a `-fast` model id rather than a toggle.
  */
 import { useMemo } from "react";
-import { Bot, Terminal } from "lucide-react";
+import { Bot, Loader2, RefreshCw, Terminal } from "lucide-react";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
+import { Button } from "@/components/ui/button";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
 import { effortLabel, modelsForAgent, type AgentModelCatalog } from "@/lib/agent-launch";
 import { inheritedFrom, withPlatformField, TIER_LABELS } from "@/lib/agent-settings";
@@ -46,6 +47,8 @@ export interface AgentPlatformPaneProps {
   canInherit: boolean;
   catalog: AgentModelCatalog;
   disabled?: boolean;
+  onRefreshModels?: () => void;
+  refreshingModels?: boolean;
   /** Tier-specific extras, e.g. API keys and provider lists at the app tier. */
   children?: React.ReactNode;
 }
@@ -87,6 +90,8 @@ export function AgentPlatformPane({
   canInherit,
   catalog,
   disabled,
+  onRefreshModels,
+  refreshingModels = false,
   children,
 }: AgentPlatformPaneProps) {
   const favorites = useAgentModelFavorites();
@@ -228,12 +233,32 @@ export function AgentPlatformPane({
       )}
 
       <div className="space-y-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">Default model</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            The model new {label} sessions start on. Changing it in a session&apos;s own picker does
-            not change this.
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-medium text-foreground">Default model</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              The model new {label} sessions start on. Changing it in a session&apos;s own picker
+              does not change this.
+            </p>
+          </div>
+          {onRefreshModels && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onRefreshModels}
+              disabled={disabled || refreshingModels}
+              aria-label={`Refresh ${label} models`}
+              className="shrink-0"
+            >
+              {refreshingModels ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              Refresh models
+            </Button>
+          )}
         </div>
         {pickerModels.length > 0 ? (
           <AgentModelPicker
@@ -270,7 +295,9 @@ export function AgentPlatformPane({
           />
         ) : (
           <p className="text-xs italic text-muted-foreground">
-            Start an environment to load available {label} models.
+            {onRefreshModels
+              ? `Refresh models to load available ${label} models without starting an environment.`
+              : `Start an environment to load available ${label} models.`}
           </p>
         )}
         {stored?.model && (

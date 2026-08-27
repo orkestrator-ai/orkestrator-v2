@@ -48,6 +48,7 @@ const {
   postGitHubCompletionComment,
   getAgentModelCatalogCache,
   ensureHostPiModelCatalog,
+  refreshHostAgentModelCatalog,
   getNativeAgentModelCatalog,
   getGatewayTokenSettings,
   getWebClientStatus,
@@ -96,6 +97,21 @@ describe("backend setup wrappers", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(undefined);
+  });
+
+  test("sends the required model-catalogue scope and omits it for global providers", async () => {
+    invokeMock.mockResolvedValue({ agent: "opencode", modelCount: 2 });
+
+    await expect(refreshHostAgentModelCatalog("opencode", "project-1")).resolves.toEqual({
+      agent: "opencode",
+      modelCount: 2,
+    });
+    await refreshHostAgentModelCatalog("codex");
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["refresh_host_agent_model_catalog", { agent: "opencode", projectId: "project-1" }],
+      ["refresh_host_agent_model_catalog", { agent: "codex" }],
+    ]);
   });
 
   test("forwards agent skill list and read payloads and propagates their results", async () => {

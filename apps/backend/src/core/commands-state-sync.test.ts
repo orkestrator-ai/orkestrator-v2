@@ -51,6 +51,9 @@ async function withCommands<T>(
     nativeAgents?: CommandContext["nativeAgents"];
     nativeAgentsFactory?: (storage: StorageService) => CommandContext["nativeAgents"];
     tabTeardown?: NonNullable<Parameters<typeof createCommandRegistry>[0]>["tabTeardown"];
+    modelCatalogRefresh?: NonNullable<
+      Parameters<typeof createCommandRegistry>[0]
+    >["modelCatalogRefresh"];
   } = {},
 ): Promise<T> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-state-sync-"));
@@ -75,6 +78,7 @@ async function withCommands<T>(
   const commands = createCommandRegistry({
     claudeStatePolls: options.claudeStatePolls,
     tabTeardown: options.tabTeardown,
+    modelCatalogRefresh: options.modelCatalogRefresh,
   });
   const context = {
     appRoot: "",
@@ -285,6 +289,161 @@ describe("create-environment agent preference command", () => {
 });
 
 describe("native agent model catalogue command", () => {
+  test("rejects an unknown host catalogue provider before launching a probe", async () => {
+    await withCommands(async (invoke) => {
+      await expect(
+        invoke("refresh_host_agent_model_catalog", { agent: "unknown" }),
+      ).rejects.toThrow("Unknown agent platform: unknown");
+    });
+  });
+
+  test("validates an OpenCode cache target before launching its host refresh", async () => {
+    const refresh = mock(async () => ({ agent: "opencode" as const, models: [] }));
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("refresh_host_agent_model_catalog", {
+            agent: "opencode",
+            projectId: "missing-project",
+          }),
+        ).rejects.toThrow("Project not found: missing-project");
+        expect(refresh).not.toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh },
+    );
+  });
+
+  test("requires an OpenCode cache target before launching its host refresh", async () => {
+    const refresh = mock(async () => ({ agent: "opencode" as const, models: [] }));
+    await withCommands(
+      async (invoke) => {
+        await expect(
+          invoke("refresh_host_agent_model_catalog", { agent: "opencode" }),
+        ).rejects.toThrow("Expected projectId to be a string");
+        expect(refresh).not.toHaveBeenCalled();
+      },
+      { modelCatalogRefresh: refresh },
+    );
+  });
+
+  test("persists an environment-free provider refresh in the host catalogue", async () => {
+    const models = [
+      {
+        platform: "grok" as const,
+        id: "grok-4",
+        label: "Grok 4",
+        providerLabel: "Grok",
+        supportsSpeed: false,
+        supportsMode: true,
+      },
+    ];
+    const refresh = mock(async () => ({ agent: "grok" as const, models }));
+    await withCommands(
+      async (invoke, storage) => {
+        expect(await invoke("refresh_host_agent_model_catalog", { agent: "grok" })).toEqual({
+          agent: "grok",
+          modelCount: 1,
+        });
+        expect((await storage.getAgentModelCatalogCache()).grok?.models).toEqual(models);
+        expect(refresh).toHaveBeenCalledTimes(1);
+      },
+      { modelCatalogRefresh: refresh },
+    );
+  });
+
+  test("persists every global host catalogue branch", async () => {
+    const catalogs = {
+      claude: { agent: "claude", models: [{ id: "claude-opus", name: "Opus" }] },
+      codex: { agent: "codex", models: [{ id: "gpt-codex", name: "Codex" }] },
+      cursor: {
+        agent: "cursor",
+        models: [{ platform: "cursor", id: "cursor-1", label: "Cursor 1" }],
+      },
+      pi: {
+        agent: "pi",
+        models: [{ platform: "pi", id: "provider/pi-1", label: "Pi 1" }],
+      },
+    } as const;
+    const refresh = mock(async (_context: CommandContext, agent: keyof typeof catalogs) =>
+      structuredClone(catalogs[agent]),
+    );
+    await withCommands(
+      async (invoke, storage) => {
+        for (const agent of ["claude", "codex", "cursor", "pi"] as const) {
+          await invoke("refresh_host_agent_model_catalog", { agent });
+        }
+        const cache = await storage.getAgentModelCatalogCache();
+        expect(cache.claude?.models).toEqual(Array.from(catalogs.claude.models));
+        expect(cache.codex?.models).toEqual(Array.from(catalogs.codex.models));
+        expect(cache.cursor?.models).toEqual(Array.from(catalogs.cursor.models));
+        expect(cache.pi?.models).toEqual(Array.from(catalogs.pi.models));
+      },
+      { modelCatalogRefresh: refresh as never },
+    );
+  });
+
+  test("merges host OpenCode models into the repository-scoped catalogue", async () => {
+    const refresh = mock(async () => ({
+      agent: "opencode" as const,
+      models: [
+        {
+          platform: "opencode" as const,
+          id: "openai/gpt-5",
+          label: "GPT-5",
+          providerLabel: "OpenAI",
+          reasoning: [
+            { id: "default", label: "Default" },
+            { id: "high", label: "High" },
+          ],
+          contextWindow: 400_000,
+          supportsImageInput: true,
+        },
+      ],
+    }));
+    await withCommands(
+      async (invoke, storage) => {
+        await storage.addProject({
+          id: "proj-1",
+          name: "Project",
+          gitUrl: "https://example.com/repo.git",
+          localPath: null,
+          order: 0,
+          addedAt: new Date(0).toISOString(),
+        });
+        await storage.cacheOpenCodeModelCatalog("proj-1", [
+          {
+            id: "repository/custom-model",
+            name: "Repository Model",
+            provider: "repository",
+          },
+        ]);
+
+        expect(
+          await invoke("refresh_host_agent_model_catalog", {
+            agent: "opencode",
+            projectId: "proj-1",
+          }),
+        ).toEqual({ agent: "opencode", modelCount: 1 });
+        expect((await storage.getOpenCodeModelCatalog("proj-1"))?.models).toEqual([
+          {
+            id: "openai/gpt-5",
+            name: "GPT-5",
+            provider: "openai",
+            variants: ["high"],
+            contextWindow: 400_000,
+            supportsImageInput: true,
+          },
+          {
+            id: "repository/custom-model",
+            name: "Repository Model",
+            provider: "repository",
+          },
+        ]);
+      },
+      { modelCatalogRefresh: refresh },
+    );
+  });
+
   test("passes only the residual first-use budget to catalogue fetching", () => {
     const startedAt = 10_000;
     const deadline = startedAt + FIRST_USE_CATALOG_BUDGET_MS;

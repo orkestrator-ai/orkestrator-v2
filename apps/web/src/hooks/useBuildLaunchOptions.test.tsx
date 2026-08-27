@@ -111,6 +111,24 @@ describe("useBuildLaunchOptions", () => {
     expect(opencode[0]?.description).toBe("Provider A");
   });
 
+  test("reloads the project catalogue after a host refresh", async () => {
+    let modelId = "provider/model-a";
+    getCachedOpenCodeModelCatalogMock.mockImplementation(async () => ({
+      projectId: "project-1",
+      models: [{ id: modelId, name: modelId, provider: "provider" }],
+    }));
+    const { result } = renderHook(() => useBuildLaunchOptions("project-1", true));
+    await flushPromises();
+    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["provider/model-a"]);
+
+    modelId = "provider/model-b";
+    act(() => window.dispatchEvent(new Event("orkestrator:model-catalog-refreshed")));
+    await flushPromises();
+
+    expect(getCachedOpenCodeModelCatalogMock).toHaveBeenCalledTimes(2);
+    expect(result.current.catalog.opencode?.map((model) => model.id)).toEqual(["provider/model-b"]);
+  });
+
   test("includes favourited OpenCode models before a cached catalogue exists", async () => {
     useConfigStore.setState({
       config: {

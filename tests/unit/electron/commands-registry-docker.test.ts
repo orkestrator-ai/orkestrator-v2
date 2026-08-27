@@ -494,27 +494,29 @@ exit 0
     );
   });
 
-  test("refreshes and clears the managed credential after direct container starts", async () => {
-    const environment = createEnvironment({
-      id: "env-direct-start",
-      environmentType: "containerized",
-      containerId: "container-1",
-      status: "stopped",
-    });
-    const config = {
-      version: "1.0.0",
-      global: {
-        useHostGitHubCredentials: false,
-        githubToken: "rotated-token",
-      },
-      repositories: {},
-    };
-    const { context } = createContext(environment);
-    context.storage.loadConfig = mock(async () => config);
-    const commands = createCommandRegistry();
+  test(
+    "refreshes and clears the managed credential after direct container starts",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-direct-start",
+        environmentType: "containerized",
+        containerId: "container-1",
+        status: "stopped",
+      });
+      const config = {
+        version: "1.0.0",
+        global: {
+          useHostGitHubCredentials: false,
+          githubToken: "rotated-token",
+        },
+        repositories: {},
+      };
+      const { context } = createContext(environment);
+      context.storage.loadConfig = mock(async () => config);
+      const commands = createCommandRegistry();
 
-    await withFakeDocker(
-      `#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
@@ -525,54 +527,60 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `,
-      async (logs) => {
-        await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
-        config.global.githubToken = "";
-        await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+        async (logs) => {
+          await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+          config.global.githubToken = "";
+          await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
 
-        const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
-        expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
-        const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls.match(/start container-1/g)).toHaveLength(2);
-        expect(calls.match(/exec --user root container-1 sh -c/g)).toHaveLength(2);
-        expect(calls).toContain(
-          "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
-        );
-      },
-    );
-  });
+          const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
+          expect(input).toBe("rotated-token\n--sync--\n\n--sync--\n");
+          const calls = await fs.readFile(logs.all, "utf8");
+          expect(calls.match(/start container-1/g)).toHaveLength(2);
+          expect(calls.match(/exec --user root container-1 sh -c/g)).toHaveLength(2);
+          expect(calls).toContain(
+            "chgrp -R node /project-files && chmod -R g+rX,o-rwx /project-files",
+          );
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-  test("delivers the host Claude credential into the container on start", async () => {
-    const { context } = claudeCredentialSyncContext();
-    const commands = createCommandRegistry();
-    const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-from-host"}}';
+  test(
+    "delivers the host Claude credential into the container on start",
+    async () => {
+      const { context } = claudeCredentialSyncContext();
+      const commands = createCommandRegistry();
+      const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-from-host"}}';
 
-    await withFakeDocker(
-      CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT,
-      async (logs) => {
-        await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
+      await withFakeDocker(
+        CLAUDE_CREDENTIAL_SYNC_DOCKER_SCRIPT,
+        async (logs) => {
+          await commands.get("docker_start_container")?.({ containerId: "container-1" }, context);
 
-        // Codex rides in on the read-only /codex-home mount; Claude's credential
-        // lives in the macOS Keychain and has to be piped in over stdin, which is
-        // the gap that left container agents reporting "Not logged in".
-        const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
-        expect(input).toContain(credential);
-        const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls).toContain("/home/node/.claude/.credentials.json");
-        // The sync runs as the image's default user (node), not `--user root`:
-        // the `exec -i <id> bash -lc` argv form proves no --user flag precedes
-        // the container id, so the credential lands owned by the agent's user.
-        // The single `--user root` exec is the project-files access repair.
-        expect(calls).toContain("exec -i container-1 bash -lc");
-        expect(calls.match(/exec --user root container-1/g)).toHaveLength(1);
-        // The token must never be passed as an argv value a `ps` or
-        // `docker inspect` could read.
-        expect(calls).not.toContain("sk-ant-oat01-from-host");
-      },
-      `#!/bin/sh\nprintf '%s' '${credential}'\n`,
-      credential,
-    );
-  });
+          // Codex rides in on the read-only /codex-home mount; Claude's credential
+          // lives in the macOS Keychain and has to be piped in over stdin, which is
+          // the gap that left container agents reporting "Not logged in".
+          const input = await fs.readFile(`${logs.exec}.stdin`, "utf8");
+          expect(input).toContain(credential);
+          const calls = await fs.readFile(logs.all, "utf8");
+          expect(calls).toContain("/home/node/.claude/.credentials.json");
+          // The sync runs as the image's default user (node), not `--user root`:
+          // the `exec -i <id> bash -lc` argv form proves no --user flag precedes
+          // the container id, so the credential lands owned by the agent's user.
+          // The single `--user root` exec is the project-files access repair.
+          expect(calls).toContain("exec -i container-1 bash -lc");
+          expect(calls.match(/exec --user root container-1/g)).toHaveLength(1);
+          // The token must never be passed as an argv value a `ps` or
+          // `docker inspect` could read.
+          expect(calls).not.toContain("sk-ant-oat01-from-host");
+        },
+        `#!/bin/sh\nprintf '%s' '${credential}'\n`,
+        credential,
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("does not read or deliver the host credential when the user opted out", async () => {
     const { context } = claudeCredentialSyncContext({ useHostClaudeCredentials: false });
@@ -606,16 +614,18 @@ exit 1
     );
   });
 
-  test("a failed Claude credential sync does not fail the container start", async () => {
-    const { context } = claudeCredentialSyncContext();
-    const commands = createCommandRegistry();
-    const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-undeliverable"}}';
+  test(
+    "a failed Claude credential sync does not fail the container start",
+    async () => {
+      const { context } = claudeCredentialSyncContext();
+      const commands = createCommandRegistry();
+      const credential = '{"claudeAiOauth":{"accessToken":"sk-ant-oat01-undeliverable"}}';
 
-    await withFakeDocker(
-      // `start` succeeds; the credential sync exec is the one that fails. The
-      // GitHub sync exec must still be allowed through so this test isolates the
-      // best-effort contract rather than failing earlier for another reason.
-      `#!/bin/sh
+      await withFakeDocker(
+        // `start` succeeds; the credential sync exec is the one that fails. The
+        // GitHub sync exec must still be allowed through so this test isolates the
+        // best-effort contract rather than failing earlier for another reason.
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 if [ "$1" = "start" ]; then exit 0; fi
 if [ "$1" = "exec" ]; then
@@ -631,21 +641,23 @@ if [ "$1" = "exec" ]; then
 fi
 exit 1
 `,
-      async (logs) => {
-        // A credential that cannot be delivered leaves the agent logged out and
-        // saying so. Failing the whole start over it is the worse outcome.
-        await expect(
-          commands.get("docker_start_container")?.({ containerId: "container-1" }, context),
-        ).resolves.toBeUndefined();
+        async (logs) => {
+          // A credential that cannot be delivered leaves the agent logged out and
+          // saying so. Failing the whole start over it is the worse outcome.
+          await expect(
+            commands.get("docker_start_container")?.({ containerId: "container-1" }, context),
+          ).resolves.toBeUndefined();
 
-        const calls = await fs.readFile(logs.all, "utf8");
-        expect(calls).toContain("start container-1");
-        expect(calls).not.toContain("sk-ant-oat01-undeliverable");
-      },
-      `#!/bin/sh\nprintf '%s' '${credential}'\n`,
-      credential,
-    );
-  });
+          const calls = await fs.readFile(logs.all, "utf8");
+          expect(calls).toContain("start container-1");
+          expect(calls).not.toContain("sk-ant-oat01-undeliverable");
+        },
+        `#!/bin/sh\nprintf '%s' '${credential}'\n`,
+        credential,
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("reports a credential sync failure after a direct container start", async () => {
     const { context } = createContext(createEnvironment(), {

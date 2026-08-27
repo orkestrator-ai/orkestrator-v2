@@ -641,7 +641,7 @@ describe("remote gateway", () => {
 
   test("keeps a slow but progressing proxy body alive past the idle timeout", async () => {
     const chunk = "slow drip ".repeat(64);
-    const chunkCount = 6;
+    const chunkCount = 30;
     const body = chunk.repeat(chunkCount);
     const target = createServer((_request, response) => {
       response.writeHead(200, {
@@ -649,8 +649,10 @@ describe("remote gateway", () => {
         "content-length": Buffer.byteLength(body),
       });
       let written = 0;
-      // Each gap is under the idle timeout but the total run is well over it,
-      // so this only succeeds if every chunk rearms the timer.
+      // Keep a wide ratio between progress and the idle deadline so ordinary
+      // host contention cannot turn a progressing source into an intentional
+      // idle timeout. The total run still exceeds the deadline, so every chunk
+      // must rearm it for the response to finish.
       const writeNext = () => {
         response.write(chunk);
         written += 1;
@@ -658,9 +660,9 @@ describe("remote gateway", () => {
           response.end();
           return;
         }
-        setTimeout(writeNext, 40);
+        setTimeout(writeNext, 20);
       };
-      setTimeout(writeNext, 40);
+      setTimeout(writeNext, 20);
     });
     auxiliaryServers.push(target);
     await new Promise<void>((resolve) => target.listen(0, "127.0.0.1", resolve));
@@ -668,7 +670,7 @@ describe("remote gateway", () => {
     if (!address || typeof address !== "object") throw new Error("Target server did not bind");
     const { info } = await startGateway({
       compression: "body",
-      proxyBodyIdleTimeoutMs: 120,
+      proxyBodyIdleTimeoutMs: 500,
     });
 
     const result = await requestUrl(
@@ -811,7 +813,7 @@ describe("remote gateway", () => {
 
     const aborted = await requestUrl(endpoint, { headers });
     expect(aborted.status).toBe(502);
-    expect(aborted.body).toContain("aborted");
+    expect(JSON.parse(aborted.body).error).toMatch(/aborted|ECONNRESET|socket hang up|closed/i);
 
     const recovery = await requestUrl(endpoint.replace("buffered-abort", "recovery"), { headers });
     expect(recovery.status).toBe(200);

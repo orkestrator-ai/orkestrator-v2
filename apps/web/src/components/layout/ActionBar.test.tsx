@@ -3158,7 +3158,9 @@ describe("ActionBar workflow tabs", () => {
       clientY: 24,
     });
 
-    expect(screen.getByRole("dialog", { name: "Configure conflict resolution" })).toBeTruthy();
+    expect(
+      await screen.findByRole("dialog", { name: "Configure conflict resolution" }),
+    ).toBeTruthy();
 
     // The click mobile browsers synthesize after the gesture must be consumed,
     // or the long press would also launch an unconfigured default-agent resolve.

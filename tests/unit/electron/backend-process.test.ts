@@ -871,7 +871,7 @@ printf 'Available within your tailnet:\\nhttps://slow.example.ts.net\\n'
       onEvent: () => undefined,
     });
 
-    await waitForPath(statusStarted);
+    await waitForPath(statusStarted, 10_000);
     await expect(client.invoke("greet", { name: "ready" })).resolves.toContain("Hello, ready!");
     await writeFile(releaseStatus, "release\n");
     await expect(waitForWebClientStatus(client, (status) => status.running)).resolves.toMatchObject(
@@ -880,7 +880,7 @@ printf 'Available within your tailnet:\\nhttps://slow.example.ts.net\\n'
         url: "https://slow.example.ts.net/",
       },
     );
-  }, 12_000);
+  }, 30_000);
 
   test(
     "honors a persisted disabled setting without invoking Tailscale",

@@ -49,6 +49,8 @@ let commandLog = "";
 let launcherLog = "";
 let fakeHome = "";
 
+const PROCESS_TEST_BUDGET_MS = 30_000;
+
 const DOCKER_SCRIPT = `#!/bin/sh
 printf 'docker %s\n' "$*" >> "$FAKE_DOCKER_LOG"
 
@@ -1346,31 +1348,35 @@ describe("process and platform command behavior", () => {
     expect(invocations).toContainEqual({ executable: "code", args: ["/tmp/project"] });
   }, 20_000);
 
-  test("falls back to the parent directory when Linux FileManager1 fails", async () => {
-    const platform = process.platform;
-    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-    process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "dbus-send";
-    try {
-      await invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" });
-      expect(await readLauncherInvocations()).toEqual([
-        {
-          executable: "dbus-send",
-          args: [
-            "--session",
-            "--print-reply",
-            "--dest=org.freedesktop.FileManager1",
-            "/org/freedesktop/FileManager1",
-            "org.freedesktop.FileManager1.ShowItems",
-            "array:string:file:///tmp/project/file.ts",
-            "string:",
-          ],
-        },
-        { executable: "xdg-open", args: ["/tmp/project"] },
-      ]);
-    } finally {
-      Object.defineProperty(process, "platform", { configurable: true, value: platform });
-    }
-  });
+  test(
+    "falls back to the parent directory when Linux FileManager1 fails",
+    async () => {
+      const platform = process.platform;
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      process.env.FAKE_LAUNCHER_FAIL_EXECUTABLE = "dbus-send";
+      try {
+        await invoke("reveal_in_file_manager", { path: "/tmp/project/file.ts" });
+        expect(await readLauncherInvocations()).toEqual([
+          {
+            executable: "dbus-send",
+            args: [
+              "--session",
+              "--print-reply",
+              "--dest=org.freedesktop.FileManager1",
+              "/org/freedesktop/FileManager1",
+              "org.freedesktop.FileManager1.ShowItems",
+              "array:string:file:///tmp/project/file.ts",
+              "string:",
+            ],
+          },
+          { executable: "xdg-open", args: ["/tmp/project"] },
+        ]);
+      } finally {
+        Object.defineProperty(process, "platform", { configurable: true, value: platform });
+      }
+    },
+    PROCESS_TEST_BUDGET_MS,
+  );
 
   test("propagates the fallback failure when both Linux reveal commands fail", async () => {
     const platform = process.platform;

@@ -19,10 +19,10 @@ const {
   pngFilenameForDroppedImage,
   resolveAgentDefaults,
 } = await import("../../../apps/web/src/components/environments/CreateEnvironmentDialog");
-const defaultConfig = structuredClone(useConfigStore.getState().config);
-const defaultClaudeModels = useClaudeStore.getState().models;
-const defaultCodexModels = useCodexStore.getState().models;
-const defaultOpenCodeModels = useOpenCodeStore.getState().models;
+const defaultConfig = structuredClone(useConfigStore.getInitialState().config);
+const defaultClaudeModels = useClaudeStore.getInitialState().models;
+const defaultCodexModels = useCodexStore.getInitialState().models;
+const defaultOpenCodeModels = useOpenCodeStore.getInitialState().models;
 const invokeMock = invoke as ReturnType<typeof mock>;
 
 if (typeof globalThis.ImageData === "undefined") {

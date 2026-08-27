@@ -1924,87 +1924,95 @@ printf '%s\\n' '{"slug":"Review OAuth Flow"}' > "$out"
     });
   });
 
-  test("rolls back a local rename when push configuration fails", async () => {
-    const worktreePath = await createGitRepoOnBranch("old-branch");
-    await runGit(worktreePath, ["config", "branch.old-branch.remote", "origin"]);
-    await runGit(worktreePath, ["config", "branch.old-branch.merge", "refs/heads/old-branch"]);
-    const environment = createEnvironment({
-      environmentType: "local",
-      worktreePath,
-      branch: "old-branch",
-      prUrl: "https://github.com/acme/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-    });
-    const { context } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
-
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await withFailingGitSubcommand("config", async () => {
-        await expect(
-          commands.get("rename_environment_from_prompt")?.(
-            { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
-            context,
-          ),
-        ).resolves.toBeUndefined();
+  test(
+    "rolls back a local rename when push configuration fails",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("old-branch");
+      await runGit(worktreePath, ["config", "branch.old-branch.remote", "origin"]);
+      await runGit(worktreePath, ["config", "branch.old-branch.merge", "refs/heads/old-branch"]);
+      const environment = createEnvironment({
+        environmentType: "local",
+        worktreePath,
+        branch: "old-branch",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
       });
-    });
+      const { context } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
 
-    expect(await currentGitBranch(worktreePath)).toBe("old-branch");
-    expect(environment.branch).toBe("old-branch");
-    expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
-    expect(environment.prState).toBe("open");
-    expect(environment.hasMergeConflicts).toBe(true);
-    // The rename moved this config to the new name and the rollback has to bring it
-    // back, or the restored branch would be left comparing against nothing.
-    await expect(configuredGitUpstream(worktreePath, "old-branch")).resolves.toEqual({
-      remote: "origin",
-      merge: "refs/heads/old-branch",
-    });
-    await expect(configuredGitUpstream(worktreePath, "review-oauth-flow")).resolves.toEqual({
-      remote: "",
-      merge: "",
-    });
-  });
-
-  test("advances the stored branch when a local rollback fails and the new branch is the only one left", async () => {
-    const worktreePath = await createGitRepoOnBranch("old-branch");
-    const environment = createEnvironment({
-      environmentType: "local",
-      worktreePath,
-      branch: "old-branch",
-      prUrl: "https://github.com/acme/repo/pull/1",
-      prState: "open",
-      hasMergeConflicts: true,
-    });
-    const { context } = createContext(environment);
-    await isolateCodexBinaryLookup(context);
-    const commands = createCommandRegistry();
-
-    await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
-      await withGitArgumentStub(
-        `  *" config --worktree push.default "*) echo "forced config failure" >&2; exit 42 ;;
-  *" branch -m -- review-oauth-flow old-branch"*) echo "forced rollback failure" >&2; exit 42 ;;`,
-        async () => {
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        await withFailingGitSubcommand("config", async () => {
           await expect(
             commands.get("rename_environment_from_prompt")?.(
               { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
               context,
             ),
           ).resolves.toBeUndefined();
-        },
-      );
-    });
+        });
+      });
 
-    // The rollback never ran, so git really is on the new branch and storage has to
-    // follow it.
-    expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
-    expect(environment.branch).toBe("review-oauth-flow");
-    expect(environment.prUrl).toBeNull();
-    expect(environment.prState).toBeNull();
-    expect(environment.hasMergeConflicts).toBeNull();
-  });
+      expect(await currentGitBranch(worktreePath)).toBe("old-branch");
+      expect(environment.branch).toBe("old-branch");
+      expect(environment.prUrl).toBe("https://github.com/acme/repo/pull/1");
+      expect(environment.prState).toBe("open");
+      expect(environment.hasMergeConflicts).toBe(true);
+      // The rename moved this config to the new name and the rollback has to bring it
+      // back, or the restored branch would be left comparing against nothing.
+      await expect(configuredGitUpstream(worktreePath, "old-branch")).resolves.toEqual({
+        remote: "origin",
+        merge: "refs/heads/old-branch",
+      });
+      await expect(configuredGitUpstream(worktreePath, "review-oauth-flow")).resolves.toEqual({
+        remote: "",
+        merge: "",
+      });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test(
+    "advances the stored branch when a local rollback fails and the new branch is the only one left",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("old-branch");
+      const environment = createEnvironment({
+        environmentType: "local",
+        worktreePath,
+        branch: "old-branch",
+        prUrl: "https://github.com/acme/repo/pull/1",
+        prState: "open",
+        hasMergeConflicts: true,
+      });
+      const { context } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
+
+      await withFakeCodex(codexSlugScript("Review OAuth Flow"), async () => {
+        await withGitArgumentStub(
+          `  *" config --worktree push.default "*) echo "forced config failure" >&2; exit 42 ;;
+  *" branch -m -- review-oauth-flow old-branch"*) echo "forced rollback failure" >&2; exit 42 ;;`,
+          async () => {
+            await expect(
+              commands.get("rename_environment_from_prompt")?.(
+                { environmentId: environment.id, prompt: "Please review the OAuth callback flow" },
+                context,
+              ),
+            ).resolves.toBeUndefined();
+          },
+        );
+      });
+
+      // The rollback never ran, so git really is on the new branch and storage has to
+      // follow it.
+      expect(await currentGitBranch(worktreePath)).toBe("review-oauth-flow");
+      expect(environment.branch).toBe("review-oauth-flow");
+      expect(environment.prUrl).toBeNull();
+      expect(environment.prState).toBeNull();
+      expect(environment.hasMergeConflicts).toBeNull();
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("keeps the stored branch when a local rollback took effect but reported failure", async () => {
     const worktreePath = await createGitRepoOnBranch("old-branch");
@@ -4320,46 +4328,50 @@ esac
     ASYNC_TEST_BUDGET_MS,
   );
 
-  test("clears a stale failure only once the stop has actually committed", async () => {
-    const environment = createEnvironment({
-      id: "env-stop-clears-failure",
-      environmentType: "containerized",
-      containerId: "container-stop-failure",
-      status: "error",
-      lifecycleError: "The container runtime is unavailable. Start it and retry.",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  test(
+    "clears a stale failure only once the stop has actually committed",
+    async () => {
+      const environment = createEnvironment({
+        id: "env-stop-clears-failure",
+        environmentType: "containerized",
+        containerId: "container-stop-failure",
+        status: "error",
+        lifecycleError: "The container runtime is unavailable. Start it and retry.",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    await withFakeDocker(
-      `#!/bin/sh
+      await withFakeDocker(
+        `#!/bin/sh
 if [ "$1" = "stop" ]; then
   printf 'container runtime refused stop\\n' >&2
   exit 1
 fi
 exit 0
 `,
-      async () => {
+        async () => {
+          await expect(
+            commands.get("stop_environment")?.({ environmentId: environment.id }, context),
+          ).rejects.toThrow("container runtime refused stop");
+        },
+      );
+      // Clearing ahead of the stop would have erased the only explanation the
+      // user has, leaving an environment in `error` with nothing to show.
+      expect(environment.status).toBe("error");
+      expect(environment.lifecycleError).toBe(
+        "The container runtime is unavailable. Start it and retry.",
+      );
+
+      await withFakeDocker("#!/bin/sh\nexit 0\n", async () => {
         await expect(
           commands.get("stop_environment")?.({ environmentId: environment.id }, context),
-        ).rejects.toThrow("container runtime refused stop");
-      },
-    );
-    // Clearing ahead of the stop would have erased the only explanation the
-    // user has, leaving an environment in `error` with nothing to show.
-    expect(environment.status).toBe("error");
-    expect(environment.lifecycleError).toBe(
-      "The container runtime is unavailable. Start it and retry.",
-    );
-
-    await withFakeDocker("#!/bin/sh\nexit 0\n", async () => {
-      await expect(
-        commands.get("stop_environment")?.({ environmentId: environment.id }, context),
-      ).resolves.toBeUndefined();
-    });
-    expect(environment.status).toBe("stopped");
-    expect(environment.lifecycleError).toBeNull();
-  });
+        ).resolves.toBeUndefined();
+      });
+      expect(environment.status).toBe("stopped");
+      expect(environment.lifecycleError).toBeNull();
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("keeps a local stop failure's explanation while still recording the stop", async () => {
     const worktreePath = await createTempDir("ork-electron-stop-local-keeps-error-");

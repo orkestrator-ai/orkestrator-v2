@@ -553,7 +553,16 @@ test("MultiReviewService fails recoverably when the consolidation session is mis
       });
 
       await service.address(started.id);
-      await waitUntil(async () => (await snapshot(started.id))?.phase === "failed");
+      await waitUntil(async () => {
+        const [workflow, environment] = await Promise.all([
+          snapshot(started.id),
+          storage.getEnvironment("env-address-missing"),
+        ]);
+        return (
+          workflow?.phase === "failed" &&
+          environment?.agentActivitySources?.["multi-review"]?.state === "idle"
+        );
+      });
       const failed = (await snapshot(started.id))!;
       expect(failed).toMatchObject({
         phase: "failed",
@@ -739,7 +748,16 @@ test("MultiReviewService resumes a persisted address attempt after restart", asy
       });
       try {
         await restarted.init();
-        await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+        await waitUntil(async () => {
+          const [workflow, environment] = await Promise.all([
+            snapshot(started.id),
+            storage.getEnvironment("env-address-restart"),
+          ]);
+          return (
+            workflow?.addressPromptPending !== true &&
+            environment?.agentActivitySources?.["multi-review"]?.state === "idle"
+          );
+        });
         expect((await snapshot(started.id))?.addressPromptPending).toBeUndefined();
         expect(dispatches).toBe(2);
         expect(await storage.getEnvironment("env-address-restart")).toMatchObject({

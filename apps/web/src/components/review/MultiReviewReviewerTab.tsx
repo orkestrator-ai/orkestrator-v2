@@ -29,6 +29,7 @@ import { toPipelineTranscript } from "@/components/build-pipeline/pipeline-trans
  * backend caps the response and a status change refreshes immediately.
  */
 export const REFRESH_INTERVAL_MS = 4_000;
+export const MANUAL_REFRESH_TIMEOUT_MS = REFRESH_INTERVAL_MS * 2;
 
 const AGENT_LABELS = {
   claude: "Claude",
@@ -92,28 +93,78 @@ export function MultiReviewReviewerTab({
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [manualRefreshPending, setManualRefreshPending] = useState(false);
   const requestGeneration = useRef(0);
-  const inFlightGeneration = useRef<number | null>(null);
+  const inFlightRequest = useRef<{ generation: number; promise: Promise<void> } | null>(null);
+  const manualRefreshAttempt = useRef<symbol | null>(null);
   const containerId =
     useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId)?.containerId) ??
     undefined;
 
-  const refresh = useCallback(async () => {
+  const fenceRequests = useCallback(() => {
+    requestGeneration.current += 1;
+    inFlightRequest.current = null;
+    manualRefreshAttempt.current = null;
+    setManualRefreshPending(false);
+  }, []);
+
+  const refresh = useCallback((): Promise<void> => {
     const generation = requestGeneration.current;
-    if (inFlightGeneration.current === generation) return;
-    inFlightGeneration.current = generation;
-    try {
-      const next = await loadTranscript(data.workflowId, data.reviewerId);
-      if (requestGeneration.current !== generation) return;
-      setSnapshot(next);
-      setTranscriptError(null);
-    } catch (reason) {
-      if (requestGeneration.current !== generation) return;
-      setTranscriptError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      if (inFlightGeneration.current === generation) inFlightGeneration.current = null;
-    }
+    const current = inFlightRequest.current;
+    if (current?.generation === generation) return current.promise;
+
+    let request!: Promise<void>;
+    request = (async () => {
+      try {
+        const next = await loadTranscript(data.workflowId, data.reviewerId);
+        if (requestGeneration.current !== generation) return;
+        setSnapshot(next);
+        setTranscriptError(null);
+      } catch (reason) {
+        if (requestGeneration.current !== generation) return;
+        setTranscriptError(reason instanceof Error ? reason.message : String(reason));
+      } finally {
+        if (inFlightRequest.current?.promise === request) inFlightRequest.current = null;
+      }
+    })();
+    inFlightRequest.current = { generation, promise: request };
+    return request;
   }, [data.reviewerId, data.workflowId, loadTranscript]);
+
+  /**
+   * A manual refresh is a request for a snapshot newer than the click. If an
+   * automatic poll is already running, wait for it and then read once more;
+   * returning the existing promise made the toolbar control silently do
+   * nothing whenever a slow transcript poll happened to overlap the click.
+   */
+  const manualRefresh = useCallback(async () => {
+    if (manualRefreshAttempt.current !== null) return;
+    const attempt = Symbol("manual reviewer transcript refresh");
+    manualRefreshAttempt.current = attempt;
+    setManualRefreshPending(true);
+    const generation = requestGeneration.current;
+    let timeoutId: number | undefined;
+    const timeout = new Promise<"timeout">((resolve) => {
+      timeoutId = window.setTimeout(() => resolve("timeout"), MANUAL_REFRESH_TIMEOUT_MS);
+    });
+    const timedOut = async (request: Promise<void>): Promise<boolean> =>
+      (await Promise.race([request.then(() => "settled" as const), timeout])) === "timeout";
+    try {
+      const current = inFlightRequest.current;
+      if (current?.generation === generation && (await timedOut(current.promise))) {
+        if (requestGeneration.current === generation) fenceRequests();
+        return;
+      }
+      if (requestGeneration.current !== generation) return;
+      if ((await timedOut(refresh())) && requestGeneration.current === generation) fenceRequests();
+    } finally {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      if (manualRefreshAttempt.current === attempt) {
+        manualRefreshAttempt.current = null;
+        setManualRefreshPending(false);
+      }
+    }
+  }, [fenceRequests, refresh]);
 
   /**
    * The workflow, not this tab, owns the reviewer's lifecycle. Stopping only
@@ -129,8 +180,7 @@ export function MultiReviewReviewerTab({
       // and still be awaiting provider messages. Fence that response out, then
       // force a new authoritative read instead of letting the in-flight guard
       // turn this refresh into a no-op.
-      requestGeneration.current += 1;
-      inFlightGeneration.current = null;
+      fenceRequests();
       await refresh();
     } catch (reason) {
       // Transcript polling continues after a refused action, but a successful
@@ -139,15 +189,25 @@ export function MultiReviewReviewerTab({
     } finally {
       setStopping(false);
     }
-  }, [data.reviewerId, data.workflowId, refresh, stopReviewer]);
+  }, [data.reviewerId, data.workflowId, fenceRequests, refresh, stopReviewer]);
 
   useEffect(() => {
     setSnapshot(null);
     setTranscriptError(null);
     setActionError(null);
     setStopping(false);
-    requestGeneration.current += 1;
-  }, [data.reviewerId, data.workflowId]);
+    fenceRequests();
+  }, [data.reviewerId, data.workflowId, fenceRequests]);
+
+  // Becoming inactive, unmounting, or replacing the transcript reader makes
+  // every outstanding result stale. This lifecycle is intentionally separate
+  // from the status-driven polling effect below: an ordinary running/completed
+  // snapshot must not fence out a manual read queued behind the request that
+  // produced it.
+  useEffect(() => {
+    if (!isActive) return;
+    return fenceRequests;
+  }, [fenceRequests, isActive, refresh]);
 
   // Keyed on snapshot?.status: `snapshot` gets a new identity on every poll,
   // so depending on it would clear and re-arm the interval each refresh.
@@ -161,7 +221,6 @@ export function MultiReviewReviewerTab({
     const interval = window.setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => {
       window.clearInterval(interval);
-      requestGeneration.current += 1;
     };
   }, [isActive, refresh, snapshot?.status, transcriptError]);
   /* oxlint-enable react-hooks/exhaustive-deps */
@@ -239,9 +298,15 @@ export function MultiReviewReviewerTab({
             size="icon"
             className="size-8"
             aria-label="Refresh reviewer transcript"
-            onClick={() => void refresh()}
+            title="Refresh reviewer transcript"
+            disabled={manualRefreshPending}
+            onClick={() => void manualRefresh()}
           >
-            <RefreshCw className="size-3.5" />
+            {manualRefreshPending ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="size-3.5" />
+            )}
           </Button>
         </div>
       </header>

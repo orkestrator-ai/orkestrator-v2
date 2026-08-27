@@ -21,6 +21,7 @@ import {
   reviewerStatusNote,
 } from "./MultiReviewTab";
 import {
+  MANUAL_REFRESH_TIMEOUT_MS,
   MultiReviewReviewerTab,
   REFRESH_INTERVAL_MS,
   toMultiReviewReviewerMessages,
@@ -1042,6 +1043,307 @@ describe("MultiReviewReviewerTab", () => {
     }
   });
 
+  test("queues a manual refresh behind an in-flight transcript poll", async () => {
+    let resolvePoll!: (value: MultiReviewReviewerTranscript) => void;
+    const poll = new Promise<MultiReviewReviewerTranscript>((resolve) => {
+      resolvePoll = resolve;
+    });
+    let resolveManual!: (value: MultiReviewReviewerTranscript) => void;
+    const manual = new Promise<MultiReviewReviewerTranscript>((resolve) => {
+      resolveManual = resolve;
+    });
+    const running: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "running",
+      messages: [],
+    };
+    const refreshed: MultiReviewReviewerTranscript = {
+      ...running,
+      model: "gpt-5.6-refreshed",
+      messages: [
+        {
+          id: "new-progress",
+          role: "assistant",
+          content: "Progress loaded after the click",
+          parts: [{ type: "text", content: "Progress loaded after the click" }],
+        },
+      ],
+    };
+    let calls = 0;
+    const loadTranscript = mock(async () => {
+      calls += 1;
+      if (calls <= 2) return running;
+      if (calls === 3) return await poll;
+      return await manual;
+    });
+    let intervalCallback: (() => void) | undefined;
+    const originalSetInterval = window.setInterval;
+    const originalClearInterval = window.clearInterval;
+    window.setInterval = ((callback: TimerHandler) => {
+      if (typeof callback === "function") intervalCallback = () => callback();
+      return 1;
+    }) as typeof window.setInterval;
+    window.clearInterval = mock(() => undefined) as typeof window.clearInterval;
+    let unmount: (() => void) | undefined;
+
+    try {
+      ({ unmount } = render(
+        <MultiReviewReviewerTab
+          data={{
+            environmentId: "env-1",
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            isLocal: true,
+          }}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      ));
+
+      // The status-dependent effect performs one settling read before arming
+      // the stable running-state interval used below.
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+      act(() => intervalCallback?.());
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(3));
+
+      const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
+      fireEvent.click(refreshButton);
+      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+      expect(refreshButton.querySelector(".animate-spin")).toBeTruthy();
+      // The click waits behind the controlled poll instead of overlapping it.
+      expect(loadTranscript).toHaveBeenCalledTimes(3);
+
+      await act(async () => {
+        resolvePoll(running);
+        await poll;
+      });
+      // With status already stable, only manualRefresh can start this read.
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(4));
+      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+
+      await act(async () => {
+        resolveManual(refreshed);
+        await manual;
+      });
+      expect(await screen.findByText(/gpt-5.6-refreshed · Read only/)).toBeTruthy();
+      await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
+      expect(loadTranscript).toHaveBeenCalledTimes(4);
+    } finally {
+      unmount?.();
+      window.setInterval = originalSetInterval;
+      window.clearInterval = originalClearInterval;
+    }
+  });
+
+  test("manually refreshes a settled reviewer when no poll is in flight", async () => {
+    let resolveManual!: (value: MultiReviewReviewerTranscript) => void;
+    const manual = new Promise<MultiReviewReviewerTranscript>((resolve) => {
+      resolveManual = resolve;
+    });
+    const completed: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "completed",
+      messages: [],
+    };
+    const refreshed: MultiReviewReviewerTranscript = {
+      ...completed,
+      model: "gpt-5.6-settled-refresh",
+      messages: [
+        {
+          id: "settled-progress",
+          role: "assistant",
+          content: "Settled transcript refreshed manually",
+          parts: [{ type: "text", content: "Settled transcript refreshed manually" }],
+        },
+      ],
+    };
+    let calls = 0;
+    const loadTranscript = mock(async () => {
+      calls += 1;
+      return calls <= 2 ? completed : await manual;
+    });
+
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+    const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
+    fireEvent.click(refreshButton);
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(3));
+    expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => {
+      resolveManual(refreshed);
+      await manual;
+    });
+    expect(await screen.findByText(/gpt-5.6-settled-refresh · Read only/)).toBeTruthy();
+    await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
+    expect(loadTranscript).toHaveBeenCalledTimes(3);
+  });
+
+  test("re-arms Refresh after a transcript request times out", async () => {
+    let resolveStale!: (value: MultiReviewReviewerTranscript) => void;
+    const stale = new Promise<MultiReviewReviewerTranscript>((resolve) => {
+      resolveStale = resolve;
+    });
+    let resolveRetry!: (value: MultiReviewReviewerTranscript) => void;
+    const retry = new Promise<MultiReviewReviewerTranscript>((resolve) => {
+      resolveRetry = resolve;
+    });
+    const running: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      agent: "codex",
+      model: "gpt-5.6",
+      status: "running",
+      messages: [],
+    };
+    const refreshed: MultiReviewReviewerTranscript = {
+      ...running,
+      model: "gpt-5.6-timeout-recovery",
+      messages: [
+        {
+          id: "retry-progress",
+          role: "assistant",
+          content: "Refresh recovered after timeout",
+          parts: [{ type: "text", content: "Refresh recovered after timeout" }],
+        },
+      ],
+    };
+    let calls = 0;
+    const loadTranscript = mock(async () => {
+      calls += 1;
+      return calls === 1 ? await stale : await retry;
+    });
+    let timeoutCallback: (() => void) | undefined;
+    const manualTimeoutId = 2_147_000_001;
+    const originalSetTimeout = window.setTimeout;
+    const originalClearTimeout = window.clearTimeout;
+    window.setTimeout = ((callback: TimerHandler, delay?: number) => {
+      if (delay === MANUAL_REFRESH_TIMEOUT_MS && typeof callback === "function") {
+        timeoutCallback = () => callback();
+        return manualTimeoutId;
+      }
+      return originalSetTimeout(callback, delay);
+    }) as typeof window.setTimeout;
+    window.clearTimeout = ((id?: number) => {
+      if (id !== manualTimeoutId) originalClearTimeout(id);
+    }) as typeof window.clearTimeout;
+    let unmount: (() => void) | undefined;
+
+    try {
+      ({ unmount } = render(
+        <MultiReviewReviewerTab
+          data={{
+            environmentId: "env-1",
+            workflowId: "multi-1",
+            reviewerId: "reviewer-1",
+            isLocal: true,
+          }}
+          isActive
+          loadTranscript={loadTranscript}
+        />,
+      ));
+
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
+      const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
+      fireEvent.click(refreshButton);
+      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+
+      await act(async () => {
+        timeoutCallback?.();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
+
+      fireEvent.click(refreshButton);
+      await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+
+      await act(async () => {
+        resolveStale(running);
+        await stale;
+      });
+      // The abandoned attempt settling late cannot clear the newer spinner.
+      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+
+      await act(async () => {
+        resolveRetry(refreshed);
+        await retry;
+      });
+      expect(await screen.findByText(/gpt-5.6-timeout-recovery · Read only/)).toBeTruthy();
+      await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
+    } finally {
+      unmount?.();
+      window.setTimeout = originalSetTimeout;
+      window.clearTimeout = originalClearTimeout;
+    }
+  });
+
+  test("releases a pending manual refresh when the reviewer tab becomes inactive", async () => {
+    let resolveStale!: (value: MultiReviewReviewerTranscript) => void;
+    const stale = new Promise<MultiReviewReviewerTranscript>((resolve) => {
+      resolveStale = resolve;
+    });
+    const staleSnapshot: MultiReviewReviewerTranscript = {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      agent: "codex",
+      model: "stale-inactive-model",
+      status: "running",
+      messages: [
+        {
+          id: "inactive-progress",
+          role: "assistant",
+          content: "Stale inactive transcript",
+          parts: [{ type: "text", content: "Stale inactive transcript" }],
+        },
+      ],
+    };
+    const loadTranscript = mock(async () => await stale);
+    const data = {
+      environmentId: "env-1",
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+      isLocal: true,
+    };
+    const view = render(
+      <MultiReviewReviewerTab data={data} isActive loadTranscript={loadTranscript} />,
+    );
+
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
+    const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
+    fireEvent.click(refreshButton);
+    expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+
+    view.rerender(
+      <MultiReviewReviewerTab data={data} isActive={false} loadTranscript={loadTranscript} />,
+    );
+    await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
+
+    await act(async () => {
+      resolveStale(staleSnapshot);
+      await stale;
+    });
+    expect(screen.queryByText(/stale-inactive-model/) === null).toBe(true);
+  });
+
   test("shows a transcript read failure in the read-only view", async () => {
     const loadTranscript = mock(async () => {
       throw new Error("Multi review workflow not found: multi-1");
@@ -1257,10 +1559,15 @@ describe("MultiReviewReviewerTab stop control", () => {
     await screen.findByRole("button", { name: "Stop this reviewer" });
     fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
+    const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
+    expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Stop this reviewer" }));
 
     await waitFor(() => expect(loadTranscript.mock.calls.length).toBeGreaterThanOrEqual(3));
     expect(await screen.findByText(/Stopped · excluded from the consolidated report/)).toBeTruthy();
+    // Stop fences the stalled manual request and must release its toolbar state
+    // before that abandoned request settles.
+    expect((refreshButton as HTMLButtonElement).disabled).toBe(false);
     await act(async () => {
       resolveStale(runningSnapshot);
       await stalePoll;

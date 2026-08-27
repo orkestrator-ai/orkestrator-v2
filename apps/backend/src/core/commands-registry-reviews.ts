@@ -4,8 +4,6 @@ import {
   isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
   isStartLoopedReviewInput,
-  isMultiReviewTerminalPhase,
-  isMultiReviewWorkflow,
   isStartMultiReviewInput,
 } from "./commands-dependencies.js";
 import type { StartLoopedReviewInput, StartMultiReviewInput } from "./commands-dependencies.js";
@@ -236,18 +234,8 @@ export function registerReviewWorkflowCommands(
       .cancel(asNonBlankString(workflowId, "workflowId"))
       .then(stripLoopedReviewSnapshotSecrets);
   });
-  register("delete_multi_review_workflow", async ({ workflowId }, { storage }) => {
-    const id = asNonBlankString(workflowId, "workflowId");
-    const current = await storage.getMultiReviewWorkflow(id);
-    if (
-      current &&
-      !(
-        isMultiReviewWorkflow(current.snapshot) &&
-        isMultiReviewTerminalPhase(current.snapshot.phase)
-      )
-    ) {
-      throw new Error("An active multi review must be cancelled before deletion");
-    }
-    return storage.deleteMultiReviewWorkflow(id);
+  register("delete_multi_review_workflow", ({ workflowId }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    return context.multiReviews.close(asNonBlankString(workflowId, "workflowId"));
   });
 }

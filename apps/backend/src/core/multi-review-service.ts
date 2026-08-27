@@ -257,6 +257,7 @@ export class MultiReviewService {
     return {
       workflowId: workflow.id,
       reviewerId: reviewer.id,
+      workflowPhase: workflow.phase,
       agent: reviewer.agent,
       model: reviewer.model,
       ...(reviewer.reasoningEffort ? { reasoningEffort: reviewer.reasoningEffort } : {}),
@@ -411,16 +412,14 @@ export class MultiReviewService {
         const hasReport = workflow.reviewers.some(
           (reviewer) => reviewer.status === "completed" && reviewer.report !== undefined,
         );
-        // A panel the user stopped in full has nothing to consolidate, and the
-        // consolidation branch below would otherwise ask the fix model to merge an
-        // empty set of reports. Retrying that failure means running those
-        // reviewers again.
-        const restartable =
-          failedReviewers.length > 0
-            ? failedReviewers
-            : hasReport
-              ? []
-              : workflow.reviewers.filter((reviewer) => reviewer.status === "cancelled");
+        // With no surviving report there is nothing to consolidate, so retry
+        // every failed or stopped reviewer. If a report did survive, preserve
+        // the user's stop choices and retry only failures from the requested panel.
+        const restartable = hasReport
+          ? failedReviewers
+          : workflow.reviewers.filter(
+              (reviewer) => reviewer.status === "failed" || reviewer.status === "cancelled",
+            );
         if (restartable.length > 0) {
           for (const reviewer of restartable) {
             // Retrying allocates a fresh session, so the abandoned one must be
@@ -542,6 +541,111 @@ export class MultiReviewService {
       const saved = await this.save(workflow, token);
       void this.advanceNow(workflowId);
       return saved;
+    });
+  }
+
+  /**
+   * Tear down an entire workflow from one parent-tab close intent.
+   *
+   * This is intentionally stronger than cancel: every reviewer and fix session
+   * is closed, every pane tab owned by the workflow is removed authoritatively,
+   * and the durable workflow is deleted so a replacement can start immediately.
+   */
+  async close(workflowId: string): Promise<void> {
+    const closeRequestedAt = nowIso();
+    return this.withLock(workflowId, async () => {
+      const existing = await this.storage.getMultiReviewWorkflow(workflowId);
+      if (!existing) return;
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error("The Multi Review controller is busy");
+      const { workflow, token } = controlled;
+      try {
+        if (!isMultiReviewTerminalPhase(workflow.phase)) {
+          throw new Error("Cancel or finish the running Multi Review before deleting it");
+        }
+        const targets = [
+          ...workflow.reviewers.flatMap((reviewer) =>
+            reviewer.providerSessionId
+              ? [
+                  {
+                    selection: reviewer as MultiReviewModelSelection,
+                    sessionId: reviewer.providerSessionId,
+                  },
+                ]
+              : [],
+          ),
+          ...(workflow.fixSession?.providerSessionId
+            ? [
+                {
+                  selection: workflow.fixModel,
+                  sessionId: workflow.fixSession.providerSessionId,
+                },
+              ]
+            : []),
+        ];
+        const uniqueTargets = [
+          ...new Map(
+            targets.map((target) => [`${target.selection.agent}:${target.sessionId}`, target]),
+          ).values(),
+        ];
+        const shutdowns = await Promise.allSettled(
+          uniqueTargets.map(async ({ selection, sessionId }) => {
+            const provider = await this.provider(workflow, selection);
+            const confirmStopped = async (): Promise<void> => {
+              const observed = await readProviderStatus(provider, sessionId);
+              if (observed.status === "running" || observed.status === "blocked") {
+                throw new Error(`session remained ${observed.status} after abort`);
+              }
+            };
+            if (!provider.closeSession) {
+              await provider.abort(sessionId);
+              await confirmStopped();
+              return;
+            }
+            try {
+              await provider.closeSession(sessionId);
+            } catch (closeError) {
+              try {
+                await provider.abort(sessionId);
+                await confirmStopped();
+              } catch (abortError) {
+                throw new Error(
+                  `Could not stop ${selection.agent} session ${sessionId}: ` +
+                    `${errorMessage(closeError)}; abort also failed: ${errorMessage(abortError)}`,
+                );
+              }
+            }
+          }),
+        );
+        const failures = shutdowns.flatMap((result) =>
+          result.status === "rejected" ? [errorMessage(result.reason)] : [],
+        );
+        if (failures.length > 0) {
+          throw new Error(`Could not close Multi Review sessions: ${failures.join("; ")}`);
+        }
+
+        // Delete the durable recovery record before its tabs. If the pane write
+        // fails, stale tabs can still reconcile against a missing workflow; the
+        // inverse would strand a live record with every recovery surface gone.
+        await this.storage.deleteMultiReviewWorkflow(workflow.id);
+        this.addressDispatchRetryAt.delete(workflow.id);
+        const cleanup = await Promise.allSettled([
+          this.storage.removeMultiReviewTabs(workflow.environmentId, workflow.id),
+          this.syncEnvironmentActivity(workflow.environmentId, closeRequestedAt),
+        ]);
+        for (const result of cleanup) {
+          if (result.status === "rejected") {
+            // The destructive commit already succeeded. Returning an error now
+            // would make the renderer retain a tab for a workflow that no
+            // longer exists; stale durable tabs reconcile away on hydration.
+            console.warn("[multi-review] Post-delete cleanup failed:", result.reason);
+          }
+        }
+      } finally {
+        // Closing owns only a short-lived destructive claim. Failed provider
+        // creation or shutdown must not leave the workflow fenced forever.
+        await this.release(workflow, token);
+      }
     });
   }
 
@@ -679,6 +783,29 @@ export class MultiReviewService {
       workflow.environmentId,
       desired,
       nowIso(),
+      "multi-review",
+    );
+  }
+
+  /** Recompute the shared activity source after deleting one of several workflows. */
+  private async syncEnvironmentActivity(
+    environmentId: string,
+    occurredAt = nowIso(),
+  ): Promise<void> {
+    const records = await this.storage.listMultiReviewWorkflows(environmentId);
+    const desired = records.some(
+      (record) => isMultiReviewWorkflow(record.snapshot) && hasWorkflowActivity(record.snapshot),
+    )
+      ? "working"
+      : "idle";
+    const environment = await this.storage.getEnvironment(environmentId);
+    if (!environment || environment.agentActivitySources?.["multi-review"]?.state === desired) {
+      return;
+    }
+    await this.storage.setEnvironmentAgentActivity(
+      environmentId,
+      desired,
+      occurredAt,
       "multi-review",
     );
   }

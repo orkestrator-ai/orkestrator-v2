@@ -15,6 +15,7 @@ import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useVirtuosoScrollState } from "@/hooks";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { multiReviewReviewerScrollKey } from "@/lib/multi-review-keys";
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
   hideMachineOutputText,
   showOnlyFinalStructuredReviewMessage,
@@ -59,6 +60,7 @@ interface MultiReviewReviewerTabProps {
   isActive: boolean;
   loadTranscript?: typeof backend.getMultiReviewReviewerTranscript;
   stopReviewer?: typeof backend.stopMultiReviewReviewer;
+  retryReview?: typeof backend.retryMultiReview;
 }
 
 export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
@@ -88,15 +90,18 @@ export function MultiReviewReviewerTab({
   isActive,
   loadTranscript = backend.getMultiReviewReviewerTranscript,
   stopReviewer = backend.stopMultiReviewReviewer,
+  retryReview = backend.retryMultiReview,
 }: MultiReviewReviewerTabProps) {
   const [snapshot, setSnapshot] = useState<MultiReviewReviewerTranscript | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [manualRefreshPending, setManualRefreshPending] = useState(false);
   const requestGeneration = useRef(0);
   const inFlightRequest = useRef<{ generation: number; promise: Promise<void> } | null>(null);
   const manualRefreshAttempt = useRef<symbol | null>(null);
+  const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
   const containerId =
     useEnvironmentStore((state) => state.getEnvironmentById(data.environmentId)?.containerId) ??
     undefined;
@@ -191,11 +196,32 @@ export function MultiReviewReviewerTab({
     }
   }, [data.reviewerId, data.workflowId, fenceRequests, refresh, stopReviewer]);
 
+  /**
+   * A failed workflow can otherwise only be recovered from its overview tab.
+   * Restart it here as well, then discard the stopped/failed transcript snapshot
+   * and read the newly allocated reviewer state from the backend.
+   */
+  const restart = useCallback(async () => {
+    if (restarting) return;
+    setRestarting(true);
+    setActionError(null);
+    try {
+      replaceWorkflow(await retryReview(data.workflowId));
+      fenceRequests();
+      await refresh();
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRestarting(false);
+    }
+  }, [data.workflowId, fenceRequests, refresh, replaceWorkflow, restarting, retryReview]);
+
   useEffect(() => {
     setSnapshot(null);
     setTranscriptError(null);
     setActionError(null);
     setStopping(false);
+    setRestarting(false);
     fenceRequests();
   }, [data.reviewerId, data.workflowId, fenceRequests]);
 
@@ -291,6 +317,23 @@ export function MultiReviewReviewerTab({
                 <Square className="mr-2 size-3.5" />
               )}
               Stop
+            </Button>
+          )}
+          {snapshot?.workflowPhase === "failed" && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={restarting}
+              aria-label="Restart failed review"
+              title="Restart the failed Multi Review stage"
+              onClick={() => void restart()}
+            >
+              {restarting ? (
+                <Loader2 className="mr-2 size-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="mr-2 size-3.5" />
+              )}
+              Restart review
             </Button>
           )}
           <Button

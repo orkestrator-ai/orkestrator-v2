@@ -27,6 +27,8 @@ import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 
 import { useLoopedReviewStore, type LoopedReviewWorkflow } from "@/stores/loopedReviewStore";
 
+import { useMultiReviewStore } from "@/stores/multiReviewStore";
+
 import { useTerminalSessionStore } from "@/stores/terminalSessionStore";
 
 import { createSessionKey as createNativeSessionKey } from "@/lib/utils";
@@ -172,6 +174,10 @@ const getPaneLayoutMock = mock(
 
 const deletePaneLayoutMock = mock(async (_environmentId: string, _expectedRevision?: number) => {});
 
+const deleteMultiReviewWorkflowMock = mock(async (_workflowId: string) => {});
+
+const listMultiReviewWorkflowsMock = mock(async (_environmentId: string) => []);
+
 const listLoopedReviewWorkflowsMock = mock(
   async (_environmentId: string) =>
     [] as Array<{
@@ -263,7 +269,9 @@ mock.module("@/lib/backend", () => ({
   savePaneLayout: savePaneLayoutMock,
   getPaneLayout: getPaneLayoutMock,
   deletePaneLayout: deletePaneLayoutMock,
+  deleteMultiReviewWorkflow: deleteMultiReviewWorkflowMock,
   listLoopedReviewWorkflows: listLoopedReviewWorkflowsMock,
+  listMultiReviewWorkflows: listMultiReviewWorkflowsMock,
   writeContainerFile: writeContainerFileMock,
   writeLocalFile: writeLocalFileMock,
   writeInitialPromptAttachments: writeInitialPromptAttachmentsMock,
@@ -395,6 +403,7 @@ describe("TerminalContainer", () => {
     });
     useNativeComposeStore.setState({ drafts: new Map() });
     useLoopedReviewStore.setState({ workflows: new Map() });
+    useMultiReviewStore.setState({ workflows: new Map() });
     useBuildPipelineStore.setState({
       pipelines: new Map(),
       buildEnvironmentIds: new Set(),
@@ -422,6 +431,8 @@ describe("TerminalContainer", () => {
     getEnvironmentSetupSessionMock.mockReset();
     getEnvironmentSetupSessionMock.mockResolvedValue(null);
     awaitEnvironmentSetupSessionMock.mockClear();
+    deleteMultiReviewWorkflowMock.mockReset();
+    deleteMultiReviewWorkflowMock.mockResolvedValue();
     setEnvironmentPendingAgentLaunchMock.mockReset();
     setEnvironmentPendingAgentLaunchMock.mockImplementation(
       async (environmentId: string, pending: boolean) => ({
@@ -1864,6 +1875,241 @@ describe("TerminalContainer", () => {
         expect(environment.root.id).toBe("left");
         expect(environment.root.tabs.map((tab) => tab.id)).toEqual(["left-tab"]);
       });
+    });
+
+    test("native tab close hides an active Multi Review without deleting it", async () => {
+      let closeTabListener: (() => void) | undefined;
+      listenMock.mockImplementation(async (event: string, handler: () => void) => {
+        if (event === "menu-close-tab") closeTabListener = handler;
+        return () => undefined;
+      });
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: "multi-parent",
+                type: "multi-review",
+                multiReviewTabData: {
+                  environmentId: "env-visible",
+                  workflowId: "workflow-1",
+                },
+              },
+            ],
+            activeTabId: "multi-parent",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+      useMultiReviewStore.setState({
+        workflows: new Map([["workflow-1", { phase: "reviewing" } as never]]),
+      });
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(closeTabListener).toBeDefined());
+      act(() => closeTabListener?.());
+
+      await waitFor(() =>
+        expect(
+          usePaneLayoutStore
+            .getState()
+            .getPane("default", "env-visible")
+            ?.tabs.some((tab) => tab.id === "multi-parent"),
+        ).toBe(false),
+      );
+      expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
+    });
+
+    test("native tab close awaits terminal Multi Review teardown", async () => {
+      let closeTabListener: (() => void) | undefined;
+      let resolveDelete!: () => void;
+      deleteMultiReviewWorkflowMock.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveDelete = resolve;
+          }),
+      );
+      listenMock.mockImplementation(async (event: string, handler: () => void) => {
+        if (event === "menu-close-tab") closeTabListener = handler;
+        return () => undefined;
+      });
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: "multi-parent",
+                type: "multi-review",
+                multiReviewTabData: {
+                  environmentId: "env-visible",
+                  workflowId: "workflow-1",
+                },
+              },
+            ],
+            activeTabId: "multi-parent",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+      useMultiReviewStore.setState({
+        workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
+      });
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(closeTabListener).toBeDefined());
+      act(() => closeTabListener?.());
+      await waitFor(() => expect(deleteMultiReviewWorkflowMock).toHaveBeenCalledWith("workflow-1"));
+      expect(
+        usePaneLayoutStore
+          .getState()
+          .getPane("default", "env-visible")
+          ?.tabs.map((tab) => tab.id),
+      ).toEqual(["multi-parent"]);
+
+      resolveDelete();
+      await waitFor(() =>
+        expect(
+          usePaneLayoutStore
+            .getState()
+            .getPane("default", "env-visible")
+            ?.tabs.some((tab) => tab.id === "multi-parent"),
+        ).toBe(false),
+      );
+    });
+
+    test("native tab close retains a terminal Multi Review when teardown fails", async () => {
+      let closeTabListener: (() => void) | undefined;
+      deleteMultiReviewWorkflowMock.mockRejectedValue(new Error("bridge unavailable"));
+      listenMock.mockImplementation(async (event: string, handler: () => void) => {
+        if (event === "menu-close-tab") closeTabListener = handler;
+        return () => undefined;
+      });
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: "multi-parent",
+                type: "multi-review",
+                multiReviewTabData: {
+                  environmentId: "env-visible",
+                  workflowId: "workflow-1",
+                },
+              },
+            ],
+            activeTabId: "multi-parent",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+      useMultiReviewStore.setState({
+        workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
+      });
+      mockToastError.mockClear();
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(closeTabListener).toBeDefined());
+      act(() => closeTabListener?.());
+
+      await waitFor(() => expect(mockToastError).toHaveBeenCalledTimes(1));
+      expect(
+        usePaneLayoutStore
+          .getState()
+          .getPane("default", "env-visible")
+          ?.tabs.map((tab) => tab.id),
+      ).toEqual(["multi-parent"]);
+    });
+
+    test("native tab close never tears down a reviewer child tab", async () => {
+      let closeTabListener: (() => void) | undefined;
+      listenMock.mockImplementation(async (event: string, handler: () => void) => {
+        if (event === "menu-close-tab") closeTabListener = handler;
+        return () => undefined;
+      });
+      usePaneLayoutStore.setState((state) => ({
+        environments: new Map(state.environments).set("env-visible", {
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: "multi-reviewer",
+                type: "multi-review",
+                multiReviewTabData: {
+                  environmentId: "env-visible",
+                  workflowId: "workflow-1",
+                  reviewerId: "reviewer-1",
+                },
+              },
+            ],
+            activeTabId: "multi-reviewer",
+          },
+          activePaneId: "default",
+          containerId: "container-visible",
+        }),
+      }));
+      useMultiReviewStore.setState({
+        workflows: new Map([["workflow-1", { phase: "cancelled" } as never]]),
+      });
+
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+        </TerminalProvider>,
+      );
+      await waitFor(() => expect(closeTabListener).toBeDefined());
+      act(() => closeTabListener?.());
+
+      await waitFor(() =>
+        expect(
+          usePaneLayoutStore
+            .getState()
+            .getPane("default", "env-visible")
+            ?.tabs.some((tab) => tab.id === "multi-reviewer"),
+        ).toBe(false),
+      );
+      expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
     });
 
     // A browser-served client (`apps/web-public`) runs the same tree with no

@@ -16,6 +16,7 @@ import {
   type MultiReviewModelSelection,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
 import type {
   BuildPipelineProvider,
   ProviderCreateSessionOptions,
@@ -110,6 +111,7 @@ class Provider implements BuildPipelineProvider {
   readonly agent = "claude" as const;
   readonly sends = new Map<string, { prompt: string; options: ProviderSendOptions }>();
   readonly aborted: string[] = [];
+  readonly closed: string[] = [];
   /** Per-session status, overriding `statusValue`; keeps tests pass-count independent. */
   readonly statusOverrides = new Map<string, ProviderStatus>();
   /**
@@ -126,6 +128,7 @@ class Provider implements BuildPipelineProvider {
   statusValue: ProviderStatus = "idle";
   statusCalls = 0;
   abortError: Error | null = null;
+  closeError: Error | null = null;
   /** Thrown by the next `status` call, then cleared. */
   statusError: Error | null = null;
   ambiguousFixOnce = false;
@@ -373,6 +376,10 @@ class Provider implements BuildPipelineProvider {
   async abort(sessionId: string): Promise<void> {
     this.aborted.push(sessionId);
     if (this.abortError) throw this.abortError;
+  }
+  async closeSession(sessionId: string): Promise<void> {
+    this.closed.push(sessionId);
+    if (this.closeError) throw this.closeError;
   }
   async dispose(): Promise<void> {
     this.disposeCalls += 1;
@@ -2573,6 +2580,38 @@ test("MultiReviewService retries every failed reviewer, not only the first", asy
   });
 });
 
+test("MultiReviewService restarts stopped and failed reviewers when no report survived", async () => {
+  const provider = new Provider();
+  provider.statusOverrides.set("session-1", "running");
+  provider.statusOverrides.set("session-2", "error");
+  await withService("env-retry-mixed-panel", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      const reviewers = (await snapshot(started.id))?.reviewers;
+      return reviewers?.[0]?.status === "running" && reviewers[1]?.status === "failed";
+    });
+
+    await service.stopReviewer(started.id, started.reviewers[0]!.id);
+    await waitUntil(async () => (await snapshot(started.id))?.phase === "failed");
+    expect((await snapshot(started.id))?.reviewers.map((reviewer) => reviewer.status)).toEqual([
+      "cancelled",
+      "failed",
+    ]);
+
+    const retried = await service.retry(started.id);
+    expect(retried.phase).toBe("reviewing");
+    expect(retried.error).toBeUndefined();
+    expect(retried.reviewers.map((reviewer) => reviewer.status)).toEqual(["pending", "pending"]);
+    expect(retried.reviewers.every((reviewer) => reviewer.providerSessionId === undefined)).toBe(
+      true,
+    );
+  });
+});
+
 test("MultiReviewService settles every running reviewer when the review stage fails", async () => {
   const provider = new Provider();
   provider.statusValue = "running";
@@ -2850,6 +2889,335 @@ test("MultiReviewService leaves a workflow that is not failed untouched on retry
     expect(provider.aborted).toEqual([]);
     expect((await snapshot(started.id))?.reviewers[0]?.providerSessionId).toBe("session-1");
   });
+});
+
+test("MultiReviewService closes every child session and pane tab before allowing a replacement", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-close-workflow",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start([
+        { agent: "claude", model: "opus" },
+        { agent: "claude", model: "sonnet" },
+      ]);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      const terminal = await service.address(ready.id);
+      await storage.savePaneLayout(
+        terminal.environmentId,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: "multi-parent",
+                type: "multi-review",
+                multiReviewTabData: {
+                  environmentId: terminal.environmentId,
+                  workflowId: terminal.id,
+                },
+              },
+              {
+                id: "multi-reviewer",
+                type: "multi-review",
+                multiReviewTabData: {
+                  environmentId: terminal.environmentId,
+                  workflowId: terminal.id,
+                  reviewerId: terminal.reviewers[0]!.id,
+                },
+              },
+              { id: `multi-review-fix:${terminal.id}`, type: "agent-native" },
+              { id: "unrelated", type: "file" },
+            ],
+            activeTabId: "multi-parent",
+          },
+        },
+        0,
+      );
+      const disposalsBeforeClose = provider.disposeCalls;
+
+      await service.close(terminal.id);
+
+      expect(provider.closed.sort()).toEqual(["session-1", "session-2", "session-3"]);
+      expect(provider.disposeCalls).toBe(disposalsBeforeClose + 1);
+      expect(await storage.getMultiReviewWorkflow(terminal.id)).toBeNull();
+      expect((await storage.getPaneLayout(terminal.environmentId))?.root).toMatchObject({
+        tabs: [{ id: "unrelated", type: "file" }],
+        activeTabId: "unrelated",
+      });
+      expect(await storage.getEnvironment(terminal.environmentId)).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "idle" } },
+      });
+
+      const replacement = await start();
+      expect(replacement.id).not.toBe(terminal.id);
+      expect(replacement.phase).toBe("reviewing");
+    },
+  );
+});
+
+test("MultiReviewService refuses to destroy a non-terminal workflow and releases its claim", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  await withService("env-close-active", provider, async ({ service, storage, start }) => {
+    const started = await start();
+
+    await expect(service.close(started.id)).rejects.toThrow("Cancel or finish");
+    expect(await storage.getMultiReviewWorkflow(started.id)).not.toBeNull();
+    expect((await storage.getMultiReviewWorkflow(started.id))?.controllerLease).toBeUndefined();
+  });
+});
+
+test("MultiReviewService retains recovery state when provider construction fails", async () => {
+  const provider = new Provider();
+  let providerAvailable = false;
+  await withService(
+    "env-close-provider-create",
+    provider,
+    async ({ service, storage }) => {
+      const workflowId = "terminal-provider-create";
+      const timestamp = new Date(0).toISOString();
+      const workflow: MultiReviewWorkflow = {
+        version: MULTI_REVIEW_WORKFLOW_VERSION,
+        controller: "backend",
+        id: workflowId,
+        environmentId: "env-close-provider-create",
+        projectId: "project-1",
+        targetBranch: "main",
+        reviewers: [
+          {
+            id: "reviewer-1",
+            agent: "claude",
+            model: "opus",
+            status: "cancelled",
+            providerSessionId: "session-orphan",
+          },
+        ],
+        fixModel: { agent: "claude", model: "opus" },
+        phase: "cancelled",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        backendRevision: 0,
+      };
+      await storage.createMultiReviewWorkflowIfNoActive(
+        workflow.id,
+        workflow.environmentId,
+        workflow.version,
+        workflow,
+      );
+
+      await expect(service.close(workflowId)).rejects.toThrow("bridge unavailable");
+      expect(await storage.getMultiReviewWorkflow(workflowId)).not.toBeNull();
+      expect((await storage.getMultiReviewWorkflow(workflowId))?.controllerLease).toBeUndefined();
+
+      providerAvailable = true;
+      await expect(service.close(workflowId)).resolves.toBeUndefined();
+      expect(await storage.getMultiReviewWorkflow(workflowId)).toBeNull();
+    },
+    {
+      createProvider: async () => {
+        if (!providerAvailable) throw new Error("bridge unavailable");
+        return provider;
+      },
+    },
+  );
+});
+
+test("MultiReviewService retains workflow tabs when close and abort both fail", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-close-stop-failure",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const terminal = await service.address(started.id);
+      await storage.savePaneLayout(
+        terminal.environmentId,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "default",
+          root: {
+            kind: "leaf",
+            id: "default",
+            tabs: [
+              {
+                id: "multi-parent",
+                type: "multi-review",
+                multiReviewTabData: {
+                  environmentId: terminal.environmentId,
+                  workflowId: terminal.id,
+                },
+              },
+            ],
+            activeTabId: "multi-parent",
+          },
+        },
+        0,
+      );
+      provider.closeError = new Error("close failed");
+      provider.abortError = new Error("abort failed");
+
+      await expect(service.close(terminal.id)).rejects.toThrow("abort also failed");
+      expect(await storage.getMultiReviewWorkflow(terminal.id)).not.toBeNull();
+      expect((await storage.getPaneLayout(terminal.environmentId))?.root).toMatchObject({
+        tabs: [{ id: "multi-parent" }],
+        activeTabId: "multi-parent",
+      });
+      expect((await storage.getMultiReviewWorkflow(terminal.id))?.controllerLease).toBeUndefined();
+    },
+  );
+});
+
+test("MultiReviewService falls back to abort when session close fails", async () => {
+  const provider = new Provider();
+  await withService("env-close-abort-fallback", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const terminal = await service.address(started.id);
+    provider.closeError = new Error("close route unavailable");
+
+    await expect(service.close(terminal.id)).resolves.toBeUndefined();
+    expect(new Set(provider.aborted)).toEqual(new Set(["session-1", "session-2"]));
+  });
+});
+
+test("MultiReviewService confirms abort-only providers have settled", async () => {
+  const provider = new Provider();
+  (provider as { closeSession?: BuildPipelineProvider["closeSession"] }).closeSession = undefined;
+  await withService("env-close-abort-only", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      return (await snapshot(started.id))?.phase === "ready";
+    });
+    const terminal = await service.address(started.id);
+
+    await expect(service.close(terminal.id)).resolves.toBeUndefined();
+    expect(new Set(provider.aborted)).toEqual(new Set(["session-1", "session-2"]));
+  });
+});
+
+test("MultiReviewService retains a workflow when an aborted session is still running", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-close-unconfirmed-abort",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const terminal = await service.address(started.id);
+      provider.closeError = new Error("close route unavailable");
+      provider.statusValue = "running";
+
+      await expect(service.close(terminal.id)).rejects.toThrow("remained running after abort");
+      expect(await storage.getMultiReviewWorkflow(terminal.id)).not.toBeNull();
+      expect((await storage.getMultiReviewWorkflow(terminal.id))?.controllerLease).toBeUndefined();
+    },
+  );
+});
+
+test("MultiReviewService deletes durable state before attempting pane cleanup", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-close-delete-order",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const terminal = await service.address(started.id);
+      let paneRemovalCalled = false;
+      const originalDelete = storage.deleteMultiReviewWorkflow.bind(storage);
+      const originalRemoveTabs = storage.removeMultiReviewTabs.bind(storage);
+      storage.deleteMultiReviewWorkflow = async () => {
+        throw new Error("sensitive store unavailable");
+      };
+      storage.removeMultiReviewTabs = async (...args) => {
+        paneRemovalCalled = true;
+        return originalRemoveTabs(...args);
+      };
+      try {
+        await expect(service.close(terminal.id)).rejects.toThrow("sensitive store unavailable");
+        expect(paneRemovalCalled).toBe(false);
+        expect(await storage.getMultiReviewWorkflow(terminal.id)).not.toBeNull();
+      } finally {
+        storage.deleteMultiReviewWorkflow = originalDelete;
+        storage.removeMultiReviewTabs = originalRemoveTabs;
+      }
+    },
+  );
+});
+
+test("MultiReviewService reports success when pane cleanup fails after durable deletion", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-close-pane-cleanup",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const terminal = await service.address(started.id);
+      const originalRemoveTabs = storage.removeMultiReviewTabs.bind(storage);
+      storage.removeMultiReviewTabs = async () => {
+        throw new Error("pane store unavailable");
+      };
+      try {
+        await expect(service.close(terminal.id)).resolves.toBeUndefined();
+        expect(await storage.getMultiReviewWorkflow(terminal.id)).toBeNull();
+      } finally {
+        storage.removeMultiReviewTabs = originalRemoveTabs;
+      }
+    },
+  );
+});
+
+test("closing an older terminal workflow preserves a replacement workflow's activity", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-close-old-workflow",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const first = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(first.id);
+        return (await snapshot(first.id))?.phase === "ready";
+      });
+      const terminal = await service.address(first.id);
+      provider.statusValue = "running";
+      const replacement = await start();
+
+      await service.close(terminal.id);
+
+      expect(await storage.getMultiReviewWorkflow(replacement.id)).not.toBeNull();
+      expect(await storage.getEnvironment(terminal.environmentId)).toMatchObject({
+        agentActivitySources: { "multi-review": { state: "working" } },
+      });
+    },
+  );
 });
 
 test("MultiReviewService attaches the agent before it dispatches a reviewer prompt", async () => {

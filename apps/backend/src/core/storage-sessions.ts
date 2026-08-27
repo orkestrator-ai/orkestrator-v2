@@ -186,6 +186,48 @@ export abstract class StorageSessions extends StorageConfig {
     return layouts[environmentId] ?? null;
   }
 
+  /** Remove every parent, reviewer, and adopted fix tab owned by one Multi Review. */
+  async removeMultiReviewTabs(environmentId: string, workflowId: string): Promise<string[]> {
+    return this.enqueuePaneLayoutMutation(async () => {
+      const layouts = await this.loadJson<Record<string, PersistedPaneLayout>>(
+        this.paneLayoutsFile(),
+        () => ({}),
+      );
+      const previous = layouts[environmentId];
+      if (!previous) return [];
+      const root = JSON.parse(JSON.stringify(previous.root)) as unknown;
+      const removed: string[] = [];
+      for (const leaf of paneLayoutLeaves(root)) {
+        const retained = leaf.tabs.filter((tab) => {
+          const tabId = typeof tab.id === "string" ? tab.id : "";
+          const reviewData = isRecord(tab.multiReviewTabData) ? tab.multiReviewTabData : undefined;
+          const owned =
+            reviewData?.workflowId === workflowId || tabId === `multi-review-fix:${workflowId}`;
+          if (owned && tabId) removed.push(tabId);
+          return !owned;
+        });
+        if (retained.length === leaf.tabs.length) continue;
+        leaf.tabs = retained;
+        if (!retained.some((tab) => tab.id === leaf.activeTabId)) {
+          const fallbackId = retained.at(-1)?.id;
+          leaf.activeTabId = typeof fallbackId === "string" ? fallbackId : null;
+        }
+      }
+      if (removed.length === 0) return [];
+      const saved: PersistedPaneLayout = {
+        ...previous,
+        root,
+        updatedAt: nowIso(),
+        revision: previous.revision + 1,
+      };
+      assertPaneLayoutRootWithinBounds(saved.root);
+      layouts[environmentId] = saved;
+      await this.saveJson(this.paneLayoutsFile(), layouts, { backup: false });
+      this.announce("pane-layout", environmentId);
+      return removed;
+    });
+  }
+
   /**
    * Loads the layout store once for destructive reconciliation. An absent file
    * is a valid empty store; a present file that cannot be parsed (including

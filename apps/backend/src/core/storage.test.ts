@@ -1521,6 +1521,87 @@ describe("pane layout intent persistence", () => {
     root: saved.root as PaneLayoutMergeInput["root"],
   });
 
+  test("removes Multi Review tabs across split leaves without unnecessary revisions", async () => {
+    await withTemporaryStorage(async (storage) => {
+      const environment = createEnvironment("project-1", { environmentType: "local" });
+      environment.id = "env-remove-multi-review-tabs";
+      await storage.addEnvironment(environment);
+
+      await expect(storage.removeMultiReviewTabs(environment.id, "workflow-1")).resolves.toEqual(
+        [],
+      );
+      const saved = await storage.savePaneLayout(
+        environment.id,
+        {
+          version: PANE_LAYOUT_VERSION,
+          containerId: null,
+          activePaneId: "left",
+          root: {
+            kind: "split",
+            id: "split",
+            direction: "horizontal",
+            sizes: [50, 50],
+            depth: 1,
+            children: [
+              {
+                kind: "leaf",
+                id: "left",
+                tabs: [
+                  {
+                    id: "parent",
+                    type: "multi-review",
+                    multiReviewTabData: {
+                      environmentId: environment.id,
+                      workflowId: "workflow-1",
+                    },
+                  },
+                  { id: "unrelated", type: "plain" },
+                ],
+                activeTabId: "parent",
+              },
+              {
+                kind: "leaf",
+                id: "right",
+                tabs: [
+                  {
+                    id: "reviewer",
+                    type: "multi-review",
+                    multiReviewTabData: {
+                      environmentId: environment.id,
+                      workflowId: "workflow-1",
+                      reviewerId: "reviewer-1",
+                    },
+                  },
+                  { id: "multi-review-fix:workflow-1", type: "agent-native" },
+                ],
+                activeTabId: "reviewer",
+              },
+            ],
+          },
+        },
+        0,
+      );
+
+      expect(new Set(await storage.removeMultiReviewTabs(environment.id, "workflow-1"))).toEqual(
+        new Set(["parent", "reviewer", "multi-review-fix:workflow-1"]),
+      );
+      const pruned = await storage.getPaneLayout(environment.id);
+      expect(pruned?.revision).toBe(saved.revision + 1);
+      expect(pruned?.root).toMatchObject({
+        kind: "split",
+        children: [
+          { kind: "leaf", tabs: [{ id: "unrelated" }], activeTabId: "unrelated" },
+          { kind: "leaf", tabs: [], activeTabId: null },
+        ],
+      });
+
+      await expect(storage.removeMultiReviewTabs(environment.id, "workflow-1")).resolves.toEqual(
+        [],
+      );
+      expect((await storage.getPaneLayout(environment.id))?.revision).toBe(pruned?.revision);
+    });
+  });
+
   test("creates an initial local layout and applies explicit selection intent", async () => {
     await withTemporaryStorage(async (storage) => {
       const environment = createEnvironment("project-1", { environmentType: "local" });

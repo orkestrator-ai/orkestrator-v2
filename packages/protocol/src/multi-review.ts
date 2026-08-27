@@ -45,6 +45,8 @@ export type MultiReviewReviewer = ReviewerRecord;
 export interface MultiReviewReviewerTranscript {
   workflowId: string;
   reviewerId: string;
+  /** Authoritative parent state, used to offer recovery from this nested view. */
+  workflowPhase: MultiReviewPhase;
   agent: AgentPlatform;
   model: string;
   reasoningEffort?: string;

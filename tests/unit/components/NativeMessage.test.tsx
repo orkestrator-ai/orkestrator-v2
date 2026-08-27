@@ -555,6 +555,24 @@ describe("NativeMessage", () => {
     });
   });
 
+  test("opens AVIF previews with the correct MIME type", async () => {
+    const message: NativeMessageType = {
+      id: "msg-local-avif-preview",
+      role: "assistant",
+      content: "",
+      createdAt: "2026-03-07T12:00:00.000Z",
+      parts: [{ type: "file", content: "/tmp/app-preview.AVIF" }],
+    };
+
+    render(<NativeMessage message={message} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /app-preview\.AVIF/i }));
+
+    const image = await screen.findByAltText("app-preview.AVIF");
+    expect(mockReadFileBase64).toHaveBeenCalledWith("/tmp/app-preview.AVIF");
+    expect(image.getAttribute("src")).toBe("data:image/avif;base64,image-base64");
+  });
+
   test("flows adjacent attachment previews and lets them wrap", () => {
     const message: NativeMessageType = {
       id: "msg-attachment-flow",

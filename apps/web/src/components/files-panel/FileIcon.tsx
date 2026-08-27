@@ -68,6 +68,7 @@ const iconMap: Record<string, IconConfig> = {
   ".gif": { icon: Image, color: "text-purple-400" },
   ".svg": { icon: Image, color: "text-orange-400" },
   ".webp": { icon: Image, color: "text-purple-400" },
+  ".avif": { icon: Image, color: "text-purple-400" },
   ".ico": { icon: Image, color: "text-purple-400" },
   // Rust - Orange
   ".rs": { icon: Cog, color: "text-orange-500" },

@@ -173,6 +173,12 @@ describe("FileViewerTab routing", () => {
       }),
     ).toBe("image");
     expect(
+      getFileViewerKind("app-preview.AVIF", {
+        showDiff: true,
+        hasDiffData: true,
+      }),
+    ).toBe("image");
+    expect(
       getFileViewerKind("README.md", {
         showDiff: true,
         hasDiffData: false,
@@ -241,6 +247,22 @@ describe("FileViewerTab component", () => {
     const image = await screen.findByRole("img", { name: "assets/logo.png" });
     expect(image.getAttribute("src")).toBe("data:image/png;base64,aW1hZ2U=");
     expect(readFileBase64Mock).toHaveBeenCalledWith("/repo/assets/logo.png");
+  });
+
+  test("loads AVIF images with the correct MIME type", async () => {
+    render(
+      <FileViewerTab
+        tabId="avif-image-tab"
+        filePath="assets/app-preview.avif"
+        worktreePath="/repo"
+        isLocalEnvironment
+        isActive
+      />,
+    );
+
+    const image = await screen.findByRole("img", { name: "assets/app-preview.avif" });
+    expect(image.getAttribute("src")).toBe("data:image/avif;base64,aW1hZ2U=");
+    expect(readFileBase64Mock).toHaveBeenCalledWith("/repo/assets/app-preview.avif");
   });
 
   test("loads container images through the container backend", async () => {

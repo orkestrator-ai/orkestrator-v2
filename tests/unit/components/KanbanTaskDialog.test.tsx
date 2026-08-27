@@ -150,15 +150,41 @@ function launchBuild(
   fireEvent.click(
     within(environmentGroup).getByRole("radio", { name: new RegExp(`^${environment}`) }),
   );
-  const stepEntries = Object.entries(stepAgents);
-  if (stepEntries.length > 0) {
-    fireEvent.click(screen.getByRole("checkbox", { name: /Use one configuration for every step/ }));
-  }
-  for (const [step, agent] of stepEntries) {
-    const group = screen.getByRole("radiogroup", { name: `${step} agent` });
-    fireEvent.click(within(group).getByRole("radio", { name: agent }));
+  for (const [step, agent] of Object.entries(stepAgents)) {
+    chooseLauncherPlatform(step as keyof typeof LAUNCHER_STEP_LABELS, agentPlatform(agent));
   }
   fireEvent.click(screen.getByRole("button", { name: "Start build" }));
+}
+
+const LAUNCHER_STEP_LABELS = {
+  Build: "Build",
+  Review: "Review",
+  Verify: "Verify",
+  PR: "Pull request",
+  Conflicts: "Resolve conflicts",
+} as const;
+
+function agentPlatform(agent: "Claude" | "Codex" | "OpenCode") {
+  return agent === "Claude" ? "claude" : agent === "Codex" ? "codex" : "opencode";
+}
+
+function launcherPicker(step: keyof typeof LAUNCHER_STEP_LABELS) {
+  return screen.getByRole("combobox", {
+    name: `${LAUNCHER_STEP_LABELS[step]} step model`,
+  });
+}
+
+function openLauncherPicker(step: keyof typeof LAUNCHER_STEP_LABELS) {
+  fireEvent.pointerDown(launcherPicker(step), { button: 0, ctrlKey: false });
+}
+
+function chooseLauncherPlatform(
+  step: keyof typeof LAUNCHER_STEP_LABELS,
+  platform: "claude" | "codex" | "opencode",
+) {
+  openLauncherPicker(step);
+  fireEvent.click(screen.getByRole("button", { name: `${platform} models` }));
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
 }
 
 /**
@@ -1521,16 +1547,13 @@ describe("KanbanTaskDialog", () => {
     render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
     openLauncher();
-    const agents = screen.getByRole("radiogroup", { name: "All steps agent" });
-    fireEvent.click(within(agents).getByRole("radio", { name: "Codex" }));
-    expect(isChecked(agents, "Codex")).toBe(true);
+    const defaultModelLabel = launcherPicker("Build").textContent;
+    chooseLauncherPlatform("Build", "codex");
+    expect(launcherPicker("Build").textContent).not.toBe(defaultModelLabel);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     openLauncher();
-
-    const reopened = screen.getByRole("radiogroup", { name: "All steps agent" });
-    expect(isChecked(reopened, "Claude")).toBe(true);
-    expect(isChecked(reopened, "Codex")).toBe(false);
+    expect(launcherPicker("Build").textContent).toBe(defaultModelLabel);
   });
 
   test("blocks another launch while a build start is in flight", async () => {
@@ -1614,18 +1637,13 @@ describe("KanbanTaskDialog", () => {
     );
 
     openLauncher();
-    const agents = screen.getByRole("radiogroup", { name: "All steps agent" });
-    fireEvent.click(within(agents).getByRole("radio", { name: "OpenCode" }));
+    chooseLauncherPlatform("Build", "opencode");
 
     await waitFor(() =>
       expect(getCachedOpenCodeModelCatalogMock).toHaveBeenCalledWith("project-1"),
     );
-    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent).toContain(
-      "Default",
-    );
-    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent).not.toContain(
-      "Zeta",
-    );
+    expect(launcherPicker("Build").textContent).toContain("Default");
+    expect(launcherPicker("Build").textContent).not.toContain("Zeta");
   });
 
   test("loads the durable OpenCode model catalog for the build project", async () => {
@@ -1648,13 +1666,8 @@ describe("KanbanTaskDialog", () => {
     );
 
     openLauncher();
-    const agents = screen.getByRole("radiogroup", { name: "All steps agent" });
-    fireEvent.click(within(agents).getByRole("radio", { name: "OpenCode" }));
-    await waitFor(() =>
-      expect(screen.getByRole("combobox", { name: "All steps model" }).textContent).toContain(
-        "Project Model",
-      ),
-    );
+    chooseLauncherPlatform("Build", "opencode");
+    await waitFor(() => expect(launcherPicker("Build").textContent).toContain("Project Model"));
   });
 
   test("accepts live OpenCode catalog updates only from environments owned by the project", async () => {
@@ -1667,8 +1680,7 @@ describe("KanbanTaskDialog", () => {
     render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
 
     openLauncher();
-    const agents = screen.getByRole("radiogroup", { name: "All steps agent" });
-    fireEvent.click(within(agents).getByRole("radio", { name: "OpenCode" }));
+    chooseLauncherPlatform("Build", "opencode");
 
     await act(async () => {
       useOpenCodeStore.setState({
@@ -1703,12 +1715,8 @@ describe("KanbanTaskDialog", () => {
       });
     });
 
-    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent).toContain(
-      "Project Live",
-    );
-    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent).not.toContain(
-      "Other Live",
-    );
+    expect(launcherPicker("Build").textContent).toContain("Project Live");
+    expect(launcherPicker("Build").textContent).not.toContain("Other Live");
   });
 
   test("the launcher opens on the repository and project defaults", async () => {
@@ -1754,16 +1762,11 @@ describe("KanbanTaskDialog", () => {
     render(<KanbanTaskDialog task={makeTask()} open onOpenChange={() => {}} />);
     openLauncher();
 
-    expect(isChecked(screen.getByRole("radiogroup", { name: "All steps agent" }), "Codex")).toBe(
-      true,
-    );
     // A project with a local path defaults to a worktree, not a container.
     expect(isChecked(screen.getByRole("radiogroup", { name: "Build environment" }), /^Local/)).toBe(
       true,
     );
-    expect(screen.getByRole("combobox", { name: "All steps model" }).textContent).toContain(
-      "GPT-5.4-Mini",
-    );
+    expect(launcherPicker("Build").textContent).toContain("GPT-5.4-Mini");
 
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 

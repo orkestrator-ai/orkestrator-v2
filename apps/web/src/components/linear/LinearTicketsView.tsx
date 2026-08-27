@@ -360,6 +360,7 @@ export function LinearTicketsViewContent({
   const connectionRequestRef = useRef(0);
   const issuesRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  const buildLaunchTriggerRef = useRef<HTMLButtonElement>(null);
   const selectedIssueIdRef = useRef(selectedIssueId);
   const commentBodyRef = useRef(commentBody);
   const commentEditRevisionsRef = useRef(new Map<string, number>());
@@ -766,6 +767,7 @@ export function LinearTicketsViewContent({
 
                 <div className="flex flex-wrap items-center gap-2">
                   <Button
+                    ref={buildLaunchTriggerRef}
                     variant="outline"
                     size="sm"
                     disabled={isBuildStarting || hasActiveBuild}
@@ -846,8 +848,9 @@ export function LinearTicketsViewContent({
           open={buildDialogOpen}
           onOpenChange={setBuildDialogOpen}
           catalog={launchCatalog}
-          busy={isBuildStarting || hasActiveBuild}
+          busy={isBuildStarting}
           localEnvironmentAvailable={localEnvironmentAvailable}
+          returnFocusRef={buildLaunchTriggerRef}
           commentContext={
             detail && detail.comments.length > 0 ? { count: detail.comments.length } : undefined
           }

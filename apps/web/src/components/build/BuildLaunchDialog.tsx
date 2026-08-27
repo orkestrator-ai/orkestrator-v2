@@ -1,5 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { BuildStepKey } from "@orkestrator/protocol/build-pipeline";
+import type { AgentModel, AgentModelRef } from "@orkestrator/protocol/native-agent";
 import {
   Container,
   FolderGit2,
@@ -11,6 +12,7 @@ import {
   ScanSearch,
   ShieldCheck,
 } from "lucide-react";
+import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -22,16 +24,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { AgentRadioGroup } from "@/components/agents/AgentRadioGroup";
-import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
-import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
+  mergeReorderedFavoriteModels,
+  useAgentModelFavorites,
+} from "@/hooks/useAgentModelFavorites";
 import {
   defaultEffortFor,
   effortLabel,
@@ -43,7 +40,6 @@ import {
 } from "@/lib/agent-launch";
 import { cn } from "@/lib/utils";
 import type { EnvironmentType } from "@/types";
-import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
 
 export interface BuildLaunchStepSelection {
   agent: LaunchAgent;
@@ -73,19 +69,19 @@ const BUILD_STEPS: Array<{
   {
     key: "build",
     title: "Build",
-    description: "Implements the ticket. Also runs the fix stage.",
+    description: "Implements the ticket and runs the fix stage.",
     icon: <Hammer className="size-4" />,
   },
   {
     key: "review",
     title: "Review",
-    description: "Reviews the diff and identifies issues and coverage gaps.",
+    description: "Reviews the diff for issues and coverage gaps.",
     icon: <ScanSearch className="size-4" />,
   },
   {
     key: "address",
     title: "Address issues",
-    description: "Continues from the review context and fixes its findings.",
+    description: "Continues from the review and fixes its findings.",
     icon: <ListChecks className="size-4" />,
   },
   {
@@ -96,13 +92,13 @@ const BUILD_STEPS: Array<{
   },
   {
     key: "pr",
-    title: "PR",
+    title: "Pull request",
     description: "Pushes the branch and opens the pull request.",
     icon: <GitPullRequest className="size-4" />,
   },
   {
     key: "resolve-conflicts",
-    title: "Conflicts",
+    title: "Resolve conflicts",
     description: "Resolves merge conflicts on an open pull request.",
     icon: <GitMerge className="size-4" />,
   },
@@ -134,39 +130,8 @@ const ENVIRONMENT_OPTIONS: Array<{
  * Git-visible uncommitted paths, so ignored files and `.git` internals are not
  * covered — claiming the workspace is protected outright would overstate it.
  */
-function validationWorkspaceNotice(uniform: boolean): string {
-  const stages = uniform ? "Review and verify" : "This step";
-  return `${stages} will run with full workspace access so validation can write generated outputs and caches. Source edits and commits are forbidden: the backend rejects the result if the commit or any Git-tracked or untracked path changed. Ignored files are not checked.`;
-}
-
-function Step({
-  number,
-  icon,
-  children,
-  last = false,
-}: {
-  number: number;
-  icon: React.ReactNode;
-  children: React.ReactNode;
-  last?: boolean;
-}) {
-  return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2rem_minmax(0,1fr)]">
-      <div className="hidden flex-col items-center sm:flex" aria-hidden="true">
-        <div className="relative grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/35 bg-cyan-500/10 text-cyan-300">
-          {icon}
-          <span className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[9px] font-semibold text-zinc-300 ring-1 ring-zinc-600">
-            {number}
-          </span>
-        </div>
-        {!last && (
-          <div className="my-1 h-full min-h-5 w-px bg-gradient-to-b from-cyan-400/35 to-zinc-700/20" />
-        )}
-      </div>
-      <div className={cn("min-w-0", !last && "pb-4")}>{children}</div>
-    </div>
-  );
-}
+const VALIDATION_WORKSPACE_NOTICE =
+  "This step runs with full workspace access so validation can write generated outputs and caches. Source edits and commits are forbidden: the backend rejects the result if the commit or any Git-tracked or untracked path changed. Ignored files are not checked.";
 
 interface BuildLaunchDialogProps {
   open: boolean;
@@ -182,10 +147,18 @@ interface BuildLaunchDialogProps {
   busy?: boolean;
   /** Whether this project has a host checkout that can own local worktrees. */
   localEnvironmentAvailable?: boolean;
+  /** Trigger that receives focus again after the dialog closes. */
+  returnFocusRef?: RefObject<HTMLElement | null>;
   onConfirm: (selection: BuildLaunchSelection) => void;
 }
 
 type StepState = { agent: LaunchAgent; model: string; reasoningEffort: string };
+
+interface ResolvedStep {
+  model: AgentModelOption | undefined;
+  efforts: string[];
+  effort: string;
+}
 
 function initialStepState(
   agent: LaunchAgent,
@@ -201,30 +174,166 @@ function initialStepState(
   };
 }
 
-/** Every step set to the same state, which is what {@link uniform} means. */
-function everyStep(state: StepState): Record<BuildStepKey, StepState> {
-  return Object.fromEntries(BUILD_STEPS.map(({ key }) => [key, { ...state }])) as Record<
-    BuildStepKey,
-    StepState
-  >;
-}
-
 function initialSteps(
   agent: LaunchAgent,
   catalog: AgentModelCatalog,
   preferredModels: BuildLaunchDialogProps["preferredModels"],
   preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"],
 ): Record<BuildStepKey, StepState> {
-  return everyStep(initialStepState(agent, catalog, preferredModels, preferredReasoningEfforts));
+  const initial = initialStepState(agent, catalog, preferredModels, preferredReasoningEfforts);
+  return Object.fromEntries(BUILD_STEPS.map(({ key }) => [key, { ...initial }])) as Record<
+    BuildStepKey,
+    StepState
+  >;
+}
+
+function flatCatalog(catalog: AgentModelCatalog, enabledPlatforms: LaunchAgent[]): AgentModel[] {
+  return enabledPlatforms.flatMap((agent) =>
+    (catalog[agent] ?? []).map((model) => ({
+      platform: agent,
+      id: model.id,
+      label: model.name,
+      ...(model.description ? { providerLabel: model.description } : {}),
+      description: model.description,
+      reasoning: model.reasoningEfforts.map((effort) => ({
+        id: effort,
+        label: effortLabel(effort),
+      })),
+    })),
+  );
+}
+
+function BuildStepCard({
+  number,
+  stepKey,
+  title,
+  description,
+  icon,
+  state,
+  resolved,
+  models,
+  enabledPlatforms,
+  catalog,
+  preferredModels,
+  preferredReasoningEfforts,
+  favorites,
+  onToggleFavorite,
+  onReorderFavorites,
+  onChange,
+}: {
+  number: number;
+  stepKey: BuildStepKey;
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+  state: StepState;
+  resolved: ResolvedStep;
+  models: AgentModel[];
+  enabledPlatforms: LaunchAgent[];
+  catalog: AgentModelCatalog;
+  preferredModels: BuildLaunchDialogProps["preferredModels"];
+  preferredReasoningEfforts: BuildLaunchDialogProps["preferredReasoningEfforts"];
+  favorites: ReturnType<typeof useAgentModelFavorites>["favorites"];
+  onToggleFavorite: ReturnType<typeof useAgentModelFavorites>["toggleFavorite"];
+  onReorderFavorites: ReturnType<typeof useAgentModelFavorites>["reorderFavorites"];
+  onChange: (next: StepState) => void;
+}) {
+  const selectModel = (agent: LaunchAgent, model: string) => {
+    onChange({
+      agent,
+      model,
+      reasoningEffort: defaultEffortFor(agent, model, catalog, preferredReasoningEfforts),
+    });
+  };
+  const reasoningOptions =
+    resolved.efforts.length === 0
+      ? []
+      : [
+          { id: "default", label: "Default" },
+          ...resolved.efforts.map((effort) => ({ id: effort, label: effortLabel(effort) })),
+        ];
+  const modelLabel =
+    resolved.model?.name ?? (state.model === "default" ? "Choose a model" : state.model);
+  const pickerLabel = `${title} step model`;
+
+  return (
+    <li
+      data-build-step={stepKey}
+      className="relative rounded-xl border border-zinc-800 bg-zinc-950/55 p-3.5"
+    >
+      <div className="mb-3 flex min-w-0 items-start gap-3">
+        <span className="relative grid size-8 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
+          {icon}
+          <span
+            data-build-step-number={number}
+            className="absolute -right-1.5 -top-1.5 grid size-4 place-items-center rounded-full bg-zinc-800 text-[9px] font-semibold text-zinc-300 ring-1 ring-zinc-600"
+          >
+            {number}
+          </span>
+        </span>
+        <div className="min-w-0 flex-1">
+          <Label
+            htmlFor={`build-${stepKey}-model`}
+            className="block text-sm font-semibold text-zinc-200"
+          >
+            {pickerLabel}
+          </Label>
+          <p className="mt-0.5 text-xs leading-snug text-zinc-500">{description}</p>
+        </div>
+      </div>
+
+      <AgentModelPicker
+        id={`build-${stepKey}-model`}
+        ariaLabel={pickerLabel}
+        models={models}
+        enabledPlatforms={enabledPlatforms}
+        selectedPlatform={state.agent}
+        favorites={favorites}
+        onToggleFavorite={onToggleFavorite}
+        onReorderFavorites={onReorderFavorites}
+        selectedModelId={resolved.model?.id ?? state.model}
+        selectedModelLabel={modelLabel}
+        onPlatformChange={(agent) => {
+          if (agent === state.agent) return;
+          selectModel(agent, firstModelFor(agent, catalog, preferredModels));
+        }}
+        onModelChange={(model) => selectModel(state.agent, model)}
+        onModelSelect={(model) => selectModel(model.platform, model.id)}
+        reasoningOptions={reasoningOptions}
+        selectedReasoningId={resolved.effort}
+        selectedReasoningLabel={
+          reasoningOptions.length > 0
+            ? resolved.effort === "default"
+              ? "Default effort"
+              : effortLabel(resolved.effort)
+            : undefined
+        }
+        onReasoningChange={(reasoningEffort) => onChange({ ...state, reasoningEffort })}
+        title={pickerLabel}
+        className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5 md:max-w-none"
+      />
+
+      {reasoningOptions.length === 0 && (
+        <p className="mt-1.5 text-xs text-zinc-500">
+          This model uses its default reasoning setting.
+        </p>
+      )}
+
+      {(stepKey === "review" || stepKey === "verify") && (
+        <p className="mt-2 text-[11px] leading-snug text-amber-400/80" role="note">
+          {VALIDATION_WORKSPACE_NOTICE}
+        </p>
+      )}
+    </li>
+  );
 }
 
 /**
  * Configures a build before it starts.
  *
- * Each pipeline step picks its own harness, model and reasoning effort, because
- * a cheap model is often the right one to write code with and the wrong one to
- * review it. The environment type is asked once: it belongs to the workspace the
- * whole pipeline shares, not to any single step.
+ * The environment belongs to the workspace and is chosen once. Every ordered
+ * pipeline stage gets a complete model picker so its harness, model and
+ * reasoning can be understood and changed as one selection.
  */
 export function BuildLaunchDialog({
   open,
@@ -237,17 +346,32 @@ export function BuildLaunchDialog({
   commentContext,
   busy = false,
   localEnvironmentAvailable = true,
+  returnFocusRef,
   onConfirm,
 }: BuildLaunchDialogProps) {
-  const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
+  const { favorites, enabledPlatforms, toggleFavorite, reorderFavorites } =
+    useAgentModelFavorites();
   const dockerAvailable = useDockerAvailability();
+  const models = useMemo(() => flatCatalog(catalog, enabledPlatforms), [catalog, enabledPlatforms]);
+  const pickerFavorites = useMemo(
+    () => favorites.filter((favorite) => enabledPlatforms.includes(favorite.platform)),
+    [enabledPlatforms, favorites],
+  );
+  const reorderPickerFavorites = useCallback(
+    (reorderedVisibleFavorites: AgentModelRef[]) => {
+      const merged = mergeReorderedFavoriteModels(
+        favorites,
+        pickerFavorites,
+        reorderedVisibleFavorites,
+      );
+      if (merged) reorderFavorites(merged);
+    },
+    [favorites, pickerFavorites, reorderFavorites],
+  );
   const [environmentType, setEnvironmentType] = useState(defaultEnvironmentType);
   const [steps, setSteps] = useState(() =>
     initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts),
   );
-  // On by default: one configuration for the whole pipeline is the common case,
-  // and it keeps five extra step sections out of the way until they are wanted.
-  const [uniform, setUniform] = useState(true);
   const [includeComments, setIncludeComments] = useState(commentContext?.defaultIncluded ?? true);
   const wasOpenRef = useRef(false);
   const environmentGroupId = useId();
@@ -268,7 +392,6 @@ export function BuildLaunchDialog({
       }
       return defaultEnvironmentType;
     });
-    setUniform(true);
     setIncludeComments(commentContext?.defaultIncluded ?? true);
     setSteps(initialSteps(defaultAgent, catalog, preferredModels, preferredReasoningEfforts));
   }, [
@@ -294,90 +417,56 @@ export function BuildLaunchDialog({
   const resolved = useMemo(() => {
     const entries = BUILD_STEPS.map(({ key }) => {
       const step = steps[key];
-      const models = modelsForAgent(catalog, step.agent);
-      const model = models.find((option) => option.id === step.model) ?? models[0];
+      const agentModels = modelsForAgent(catalog, step.agent);
+      const model = agentModels.find((option) => option.id === step.model) ?? agentModels[0];
       const efforts = model?.reasoningEfforts ?? [];
       const effort =
         efforts.length > 0 &&
         (step.reasoningEffort === "default" || efforts.includes(step.reasoningEffort))
           ? step.reasoningEffort
           : "default";
-      return [key, { models, model, efforts, effort }] as const;
+      return [key, { model, efforts, effort }] as const;
     });
-    return Object.fromEntries(entries) as Record<
-      BuildStepKey,
-      {
-        models: AgentModelOption[];
-        model: AgentModelOption | undefined;
-        efforts: string[];
-        effort: string;
-      }
-    >;
+    return Object.fromEntries(entries) as Record<BuildStepKey, ResolvedStep>;
   }, [catalog, steps]);
 
-  // While uniform, every step is edited together, so the submitted payload needs
-  // no special case and unticking leaves the steps where the shared value was.
-  const updateStep = (key: BuildStepKey, next: Partial<StepState>) => {
-    setSteps((current) =>
-      uniform
-        ? everyStep({ ...current[key], ...next })
-        : { ...current, [key]: { ...current[key], ...next } },
-    );
+  const updateStep = (key: BuildStepKey, next: StepState) => {
+    setSteps((current) => ({ ...current, [key]: next }));
   };
 
-  const handleUniformChange = (next: boolean) => {
-    setUniform(next);
-    if (next) setSteps((current) => everyStep(current.build));
-  };
-
-  const handleAgentChange = (key: BuildStepKey, agent: LaunchAgent) => {
-    updateStep(key, initialStepState(agent, catalog, preferredModels, preferredReasoningEfforts));
-  };
-
-  const handleModelChange = (key: BuildStepKey, model: string) => {
-    updateStep(key, {
-      model,
-      reasoningEffort: defaultEffortFor(
-        steps[key].agent,
-        model,
-        catalog,
-        preferredReasoningEfforts,
-      ),
-    });
-  };
-
-  const visibleSteps = uniform ? BUILD_STEPS.slice(0, 1) : BUILD_STEPS;
-
-  const summary = visibleSteps.map(({ key, title }) => {
-    const step = resolved[key];
-    const effort = step.effort === "default" ? "default effort" : `${step.effort} effort`;
-    const label = uniform ? "All steps" : title;
-    return `${label}: ${step.model?.name ?? steps[key].model} · ${effort}`;
-  });
   const commentContextLabel = commentContext
     ? `Include ${commentContext.count} comment${commentContext.count === 1 ? "" : "s"} in build context`
     : "";
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[85vh] w-[min(calc(100%-1rem),38rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[38rem]">
-        <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
-          <DialogTitle className="flex items-center gap-2 text-base">
-            <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
-              <Hammer className="size-4" />
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <DialogContent
+        className="flex max-h-[min(46rem,calc(100vh-2rem))] w-[min(calc(100%-1rem),42rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[42rem]"
+        onCloseAutoFocus={(event) => {
+          const focusTarget = returnFocusRef?.current;
+          if (!focusTarget?.isConnected) return;
+          event.preventDefault();
+          focusTarget.focus();
+        }}
+      >
+        <DialogHeader className="shrink-0 border-b border-zinc-800 bg-[radial-gradient(circle_at_15%_0%,rgba(34,211,238,0.12),transparent_48%)] px-5 pb-4 pt-5 sm:px-6">
+          <DialogTitle className="flex items-center gap-3 text-base">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
+              <Hammer className="size-5" />
             </span>
             Configure build
           </DialogTitle>
           <DialogDescription>
-            Pick where the build runs, then the agent, model and reasoning effort for each pipeline
-            step.
+            Choose the workspace, then assign a model to every stage of the pipeline.
           </DialogDescription>
         </DialogHeader>
 
         <form
           className="flex min-h-0 flex-1 flex-col overflow-hidden"
+          aria-busy={busy}
           onSubmit={(event) => {
             event.preventDefault();
+            if (busy) return;
             if (environmentType === "containerized" && !dockerAvailable) return;
             if (environmentType === "local" && !localEnvironmentAvailable) return;
             onConfirm({
@@ -400,12 +489,13 @@ export function BuildLaunchDialog({
           <div
             role="region"
             aria-label="Build configuration"
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6"
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
           >
-            <Step number={1} icon={<Container className="size-4" />}>
-              <Label className="mb-2 block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-                Environment
-              </Label>
+            <fieldset disabled={busy} className="min-w-0 border-0 px-5 py-5 sm:px-6">
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-zinc-200">Environment</h3>
+                <p className="text-xs text-zinc-500">Every stage runs in this workspace.</p>
+              </div>
               <div
                 className="grid gap-2 sm:grid-cols-2"
                 role="radiogroup"
@@ -455,205 +545,80 @@ export function BuildLaunchDialog({
                   );
                 })}
               </div>
-            </Step>
 
-            {commentContext && (
-              <div className="mb-4 rounded-lg border border-cyan-400/20 bg-cyan-500/[0.06] px-3 py-2.5 sm:ml-[2.75rem]">
-                <div className="flex items-start gap-2.5">
-                  <Checkbox
-                    id={commentContextId}
-                    checked={includeComments}
-                    onCheckedChange={(checked) => setIncludeComments(checked === true)}
-                    aria-label={commentContextLabel}
-                    className="mt-0.5"
-                  />
-                  <Label
-                    htmlFor={commentContextId}
-                    className="flex cursor-pointer items-start gap-2.5"
-                  >
-                    <MessageSquare className="mt-0.5 size-4 shrink-0 text-cyan-300/80" />
-                    <span>
-                      <span className="block text-sm font-medium text-zinc-200">
-                        {commentContextLabel}
+              {commentContext && (
+                <div className="mt-3 rounded-lg border border-cyan-400/20 bg-cyan-500/[0.06] px-3 py-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <Checkbox
+                      id={commentContextId}
+                      checked={includeComments}
+                      onCheckedChange={(checked) => setIncludeComments(checked === true)}
+                      aria-label={commentContextLabel}
+                      className="mt-0.5"
+                    />
+                    <Label
+                      htmlFor={commentContextId}
+                      className="flex cursor-pointer items-start gap-2.5"
+                    >
+                      <MessageSquare className="mt-0.5 size-4 shrink-0 text-cyan-300/80" />
+                      <span>
+                        <span className="block text-sm font-medium text-zinc-200">
+                          {commentContextLabel}
+                        </span>
+                        <span className="mt-0.5 block text-[11px] font-normal leading-snug text-zinc-500">
+                          Give the pipeline the discussion attached to this ticket.
+                        </span>
                       </span>
-                      <span className="mt-0.5 block text-[11px] font-normal leading-snug text-zinc-500">
-                        Give the pipeline the discussion attached to this ticket.
-                      </span>
-                    </span>
-                  </Label>
-                </div>
-              </div>
-            )}
-
-            <div className="mb-4 rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2.5 sm:ml-[2.75rem]">
-              <div className="flex items-start gap-2.5">
-                <Checkbox
-                  id="build-uniform-steps"
-                  checked={uniform}
-                  onCheckedChange={(checked) => handleUniformChange(checked === true)}
-                  className="mt-0.5"
-                />
-                <Label htmlFor="build-uniform-steps" className="block cursor-pointer">
-                  <span className="block text-sm font-medium text-zinc-200">
-                    Use one configuration for every step
-                  </span>
-                  <span className="mt-0.5 block text-[11px] font-normal leading-snug text-zinc-500">
-                    Untick to give build, review, address issues, verify, PR and conflict resolution
-                    their own agent, model and reasoning.
-                  </span>
-                </Label>
-              </div>
-            </div>
-
-            {visibleSteps.map(({ key, title, description, icon }, index) => {
-              const step = resolved[key];
-              const effortAvailable = step.efforts.length > 0;
-              const stepLabel = uniform ? "All steps" : title;
-              return (
-                <Step
-                  key={key}
-                  number={index + 2}
-                  icon={icon}
-                  last={index === visibleSteps.length - 1}
-                >
-                  <div className="mb-2">
-                    <Label className="block text-xs font-medium uppercase tracking-[0.14em] text-zinc-400">
-                      {uniform ? "All steps" : `${title} step`}
                     </Label>
-                    <p className="mt-0.5 text-[11px] leading-snug text-zinc-500">
-                      {uniform
-                        ? "Build, review, address issues, verify, PR and conflict resolution all run this way."
-                        : description}
-                    </p>
                   </div>
-                  <AgentRadioGroup
-                    value={steps[key].agent}
-                    onChange={(agent) => handleAgentChange(key, agent)}
-                    label={`${stepLabel} agent`}
-                  />
-                  {(uniform || key === "review" || key === "verify") && (
-                    <p className="mt-2 text-[11px] leading-snug text-amber-400/80" role="note">
-                      {validationWorkspaceNotice(uniform)}
-                    </p>
-                  )}
-                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                    <div className="min-w-0">
-                      <Label
-                        htmlFor={`build-${key}-model`}
-                        className="mb-1.5 block text-[11px] text-zinc-500"
-                      >
-                        {stepLabel} model
-                      </Label>
-                      {steps[key].agent === "opencode" ? (
-                        <AgentModelPicker
-                          id={`build-${key}-model`}
-                          ariaLabel={`${stepLabel} model`}
-                          models={step.models.map((model) => ({
-                            platform: "opencode" as const,
-                            id: model.id,
-                            label: model.name,
-                            description: model.description,
-                          }))}
-                          enabledPlatforms={["opencode"]}
-                          selectedPlatform="opencode"
-                          favorites={favorites}
-                          onToggleFavorite={toggleFavorite}
-                          onReorderFavorites={reorderFavorites}
-                          selectedModelId={step.model?.id ?? steps[key].model}
-                          selectedModelLabel={step.model?.name ?? "Choose a model"}
-                          onModelChange={(model) => handleModelChange(key, model)}
-                          reasoningOptions={[]}
-                          title={`${stepLabel} model`}
-                          className="min-h-11 border border-zinc-700/80 bg-zinc-900 py-2.5"
-                        />
-                      ) : (
-                        <Select
-                          value={step.model?.id ?? steps[key].model}
-                          onValueChange={(model) => handleModelChange(key, model)}
-                        >
-                          <SelectTrigger
-                            id={`build-${key}-model`}
-                            className="min-h-11 w-full border-zinc-700/80 bg-zinc-900 py-2.5 data-[size=default]:h-auto"
-                          >
-                            <span className="flex min-w-0 flex-1 flex-col text-left">
-                              <span className="truncate text-sm">
-                                {step.model?.name ?? "Choose a model"}
-                              </span>
-                              {step.model?.description && (
-                                <span className="truncate text-[11px] font-normal text-zinc-500">
-                                  {step.model.description}
-                                </span>
-                              )}
-                            </span>
-                          </SelectTrigger>
-                          <SelectContent position="popper" className="max-h-72">
-                            {step.models.map((option) => (
-                              <SelectItem key={option.id} value={option.id} className="py-2">
-                                <span>
-                                  <span className="block">{option.name}</span>
-                                  {option.description && (
-                                    <span className="block max-w-[28rem] truncate text-[11px] text-zinc-500">
-                                      {option.description}
-                                    </span>
-                                  )}
-                                </span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <Label
-                        htmlFor={`build-${key}-effort`}
-                        className="mb-1.5 block text-[11px] text-zinc-500"
-                      >
-                        {stepLabel} reasoning effort
-                      </Label>
-                      <Select
-                        value={step.effort}
-                        onValueChange={(effort) => updateStep(key, { reasoningEffort: effort })}
-                        disabled={!effortAvailable}
-                      >
-                        <SelectTrigger
-                          id={`build-${key}-effort`}
-                          className="h-11 w-full border-zinc-700/80 bg-zinc-900"
-                        >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="default">Default</SelectItem>
-                          {step.efforts.map((effort) => (
-                            <SelectItem key={effort} value={effort}>
-                              {effortLabel(effort)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {!effortAvailable && (
-                        <p className="mt-1.5 text-[11px] text-zinc-500">
-                          This model uses its default reasoning setting.
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </Step>
-              );
-            })}
+                </div>
+              )}
 
-            <div className="mt-5 space-y-1 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-400">
-              <p>
-                <span className="text-zinc-500">Environment:</span>{" "}
-                {environmentType === "local" ? "Local worktree" : "Container"}
-              </p>
-              {summary.map((line) => (
-                <p key={line}>{line}</p>
-              ))}
-            </div>
+              <div className="my-5 flex items-center gap-3 text-zinc-500" aria-hidden="true">
+                <span className="h-px flex-1 bg-zinc-800" />
+                <Hammer className="size-3.5" />
+                <span className="h-px flex-1 bg-zinc-800" />
+              </div>
+
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-zinc-200">Build steps</h3>
+                <p className="text-xs text-zinc-500">
+                  The pipeline runs top to bottom. Pick the model best suited to each stage.
+                </p>
+              </div>
+              <ol className="space-y-2.5" aria-label="Build steps">
+                {BUILD_STEPS.map(({ key, title, description, icon }, index) => (
+                  <BuildStepCard
+                    key={key}
+                    number={index + 1}
+                    stepKey={key}
+                    title={title}
+                    description={description}
+                    icon={icon}
+                    state={steps[key]}
+                    resolved={resolved[key]}
+                    models={models}
+                    enabledPlatforms={enabledPlatforms}
+                    catalog={catalog}
+                    preferredModels={preferredModels}
+                    preferredReasoningEfforts={preferredReasoningEfforts}
+                    favorites={pickerFavorites}
+                    onToggleFavorite={toggleFavorite}
+                    onReorderFavorites={reorderPickerFavorites}
+                    onChange={(next) => updateStep(key, next)}
+                  />
+                ))}
+              </ol>
+            </fieldset>
           </div>
 
           <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={busy}
+            >
               Cancel
             </Button>
             <Button
@@ -664,7 +629,7 @@ export function BuildLaunchDialog({
                 (environmentType === "local" && !localEnvironmentAvailable)
               }
             >
-              Start build
+              {busy ? "Starting build…" : "Start build"}
             </Button>
           </DialogFooter>
         </form>

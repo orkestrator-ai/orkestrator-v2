@@ -215,6 +215,7 @@ export function KanbanTaskDialog({
   };
   const [previewImage, setPreviewImage] = useState<{ url: string; filename: string } | null>(null);
   const dialogContentRef = useRef<HTMLDivElement>(null);
+  const buildLaunchTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Cache of loaded image data URLs keyed by image ID (for on-demand loading from disk)
   const [imageUrlCache, setImageUrlCache] = useState<Record<string, string>>({});
@@ -909,6 +910,7 @@ export function KanbanTaskDialog({
                 Create Task
               </Button>
               <Button
+                ref={buildLaunchTriggerRef}
                 size="sm"
                 variant="outline"
                 className="gap-1.5"
@@ -934,6 +936,7 @@ export function KanbanTaskDialog({
           catalog={launchCatalog}
           busy={isBuildStarting}
           localEnvironmentAvailable={localEnvironmentAvailable}
+          returnFocusRef={buildLaunchTriggerRef}
           {...launchDefaults}
           onConfirm={(selection) => void handleCreateAndBuild(selection)}
         />
@@ -1074,6 +1077,7 @@ export function KanbanTaskDialog({
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Button
+                        ref={buildLaunchTriggerRef}
                         size="sm"
                         variant="outline"
                         className="gap-1.5 flex-1"
@@ -1215,6 +1219,7 @@ export function KanbanTaskDialog({
         catalog={launchCatalog}
         busy={isBuildStarting}
         localEnvironmentAvailable={localEnvironmentAvailable}
+        returnFocusRef={buildLaunchTriggerRef}
         {...launchDefaults}
         onConfirm={handleBuildConfirmed}
       />

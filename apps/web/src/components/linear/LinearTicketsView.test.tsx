@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
 import {
   mockToastError as toastErrorMock,
@@ -725,18 +725,16 @@ describe("LinearTicketsView", () => {
 
     expect(await screen.findByRole("heading", { name: "Configure build" })).toBeTruthy();
     expect(screen.getByRole("radiogroup", { name: "Build environment" })).toBeTruthy();
-    expect(screen.getByRole("radiogroup", { name: "All steps agent" })).toBeTruthy();
+    expect(
+      within(screen.getByRole("list", { name: "Build steps" })).getAllByRole("listitem"),
+    ).toHaveLength(6);
+    expect(screen.getByRole("combobox", { name: "Build step model" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Review step model" })).toBeTruthy();
     const includeComments = screen.getByRole("checkbox", {
       name: "Include 1 comment in build context",
     }) as HTMLButtonElement;
     expect(includeComments.getAttribute("data-state")).toBe("checked");
     fireEvent.click(includeComments);
-    fireEvent.click(
-      screen.getByRole("checkbox", {
-        name: /Use one configuration for every step/,
-      }),
-    );
-    expect(screen.getByRole("radiogroup", { name: "Review agent" })).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: /^Local/ }));
     fireEvent.click(screen.getByRole("button", { name: "Start build" }));
 
@@ -762,7 +760,7 @@ describe("LinearTicketsView", () => {
     });
   });
 
-  test("blocks an open launcher when a build becomes active in the background", async () => {
+  test("redirects an open launcher when a build becomes active in the background", async () => {
     renderLinearTicketsView();
     fireEvent.click(await screen.findByText("Add Linear integration"));
     await screen.findByText("Build Linear support");
@@ -790,7 +788,11 @@ describe("LinearTicketsView", () => {
       useBuildPipelineStore.getState().replacePipeline(activePipeline);
     });
 
-    await waitFor(() => expect(startButton.disabled).toBe(true));
+    await waitFor(() => expect(startButton.disabled).toBe(false));
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(form?.getAttribute("aria-busy")).toBe("false");
 
     // A programmatic submit bypasses the disabled button and exercises the
     // confirmation-time store guard against a stale event ordering.

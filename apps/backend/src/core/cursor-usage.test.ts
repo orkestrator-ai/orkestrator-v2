@@ -142,7 +142,84 @@ describe("Cursor usage tolerant parsing", () => {
     });
   });
 
-  test("reports an over-quota account instead of dropping its bars", () => {
+  test("keeps the reported quota separate from saturated included spend", () => {
+    const result = normalizeCursorAccountUsage(
+      {
+        billingCycleEnd: 1_788_220_800_000,
+        planUsage: {
+          includedSpend: 2_000,
+          limit: 2_000,
+          autoPercentUsed: 50,
+          apiPercentUsed: 0,
+          totalPercentUsed: 50,
+        },
+      },
+      { planInfo: { planName: "Pro" } },
+      "2026-08-27T12:32:54.000Z",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        included: {
+          usedCents: 2_000,
+          limitCents: 2_000,
+          usedPercent: 100,
+        },
+        internalPercentages: { autoPercentUsed: 50, apiPercentUsed: 0, totalPercentUsed: 50 },
+        buckets: [
+          { label: "Cursor Models", usedPercent: 50 },
+          { label: "Other Models", usedPercent: 0 },
+        ],
+      },
+    });
+  });
+
+  test("derives included usage from totalSpend when the reported percentage is absent", () => {
+    const result = normalizeCursorAccountUsage(
+      {
+        planUsage: {
+          totalSpend: 10_000,
+          limit: 40_000,
+        },
+      },
+      undefined,
+      "2026-08-27T12:32:54.000Z",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        included: {
+          usedCents: 10_000,
+          limitCents: 40_000,
+          usedPercent: 25,
+        },
+      },
+    });
+  });
+
+  test("omits the derived percentage when the included limit is zero", () => {
+    const result = normalizeCursorAccountUsage(
+      {
+        planUsage: {
+          includedSpend: 1_000,
+          limit: 0,
+        },
+      },
+      undefined,
+      "2026-08-27T12:32:54.000Z",
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: { included: { usedCents: 1_000, limitCents: 0 } },
+    });
+    if (!result.ok) return;
+    expect(result.data.included).not.toHaveProperty("usedPercent");
+  });
+
+  test("reports an over-allowance account even when Cursor's quota is below 100 percent", () => {
     const result = normalizeCursorAccountUsage(
       {
         billingCycleEnd: 1_788_220_800_000,
@@ -151,7 +228,7 @@ describe("Cursor usage tolerant parsing", () => {
           remaining: -6_000,
           limit: 40_000,
           autoPercentUsed: 112.5,
-          totalPercentUsed: 115,
+          totalPercentUsed: 50,
         },
       },
       undefined,
@@ -172,7 +249,7 @@ describe("Cursor usage tolerant parsing", () => {
     });
     expect(result.data.internalPercentages).toEqual({
       autoPercentUsed: 112.5,
-      totalPercentUsed: 115,
+      totalPercentUsed: 50,
     });
   });
 
@@ -188,8 +265,13 @@ describe("Cursor usage tolerant parsing", () => {
     ).toMatchObject({
       ok: true,
       data: {
-        included: { usedPercent: 125 },
+        included: {},
         buckets: [{ usedPercent: 120 }, { usedPercent: 130 }],
+        internalPercentages: {
+          autoPercentUsed: 120,
+          apiPercentUsed: 130,
+          totalPercentUsed: 125,
+        },
       },
     });
   });

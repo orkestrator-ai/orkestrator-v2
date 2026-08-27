@@ -25,6 +25,7 @@ export interface CursorNormalizedUsage {
     usedCents?: number;
     remainingCents?: number;
     limitCents?: number;
+    /** Percentage of the monetary included allowance: usedCents / limitCents. */
     usedPercent?: number;
   };
   buckets: CursorUsageBucket[];
@@ -41,6 +42,7 @@ export interface CursorNormalizedUsage {
   internalPercentages?: {
     autoPercentUsed?: number;
     apiPercentUsed?: number;
+    /** Cursor's reported overall quota percentage, which may use a different denominator. */
     totalPercentUsed?: number;
   };
   source: {

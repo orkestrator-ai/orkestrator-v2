@@ -751,6 +751,11 @@ describe("AgentInfoButton usage panel", () => {
             individualRemainingCents: 10_000,
             limitType: "user",
           },
+          internalPercentages: {
+            autoPercentUsed: 0,
+            apiPercentUsed: 46.444,
+            totalPercentUsed: 15.48,
+          },
           source: {
             kind: "internal-dashboard-api",
             retrievedAt: "2026-08-26T16:00:00.000Z",
@@ -769,9 +774,11 @@ describe("AgentInfoButton usage panel", () => {
     expect(metricValue("Included left")).toBe("$167.78");
     expect(metricValue("Included limit")).toBe("$400.00");
     expect(metricValue("On-demand")).toBe("$0.00");
-    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.getByText("Cursor quota")).toBeTruthy();
+    expect(screen.getByText("Included allowance")).toBeTruthy();
     expect(screen.getByText("Cursor Models")).toBeTruthy();
     expect(screen.getByText("Other Models")).toBeTruthy();
+    expect(screen.getByText("15% used")).toBeTruthy();
     expect(screen.getByText("58% used")).toBeTruthy();
     expect(screen.getByText("46% used")).toBeTruthy();
     expect(nativeInvokeMock).toHaveBeenCalledWith("get_cursor_account_usage");
@@ -831,7 +838,8 @@ describe("AgentInfoButton usage panel", () => {
     expect(metricValue("Pooled limit")).toBe("$500.00");
     expect(screen.getByText("team")).toBeTruthy();
     // The included bar still renders; there are simply no bucket bars.
-    expect(screen.getByText("Included usage")).toBeTruthy();
+    expect(screen.getByText("Included allowance")).toBeTruthy();
+    expect(screen.queryByText("Cursor quota") === null).toBe(true);
     expect(screen.queryByText("Cursor Models") === null).toBe(true);
   });
 
@@ -844,8 +852,9 @@ describe("AgentInfoButton usage panel", () => {
               provider: "cursor",
               plan: "Pro",
               cycle: {},
-              included: { usedPercent: 42 },
+              included: {},
               buckets: [],
+              internalPercentages: { totalPercentUsed: 42 },
               source: {
                 kind: "internal-dashboard-api",
                 retrievedAt: "2026-08-26T16:00:00.000Z",
@@ -862,10 +871,12 @@ describe("AgentInfoButton usage panel", () => {
     expect(screen.queryByText("Included used") === null).toBe(true);
     expect(screen.queryByText("Included limit") === null).toBe(true);
     expect(screen.queryByText("On-demand") === null).toBe(true);
+    expect(screen.getByText("Cursor quota")).toBeTruthy();
+    expect(screen.queryByText("Included allowance") === null).toBe(true);
     expect(screen.getByText("42% used")).toBeTruthy();
   });
 
-  test("shows an over-quota account as a saturated bar and a negative balance", async () => {
+  test("distinguishes an over-allowance account from its lower reported quota", async () => {
     nativeInvokeMock.mockImplementation(async (command: string) =>
       command === "get_cursor_account_usage"
         ? {
@@ -889,6 +900,10 @@ describe("AgentInfoButton usage panel", () => {
                   remainingPercent: 0,
                 },
               ],
+              internalPercentages: {
+                autoPercentUsed: 112.5,
+                totalPercentUsed: 50,
+              },
               source: {
                 kind: "internal-dashboard-api",
                 retrievedAt: "2026-08-26T16:00:00.000Z",
@@ -904,6 +919,9 @@ describe("AgentInfoButton usage panel", () => {
     await waitFor(() => expect(screen.getByText("Cursor account")).toBeTruthy());
     expect(metricValue("Included left")).toBe("-$60.00");
     expect(screen.getByText("over allowance")).toBeTruthy();
+    expect(screen.getByText("Cursor quota")).toBeTruthy();
+    expect(screen.getByText("Included allowance")).toBeTruthy();
+    expect(screen.getByText("50% used")).toBeTruthy();
     // The label stays truthful while the bar saturates: `Progress` positions its
     // fill with translateX, so an unclamped value would leave an empty track.
     expect(screen.getByText("115% used")).toBeTruthy();
@@ -938,8 +956,9 @@ describe("AgentInfoButton usage panel", () => {
               provider: "cursor",
               plan: "Ultra",
               cycle: {},
-              included: { usedPercent: 12 },
+              included: {},
               buckets: [],
+              internalPercentages: { totalPercentUsed: 12 },
               source: {
                 kind: "internal-dashboard-api",
                 retrievedAt: "2026-08-26T16:00:00.000Z",

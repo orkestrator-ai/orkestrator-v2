@@ -106,6 +106,36 @@ const VISIBLE_MODEL_ROWS = 5;
 const RADIO_ROW_CLASS = "items-start py-2 [&>span:first-child]:top-2 [&>span:first-child]:h-5";
 const FAVORITE_LONG_PRESS_MS = 400;
 const FAVORITE_DRAG_TOLERANCE_PX = 8;
+const REASONING_EFFORT_RANK: ReadonlyMap<string, number> = new Map([
+  ["default", 0],
+  ["__inherit__", 0],
+  ["off", 1],
+  ["none", 1],
+  ["minimal", 2],
+  ["low", 3],
+  ["medium", 4],
+  ["high", 5],
+  ["xhigh", 6],
+  ["extra-high", 6],
+  ["extra_high", 6],
+  ["max", 7],
+  ["ultra", 8],
+]);
+
+/** Present provider-neutral reasoning choices from least to greatest effort. */
+function orderReasoningOptions(options: readonly AgentReasoningOption[]): AgentReasoningOption[] {
+  return options
+    .map((option, index) => ({ option, index }))
+    .sort((left, right) => {
+      const leftRank = REASONING_EFFORT_RANK.get(left.option.id.trim().toLowerCase());
+      const rightRank = REASONING_EFFORT_RANK.get(right.option.id.trim().toLowerCase());
+      if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank;
+      if (leftRank !== undefined) return -1;
+      if (rightRank !== undefined) return 1;
+      return left.index - right.index;
+    })
+    .map(({ option }) => option);
+}
 /**
  * Favourite rows carry no drag handle, and `cursor-grab` does not exist on
  * touch, so the gesture that reorders them has to be spelled out. Keyed by the
@@ -459,12 +489,13 @@ function ReasoningItems({
   AgentModelPickerProps,
   "reasoningOptions" | "selectedReasoningId" | "disabled" | "onReasoningChange"
 >) {
+  const orderedOptions = useMemo(() => orderReasoningOptions(reasoningOptions), [reasoningOptions]);
   return (
     <DropdownMenuRadioGroup
       value={selectedReasoningId ?? ""}
       onValueChange={(reasoningId) => onReasoningChange?.(reasoningId)}
     >
-      {reasoningOptions.map((option) => (
+      {orderedOptions.map((option) => (
         <DropdownMenuRadioItem
           key={option.id}
           value={option.id}

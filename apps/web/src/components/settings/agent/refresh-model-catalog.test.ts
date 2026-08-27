@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   MODEL_CATALOG_REFRESHED_EVENT,
   refreshSettingsModelCatalog,
+  resolveSettingsCatalogProjectId,
 } from "./refresh-model-catalog";
 
 function dependencies() {
@@ -14,6 +15,23 @@ function dependencies() {
 }
 
 describe("settings model catalogue refresh", () => {
+  test("falls back to an available repository when Global Settings has no active selection", () => {
+    expect(resolveSettingsCatalogProjectId(null, ["project-1", "project-2"])).toBe("project-1");
+    expect(resolveSettingsCatalogProjectId("missing", ["project-1", "project-2"])).toBe(
+      "project-1",
+    );
+    expect(resolveSettingsCatalogProjectId("project-2", ["project-1", "project-2"])).toBe(
+      "project-2",
+    );
+    expect(resolveSettingsCatalogProjectId(null, [])).toBeNull();
+  });
+
+  test("handles single, empty, and not-yet-hydrated repository lists", () => {
+    expect(resolveSettingsCatalogProjectId(null, ["only-project"])).toBe("only-project");
+    expect(resolveSettingsCatalogProjectId("", ["project-1"])).toBe("project-1");
+    expect(resolveSettingsCatalogProjectId("project-1", [])).toBe("project-1");
+  });
+
   test("requires a repository before invoking OpenCode", async () => {
     const deps = dependencies();
 

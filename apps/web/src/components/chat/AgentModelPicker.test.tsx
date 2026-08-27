@@ -767,6 +767,74 @@ describe("AgentModelPicker", () => {
     );
   });
 
+  test("orders reasoning choices from provider default through increasing effort", () => {
+    setMobileViewport(false);
+    renderPicker({
+      reasoningOptions: [
+        { id: "high", label: "High" },
+        { id: "low", label: "Low" },
+        { id: "max", label: "Max" },
+        { id: "default", label: "Provider default" },
+        { id: "xhigh", label: "Extra high" },
+        { id: "minimal", label: "Minimal" },
+        { id: "medium", label: "Medium" },
+      ],
+    });
+    openPicker();
+
+    const reasoningGroup = screen.getByRole("group", { name: "Reasoning" });
+    expect(
+      Array.from(reasoningGroup.querySelectorAll('[role="menuitemradio"]')).map((item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual(["Provider default", "Minimal", "Low", "Medium", "High", "Extra high", "Max"]);
+  });
+
+  test("keeps unknown and prototype-named reasoning choices stable after known efforts", () => {
+    setMobileViewport(false);
+    renderPicker({
+      reasoningOptions: [
+        { id: "custom-first", label: "Custom first" },
+        { id: " HIGH ", label: "Normalized high" },
+        { id: "constructor", label: "Constructor" },
+        { id: "none", label: "None" },
+        { id: "off", label: "Off" },
+        { id: "__inherit__", label: "Inherit" },
+        { id: "default", label: "Provider default" },
+        { id: "extra_high", label: "Extra high" },
+        { id: "toString", label: "To string" },
+        { id: "custom-last", label: "Custom last" },
+      ],
+    });
+    openPicker();
+
+    const reasoningGroup = screen.getByRole("group", { name: "Reasoning" });
+    expect(
+      Array.from(reasoningGroup.querySelectorAll('[role="menuitemradio"]')).map((item) =>
+        item.textContent?.trim(),
+      ),
+    ).toEqual([
+      "Inherit",
+      "Provider default",
+      "None",
+      "Off",
+      "Normalized high",
+      "Extra high",
+      "Custom first",
+      "Constructor",
+      "To string",
+      "Custom last",
+    ]);
+  });
+
+  test("keeps a single provider-specific reasoning choice available", () => {
+    setMobileViewport(false);
+    renderPicker({ reasoningOptions: [{ id: "bespoke", label: "Bespoke" }] });
+    openPicker();
+
+    expect(screen.getAllByRole("menuitemradio", { name: "Bespoke" })).toHaveLength(1);
+  });
+
   test("disables unavailable reasoning choices and omits an empty ladder", () => {
     setMobileViewport(false);
     renderPicker({ onReasoningChange: undefined });

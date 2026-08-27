@@ -49,6 +49,8 @@ export interface AgentPlatformPaneProps {
   disabled?: boolean;
   onRefreshModels?: () => void;
   refreshingModels?: boolean;
+  refreshModelsDisabled?: boolean;
+  modelCatalogScopeDescription?: string;
   /** Tier-specific extras, e.g. API keys and provider lists at the app tier. */
   children?: React.ReactNode;
 }
@@ -92,6 +94,8 @@ export function AgentPlatformPane({
   disabled,
   onRefreshModels,
   refreshingModels = false,
+  refreshModelsDisabled = false,
+  modelCatalogScopeDescription,
   children,
 }: AgentPlatformPaneProps) {
   const favorites = useAgentModelFavorites();
@@ -249,6 +253,11 @@ export function AgentPlatformPane({
               The model new {label} sessions start on. Changing it in a session&apos;s own picker
               does not change this.
             </p>
+            {modelCatalogScopeDescription && (
+              <p className="mt-1 text-xs text-muted-foreground/80">
+                {modelCatalogScopeDescription}
+              </p>
+            )}
           </div>
           {onRefreshModels && (
             <Button
@@ -256,7 +265,10 @@ export function AgentPlatformPane({
               variant="outline"
               size="sm"
               onClick={onRefreshModels}
-              disabled={disabled || refreshingModels}
+              disabled={disabled || refreshingModels || refreshModelsDisabled}
+              title={
+                refreshModelsDisabled ? "Add or select a repository to refresh models" : undefined
+              }
               aria-label={`Refresh ${label} models`}
               className="shrink-0"
             >

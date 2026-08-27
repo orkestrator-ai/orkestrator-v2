@@ -19,8 +19,6 @@ const COMMAND_LINES = {
   claude: "/app/bin/bun /app/bridges/claude-bridge/dist/index.js",
   opencode: "/toolchains/opencode serve --port 5000 --hostname 127.0.0.1",
   pi: "/app/bin/bun /app/bridges/pi-bridge/dist/index.js",
-  // Cursor is served by whichever engine the installation selected, so both
-  // satisfy its markers; Grok is always the shared ACP bridge.
   cursorSdk: "/app/bin/bun /app/bridges/cursor-bridge/dist/index.js",
   acp: "/app/bin/bun /app/bridges/acp-bridge/dist/index.js",
 } as const;
@@ -283,16 +281,14 @@ describe("reapOrphanedLocalServers", () => {
     expect(reaped).toEqual([{ environmentId: "env-1", kind: "pi", pid: 4243, outcome: "reaped" }]);
   });
 
-  test("accepts either engine behind a recorded cursor pid", async () => {
-    for (const commandLine of [COMMAND_LINES.cursorSdk, COMMAND_LINES.acp]) {
-      const { options, terminated } = makeOptions([environment({ cursorBridgePid: 4244 })], {
-        identities: new Map([[4244, orphanedLeader(4244, commandLine)]]),
-      });
+  test("accepts the SDK bridge behind a recorded cursor pid", async () => {
+    const { options, terminated } = makeOptions([environment({ cursorBridgePid: 4244 })], {
+      identities: new Map([[4244, orphanedLeader(4244, COMMAND_LINES.cursorSdk)]]),
+    });
 
-      const reaped = await reapOrphanedLocalServers(options);
-      expect(terminated).toEqual([4244]);
-      expect(reaped.map((entry) => entry.outcome)).toEqual(["reaped"]);
-    }
+    const reaped = await reapOrphanedLocalServers(options);
+    expect(terminated).toEqual([4244]);
+    expect(reaped.map((entry) => entry.outcome)).toEqual(["reaped"]);
   });
 
   test("does not accept a pi bridge command line under a cursor or grok record", async () => {

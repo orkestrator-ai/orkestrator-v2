@@ -292,14 +292,6 @@ function createSpawn(outcomes: SpawnOutcome[]): typeof spawn {
 }
 
 describe("pinned desktop toolchain cache", () => {
-  test("activates the pinned Cursor bundle under the cursor-agent command", () => {
-    const cursor = pinnedToolchainArtifacts("darwin", "arm64").find(
-      (artifact) => artifact.name === "cursor",
-    );
-    expect(cursor?.archive.entryPath).toBe("dist-package/cursor-agent");
-    expect(cursor?.activationAliases).toContain("cursor-agent");
-  });
-
   test("installs a raw executable artifact", async () => {
     const dataDir = await createDataDir();
     const body = Buffer.from("#!/bin/sh\nprintf 'grok 1.0.3\\n'\n");
@@ -340,7 +332,7 @@ describe("pinned desktop toolchain cache", () => {
     const launcher = Buffer.from('#!/bin/sh\nexec "$(dirname "$0")/node/bin/node"\n');
     const runtime = Buffer.from("bundled runtime");
     const archive = await tarGzip([
-      { name: "dist-package/cursor-agent", body: launcher },
+      { name: "dist-package/pi", body: launcher },
       { name: "dist-package/node/bin/node", body: runtime },
       { name: "dist-package/unpinned-runtime.js", body: Buffer.from("not installed") },
     ]);
@@ -349,21 +341,21 @@ describe("pinned desktop toolchain cache", () => {
         artifacts[1]!,
         archive,
         {
-          entryPath: "dist-package/cursor-agent",
+          entryPath: "dist-package/pi",
           bundleRoot: "dist-package/",
           bundleFiles: [
             { path: "node/bin/node", size: runtime.byteLength, sha256: sha256(runtime) },
           ],
-          url: "https://downloads.example.test/cursor.tar.gz",
+          url: "https://downloads.example.test/pi.tar.gz",
         },
         {
-          fileName: "cursor",
+          fileName: "pi",
           size: launcher.byteLength,
           sha256: sha256(launcher),
         },
       ),
-      name: "cursor",
-      activationAliases: ["cursor-agent"],
+      name: "pi",
+      activationAliases: ["pi-agent"],
     };
     const result = await ensurePinnedToolchains({
       dataDir,
@@ -376,8 +368,8 @@ describe("pinned desktop toolchain cache", () => {
       skipExecutableProbeForTests: true,
     });
 
-    const target = await readlink(path.join(result.binDir, "cursor"));
-    expect(await readlink(path.join(result.binDir, "cursor-agent"))).toBe(target);
+    const target = await readlink(path.join(result.binDir, "pi"));
+    expect(await readlink(path.join(result.binDir, "pi-agent"))).toBe(target);
     expect(await readFile(target)).toEqual(launcher);
     expect(await readFile(path.join(path.dirname(target), "node/bin/node"))).toEqual(runtime);
     await expect(
@@ -412,7 +404,7 @@ describe("pinned desktop toolchain cache", () => {
     const runtime = Buffer.from("bundled runtime");
     const lazyChunk = Buffer.from("lazy runtime");
     const archive = await tarGzip([
-      { name: "dist-package/cursor-agent", body: launcher },
+      { name: "dist-package/pi", body: launcher },
       { name: "dist-package/node", body: runtime },
       { name: "dist-package/chunks/lazy.js", body: lazyChunk },
     ]);
@@ -421,23 +413,23 @@ describe("pinned desktop toolchain cache", () => {
         artifacts[1]!,
         archive,
         {
-          entryPath: "dist-package/cursor-agent",
+          entryPath: "dist-package/pi",
           bundleRoot: "dist-package/",
           bundleIntegrity: {
             fileCount: 2,
             totalSize: 27,
             sha256: "46ed76bffe64e3672843d3c536ff0fbd0d91e3dd3528b12e1c870264856d8855",
           },
-          url: "https://downloads.example.test/cursor.tar.gz",
+          url: "https://downloads.example.test/pi.tar.gz",
         },
         {
-          fileName: "cursor",
+          fileName: "pi",
           size: launcher.byteLength,
           sha256: sha256(launcher),
         },
       ),
-      name: "cursor",
-      activationAliases: ["cursor-agent"],
+      name: "pi",
+      activationAliases: ["pi-agent"],
     };
     const install = async (onFetch = () => undefined) =>
       ensurePinnedToolchains({
@@ -454,7 +446,7 @@ describe("pinned desktop toolchain cache", () => {
       });
 
     const result = await install();
-    const target = await readlink(path.join(result.binDir, "cursor"));
+    const target = await readlink(path.join(result.binDir, "pi"));
     const lazyChunkPath = path.join(path.dirname(target), "chunks/lazy.js");
     expect(await readFile(lazyChunkPath)).toEqual(lazyChunk);
 
@@ -2471,7 +2463,7 @@ describe("pinned desktop toolchain cache", () => {
     await expect(
       ensurePinnedToolchains({
         dataDir: await createDataDir(),
-        artifacts: [{ ...artifacts[0], activationAliases: ["../cursor-agent"] }],
+        artifacts: [{ ...artifacts[0], activationAliases: ["../unsafe-agent"] }],
         fetchImpl,
         skipExecutableProbeForTests: true,
       }),

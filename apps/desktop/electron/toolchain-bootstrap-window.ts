@@ -69,11 +69,11 @@ const PLATFORM_SELECTION_HTML = `<!doctype html>
   <main>
     <p class="eyebrow">First-run setup</p>
     <h1>Choose your agent systems</h1>
-    <p class="intro">Orkestrator will download the latest verified build of each selected system. You can change this later under Settings → Platforms.</p>
+    <p class="intro">Orkestrator will prepare each selected system and download a verified CLI where one is required. You can change this later under Settings → Platforms.</p>
     <fieldset aria-label="Agent platforms">
       <label><input type="checkbox" value="claude" checked><span class="name">Claude Code</span><span class="protocol">Native + CLI</span></label>
       <label><input type="checkbox" value="codex" checked><span class="name">Codex</span><span class="protocol">Native + CLI</span></label>
-      <label><input type="checkbox" value="cursor" checked><span class="name">Cursor Agent</span><span class="protocol">ACP + CLI</span></label>
+      <label><input type="checkbox" value="cursor" checked><span class="name">Cursor Agent</span><span class="protocol">Native SDK</span></label>
       <label><input type="checkbox" value="grok" checked><span class="name">Grok Build</span><span class="protocol">ACP + CLI</span></label>
       <label><input type="checkbox" value="opencode" checked><span class="name">OpenCode</span><span class="protocol">Native + CLI</span></label>
       <label><input type="checkbox" value="pi" checked><span class="name">Pi</span><span class="protocol">Native + CLI</span></label>

@@ -1563,6 +1563,37 @@ describe("AgentInfoButton Codex runtime panel", () => {
     } as never);
   }
 
+  function seedCodexProjection(runtime: NativeAgentSessionProjection["runtime"]) {
+    useNativeAgentProjectionStore.getState().setProjection(CODEX_KEY, {
+      platform: "codex",
+      environmentId: ENVIRONMENT_ID,
+      sessionId: "codex-session-1",
+      connection: "connected",
+      turn: { phase: "idle" },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      capabilities: {
+        attachments: { files: true, images: true },
+        queue: true,
+        resume: true,
+        fork: true,
+        slashCommands: true,
+        backgroundTasks: false,
+        composer: {
+          provider: true,
+          model: true,
+          reasoning: true,
+          speed: true,
+          mode: true,
+        },
+      },
+      runtime,
+      revision: 1,
+      generation: "test",
+    } satisfies NativeAgentSessionProjection);
+  }
+
   test("shows a loading line until the health request resolves", async () => {
     seedCodex();
     let release: (value: unknown) => void = () => {};
@@ -1629,9 +1660,11 @@ describe("AgentInfoButton Codex runtime panel", () => {
     mockGetCodexRuntimeHealth.mockImplementation(async () => ({
       engine: { state: "ready" },
       notices: [
-        ...Array.from({ length: 8 }, () => ({
+        ...Array.from({ length: 8 }, (_, index) => ({
           method: "mcpServer/startupStatus/updated",
           message: "Codex reported mcpServer startupStatus updated",
+          detail: `context7: ${index === 7 ? "failed\nConnection timed out" : "starting"}`,
+          receivedAt: `2026-08-26T20:0${index}:00.000Z`,
         })),
         { method: "warning", message: "Codex reported warning" },
       ],
@@ -1646,6 +1679,85 @@ describe("AgentInfoButton Codex runtime panel", () => {
       true,
     );
     expect(screen.getByText("Codex reported warning")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Show details for Codex reported mcpServer startupStatus updated",
+      }),
+    );
+    expect(screen.getByRole("dialog", { name: "Codex runtime notice" })).toBeTruthy();
+    expect(screen.getByText("mcpServer/startupStatus/updated")).toBeTruthy();
+    expect(
+      screen.getByText(
+        (_content, element) => element?.textContent === "context7: failed\nConnection timed out",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Showing the 5 most recent occurrences.")).toBeTruthy();
+  });
+
+  test("opens projected notice details and dismisses only the nested dialog", async () => {
+    seedCodex();
+    seedCodexProjection({
+      state: "ready",
+      notices: [
+        {
+          method: "configWarning",
+          message: "Codex reported configWarning",
+          count: 2,
+          occurrences: [
+            {
+              detail: "The /compact command is deprecated",
+              receivedAt: "2026-08-26T20:00:00.000Z",
+            },
+            { detail: "Use /new instead", receivedAt: "not-a-date" },
+          ],
+        },
+      ],
+    });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    const noticeTrigger = screen.getByRole("button", {
+      name: "Show details for Codex reported configWarning",
+    });
+    fireEvent.click(noticeTrigger);
+    expect(screen.getByRole("dialog", { name: "Codex runtime notice" })).toBeTruthy();
+    expect(screen.getByText("The /compact command is deprecated")).toBeTruthy();
+    expect(screen.getByText("Use /new instead")).toBeTruthy();
+    expect(screen.queryByText("Invalid Date") === null).toBe(true);
+
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => document.dispatchEvent(escape));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Codex runtime notice" }) === null).toBe(true),
+    );
+    expect(isPopoverOpen()).toBe(true);
+
+    fireEvent.click(noticeTrigger);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Codex runtime notice" }) === null).toBe(true),
+    );
+    expect(isPopoverOpen()).toBe(true);
+
+    fireEvent.click(noticeTrigger);
+    const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
+    expect(overlay).toBeTruthy();
+    // Radix deliberately installs its outside-pointer listener on the next
+    // task so the click that mounted a dialog cannot immediately dismiss it.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    fireEvent.pointerDown(overlay!);
+    fireEvent.click(overlay!);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Codex runtime notice" }) === null).toBe(true),
+    );
+    expect(isPopoverOpen()).toBe(true);
   });
 
   test("uses the latest occurrence when limiting distinct notices", async () => {

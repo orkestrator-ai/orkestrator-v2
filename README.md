@@ -302,7 +302,7 @@ apps/backend/   Standalone Bun service and authoritative long-running state
 apps/desktop/   Electron shell, preload API, native IPC, and backend supervision
 apps/web/       React/Vite application used by Electron and remote browsers
 packages/       Shared cross-runtime contracts and validation
-bridges/        Claude, Codex, and ACP (Cursor Agent / Grok Build) bridge services
+bridges/        Claude, Codex, Cursor SDK, Pi SDK, and Grok ACP bridge services
 ```
 
 The web application is independently built. Electron loads it as its renderer while the Electron-supervised backend serves the same renderer to authenticated browsers. The same backend can instead run standalone without Electron.

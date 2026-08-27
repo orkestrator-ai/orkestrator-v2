@@ -153,7 +153,7 @@ function bridgeRequestTimeoutMs(
   ) {
     return ACP_SESSION_START_TIMEOUT_MS;
   }
-  // Unlike session start this is not narrowed to the ACP agents: every bridge
+  // Unlike session start this is not narrowed to these slower-starting bridges: every bridge
   // can reattach a detached session on its prompt route, and none of them
   // benefits from the caller giving up while that work is still running.
   if (kind === "attach" || kind === "prompt") return BRIDGE_ATTACH_TIMEOUT_MS;

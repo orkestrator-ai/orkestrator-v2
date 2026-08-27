@@ -116,7 +116,7 @@ export const mergingEnvironments = new Set<string>();
 export const mergeCleanupRecoveryTasks = new Map<string, Promise<void>>();
 export type LocalServerKind = "opencode" | "claude" | "codex" | "cursor" | "grok" | "pi";
 /** The ACP-speaking subset of `LocalServerKind`, launched through the ACP bridge. */
-export type AcpLocalServerKind = Extract<LocalServerKind, "cursor" | "grok">;
+export type AcpLocalServerKind = Extract<LocalServerKind, "grok">;
 
 export function retryableBridgeStartupError(
   message: string,
@@ -140,9 +140,8 @@ export const LOCAL_SERVER_KILL_WAIT_MS = 1_000;
 export const LOCAL_SERVER_HEALTH_ATTEMPTS = 75;
 export const LOCAL_SERVER_HEALTH_INTERVAL_MS = 200;
 /**
- * Grok and Cursor take longer than the HTTP bridges to bind: the ACP child
- * often becomes healthy about a second after the 15s wait gives up, which
- * flashes Connection Failed and then attaches on the next refresh.
+ * Grok, Cursor, and Pi may need longer to initialize their agent runtime before
+ * binding than the lightweight HTTP bridges.
  */
 export const ACP_LOCAL_SERVER_HEALTH_ATTEMPTS = 120;
 export let localServerShutdownRequested = false;
@@ -211,7 +210,6 @@ export const CONTAINER_CURSOR_CREDENTIAL_DIR = path.posix.dirname(CONTAINER_CURS
 export const HOST_CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials";
 export const AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV =
   "ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR";
-export const AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV = "AGENT_CLI_CREDENTIAL_STORE";
 export const CLAUDE_GITHUB_CREDENTIAL_FILE_ENV = "ORKESTRATOR_GITHUB_CREDENTIAL_FILE";
 export const CLAUDE_GITHUB_ENV_FINGERPRINT_FILE =
   "/tmp/orkestrator-ai/claude-github-env-fingerprint";

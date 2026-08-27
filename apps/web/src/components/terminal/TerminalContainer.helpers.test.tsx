@@ -1402,7 +1402,7 @@ describe("TerminalContainer", () => {
       });
     });
 
-    test.each(["cursor", "grok", "pi"] as const)(
+    test.each(["grok", "pi"] as const)(
       "creates a %s terminal tab when CLI mode is explicit",
       async (platform) => {
         render(
@@ -1433,6 +1433,40 @@ describe("TerminalContainer", () => {
         });
       },
     );
+
+    test("keeps Cursor on the SDK bridge when a legacy CLI override is explicit", async () => {
+      render(
+        <TerminalProvider>
+          <TerminalContainer
+            environmentId="env-visible"
+            containerId="container-visible"
+            isContainerRunning
+            isActive
+          />
+          <CreateTabHarness
+            type="cursor"
+            options={{
+              tabId: "cursor-legacy-cli",
+              agentLaunchMode: "cli",
+              initialPrompt: "Use the SDK",
+            }}
+          />
+        </TerminalProvider>,
+      );
+
+      await waitFor(() => {
+        expect(
+          usePaneLayoutStore
+            .getState()
+            .getAllTabs("env-visible")
+            .find((tab) => tab.id === "cursor-legacy-cli"),
+        ).toMatchObject({
+          id: "cursor-legacy-cli",
+          type: "agent-native",
+          nativeAgentData: { platform: "cursor" },
+        });
+      });
+    });
 
     test("creates exactly one Pi native tab when native mode is explicit", async () => {
       render(

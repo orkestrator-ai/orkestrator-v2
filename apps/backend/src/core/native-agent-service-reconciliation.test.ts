@@ -1618,7 +1618,7 @@ describe("NativeAgentService", () => {
   });
 
   /**
-   * A Cursor background Task keeps the ACP bridge's `/activity` `working` after
+   * A Cursor background task keeps the SDK bridge's `/activity` `working` after
    * the parent turn ends, so the environment badge is only ever as truthful as
    * that probe. When the bridge stops claiming a live child — the child ended,
    * or a restart made the turn's outcome unknown — the environment has to

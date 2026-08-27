@@ -2,7 +2,7 @@
  * Recover a JSON value from a model’s structured-output text.
  *
  * Providers that enforce a schema natively (Claude, Codex app-server) already
- * isolate the contract payload. Cursor/Grok ACP and OpenCode’s text fallback
+ * isolate the contract payload. Cursor SDK, Grok ACP, and OpenCode's text fallback
  * concatenate the assistant’s visible text, which often includes a thinking
  * prefix, a Markdown fence, or a short lead-in/trailing sentence. Domain
  * validation still happens above this layer — this only answers whether the

@@ -78,18 +78,14 @@ export const DEFAULT_CLAUDE_NATIVE_BACKEND: ClaudeNativeBackend = "sdk";
 /**
  * What each platform does when no tier has an opinion.
  *
- * Claude ships native. Everything else stays on `terminal`, which is what the
- * launch resolver has always fallen back to — Cursor and Grok included, because
- * before this module existed they were routed through the OpenCode branch of a
- * mode ternary and inherited its `terminal` default. Preserved rather than
- * corrected: a shipped default that quietly expands which launches the backend
- * owns is worse than one that is merely conservative.
+ * Cursor is SDK-only and therefore always native. Claude also ships native;
+ * the remaining CLI-backed platforms default to terminal mode.
  */
 export const SHIPPED_PLATFORM_MODES: Readonly<Record<AgentPlatform, AgentLaunchMode>> =
   Object.freeze({
     claude: "native",
     codex: "terminal",
-    cursor: "terminal",
+    cursor: "native",
     grok: "terminal",
     opencode: "terminal",
     pi: "terminal",
@@ -129,7 +125,9 @@ export function resolveAgentPlatformSettings(
   const global = tierPlatform(tiers.global, platform);
 
   const mode =
-    environment?.mode ?? repository?.mode ?? global?.mode ?? SHIPPED_PLATFORM_MODES[platform];
+    platform === "cursor"
+      ? "native"
+      : (environment?.mode ?? repository?.mode ?? global?.mode ?? SHIPPED_PLATFORM_MODES[platform]);
 
   // A model id belongs to one platform's catalogue, so it only ever travels
   // down its own column. This is the rule the old repository `defaultModel`
@@ -167,10 +165,16 @@ export function resolveActionDefaults(tiers: AgentSettingsTiers): ActionDefaults
   return resolved;
 }
 
-function normalizePlatformSettings(value: unknown): AgentPlatformSettings | undefined {
+function normalizePlatformSettings(
+  value: unknown,
+  platform: AgentPlatform,
+): AgentPlatformSettings | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  const mode = record.mode === "terminal" || record.mode === "native" ? record.mode : undefined;
+  const mode =
+    platform !== "cursor" && (record.mode === "terminal" || record.mode === "native")
+      ? record.mode
+      : undefined;
   const model = typeof record.model === "string" ? record.model.trim() : "";
   const reasoningEffort =
     typeof record.reasoningEffort === "string" ? record.reasoningEffort.trim() : "";
@@ -207,7 +211,7 @@ export function normalizeAgentSettings(value: unknown): AgentSettingsTier {
       ? (record.platforms as Record<string, unknown>)
       : {};
   for (const platform of AGENT_PLATFORMS) {
-    const settings = normalizePlatformSettings(rawPlatforms[platform]);
+    const settings = normalizePlatformSettings(rawPlatforms[platform], platform);
     if (settings) platforms[platform] = settings;
   }
 

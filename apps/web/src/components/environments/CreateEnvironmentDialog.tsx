@@ -134,7 +134,6 @@ export function resolveAgentDefaults(
     claudeMode: resolveAgentPlatformSettings(tiers, "claude").mode,
     opencodeMode: resolveAgentPlatformSettings(tiers, "opencode").mode,
     codexMode: resolveAgentPlatformSettings(tiers, "codex").mode,
-    cursorMode: resolveAgentPlatformSettings(tiers, "cursor").mode,
     grokMode: resolveAgentPlatformSettings(tiers, "grok").mode,
     piMode: resolveAgentPlatformSettings(tiers, "pi").mode,
   } as const;
@@ -190,7 +189,6 @@ export interface ClaudeOptions {
   claudeMode: ClaudeMode;
   opencodeMode: OpenCodeMode;
   codexMode: CodexMode;
-  cursorMode?: AgentStyle;
   grokMode?: AgentStyle;
   piMode?: AgentStyle;
   /**
@@ -263,7 +261,6 @@ export function CreateEnvironmentDialog({
   const configClaudeMode = resolved.claudeMode as ClaudeMode;
   const configOpencodeMode = resolved.opencodeMode as OpenCodeMode;
   const configCodexMode = resolved.codexMode as CodexMode;
-  const configCursorMode = resolved.cursorMode;
   const configGrokMode = resolved.grokMode;
   const configPiMode = resolved.piMode;
   const configEnvironmentType: EnvironmentType = repoConfig?.lastEnvironmentType ?? "containerized";
@@ -429,7 +426,6 @@ export function CreateEnvironmentDialog({
       claudeMode: configClaudeMode,
       opencodeMode: configOpencodeMode,
       codexMode: configCodexMode,
-      cursorMode: configCursorMode,
       grokMode: configGrokMode,
       piMode: configPiMode,
       // Each platform's own resolved column, so a model is only ever offered to
@@ -451,7 +447,6 @@ export function CreateEnvironmentDialog({
       configClaudeMode,
       configCodexMode,
       configDefaultAgent,
-      configCursorMode,
       configGrokMode,
       configPiMode,
       configOpencodeMode,
@@ -491,7 +486,6 @@ export function CreateEnvironmentDialog({
   const [claudeMode, setClaudeMode] = useState<ClaudeMode>(initialAgentDefaults.claudeMode);
   const [opencodeMode, setOpencodeMode] = useState<OpenCodeMode>(initialAgentDefaults.opencodeMode);
   const [codexMode, setCodexMode] = useState<CodexMode>(initialAgentDefaults.codexMode);
-  const [cursorMode, setCursorMode] = useState<AgentStyle>(initialAgentDefaults.cursorMode);
   const [grokMode, setGrokMode] = useState<AgentStyle>(initialAgentDefaults.grokMode);
   const [piMode, setPiMode] = useState<AgentStyle>(initialAgentDefaults.piMode);
   const [model, setModel] = useState(initialAgentDefaults.model);
@@ -599,7 +593,6 @@ export function CreateEnvironmentDialog({
     setClaudeMode(initialAgentDefaults.claudeMode);
     setOpencodeMode(initialAgentDefaults.opencodeMode);
     setCodexMode(initialAgentDefaults.codexMode);
-    setCursorMode(initialAgentDefaults.cursorMode);
     setGrokMode(initialAgentDefaults.grokMode);
     setPiMode(initialAgentDefaults.piMode);
     setModel(initialAgentDefaults.model);
@@ -933,7 +926,6 @@ export function CreateEnvironmentDialog({
     setClaudeMode(initialAgentDefaults.claudeMode);
     setOpencodeMode(initialAgentDefaults.opencodeMode);
     setCodexMode(initialAgentDefaults.codexMode);
-    setCursorMode(initialAgentDefaults.cursorMode);
     setGrokMode(initialAgentDefaults.grokMode);
     setPiMode(initialAgentDefaults.piMode);
     setModel(initialAgentDefaults.model);
@@ -948,7 +940,7 @@ export function CreateEnvironmentDialog({
         : agentType === "codex"
           ? codexMode
           : agentType === "cursor"
-            ? cursorMode
+            ? "native"
             : agentType === "grok"
               ? grokMode
               : piMode;
@@ -1016,11 +1008,9 @@ export function CreateEnvironmentDialog({
         setOpencodeMode(nextMode);
       } else if (agentType === "codex") {
         setCodexMode(nextMode);
-      } else if (agentType === "cursor") {
-        setCursorMode(nextMode);
       } else if (agentType === "grok") {
         setGrokMode(nextMode);
-      } else {
+      } else if (agentType === "pi") {
         setPiMode(nextMode);
       }
     },
@@ -1158,7 +1148,6 @@ export function CreateEnvironmentDialog({
           claudeMode,
           opencodeMode,
           codexMode,
-          cursorMode,
           grokMode,
           piMode,
           model:
@@ -1195,7 +1184,6 @@ export function CreateEnvironmentDialog({
       claudeMode,
       opencodeMode,
       codexMode,
-      cursorMode,
       grokMode,
       piMode,
       model,
@@ -1477,17 +1465,19 @@ export function CreateEnvironmentDialog({
               <div className={cn("space-y-3 sm:col-span-2", !launchAgent && "opacity-50")}>
                 <div className="flex min-h-5 items-center justify-between gap-4">
                   <Label className="text-sm">Default Agent</Label>
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="use-tui"
-                      checked={selectedMode === "terminal"}
-                      onCheckedChange={setUseTui}
-                      disabled={isLoading || !launchAgent}
-                    />
-                    <Label htmlFor="use-tui" className="cursor-pointer text-sm font-normal">
-                      Use TUI
-                    </Label>
-                  </div>
+                  {agentType !== "cursor" && (
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="use-tui"
+                        checked={selectedMode === "terminal"}
+                        onCheckedChange={setUseTui}
+                        disabled={isLoading || !launchAgent}
+                      />
+                      <Label htmlFor="use-tui" className="cursor-pointer text-sm font-normal">
+                        Use TUI
+                      </Label>
+                    </div>
+                  )}
                 </div>
                 <div className="rounded-xl border border-border/70 bg-zinc-950/45 p-2">
                   <AgentModelPicker

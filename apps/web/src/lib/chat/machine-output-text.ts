@@ -3,7 +3,7 @@
  *
  * A schema-constrained turn asks the provider for one JSON document as its
  * final answer. Providers differ in how they get there: Claude calls a tool,
- * while Codex and the ACP agents write the document into the ordinary text
+ * while Codex, Cursor, and Grok write the document into the ordinary text
  * channel — and re-write a longer draft of it on every progress update. Those
  * drafts stream in character by character, so for most of their life they are
  * neither valid JSON (nothing downstream can fold them into a report view) nor

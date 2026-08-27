@@ -167,36 +167,45 @@ export function AgentPlatformPane({
 
   return (
     <div className="max-w-2xl space-y-8">
-      <div className="space-y-3">
-        <div>
+      {platform === "cursor" ? (
+        <div className="space-y-1">
           <h3 className="text-sm font-medium text-foreground">Mode</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            How {label} runs in environments. Native opens a chat interface instead of a terminal.
+          <p className="text-xs text-muted-foreground">
+            Cursor always runs in Native mode through its TypeScript SDK.
           </p>
         </div>
-        <OptionCards
-          ariaLabel={`${label} mode`}
-          value={stored?.mode ?? INHERIT}
-          onChange={(value) => set("mode", value === INHERIT ? undefined : value)}
-          disabled={disabled}
-          inherit={
-            canInherit
-              ? {
-                  label: `Inherit — ${inherited.mode === "native" ? "Native" : "Terminal"} (from ${
-                    TIER_LABELS[modeSource]
-                  })`,
-                }
-              : undefined
-          }
-          options={MODE_OPTIONS}
-        />
-        {!canInherit && !stored?.mode && (
-          <p className="text-xs text-muted-foreground">
-            Unset, so {label} uses its shipped default of{" "}
-            {SHIPPED_PLATFORM_MODES[platform] === "native" ? "Native" : "Terminal"}.
-          </p>
-        )}
-      </div>
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <h3 className="text-sm font-medium text-foreground">Mode</h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              How {label} runs in environments. Native opens a chat interface instead of a terminal.
+            </p>
+          </div>
+          <OptionCards
+            ariaLabel={`${label} mode`}
+            value={stored?.mode ?? INHERIT}
+            onChange={(value) => set("mode", value === INHERIT ? undefined : value)}
+            disabled={disabled}
+            inherit={
+              canInherit
+                ? {
+                    label: `Inherit — ${inherited.mode === "native" ? "Native" : "Terminal"} (from ${
+                      TIER_LABELS[modeSource]
+                    })`,
+                  }
+                : undefined
+            }
+            options={MODE_OPTIONS}
+          />
+          {!canInherit && !stored?.mode && (
+            <p className="text-xs text-muted-foreground">
+              Unset, so {label} uses its shipped default of{" "}
+              {SHIPPED_PLATFORM_MODES[platform] === "native" ? "Native" : "Terminal"}.
+            </p>
+          )}
+        </div>
+      )}
 
       {platform === "claude" && (
         <div className="space-y-3">

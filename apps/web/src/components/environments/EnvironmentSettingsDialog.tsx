@@ -222,6 +222,8 @@ function AgentExtensionSection({
 }) {
   const copy = AGENT_EXTENSION_COPY[catalog.agent];
   const extensionCount = catalog.mcpServers.length + catalog.plugins.length;
+  const unavailableCollections =
+    Number(Boolean(catalog.mcpError)) + Number(Boolean(catalog.pluginError));
   const listSkills = useCallback(
     (provider: backend.AgentSkillProvider) =>
       backend.listEnvironmentAgentSkills(environmentId, provider),
@@ -237,9 +239,13 @@ function AgentExtensionSection({
     <section className="space-y-5" aria-label={`${copy.label} extensions`}>
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>
-          {extensionCount === 0
-            ? "No configured extensions found"
-            : `${extensionCount} configured extension${extensionCount === 1 ? "" : "s"}`}
+          {unavailableCollections === 2
+            ? "Extension discovery unavailable"
+            : unavailableCollections === 1
+              ? `${extensionCount} configured extension${extensionCount === 1 ? "" : "s"}; one collection unavailable`
+              : extensionCount === 0
+                ? "No configured extensions found"
+                : `${extensionCount} configured extension${extensionCount === 1 ? "" : "s"}`}
         </span>
       </div>
       <div className="grid grid-cols-1 overflow-hidden rounded-xl border border-border/80 bg-card/40 divide-y divide-border/70 md:grid-cols-2 md:divide-x md:divide-y-0">

@@ -82,7 +82,8 @@ export function resolveEnvironmentCreateRequest(options: ClaudeOptions) {
 
 /**
  * Unlike a build pipeline, the create dialog forwards the modes the user picked
- * instead of forcing native — the shared helper only owns the routing.
+ * instead of forcing native. Cursor is the exception: the shared helper always
+ * pins it to its sole supported SDK mode.
  */
 export function resolveEnvironmentAgentSettings(options: ClaudeOptions): AgentSettingsTier {
   return resolveAgentModeSettings(options.agentType, options);

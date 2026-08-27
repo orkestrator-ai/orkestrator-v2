@@ -144,10 +144,10 @@ describe("migrateGlobalAgentSettings", () => {
     expect(migrated.platforms?.grok?.model).toBeUndefined();
   });
 
-  test("seeds cursor and grok from the opencode mode they already followed", () => {
+  test("seeds Grok from the OpenCode mode while Cursor stays SDK-only", () => {
     const migrated = migrateGlobalAgentSettings({ opencodeMode: "native" });
     expect(migrated.platforms?.opencode?.mode).toBe("native");
-    expect(migrated.platforms?.cursor?.mode).toBe("native");
+    expect(migrated.platforms?.cursor).toBeUndefined();
     expect(migrated.platforms?.grok?.mode).toBe("native");
   });
 
@@ -242,7 +242,7 @@ describe("migrateEnvironmentAgentSettings", () => {
     expect(migrated.defaultAgent).toBe("codex");
     expect(migrated.platforms?.claude).toEqual({ mode: "terminal", claudeNativeBackend: "tmux" });
     expect(migrated.platforms?.codex).toEqual({ mode: "native" });
-    expect(migrated.platforms?.cursor).toEqual({ mode: "native" });
+    expect(migrated.platforms?.cursor).toBeUndefined();
     expect(migrated.platforms?.grok).toEqual({ mode: "native" });
   });
 

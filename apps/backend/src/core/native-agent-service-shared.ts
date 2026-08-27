@@ -114,7 +114,7 @@ export interface EnsureNativeAgentSessionInput {
    * Codex session would make that round fail.
    */
   sessionMode?: ProviderExecutionMode;
-  /** Cursor/Grok ACP speed toggle applied at session create. */
+  /** Cursor/Grok speed toggle applied at session create. */
   fastMode?: boolean;
   /** Primary execution profile to persist before the first interactive prompt. */
   executionProfileId?: string;

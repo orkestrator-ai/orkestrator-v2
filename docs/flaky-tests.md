@@ -10,6 +10,30 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `MultiReviewService resumes a persisted address attempt after restart` (`apps/backend/src/core/multi-review-service.test.ts:632`)
+
+- **Status:** open
+- **Date observed:** 2026-08-26
+- **Original command:** `bun run test` (complete concurrent cross-platform
+  suite).
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace,
+  root/agent-support, bridges, and protocol-lockfile groups concurrently; the
+  failure was in the backend workspace package.
+- **Failure:** the final environment snapshot was expected to contain
+  `agentActivitySources: { "multi-review": { state: "idle" } }`, but the source
+  and aggregate activity remained `working` after the restarted service cleared
+  the persisted address attempt.
+- **Suite counts:** complete run — 9,810 total, 9,796 passed, 12 skipped, 2
+  failed. The other failure was the deterministic bounded-DOM assertion fixed
+  in the same change.
+- **Isolated rerun:** `bun test ./src/core/multi-review-service.test.ts` from
+  `apps/backend` -> 73 passed, 0 failed.
+- **Hypothesis:** the isolated owner exercises the same persisted restart and
+  activity transition successfully, so the observed failure depends on
+  aggregate execution or timing. The available output does not establish a
+  narrower shared-state or scheduling cause; a recurrence should capture the
+  activity-source writes around shutdown, init, and pending-dispatch clearing.
+
 ## `opencode-client getSessionMessages > falls back to string conversion when circular tool payloads cannot be serialized` (`apps/web/src/lib/opencode-sessions.test.ts`)
 
 - **Status:** open
@@ -219,6 +243,16 @@ history rather than two partial ones.
   isolated rerun,
   `bun test ./src/components/layout/ActionBar.test.tsx --only-failures` from
   `apps/web`, passed all 189 tests in 12.37 s.
+- **Recurrence (Cursor SDK-only migration, 2026-08-26):** `bun run test`
+  failed the same keyboard-shortcut case after 23.36 ms on
+  `expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands:
+  ["bun test"] })`. The mock contained the preceding plain, native-agent, and
+  review-tab calls, but not the run-command call. The web workspace group
+  reported 5,466 passed, 1 skipped, and 3 failed across 236 files; the other two
+  failures were stale Cursor CLI expectations fixed in the same change. The
+  isolated rerun `bun test src/components/layout/ActionBar.test.tsx` from
+  `apps/web` passed all 190 tests with 728 assertions in 12.84 s, including the
+  target in 14.89 ms.
 - **Recurrence (retry-gate review follow-up, 2026-08-25):** the same case failed
   again on the next `bun run test` for that branch, at `ActionBar.test.tsx:5170`
   after 51.07 ms, alongside `opens the Resolve modal after a mobile long press
@@ -228,6 +262,20 @@ history rather than two partial ones.
   passed 189/189 in 14.54 s. Two distinct cases in one file failing together,
   both of which pass alone, points at the whole file losing its wall-clock
   budget rather than at either assertion.
+- **Recurrence (control MCP review fixes, 2026-08-26):** `bun run test` failed
+  `ActionBar keyboard shortcuts and tab guards > dispatches tab, workflow,
+  editor, and panel shortcuts` at `ActionBar.test.tsx:5170` after 23.68 ms. The
+  expected `createTabMock("plain", { initialCommands: ["bun test"] })` call was
+  absent even though the mock recorded the preceding plain, native-agent, and
+  Codex tab calls. The web workspace group reported 5,439 passed, 1 skipped,
+  and 1 failed across 235 files in 63.11 s; the other aggregate groups passed.
+  The isolated rerun
+  `bun test --cwd apps/web src/components/layout/ActionBar.test.tsx --timeout 30000`
+  passed 189/189 in 12.79 s, with the target case completing in 14.64 ms. The
+  reviewed change only replaces ActionBar's tab-cap literal source with a shared
+  constant whose value remains 9; it does not touch run-command loading or the
+  shortcut payload. Evidence: the `workspace-web-backend-desktop-web-public-cli-protocol`
+  log under `/var/folders/.../orkestrator-test-run.qXZvbG`.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
 
 ## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)
@@ -2014,3 +2062,14 @@ Post-fix stress verification:
 - **Isolated rerun:** `bun run test:logged -- --name features-view-isolated -- bun test tests/unit/components/FeaturesView.test.tsx --only-failures` → passed in 2.7 s.
 - **Attribution:** the change in flight touches native-agent and chat-shell components plus their tests; it does not touch `FeaturesView`, its tests, or their dependencies. The isolated owner passed against the same immutable head.
 - **Hypothesis:** the evidence establishes an aggregate-only worker termination, but not why the worker received `SIGTERM`. A recurrence should capture the runner's process/resource diagnostics and the test reached immediately before termination before changing test budgets or assertions.
+
+## CreateEnvironmentDialog compact agent controls default mode (`tests/unit/components/CreateEnvironmentDialog.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-26
+- **Original command:** `bun test apps/backend/src/core/extension-discovery.test.ts bridges/acp-bridge/src/grok-runtime.test.ts apps/desktop/electron/agent-platform-selection.test.ts tests/unit/electron/toolchain-startup.test.ts tests/unit/electron/commands-registry-tools.test.ts tests/unit/components/CreateEnvironmentDialog.test.tsx tests/unit/components/EnvironmentSettingsDialog.test.tsx`
+- **Worker configuration:** one Bun test process running seven explicitly selected files.
+- **Failure:** `resolveAgentDefaults > shows the project name in the title and presents the compact agent controls in order` expected the Use TUI checkbox `data-state` to be `unchecked`, but received `checked` (duration: 18.29 ms).
+- **Suite counts:** 179 total, 178 passed, 1 failed.
+- **Isolated rerun:** `bun test tests/unit/components/CreateEnvironmentDialog.test.tsx` → 105 passed, 0 failed in 5.62 s.
+- **Hypothesis:** the result depends on state shared with another file in the combined Bun process; the owning file resets enough state to pass in isolation, but the exact leaking state has not been identified.

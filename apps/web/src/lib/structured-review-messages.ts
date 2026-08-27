@@ -67,7 +67,7 @@ function showOnlyFinalPayloadMessage(
  * Withhold every agent text block that is a JSON document rather than prose.
  *
  * A schema-constrained turn is answered with one JSON document, and providers
- * that write it into the text channel — Codex and the ACP agents — also emit
+ * that write it into the text channel — Codex, Cursor, and Grok — also emit
  * longer and longer *drafts* of it as their progress updates. A draft is not a
  * recognized payload (it is usually still streaming, and even when finished it
  * is a provisional report the workflow has not accepted), so nothing else

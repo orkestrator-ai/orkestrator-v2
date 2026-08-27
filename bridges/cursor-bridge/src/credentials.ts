@@ -30,9 +30,9 @@ export interface BridgeAuthStatus {
  * The credential store this bridge reads and writes.
  *
  * Pointed at Orkestrator's own data directory when the launcher supplies a
- * path, so an environment authenticated through the app is not revoked by an
- * unrelated `cursor-agent logout`, and so a container can be handed exactly
- * one credential file. Falls back to the SDK default otherwise.
+ * path, so an environment authenticated through the app is isolated from
+ * unrelated Cursor state and a container can be handed exactly one credential
+ * file. Falls back to the SDK default otherwise.
  */
 export const credentialStore: SdkCredentialStore = credentialFile
   ? new FileCredentialStore(credentialFile)

@@ -130,15 +130,18 @@ describe("pinned artifacts for a platform selection", () => {
   test("downloads only what the selection enables", () => {
     expect(
       pinnedArtifactsForPlatforms(["cursor", "grok"], "darwin", "arm64").map((a) => a.name),
-    ).toEqual(["cursor", "grok"]);
+    ).toEqual(["grok"]);
     expect(pinnedArtifactsForPlatforms(["claude"], "linux", "x64").map((a) => a.name)).toEqual([
       "claude",
     ]);
   });
 
   test("selects nothing when no platform is enabled", () => {
-    // What an agent-test profile used to do, which is why Cursor and Grok were
-    // unlaunchable in exactly the profiles meant to test them.
+    // A profile with no selected platform must not download any toolchain.
     expect(pinnedArtifactsForPlatforms([], "darwin", "arm64")).toEqual([]);
+  });
+
+  test("treats a Cursor-only selection as requiring no managed artifact", () => {
+    expect(pinnedArtifactsForPlatforms(["cursor"], "darwin", "arm64")).toEqual([]);
   });
 });

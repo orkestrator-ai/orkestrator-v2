@@ -167,9 +167,8 @@ async function startApplication(): Promise<void> {
   const dataDir = app.getPath("userData");
   // An agent-test profile takes its selection from the launcher rather than the
   // durable per-installation choice, so an isolated run never inherits or
-  // rewrites the user's. It must still be a real selection: Cursor and Grok
-  // resolve only through the managed toolchain, so provisioning nothing leaves
-  // them permanently unlaunchable in exactly the profiles meant to test them.
+  // rewrites the user's. It must still be a real selection: managed CLI-backed
+  // platforms such as Grok need their toolchain provisioned for the profile.
   const isAgentTest = runtimeFlavor === "agent-test";
   const storedPlatformSelection = isAgentTest
     ? { enabled: runtimeProfile?.agentPlatforms ?? [], needsFirstRunChoice: false }

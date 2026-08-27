@@ -7,8 +7,8 @@ describe("containerServerLogFile", () => {
     expect(containerServerLogFile("pi")).toBe("/tmp/pi-bridge.log");
   });
 
-  test("keeps the ACP fallback for ACP-backed servers", () => {
-    expect(containerServerLogFile("cursor")).toBe("/tmp/cursor-acp-bridge.log");
+  test("uses provider-specific bridge logs", () => {
+    expect(containerServerLogFile("cursor")).toBe("/tmp/cursor-bridge.log");
     expect(containerServerLogFile("grok")).toBe("/tmp/grok-acp-bridge.log");
   });
 });

@@ -3,6 +3,11 @@
 Status: analysis only. No implementation in this document's originating change.
 Recorded 2026-08-16 from a read-only inventory of the six agent surfaces.
 
+> Historical note (2026-08-26): Cursor's ACP/CLI interface described below has
+> been removed. Cursor now runs only through `bridges/cursor-bridge/` and
+> `@cursor/sdk`; Grok remains on `bridges/acp-bridge/`. The retained comparison
+> records the state that motivated later work and is not current architecture.
+
 The six surfaces compared:
 
 | Surface | Label in UI | Integration |
@@ -541,7 +546,7 @@ Do not fake these on platforms that lack the vendor method.
 | OpenCode undo / redo / share | OpenCode SDK `session.revert` / `unrevert` / `share`. |
 | OpenCode execution profiles | OpenCode primary agents, not Claude subagents / Codex profiles. |
 | OpenCode provider allowlist | Thousands of models; other platforms are single-catalogue. |
-| ACP image-only attachments | Both ACP agents take inline image blocks, not files. |
+| Bridge image-only attachments | Cursor's SDK bridge and Grok's ACP bridge take inline image blocks, not files. |
 | ACP `--force` / `--always-approve` | CLI contract. Cursor MCP approve is the intentional container exception. |
 | Claude Tmux TUI slash / fast / compact | Those commands exist because the user is driving the CLI, not the SDK. |
 | Claude Tmux interactive terminal + selection prompts | That is the point of Tmux. |

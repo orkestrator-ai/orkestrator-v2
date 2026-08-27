@@ -172,6 +172,8 @@ export interface StartupAgentSessionSnapshot {
 export interface Environment {
   id: string;
   projectId: string;
+  /** Idempotency key for an externally requested environment launch. */
+  controlRequestId?: string;
   /** Persisted association used to recover a build pipeline after renderer remount. */
   buildPipelineId?: string;
   /**
@@ -301,6 +303,8 @@ export interface Environment {
   initialAgentModel?: string;
   /** One-shot reasoning effort for the agent tab created from pendingAgentLaunch. */
   initialReasoningEffort?: string;
+  /** One-shot conversation mode for the agent tab created from pendingAgentLaunch. */
+  initialConversationMode?: "plan" | "build";
   initialPrompt?: string;
   /** Attachments waiting to be delivered or written before the first prompt. */
   initialPromptAttachments?: InitialPromptImageAttachment[];
@@ -317,6 +321,7 @@ export type ClientEnvironment = Omit<
   | "frontendAgentActivityObservers"
   | "prRecheckAfterAgentCompletionArmedAt"
   | "initialPromptAttachments"
+  | "initialConversationMode"
   | "claudeModelCatalog"
   | "opencodePid"
   | "claudeBridgePid"
@@ -326,6 +331,7 @@ export type ClientEnvironment = Omit<
   | "piBridgePid"
   | "pendingRenamePrompt"
   | "tabTeardownIntents"
+  | "controlRequestId"
 > & {
   /**
    * Whether the stripped `initialPromptAttachments` array holds anything.
@@ -686,15 +692,6 @@ export interface AppConfig {
     };
     terminalScrollback: number;
     experimentalCodexRawEventLogging?: boolean;
-    /**
-     * Run Cursor sessions on the SDK bridge instead of the ACP one.
-     *
-     * Experimental and off by default: the two bridges are separate processes
-     * with separate session stores, so switching this changes which engine a
-     * new Cursor session is created on. Existing sessions stay with the bridge
-     * that created them.
-     */
-    experimentalCursorSdkBridge?: boolean;
     debugLogging?: boolean;
     /** Number of days production application logs remain on disk. */
     debugLogRetentionDays?: number;

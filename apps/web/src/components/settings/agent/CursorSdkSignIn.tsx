@@ -1,5 +1,5 @@
 /**
- * Sign-in for the experimental Cursor SDK bridge.
+ * Sign-in for the Cursor SDK bridge.
  *
  * Deliberately thin. The backend spawns the bridge's login mode, which opens
  * the browser, parses its output, stores the credential and owns the

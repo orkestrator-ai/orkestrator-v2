@@ -127,12 +127,11 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 #   CODEX_CLI_VERSION     ↔ config/codex-version.json and the generated app-server protocol
 #   OPENCODE_CLI_VERSION  ↔ @opencode-ai/sdk in apps/web/package.json and apps/backend/package.json
 #   PI_CLI_VERSION        ↔ the three @earendil-works/pi-* pins in bridges/pi-bridge/package.json
-# Claude CLI and the Cursor CLI have their own release trains, distinct from
-# @anthropic-ai/claude-agent-sdk and @cursor/sdk respectively.
+# Claude CLI has its own release train, distinct from
+# @anthropic-ai/claude-agent-sdk.
 ARG CLAUDE_CLI_VERSION=2.1.245
 ARG CODEX_CLI_VERSION=0.149.1
 ARG OPENCODE_CLI_VERSION=1.18.23
-ARG CURSOR_AGENT_VERSION=2026.08.11-e8db854
 ARG GROK_BUILD_VERSION=1.0.10
 ARG PI_CLI_VERSION=0.84.3
 
@@ -150,26 +149,18 @@ RUN npm install -g "@openai/codex@${CODEX_CLI_VERSION}"
 ENV CODEX_CLI_PATH=/usr/local/share/npm-global/bin/codex
 ENV PATH="/usr/local/share/npm-global/bin:/home/node/.opencode/bin:$PATH"
 
-# Cursor Agent ships as a self-contained bundle; its launcher expects the
-# adjacent Node runtime and JS payload, so retain the bundle intact. Grok Build
-# is a single native executable. Both downloads are pinned and hash verified.
+# Grok Build is a single native executable. The download is pinned and hash
+# verified.
 USER root
 RUN ARCH="$(dpkg --print-architecture)" && \
   case "$ARCH" in \
-    amd64) CURSOR_ARCH=x64; CURSOR_SHA=bfff4bf6f4e9dd30c1d0ef0a70b6077b074015dd2948e4c50685d53afdcfce5a; GROK_ARCH=x86_64; GROK_SHA=d698a2dfa7ea37043f1c70cdca7da12ca51a5e124ffb4fc9a7b12bd26d0e2752 ;; \
-    arm64) CURSOR_ARCH=arm64; CURSOR_SHA=ea13f92e295f523a99ce8d8f57d6894d21e5d1e2d030ffad718ccd5955ca2eed; GROK_ARCH=aarch64; GROK_SHA=050a0e35a8aa612cdf1ed9ea15d2733e05413db2b20f2cbb39a26b66e51f2b4d ;; \
+    amd64) GROK_ARCH=x86_64; GROK_SHA=d698a2dfa7ea37043f1c70cdca7da12ca51a5e124ffb4fc9a7b12bd26d0e2752 ;; \
+    arm64) GROK_ARCH=aarch64; GROK_SHA=050a0e35a8aa612cdf1ed9ea15d2733e05413db2b20f2cbb39a26b66e51f2b4d ;; \
     *) echo "Unsupported architecture: $ARCH" >&2; exit 1 ;; \
   esac && \
-  curl -fsSL "https://downloads.cursor.com/lab/${CURSOR_AGENT_VERSION}/linux/${CURSOR_ARCH}/agent-cli-package.tar.gz" -o /tmp/cursor-agent.tar.gz && \
-  printf '%s  %s\n' "$CURSOR_SHA" /tmp/cursor-agent.tar.gz | sha256sum -c - && \
-  mkdir -p /opt/cursor-agent && \
-  tar -xzf /tmp/cursor-agent.tar.gz -C /opt/cursor-agent --strip-components=1 --no-same-owner && \
-  ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor && \
-  ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent && \
   curl -fsSL "https://storage.googleapis.com/grok-build-public-artifacts/cli/grok-${GROK_BUILD_VERSION}-linux-${GROK_ARCH}" -o /usr/local/bin/grok && \
   printf '%s  %s\n' "$GROK_SHA" /usr/local/bin/grok | sha256sum -c - && \
-  chmod 755 /usr/local/bin/grok /opt/cursor-agent/cursor-agent && \
-  rm -f /tmp/cursor-agent.tar.gz
+  chmod 755 /usr/local/bin/grok
 
 # Pi ships as a self-contained bundle: the launcher loads its themes, docs,
 # examples and a native helper module from beside itself, so the tree is kept
@@ -197,7 +188,6 @@ ENV PI_CLI_PATH=/usr/local/bin/pi
 RUN "$CLAUDE_CLI_PATH" --version \
  && "$CODEX_CLI_PATH" --version \
  && "$OPENCODE_CLI_PATH" --version \
- && cursor-agent --version \
  && grok --version \
  && "$PI_CLI_PATH" --version
 
@@ -291,7 +281,7 @@ WORKDIR /opt/bridge-build/bridges/codex-bridge
 RUN bun run build \
  && rm -rf node_modules
 
-# Build the shared ACP HTTP bridge used by Cursor Agent and Grok Build.
+# Build the ACP HTTP bridge used by Grok Build.
 WORKDIR /opt/bridge-build/bridges/acp-bridge
 RUN bun run build \
  && rm -rf node_modules
@@ -304,8 +294,8 @@ WORKDIR /opt/bridge-build/bridges/pi-bridge
 RUN bun run build \
  && rm -rf node_modules
 
-# Build the experimental Cursor SDK bridge, the alternative engine for Cursor
-# sessions. Its build bundles @cursor/sdk's JavaScript into dist/index.js and
+# Build the Cursor SDK bridge. Its build bundles @cursor/sdk's JavaScript into
+# dist/index.js and
 # the `vendor` step stages the SDK's Linux platform package — ripgrep, the
 # sandbox helper and the tree-sitter grammars, which cannot be bundled — into
 # dist/node_modules, where the SDK's runtime lookup walks up from dist/index.js

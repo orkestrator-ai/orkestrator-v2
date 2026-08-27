@@ -1051,6 +1051,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
     const resolved = resolveAgentPlatformSettings(tiers, agent);
     const model = environment.initialAgentModel ?? resolved.model;
     const reasoningEffort = environment.initialReasoningEffort ?? resolved.reasoningEffort;
+    const conversationMode = environment.initialConversationMode;
 
     // Publishing runs inside the same failure handling as the launch itself. A
     // throw here (an unwritable layout file, a root over the size bound) would
@@ -1100,12 +1101,13 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
           filename: attachment.name,
           data: attachment.base64Data,
         }));
-      const dispatchInput = {
+      const dispatchInput: DispatchNativeAgentPromptInput = {
         environmentId: environment.id,
         agent,
         logicalSessionKey,
         model,
         reasoningEffort,
+        ...(conversationMode ? { mode: conversationMode } : {}),
         // A file-only turn needs non-blank text before its final workspace paths
         // can be resolved inside the dispatch lock below.
         prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
@@ -1139,6 +1141,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               logicalSessionKey,
               model,
               reasoningEffort,
+              ...(conversationMode ? { sessionMode: conversationMode } : {}),
             });
 
       // The provider mapping is not enough to satisfy the launch: the user
@@ -1155,6 +1158,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         pendingAgentLaunch: false,
         initialAgentModel: undefined,
         initialReasoningEffort: undefined,
+        initialConversationMode: undefined,
         initialPromptAttachments: undefined,
         // Once the durable pane carries the provider session id, the snapshot
         // has no remaining reader and must reach a terminal state. Leaving it
@@ -1191,6 +1195,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         ...(terminal
           ? {
               pendingAgentLaunch: false,
+              initialConversationMode: undefined,
               initialPromptAttachments: undefined,
             }
           : {}),

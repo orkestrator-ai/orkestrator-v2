@@ -123,6 +123,8 @@ process.stdout.write(
     authFile: info.authFile,
     browserUrl: info.browserUrl,
     browserError: info.browserError,
+    controlMcpUrl: backend.getControlMcpInfo()?.url,
+    controlMcpFile: backend.getControlMcpInfo()?.descriptorFile,
   })}\n`,
 );
 

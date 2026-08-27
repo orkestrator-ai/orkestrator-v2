@@ -41,10 +41,7 @@ export function parseFilters(args: string[]): Filters {
     const separator = argument.indexOf("=");
     const flag = separator === -1 ? argument : argument.slice(0, separator);
     const value = separator === -1 ? "" : argument.slice(separator + 1);
-    if (
-      flag === "--tool" &&
-      ["claude", "codex", "cursor", "grok", "opencode", "pi"].includes(value)
-    ) {
+    if (flag === "--tool" && ["claude", "codex", "grok", "opencode", "pi"].includes(value)) {
       filters.tool = value as ToolchainName;
     } else if (flag === "--platform" && ["darwin", "linux"].includes(value)) {
       filters.platform = value as ToolchainPlatform;
@@ -52,7 +49,7 @@ export function parseFilters(args: string[]): Filters {
       filters.architecture = value as ToolchainArchitecture;
     } else {
       throw new Error(
-        `Unknown filter ${argument}. Use --tool=claude|codex|cursor|grok|opencode|pi, ` +
+        `Unknown filter ${argument}. Use --tool=claude|codex|grok|opencode|pi, ` +
           "--platform=darwin|linux, or --arch=arm64|x64.",
       );
     }

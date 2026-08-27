@@ -220,7 +220,7 @@ describe("host model catalogue refresh", () => {
     expect(children[0]?.exited).toBe(true);
   });
 
-  test("uses the long host budget and isolated Cursor agent-test credential home", async () => {
+  test("uses the long host budget and the Cursor SDK bridge credentials", async () => {
     process.env.CURSOR_API_KEY = "cursor-test-key";
     const observedBudgets: Array<number | undefined> = [];
     stubBridgeSpawn((spawned) => listenAsBridge(Number(spawned.env.PORT)));
@@ -236,21 +236,18 @@ describe("host model catalogue refresh", () => {
       "cursor",
     );
 
-    const cursorHome = path.join(
-      storage.getDataDir(),
-      "agent-credentials",
-      "provider-homes",
-      "cursor",
-    );
     expect(observedBudgets).toEqual([
       HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
       HOST_ACP_MODEL_FETCH_TIMEOUT_MS,
     ]);
-    expect(spawns[0]?.env.HOME).toBe(cursorHome);
-    expect(spawns[0]?.env.AGENT_CLI_CREDENTIAL_STORE).toBe("file");
+    expect(spawns[0]?.cwd).toBe(path.join(appRoot, "bridges", "cursor-bridge"));
+    expect(spawns[0]?.env.CURSOR_BRIDGE_TOKEN).toBeTruthy();
+    expect(spawns[0]?.env.CURSOR_BRIDGE_AUTH_FILE).toBe(
+      path.join(storage.getDataDir(), "cursor-sdk", "auth.json"),
+    );
+    expect(spawns[0]?.env.CURSOR_BRIDGE_PROJECT_SETTINGS).toBe("0");
     expect(spawns[0]?.env.CURSOR_API_KEY).toBe("cursor-test-key");
-    expect(spawns[0]?.env.ACP_APPROVE_PROJECT_MCPS).toBe("0");
-    expect(await fs.stat(cursorHome)).toBeTruthy();
+    expect(spawns[0]?.env.ACP_PROVIDER).toBeUndefined();
   });
 
   test("normalizes an OpenCode catalogue with a bounded provider request", async () => {

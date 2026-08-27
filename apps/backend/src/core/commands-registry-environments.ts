@@ -163,12 +163,28 @@ export function registerEnvironmentCommands(
         environmentType,
         namingPrompt,
         buildPipelineId,
+        agentSettings,
+        pendingAgentLaunch,
+        initialAgentModel,
+        initialReasoningEffort,
+        initialConversationMode,
+        controlRequestId,
       },
       context,
     ) => {
       const { storage } = context;
       const project = await storage.getProject(asString(projectId, "projectId"));
       if (!project) throw new Error(`Project not found: ${projectId}`);
+      const externalRequestId = asOptionalString(controlRequestId)?.trim();
+      if (externalRequestId) {
+        if (externalRequestId.length > 256) {
+          throw new Error("controlRequestId must be at most 256 characters");
+        }
+        const existing = (await storage.getEnvironmentsByProject(project.id)).find(
+          (candidate) => candidate.controlRequestId === externalRequestId,
+        );
+        if (existing) return toClientEnvironment(existing);
+      }
       const requestedEnvironmentType = asEnvironmentType(environmentType);
       if (requestedEnvironmentType === "local" && !project.localPath) {
         throw new Error("Project has no local path - cannot create a local worktree");
@@ -206,6 +222,23 @@ export function registerEnvironmentCommands(
         entryPort: repoConfig.entryPort,
         pendingRenamePrompt,
       });
+      env.controlRequestId = externalRequestId || undefined;
+      if (agentSettings !== undefined) env.agentSettings = normalizedTier(agentSettings);
+      if (pendingAgentLaunch === true) {
+        env.pendingAgentLaunch = true;
+        env.initialAgentModel = asOptionalString(initialAgentModel)?.trim() || undefined;
+        env.initialReasoningEffort = asOptionalString(initialReasoningEffort)?.trim() || undefined;
+        if (
+          initialConversationMode !== undefined &&
+          initialConversationMode !== "plan" &&
+          initialConversationMode !== "build"
+        ) {
+          throw new Error("initialConversationMode must be plan or build");
+        }
+        env.initialConversationMode = initialConversationMode;
+      } else if (pendingAgentLaunch !== undefined && pendingAgentLaunch !== false) {
+        throw new Error("pendingAgentLaunch must be a boolean");
+      }
       await storage.patchRepositoryConfig(project.id, {
         lastEnvironmentType: env.environmentType,
       });
@@ -500,6 +533,7 @@ export function registerEnvironmentCommands(
         pendingAgentLaunch,
         initialAgentModel,
         initialReasoningEffort,
+        initialConversationMode,
         initialPromptAttachments,
       },
       { storage },
@@ -524,6 +558,7 @@ export function registerEnvironmentCommands(
         if (!pendingAgentLaunch) {
           updates.initialAgentModel = undefined;
           updates.initialReasoningEffort = undefined;
+          updates.initialConversationMode = undefined;
           updates.initialPromptAttachments = undefined;
         }
       }
@@ -532,6 +567,19 @@ export function registerEnvironmentCommands(
       }
       if (pendingAgentLaunch !== false && typeof initialReasoningEffort === "string") {
         updates.initialReasoningEffort = initialReasoningEffort;
+      }
+      if (
+        initialConversationMode !== undefined &&
+        initialConversationMode !== "plan" &&
+        initialConversationMode !== "build"
+      ) {
+        throw new Error("initialConversationMode must be plan or build");
+      }
+      if (
+        pendingAgentLaunch !== false &&
+        (initialConversationMode === "plan" || initialConversationMode === "build")
+      ) {
+        updates.initialConversationMode = initialConversationMode;
       }
       if (pendingAgentLaunch !== false && Array.isArray(initialPromptAttachments)) {
         updates.initialPromptAttachments =

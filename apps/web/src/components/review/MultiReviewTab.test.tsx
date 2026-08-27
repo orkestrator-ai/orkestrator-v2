@@ -12,7 +12,6 @@ import {
   type CreatableTabType,
   type CreateTabOptions,
 } from "@/contexts";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { useMessagePartExpansionStore } from "@/stores/messagePartExpansionStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import {
@@ -292,7 +291,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(consolidated.textContent).toContain("The failure branch");
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Please address all the issues and coverage gaps",
+        name: "Fix",
       }),
     );
 
@@ -300,8 +299,81 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     expect(await screen.findByText("The fix model is working interactively")).toBeTruthy();
     expect(await screen.findByText(/fix request was recorded and will be delivered/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open fix session" }) === null).toBe(true);
-    expect(screen.queryByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT }) === null).toBe(true);
+    expect(screen.queryByRole("button", { name: "Fix" }) === null).toBe(true);
     expect(createTab).not.toHaveBeenCalled();
+  });
+
+  test("opens a custom fix dialog with the selected fix model and default prompt", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => true);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => ready)}
+        />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom fix prompt" }));
+    expect(await screen.findByRole("heading", { name: "Custom fix prompt" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Custom fix model" }).textContent).toContain(
+      "gpt-5.4",
+    );
+    const prompt = screen.getByLabelText("Prompt") as HTMLTextAreaElement;
+    expect(prompt.value).toBe("Please address all the issues and coverage gaps");
+
+    fireEvent.change(prompt, { target: { value: "Fix the reported regression" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start fix" }));
+
+    await waitFor(() =>
+      expect(createTab).toHaveBeenCalledWith(
+        "codex",
+        expect.objectContaining({
+          agentLaunchMode: "native",
+          initialAgentModel: "gpt-5.4",
+          initialReasoningEffort: "high",
+          initialConversationMode: "build",
+          initialPrompt: expect.stringContaining("Fix the reported regression"),
+          isReviewTab: true,
+        }),
+      ),
+    );
+    const initialPrompt = createTab.mock.calls[0]?.[1]?.initialPrompt;
+    expect(initialPrompt).toContain("Shared finding");
+    expect(initialPrompt).toContain("The failure branch");
+    expect(initialPrompt).toContain("<structured-review-findings-json>");
+    expect(screen.queryByRole("heading", { name: "Custom fix prompt" }) === null).toBe(true);
+  });
+
+  test("keeps custom fix launch failures visible inside the dialog", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const createTab = mock((_type: CreatableTabType, _options?: CreateTabOptions) => false);
+
+    render(
+      <TerminalProvider>
+        <TabRegistrar createTab={createTab} />
+        <MultiReviewTab
+          data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+          isActive
+          hydrateWorkflow={mock(async () => ready)}
+        />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom fix prompt" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start fix" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "The environment is not ready or the maximum tab count was reached.",
+    );
+    expect(screen.getByRole("heading", { name: "Custom fix prompt" })).toBeTruthy();
+    expect(createTab).toHaveBeenCalledTimes(1);
   });
 
   test("does not open a fix tab when the backend refuses the handoff", async () => {
@@ -329,7 +401,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT }));
+    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     expect(await screen.findByText(/consolidation session is no longer available/)).toBeTruthy();
     // Nothing may reach the provider session when the handoff was refused.
     expect(createTab).not.toHaveBeenCalled();
@@ -372,7 +444,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       </TerminalProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT }));
+    fireEvent.click(screen.getByRole("button", { name: "Fix" }));
     expect(await screen.findByText(/fix request was recorded and will be delivered/)).toBeTruthy();
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));
     expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("interactive");
@@ -517,7 +589,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       />,
     );
 
-    const button = screen.getByRole("button", { name: ADDRESS_ALL_REVIEW_PROMPT });
+    const button = screen.getByRole("button", { name: "Fix" });
     expect(button.hasAttribute("disabled")).toBe(false);
     fireEvent.click(button);
     await waitFor(() => expect(address).toHaveBeenCalledWith(ready.id));

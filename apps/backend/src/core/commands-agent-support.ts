@@ -214,48 +214,35 @@ export function resolvePiBinary(context: CommandContext): string {
 }
 
 /**
- * The one resolver for a locally launchable Cursor or Grok agent.
+ * Resolve the locally launchable Grok ACP agent.
  *
- * Unlike the other agents, these never fall back to a PATH lookup. `cursor` on
- * PATH is the desktop editor, which opens a GUI instead of speaking ACP, and a
- * platform enabled from Settings after startup can make `which` succeed for an
- * executable this backend generation never activated — the bridge then starts
- * healthy and only fails later, during session creation, with an opaque
- * transport error. Availability reporting and bridge startup both go through
- * here so they can never disagree about what is launchable.
- *
- * `cursor` is accepted as a secondary managed name for activation directories
- * and packaged layouts predating the `cursor-agent` alias.
+ * Grok never falls back to a PATH lookup. A platform enabled from Settings
+ * after startup can make `which` succeed for an executable this backend
+ * generation never activated, so availability reporting and bridge startup
+ * both go through the managed toolchain.
  */
 export function resolveManagedAcpBinary(
   context: CommandContext,
-  kind: AcpLocalServerKind,
+  _kind: AcpLocalServerKind,
 ): string | undefined {
-  return kind === "cursor"
-    ? (resolveManagedBinary(context, "cursor-agent") ?? resolveManagedBinary(context, "cursor"))
-    : resolveManagedBinary(context, "grok");
+  return resolveManagedBinary(context, "grok");
 }
 
-/**
- * CLI name used for extension discovery inside a container or on PATH.
- * Cursor's ACP binary is `cursor-agent`; `cursor` is the desktop editor.
- */
 export function extensionCliName(agent: AgentExtensionId): string {
-  return agent === "cursor" ? "cursor-agent" : agent;
+  return agent;
 }
 
 export function resolveAgentBinary(context: CommandContext, agent: AgentExtensionId): string {
   if (agent === "claude") return resolveClaudeBinary(context);
   if (agent === "codex") return resolveCodexBinary(context);
   if (agent === "pi") return resolvePiBinary(context);
-  if (agent === "cursor" || agent === "grok") {
+  if (agent === "cursor") {
+    throw new Error("Cursor SDK extension discovery is not available through a CLI.");
+  }
+  if (agent === "grok") {
     const managed = resolveManagedAcpBinary(context, agent);
     if (!managed) {
-      throw new Error(
-        agent === "cursor"
-          ? "Cursor Agent is not installed in this backend's toolchain."
-          : "Grok Build is not installed in this backend's toolchain.",
-      );
+      throw new Error("Grok Build is not installed in this backend's toolchain.");
     }
     return managed;
   }
@@ -271,6 +258,9 @@ export function createExtensionCommandRunner(
 ): ExtensionCommandRunner {
   if (environment.environmentType === "local" && environment.worktreePath) {
     return async (agent, args) => {
+      if (agent === "cursor") {
+        throw new Error("Cursor SDK extension discovery is not available through a CLI.");
+      }
       const { stdout } = await run(resolveAgentBinary(context, agent), args, {
         cwd: environment.worktreePath,
         env: {
@@ -286,6 +276,9 @@ export function createExtensionCommandRunner(
   if (environment.containerId) {
     const containerId = environment.containerId;
     return async (agent, args) => {
+      if (agent === "cursor") {
+        throw new Error("Cursor SDK extension discovery is not available through a CLI.");
+      }
       const { stdout } = await run(
         "docker",
         [
@@ -436,6 +429,18 @@ export async function runEnvironmentAgentSkills(
 
 export function hasPackagedOrPathBinary(context: CommandContext, name: string): Promise<boolean> {
   return resolveManagedBinary(context, name) ? Promise.resolve(true) : commandExists(name);
+}
+
+export function hasCursorSdkBridge(
+  context: CommandContext,
+  nodeEnvironment = process.env.NODE_ENV,
+): Promise<boolean> {
+  const entrypoint = path.join("cursor-bridge", "dist", "index.js");
+  const developmentEntrypoint = path.join(context.appRoot, "bridges", entrypoint);
+  if (nodeEnvironment !== "production" && existsSync(developmentEntrypoint)) {
+    return Promise.resolve(true);
+  }
+  return Promise.resolve(existsSync(path.join(context.resourceRoot, entrypoint)));
 }
 
 // Resolution is synchronous, but every sibling probe answers with a promise and

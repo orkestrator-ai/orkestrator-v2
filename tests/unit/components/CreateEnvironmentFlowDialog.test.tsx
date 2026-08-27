@@ -51,7 +51,6 @@ const baseOptions: ClaudeOptions = {
   claudeMode: "terminal",
   opencodeMode: "terminal",
   codexMode: "native",
-  cursorMode: "terminal",
   grokMode: "native",
   model: "default",
   initialPrompt: "",
@@ -1010,9 +1009,8 @@ describe("CreateEnvironmentFlowDialog", () => {
       resolveEnvironmentAgentSettings({
         ...baseOptions,
         agentType: "cursor",
-        cursorMode: "terminal",
       }),
-    ).toEqual({ defaultAgent: "cursor", platforms: { cursor: { mode: "terminal" } } });
+    ).toEqual({ defaultAgent: "cursor", platforms: { cursor: { mode: "native" } } });
     expect(
       resolveEnvironmentAgentSettings({
         ...baseOptions,

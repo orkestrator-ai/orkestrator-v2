@@ -678,6 +678,67 @@ test("supervisor failures are isolated during restore and shutdown", async () =>
   }
 });
 
+test("does not publish the persistent control MCP until backend recovery completes", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-control-ready-"));
+  let releaseNativeInit!: () => void;
+  let markNativeInitStarted!: () => void;
+  const nativeInitGate = new Promise<void>((resolve) => {
+    releaseNativeInit = resolve;
+  });
+  const nativeInitStarted = new Promise<void>((resolve) => {
+    markNativeInitStarted = resolve;
+  });
+  const controlMcp = {
+    getInfo: mock(() => null),
+    getSettings: mock(() => ({
+      enabled: true,
+      running: false,
+      url: "http://127.0.0.1:34122/mcp",
+      token: "",
+      error: null,
+    })),
+    rotateToken: mock(async () => {
+      throw new Error("not used");
+    }),
+    start: mock(async () => undefined),
+    stop: mock(async () => undefined),
+  };
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir: "",
+    appRoot: "",
+    resourceRoot: "",
+    emit: () => undefined,
+    agentTools: fakeAgentTools(),
+    controlMcp,
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  const internals = backend as unknown as {
+    nativeAgents: { init: () => Promise<void> };
+  };
+  internals.nativeAgents.init = mock(async () => {
+    markNativeInitStarted();
+    await nativeInitGate;
+  });
+
+  try {
+    const initialization = backend.init();
+    await nativeInitStarted;
+    expect(controlMcp.start).not.toHaveBeenCalled();
+
+    releaseNativeInit();
+    await initialization;
+    expect(controlMcp.start).toHaveBeenCalledTimes(1);
+  } finally {
+    releaseNativeInit();
+    await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
 type ControlledInterval = {
   active: boolean;
   callback: () => void;

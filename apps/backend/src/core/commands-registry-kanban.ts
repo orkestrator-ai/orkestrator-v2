@@ -12,6 +12,13 @@ import {
   assertOnlyKeys,
 } from "./commands-helpers.js";
 
+function asOptionalMutationRequestId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  const requestId = asNonBlankString(value, "requestId");
+  if (requestId.length > 256) throw new Error("requestId must be at most 256 characters");
+  return requestId;
+}
+
 export function registerKanbanCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
@@ -22,12 +29,24 @@ export function registerKanbanCommands(
       storage.getKanbanTasks(asString(args.projectId, "projectId")),
     ),
   );
-  register("add_kanban_task", ({ projectId, title, description }, { storage }) =>
-    storage.addKanbanTask(
-      asString(projectId, "projectId"),
-      asString(title, "title"),
-      asString(description, "description"),
-    ),
+  register(
+    "add_kanban_task",
+    ({ projectId, title, description, acceptanceCriteria, status, requestId }, { storage }) => {
+      const parsedRequestId = asOptionalMutationRequestId(requestId);
+      const initial = {
+        ...(typeof acceptanceCriteria === "string" ? { acceptanceCriteria } : {}),
+        ...(typeof status === "string" ? { status: status as never } : {}),
+        ...(parsedRequestId ? { requestId: parsedRequestId } : {}),
+      };
+      const required = [
+        asString(projectId, "projectId"),
+        asString(title, "title"),
+        asString(description, "description"),
+      ] as const;
+      return Object.keys(initial).length > 0
+        ? storage.addKanbanTask(...required, initial)
+        : storage.addKanbanTask(...required);
+    },
   );
   register(
     "update_kanban_task",
@@ -63,9 +82,18 @@ export function registerKanbanCommands(
   register("delete_kanban_task", ({ taskId }, { storage }) =>
     storage.deleteKanbanTask(asString(taskId, "taskId")),
   );
-  register("add_kanban_comment", ({ taskId, text }, { storage }) =>
-    storage.addKanbanComment(asString(taskId, "taskId"), asString(text, "text")),
-  );
+  register("add_kanban_comment", ({ taskId, text, projectId, requestId }, { storage }) => {
+    const parsedRequestId = asOptionalMutationRequestId(requestId);
+    const required = [asString(taskId, "taskId"), asString(text, "text")] as const;
+    if (projectId === undefined && parsedRequestId === undefined) {
+      return storage.addKanbanComment(...required);
+    }
+    return storage.addKanbanComment(
+      ...required,
+      projectId === undefined ? undefined : asString(projectId, "projectId"),
+      parsedRequestId,
+    );
+  });
   register("delete_kanban_comment", ({ taskId, commentId }, { storage }) =>
     storage.deleteKanbanComment(asString(taskId, "taskId"), asString(commentId, "commentId")),
   );

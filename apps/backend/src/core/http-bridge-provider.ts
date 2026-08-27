@@ -581,13 +581,45 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     const health = asRecord(payload);
     if (!health) return undefined;
     const engine = asRecord(health.engine);
-    const groupedNotices = new Map<string, number>();
+    const groupedNotices = new Map<
+      string,
+      NonNullable<NativeAgentRuntimeSummary["notices"]>[number]
+    >();
     if (Array.isArray(health.notices)) {
       for (const candidate of health.notices.slice(-128)) {
-        const message = asRecord(candidate)?.message;
+        const item = asRecord(candidate);
+        const message = item?.message;
         if (typeof message !== "string" || message.length === 0) continue;
         const bounded = message.slice(0, 1_000);
-        groupedNotices.set(bounded, (groupedNotices.get(bounded) ?? 0) + 1);
+        const method =
+          typeof item?.method === "string" && item.method.length > 0
+            ? item.method.slice(0, 128)
+            : undefined;
+        const key = `${method ?? ""}\u0000${bounded}`;
+        const existing = groupedNotices.get(key);
+        const detail =
+          typeof item?.detail === "string" && item.detail.length > 0
+            ? item.detail.slice(0, 1_000)
+            : undefined;
+        const receivedAt =
+          typeof item?.receivedAt === "string" && item.receivedAt.length > 0
+            ? item.receivedAt.slice(0, 64)
+            : undefined;
+        const occurrences = [
+          ...(existing?.occurrences ?? []),
+          ...(detail || receivedAt
+            ? [{ ...(detail ? { detail } : {}), ...(receivedAt ? { receivedAt } : {}) }]
+            : []),
+        ].slice(-5);
+        // Reinsert repeated groups so the five-group limit follows the most
+        // recent occurrence, not the first time that method appeared.
+        if (existing) groupedNotices.delete(key);
+        groupedNotices.set(key, {
+          message: bounded,
+          ...(method ? { method } : {}),
+          count: (existing?.count ?? 0) + 1,
+          ...(occurrences.length > 0 ? { occurrences } : {}),
+        });
       }
     }
     return {
@@ -600,9 +632,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
         : {}),
       ...(groupedNotices.size > 0
         ? {
-            notices: [...groupedNotices.entries()].slice(-5).map(([message, count]) => ({
-              message,
-              ...(count > 1 ? { count } : {}),
+            notices: [...groupedNotices.values()].slice(-5).map(({ count, ...notice }) => ({
+              ...notice,
+              ...(count !== undefined && count > 1 ? { count } : {}),
             })),
           }
         : {}),

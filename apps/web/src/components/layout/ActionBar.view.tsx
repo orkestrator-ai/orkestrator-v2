@@ -532,15 +532,6 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                           OpenCode CLI
                         </ContextMenuItem>
                       )}
-                      {enabledAgents.has("cursor") && (
-                        <ContextMenuItem
-                          onClick={() => handleCreateAgentTab("cursor", "cli")}
-                          disabled={!canCreateTab}
-                        >
-                          <CursorAgentIcon className="mr-2 h-4 w-4" />
-                          Cursor CLI
-                        </ContextMenuItem>
-                      )}
                       {enabledAgents.has("grok") && (
                         <ContextMenuItem
                           onClick={() => handleCreateAgentTab("grok", "cli")}

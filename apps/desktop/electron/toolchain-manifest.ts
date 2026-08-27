@@ -1,7 +1,6 @@
 export const PINNED_TOOLCHAIN_VERSIONS = {
   claude: "2.1.245",
   codex: "0.149.1",
-  cursor: "2026.08.11-e8db854",
   grok: "1.0.10",
   opencode: "1.18.23",
   pi: "0.84.3",
@@ -97,7 +96,6 @@ const GITHUB_RELEASE_HOSTS = [
   "objects.githubusercontent.com",
 ] as const;
 const NPM_REGISTRY_HOSTS = ["registry.npmjs.org"] as const;
-const CURSOR_DOWNLOAD_HOSTS = ["downloads.cursor.com"] as const;
 const GROK_DOWNLOAD_HOSTS = ["x.ai", "storage.googleapis.com", "storage.cloud.google.com"] as const;
 
 // Release bases are derived from PINNED_TOOLCHAIN_VERSIONS so a version bump
@@ -426,112 +424,6 @@ export const PINNED_TOOLCHAIN_ARTIFACTS: readonly ToolchainArtifact[] = [
       fileName: "claude",
       size: 391_948_592,
       sha256: "16ad2b94deaf7b29abed966d981c9991a47af0420f5be8ed4a3f83bea9f678bc",
-    },
-  },
-  {
-    name: "cursor",
-    version: PINNED_TOOLCHAIN_VERSIONS.cursor,
-    platform: "darwin",
-    architecture: "arm64",
-    activationAliases: ["cursor-agent"],
-    archive: {
-      format: "tar.gz",
-      url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/darwin/arm64/agent-cli-package.tar.gz`,
-      entryPath: "dist-package/cursor-agent",
-      bundleRoot: "dist-package/",
-      bundleIntegrity: {
-        fileCount: 435,
-        totalSize: 233_915_000,
-        sha256: "c8cb6eb3dda11f10bb185a3159c34358999c6d120f409e28e7c5dcd0c98443c2",
-      },
-      size: 74_746_275,
-      sha256: "46044d6d7bcbd7b49a0cf1cd01aa4ca79aaa2ea5f2c7a32965fc0ebe29841790",
-      allowedHosts: CURSOR_DOWNLOAD_HOSTS,
-    },
-    executable: {
-      fileName: "cursor",
-      size: 1_074,
-      sha256: "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831",
-      skipMacSignatureVerification: true,
-    },
-  },
-  {
-    name: "cursor",
-    version: PINNED_TOOLCHAIN_VERSIONS.cursor,
-    platform: "darwin",
-    architecture: "x64",
-    activationAliases: ["cursor-agent"],
-    archive: {
-      format: "tar.gz",
-      url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/darwin/x64/agent-cli-package.tar.gz`,
-      entryPath: "dist-package/cursor-agent",
-      bundleRoot: "dist-package/",
-      bundleIntegrity: {
-        fileCount: 435,
-        totalSize: 239_811_650,
-        sha256: "09567340b9337525d9f4073913c36f077ced7f136dd07d2435fe9c9ca678a4c6",
-      },
-      size: 77_650_670,
-      sha256: "d5c1ce96dd36469e0231d818d4ccf390caac52d94e607c56ebeecc247cab2b1b",
-      allowedHosts: CURSOR_DOWNLOAD_HOSTS,
-    },
-    executable: {
-      fileName: "cursor",
-      size: 1_074,
-      sha256: "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831",
-      skipMacSignatureVerification: true,
-    },
-  },
-  {
-    name: "cursor",
-    version: PINNED_TOOLCHAIN_VERSIONS.cursor,
-    platform: "linux",
-    architecture: "arm64",
-    activationAliases: ["cursor-agent"],
-    archive: {
-      format: "tar.gz",
-      url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/linux/arm64/agent-cli-package.tar.gz`,
-      entryPath: "dist-package/cursor-agent",
-      bundleRoot: "dist-package/",
-      bundleIntegrity: {
-        fileCount: 441,
-        totalSize: 248_799_966,
-        sha256: "2559dbe9372301df47c5833a84b35d4025baaab7b76edcf6d86a7b81f4d512e6",
-      },
-      size: 83_117_637,
-      sha256: "ea13f92e295f523a99ce8d8f57d6894d21e5d1e2d030ffad718ccd5955ca2eed",
-      allowedHosts: CURSOR_DOWNLOAD_HOSTS,
-    },
-    executable: {
-      fileName: "cursor",
-      size: 1_074,
-      sha256: "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831",
-    },
-  },
-  {
-    name: "cursor",
-    version: PINNED_TOOLCHAIN_VERSIONS.cursor,
-    platform: "linux",
-    architecture: "x64",
-    activationAliases: ["cursor-agent"],
-    archive: {
-      format: "tar.gz",
-      url: `https://downloads.cursor.com/lab/${PINNED_TOOLCHAIN_VERSIONS.cursor}/linux/x64/agent-cli-package.tar.gz`,
-      entryPath: "dist-package/cursor-agent",
-      bundleRoot: "dist-package/",
-      bundleIntegrity: {
-        fileCount: 441,
-        totalSize: 254_357_686,
-        sha256: "76a35725239f2fa87a2afbc9d43f76d57cfecb5aadc99f5a5581d5f8ab9843f9",
-      },
-      size: 84_532_310,
-      sha256: "bfff4bf6f4e9dd30c1d0ef0a70b6077b074015dd2948e4c50685d53afdcfce5a",
-      allowedHosts: CURSOR_DOWNLOAD_HOSTS,
-    },
-    executable: {
-      fileName: "cursor",
-      size: 1_074,
-      sha256: "eed61c5224668c9236334c4c68936a16aecc37374b592f59e31eb50433817831",
     },
   },
   {

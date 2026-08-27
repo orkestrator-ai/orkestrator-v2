@@ -1,23 +1,11 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import type { CommandContext } from "./commands-context.js";
-import {
-  getClaudeOAuthAccessToken,
-  getHostClaudeCredentials,
-  getHostCursorCredentials,
-  syncAgentTestCursorCredentials,
-} from "./commands-files.js";
-import {
-  AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV,
-  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
-} from "./commands-runtime-state.js";
+import { getClaudeOAuthAccessToken, getHostClaudeCredentials } from "./commands-files.js";
+import { AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV } from "./commands-runtime-state.js";
 import { cursorApiKeyFingerprint, resolveCursorApiKey } from "./commands-validation.js";
-
-type HostCursorCredentials = Awaited<ReturnType<typeof getHostCursorCredentials>>;
 
 export type CursorHostCredentialMaterial = {
   apiKey: string | undefined;
-  hostCredentials: HostCursorCredentials;
   fingerprint: string;
 };
 
@@ -30,47 +18,12 @@ export async function resolveCursorHostCredentialMaterial(
   const apiKey = allowed
     ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
     : undefined;
-  const hostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-  const hostCredentials =
-    context.runtimeFlavor === "agent-test" && allowed && !apiKey && hostHome
-      ? await getHostCursorCredentials(process.platform, hostHome)
-      : undefined;
   const fingerprint = createHash("sha256")
     .update(allowed ? "allowed" : "denied")
     .update("\0")
     .update(cursorApiKeyFingerprint(apiKey))
-    .update("\0")
-    .update(hostCredentials?.accessToken ?? "")
-    .update("\0")
-    .update(hostCredentials?.refreshToken ?? "")
-    .update("\0")
-    .update(hostCredentials?.apiKey ?? "")
     .digest("hex");
-  return { apiKey, hostCredentials, fingerprint };
-}
-
-/** Apply Cursor's host credential policy to an ACP child environment. */
-export async function applyCursorHostCredentialEnvironment(
-  context: CommandContext,
-  env: NodeJS.ProcessEnv,
-  credentials: CursorHostCredentialMaterial,
-): Promise<void> {
-  if (credentials.apiKey) env.CURSOR_API_KEY = credentials.apiKey;
-  else delete env.CURSOR_API_KEY;
-  if (context.runtimeFlavor !== "agent-test") return;
-
-  const cursorHome = path.join(
-    context.storage.getDataDir(),
-    "agent-credentials",
-    "provider-homes",
-    "cursor",
-  );
-  env.HOME = cursorHome;
-  env[AGENT_TEST_CURSOR_CREDENTIAL_STORE_ENV] = "file";
-  await syncAgentTestCursorCredentials(
-    cursorHome,
-    credentials.apiKey ? undefined : credentials.hostCredentials,
-  );
+  return { apiKey, fingerprint };
 }
 
 /** Apply Claude's agent-test host credential policy to a child environment. */

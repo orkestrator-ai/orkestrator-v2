@@ -34,13 +34,12 @@ import {
 } from "./commands-runtime-state.js";
 import { terminateLocalServerChild } from "./commands-local-server-lifecycle.js";
 import { fetchClaudeBridgeModelCatalog } from "./commands-containers.js";
-import { cursorSdkBridgeEnabled, cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
+import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import { discoverHostPiModelCatalog } from "./pi-model-catalog-seeding.js";
 import { normalizeOpenCodeComposerCatalog } from "./opencode-model-catalog.js";
 import { runCommand } from "./shell.js";
 import {
   applyClaudeHostCredentialEnvironment,
-  applyCursorHostCredentialEnvironment,
   resolveCursorHostCredentialMaterial,
 } from "./host-agent-credentials.js";
 import {
@@ -219,7 +218,7 @@ async function refreshAcp(
   agent: "cursor" | "grok",
   dependencies: HostRefreshDependencies,
 ): Promise<HostCatalog> {
-  const useCursorSdk = agent === "cursor" && (await cursorSdkBridgeEnabled(context));
+  const useCursorSdk = agent === "cursor";
   const bridgeName = useCursorSdk ? "cursor-bridge" : "acp-bridge";
   const { cwd, entrypoint } = bridgeEntrypoint(context, bridgeName);
   const workingDirectory = await probeWorkingDirectory(context);
@@ -239,17 +238,14 @@ async function refreshAcp(
     if (cursorApiKey) env.CURSOR_API_KEY = cursorApiKey;
     else delete env.CURSOR_API_KEY;
   } else {
-    const executable = resolveManagedAcpBinary(context, agent);
+    const executable = resolveManagedAcpBinary(context, "grok");
     if (!executable) {
-      throw new Error(`${agent === "cursor" ? "Cursor Agent" : "Grok Build"} is not installed yet`);
+      throw new Error("Grok Build is not installed yet");
     }
     env.ACP_BRIDGE_TOKEN = token;
     env.ACP_PROVIDER = agent;
     env.ACP_AGENT_PATH = executable;
     env.ACP_APPROVE_PROJECT_MCPS = "0";
-    if (agent === "cursor") {
-      await applyCursorHostCredentialEnvironment(context, env, cursorCredentials!);
-    }
   }
   const models = await withShortLivedBridge(
     {

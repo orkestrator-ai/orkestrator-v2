@@ -9,7 +9,9 @@ const report = {
 
 describe("multiReviewCustomFixPrompt", () => {
   test("keeps the Address all prompt stable", () => {
-    expect(ADDRESS_ALL_REVIEW_PROMPT).toBe("Please address all the issues and coverage gaps");
+    expect(ADDRESS_ALL_REVIEW_PROMPT).toBe(
+      "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.",
+    );
   });
 
   test("frames actionable report evidence and appends the custom instruction", () => {

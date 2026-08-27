@@ -69,7 +69,11 @@ import { DockerStatsDialog } from "@/components/docker";
 import * as backend from "@/lib/backend";
 import { cn } from "@/lib/utils";
 import { ReviewLaunchDialog } from "@/components/review/ReviewLaunchDialog";
-import { MultiReviewLaunchDialog, StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
+import {
+  defaultMultiReviewLaunchSelection,
+  MultiReviewLaunchDialog,
+  StackedEyes,
+} from "@/components/review/MultiReviewLaunchDialog";
 import { AgentLaunchDialog } from "@/components/launch/AgentLaunchDialog";
 import { resolveDefaultReviewTabType } from "@/lib/review-launch-options";
 import { MOBILE_SHELL_MEDIA_QUERY, MOBILE_TOOLS_TRIGGER_SELECTOR } from "./MobileAppShellLayout";
@@ -297,6 +301,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     openReviewDialog,
     reviewLongPress,
     handleConfiguredReview,
+    openMultiReviewDialog,
+    multiReviewLongPress,
     handleMultiReview,
     handleLoopedReview,
     openScriptDialog,
@@ -647,14 +653,40 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                         <p className="text-xs text-muted-foreground">
                           Compare independent model reviews and consolidate every finding
                         </p>
+                        <p className="text-xs text-muted-foreground">
+                          Right-click or long-press to configure
+                        </p>
                       </>
                     }
                   >
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8"
-                      onClick={() => setMultiReviewDialogOpen(true)}
+                      className="h-8 w-8 touch-manipulation"
+                      onClick={(event) => {
+                        if (multiReviewLongPress.shouldSuppressClick()) {
+                          event.preventDefault();
+                          return;
+                        }
+                        void handleMultiReview(
+                          defaultMultiReviewLaunchSelection({
+                            defaultAgent: reviewLaunchDefaults.defaultAgent,
+                            catalog: reviewModelCatalog,
+                            preferredModels: reviewLaunchDefaults.preferredModels,
+                            preferredReasoningEfforts:
+                              reviewLaunchDefaults.preferredReasoningEfforts,
+                            secondReviewerDefaults: review2LaunchDefaults,
+                            fixModelDefaults: fixReviewIssuesLaunchDefaults,
+                          }),
+                        );
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        multiReviewLongPress.cancel();
+                        openMultiReviewDialog();
+                      }}
+                      {...multiReviewLongPress.handlers}
+                      data-toolbar-custom-context-menu="true"
                       disabled={
                         !selectedEnvironment ||
                         !canCreateTab ||

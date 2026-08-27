@@ -3519,7 +3519,7 @@ describe("ActionBar workflow tabs", () => {
     expect(createTabMock).toHaveBeenCalledTimes(cases.length);
   });
 
-  test("places Multi Review after Review and sends only the launch intent to the backend", async () => {
+  test("opens Multi Review settings on right-click and launches the populated defaults on click", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       prUrl: null,
@@ -3533,8 +3533,17 @@ describe("ActionBar workflow tabs", () => {
     expect(toolbarButtons.indexOf(screen.getByRole("button", { name: "Multi Review" }))).toBe(
       toolbarButtons.indexOf(screen.getByRole("button", { name: "Code review" })) + 1,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
+    const multiReviewButton = screen.getByRole("button", { name: "Multi Review" });
+    fireEvent.focus(multiReviewButton);
+    expect(screen.getByText("Right-click or long-press to configure")).toBeTruthy();
+    fireEvent.blur(multiReviewButton);
+    fireEvent.contextMenu(multiReviewButton);
+    expect(screen.getByRole("dialog", { name: "Configure Multi Review" })).toBeTruthy();
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    fireEvent.click(multiReviewButton);
+    expect(screen.queryByRole("dialog", { name: "Configure Multi Review" }) === null).toBe(true);
 
     await waitFor(() =>
       expect(startMultiReviewMock).toHaveBeenCalledWith(
@@ -3554,6 +3563,73 @@ describe("ActionBar workflow tabs", () => {
       displayTitle: "Multi Review",
     });
     expect(installMultiReviewWorkflowMock).toHaveBeenCalledWith(startedMultiReview);
+  });
+
+  test("opens Multi Review settings on mobile long press without launching defaults", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    render(<ActionBar presentation="grid" />);
+
+    const multiReviewButton = screen.getByRole("button", { name: "Multi Review" });
+    fireEvent.pointerDown(multiReviewButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    fireEvent.pointerUp(multiReviewButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole("dialog", { name: "Configure Multi Review" })).toBeTruthy();
+      },
+      { timeout: 10_000 },
+    );
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+
+    // Consume the click synthesized by mobile browsers after the gesture.
+    fireEvent.click(multiReviewButton);
+    expect(startMultiReviewMock).not.toHaveBeenCalled();
+  }, 20_000);
+
+  test("suppresses a second toolbar click while Multi Review launch is in flight", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    let resolveStart!: (workflow: typeof startedMultiReview) => void;
+    startMultiReviewMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    render(<ActionBar />);
+
+    const multiReviewButton = screen.getByRole("button", { name: "Multi Review" });
+    fireEvent.click(multiReviewButton);
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
+    expect((multiReviewButton as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(multiReviewButton);
+    expect(startMultiReviewMock).toHaveBeenCalledTimes(1);
+
+    resolveStart(startedMultiReview);
+    await waitFor(() => expect(createTabMock).toHaveBeenCalledTimes(1));
   });
 
   /**
@@ -3579,7 +3655,6 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() =>
       expect(createTabMock).toHaveBeenCalledWith("multi-review", {
@@ -3613,7 +3688,7 @@ describe("ActionBar workflow tabs", () => {
     currentWorkspaceReady = true;
     render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() =>
@@ -3648,7 +3723,7 @@ describe("ActionBar workflow tabs", () => {
     currentWorkspaceReady = true;
     render(<ActionBar />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Multi Review" }));
     fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() =>
@@ -3683,7 +3758,6 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() => expect(cancelMultiReviewMock).toHaveBeenCalledWith("multi-workflow-1"));
     expect(deleteMultiReviewWorkflowMock).not.toHaveBeenCalled();
@@ -3714,7 +3788,6 @@ describe("ActionBar workflow tabs", () => {
     render(<ActionBar />);
 
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() =>
       expect(deleteMultiReviewWorkflowMock).toHaveBeenCalledWith("multi-workflow-1"),
@@ -4669,7 +4742,6 @@ describe("ActionBar configured action defaults", () => {
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     // Each role keeps its own provider/model/effort decision all the way to the
     // backend launch intent.
@@ -4696,6 +4768,49 @@ describe("ActionBar configured action defaults", () => {
     });
   });
 
+  test("preserves configured OpenCode defaults while the repository catalog is loading", async () => {
+    currentEnvironment = {
+      ...selectedEnvironment,
+      agentSettings: { defaultAgent: "codex" },
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+    };
+    currentWorkspaceReady = true;
+    currentActionDefaults = {
+      review: {
+        platform: "opencode",
+        model: "provider/repository-cached-reviewer",
+        reasoningEffort: "high",
+      },
+      review2: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" },
+      fixReviewIssues: {
+        platform: "opencode",
+        model: "provider/repository-cached-fixer",
+        reasoningEffort: "medium",
+      },
+    };
+
+    render(<ActionBar />);
+    fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
+
+    await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalledTimes(1));
+    const launch = startMultiReviewMock.mock.calls[0]?.[0] as {
+      reviewers: Array<{ agent: string; model: string; reasoningEffort?: string }>;
+      fixModel: { agent: string; model: string; reasoningEffort?: string };
+    };
+    expect(launch.reviewers[0]).toEqual({
+      agent: "opencode",
+      model: "provider/repository-cached-reviewer",
+      reasoningEffort: "high",
+    });
+    expect(launch.fixModel).toEqual({
+      agent: "opencode",
+      model: "provider/repository-cached-fixer",
+      reasoningEffort: "medium",
+    });
+  });
+
   test("keeps Review as the upgrade fallback for unset Multi Review roles", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
@@ -4711,7 +4826,6 @@ describe("ActionBar configured action defaults", () => {
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Multi Review" }));
-    fireEvent.click(screen.getByRole("button", { name: "Start 2-model review" }));
 
     await waitFor(() => expect(startMultiReviewMock).toHaveBeenCalled());
     const launch = startMultiReviewMock.mock.calls.at(-1)?.[0] as {

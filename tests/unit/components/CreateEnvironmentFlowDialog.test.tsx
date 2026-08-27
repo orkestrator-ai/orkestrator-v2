@@ -22,11 +22,16 @@ const getContainerGitHubCredentialStatusMock = mock(async () => ({
   source: "host-cli" as const,
   available: true,
 }));
+const createFeatureBuildMock = mock(async (..._args: unknown[]) => ({
+  taskId: "task-1",
+  pipelineId: "pipeline-1",
+}));
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
+  createFeatureBuild: createFeatureBuildMock,
 }));
 
 afterAll(() => {
@@ -92,6 +97,8 @@ async function submitCreateFlow(options: { turnOffLaunchAgent?: boolean } = {}) 
 describe("CreateEnvironmentFlowDialog", () => {
   beforeEach(() => {
     updateEnvironmentAgentSettingsMock.mockClear();
+    createFeatureBuildMock.mockClear();
+    createFeatureBuildMock.mockResolvedValue({ taskId: "task-1", pipelineId: "pipeline-1" });
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
       source: "host-cli",
@@ -445,6 +452,128 @@ describe("CreateEnvironmentFlowDialog", () => {
     await waitFor(() =>
       expect(screen.queryByText("No GitHub CLI credentials found") === null).toBe(true),
     );
+  });
+
+  /**
+   * A feature build clones the repository exactly like a plain container
+   * create, so it has to go behind the same credential warning rather than
+   * around it — the ticket and the pipeline are written by the same request
+   * that provisions, so a failed clone is not something the user can undo.
+   */
+  function startFeatureBuild(name: string) {
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.change(screen.getByLabelText(/Feature name/i), { target: { value: name } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+  }
+
+  test("warns before a containerized feature build when credentials are unavailable", async () => {
+    getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
+      source: "host-cli",
+      available: false,
+    });
+    const createEnvironment = mock(async () => ({ id: "env-feature" }) as Environment);
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={createEnvironment}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    startFeatureBuild("Dark mode toggle");
+
+    expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
+    expect(createFeatureBuildMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create anyway" }));
+
+    await waitFor(() => expect(createFeatureBuildMock).toHaveBeenCalledTimes(1));
+    // The one request owns the ticket, the environment and the pipeline, so
+    // the plain create path must not also run.
+    expect(createEnvironment).not.toHaveBeenCalled();
+    const request = createFeatureBuildMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(request.title).toBe("Dark mode toggle");
+    expect(request.environmentType).toBe("containerized");
+  });
+
+  test("abandons a feature build when the credential warning is dismissed", async () => {
+    getContainerGitHubCredentialStatusMock.mockResolvedValueOnce({
+      source: "host-cli",
+      available: false,
+    });
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "env-feature" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    startFeatureBuild("Dark mode toggle");
+    expect(await screen.findByText("No GitHub CLI credentials found")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+
+    expect(createFeatureBuildMock).not.toHaveBeenCalled();
+    // The dialog stays open on the same ticket, so the user can fix the
+    // credential and try again without retyping it.
+    expect(screen.queryByText("No GitHub CLI credentials found") === null).toBe(true);
+    expect((screen.getByLabelText(/Feature name/i) as HTMLInputElement).value).toBe(
+      "Dark mode toggle",
+    );
+  });
+
+  test("reports a failed feature build without closing the dialog", async () => {
+    createFeatureBuildMock.mockRejectedValueOnce(new Error("Docker is not running"));
+    const onOpenChange = mock(() => {});
+
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={onOpenChange}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "env-feature" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    startFeatureBuild("Dark mode toggle");
+
+    await waitFor(() => expect(createFeatureBuildMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+    expect(mockToastError.mock.calls[0]![0]).toBe("Could not start the build");
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+
+  test("skips the credential check for a local feature build", async () => {
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "env-feature-local" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Local/ }));
+    startFeatureBuild("Dark mode toggle");
+
+    await waitFor(() => expect(createFeatureBuildMock).toHaveBeenCalledTimes(1));
+    // A local worktree reuses the host checkout instead of cloning.
+    expect(getContainerGitHubCredentialStatusMock).not.toHaveBeenCalled();
+    const request = createFeatureBuildMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(request.environmentType).toBe("local");
   });
 
   test("does not check container GitHub credentials for a local worktree", async () => {
@@ -852,7 +981,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("switch", { name: /Launch agent/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Launch agent/i }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());

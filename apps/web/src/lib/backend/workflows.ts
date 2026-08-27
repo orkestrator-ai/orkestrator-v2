@@ -1,4 +1,8 @@
 import { invoke } from "@/lib/native/backend";
+import type {
+  CreateFeatureBuildInput,
+  CreateFeatureBuildResult,
+} from "@orkestrator/protocol/feature-build";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type {
   AgentInteractionApplyOutcome,
@@ -444,6 +448,20 @@ export async function startBuildPipeline(
   input: StartBuildPipelineInput,
 ): Promise<BackendBuildPipeline> {
   return invoke<BackendBuildPipeline>("start_build_pipeline", { ...input });
+}
+
+/**
+ * Creates the ticket and starts its build in one backend-owned request.
+ *
+ * The renderer deliberately does not create the ticket itself and then start a
+ * pipeline: those are two writes, and a tab that goes away between them leaves
+ * a ticket nobody is building. `requestId` makes a retry return the same ticket
+ * and the same pipeline rather than a second of each.
+ */
+export async function createFeatureBuild(
+  input: CreateFeatureBuildInput,
+): Promise<CreateFeatureBuildResult> {
+  return invoke<CreateFeatureBuildResult>("create_feature_build", { ...input });
 }
 
 export async function pauseBuildPipeline(pipelineId: string): Promise<BackendBuildPipeline> {

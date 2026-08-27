@@ -34,6 +34,78 @@ history rather than two partial ones.
   narrower shared-state or scheduling cause; a recurrence should capture the
   activity-source writes around shutdown, init, and pending-dispatch clearing.
 
+## `MultiReviewService dispatches a durable address intent without a renderer` (`apps/backend/src/core/multi-review-service.test.ts:587`)
+
+- **Status:** open
+- **Date observed:** 2026-08-27
+- **Original command:** `bun run test` (complete concurrent cross-platform
+  suite), on branch `update-environment-modal`.
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  this failure was in the backend workspace package, whose own script uses
+  `--parallel=${ORKESTRATOR_TEST_WORKERS:-2}` under turbo alongside the web,
+  desktop, web-public, CLI and protocol packages.
+- **Failure:** 2,202 passed, 1 failed across 92 files in 42.2 s. The failing
+  assertion is one of the environment activity-source transitions this test
+  makes around the durable address dispatch.
+- **Isolated reruns:** `bun run test:logged -- --name mr-isolate -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  src/core/multi-review-service.test.ts --only-failures` -> exit 0 in 4.9 s.
+  The single test alone with `-t` -> 1 passed. The whole backend `src` suite was
+  then run three more times at `--parallel=2`: 2,190 passed, 0 failed each time.
+- **Relationship to the sibling entry:** this is the same file and the same
+  `agentActivitySources["multi-review"]` timing shape as
+  `MultiReviewService resumes a persisted address attempt after restart`,
+  recorded above on 2026-08-26. Treat the two as one cluster.
+- **Attribution:** the change under review refactored this service's reviewer
+  fan-out into the shared `review-fanout.ts`, so this file is *not* untouched
+  and the usual "unrelated diff" argument does not apply on its own. What does
+  apply: the test reaches the `ready` phase — meaning the reviewer path it
+  shares with the refactor completed successfully — before the assertions that
+  failed, and `address`, `advanceAddressPrompt` and `syncWorkflowActivity`,
+  which own those assertions, were not modified. The sibling entry predates the
+  change. A recurrence should capture the activity-source writes around
+  `address()` and the dispatch callback rather than the reviewer pass.
+- **Recurrence (multi-model build lifecycle fixes, 2026-08-27):**
+  `bun run --cwd apps/backend test` ran 18 Bun workers and reported this case
+  failed after 188.74 ms; the backend package finished with 2,220 passed and 1
+  failed across 93 files in 15.21 s. The captured aggregate tail did not retain
+  the assertion detail. The immediate isolated rerun, `bun test
+  ./src/core/multi-review-service.test.ts` from `apps/backend`, passed all 79
+  cases and 335 assertions in 4.58 s; this target passed in 37.84 ms. The
+  lifecycle changes in this pass do not touch `address()`, its dispatch
+  callback, or `syncWorkflowActivity`, so the evidence remains consistent with
+  the existing activity-source timing cluster rather than a deterministic
+  reviewer-fan-out regression.
+
+## `MultiReviewService fails recoverably when the consolidation session is missing` (`apps/backend/src/core/multi-review-service.test.ts:545`)
+
+- **Status:** open
+- **Date observed:** 2026-08-27
+- **Original command:** `bun run test` (complete four-group repository suite).
+- **Worker configuration:** `scripts/test-all.ts` ran workspace, root,
+  bridges, and protocol-lockfile groups concurrently. The backend workspace
+  used `--parallel=2` inside Turbo while the other groups were active.
+- **Failure:** the workflow correctly reached `failed` with the missing-session
+  error and cleared its address bookkeeping, but the environment's
+  `agentActivitySources["multi-review"].state` was still `working` instead of
+  `idle` at the final assertion (duration: 148.09 ms).
+- **Suite counts:** backend workspace — 2,220 passed, 1 failed, 8,141
+  assertions across 93 files in 51.09 s. The root, bridges, and protocol
+  lockfile groups passed.
+- **Isolated rerun:** `bun test ./src/core/multi-review-service.test.ts
+  --test-name-pattern "fails recoverably when the consolidation session is
+  missing"` from `apps/backend` -> 1 passed, 78 filtered out, 7 assertions in
+  88 ms; the target passed in 62.16 ms.
+- **Relationship to sibling entries:** this is the same file and final
+  environment activity-source transition as the two open Multi Review address
+  entries above. The workflow state assertions passed before the activity
+  projection lagged, so this joins that timing cluster.
+- **Hypothesis:** aggregate scheduling can leave the asynchronous environment
+  activity projection one write behind the already-durable workflow failure.
+  The isolated case exercises the same missing-session and cleanup path
+  successfully. A fix should establish or await the activity-write ordering;
+  the assertion should not be loosened.
+
 ## `opencode-client getSessionMessages > falls back to string conversion when circular tool payloads cannot be serialized` (`apps/web/src/lib/opencode-sessions.test.ts`)
 
 - **Status:** resolved — see the 2026-08-27 resolution sweep below
@@ -372,6 +444,15 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 - **Widened scope:** run 3 shows the cluster is not confined to the gateway and command-registry files. `test-diagnostic-bounds.test.ts` walks every test file in the repository and needs 2.18 s even alone, so it sits close to the 5000 ms deadline before any contention is added; it is the clearest example of a deadline that is too tight for the work rather than a test that hangs. A test needing 1–2 s alone but exceeding 5 s under `--parallel=4` is being starved.
 - **Hypothesis:** All three are fixed-deadline (5000 ms) assertions in files that spawn child processes and bind loopback ports. Under the observed load they lose the CPU long enough to cross the deadline, and the gateway proxy's `502` is the same starvation surfacing as an upstream connect failure rather than a timeout. The `commands-registry-environments.test.ts` file failing on a *different* pair of tests in isolation is the strongest evidence that the deadline, not any one test's logic, is what is being hit. A fix should replace the fixed deadlines in these three files with progress-based waits, or raise them proportionally to detected host load; do not simply widen the constant, which moves the threshold without removing the race.
 - **Not attributable to the change under review:** the diff that surfaced this (`packages/protocol/src/action-defaults.ts` and the settings/toolbar wiring) touches none of these files or the code they exercise.
+- **Recurrence (2026-08-27, `update-environment-modal`):** six of this cluster failed together in one `bun run test` (root and agent-support group: 3,853 passed, 1 skipped, 6 failed, 3 non-fatal between-test errors, 187 files in 211.7 s; the workspace, bridges and protocol-lockfile groups all passed). Every one was a 5,00x ms timeout:
+  - `Electron backend command registry > keeps the stored branch when a container rollback outcome cannot be established` (`tests/unit/electron/commands-registry-environments.test.ts:2216`, 5,005.26 ms)
+  - `Electron backend command registry > keeps the stored branch when a container rollback fails and the container is unreachable` (`tests/unit/electron/commands-registry-environments.test.ts:2276`, 5,003.91 ms)
+  - `Electron backend command registry > stops container merges when draft inspection or readiness fails` (`tests/unit/electron/commands-registry-pr.test.ts:472`, 5,002.42 ms)
+  - `Electron backend command registry > stops local merges when draft inspection or readiness fails` (`tests/unit/electron/commands-registry-pr.test.ts`, 5,022.30 ms)
+  - `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts`, 5,025.65 ms)
+  - `Electron backend command registry > reports whether the selected host GitHub CLI credential is available` (`tests/unit/electron/commands-registry-tools.test.ts:840`, 5,010.40 ms)
+
+  All three owning files passed alone immediately afterwards: `bun run test:logged -- --name env-registry -- bun test ./tests/unit/electron/commands-registry-environments.test.ts --only-failures` -> exit 0 in 30.9 s; `... --name gh-cred -- bun test ./tests/unit/electron/commands-registry-github.test.ts ./tests/unit/electron/commands-registry-pr.test.ts` -> exit 0 in 10.8 s; `... --name tools-registry -- bun test ./tests/unit/electron/commands-registry-tools.test.ts` -> exit 0 in 0.5 s. The failing set is again unstable between runs and spans three files, which is the same signature as every earlier occurrence. No new evidence about the mechanism. The change under review adds a reviewer fan-out to the build pipeline, a `create_feature_build` command and create-environment dialog work; none of these three files load any of it.
 
 ## `live session read paths > denies an oversized blocking hook without broadcasting truncated approval data` (`tests/unit/electron/tmux-session.test.ts:1166`)
 

@@ -390,6 +390,8 @@ export type KanbanTask = {
   order: number;
   environmentId?: string;
   buildPipelineId?: string;
+  /** Canonical immutable input owned by create_feature_build idempotency. */
+  featureBuildRequestHash?: string;
   prUrl?: string;
   prState?: PrState;
   prMergeCommented?: boolean;

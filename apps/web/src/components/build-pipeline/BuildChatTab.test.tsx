@@ -2189,6 +2189,51 @@ describe("BuildChatTab agent messaging", () => {
     expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
   });
 
+  test("hides the compose box while multi-model review owns the phase", () => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          running.id,
+          {
+            ...running,
+            phase: "reviewing",
+            reviewers: [
+              { agent: "claude", model: "opus" },
+              { agent: "codex", model: "gpt-5.6" },
+            ],
+          },
+        ],
+      ]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+    renderTab();
+
+    expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
+  });
+
+  test("keeps the compose box hidden when multi-model review is paused", () => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        [
+          running.id,
+          {
+            ...running,
+            phase: "paused",
+            pausedFromPhase: "reviewing",
+            reviewers: [
+              { agent: "claude", model: "opus" },
+              { agent: "codex", model: "gpt-5.6" },
+            ],
+          },
+        ],
+      ]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+    renderTab();
+
+    expect(screen.queryByLabelText("Send a message to the agent") === null).toBe(true);
+  });
+
   test("restarts the review through the backend", async () => {
     renderTab();
 

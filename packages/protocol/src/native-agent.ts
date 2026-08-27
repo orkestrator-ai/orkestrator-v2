@@ -9,6 +9,8 @@ export interface NativeAgentTabData {
   containerId?: string;
   hostPort?: number;
   sessionId?: string;
+  /** A backend-owned resume target must fail rather than create an empty replacement. */
+  requireExistingResumeSession?: boolean;
   isLocal?: boolean;
 }
 
@@ -23,6 +25,8 @@ export function isNativeAgentTabData(value: unknown): value is NativeAgentTabDat
     data.environmentId.length > 0 &&
     optionalString("containerId") &&
     optionalString("sessionId") &&
+    (data.requireExistingResumeSession === undefined ||
+      typeof data.requireExistingResumeSession === "boolean") &&
     (data.hostPort === undefined ||
       (Number.isSafeInteger(data.hostPort) && (data.hostPort as number) > 0)) &&
     (data.isLocal === undefined || typeof data.isLocal === "boolean")

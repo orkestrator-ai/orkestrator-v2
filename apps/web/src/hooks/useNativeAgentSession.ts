@@ -56,6 +56,7 @@ interface UseNativeAgentSessionOptions {
   defaultAgentModel?: string;
   defaultReasoningEffort?: string;
   initialProviderSessionId?: string;
+  requireExistingResumeSession?: boolean;
   initialConversationMode?: "build" | "plan";
   initialFastMode?: boolean;
   initialExecutionProfileId?: string;
@@ -99,6 +100,7 @@ export function useNativeAgentSession<TMessage = unknown>({
   defaultAgentModel,
   defaultReasoningEffort,
   initialProviderSessionId,
+  requireExistingResumeSession = false,
   initialConversationMode,
   initialFastMode,
   initialExecutionProfileId,
@@ -394,6 +396,7 @@ export function useNativeAgentSession<TMessage = unknown>({
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (!message.includes("provider session was not found")) throw error;
+          if (requireExistingResumeSession) throw error;
           // A restored pane may point at a rollout deleted outside
           // Orkestrator. Only an authoritative provider "missing" result may
           // replace it; transport failures remain retryable and never create a
@@ -477,6 +480,7 @@ export function useNativeAgentSession<TMessage = unknown>({
     initialExecutionProfileId,
     initialProviderSessionId,
     initialReasoningEffort,
+    requireExistingResumeSession,
     enabled,
     flushPendingReconcile,
     platform,

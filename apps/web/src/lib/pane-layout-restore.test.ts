@@ -306,6 +306,35 @@ describe("reconcilePersistedLayout", () => {
     }
   });
 
+  test("restores strict backend-owned native session identity", () => {
+    const restored = reconcilePersistedLayout(
+      saved({
+        kind: "leaf",
+        id: "pane-1",
+        tabs: [
+          {
+            id: "multi-review-fix:multi-1",
+            type: "agent-native",
+            nativeAgentData: {
+              platform: "codex",
+              environmentId: "env-1",
+              sessionId: "provider-fix",
+              requireExistingResumeSession: true,
+            },
+          },
+        ],
+        activeTabId: "multi-review-fix:multi-1",
+      }),
+      context,
+    );
+
+    const tab = (restored!.root as unknown as { tabs: Array<Record<string, unknown>> }).tabs[0]!;
+    expect(tab.nativeAgentData).toMatchObject({
+      sessionId: "provider-fix",
+      requireExistingResumeSession: true,
+    });
+  });
+
   test("ignores malformed one-shot agent launch and handoff values", () => {
     for (const agentHandoffId of [["not", "a", "string"], "", "   "]) {
       const restored = reconcilePersistedLayout(

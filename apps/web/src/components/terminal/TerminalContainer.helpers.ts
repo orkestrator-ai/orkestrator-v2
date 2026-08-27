@@ -326,6 +326,7 @@ export function createClaudeNativeLikeTab({
   initialReasoningEffort,
   initialConversationMode,
   sessionId,
+  requireExistingResumeSession,
   deferPlatform = false,
 }: {
   id: string;
@@ -340,6 +341,7 @@ export function createClaudeNativeLikeTab({
   initialReasoningEffort?: string;
   initialConversationMode?: "build" | "plan";
   sessionId?: string;
+  requireExistingResumeSession?: boolean;
   deferPlatform?: boolean;
 }): TabInfo {
   if (nativeBackend === "tmux") {
@@ -368,6 +370,7 @@ export function createClaudeNativeLikeTab({
       environmentId,
       isLocal,
       sessionId,
+      requireExistingResumeSession,
     },
     initialPrompt,
     displayTitle,
@@ -385,6 +388,7 @@ export function createAgentNativeTab({
   environmentId,
   isLocal,
   sessionId,
+  requireExistingResumeSession,
   initialPrompt,
   displayTitle,
   isReviewTab,
@@ -398,6 +402,7 @@ export function createAgentNativeTab({
   environmentId: string;
   isLocal: boolean;
   sessionId?: string;
+  requireExistingResumeSession?: boolean;
   initialPrompt?: string;
   displayTitle?: string;
   isReviewTab?: boolean;
@@ -414,6 +419,7 @@ export function createAgentNativeTab({
       environmentId,
       isLocal,
       sessionId,
+      requireExistingResumeSession,
     },
     initialPrompt,
     displayTitle,

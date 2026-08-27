@@ -215,6 +215,7 @@ export function SharedNativeAgentController({
     defaultAgentModel: configuredModel,
     defaultReasoningEffort: configuredReasoning,
     initialProviderSessionId: data.sessionId,
+    requireExistingResumeSession: data.requireExistingResumeSession,
     // A *new* mode-capable tab starts in build. Left undefined it would adopt
     // whatever mode the provider happens to report. A resumed session is
     // excluded deliberately: that thread already has a mode, and forcing build

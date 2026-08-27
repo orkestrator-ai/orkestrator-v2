@@ -335,6 +335,7 @@ describe("native agent protocol", () => {
           platform,
           environmentId: "environment-1",
           sessionId: "session-1",
+          requireExistingResumeSession: true,
           hostPort: 4123,
           isLocal: true,
         }),
@@ -371,6 +372,7 @@ describe("native agent protocol", () => {
     const base = { platform: "codex", environmentId: "env" };
     expect(isNativeAgentTabData({ ...base, containerId: 1 })).toBe(false);
     expect(isNativeAgentTabData({ ...base, sessionId: {} })).toBe(false);
+    expect(isNativeAgentTabData({ ...base, requireExistingResumeSession: "yes" })).toBe(false);
     expect(isNativeAgentTabData({ ...base, isLocal: "true" })).toBe(false);
   });
 

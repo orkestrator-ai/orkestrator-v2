@@ -6823,6 +6823,187 @@ describe("TerminalContainer", () => {
     ).toEqual(["reviewer-1"]);
   });
 
+  test("focuses a caller-owned fix tab instead of duplicating it at the tab limit", async () => {
+    const results: boolean[] = [];
+    function FixTabReattachHarness() {
+      const { createTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createTab || didRunRef.current) return;
+        didRunRef.current = true;
+        const options = {
+          tabId: "multi-review-fix:workflow-1",
+          activateExistingTab: true,
+          agentLaunchMode: "native" as const,
+          resumeSessionId: "provider-fix",
+          requireExistingResumeSession: true,
+        };
+        results.push(createTab("codex", options));
+        results.push(createTab("codex", options));
+      }, [createTab]);
+      return null;
+    }
+
+    const filler = Array.from({ length: MAX_TABS - 1 }, (_unused, index) => ({
+      id: `filler-${index}`,
+      type: "plain" as const,
+    }));
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-full", {
+        root: {
+          kind: "leaf",
+          id: "only",
+          tabs: [
+            {
+              id: "multi-review-fix:workflow-1",
+              type: "agent-native",
+              nativeAgentData: {
+                platform: "codex",
+                environmentId: "env-full",
+                sessionId: "provider-fix",
+                requireExistingResumeSession: true,
+              },
+            },
+            ...filler,
+          ],
+          activeTabId: "filler-0",
+        },
+        activePaneId: "only",
+        containerId: "container-full",
+      }),
+    }));
+    mockToastError.mockClear();
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-full"
+          containerId="container-full"
+          isContainerRunning
+          isActive
+        />
+        <FixTabReattachHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(results).toEqual([true, true]));
+    const pane = usePaneLayoutStore.getState().getPane("only", "env-full");
+    expect(pane?.tabs).toHaveLength(MAX_TABS);
+    expect(pane?.tabs.filter((tab) => tab.id === "multi-review-fix:workflow-1")).toHaveLength(1);
+    expect(pane?.activeTabId).toBe("multi-review-fix:workflow-1");
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  test("rejects a colliding caller-owned tab ID unless activation is explicitly allowed", async () => {
+    const results: boolean[] = [];
+    function DuplicateIdHarness() {
+      const { createTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createTab || didRunRef.current) return;
+        didRunRef.current = true;
+        results.push(
+          createTab("codex", {
+            tabId: "existing-agent",
+            agentLaunchMode: "native",
+            resumeSessionId: "provider-fix",
+          }),
+        );
+      }, [createTab]);
+      return null;
+    }
+
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-visible", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "existing-agent", type: "agent-native" },
+            { id: "visible-tab", type: "plain" },
+          ],
+          activeTabId: "visible-tab",
+        },
+        activePaneId: "default",
+        containerId: "container-visible",
+      }),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <DuplicateIdHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(results).toEqual([false]));
+    const pane = usePaneLayoutStore.getState().getPane("default", "env-visible");
+    expect(pane?.tabs.filter((tab) => tab.id === "existing-agent")).toHaveLength(1);
+    expect(pane?.activeTabId).toBe("visible-tab");
+  });
+
+  test("rejects activation when an inconsistent layout cannot locate the existing tab's pane", async () => {
+    const results: boolean[] = [];
+    function MissingPaneHarness() {
+      const { createTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createTab || didRunRef.current) return;
+        didRunRef.current = true;
+        const originalFindPaneWithTab = usePaneLayoutStore.getState().findPaneWithTab;
+        usePaneLayoutStore.setState({ findPaneWithTab: () => null });
+        results.push(
+          createTab("codex", {
+            tabId: "existing-agent",
+            activateExistingTab: true,
+            agentLaunchMode: "native",
+            resumeSessionId: "provider-fix",
+          }),
+        );
+        usePaneLayoutStore.setState({ findPaneWithTab: originalFindPaneWithTab });
+      }, [createTab]);
+      return null;
+    }
+
+    usePaneLayoutStore.setState((state) => ({
+      environments: new Map(state.environments).set("env-visible", {
+        root: {
+          kind: "leaf",
+          id: "default",
+          tabs: [
+            { id: "existing-agent", type: "agent-native" },
+            { id: "visible-tab", type: "plain" },
+          ],
+          activeTabId: "visible-tab",
+        },
+        activePaneId: "default",
+        containerId: "container-visible",
+      }),
+    }));
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <MissingPaneHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(results).toEqual([false]));
+    expect(usePaneLayoutStore.getState().getPane("default", "env-visible")?.activeTabId).toBe(
+      "visible-tab",
+    );
+  });
+
   /**
    * Reuse is deliberately resolved *before* the tab limit, because surfacing a
    * tab that already exists adds nothing to the count. A full workspace is

@@ -26,6 +26,7 @@ import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
 import type { TabType } from "@/contexts";
+import { getWorkflowTabTitle } from "./workflow-tab-title";
 
 /** Every agent brand mark in the tab strip is drawn at this size. */
 const TAB_ICON_CLASS = "h-3 w-3 shrink-0";
@@ -44,15 +45,6 @@ const isGrokTab = (type: TabType): boolean => type === "grok";
 
 /** Check if a tab type is a build pipeline tab */
 const isBuildTab = (type: TabType): boolean => type === "claude-build";
-
-function getWorkflowTabTitle(tab: TabInfo): "Review" | "PR" | "Resolve" | undefined {
-  if (tab.isReviewTab) return "Review";
-  if (tab.displayTitle === "PR") return "PR";
-  if (tab.displayTitle === "Resolve" || tab.displayTitle === "Conflict") {
-    return "Resolve";
-  }
-  return undefined;
-}
 
 interface DraggableTabProps {
   tab: TabInfo;

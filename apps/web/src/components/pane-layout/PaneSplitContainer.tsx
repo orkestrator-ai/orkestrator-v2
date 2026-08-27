@@ -6,6 +6,7 @@ import { isPaneLeaf, type PaneLeaf, type PaneNode, type PaneSplit } from "@/type
 import { PaneTree } from "./PaneTree";
 import { MobilePaneSwitcher } from "./MobilePaneSwitcher";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
+import { getWorkflowTabTitle } from "./workflow-tab-title";
 
 /** Debounce delay for store updates during resize operations (ms) */
 const RESIZE_DEBOUNCE_MS = 100;
@@ -13,6 +14,18 @@ const RESIZE_DEBOUNCE_MS = 100;
 export function collectPaneLeaves(node: PaneNode): PaneLeaf[] {
   if (isPaneLeaf(node)) return [node];
   return [...collectPaneLeaves(node.children[0]), ...collectPaneLeaves(node.children[1])];
+}
+
+export function mobilePaneOptions(split: PaneSplit): Array<{ id: string; label: string }> {
+  return collectPaneLeaves(split).map((pane) => {
+    const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
+    return {
+      id: pane.id,
+      label: activeTab
+        ? (getWorkflowTabTitle(activeTab) ?? activeTab.displayTitle ?? activeTab.type)
+        : "Empty pane",
+    };
+  });
 }
 
 interface PaneSplitContainerProps {
@@ -96,13 +109,7 @@ export const PaneSplitContainer = memo(function PaneSplitContainer({
     const paneById = new Map(panes.map((pane) => [pane.id, pane]));
     return (
       <MobilePaneSwitcher
-        panes={panes.map((pane) => {
-          const activeTab = pane.tabs.find((tab) => tab.id === pane.activeTabId);
-          return {
-            id: pane.id,
-            label: activeTab?.displayTitle ?? activeTab?.type ?? "Empty pane",
-          };
-        })}
+        panes={mobilePaneOptions(split)}
         activePaneId={activePaneId}
         onSelect={(paneId) => setActivePane(paneId, environmentId)}
         renderPane={(paneId, paneIsActive) => (

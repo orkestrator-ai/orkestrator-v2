@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { useEffect } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type {
-  MultiReviewReviewerTranscript,
-  MultiReviewWorkflow,
+import {
+  MULTI_REVIEW_FIX_TAB_TITLE,
+  type MultiReviewReviewerTranscript,
+  type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import {
@@ -437,6 +438,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
           initialReasoningEffort: "high",
           initialConversationMode: "build",
           initialPrompt: expect.stringContaining("Fix the reported regression"),
+          displayTitle: "Fix",
           isReviewTab: true,
         }),
       ),
@@ -444,6 +446,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     const initialPrompt = createTab.mock.calls[0]?.[1]?.initialPrompt;
     expect(initialPrompt).toContain("Shared finding");
     expect(initialPrompt).toContain("The failure branch");
+    expect(initialPrompt).toContain("Deduplicated reviewer findings");
     expect(initialPrompt).toContain("<structured-review-findings-json>");
     expect(screen.queryByRole("heading", { name: "Custom fix prompt" }) === null).toBe(true);
   });
@@ -847,7 +850,7 @@ describe("MultiReviewTab backend snapshot viewer", () => {
       agentLaunchMode: "native",
       resumeSessionId: "provider-fix",
       requireExistingResumeSession: true,
-      displayTitle: "Multi Review · Fix",
+      displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
       isReviewTab: true,
       initialAgentModel: "gpt-5.6",
       initialReasoningEffort: "high",

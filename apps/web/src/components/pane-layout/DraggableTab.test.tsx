@@ -14,7 +14,11 @@ import { useFileDirtyStore } from "@/stores";
 import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { loopedReviewFixture } from "@/test/looped-review-fixture";
-import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_FIX_TAB_TITLE,
+  MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 
 const realSortableSnapshot = { ...realSortable };
 const realUtilitiesSnapshot = { ...realUtilities };
@@ -168,6 +172,43 @@ describe("DraggableTab title precedence", () => {
 
     expect(screen.getByText("Review 1")).toBeDefined();
     expect(screen.queryByText("Auto Title") === null).toBe(true);
+  });
+
+  test("custom Multi Review fix tabs keep their fix title", () => {
+    const tab: TabInfo = {
+      id: "tab-fix",
+      type: "agent-native",
+      displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
+      isReviewTab: true,
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
+    };
+
+    useCodexStore.setState({
+      sessions: new Map([
+        [createSessionKey("env-1", "tab-fix"), { title: "Generated review title" } as never],
+      ]),
+    });
+
+    renderTab(tab, 3);
+
+    expect(screen.getByText("Fix 4")).toBeDefined();
+    expect(screen.queryByText("Review 4") === null).toBe(true);
+    expect(screen.queryByText("Generated review title") === null).toBe(true);
+  });
+
+  test("restored custom fix tabs migrate the former long title to Fix", () => {
+    const tab: TabInfo = {
+      id: "tab-restored-fix",
+      type: "agent-native",
+      displayTitle: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+      isReviewTab: true,
+      nativeAgentData: { platform: "codex", environmentId: "env-1" },
+    };
+
+    renderTab(tab, 1);
+
+    expect(screen.getByText("Fix 2")).toBeDefined();
+    expect(screen.queryByText("Review 2") === null).toBe(true);
   });
 
   test("workflow tabs keep their label and reveal the user-defined session name on hover", async () => {

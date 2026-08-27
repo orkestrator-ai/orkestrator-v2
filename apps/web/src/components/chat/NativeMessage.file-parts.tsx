@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { readContainerFileBase64, readFileBase64 } from "@/lib/backend";
 import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { JsonPayloadPart } from "@/components/chat/JsonPayloadPart";
-import { userPromptDisplayText } from "@/lib/chat/user-prompt-display";
+import { userPromptPresentation } from "@/lib/chat/user-prompt-display";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
 import { parseJsonPayload } from "@/lib/chat/json-payload";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
@@ -332,10 +332,14 @@ export function TextPart({
   expansionKey: string;
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const displayContent = useMemo(
-    () => (truncateUserPrompt ? userPromptDisplayText(content) : content),
+  const promptPresentation = useMemo(
+    () =>
+      truncateUserPrompt
+        ? userPromptPresentation(content)
+        : { displayText: content, evidencePayload: null },
     [content, truncateUserPrompt],
   );
+  const displayContent = promptPresentation.displayText;
   const lineCount = useMemo(() => displayContent.split(/\r\n|\r|\n/).length, [displayContent]);
   const shouldTruncate = truncateUserPrompt && lineCount > USER_PROMPT_COLLAPSED_LINE_COUNT;
   const jsonPayload = useMemo(
@@ -394,6 +398,14 @@ export function TextPart({
         >
           {isExpanded ? "show less" : "show more"}
         </button>
+      ) : null}
+      {promptPresentation.evidencePayload ? (
+        <div className="pt-2">
+          <JsonPayloadPart
+            payload={promptPresentation.evidencePayload}
+            expansionKey={`${expansionKey}/prompt-evidence`}
+          />
+        </div>
       ) : null}
       {showCopy ? (
         <MessageCopyButton

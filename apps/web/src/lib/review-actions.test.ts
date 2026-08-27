@@ -5,6 +5,7 @@ import { ADDRESS_ALL_REVIEW_PROMPT, multiReviewCustomFixPrompt } from "./review-
 const report = {
   issues: [{ title: "Fix the session handoff", evidence: "Observed in source" }],
   testCoverageGaps: [{ file: "src/review.test.ts", untestedBehavior: "Failure feedback" }],
+  reviewSummary: "Complete consolidated report",
 } as StructuredReviewReport;
 
 describe("multiReviewCustomFixPrompt", () => {
@@ -20,6 +21,7 @@ describe("multiReviewCustomFixPrompt", () => {
     expect(prompt).toContain("<structured-review-findings-json>");
     expect(prompt).toContain("Fix the session handoff");
     expect(prompt).toContain("Failure feedback");
+    expect(prompt).toContain("Complete consolidated report");
     expect(prompt).toContain("User-provided fix instructions:\nPreserve the existing API");
   });
 

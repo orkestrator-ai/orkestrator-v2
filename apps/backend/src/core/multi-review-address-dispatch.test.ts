@@ -1,5 +1,8 @@
 import { expect, mock, test } from "bun:test";
-import type { MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import { NativeAgentProviderSessionMissingError } from "./native-agent-service.js";
 import {
@@ -30,7 +33,7 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
     origin: "interactive-native",
     interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
     providerSessionId: "provider-fix",
-    title: "Multi Review · Fix",
+    title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
     model: "gpt-5.6",
     reasoningEffort: "high",
     phase: "fix",

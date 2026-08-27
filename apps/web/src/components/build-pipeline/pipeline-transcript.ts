@@ -265,12 +265,12 @@ function toNativePart(value: unknown): NativeMessagePart | null {
 const CLAUDE_PART_TYPES = new Set(["text", "thinking", "file", "tool-invocation", "tool-result"]);
 
 /**
- * Validate provider parts and put back the two names Claude spells differently.
+ * Validate provider parts into the subset accepted by the Claude display
+ * normalizer.
  *
- * `toNativePart` normalizes `timestamp` → `createdAt` and `_messageUuid` →
- * `sourcePartId`, but `normalizeClaudePart` reads the wire names. Handing it a
- * native part directly would drop those fields, so each text/tool section
- * would fall back to the prompt time instead of the backend part clock.
+ * `toNativePart` guarantees the required `content` string, including when a
+ * provider block is empty. Rebuilding here preserves that invariant while
+ * omitting `createdAt` and `sourcePartId` when their validated values are absent.
  */
 function toClaudeParts(value: unknown): ClaudeMessagePart[] {
   if (!Array.isArray(value)) return [];
@@ -280,9 +280,11 @@ function toClaudeParts(value: unknown): ClaudeMessagePart[] {
       ({ createdAt, sourcePartId, content, ...rest }) =>
         ({
           ...rest,
-          // The Claude adapter falls back to the tool name for a part that carries
-          // no content of its own; the validator's `""` would suppress that.
-          ...(content ? { content } : {}),
+          // `NativeMessagePart.content` is required even when it is empty. In
+          // particular, Claude can emit an empty thinking block while moving
+          // between streamed blocks, and the shared normalizer trims that
+          // value when deciding whether to drop it.
+          content,
           ...(createdAt ? { createdAt } : {}),
           ...(sourcePartId ? { sourcePartId } : {}),
         }) as unknown as ClaudeMessagePart,

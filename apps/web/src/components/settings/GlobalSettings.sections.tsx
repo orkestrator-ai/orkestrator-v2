@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -82,8 +82,11 @@ import { resolveDefaultAgent } from "@orkestrator/protocol/agent-settings";
 import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { useUIStore } from "@/stores";
-import { refreshSettingsModelCatalog } from "./agent/refresh-model-catalog";
+import { useProjectStore, useUIStore } from "@/stores";
+import {
+  refreshSettingsModelCatalog,
+  resolveSettingsCatalogProjectId,
+} from "./agent/refresh-model-catalog";
 import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
@@ -348,11 +351,25 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   );
 
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const projects = useProjectStore((state) => state.projects);
+  const projectIds = useMemo(() => projects.map((project) => project.id), [projects]);
+  const catalogProjectId = resolveSettingsCatalogProjectId(selectedProjectId, projectIds);
+  const catalogProject = projects.find((project) => project.id === catalogProjectId);
+  const catalogProjectLabel = catalogProject?.name ?? catalogProjectId;
+  const openCodeCatalogScopeDescription = !catalogProjectId
+    ? "Add a repository to load and refresh OpenCode models."
+    : catalogProjectId === selectedProjectId
+      ? `Models are loaded from ${catalogProjectLabel}.`
+      : selectedProjectId
+        ? `The selected repository is unavailable; models are loaded from ${catalogProjectLabel}.`
+        : `No repository is selected; models are loaded from ${catalogProjectLabel}.`;
   const [refreshingModelCatalog, setRefreshingModelCatalog] = useState<AgentPlatform | null>(null);
   const refreshingModelCatalogRef = useRef<AgentPlatform | null>(null);
   // Repository-scoped so an OpenCode catalogue cached for the open project is
-  // offered here too; the Claude/Codex/Cursor/Grok catalogues are global.
-  const catalog = useProjectModelCatalog(selectedProjectId ?? "", true);
+  // offered here too. Global Settings can open before the user selects one, so
+  // fall back to the first repository rather than presenting a refresh action
+  // that can only fail. The Claude/Codex/Cursor/Grok catalogues are global.
+  const catalog = useProjectModelCatalog(catalogProjectId ?? "", true);
   const agentTiers = { global: agentSettings };
 
   const refreshModelCatalog = useCallback(
@@ -361,8 +378,12 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       refreshingModelCatalogRef.current = platform;
       setRefreshingModelCatalog(platform);
       try {
-        const result = await refreshSettingsModelCatalog(platform, selectedProjectId);
-        toast.success(`${AGENT_PLATFORM_LABELS[platform]} models refreshed (${result.modelCount})`);
+        const result = await refreshSettingsModelCatalog(platform, catalogProjectId);
+        const scope =
+          platform === "opencode" && catalogProjectLabel ? ` for ${catalogProjectLabel}` : "";
+        toast.success(
+          `${AGENT_PLATFORM_LABELS[platform]} models refreshed${scope} (${result.modelCount})`,
+        );
       } catch (error) {
         toast.error(
           error instanceof Error
@@ -374,7 +395,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
         setRefreshingModelCatalog(null);
       }
     },
-    [selectedProjectId],
+    [catalogProjectId, catalogProjectLabel],
   );
 
   const renderDefaults = () => (
@@ -403,6 +424,10 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       disabled={isSaving}
       onRefreshModels={() => void refreshModelCatalog(platform)}
       refreshingModels={refreshingModelCatalog === platform}
+      refreshModelsDisabled={platform === "opencode" && !catalogProjectId}
+      modelCatalogScopeDescription={
+        platform === "opencode" ? openCodeCatalogScopeDescription : undefined
+      }
     >
       {extras}
     </AgentPlatformPane>

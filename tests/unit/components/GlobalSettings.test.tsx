@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
+import { useProjectStore } from "@/stores/projectStore";
+import { useUIStore } from "@/stores/uiStore";
 import { mockWriteText } from "../../mocks/clipboard";
 import {
   REVIEW_INSTRUCTION_MAX_LENGTH,
@@ -81,6 +83,12 @@ const mockSetGatewayToken = mock(async (token: string) => ({
 const mockOpenInBrowser = mock(async () => undefined);
 const mockTestDomainResolution = mock(async () => []);
 const mockRevealInFileManager = mock(async (_path: string) => {});
+const mockGetCachedOpenCodeModelCatalog = mock(async (_projectId: string) => null);
+const mockRefreshHostAgentModelCatalog = mock(async (agent: string, _projectId?: string) => ({
+  agent,
+  modelCount: 2,
+}));
+const mockGetAgentModelCatalogCache = mock(async () => ({}));
 const actualBackend = await import("../../../apps/web/src/lib/backend");
 
 mock.module("@/lib/backend", () => ({
@@ -101,6 +109,9 @@ mock.module("@/lib/backend", () => ({
   openInBrowser: mockOpenInBrowser,
   testDomainResolution: mockTestDomainResolution,
   revealInFileManager: mockRevealInFileManager,
+  getCachedOpenCodeModelCatalog: mockGetCachedOpenCodeModelCatalog,
+  refreshHostAgentModelCatalog: mockRefreshHostAgentModelCatalog,
+  getAgentModelCatalogCache: mockGetAgentModelCatalogCache,
 }));
 
 const { GlobalSettings } = await import("../../../apps/web/src/components/settings/GlobalSettings");
@@ -154,6 +165,15 @@ describe("GlobalSettings", () => {
     mockOpenInBrowser.mockClear();
     mockTestDomainResolution.mockClear();
     mockRevealInFileManager.mockClear();
+    mockGetCachedOpenCodeModelCatalog.mockClear();
+    mockGetCachedOpenCodeModelCatalog.mockImplementation(async () => null);
+    mockRefreshHostAgentModelCatalog.mockClear();
+    mockRefreshHostAgentModelCatalog.mockImplementation(async (agent: string) => ({
+      agent,
+      modelCount: 2,
+    }));
+    mockGetAgentModelCatalogCache.mockClear();
+    mockGetAgentModelCatalogCache.mockImplementation(async () => ({}));
     mockToastSuccess.mockClear();
     mockToastError.mockClear();
     mockWriteText.mockReset();
@@ -190,6 +210,8 @@ describe("GlobalSettings", () => {
       source: "file" as const,
     }));
     window.orkestratorGateway = { enabled: true };
+    useProjectStore.setState({ projects: [], isLoading: false, error: null });
+    useUIStore.setState({ selectedProjectId: null });
 
     useConfigStore.setState({
       config: {
@@ -856,6 +878,47 @@ describe("GlobalSettings", () => {
       screen
         .getAllByRole("button", { name: /^Remove .* provider$/ })
         .map((button) => button.closest("li")?.querySelector("span")?.textContent ?? "");
+
+    test("names and refreshes the fallback repository when none is selected", async () => {
+      useProjectStore.setState({
+        projects: [
+          {
+            id: "project-2",
+            name: "Fallback Repository",
+            gitUrl: "https://github.com/acme/fallback.git",
+            localPath: null,
+            addedAt: "2026-08-27T00:00:00.000Z",
+            order: 0,
+          },
+          {
+            id: "project-1",
+            name: "Other Repository",
+            gitUrl: "https://github.com/acme/other.git",
+            localPath: null,
+            addedAt: "2026-08-27T00:00:00.000Z",
+            order: 1,
+          },
+        ],
+      });
+
+      render(<GlobalSettings activeSection="opencode" />);
+
+      expect(
+        screen.getByText("No repository is selected; models are loaded from Fallback Repository."),
+      ).toBeTruthy();
+      await waitFor(() => {
+        expect(mockGetCachedOpenCodeModelCatalog).toHaveBeenCalledWith("project-2");
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Refresh OpenCode models" }));
+
+      await waitFor(() => {
+        expect(mockRefreshHostAgentModelCatalog).toHaveBeenCalledWith("opencode", "project-2");
+        expect(mockToastSuccess).toHaveBeenCalledWith(
+          "OpenCode models refreshed for Fallback Repository (2)",
+        );
+      });
+    });
 
     test("defaults to the two managed provider catalogues", () => {
       render(<GlobalSettings activeSection="opencode" />);

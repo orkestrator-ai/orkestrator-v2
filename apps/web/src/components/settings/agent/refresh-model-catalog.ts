@@ -21,6 +21,17 @@ const defaultDependencies: RefreshDependencies = {
   dispatch: (event) => window.dispatchEvent(event),
 };
 
+/** Pick a durable OpenCode cache scope even when Global Settings has no active repository. */
+export function resolveSettingsCatalogProjectId(
+  selectedProjectId: string | null,
+  projectIds: readonly string[],
+): string | null {
+  if (selectedProjectId && (projectIds.length === 0 || projectIds.includes(selectedProjectId))) {
+    return selectedProjectId;
+  }
+  return projectIds[0] ?? null;
+}
+
 /** Run the settings refresh and publish cache invalidation only after persistence succeeds. */
 export async function refreshSettingsModelCatalog(
   platform: AgentPlatform,

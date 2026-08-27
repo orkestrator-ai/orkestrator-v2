@@ -46,6 +46,27 @@ describe("AgentPlatformPane model refresh", () => {
     ).toBe(true);
   });
 
+  test("explains repository scope and disables refresh when no scope exists", () => {
+    render(
+      <AgentPlatformPane
+        platform="opencode"
+        tier={{}}
+        onChange={() => undefined}
+        tiers={{ global: {} }}
+        canInherit={false}
+        catalog={catalog}
+        onRefreshModels={() => undefined}
+        refreshModelsDisabled
+        modelCatalogScopeDescription="Add a repository to load and refresh OpenCode models."
+      />,
+    );
+
+    expect(screen.getByText("Add a repository to load and refresh OpenCode models.")).toBeTruthy();
+    const refresh = screen.getByRole("button", { name: "Refresh OpenCode models" });
+    expect(refresh.hasAttribute("disabled")).toBe(true);
+    expect(refresh.getAttribute("title")).toBe("Add or select a repository to refresh models");
+  });
+
   test("keeps the environment guidance when no refresh action is available", () => {
     render(
       <AgentPlatformPane

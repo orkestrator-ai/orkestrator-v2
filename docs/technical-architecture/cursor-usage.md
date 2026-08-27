@@ -32,8 +32,13 @@ usage. The historical `autoPercentUsed`, `apiPercentUsed`, and
 are separate from transport parsing and can be overridden with
 `CURSOR_USAGE_AUTO_LABEL` and `CURSOR_USAGE_API_LABEL`.
 
-Three parsing rules are easy to get backwards:
+Four parsing rules are easy to get backwards:
 
+- **The two headline percentages have different denominators.** Cursor's
+  `totalPercentUsed` is its reported quota meter. The included-allowance meter
+  is derived from `(includedSpend ?? totalSpend) / limit`, so it remains
+  consistent with the dollar figures displayed beside it. The panel labels and
+  renders both when Cursor supplies both; neither silently replaces the other.
 - **Percentages above 100 are kept, not discarded.** An account past its included
   allowance is the case the readout exists for. Dropping the value there removed
   the bar, and for a response carrying only percentages removed every field and

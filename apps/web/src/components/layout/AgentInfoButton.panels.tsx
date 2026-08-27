@@ -566,11 +566,20 @@ export function CursorAccountUsagePanel({
 
   const account = result.data;
   const limits: AgentRateLimitWindow[] = [
+    ...(account.internalPercentages?.totalPercentUsed === undefined
+      ? []
+      : [
+          {
+            label: "Cursor quota",
+            usedPercent: account.internalPercentages.totalPercentUsed,
+            ...(account.cycle.endsAt ? { resetsAt: account.cycle.endsAt } : {}),
+          },
+        ]),
     ...(account.included.usedPercent === undefined
       ? []
       : [
           {
-            label: "Included usage",
+            label: "Included allowance",
             usedPercent: account.included.usedPercent,
             ...(account.cycle.endsAt ? { resetsAt: account.cycle.endsAt } : {}),
           },

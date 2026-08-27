@@ -21,10 +21,11 @@ import {
   type AgentModelCatalog,
   type LaunchAgent,
 } from "@/lib/agent-launch";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { flatCatalog } from "./MultiReviewLaunchDialog";
 
-export const DEFAULT_MULTI_REVIEW_FIX_PROMPT = ADDRESS_ALL_REVIEW_PROMPT;
+// Keep the editable custom-session default independent from the built-in Fix
+// action, whose prompt carries workflow-specific mode instructions.
+export const DEFAULT_MULTI_REVIEW_FIX_PROMPT = "Please address all the issues and coverage gaps";
 
 interface MultiReviewFixPromptDialogProps {
   open: boolean;

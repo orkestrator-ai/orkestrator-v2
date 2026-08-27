@@ -7,7 +7,8 @@ export const MULTI_REVIEW_WORKFLOW_VERSION = 1 as const;
 export const MULTI_REVIEW_MIN_REVIEWERS = 1;
 export const MULTI_REVIEW_MAX_REVIEWERS = 32;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = 10_000;
-export const MULTI_REVIEW_ADDRESS_PROMPT = "Please address all the issues and coverage gaps";
+export const MULTI_REVIEW_ADDRESS_PROMPT =
+  "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.";
 
 export interface MultiReviewModelSelection {
   agent: AgentPlatform;

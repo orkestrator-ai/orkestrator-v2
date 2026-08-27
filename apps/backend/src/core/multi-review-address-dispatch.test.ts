@@ -39,7 +39,8 @@ test("dispatchMultiReviewAddressPrompt adopts and dispatches the stable producti
   expect(dispatchIntent).toHaveBeenCalledWith(
     expect.objectContaining({
       logicalSessionKey: "multi-review:multi-1:interactive",
-      prompt: "Please address all the issues and coverage gaps",
+      prompt:
+        "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.",
       requestId: "multi-review-address:multi-1",
       mode: "build",
     }),

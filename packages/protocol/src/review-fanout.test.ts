@@ -83,6 +83,14 @@ describe("reviewer records", () => {
     expect(isReviewerRecord(reviewer({ progressDigest: "a".repeat(64) }))).toBe(true);
     expect(isReviewerRecord(reviewer({ progressDigest: "a".repeat(63) }))).toBe(false);
   });
+
+  test("carries whether the model is a real selection or a placeholder", () => {
+    // The string alone cannot answer it: `"default"` is a genuine Claude
+    // catalog id, so an unpinned reviewer has to say so out loud.
+    expect(isReviewerRecord(reviewer({ model: "default", modelUnpinned: true }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ model: "default" }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ modelUnpinned: "yes" as never }))).toBe(false);
+  });
 });
 
 describe("reviewer lists", () => {

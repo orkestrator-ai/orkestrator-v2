@@ -40,6 +40,19 @@ export type ReviewDispatchState = "prepared" | "dispatching" | "sent";
 export interface ReviewerRecord extends ReviewerModelSelection {
   id: string;
   status: ReviewerStatus;
+  /**
+   * The owner pinned no model, and `model` is a display placeholder.
+   *
+   * A record has to name a model — provenance, the session label and the tab
+   * all read it — but "no selection" is a real state for an owner whose
+   * reviewers come from step configuration rather than from a launcher's model
+   * picker. It cannot be inferred from the placeholder itself: `"default"` is
+   * a genuine Claude catalog id, so a Claude reviewer that pinned nothing and
+   * one that pinned `default` collapse onto the same string. Dispatch reads
+   * this rather than the string, so an unpinned reviewer sends no model and
+   * gets the harness default, exactly as a single-reviewer review step does.
+   */
+  modelUnpinned?: boolean;
   sessionKey?: string;
   providerSessionId?: string;
   requestId?: string;
@@ -175,6 +188,7 @@ const REVIEWER_KEYS = [
   "reasoningEffort",
   "id",
   "status",
+  "modelUnpinned",
   "sessionKey",
   "providerSessionId",
   "requestId",
@@ -202,6 +216,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     isReviewerModelSelectionFields(value) &&
     nonBlank(value.id) &&
     REVIEWER_STATUSES.has(value.status as ReviewerStatus) &&
+    (value.modelUnpinned === undefined || typeof value.modelUnpinned === "boolean") &&
     (value.sessionKey === undefined || nonBlank(value.sessionKey)) &&
     (value.providerSessionId === undefined || nonBlank(value.providerSessionId)) &&
     (value.requestId === undefined || nonBlank(value.requestId)) &&

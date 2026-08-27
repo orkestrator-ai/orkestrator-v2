@@ -857,6 +857,99 @@ describe("BuildPipelineService", () => {
     }
   });
 
+  /**
+   * Provisions one environment and reports the arguments `create_environment`
+   * was called with. The pipeline creates its own environment, so this is the
+   * only place a launcher's environment shaping can be observed.
+   */
+  async function provisioningArgs(
+    overrides: Partial<Parameters<BuildPipelineService["start"]>[0]>,
+  ): Promise<Record<string, unknown>> {
+    const dataDir = await fs.mkdtemp(path.join(tmpdir(), "orkestrator-pipeline-env-options-"));
+    const storage = new StorageService(dataDir);
+    await storage.init();
+    let observed: Record<string, unknown> = {};
+    const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+      if (command !== "create_environment") {
+        throw new Error(`Unexpected command: ${command}`);
+      }
+      observed = args;
+      return (await storage.addEnvironment({
+        id: "created-env",
+        projectId: "project-1",
+        buildPipelineId: String(args.buildPipelineId),
+        name: "created",
+        branch: "created",
+        containerId: null,
+        status: "stopped",
+        prUrl: null,
+        prState: null,
+        hasMergeConflicts: null,
+        createdAt: new Date(0).toISOString(),
+        networkAccessMode: "full",
+        order: 0,
+        environmentType: "local",
+        worktreePath: "/tmp/created",
+      })) as T;
+    };
+    const service = new BuildPipelineService(storage, invoke, {
+      autoAdvance: false,
+      provider: async () => new FakeProvider(),
+    });
+    try {
+      await service.start(startInput({ existingEnvironmentId: undefined, ...overrides }));
+      return observed;
+    } finally {
+      await service.shutdown();
+      await fs.rm(dataDir, { recursive: true, force: true });
+    }
+  }
+
+  test("provisions the environment a launcher shaped", async () => {
+    const args = await provisioningArgs({
+      environmentType: "containerized",
+      namingPrompt: "Dark mode toggle",
+      environmentOptions: {
+        name: "  feature-dark-mode  ",
+        networkAccessMode: "full",
+        portMappings: [{ containerPort: 5173, hostPort: 4300, protocol: "tcp" }],
+      },
+    });
+
+    // A chosen name wins over the ticket-derived one, and is trimmed, because
+    // `create_environment` skips the rename-from-prompt path when it has one.
+    expect(args.name).toBe("feature-dark-mode");
+    // The launcher's mode wins over the containerized default of `restricted`.
+    expect(args.networkAccessMode).toBe("full");
+    expect(args.portMappings).toEqual([{ containerPort: 5173, hostPort: 4300, protocol: "tcp" }]);
+    expect(args.environmentType).toBe("containerized");
+    expect(args.namingPrompt).toBe("Dark mode toggle");
+  });
+
+  test("keeps its own provisioning defaults when a launcher shaped nothing", async () => {
+    const containerized = await provisioningArgs({ environmentType: "containerized" });
+    expect(containerized.networkAccessMode).toBe("restricted");
+    // Absent rather than empty: an explicit name suppresses naming from the
+    // prompt, so sending a blank one would leave the environment called "".
+    expect("name" in containerized).toBe(false);
+    expect("portMappings" in containerized).toBe(false);
+
+    // A local worktree has no firewall to apply a mode to.
+    const local = await provisioningArgs({ environmentType: "local" });
+    expect(local.networkAccessMode).toBe("full");
+  });
+
+  test("drops a blank name and an empty port list rather than forwarding them", async () => {
+    const args = await provisioningArgs({
+      environmentType: "containerized",
+      environmentOptions: { name: "   ", networkAccessMode: "restricted", portMappings: [] },
+    });
+
+    expect("name" in args).toBe(false);
+    expect("portMappings" in args).toBe(false);
+    expect(args.networkAccessMode).toBe("restricted");
+  });
+
   test("shutdown waits for an in-flight supervisor pass before disposing providers", async () => {
     await withService(async (service, _storage, provider) => {
       const started = await service.start(startInput());

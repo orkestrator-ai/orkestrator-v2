@@ -78,10 +78,19 @@ export function reviewFanoutErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function reviewerModel(selection: ReviewerModelSelection): string | undefined {
-  return selection.model === "default" && selection.agent !== "claude"
-    ? undefined
-    : selection.model;
+/**
+ * The model to dispatch a reviewer's turn under, or `undefined` for "unset".
+ *
+ * A reviewer that pinned nothing says so explicitly, because the placeholder
+ * cannot: `"default"` is a real Claude catalog id — the bridge resolves it to
+ * Opus with a 1M context — so for Claude it is a selection to be forwarded,
+ * while for every other harness it is only the launcher's stand-in for a
+ * catalogue it does not have yet. This is the same line `stepModel` draws for
+ * a single-reviewer review step.
+ */
+function reviewerModel(reviewer: ReviewerRecord): string | undefined {
+  if (reviewer.modelUnpinned) return undefined;
+  return reviewer.model === "default" && reviewer.agent !== "claude" ? undefined : reviewer.model;
 }
 
 /** The review source is known to differ from the snapshot every reviewer saw. */

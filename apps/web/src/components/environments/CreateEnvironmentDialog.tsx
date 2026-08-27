@@ -80,6 +80,7 @@ import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-
 import { FeatureBuildFields } from "./FeatureBuildFields";
 import {
   defaultFeatureBuildModels,
+  featureBuildIdentity,
   featureBuildRequest,
   type BuildIntent,
   type FeatureBuildModelState,
@@ -542,11 +543,23 @@ export function CreateEnvironmentDialog({
   /**
    * Idempotency key for the feature build.
    *
-   * Minted once per dialog opening so a retry after a lost response returns the
-   * same ticket and the same pipeline rather than a second of each. Cleared on
-   * a successful create, so the next feature gets its own key.
+   * Held so a retry after a lost response returns the same ticket and the same
+   * pipeline rather than a second of each. Rotated on a successful create, on a
+   * reset, and — see `featureAttemptIdentityRef` — whenever the user edits the
+   * request between attempts.
    */
   const featureRequestIdRef = useRef(createUuid());
+  /**
+   * The request the current key was last spent on, or null if it is unspent.
+   *
+   * The backend binds a key to its first arguments and rejects reuse with
+   * different ones. A create can fail *after* the ticket was written — a
+   * provisioning failure is the common one — and the natural response is to
+   * change something and try again, so an edited retry has to arrive under a
+   * new key. An unchanged retry must not, because that is the lost-response
+   * case the key exists for.
+   */
+  const featureAttemptIdentityRef = useRef<string | null>(null);
   // Held as null until the panel is first shown so that reopening the dialog,
   // or a catalogue arriving late, re-resolves the defaults instead of pinning
   // whatever was known on first render.
@@ -679,6 +692,10 @@ export function CreateEnvironmentDialog({
     // Back to null rather than to the current defaults, so the next opening
     // re-resolves them against whatever the catalogue holds by then.
     setFeatureModels(null);
+    // The form this key was minted for is gone, so it can never be the "same
+    // request again" a reuse would stand for.
+    featureRequestIdRef.current = createUuid();
+    featureAttemptIdentityRef.current = null;
   }, [defaultPortMappings, effectiveDefaultEnvironmentType, initialAgentDefaults]);
 
   const beginAttachmentOperation = useCallback(() => {
@@ -1187,7 +1204,7 @@ export function CreateEnvironmentDialog({
       try {
         if (buildIntent === "feature") {
           if (!projectId || !onCreateFeatureBuild || !featureName.trim()) return;
-          const started = await onCreateFeatureBuild(
+          const buildRequest = (requestId: string) =>
             featureBuildRequest({
               projectId,
               title: featureName,
@@ -1200,13 +1217,27 @@ export function CreateEnvironmentDialog({
               defaultAgent: agentType,
               customizeModels,
               models: effectiveFeatureModels,
-              requestId: featureRequestIdRef.current,
-            }),
-          );
+              requestId,
+            });
+          let request = buildRequest(featureRequestIdRef.current);
+          const identity = featureBuildIdentity(request);
+          // A previous attempt may have created the ticket before it failed, so
+          // the key is spent. Reusing it for an edited request is rejected
+          // outright by the backend; only an unchanged retry may reuse it.
+          if (
+            featureAttemptIdentityRef.current !== null &&
+            featureAttemptIdentityRef.current !== identity
+          ) {
+            featureRequestIdRef.current = createUuid();
+            request = buildRequest(featureRequestIdRef.current);
+          }
+          featureAttemptIdentityRef.current = identity;
+          const started = await onCreateFeatureBuild(request);
           if (started === false) return;
           // A new key only after the request succeeded: a retry of a create
           // whose response was lost has to reuse this one.
           featureRequestIdRef.current = createUuid();
+          featureAttemptIdentityRef.current = null;
           resetForm();
           onOpenChange(false);
           return;

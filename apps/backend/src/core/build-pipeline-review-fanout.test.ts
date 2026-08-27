@@ -559,6 +559,35 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("a reviewer that pinned no model dispatches without one, on every harness", async () => {
+    await withPipeline(async ({ service, read, provider, providers }) => {
+      const started = await service.start(startInput([{ agent: "claude" }, { agent: "codex" }]));
+      const stored = await read(started.id);
+      // The placeholder is a label, not a selection. Claude's `"default"` is a
+      // real catalog id, so the record has to say which of the two it is.
+      expect(stored.reviewers).toEqual([{ agent: "claude" }, { agent: "codex" }]);
+
+      const reviewing = await advanceUntil(service, read, started.id, "reviewing");
+      expect(reviewing.reviewFanout?.reviewers.map((entry) => entry.modelUnpinned)).toEqual([
+        true,
+        true,
+      ]);
+      await service.advanceNow(started.id);
+
+      const codex = providers.get("codex")!;
+      expect(
+        provider.created.find((entry) => entry.label === "Review 1")?.options?.model,
+      ).toBeUndefined();
+      expect(
+        provider.sent.find((entry) => entry.sessionId.includes("review-1"))?.model,
+      ).toBeUndefined();
+      expect(
+        codex.created.find((entry) => entry.label === "Review 2")?.options?.model,
+      ).toBeUndefined();
+      expect(codex.sent[0]?.model).toBeUndefined();
+    });
+  });
+
   test("throttles pure streaming transcript persistence", async () => {
     await withPipeline(
       async ({ service, storage, read, provider }) => {

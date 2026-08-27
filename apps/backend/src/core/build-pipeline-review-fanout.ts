@@ -606,13 +606,18 @@ export class BuildPipelineReviewFanout {
 }
 
 function reviewerFromConfig(config: BuildStepConfig): ReviewerRecord {
+  const model = config.model?.trim();
   return {
     id: randomUUID(),
     agent: config.agent,
-    // A reviewer record requires a concrete model id, and the harness's own
-    // default is exactly what `"default"` means everywhere else a step omits
-    // one. The runner translates it back to "send no model" at dispatch.
-    model: config.model?.trim() || "default",
+    // A reviewer record requires a concrete model id, so a step that pinned
+    // none is labelled with the same placeholder the launcher shows — but
+    // flagged, because the placeholder is not the selection. `"default"` is a
+    // real Claude model, so inferring "unpinned" from the string would run an
+    // unconfigured Claude reviewer on Opus 1M while the single-reviewer stage
+    // ran it on the repository default.
+    model: model || "default",
+    ...(model ? {} : { modelUnpinned: true }),
     ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
     status: "pending",
   };

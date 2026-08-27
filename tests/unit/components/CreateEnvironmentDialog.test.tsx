@@ -3751,6 +3751,98 @@ describe("CreateEnvironmentDialog feature builds", () => {
     ).toBe(true);
   });
 
+  /**
+   * The idempotency key's whole job is to tell "the same request again" from
+   * "a different request". The backend binds a key to the arguments it first
+   * saw and refuses to reuse it for anything else — and a create can fail
+   * *after* it wrote the ticket — so getting this wrong locks the user out of
+   * their own dialog rather than costing them a duplicate.
+   */
+  function submitFeature() {
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+  }
+
+  test("reuses the request id when an unchanged create is retried", async () => {
+    const onCreateFeatureBuild = mock(async () => false);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Dark mode toggle" });
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
+
+    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    // A response that never arrived is indistinguishable from one that was
+    // lost, so the identical retry has to land on the same ticket.
+    expect(second.requestId).toBe(first.requestId);
+  });
+
+  test("mints a new request id when the ticket is edited after a failed create", async () => {
+    const onCreateFeatureBuild = mock(async () => false);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Dark mode toggle" });
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+
+    // The create failed after writing its ticket; the user changes something
+    // and tries again, which is the only way out of a provisioning failure.
+    chooseFeature({ name: "Dark mode toggle v2" });
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
+
+    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    expect(second.title).toBe("Dark mode toggle v2");
+    expect(second.requestId).not.toBe(first.requestId);
+  });
+
+  test("mints a new request id for the next feature after one succeeds", async () => {
+    const onCreateFeatureBuild = mock(async () => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Dark mode toggle" });
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+
+    // A success resets the form, so this is a second feature rather than a
+    // retry of the first one.
+    chooseFeature({ name: "Dark mode toggle" });
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
+
+    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    expect(second.title).toBe(first.title);
+    expect(second.requestId).not.toBe(first.requestId);
+  });
+
   test("cannot start a feature build when the caller offers no handler", () => {
     render(
       <CreateEnvironmentDialog

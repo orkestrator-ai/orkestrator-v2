@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AgentModelCatalog } from "@/lib/agent-launch";
 import {
   defaultFeatureBuildModels,
+  featureBuildIdentity,
   featureBuildRequest,
   featureBuildStepConfigs,
   resolveFeatureBuildStep,
@@ -166,5 +167,55 @@ describe("featureBuildRequest", () => {
       customizeModels: false,
     });
     expect(request.environmentOptions?.name).toBeUndefined();
+  });
+});
+
+describe("featureBuildIdentity", () => {
+  const base = {
+    projectId: "project-1",
+    title: "Dark mode",
+    description: "A toggle",
+    acceptanceCriteria: "It persists",
+    environmentType: "containerized" as const,
+    environmentName: "feature-dark",
+    networkAccessMode: "restricted" as const,
+    portMappings: [],
+    defaultAgent: "claude" as const,
+    customizeModels: false,
+    models: models(),
+    requestId: "request-1",
+  };
+
+  test("ignores the key itself, so a resend under the same key is the same request", () => {
+    // This is what makes reuse safe: the identity answers "is this the request
+    // the key was spent on", which cannot depend on the key.
+    expect(featureBuildIdentity(featureBuildRequest(base))).toBe(
+      featureBuildIdentity(featureBuildRequest({ ...base, requestId: "request-2" })),
+    );
+  });
+
+  test("changes when any argument the backend binds to the key changes", () => {
+    const identity = featureBuildIdentity(featureBuildRequest(base));
+    const differing = [
+      { title: "Light mode" },
+      { description: "Something else" },
+      { acceptanceCriteria: "Different" },
+      { environmentName: "other-name" },
+      { networkAccessMode: "full" as const },
+      { environmentType: "local" as const },
+      { customizeModels: true },
+      { portMappings: [{ containerPort: 5173, hostPort: 5173, protocol: "tcp" as const }] },
+    ];
+    for (const override of differing) {
+      expect(featureBuildIdentity(featureBuildRequest({ ...base, ...override }))).not.toBe(
+        identity,
+      );
+    }
+  });
+
+  test("does not depend on the order the request's keys were built in", () => {
+    const request = featureBuildRequest(base);
+    const reordered = Object.fromEntries(Object.entries(request).reverse()) as typeof request;
+    expect(featureBuildIdentity(reordered)).toBe(featureBuildIdentity(request));
   });
 });

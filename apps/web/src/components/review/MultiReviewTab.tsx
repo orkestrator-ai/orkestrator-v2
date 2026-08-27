@@ -17,10 +17,12 @@ import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { hydrateMultiReviewWorkflow } from "@/lib/multi-review-persistence";
-import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { useOptionalTerminalContext, type CreateTabOptions } from "@/contexts/TerminalContext";
 import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import * as backend from "@/lib/backend";
+import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
+import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { multiReviewCustomFixPrompt } from "@/lib/review-actions";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
@@ -125,6 +127,9 @@ function MultiReviewOverviewTab({
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [stoppingReviewerId, setStoppingReviewerId] = useState<string | null>(null);
+  const [customFixPromptOpen, setCustomFixPromptOpen] = useState(false);
+  const [customFixError, setCustomFixError] = useState<string | null>(null);
+  const modelCatalog = useReviewModelCatalog(workflow?.projectId ?? "", customFixPromptOpen);
 
   const hydrate = useCallback(async () => {
     setError(null);
@@ -219,6 +224,32 @@ function MultiReviewOverviewTab({
     } finally {
       setPending(false);
     }
+  };
+
+  const startCustomFix = (selection: MultiReviewWorkflow["fixModel"], prompt: string) => {
+    if (!workflow?.consolidatedReport) {
+      setCustomFixError("The consolidated review report is no longer available.");
+      return;
+    }
+    if (!createTab) {
+      setCustomFixError("The environment is not ready or the maximum tab count was reached.");
+      return;
+    }
+    const opened = createTab(selection.agent, {
+      agentLaunchMode: "native",
+      displayTitle: "Multi Review · Fix",
+      isReviewTab: true,
+      initialAgentModel: selection.model === "default" ? undefined : selection.model,
+      initialReasoningEffort: selection.reasoningEffort,
+      initialConversationMode: "build",
+      initialPrompt: multiReviewCustomFixPrompt(workflow.consolidatedReport, prompt),
+    });
+    if (opened) {
+      setCustomFixError(null);
+      setCustomFixPromptOpen(false);
+      return;
+    }
+    setCustomFixError("The environment is not ready or the maximum tab count was reached.");
   };
 
   if (!workflow) {
@@ -448,12 +479,36 @@ function MultiReviewOverviewTab({
             </Button>
           )}
         {workflow.phase === "ready" && (
-          <Button disabled={pending} onClick={() => void addressAll()}>
-            <Wrench className="mr-2 size-4" />
-            {ADDRESS_ALL_REVIEW_PROMPT}
-          </Button>
+          <>
+            <Button disabled={pending} onClick={() => void addressAll()}>
+              <Wrench className="mr-2 size-4" />
+              Fix
+            </Button>
+            <Button
+              disabled={pending}
+              onClick={() => {
+                setCustomFixError(null);
+                setCustomFixPromptOpen(true);
+              }}
+              aria-label="Custom fix prompt"
+              title="Custom fix prompt"
+            >
+              ...
+            </Button>
+          </>
         )}
       </footer>
+      <MultiReviewFixPromptDialog
+        open={customFixPromptOpen}
+        onOpenChange={(open) => {
+          setCustomFixPromptOpen(open);
+          if (!open) setCustomFixError(null);
+        }}
+        catalog={modelCatalog}
+        defaultSelection={workflow.fixModel}
+        error={customFixError}
+        onSubmit={startCustomFix}
+      />
     </div>
   );
 }

@@ -92,7 +92,7 @@ function initialConfiguredRow(
   );
 }
 
-function flatCatalog(catalog: AgentModelCatalog): AgentModel[] {
+export function flatCatalog(catalog: AgentModelCatalog): AgentModel[] {
   return (["claude", "codex", "cursor", "grok", "opencode", "pi"] as LaunchAgent[]).flatMap(
     (agent) =>
       modelsForAgent(catalog, agent).map((model) => ({

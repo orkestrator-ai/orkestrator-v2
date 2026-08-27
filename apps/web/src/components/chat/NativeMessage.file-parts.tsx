@@ -74,6 +74,7 @@ function getMimeType(path: string): string {
     jpeg: "image/jpeg",
     gif: "image/gif",
     webp: "image/webp",
+    avif: "image/avif",
     svg: "image/svg+xml",
     bmp: "image/bmp",
     ico: "image/x-icon",
@@ -87,9 +88,19 @@ function isImageReference(pathOrUrl?: string): boolean {
   if (!pathOrUrl) return false;
   if (pathOrUrl.startsWith("data:image/")) return true;
   const lower = pathOrUrl.toLowerCase();
-  return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".tif", ".tiff"].some(
-    (ext) => lower.includes(ext),
-  );
+  return [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".avif",
+    ".svg",
+    ".bmp",
+    ".ico",
+    ".tif",
+    ".tiff",
+  ].some((ext) => lower.includes(ext));
 }
 
 function isRemoteImageUrl(fileUrl?: string): boolean {

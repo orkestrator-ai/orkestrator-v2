@@ -35,7 +35,17 @@ const LazyMonacoFileEditor = lazy(async () => ({
 }));
 
 /** Image file extensions that should be rendered as images */
-const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
+const IMAGE_EXTENSIONS = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "avif",
+  "svg",
+  "ico",
+  "bmp",
+]);
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown"]);
 
@@ -78,6 +88,7 @@ function getImageMimeType(filePath: string): string | undefined {
     jpeg: "image/jpeg",
     gif: "image/gif",
     webp: "image/webp",
+    avif: "image/avif",
     svg: "image/svg+xml",
     ico: "image/x-icon",
     bmp: "image/bmp",

@@ -17,6 +17,7 @@ import {
   safeParseReviewFindingPool,
   safeParseReviewReconciliation,
   safeParseStructuredReviewReport,
+  stripStructuredReviewProvenance,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   type ReviewFindingPool,
   type ReviewReconciliation,
@@ -151,6 +152,8 @@ const fullyPopulatedReport = {
   ],
   issues: [
     {
+      reviewModels: ["gpt-5.6", "claude-opus-4.1"],
+      reviewSourceIds: ["reviewer-1/issue-1", "reviewer-2/issue-1"],
       severity: "P1",
       confidence: 94,
       category: "correctness",
@@ -183,6 +186,8 @@ const fullyPopulatedReport = {
   ],
   testCoverageGaps: [
     {
+      reviewModels: ["gpt-5.6"],
+      reviewSourceIds: ["reviewer-1/coverage-gap-1"],
       file: "apps/web/src/stores/review.ts",
       untestedBehavior: "Recovery after malformed structured output.",
     },
@@ -263,6 +268,31 @@ describe("structured review report contract", () => {
     expect(parsed.issues[0]?.alternativeFixes).toHaveLength(2);
     expect(parsed.whatChanged.keyCodeChanges[1]?.line).toBeNull();
     expect(parsed.reviewScope.commit?.sha).toBe("d34db33f");
+  });
+
+  test("rejects empty and duplicate provenance values", () => {
+    for (const [field, values] of [
+      ["reviewModels", [""]],
+      ["reviewModels", ["gpt-5.6", "gpt-5.6"]],
+      ["reviewSourceIds", [""]],
+      ["reviewSourceIds", ["reviewer-1/issue-1", "reviewer-1/issue-1"]],
+    ] as const) {
+      expect(
+        safeParseStructuredReviewReport({
+          ...fullyPopulatedReport,
+          issues: [{ ...fullyPopulatedReport.issues[0], [field]: values }],
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  test("strips provider-authored provenance from a parsed report", () => {
+    const stripped = stripStructuredReviewProvenance(fullyPopulatedReport);
+
+    expect(stripped.issues[0]).not.toHaveProperty("reviewModels");
+    expect(stripped.issues[0]).not.toHaveProperty("reviewSourceIds");
+    expect(stripped.testCoverageGaps[0]).not.toHaveProperty("reviewModels");
+    expect(stripped.testCoverageGaps[0]).not.toHaveProperty("reviewSourceIds");
   });
 
   test("infers not-run tests only when a caller opts in to the legacy shape", () => {
@@ -488,6 +518,9 @@ describe("structured review report contract", () => {
     expect(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.required).toContain(
       "alternativeFixes",
     );
+    expect(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.required).toContain(
+      "reviewSourceIds",
+    );
     expect(
       STRUCTURED_REVIEW_REPORT_JSON_SCHEMA.properties.issues.items.properties.alternativeFixes,
     ).toMatchObject({
@@ -562,7 +595,7 @@ describe("structured review report contract", () => {
     expect(description).toContain("validation could not be run");
   });
 
-  test("keeps optional alternative fixes ergonomic after strict wire validation", () => {
+  test("keeps optional finding arrays ergonomic after strict wire validation", () => {
     const parsed = parseStructuredReviewReport({
       ...emptyReport,
       issues: [
@@ -579,11 +612,15 @@ describe("structured review report contract", () => {
           suggestion: "Keep the domain field optional.",
           verification: "Parse the report.",
           alternativeFixes: null,
+          reviewModels: null,
+          reviewSourceIds: null,
         },
       ],
     });
 
     expect(parsed.issues[0]).not.toHaveProperty("alternativeFixes");
+    expect(parsed.issues[0]).not.toHaveProperty("reviewModels");
+    expect(parsed.issues[0]).not.toHaveProperty("reviewSourceIds");
   });
 });
 
@@ -653,13 +690,14 @@ describe("structured review readable formatting", () => {
     for (const expected of [
       "### 1. [P1][conf:94][correctness]",
       "#### A malformed result can advance the workflow",
+      "- Review models: gpt-5.6, claude-opus-4.1",
       "- File: apps/web/src/stores/review.ts:82",
       "- Symbol: completeReview",
       "- Evidence: completeReview sets phase to completed before calling parse.",
       "- Suggestion: Validate first and persist success only after parsing succeeds.",
       "- Verification: Return malformed provider data and assert that the workflow pauses.",
       "- Alternative fixes:",
-      "apps/web/src/stores/review.ts — Recovery after malformed structured output.",
+      "apps/web/src/stores/review.ts [gpt-5.6] — Recovery after malformed structured output.",
       "- Ready: with-fixes",
       "One high-confidence correctness issue and one coverage weakness were found.",
     ]) {

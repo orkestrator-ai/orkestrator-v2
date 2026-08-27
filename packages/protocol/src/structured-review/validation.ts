@@ -433,6 +433,8 @@ function validateStrength(value: unknown, path: string, issues: Issues): void {
 
 function validateReviewIssue(value: unknown, path: string, issues: Issues, pooled = false): void {
   const allowedKeys = [
+    "reviewModels",
+    "reviewSourceIds",
     "severity",
     "confidence",
     "category",
@@ -452,6 +454,12 @@ function validateReviewIssue(value: unknown, path: string, issues: Issues, poole
 
   if (pooled) {
     validateNonEmptyString(readRequired(object, "poolId", path, issues), `${path}.poolId`, issues);
+  }
+  if (hasOwn(object, "reviewModels") && object.reviewModels !== null) {
+    validateProvenanceValues(object.reviewModels, `${path}.reviewModels`, issues);
+  }
+  if (hasOwn(object, "reviewSourceIds") && object.reviewSourceIds !== null) {
+    validateProvenanceValues(object.reviewSourceIds, `${path}.reviewSourceIds`, issues);
   }
   validateEnum(
     readRequired(object, "severity", path, issues),
@@ -491,6 +499,8 @@ function validateReviewIssue(value: unknown, path: string, issues: Issues, poole
 
 function validateCoverageGap(value: unknown, path: string, issues: Issues, pooled = false): void {
   const object = readObject(value, path, issues, [
+    "reviewModels",
+    "reviewSourceIds",
     "file",
     "untestedBehavior",
     ...(pooled ? ["poolId"] : []),
@@ -499,12 +509,27 @@ function validateCoverageGap(value: unknown, path: string, issues: Issues, poole
   if (pooled) {
     validateNonEmptyString(readRequired(object, "poolId", path, issues), `${path}.poolId`, issues);
   }
+  if (hasOwn(object, "reviewModels") && object.reviewModels !== null) {
+    validateProvenanceValues(object.reviewModels, `${path}.reviewModels`, issues);
+  }
+  if (hasOwn(object, "reviewSourceIds") && object.reviewSourceIds !== null) {
+    validateProvenanceValues(object.reviewSourceIds, `${path}.reviewSourceIds`, issues);
+  }
   validateString(readRequired(object, "file", path, issues), `${path}.file`, issues);
   validateString(
     readRequired(object, "untestedBehavior", path, issues),
     `${path}.untestedBehavior`,
     issues,
   );
+}
+
+function validateProvenanceValues(value: unknown, path: string, issues: Issues): void {
+  if (!validateStringArray(value, path, issues, true)) return;
+  value.forEach((model, index) => {
+    if (model.length === 0) {
+      addIssue(issues, `${path}[${index}]`, "invalid_value", "Expected a non-empty string.");
+    }
+  });
 }
 
 function validateVerdict(value: unknown, path: string, issues: Issues): void {
@@ -682,20 +707,20 @@ function parseContract<T>(
   if (issues.length > 0) {
     throw new ReviewContractValidationError(contract, issues);
   }
-  return normalizeOptionalAlternativeFixes(value) as T;
+  return normalizeOptionalFindingArrays(value) as T;
 }
 
 /**
  * Strict provider schemas must require every object property, so the wire
- * representation uses `null` for an omitted optional alternative-fixes list.
- * Keep the provider-independent domain contract ergonomic by removing only
- * those null sentinels after validation.
+ * representation uses `null` for omitted optional finding arrays. Keep the
+ * provider-independent domain contract ergonomic by removing only those null
+ * sentinels after validation.
  */
-function normalizeOptionalAlternativeFixes(value: unknown): unknown {
+function normalizeOptionalFindingArrays(value: unknown): unknown {
   if (Array.isArray(value)) {
     let changed = false;
     const normalized = value.map((entry) => {
-      const next = normalizeOptionalAlternativeFixes(entry);
+      const next = normalizeOptionalFindingArrays(entry);
       changed ||= next !== entry;
       return next;
     });
@@ -708,15 +733,33 @@ function normalizeOptionalAlternativeFixes(value: unknown): unknown {
   let changed = false;
   const normalized: JsonObject = {};
   for (const [key, entry] of Object.entries(value as JsonObject)) {
-    if (key === "alternativeFixes" && entry === null) {
+    if (
+      (key === "alternativeFixes" || key === "reviewModels" || key === "reviewSourceIds") &&
+      entry === null
+    ) {
       changed = true;
       continue;
     }
-    const next = normalizeOptionalAlternativeFixes(entry);
+    const next = normalizeOptionalFindingArrays(entry);
     changed ||= next !== entry;
     normalized[key] = next;
   }
   return changed ? normalized : value;
+}
+
+/** Removes provider-authored provenance unless a caller can derive it authoritatively. */
+export function stripStructuredReviewProvenance(
+  report: StructuredReviewReport,
+): StructuredReviewReport {
+  const strip = <T extends { reviewModels?: string[]; reviewSourceIds?: string[] }>(finding: T) => {
+    const { reviewModels: _models, reviewSourceIds: _sourceIds, ...rest } = finding;
+    return rest;
+  };
+  return {
+    ...report,
+    issues: report.issues.map(strip),
+    testCoverageGaps: report.testCoverageGaps.map(strip),
+  };
 }
 
 /**

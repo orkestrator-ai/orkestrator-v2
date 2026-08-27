@@ -36,6 +36,21 @@ function location(file: string, line: number | null): string {
   return line ? `${file}:${line}` : file;
 }
 
+function ReviewModelPills({ models }: { models?: readonly string[] }) {
+  if (!models?.length) return null;
+  return models.map((model) => (
+    <span
+      key={model}
+      role="note"
+      aria-label={`Review model: ${model}`}
+      title={`Reported by ${model}`}
+      className="max-w-56 truncate rounded-full border border-cyan-500/25 bg-cyan-500/8 px-2 py-0.5 font-mono text-[10px] font-medium text-cyan-300/90"
+    >
+      {model}
+    </span>
+  ));
+}
+
 /**
  * Collapsed sections are genuinely unmounted rather than hidden: the report is
  * the largest thing in a transcript, and a build pipeline appends one to a
@@ -514,6 +529,7 @@ function ReportArticle({
                   </span>
                   <span className="text-xs">{issue.confidence}% confidence</span>
                   <span className="text-xs opacity-80">{issue.category}</span>
+                  <ReviewModelPills models={issue.reviewModels} />
                 </div>
                 <h4 className="mt-2 text-sm font-semibold text-foreground">
                   {index + 1}. {issue.title}
@@ -561,9 +577,12 @@ function ReportArticle({
           render={(value) => {
             const gap = value as (typeof report.testCoverageGaps)[number];
             return (
-              <>
-                <code>{gap.file}</code> — {gap.untestedBehavior}
-              </>
+              <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                <ReviewModelPills models={gap.reviewModels} />
+                <span>
+                  <code>{gap.file}</code> — {gap.untestedBehavior}
+                </span>
+              </span>
             );
           }}
         />

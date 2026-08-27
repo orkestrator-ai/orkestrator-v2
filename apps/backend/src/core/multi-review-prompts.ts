@@ -79,6 +79,7 @@ ${MULTI_REVIEW_REPORTS_FRAME_CLOSE}
 ${MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION}${JSON.stringify(input.targetBranch)}.
 
 - Semantically deduplicate equivalent issues and coverage gaps. Keep the clearest evidence, most accurate location, strongest verification, and highest justified severity/confidence.
+- Every source issue and coverage gap has a backend-issued reviewSourceIds value. For every consolidated finding, copy the IDs of every source finding that substantiates it into reviewSourceIds. Preserve all supporting IDs when deduplicating. Set reviewModels to null; the backend derives authoritative model labels from the cited IDs.
 - Preserve distinct findings even when they touch the same file or symptom.
 - Reconcile disagreements using the supplied evidence; do not decide by majority vote.${scopeReconciliationRule(input.worktree)}
 - Combine useful strengths, limitations, test results, scope details, change explanation, and reviewer commentary without inventing evidence.

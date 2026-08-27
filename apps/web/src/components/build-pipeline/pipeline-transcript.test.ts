@@ -169,6 +169,59 @@ quoted context
     expect(transcript[0]!.createdAt).toBe("2026-07-29T00:01:00.000Z");
   });
 
+  test("drops an empty Claude thinking block without crashing the transcript", () => {
+    const transcript = toPipelineTranscript(
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            { type: "thinking", content: "" },
+            { type: "tool-invocation", content: "", toolName: "Read" },
+            { type: "text", content: "Reviewing the implementation" },
+          ],
+        },
+      ],
+      "claude",
+      FALLBACK,
+    );
+
+    expect(flattenedParts(transcript).map((part) => part.type)).toEqual([
+      "tool-invocation",
+      "text",
+    ]);
+    expect(flattenedParts(transcript).some((part) => part.type === "thinking")).toBe(false);
+  });
+
+  test("preserves empty Claude text content while normalizing adjacent text", () => {
+    const transcript = toPipelineTranscript(
+      [
+        {
+          id: "message-1",
+          role: "assistant",
+          content: "",
+          parts: [
+            { type: "text", content: "" },
+            { type: "text", content: "Review complete" },
+          ],
+        },
+      ],
+      "claude",
+      FALLBACK,
+    );
+
+    expect(
+      flattenedParts(transcript).map((part) => ({
+        type: part.type,
+        content: part.content,
+      })),
+    ).toEqual([
+      { type: "text", content: "" },
+      { type: "text", content: "Review complete" },
+    ]);
+  });
+
   test("reads OpenCode's info/parts envelope", () => {
     const transcript = toPipelineTranscript(
       [

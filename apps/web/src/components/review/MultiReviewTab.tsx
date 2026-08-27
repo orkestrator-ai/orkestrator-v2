@@ -9,7 +9,11 @@ import {
   Square,
   Wrench,
 } from "lucide-react";
-import type { MultiReviewPhase, MultiReviewWorkflow } from "@orkestrator/protocol/multi-review";
+import {
+  MULTI_REVIEW_FIX_TAB_TITLE,
+  type MultiReviewPhase,
+  type MultiReviewWorkflow,
+} from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -70,7 +74,7 @@ export function multiReviewFixSessionTabOptions(
   return {
     agentLaunchMode: "native",
     resumeSessionId: session.providerSessionId,
-    displayTitle: "Multi Review · Fix",
+    displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
     isReviewTab: true,
     initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
     initialReasoningEffort: workflow.fixModel.reasoningEffort,
@@ -237,7 +241,7 @@ function MultiReviewOverviewTab({
     }
     const opened = createTab(selection.agent, {
       agentLaunchMode: "native",
-      displayTitle: "Multi Review · Fix",
+      displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
       isReviewTab: true,
       initialAgentModel: selection.model === "default" ? undefined : selection.model,
       initialReasoningEffort: selection.reasoningEffort,

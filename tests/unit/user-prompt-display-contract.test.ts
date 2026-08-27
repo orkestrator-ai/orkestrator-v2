@@ -6,7 +6,12 @@ import {
 } from "@orkestrator/protocol/review-evidence-frames";
 import { addressPrompt } from "../../apps/backend/src/core/build-pipeline-prompts";
 import { createMultiReviewConsolidationPrompt } from "../../apps/backend/src/core/multi-review-prompts";
-import { userPromptDisplayText } from "../../apps/web/src/lib/chat/user-prompt-display";
+import { TEST_STRUCTURED_REVIEW_REPORT } from "../../apps/web/src/components/build-pipeline/structured-review-test-fixture";
+import {
+  userPromptDisplayText,
+  userPromptPresentation,
+} from "../../apps/web/src/lib/chat/user-prompt-display";
+import { multiReviewCustomFixPrompt } from "../../apps/web/src/lib/review-actions";
 
 const report = {
   issues: [
@@ -68,5 +73,22 @@ describe("backend prompt display contract", () => {
     expect(displayed).toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.continuationPrefix);
     expect(displayed).not.toContain("Producer-owned finding");
     expect(displayed).not.toContain(STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.openMarker);
+  });
+
+  test("renders evidence from the exact custom-fix prompt producer", () => {
+    const source = multiReviewCustomFixPrompt(
+      TEST_STRUCTURED_REVIEW_REPORT,
+      "Preserve the public API.",
+    );
+    const presentation = userPromptPresentation(source);
+
+    expect(presentation.displayText).toContain("Preserve the public API.");
+    expect(presentation.displayText).not.toContain(
+      STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT.omissionText,
+    );
+    expect(presentation.evidencePayload?.kind).toBe("structured-review");
+    expect(presentation.evidencePayload?.source).toBe(
+      JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT, null, 2),
+    );
   });
 });

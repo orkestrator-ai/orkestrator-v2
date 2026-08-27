@@ -5,14 +5,31 @@
  * is presentation-only: copy actions continue to use the original source.
  */
 import {
+  MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX,
   REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS,
+  STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT,
   type ReviewEvidenceFrameDisplayContract,
 } from "@orkestrator/protocol/review-evidence-frames";
+import { parseJsonPayload, type JsonPayload } from "./json-payload";
 
-function displayTextForContract(
+export interface UserPromptPresentation {
+  displayText: string;
+  /** A fix prompt's framed report, rendered after its visible instructions. */
+  evidencePayload: JsonPayload | null;
+}
+
+/** Decode the prompt-only escaping before exposing the evidence as readable JSON. */
+function readableEvidencePayload(payload: JsonPayload): JsonPayload {
+  return {
+    ...payload,
+    source: JSON.stringify(JSON.parse(payload.source), null, 2),
+  };
+}
+
+function presentationForContract(
   source: string,
   contract: ReviewEvidenceFrameDisplayContract,
-): string | null {
+): UserPromptPresentation | null {
   if (!source.trimStart().startsWith(contract.promptPrefix)) return null;
 
   const open = source.indexOf(contract.openMarker);
@@ -25,7 +42,21 @@ function displayTextForContract(
   while (close > open) {
     const afterFrame = source.slice(close + contract.closeMarker.length).trimStart();
     if (afterFrame.startsWith(contract.continuationPrefix)) {
-      return `${source.slice(0, open).trimEnd()}\n\n${contract.omissionText}\n\n${afterFrame}`;
+      const evidenceSource = source.slice(open + contract.openMarker.length, close).trim();
+      const rendersEvidence =
+        contract === STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT &&
+        afterFrame.startsWith(
+          `${contract.continuationPrefix}\n\n${MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX}\n`,
+        );
+      const parsedEvidence = rendersEvidence ? parseJsonPayload(evidenceSource) : null;
+      const evidencePayload = parsedEvidence ? readableEvidencePayload(parsedEvidence) : null;
+      const beforeFrame = source.slice(0, open).trimEnd();
+      return {
+        displayText: evidencePayload
+          ? `${beforeFrame}\n\n${afterFrame}`
+          : `${beforeFrame}\n\n${contract.omissionText}\n\n${afterFrame}`,
+        evidencePayload,
+      };
     }
     close = source.lastIndexOf(contract.closeMarker, close - 1);
   }
@@ -33,11 +64,16 @@ function displayTextForContract(
   return null;
 }
 
+/** Build the visible prompt and any structured evidence rendered beneath it. */
+export function userPromptPresentation(source: string): UserPromptPresentation {
+  for (const contract of REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS) {
+    const presentation = presentationForContract(source, contract);
+    if (presentation !== null) return presentation;
+  }
+  return { displayText: source, evidencePayload: null };
+}
+
 /** Hide the reviewer-report JSON that already has a structured presentation. */
 export function userPromptDisplayText(source: string): string {
-  for (const contract of REVIEW_EVIDENCE_FRAME_DISPLAY_CONTRACTS) {
-    const displayed = displayTextForContract(source, contract);
-    if (displayed !== null) return displayed;
-  }
-  return source;
+  return userPromptPresentation(source).displayText;
 }

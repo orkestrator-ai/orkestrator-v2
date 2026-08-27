@@ -24,6 +24,7 @@ export const STRUCTURED_REVIEW_FINDINGS_FRAME_OPEN = "<structured-review-finding
 export const STRUCTURED_REVIEW_FINDINGS_FRAME_CLOSE = "</structured-review-findings-json>";
 export const STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION =
   "Address all the above issues and coverage gaps, making sensible assumptions and without asking questions.";
+export const MULTI_REVIEW_CUSTOM_FIX_INSTRUCTIONS_PREFIX = "User-provided fix instructions:";
 
 export const MULTI_REVIEW_REPORTS_DISPLAY_CONTRACT = {
   promptPrefix: MULTI_REVIEW_CONSOLIDATION_PROMPT_PREFIX,

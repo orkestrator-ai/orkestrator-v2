@@ -463,20 +463,47 @@ describe("NativeMessage find-index alignment", () => {
     expect(searchText).not.toContain("multi-review-reports-json");
   });
 
-  test("a fix-phase prompt omits its structured findings from display and find", () => {
+  test("a fix-phase prompt renders its structured report beneath the instructions", () => {
     const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
     const message = makeMessage(
-      evidencePrompt(contract, '{"issues":[{"title":"Duplicated finding"}]}'),
+      evidencePrompt(
+        contract,
+        JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT),
+        "\n\nUser-provided fix instructions:\nFix the finding.",
+      ),
+      "user",
+    );
+    const view = render(<NativeMessage message={message} />);
+    const searchText = getNativeMessageSearchText(message);
+
+    expect(view.container.textContent).toContain(contract.continuationPrefix);
+    expect(view.container.textContent).toContain("Structured review report");
+    expect(view.container.textContent).toContain("Ready: with-fixes");
+    expect(view.container.textContent).not.toContain(contract.omissionText);
+    expect(view.container.textContent).not.toContain(contract.openMarker);
+    expect(searchText).toContain("Structured review report");
+    expect(searchText).toBe(renderedSearchText(view.container));
+
+    fireEvent.click(screen.getByText("Structured review report"));
+    expect(screen.getByText("Review Scope")).toBeTruthy();
+  });
+
+  test("a malformed fix-phase report falls back to the omission in display and find", () => {
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const message = makeMessage(
+      evidencePrompt(
+        contract,
+        '{"issues":[',
+        "\n\nUser-provided fix instructions:\nFix the finding.",
+      ),
       "user",
     );
     const view = render(<NativeMessage message={message} />);
     const searchText = getNativeMessageSearchText(message);
 
     expect(view.container.textContent).toContain(contract.omissionText);
-    expect(view.container.textContent).toContain(contract.continuationPrefix);
-    expect(view.container.textContent).not.toContain("Duplicated finding");
-    expect(searchText).toContain(contract.omissionText);
-    expect(searchText).not.toContain("Duplicated finding");
+    expect(view.container.textContent).not.toContain('{"issues":[');
+    expect(searchText).toBe(renderedSearchText(view.container));
   });
 
   test("filters a legacy user message without text parts in display and find", () => {
@@ -498,6 +525,21 @@ describe("NativeMessage find-index alignment", () => {
     expect(searchText).not.toContain("Legacy evidence");
   });
 
+  test("normalizes Markdown in a legacy user message exactly like the rendered content", () => {
+    const message = {
+      id: "user-legacy-markdown",
+      role: "user" as const,
+      content: "# Legacy heading\n\nA **bold** [link](https://example.com).",
+      createdAt: "2026-07-30T10:00:00.000Z",
+      parts: [],
+    };
+    const view = render(<NativeMessage message={message} />);
+    const searchText = getNativeMessageSearchText(message);
+
+    expect(searchText).toBe(renderedSearchText(view.container));
+    expect(searchText).toBe("Legacy heading\nA bold link.");
+  });
+
   test("TextPart copies the complete source while displaying an omission", async () => {
     mockWriteText.mockClear();
     mockWriteText.mockImplementation(async () => {});
@@ -509,6 +551,26 @@ describe("NativeMessage find-index alignment", () => {
     );
     expect(view.container.textContent).toContain(contract.omissionText);
     expect(view.container.textContent).not.toContain("Copy-only evidence");
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
+    await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(source));
+  });
+
+  test("TextPart copies the complete custom-fix source while displaying its report card", async () => {
+    mockWriteText.mockClear();
+    mockWriteText.mockImplementation(async () => {});
+    const contract = STRUCTURED_REVIEW_FINDINGS_DISPLAY_CONTRACT;
+    const source = evidencePrompt(
+      contract,
+      JSON.stringify(TEST_STRUCTURED_REVIEW_REPORT),
+      "\n\nUser-provided fix instructions:\nFix the finding.",
+    );
+
+    const view = render(
+      <TextPart content={source} truncateUserPrompt expansionKey="copy-source/custom-fix" />,
+    );
+    expect(view.container.textContent).toContain("Structured review report");
+    expect(view.container.textContent).not.toContain(contract.openMarker);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy text" }));
     await waitFor(() => expect(mockWriteText).toHaveBeenCalledWith(source));

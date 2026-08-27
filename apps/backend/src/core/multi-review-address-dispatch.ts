@@ -1,6 +1,7 @@
 import { INTERACTIVE_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import {
   MULTI_REVIEW_ADDRESS_PROMPT,
+  MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
   type MultiReviewWorkflow,
 } from "@orkestrator/protocol/multi-review";
 import {
@@ -34,7 +35,7 @@ export async function dispatchMultiReviewAddressPrompt(
       origin: "interactive-native",
       interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
       providerSessionId: session.providerSessionId,
-      title: "Multi Review · Fix",
+      title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
       model,
       reasoningEffort: workflow.fixModel.reasoningEffort,
       phase: "fix",
@@ -52,7 +53,7 @@ export async function dispatchMultiReviewAddressPrompt(
     logicalSessionKey,
     origin: "interactive-native",
     interactionPolicy: INTERACTIVE_AGENT_INTERACTION_POLICY,
-    title: "Multi Review · Fix",
+    title: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
     model,
     reasoningEffort: workflow.fixModel.reasoningEffort,
     phase: "fix",

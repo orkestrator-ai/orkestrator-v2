@@ -2,7 +2,8 @@ import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import type { PaneSplit } from "@/types/paneLayout";
-import { collectPaneLeaves } from "./PaneSplitContainer";
+import { MULTI_REVIEW_LEGACY_FIX_TAB_TITLE } from "@orkestrator/protocol/multi-review";
+import { collectPaneLeaves, mobilePaneOptions } from "./PaneSplitContainer";
 import { MobilePaneSwitcher } from "./MobilePaneSwitcher";
 
 afterEach(cleanup);
@@ -86,5 +87,45 @@ describe("MobilePaneSwitcher", () => {
     };
 
     expect(collectPaneLeaves(split).map((pane) => pane.id)).toEqual(["left", "top", "bottom"]);
+  });
+
+  test("normalizes a restored Multi Review fix title in the mobile pane selector", () => {
+    const split: PaneSplit = {
+      kind: "split",
+      id: "root",
+      direction: "horizontal",
+      depth: 0,
+      sizes: [50, 50],
+      children: [
+        {
+          kind: "leaf",
+          id: "left",
+          activeTabId: "fix-tab",
+          tabs: [
+            {
+              id: "fix-tab",
+              type: "agent-native",
+              displayTitle: MULTI_REVIEW_LEGACY_FIX_TAB_TITLE,
+              isReviewTab: true,
+            },
+          ],
+        },
+        { kind: "leaf", id: "right", tabs: [], activeTabId: null },
+      ],
+    };
+
+    render(
+      <MobilePaneSwitcher
+        panes={mobilePaneOptions(split)}
+        activePaneId="left"
+        onSelect={() => undefined}
+        renderPane={() => null}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "1. Fix" })).toBeTruthy();
+    expect(
+      screen.queryByRole("tab", { name: `1. ${MULTI_REVIEW_LEGACY_FIX_TAB_TITLE}` }) === null,
+    ).toBe(true);
   });
 });

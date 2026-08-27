@@ -9,6 +9,10 @@ export const MULTI_REVIEW_MAX_REVIEWERS = 32;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = 10_000;
 export const MULTI_REVIEW_ADDRESS_PROMPT =
   "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.";
+/** Stable pane label for current Multi Review fix tabs. */
+export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
+/** Former pane title retained for restored layouts and backend session metadata. */
+export const MULTI_REVIEW_LEGACY_FIX_TAB_TITLE = "Multi Review · Fix";
 
 export interface MultiReviewModelSelection {
   agent: AgentPlatform;

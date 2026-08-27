@@ -276,6 +276,19 @@ history rather than two partial ones.
   constant whose value remains 9; it does not touch run-command loading or the
   shortcut payload. Evidence: the `workspace-web-backend-desktop-web-public-cli-protocol`
   log under `/var/folders/.../orkestrator-test-run.qXZvbG`.
+- **Recurrence (Multi Review fix transcript follow-up, 2026-08-27):** `bun run
+  test` failed `ActionBar keyboard shortcuts and tab guards > dispatches tab,
+  workflow, editor, and panel shortcuts` at `ActionBar.test.tsx:5212` after
+  27.81 ms. The expected `createTabMock("plain", { initialCommands: ["bun
+  test"] })` call was absent, while the mock recorded the preceding plain,
+  native-agent, and Codex review-tab calls. The web workspace group reported
+  5,507 passed, 1 skipped, and 1 failed across 240 files in 69.45 s; the root,
+  bridges, and protocol-lockfile groups passed. The isolated rerun `bun test
+  src/components/layout/ActionBar.test.tsx --only-failures` from `apps/web`
+  passed all 190 tests with 727 assertions in 14.47 s. The reviewed change does
+  not touch ActionBar or its shortcut handler. Evidence:
+  `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
+  `/var/folders/.../orkestrator-test-run.IB45Lu`.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
 
 ## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)

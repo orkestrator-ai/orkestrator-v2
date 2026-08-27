@@ -1,11 +1,14 @@
 import { marked, Renderer, type Tokens } from "marked";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import { jsonPayloadSearchText, parseJsonPayload } from "@/lib/chat/json-payload";
-import { userPromptDisplayText } from "@/lib/chat/user-prompt-display";
+import { userPromptPresentation } from "@/lib/chat/user-prompt-display";
 
 class SearchTextRenderer extends Renderer {
   override space(): string {
-    return "\n";
+    // Block renderers already contribute the DOM's separator. Emitting the
+    // source blank line as well would add a searchable character that no
+    // mounted text node owns.
+    return "";
   }
 
   override code({ text }: Tokens.Code): string {
@@ -143,6 +146,16 @@ function textPartSearchText(source: string, foldJsonPayload: boolean): string {
   return markdownToAgentSearchText(source);
 }
 
+function userTextPartSearchText(source: string): string {
+  const presentation = userPromptPresentation(source);
+  return [
+    textPartSearchText(presentation.displayText, false),
+    presentation.evidencePayload ? jsonPayloadSearchText(presentation.evidencePayload) : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 /**
  * Mirrors the content roots rendered by NativeMessage: each text part is one
  * independently searchable segment, with message.content as the fallback for
@@ -163,18 +176,18 @@ export function getNativeMessageSearchText(message: NativeMessage): string {
   const foldJsonPayload = message.role !== "user";
   const sources = textPartSources(message.parts);
   if (sources.length === 0) {
-    // The legacy fallback indexes `content` as written; only the fold is new.
+    // Assistant legacy content is indexed as written. User content is rendered
+    // through MessageMarkdown, so normalize it exactly like a user text part.
     const payload = foldJsonPayload ? parseJsonPayload(message.content) : null;
     if (payload) return jsonPayloadSearchText(payload);
-    return message.role === "user" ? userPromptDisplayText(message.content) : message.content;
+    return message.role === "user" ? userTextPartSearchText(message.content) : message.content;
   }
 
   return sources
     .map((source) =>
-      textPartSearchText(
-        message.role === "user" ? userPromptDisplayText(source) : source,
-        foldJsonPayload,
-      ),
+      message.role === "user"
+        ? userTextPartSearchText(source)
+        : textPartSearchText(source, foldJsonPayload),
     )
     .filter(Boolean)
     .join("\n\n");

@@ -10,6 +10,7 @@ import {
   isBuildPipeline,
   isActiveBuildPhase,
   isStartBuildPipelineInput,
+  usesReviewFanout,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
 } from "@orkestrator/protocol/build-pipeline";
@@ -30,6 +31,7 @@ import {
   resumablePhase,
   sessionAgent,
   pipelineAgents,
+  normalizeReviewers,
   normalizeSteps,
   sessionPhaseFor,
   resumePromptFor,
@@ -273,6 +275,7 @@ export abstract class BuildPipelineServiceBase {
       }
     }
     const steps = normalizeSteps(input.steps);
+    const reviewers = normalizeReviewers(input.reviewers);
     const pipeline: BuildPipeline = {
       id: randomUUID(),
       taskId: input.taskId,
@@ -284,6 +287,8 @@ export abstract class BuildPipelineServiceBase {
       // own configuration falls back to.
       agentType: steps?.build?.agent ?? input.agentType,
       ...(steps ? { steps } : {}),
+      ...(reviewers ? { reviewers } : {}),
+      ...(input.environmentOptions ? { environmentOptions: input.environmentOptions } : {}),
       phase: existingEnvironment ? "starting-environment" : "creating-environment",
       sessions: [],
       currentSessionIndex: -1,
@@ -428,7 +433,7 @@ export abstract class BuildPipelineServiceBase {
   }
 
   async pause(pipelineId: string): Promise<BuildPipeline> {
-    let abortError: unknown;
+    let abortErrors: unknown[] = [];
     const pipeline = await this.mutate(pipelineId, async (pipeline) => {
       const previous = resumablePhase(pipeline.phase);
       if (!previous) return;
@@ -438,19 +443,24 @@ export abstract class BuildPipelineServiceBase {
       // stopped, and `advance` returns early for non-active phases so nothing
       // else would ever clear it.
       delete pipeline.stallWarning;
-      const session = sessionForCurrentPhase(pipeline);
-      if (session?.status === "running") {
+      if (pipeline.reviewFanout) {
+        abortErrors = await this.abandonReviewFanout(pipeline, "idle");
+      } else {
+        const session = sessionForCurrentPhase(pipeline);
+        if (session?.status !== "running") return;
         try {
           const provider = await this.provider(pipeline, sessionAgent(pipeline, session));
           await provider.abort(session.sdkSessionId);
           session.status = "idle";
         } catch (error) {
-          abortError = error;
-          pipeline.error = `Build paused, but stopping the agent could not be confirmed: ${errorMessage(error)}`;
+          abortErrors = [error];
         }
       }
+      if (abortErrors.length > 0) {
+        pipeline.error = `Build paused, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`;
+      }
     });
-    if (abortError) throw abortError;
+    if (abortErrors.length > 0) throw abortErrors[0];
     return pipeline;
   }
 
@@ -461,6 +471,12 @@ export abstract class BuildPipelineServiceBase {
       candidate.phase = phase;
       delete candidate.pausedFromPhase;
       delete candidate.error;
+      // Multi-model review resumes by opening a fresh panel. There is no one
+      // reviewer session a generic resume prompt could safely target.
+      if (phase === "reviewing" && usesReviewFanout(candidate)) {
+        candidate.reviewRetryRequested = true;
+        return;
+      }
       const session = sessionForCurrentPhase(candidate);
       const resumePrompt = resumePromptFor(phase);
       const prompt = resumePrompt ? withUnattendedPolicy(resumePrompt) : null;
@@ -520,6 +536,14 @@ export abstract class BuildPipelineServiceBase {
     const pipeline = await this.mutate(pipelineId, (candidate) => {
       if (candidate.phase === "complete" || candidate.phase === "failed") {
         rejection = new Error("This build has finished");
+        return;
+      }
+      if (
+        usesReviewFanout(candidate) &&
+        (candidate.phase === "reviewing" ||
+          (candidate.phase === "paused" && candidate.pausedFromPhase === "reviewing"))
+      ) {
+        rejection = new Error("Messages cannot be sent during a multi-model review");
         return;
       }
       const queue = candidate.pendingUserMessages ?? [];
@@ -651,23 +675,28 @@ export abstract class BuildPipelineServiceBase {
   }
 
   async cancel(pipelineId: string): Promise<BuildPipeline> {
-    let abortError: unknown;
+    let abortErrors: unknown[] = [];
     const pipeline = await this.mutate(pipelineId, async (pipeline) => {
-      const session = sessionForCurrentPhase(pipeline);
-      if (session?.status === "running" && pipeline.environmentId) {
-        try {
-          await (
-            await this.provider(pipeline, sessionAgent(pipeline, session))
-          ).abort(session.sdkSessionId);
-          session.status = "idle";
-        } catch (error) {
-          abortError = error;
+      if (pipeline.reviewFanout) {
+        abortErrors = await this.abandonReviewFanout(pipeline, "idle");
+      } else {
+        const session = sessionForCurrentPhase(pipeline);
+        if (session?.status === "running" && pipeline.environmentId) {
+          try {
+            await (
+              await this.provider(pipeline, sessionAgent(pipeline, session))
+            ).abort(session.sdkSessionId);
+            session.status = "idle";
+          } catch (error) {
+            abortErrors = [error];
+          }
         }
       }
       pipeline.phase = "failed";
-      pipeline.error = abortError
-        ? `Build cancelled, but stopping the agent could not be confirmed: ${errorMessage(abortError)}`
-        : "Build cancelled";
+      pipeline.error =
+        abortErrors.length > 0
+          ? `Build cancelled, but stopping every agent could not be confirmed: ${abortErrors.map(errorMessage).join("; ")}`
+          : "Build cancelled";
       delete pipeline.pendingPromptAttempt;
       delete pipeline.activePromptContext;
       delete pipeline.pendingUserMessages;
@@ -681,13 +710,83 @@ export abstract class BuildPipelineServiceBase {
     // here would grow the map for every cancelled build until shutdown.
     this.lastProviderAgent.delete(pipelineId);
     await this.reconcileTerminalState(pipeline);
-    if (abortError) throw abortError;
+    if (abortErrors.length > 0) throw abortErrors[0];
     return pipeline;
+  }
+
+  /** Stops every provider turn owned by a live multi-model review. */
+  protected async abandonReviewFanout(
+    pipeline: BuildPipeline,
+    sessionStatus: "idle" | "error",
+  ): Promise<unknown[]> {
+    const fanout = pipeline.reviewFanout;
+    if (!fanout) return [];
+    const now = new Date().toISOString();
+    const targets: Array<{ agent: BuildPipelineAgent; sessionId: string }> = [];
+    for (const reviewer of fanout.reviewers) {
+      if (
+        reviewer.status !== "pending" &&
+        reviewer.status !== "running" &&
+        reviewer.status !== "cancelled"
+      ) {
+        continue;
+      }
+      reviewer.status = "cancelled";
+      reviewer.completedAt = now;
+      delete reviewer.stalledSince;
+      delete reviewer.idleResultPolls;
+      if (reviewer.providerSessionId) {
+        targets.push({
+          agent: reviewer.agent as BuildPipelineAgent,
+          sessionId: reviewer.providerSessionId,
+        });
+      }
+    }
+    if (fanout.consolidation && !fanout.report) {
+      targets.push({
+        agent: fanout.consolidation.agent as BuildPipelineAgent,
+        sessionId: fanout.consolidation.providerSessionId,
+      });
+    }
+    const fanoutOwnsCurrentSession =
+      pipeline.phase === "reviewing" ||
+      (pipeline.phase === "paused" && pipeline.pausedFromPhase === "reviewing");
+    const currentSession = sessionForCurrentPhase(pipeline);
+    if (!fanoutOwnsCurrentSession && currentSession?.status === "running") {
+      targets.push({
+        agent: sessionAgent(pipeline, currentSession),
+        sessionId: currentSession.sdkSessionId,
+      });
+    }
+    const uniqueTargets = Array.from(
+      new Map(targets.map((target) => [target.sessionId, target])).values(),
+    );
+    const mirroredSessionIds = new Set(
+      fanout.reviewers.flatMap((reviewer) =>
+        reviewer.providerSessionId ? [reviewer.providerSessionId] : [],
+      ),
+    );
+    if (fanout.consolidation) mirroredSessionIds.add(fanout.consolidation.providerSessionId);
+    for (const target of uniqueTargets) mirroredSessionIds.add(target.sessionId);
+    for (const sessionId of mirroredSessionIds) {
+      const session = pipeline.sessions.find((candidate) => candidate.sdkSessionId === sessionId);
+      if (session?.status === "running") session.status = sessionStatus;
+    }
+    const results = await Promise.allSettled(
+      uniqueTargets.map(async ({ agent, sessionId }) => {
+        await (await this.provider(pipeline, agent)).abort(sessionId);
+      }),
+    );
+    return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   }
 
   async remove(pipelineId: string): Promise<void> {
     const record = await this.storage.getBuildPipeline(pipelineId);
-    if (record && isBuildPipeline(record.snapshot) && isActiveBuildPhase(record.snapshot.phase)) {
+    if (
+      record &&
+      isBuildPipeline(record.snapshot) &&
+      (isActiveBuildPhase(record.snapshot.phase) || record.snapshot.reviewFanout !== undefined)
+    ) {
       await this.cancel(pipelineId);
     }
     await this.storage.deleteBuildPipeline(pipelineId);

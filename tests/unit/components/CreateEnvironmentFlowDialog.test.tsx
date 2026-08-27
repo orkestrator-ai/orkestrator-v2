@@ -852,7 +852,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("switch", { name: /Launch agent/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Launch agent/i }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => expect(updateEnvironmentAgentSettingsMock).toHaveBeenCalled());

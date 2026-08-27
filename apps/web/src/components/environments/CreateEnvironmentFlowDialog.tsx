@@ -13,10 +13,12 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  createFeatureBuild,
   getContainerGitHubCredentialStatus,
   updateEnvironmentAgentSettings,
   type GitHubCredentialStatus,
 } from "@/lib/backend";
+import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
 import { useClaudeOptionsStore, useConfigStore, useProjectStore, useUIStore } from "@/stores";
 import type { StartEnvironmentOptions } from "@/hooks/useEnvironments";
@@ -50,8 +52,16 @@ interface CreateEnvironmentFlowDialogProps extends CreateEnvironmentFlowOperatio
   projectName?: string;
 }
 
+/**
+ * A create that is waiting for the user to answer the GitHub credential warning.
+ *
+ * It carries the work rather than the form it came from, because two different
+ * forms reach it now: creating a plain environment, and starting a feature
+ * build. Both clone the repository, so both deserve the same warning.
+ */
 interface PendingGitHubCredentialWarning {
-  options: ClaudeOptions;
+  environmentType: EnvironmentType;
+  create: () => Promise<boolean>;
   status: GitHubCredentialStatus | null;
   resolve: (created: boolean) => void;
   settled: boolean;
@@ -161,14 +171,14 @@ export function CreateEnvironmentFlowDialog({
     }
   }, [settleCredentialWarning]);
 
-  const canCreateEnvironment = useCallback((options: ClaudeOptions): boolean => {
-    if (options.environmentType === "containerized" && !dockerAvailableRef.current) {
+  const canCreateEnvironment = useCallback((environmentType: EnvironmentType): boolean => {
+    if (environmentType === "containerized" && !dockerAvailableRef.current) {
       toast.warning("Docker is not running", {
         description: "Choose a local worktree environment or start Docker.",
       });
       return false;
     }
-    if (options.environmentType === "local" && !localEnvironmentAvailableRef.current) {
+    if (environmentType === "local" && !localEnvironmentAvailableRef.current) {
       toast.warning("Local worktrees are unavailable", {
         description: "Add a local checkout for this project before creating a local environment.",
       });
@@ -203,7 +213,7 @@ export function CreateEnvironmentFlowDialog({
   }, [cancelPendingCredentialFlow]);
 
   const performCreate = async (options: ClaudeOptions): Promise<boolean> => {
-    if (!projectId || !canCreateEnvironment(options)) return false;
+    if (!projectId || !canCreateEnvironment(options.environmentType)) return false;
 
     setIsCreating(true);
     try {
@@ -262,11 +272,20 @@ export function CreateEnvironmentFlowDialog({
     }
   };
 
-  const handleCreate = async (options: ClaudeOptions): Promise<boolean> => {
-    if (!projectId || !canCreateEnvironment(options)) return false;
-    if (options.environmentType === "local") {
-      return performCreate(options);
-    }
+  /**
+   * Runs the create behind the GitHub credential check.
+   *
+   * Local worktrees skip it: they reuse the host checkout rather than cloning,
+   * so a missing credential cannot stop them. A container clones, and a private
+   * repository that fails to clone leaves a broken environment behind, so the
+   * warning happens before any of it is created.
+   */
+  const withGitHubCredentialPreflight = async (
+    environmentType: EnvironmentType,
+    create: () => Promise<boolean>,
+  ): Promise<boolean> => {
+    if (!projectId || !canCreateEnvironment(environmentType)) return false;
+    if (environmentType === "local") return create();
 
     cancelPendingCredentialFlow();
     let cancelPreflight!: () => void;
@@ -295,20 +314,19 @@ export function CreateEnvironmentFlowDialog({
       return false;
     }
     setIsCreating(false);
-    if (!canCreateEnvironment(options)) return false;
+    if (!canCreateEnvironment(environmentType)) return false;
 
     const status = "status" in result ? result.status : null;
     if ("error" in result) {
       console.error("Failed to check GitHub credential status:", result.error);
     }
 
-    if (status?.available) {
-      return performCreate(options);
-    }
+    if (status?.available) return create();
 
     return new Promise<boolean>((resolve) => {
-      const pending = {
-        options,
+      const pending: PendingGitHubCredentialWarning = {
+        environmentType,
+        create,
         status,
         resolve,
         settled: false,
@@ -319,6 +337,41 @@ export function CreateEnvironmentFlowDialog({
     });
   };
 
+  const handleCreate = (options: ClaudeOptions): Promise<boolean> =>
+    withGitHubCredentialPreflight(options.environmentType, () => performCreate(options));
+
+  /**
+   * Starts a feature build.
+   *
+   * One backend call does all of it — ticket, environment, pipeline — and the
+   * backend also publishes the build tab, so there is nothing for this dialog
+   * to open or poll afterwards. Selecting the project is the only local step,
+   * and it is presentation.
+   */
+  const performFeatureBuild = async (input: CreateFeatureBuildInput): Promise<boolean> => {
+    if (!projectId) return false;
+    setIsCreating(true);
+    try {
+      await createFeatureBuild(input);
+      setProjectCollapsed(projectId, false);
+      toast.success("Build started", {
+        description: "The ticket was added and its environment is being created.",
+      });
+      return true;
+    } catch (error) {
+      console.error("Failed to start feature build:", error);
+      toast.error("Could not start the build", {
+        description: error instanceof Error ? error.message : "An unexpected error occurred.",
+      });
+      return false;
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleCreateFeatureBuild = (input: CreateFeatureBuildInput): Promise<boolean> =>
+    withGitHubCredentialPreflight(input.environmentType, () => performFeatureBuild(input));
+
   const dismissCredentialWarning = () => {
     if (isCreating) return;
     const pending = pendingCredentialWarningRef.current;
@@ -328,14 +381,14 @@ export function CreateEnvironmentFlowDialog({
   const createWithoutGitHubCredential = async () => {
     const pending = pendingCredentialWarningRef.current;
     if (!pending || pending.creating) return;
-    if (!canCreateEnvironment(pending.options)) {
+    if (!canCreateEnvironment(pending.environmentType)) {
       settleCredentialWarning(pending, { created: false });
       return;
     }
     pending.creating = true;
 
     try {
-      const created = await performCreate(pending.options);
+      const created = await pending.create();
       settleCredentialWarning(pending, { created });
     } catch (error) {
       console.error("Failed to create environment:", error);
@@ -362,6 +415,7 @@ export function CreateEnvironmentFlowDialog({
         open={open}
         onOpenChange={onOpenChange}
         onCreate={handleCreate}
+        onCreateFeatureBuild={handleCreateFeatureBuild}
         isLoading={isCreating}
         projectId={projectId}
         projectName={projectName}

@@ -8,6 +8,7 @@ import type {
   BuildPipeline,
   BuildPipelineAgent,
   BuildPipelineSource,
+  BuildStepConfig,
   BuildStepConfigs,
   PipelineSession,
   PendingPipelineInteractionResolution,
@@ -195,6 +196,14 @@ export function pipelineAgents(pipeline: BuildPipeline): Set<BuildPipelineAgent>
     const agent = pipeline.steps?.[key]?.agent;
     if (agent) agents.add(agent);
   }
+  // A multi-reviewer pipeline holds a provider per reviewer harness, and those
+  // are not reachable through `steps.review` alone.
+  for (const reviewer of pipeline.reviewers ?? []) {
+    agents.add(reviewer.agent);
+  }
+  for (const reviewer of pipeline.reviewFanout?.reviewers ?? []) {
+    agents.add(reviewer.agent as BuildPipelineAgent);
+  }
   for (const session of pipeline.sessions) {
     agents.add(sessionAgent(pipeline, session));
   }
@@ -241,6 +250,29 @@ export function normalizeSteps(steps: BuildStepConfigs | undefined): BuildStepCo
     };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+/**
+ * Drops empty selections from a reviewer list, and drops the list entirely when
+ * it names one reviewer.
+ *
+ * A single-entry list is exactly the classic one-reviewer stage, and storing it
+ * would make every such pipeline take the fan-out path for no benefit — a
+ * second session, a consolidation turn, and a merge of one report into itself.
+ */
+export function normalizeReviewers(
+  reviewers: BuildStepConfig[] | undefined,
+): BuildStepConfig[] | undefined {
+  if (!reviewers || reviewers.length <= 1) return undefined;
+  return reviewers.map((reviewer) => {
+    const model = stepModel(reviewer.agent, reviewer.model);
+    const reasoningEffort = reviewer.reasoningEffort?.trim();
+    return {
+      agent: reviewer.agent,
+      ...(model ? { model } : {}),
+      ...(reasoningEffort && reasoningEffort !== "default" ? { reasoningEffort } : {}),
+    };
+  });
 }
 
 export function sessionPhaseFor(phase: ResumableBuildPhase): PipelineSessionPhase | null {

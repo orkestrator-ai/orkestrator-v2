@@ -2,6 +2,7 @@ import type { CommandRegistrar, RegistryDependencies } from "./commands-registry
 import { isStartBuildPipelineInput } from "./commands-dependencies.js";
 import type { StartBuildPipelineInput } from "./commands-dependencies.js";
 import { asString, asBoolean, asNonBlankString, toClientEnvironment } from "./commands-helpers.js";
+import { createFeatureBuild } from "./feature-build.js";
 
 export function registerBuildPipelineCommands(
   register: CommandRegistrar,
@@ -15,6 +16,11 @@ export function registerBuildPipelineCommands(
     }
     return context.buildPipelines.start(args as StartBuildPipelineInput);
   });
+  /**
+   * Creates the ticket and the build for it in one backend-owned step, so a
+   * renderer that navigates away mid-flight cannot leave one without the other.
+   */
+  register("create_feature_build", (args, context) => createFeatureBuild(args, context));
   register("pause_build_pipeline", ({ pipelineId }, context) => {
     if (!context.buildPipelines) throw new Error("Build pipeline supervisor is unavailable");
     return context.buildPipelines.pause(asNonBlankString(pipelineId, "pipelineId"));

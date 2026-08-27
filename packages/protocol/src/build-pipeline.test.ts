@@ -8,13 +8,16 @@ import {
   isBuildPipeline,
   isBuildStepConfigs,
   isStartBuildPipelineInput,
+  pipelineReviewerConfigs,
   stepKeyForSessionPhase,
+  usesReviewFanout,
   MAX_BUILD_PIPELINE_ITERATIONS,
   MAX_PIPELINE_USER_MESSAGES,
   MAX_PIPELINE_USER_MESSAGE_LENGTH,
   isVerificationVerdict,
   VERIFICATION_VERDICT_SCHEMA,
   type BuildPipeline,
+  type BuildStepConfig,
   type BuildStepKey,
   type PipelineSessionPhase,
 } from "./build-pipeline.js";
@@ -1326,6 +1329,62 @@ describe("build pipeline protocol", () => {
     // Absent is not malformed: every step falls back to the repository default.
     expect(isBuildPipeline({ ...base, steps: undefined })).toBe(true);
     expect(isStartBuildPipelineInput({ ...input, steps: undefined })).toBe(true);
+  });
+
+  test("carries a reviewer panel only when it names more than one reviewer", () => {
+    const base = snapshot();
+    const input = {
+      taskId: base.taskId,
+      projectId: base.projectId,
+      taskTitle: base.taskTitle,
+      taskSnapshot: base.taskSnapshot,
+      environmentType: base.environmentType,
+      agentType: base.agentType,
+    };
+    const reviewers: BuildStepConfig[] = [
+      { agent: "claude", model: "opus" },
+      { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" },
+    ];
+    expect(isStartBuildPipelineInput({ ...input, reviewers })).toBe(true);
+    expect(isBuildPipeline({ ...base, reviewers })).toBe(true);
+    // A pipeline started before fan-out existed has none, and reads its single
+    // reviewer out of `steps.review` instead.
+    expect(pipelineReviewerConfigs({ ...base, reviewers: undefined })).toEqual([
+      { agent: base.agentType },
+    ]);
+    expect(usesReviewFanout({ ...base, reviewers })).toBe(true);
+    expect(usesReviewFanout({ ...base, reviewers: undefined })).toBe(false);
+    for (const malformed of [null, [], "claude", [{ agent: "gemini", model: "x" }]]) {
+      expect(isStartBuildPipelineInput({ ...input, reviewers: malformed })).toBe(false);
+      expect(isBuildPipeline({ ...base, reviewers: malformed })).toBe(false);
+    }
+  });
+
+  test("validates the environment options a launcher forwards to provisioning", () => {
+    const base = snapshot();
+    const input = {
+      taskId: base.taskId,
+      projectId: base.projectId,
+      taskTitle: base.taskTitle,
+      taskSnapshot: base.taskSnapshot,
+      environmentType: base.environmentType,
+      agentType: base.agentType,
+    };
+    const environmentOptions = {
+      name: "feature-dark-mode",
+      networkAccessMode: "restricted",
+      portMappings: [{ containerPort: 5173, hostPort: 5173, protocol: "tcp" }],
+    };
+    expect(isStartBuildPipelineInput({ ...input, environmentOptions })).toBe(true);
+    expect(isBuildPipeline({ ...base, environmentOptions })).toBe(true);
+    for (const malformed of [
+      { networkAccessMode: "open" },
+      { portMappings: [{ containerPort: 70000, hostPort: 1, protocol: "tcp" }] },
+      { portMappings: [{ containerPort: 1, hostPort: 1, protocol: "sctp" }] },
+      { unexpected: true },
+    ]) {
+      expect(isStartBuildPipelineInput({ ...input, environmentOptions: malformed })).toBe(false);
+    }
   });
 
   test("records the harness a session ran on, and only a known one", () => {

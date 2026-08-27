@@ -334,11 +334,12 @@ describe("resolveAgentDefaults", () => {
     expect(screen.queryByRole("radiogroup", { name: "Default Agent" }) === null).toBe(true);
     expect(screen.queryByRole("combobox", { name: "Reasoning effort" }) === null).toBe(true);
     expect(getAgentModelPicker()).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "Use TUI" }) === null).toBe(true);
     expect(
-      (screen.getByRole("checkbox", { name: "Use TUI" }) as HTMLButtonElement).getAttribute(
+      (screen.getByRole("checkbox", { name: "Launch Agent" }) as HTMLButtonElement).getAttribute(
         "data-state",
       ),
-    ).toBe("unchecked");
+    ).toBe("checked");
   });
 
   test("starts on the prompt tab and preserves values while moving between mobile sections", () => {
@@ -401,7 +402,7 @@ describe("resolveAgentDefaults", () => {
     const panels = {
       Prompt: screen.getByLabelText(/Initial Prompt/i).closest('[role="tabpanel"]'),
       Setup: screen.getByLabelText(/Environment Name/i).closest('[role="tabpanel"]'),
-      Agent: screen.getByRole("switch", { name: "Launch Agent" }).closest('[role="tabpanel"]'),
+      Agent: screen.getByRole("checkbox", { name: "Launch Agent" }).closest('[role="tabpanel"]'),
       Access: screen.getByRole("button", { name: "Restricted" }).closest('[role="tabpanel"]'),
       Ports: screen
         .getByRole("button", { name: /Port Configuration/ })
@@ -499,14 +500,14 @@ describe("resolveAgentDefaults", () => {
     );
 
     expect(screen.getByRole("tab", { name: "Prompt" }).getAttribute("aria-selected")).toBe("true");
-    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
 
     await waitFor(() => {
       expect(screen.getByRole("tab", { name: "Agent" }).getAttribute("aria-selected")).toBe("true");
     });
     expect(
       screen
-        .getByRole("switch", { name: "Launch Agent" })
+        .getByRole("checkbox", { name: "Launch Agent" })
         .closest('[role="tabpanel"]')
         ?.getAttribute("data-mobile-transition"),
     ).toBe("forward");
@@ -581,7 +582,7 @@ describe("resolveAgentDefaults", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Restricted" }));
     fireEvent.click(screen.getByRole("button", { name: /Local/ }));
-    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -595,9 +596,9 @@ describe("resolveAgentDefaults", () => {
       );
     });
     expect((screen.getByLabelText(/Environment Name/i) as HTMLInputElement).value).toBe("");
-    expect(screen.getByRole("switch", { name: "Launch Agent" }).getAttribute("aria-checked")).toBe(
-      "true",
-    );
+    expect(
+      screen.getByRole("checkbox", { name: "Launch Agent" }).getAttribute("aria-checked"),
+    ).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => {
@@ -719,7 +720,7 @@ describe("resolveAgentDefaults", () => {
       (screen.getByRole("button", { name: /Containerized/ }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(
-      (screen.getByRole("switch", { name: "Launch Agent" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("checkbox", { name: "Launch Agent" }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect((screen.getByLabelText(/Initial Prompt/i) as HTMLTextAreaElement).disabled).toBe(true);
 
@@ -727,7 +728,7 @@ describe("resolveAgentDefaults", () => {
     expect(onCreate).not.toHaveBeenCalled();
   });
 
-  test("submits codex terminal mode from the dialog", async () => {
+  test("submits the configured Codex mode alongside the prompt", async () => {
     useConfigStore.setState({
       config: {
         version: "1.0",
@@ -761,7 +762,6 @@ describe("resolveAgentDefaults", () => {
     render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
     await selectAgentPlatform("Codex");
-    fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
     fireEvent.change(screen.getByLabelText(/Initial Prompt/i), {
       target: { value: "Review the migration plan" },
     });
@@ -771,7 +771,7 @@ describe("resolveAgentDefaults", () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           agentType: "codex",
-          codexMode: "terminal",
+          codexMode: "native",
           initialPrompt: "Review the migration plan",
         }),
       );
@@ -953,11 +953,6 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByRole("checkbox", { name: "Use TUI" }).getAttribute("data-state")).toBe(
-        "checked",
-      ),
-    );
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() =>
@@ -1081,8 +1076,6 @@ describe("resolveAgentDefaults", () => {
     render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
 
     await waitFor(() => expect(getAgentModelPicker().textContent).toContain("Cursor Grok 4.6"));
-    const useTuiCheckbox = screen.queryByRole("checkbox", { name: "Use TUI" });
-    expect(useTuiCheckbox).toBeNull();
     openAgentModelPicker();
     expect(screen.getByRole("menuitemradio", { name: /Cursor Grok 4\.6/ })).toBeTruthy();
     expect(screen.getByRole("menuitemradio", { name: /Composer 2\.5/ })).toBeTruthy();
@@ -1417,7 +1410,7 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(getAgentModelPicker().getAttribute("aria-expanded")).toBe("false"));
   });
 
-  test("honors project mode defaults in the checkbox and submission", async () => {
+  test("honors project mode defaults in the submission", async () => {
     const config = structuredClone(defaultConfig);
     config.global.agentSettings = { ...config.global.agentSettings, defaultAgent: "claude" };
     config.global.agentSettings = {
@@ -1444,9 +1437,6 @@ describe("resolveAgentDefaults", () => {
       />,
     );
 
-    expect(screen.getByRole("checkbox", { name: "Use TUI" }).getAttribute("data-state")).toBe(
-      "unchecked",
-    );
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() =>
       expect(onCreate).toHaveBeenCalledWith(
@@ -2543,17 +2533,26 @@ describe("resolveAgentDefaults", () => {
       expectedMode: "native",
     },
   ] as const)(
-    "submits $agentLabel $selectedMode mode from the dialog",
-    async ({ agentLabel, agentType, selectedMode, expectedField, expectedMode }) => {
+    // The dialog no longer offers a per-environment mode override, so what it
+    // submits is exactly the platform's own Settings column.
+    "submits $agentLabel $selectedMode mode from Settings",
+    async ({ agentLabel, agentType, expectedField, expectedMode }) => {
+      const config = structuredClone(defaultConfig);
+      config.global.agentSettings = {
+        ...config.global.agentSettings,
+        platforms: {
+          ...config.global.agentSettings?.platforms,
+          [agentType]: {
+            ...config.global.agentSettings?.platforms?.[agentType],
+            mode: expectedMode,
+          },
+        },
+      };
+      useConfigStore.setState({ config });
       const onCreate = mock(async () => {});
       render(<CreateEnvironmentDialog open={true} onOpenChange={() => {}} onCreate={onCreate} />);
 
       await selectAgentPlatform(agentLabel);
-      const useTui = screen.getByRole("checkbox", { name: "Use TUI" });
-      const isTerminal = useTui.getAttribute("data-state") === "checked";
-      if ((selectedMode === "Terminal") !== isTerminal) {
-        fireEvent.click(screen.getByRole("checkbox", { name: "Use TUI" }));
-      }
       fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
       await waitFor(() => {
@@ -2574,7 +2573,7 @@ describe("resolveAgentDefaults", () => {
     fireEvent.change(screen.getByLabelText(/Environment Name/i), {
       target: { value: "  local-review  " },
     });
-    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
 
     await waitFor(() => {
@@ -3021,7 +3020,7 @@ describe("resolveAgentDefaults", () => {
     await Promise.resolve();
     expect(mockReadImage).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
     await waitFor(() => {
       expect(screen.queryByLabelText(/Initial Prompt/i) === null).toBe(true);
     });
@@ -3437,9 +3436,9 @@ describe("resolveAgentDefaults", () => {
     fireEvent.drop(screen.getByRole("dialog"), {
       dataTransfer: attachmentDataTransfer([disabledFile]),
     });
-    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
     await act(async () => disabledBuffer.resolve(new TextEncoder().encode("late").buffer));
-    fireEvent.click(screen.getByRole("switch", { name: "Launch Agent" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Launch Agent" }));
     expect(screen.queryByText("disabled.txt") === null).toBe(true);
     expect(toastSuccessMock).not.toHaveBeenCalled();
   });
@@ -3651,5 +3650,180 @@ describe("resolveAgentDefaults", () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect((nameInput as HTMLInputElement).value).toBe("Keep this name");
+  });
+});
+
+describe("CreateEnvironmentDialog feature builds", () => {
+  /** Opens the Build section's feature option and fills the ticket. */
+  function chooseFeature(fields: {
+    name?: string;
+    description?: string;
+    acceptanceCriteria?: string;
+  }) {
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    if (fields.name !== undefined) {
+      fireEvent.change(screen.getByLabelText(/Feature name/i), {
+        target: { value: fields.name },
+      });
+    }
+    if (fields.description !== undefined) {
+      fireEvent.change(screen.getByLabelText(/^Description$/i), {
+        target: { value: fields.description },
+      });
+    }
+    if (fields.acceptanceCriteria !== undefined) {
+      fireEvent.change(screen.getByLabelText(/Acceptance criteria/i), {
+        target: { value: fields.acceptanceCriteria },
+      });
+    }
+  }
+
+  test("starts on the prompt option and swaps the fields when a feature is chosen", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+
+    expect(screen.getByLabelText(/Initial Prompt/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/Feature name/i) === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+
+    expect(screen.getByLabelText(/Feature name/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Acceptance criteria/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/Initial Prompt/i) === null).toBe(true);
+  });
+
+  test("submits the ticket to the feature build handler instead of creating an environment", async () => {
+    const onCreate = mock(async () => {});
+    const onCreateFeatureBuild = mock(async () => {});
+    const onOpenChange = mock(() => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={onOpenChange}
+        onCreate={onCreate}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({
+      name: "  Dark mode toggle  ",
+      description: "Adds a toggle to the header.",
+      acceptanceCriteria: "The preference survives a reload.",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
+    expect(onCreate).not.toHaveBeenCalled();
+    const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    expect(request.projectId).toBe("project-1");
+    expect(request.title).toBe("Dark mode toggle");
+    expect(request.acceptanceCriteria).toBe("The preference survives a reload.");
+    expect(request.environmentType).toBe("containerized");
+    // Closed models panel means no pinned steps: the backend applies the same
+    // defaults it would have used anyway.
+    expect(request.steps).toBeUndefined();
+    expect(typeof request.requestId).toBe("string");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("will not submit a feature with no name", () => {
+    const onCreateFeatureBuild = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "   " });
+    expect(
+      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  test("cannot start a feature build when the caller offers no handler", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+      />,
+    );
+
+    chooseFeature({ name: "Dark mode toggle" });
+    expect(
+      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  test("offers a model per step behind Advanced, with two reviewers by default", async () => {
+    const onCreateFeatureBuild = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Dark mode toggle" });
+    // The panel is folded away until it is asked for.
+    expect(screen.queryByRole("switch", { name: "Customize models" }) === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
+
+    expect(screen.getByLabelText("Build agent, model and reasoning")).toBeTruthy();
+    expect(screen.getByLabelText("Address issues agent, model and reasoning")).toBeTruthy();
+    expect(screen.getByLabelText("Pull request agent, model and reasoning")).toBeTruthy();
+    expect(screen.getByLabelText("Resolve conflicts agent, model and reasoning")).toBeTruthy();
+    // Verify is deliberately absent: it runs on the address model.
+    expect(screen.queryByLabelText(/^Verify agent/) === null).toBe(true);
+    expect(screen.getByLabelText("Review 1 agent, model and reasoning")).toBeTruthy();
+    expect(screen.getByLabelText("Review 2 agent, model and reasoning")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
+    const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    expect((request.reviewers as unknown[]).length).toBe(2);
+    expect((request.steps as Record<string, unknown>).verify).toBeUndefined();
+  });
+
+  test("adds and removes reviewers, and never removes the last one", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+
+    chooseFeature({ name: "Dark mode toggle" });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add review" }));
+    expect(screen.getByLabelText("Review 3 agent, model and reasoning")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove review 3" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove review 2" }));
+    expect(screen.queryByLabelText("Review 2 agent, model and reasoning") === null).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Remove review 1" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });

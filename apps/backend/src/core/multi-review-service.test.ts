@@ -2740,7 +2740,9 @@ test("MultiReviewService retries a failed reviewer without stranding its provide
     });
 
     const retried = await service.retry(started.id);
-    expect(provider.aborted).toEqual(["session-1"]);
+    // The idle-result bound stops the parked session immediately; retry
+    // repeats the best-effort abort before forgetting its durable id.
+    expect(provider.aborted).toEqual(["session-1", "session-1"]);
     expect(retried.phase).toBe("reviewing");
     expect(retried.error).toBeUndefined();
     expect(retried.reviewers[0]?.status).toBe("pending");

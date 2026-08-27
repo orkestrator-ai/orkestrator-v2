@@ -20,7 +20,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -78,6 +77,14 @@ import type { InitialPromptImageAttachment } from "@/lib/initial-prompt-attachme
 import { buildReviewModelCatalog, includeMissingOpenCodeModels } from "@/lib/review-launch-options";
 import { effortLabel, modelsForAgent } from "@/lib/agent-launch";
 import { resolveCreateEnvironmentAgentDefaults } from "@/lib/create-environment-agent-defaults";
+import { FeatureBuildFields } from "./FeatureBuildFields";
+import {
+  defaultFeatureBuildModels,
+  featureBuildRequest,
+  type BuildIntent,
+  type FeatureBuildModelState,
+} from "@/lib/feature-build-launch";
+import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import {
   getCachedOpenCodeModelCatalog,
   ensureHostPiModelCatalog,
@@ -220,6 +227,14 @@ interface CreateEnvironmentDialogProps {
   defaultPortMappings?: PortMapping[];
   /** Whether this project has a host checkout that can own local worktrees. */
   localEnvironmentAvailable?: boolean;
+  /**
+   * Starts a feature build: one backend request that creates the Kanban ticket,
+   * the environment and the pipeline. Absent when the caller cannot build.
+   *
+   * Return false when creation has been deferred or cancelled by a preflight,
+   * matching {@link onCreate}.
+   */
+  onCreateFeatureBuild?: (input: CreateFeatureBuildInput) => Promise<void | boolean>;
 }
 
 // Persist draft prompt text per project across dialog open/close within the session
@@ -229,6 +244,7 @@ export function CreateEnvironmentDialog({
   open,
   onOpenChange,
   onCreate,
+  onCreateFeatureBuild,
   isLoading = false,
   projectId,
   projectName,
@@ -462,6 +478,32 @@ export function CreateEnvironmentDialog({
       }),
     [configuredAgentDefaults, enabledAgentPlatforms, modelCatalog],
   );
+  /**
+   * The models "Customize models" opens on.
+   *
+   * Every step reads its own Settings entry — the same entries the review,
+   * multi-review, PR and resolve launchers use — so the panel agrees with what
+   * a direct click on those actions would run. The build step follows the
+   * dialog's own Default Agent instead, because that is the decision the user
+   * has already made a few controls above.
+   */
+  const defaultFeatureModels = useMemo(
+    () =>
+      defaultFeatureBuildModels({
+        catalog: modelCatalog,
+        build: {
+          agent: initialAgentDefaults.agent,
+          model: initialAgentDefaults.model,
+          reasoningEffort: initialAgentDefaults.reasoningEffort,
+        },
+        review: resolvedActionDefault(agentTiers, "review", enabledAgentPlatforms),
+        review2: resolvedActionDefault(agentTiers, "review2", enabledAgentPlatforms),
+        address: resolvedActionDefault(agentTiers, "fixReviewIssues", enabledAgentPlatforms),
+        pr: resolvedActionDefault(agentTiers, "pr", enabledAgentPlatforms),
+        resolve: resolvedActionDefault(agentTiers, "resolve", enabledAgentPlatforms),
+      }),
+    [agentTiers, enabledAgentPlatforms, initialAgentDefaults, modelCatalog],
+  );
   const getInitialAgentSelection = useCallback(
     (nextAgent: AgentType) => {
       const defaults = resolveCreateEnvironmentAgentDefaults({
@@ -490,6 +532,25 @@ export function CreateEnvironmentDialog({
   const [piMode, setPiMode] = useState<AgentStyle>(initialAgentDefaults.piMode);
   const [model, setModel] = useState(initialAgentDefaults.model);
   const [reasoningEffort, setReasoningEffort] = useState(initialAgentDefaults.reasoningEffort);
+  const [buildIntent, setBuildIntent] = useState<BuildIntent>("prompt");
+  const [featureName, setFeatureName] = useState("");
+  const [featureDescription, setFeatureDescription] = useState("");
+  const [featureAcceptanceCriteria, setFeatureAcceptanceCriteria] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [customizeModels, setCustomizeModels] = useState(false);
+  const [featureModels, setFeatureModels] = useState<FeatureBuildModelState | null>(null);
+  /**
+   * Idempotency key for the feature build.
+   *
+   * Minted once per dialog opening so a retry after a lost response returns the
+   * same ticket and the same pipeline rather than a second of each. Cleared on
+   * a successful create, so the next feature gets its own key.
+   */
+  const featureRequestIdRef = useRef(createUuid());
+  // Held as null until the panel is first shown so that reopening the dialog,
+  // or a catalogue arriving late, re-resolves the defaults instead of pinning
+  // whatever was known on first render.
+  const effectiveFeatureModels = featureModels ?? defaultFeatureModels;
   const [initialPrompt, setInitialPrompt] = useState("");
   const [initialPromptAttachments, setInitialPromptAttachments] = useState<
     InitialPromptImageAttachment[]
@@ -609,6 +670,15 @@ export function CreateEnvironmentDialog({
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
+    setBuildIntent("prompt");
+    setFeatureName("");
+    setFeatureDescription("");
+    setFeatureAcceptanceCriteria("");
+    setAdvancedOpen(false);
+    setCustomizeModels(false);
+    // Back to null rather than to the current defaults, so the next opening
+    // re-resolves them against whatever the catalogue holds by then.
+    setFeatureModels(null);
   }, [defaultPortMappings, effectiveDefaultEnvironmentType, initialAgentDefaults]);
 
   const beginAttachmentOperation = useCallback(() => {
@@ -932,18 +1002,12 @@ export function CreateEnvironmentDialog({
     setReasoningEffort(initialAgentDefaults.reasoningEffort);
   }, [initialAgentDefaults, open]);
 
-  const selectedMode =
-    agentType === "claude"
-      ? claudeMode
-      : agentType === "opencode"
-        ? opencodeMode
-        : agentType === "codex"
-          ? codexMode
-          : agentType === "cursor"
-            ? "native"
-            : agentType === "grok"
-              ? grokMode
-              : piMode;
+  /**
+   * Terminal-versus-native is no longer a per-environment choice in this
+   * dialog: it comes from each platform's own Settings column, which is where
+   * every other launcher reads it from. The checkbox that used to override it
+   * here is now Launch Agent.
+   */
   const availableModels = modelsForAgent(modelCatalog, agentType);
   const pickerModels = enabledAgentPlatforms.flatMap((platform) =>
     modelsForAgent(modelCatalog, platform).map((option) => ({
@@ -996,25 +1060,6 @@ export function CreateEnvironmentDialog({
       setReasoningEffort(nextSelection.reasoningEffort);
     },
     [agentType, getInitialAgentSelection],
-  );
-
-  const setUseTui = useCallback(
-    (checked: boolean | "indeterminate") => {
-      agentSelectionTouchedRef.current = true;
-      const nextMode = checked === true ? "terminal" : "native";
-      if (agentType === "claude") {
-        setClaudeMode(nextMode);
-      } else if (agentType === "opencode") {
-        setOpencodeMode(nextMode);
-      } else if (agentType === "codex") {
-        setCodexMode(nextMode);
-      } else if (agentType === "grok") {
-        setGrokMode(nextMode);
-      } else if (agentType === "pi") {
-        setPiMode(nextMode);
-      }
-    },
-    [agentType],
   );
 
   const selectAgentModel = useCallback(
@@ -1140,6 +1185,32 @@ export function CreateEnvironmentDialog({
       }
 
       try {
+        if (buildIntent === "feature") {
+          if (!projectId || !onCreateFeatureBuild || !featureName.trim()) return;
+          const started = await onCreateFeatureBuild(
+            featureBuildRequest({
+              projectId,
+              title: featureName,
+              description: featureDescription,
+              acceptanceCriteria: featureAcceptanceCriteria,
+              environmentType,
+              environmentName,
+              networkAccessMode,
+              portMappings,
+              defaultAgent: agentType,
+              customizeModels,
+              models: effectiveFeatureModels,
+              requestId: featureRequestIdRef.current,
+            }),
+          );
+          if (started === false) return;
+          // A new key only after the request succeeded: a retry of a create
+          // whose response was lost has to reuse this one.
+          featureRequestIdRef.current = createUuid();
+          resetForm();
+          onOpenChange(false);
+          return;
+        }
         const created = await onCreate({
           environmentType,
           environmentName: environmentName.trim(),
@@ -1181,6 +1252,13 @@ export function CreateEnvironmentDialog({
       environmentName,
       launchAgent,
       agentType,
+      buildIntent,
+      customizeModels,
+      effectiveFeatureModels,
+      featureAcceptanceCriteria,
+      featureDescription,
+      featureName,
+      onCreateFeatureBuild,
       claudeMode,
       opencodeMode,
       codexMode,
@@ -1439,45 +1517,26 @@ export function CreateEnvironmentDialog({
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
               className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
             >
-              {/* Startup + mode row */}
-              <div className="space-y-2">
-                {/* Launch Agent Toggle */}
-                <div className="space-y-2">
-                  <Label className="text-sm">Container Startup</Label>
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label htmlFor="launch-agent" className="text-sm">
-                        Launch Agent
-                      </Label>
-                      <p className="text-xs text-muted-foreground">Auto-start when ready</p>
-                    </div>
-                    <Switch
-                      id="launch-agent"
-                      checked={launchAgent}
-                      onCheckedChange={setLaunchAgent}
-                      disabled={isLoading}
-                    />
-                  </div>
-                </div>
-              </div>
-
               {/* Compact agent launch configuration */}
-              <div className={cn("space-y-3 sm:col-span-2", !launchAgent && "opacity-50")}>
+              <div
+                className={cn(
+                  "space-y-3 sm:col-span-2",
+                  !launchAgent && buildIntent === "prompt" && "opacity-50",
+                )}
+              >
                 <div className="flex min-h-5 items-center justify-between gap-4">
                   <Label className="text-sm">Default Agent</Label>
-                  {agentType !== "cursor" && (
-                    <div className="flex items-center gap-2">
-                      <Checkbox
-                        id="use-tui"
-                        checked={selectedMode === "terminal"}
-                        onCheckedChange={setUseTui}
-                        disabled={isLoading || !launchAgent}
-                      />
-                      <Label htmlFor="use-tui" className="cursor-pointer text-sm font-normal">
-                        Use TUI
-                      </Label>
-                    </div>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="launch-agent"
+                      checked={launchAgent}
+                      onCheckedChange={(checked) => setLaunchAgent(checked === true)}
+                      disabled={isLoading}
+                    />
+                    <Label htmlFor="launch-agent" className="cursor-pointer text-sm font-normal">
+                      Launch Agent
+                    </Label>
+                  </div>
                 </div>
                 <div className="rounded-xl border border-border/70 bg-zinc-950/45 p-2">
                   <AgentModelPicker
@@ -1500,7 +1559,7 @@ export function CreateEnvironmentDialog({
                       reasoningOptions.find((option) => option.id === reasoningEffort)?.label
                     }
                     onReasoningChange={selectReasoningEffort}
-                    disabled={isLoading || !launchAgent}
+                    disabled={isLoading || (!launchAgent && buildIntent === "prompt")}
                     title="Choose agent, model, and reasoning"
                     className="min-h-9 w-full max-w-none justify-start md:max-w-none md:flex-1"
                   />
@@ -1642,78 +1701,98 @@ export function CreateEnvironmentDialog({
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
               className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
             >
-              {/* Initial Prompt */}
-              {launchAgent && (
-                <div className="space-y-2">
-                  <Label htmlFor="initial-prompt">
-                    Initial Prompt <span className="text-muted-foreground">(optional)</span>
-                  </Label>
-                  <Textarea
-                    ref={promptRef}
-                    id="initial-prompt"
-                    placeholder={
-                      agentType === "claude"
-                        ? "Enter a task for Claude to work on..."
-                        : agentType === "codex"
-                          ? "Enter a task for Codex to work on..."
-                          : "Enter a task for OpenCode to work on..."
-                    }
-                    value={initialPrompt}
-                    onChange={(e) => setInitialPrompt(e.target.value)}
-                    onKeyDown={handlePromptKeyDown}
-                    disabled={isLoading}
-                    rows={3}
-                    className="resize-y max-h-[calc(15*theme(lineHeight.normal)*1em)] overflow-y-auto"
-                  />
-                  {isDraggingAttachments && (
-                    <p className="rounded-md border border-dashed border-primary/70 bg-primary/10 px-3 py-2 text-center text-sm text-primary">
-                      Drop files to attach them to the initial prompt
-                    </p>
-                  )}
-                  {initialPromptAttachments.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {initialPromptAttachments.map((attachment) => (
-                        <div
-                          key={attachment.id}
-                          className={cn(
-                            "group relative h-16 overflow-hidden rounded-md border border-border bg-muted",
-                            attachment.type === "file"
-                              ? "flex w-40 items-center gap-2 px-2"
-                              : "w-16",
-                          )}
-                        >
-                          {attachment.type === "file" ? (
-                            <>
-                              <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-                              <span
-                                className="min-w-0 truncate pr-4 text-xs"
-                                title={attachment.name}
+              <FeatureBuildFields
+                intent={buildIntent}
+                onIntentChange={setBuildIntent}
+                name={featureName}
+                onNameChange={setFeatureName}
+                description={featureDescription}
+                onDescriptionChange={setFeatureDescription}
+                acceptanceCriteria={featureAcceptanceCriteria}
+                onAcceptanceCriteriaChange={setFeatureAcceptanceCriteria}
+                advancedOpen={advancedOpen}
+                onAdvancedOpenChange={setAdvancedOpen}
+                customizeModels={customizeModels}
+                onCustomizeModelsChange={setCustomizeModels}
+                models={effectiveFeatureModels}
+                onModelsChange={setFeatureModels}
+                catalog={modelCatalog}
+                enabledPlatforms={enabledAgentPlatforms}
+                disabled={isLoading}
+                promptFields={
+                  launchAgent ? (
+                    <div className="space-y-2">
+                      <Label htmlFor="initial-prompt">
+                        Initial Prompt <span className="text-muted-foreground">(optional)</span>
+                      </Label>
+                      <Textarea
+                        ref={promptRef}
+                        id="initial-prompt"
+                        placeholder={
+                          agentType === "claude"
+                            ? "Enter a task for Claude to work on..."
+                            : agentType === "codex"
+                              ? "Enter a task for Codex to work on..."
+                              : "Enter a task for OpenCode to work on..."
+                        }
+                        value={initialPrompt}
+                        onChange={(e) => setInitialPrompt(e.target.value)}
+                        onKeyDown={handlePromptKeyDown}
+                        disabled={isLoading}
+                        rows={3}
+                        className="resize-y max-h-[calc(15*theme(lineHeight.normal)*1em)] overflow-y-auto"
+                      />
+                      {isDraggingAttachments && (
+                        <p className="rounded-md border border-dashed border-primary/70 bg-primary/10 px-3 py-2 text-center text-sm text-primary">
+                          Drop files to attach them to the initial prompt
+                        </p>
+                      )}
+                      {initialPromptAttachments.length > 0 && (
+                        <div className="flex flex-wrap gap-2">
+                          {initialPromptAttachments.map((attachment) => (
+                            <div
+                              key={attachment.id}
+                              className={cn(
+                                "group relative h-16 overflow-hidden rounded-md border border-border bg-muted",
+                                attachment.type === "file"
+                                  ? "flex w-40 items-center gap-2 px-2"
+                                  : "w-16",
+                              )}
+                            >
+                              {attachment.type === "file" ? (
+                                <>
+                                  <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+                                  <span
+                                    className="min-w-0 truncate pr-4 text-xs"
+                                    title={attachment.name}
+                                  >
+                                    {attachment.name}
+                                  </span>
+                                </>
+                              ) : (
+                                <img
+                                  src={attachment.previewUrl}
+                                  alt={attachment.name}
+                                  className="h-full w-full object-cover"
+                                />
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => removeInitialPromptAttachment(attachment.id)}
+                                disabled={isLoading}
+                                className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
+                                aria-label={`Remove ${attachment.name}`}
                               >
-                                {attachment.name}
-                              </span>
-                            </>
-                          ) : (
-                            <img
-                              src={attachment.previewUrl}
-                              alt={attachment.name}
-                              className="h-full w-full object-cover"
-                            />
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => removeInitialPromptAttachment(attachment.id)}
-                            disabled={isLoading}
-                            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-                            aria-label={`Remove ${attachment.name}`}
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
+                                <X className="h-3 w-3" />
+                              </button>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      )}
                     </div>
-                  )}
-                </div>
-              )}
+                  ) : null
+                }
+              />
             </TabsContent>
           </Tabs>
         </form>
@@ -1735,7 +1814,10 @@ export function CreateEnvironmentDialog({
               pendingAttachmentOperations > 0 ||
               (environmentType === "containerized" &&
                 (!dockerAvailable || !validatePortMappings())) ||
-              (environmentType === "local" && !localEnvironmentAvailable)
+              (environmentType === "local" && !localEnvironmentAvailable) ||
+              // A feature build opens a ticket, so it needs something to call
+              // it. Everything else about the feature form is optional.
+              (buildIntent === "feature" && (!onCreateFeatureBuild || !featureName.trim()))
             }
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}

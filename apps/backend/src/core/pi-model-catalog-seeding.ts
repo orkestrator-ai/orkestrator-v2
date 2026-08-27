@@ -20,6 +20,8 @@ import {
 
 /** One host-wide first-use catalogue probe at a time. */
 let piCatalogDiscovery: Promise<AgentModel[]> | null = null;
+/** A user-requested follow-up probe, shared by concurrent manual refreshes. */
+let piCatalogForcedDiscovery: Promise<AgentModel[]> | null = null;
 
 /**
  * When the last probe produced no catalogue, as epoch milliseconds.
@@ -47,6 +49,7 @@ let piCatalogProbeSequence = 0;
  */
 export function resetPiModelCatalogSeedingState(): void {
   piCatalogDiscovery = null;
+  piCatalogForcedDiscovery = null;
   piCatalogEmptyProbeAt = null;
   piCatalogProbeSequence = 0;
 }
@@ -59,31 +62,59 @@ export function resetPiModelCatalogSeedingState(): void {
  * this starts the same bridge from its trusted package directory, reads only
  * `/global/models`, and always tears the process down before returning.
  */
-export function discoverHostPiModelCatalog(context: CommandContext): Promise<AgentModel[]> {
+export function discoverHostPiModelCatalog(
+  context: CommandContext,
+  force = false,
+): Promise<AgentModel[]> {
+  if (force) {
+    piCatalogEmptyProbeAt = null;
+    if (piCatalogForcedDiscovery) return piCatalogForcedDiscovery;
+    const preceding = piCatalogDiscovery;
+    const forced = (preceding ? preceding.catch(() => []) : Promise.resolve([]))
+      .then(() => {
+        // State may have changed while the earlier automatic probe was running;
+        // a manual refresh always starts a new generation after it settles.
+        piCatalogEmptyProbeAt = null;
+        return trackedDiscovery(context);
+      })
+      .finally(() => {
+        if (piCatalogForcedDiscovery === forced) piCatalogForcedDiscovery = null;
+        if (piCatalogDiscovery === forced) piCatalogDiscovery = null;
+      });
+    piCatalogForcedDiscovery = forced;
+    // Ordinary cache-first callers arriving while the forced refresh is queued
+    // join it instead of opening a third bridge between the two generations.
+    piCatalogDiscovery = forced;
+    return forced;
+  }
   if (
     piCatalogEmptyProbeAt !== null &&
     Date.now() - piCatalogEmptyProbeAt < PI_CATALOG_EMPTY_PROBE_BACKOFF_MS
   ) {
     return Promise.resolve([]);
   }
-  piCatalogDiscovery ??= runDiscovery(context)
-    .then(
-      (models) => {
-        if (models.length === 0) piCatalogEmptyProbeAt = Date.now();
-        return models;
-      },
-      (error: unknown) => {
-        // A probe that could not run is as expensive to repeat as one that ran
-        // and found nothing, so it arms the same backoff. The error still
-        // reaches this caller; only the retries within the window are dropped.
-        piCatalogEmptyProbeAt = Date.now();
-        throw error;
-      },
-    )
-    .finally(() => {
-      piCatalogDiscovery = null;
-    });
-  return piCatalogDiscovery;
+  if (piCatalogDiscovery) return piCatalogDiscovery;
+  const discovery = trackedDiscovery(context).finally(() => {
+    if (piCatalogDiscovery === discovery) piCatalogDiscovery = null;
+  });
+  piCatalogDiscovery = discovery;
+  return discovery;
+}
+
+function trackedDiscovery(context: CommandContext): Promise<AgentModel[]> {
+  return runDiscovery(context).then(
+    (models) => {
+      if (models.length === 0) piCatalogEmptyProbeAt = Date.now();
+      return models;
+    },
+    (error: unknown) => {
+      // A probe that could not run is as expensive to repeat as one that ran
+      // and found nothing, so it arms the same backoff. The error still
+      // reaches this caller; only the retries within the window are dropped.
+      piCatalogEmptyProbeAt = Date.now();
+      throw error;
+    },
+  );
 }
 
 async function runDiscovery(context: CommandContext): Promise<AgentModel[]> {

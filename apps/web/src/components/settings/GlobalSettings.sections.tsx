@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -83,6 +83,7 @@ import { AgentDefaultsPane } from "./agent/AgentDefaultsPane";
 import { AgentPlatformPane } from "./agent/AgentPlatformPane";
 import { useProjectModelCatalog } from "@/hooks/useBuildLaunchOptions";
 import { useUIStore } from "@/stores";
+import { refreshSettingsModelCatalog } from "./agent/refresh-model-catalog";
 import {
   MAX_DEBUG_LOG_RETENTION_DAYS,
   MIN_DEBUG_LOG_RETENTION_DAYS,
@@ -347,10 +348,34 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
   );
 
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
+  const [refreshingModelCatalog, setRefreshingModelCatalog] = useState<AgentPlatform | null>(null);
+  const refreshingModelCatalogRef = useRef<AgentPlatform | null>(null);
   // Repository-scoped so an OpenCode catalogue cached for the open project is
   // offered here too; the Claude/Codex/Cursor/Grok catalogues are global.
   const catalog = useProjectModelCatalog(selectedProjectId ?? "", true);
   const agentTiers = { global: agentSettings };
+
+  const refreshModelCatalog = useCallback(
+    async (platform: AgentPlatform) => {
+      if (refreshingModelCatalogRef.current) return;
+      refreshingModelCatalogRef.current = platform;
+      setRefreshingModelCatalog(platform);
+      try {
+        const result = await refreshSettingsModelCatalog(platform, selectedProjectId);
+        toast.success(`${AGENT_PLATFORM_LABELS[platform]} models refreshed (${result.modelCount})`);
+      } catch (error) {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : `Failed to refresh ${AGENT_PLATFORM_LABELS[platform]} models`,
+        );
+      } finally {
+        refreshingModelCatalogRef.current = null;
+        setRefreshingModelCatalog(null);
+      }
+    },
+    [selectedProjectId],
+  );
 
   const renderDefaults = () => (
     <AgentDefaultsPane
@@ -376,6 +401,8 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
       canInherit={false}
       catalog={catalog}
       disabled={isSaving}
+      onRefreshModels={() => void refreshModelCatalog(platform)}
+      refreshingModels={refreshingModelCatalog === platform}
     >
       {extras}
     </AgentPlatformPane>

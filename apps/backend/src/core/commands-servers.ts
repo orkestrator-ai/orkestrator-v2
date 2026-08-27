@@ -45,7 +45,6 @@ import type {
   AgentReasoningOption,
 } from "./commands-dependencies.js";
 import {
-  AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV,
   localServerProcesses,
   localCodexBridgeTokens,
   localClaudeBridgeTokens,
@@ -78,7 +77,6 @@ import {
   invalidatePendingPrMonitorSync,
   setMergeCleanupScheduler,
 } from "./commands-pr-monitor.js";
-import { resolveCursorApiKey, cursorApiKeyFingerprint } from "./commands-validation.js";
 import {
   resolveCodexBinary,
   resolveOpenCodeBinary,
@@ -98,7 +96,10 @@ import {
 import { getHostPort } from "./commands-container-exec.js";
 import { dockerExec } from "./commands-container-exec.js";
 import { conciseError, cleanupErrorMessage } from "./commands-error-text.js";
-import { getClaudeOAuthAccessToken, getHostClaudeCredentials } from "./commands-files.js";
+import {
+  applyClaudeHostCredentialEnvironment,
+  resolveCursorHostCredentialMaterial,
+} from "./host-agent-credentials.js";
 import { cursorSdkCredentialPath } from "./cursor-sdk-bridge.js";
 import type { OpenCodeAgentToolsOutcome, LocalServerKind } from "./commands-runtime-state.js";
 import type { CommandContext } from "./commands-context.js";
@@ -340,14 +341,20 @@ export function acpModelFetchTimeoutMs(kind: "cursor" | "grok" | "pi"): number {
   return kind === "pi" ? 35_000 : 8_000;
 }
 
+/** Host discovery starts cold and must cover each bridge's bounded 30s provider operation. */
+export const HOST_ACP_MODEL_FETCH_TIMEOUT_MS = 35_000;
+
 /** Read the normalized model rows from a known bridge endpoint. */
 export async function fetchAcpNormalizedModelsAt(
   port: number,
   authToken: string,
   kind: "cursor" | "grok" | "pi",
   timeoutMs?: number,
+  maximumTimeoutMs = acpModelFetchTimeoutMs(kind),
 ): Promise<AgentModel[]> {
-  return (await fetchAcpNormalizedModelsAtResult(port, authToken, kind, timeoutMs)).models;
+  return (
+    await fetchAcpNormalizedModelsAtResult(port, authToken, kind, timeoutMs, maximumTimeoutMs)
+  ).models;
 }
 
 /** Read models while distinguishing a valid empty catalogue from transport failure. */
@@ -356,6 +363,7 @@ export async function fetchAcpNormalizedModelsAtResult(
   authToken: string,
   kind: "cursor" | "grok" | "pi",
   timeoutMs?: number,
+  maximumTimeoutMs = acpModelFetchTimeoutMs(kind),
 ): Promise<AcpNormalizedModelsResult> {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/global/models`, {
@@ -363,12 +371,10 @@ export async function fetchAcpNormalizedModelsAtResult(
         Authorization: `Bearer ${authToken}`,
         "X-Orkestrator-Acp-Token": authToken,
       },
-      // A caller working to an overall deadline may narrow this, never widen it.
+      // The default is the interactive cap. Explicit discovery callers may
+      // supply a larger maximum that matches their provider-operation budget.
       signal: AbortSignal.timeout(
-        Math.min(
-          acpModelFetchTimeoutMs(kind),
-          Math.max(1_000, timeoutMs ?? Number.MAX_SAFE_INTEGER),
-        ),
+        Math.min(maximumTimeoutMs, Math.max(1_000, timeoutMs ?? Number.MAX_SAFE_INTEGER)),
       ),
     });
     if (!response.ok) return { status: "failed", models: [] };
@@ -735,21 +741,10 @@ export async function startLocalServerUnlocked(
   kind: LocalServerKind,
 ): Promise<{ port: number; pid: number; wasRunning: boolean; authToken?: string }> {
   const key = `${kind}:${environmentId}`;
-  const allowCursorCredentials =
-    context.runtimeFlavor !== "agent-test" || context.credentialSources?.has("cursor");
-  const cursorApiKey =
-    kind === "cursor" && allowCursorCredentials
-      ? resolveCursorApiKey((await context.storage.loadConfig()).global).apiKey
-      : undefined;
-  const agentTestHostHome = process.env.ORKESTRATOR_AGENT_TEST_HOST_HOME?.trim();
-  const cursorCredentialFingerprint =
-    kind === "cursor"
-      ? createHash("sha256")
-          .update(allowCursorCredentials ? "allowed" : "denied")
-          .update("\0")
-          .update(cursorApiKeyFingerprint(cursorApiKey))
-          .digest("hex")
-      : undefined;
+  const cursorCredentials =
+    kind === "cursor" ? await resolveCursorHostCredentialMaterial(context) : undefined;
+  const cursorApiKey = cursorCredentials?.apiKey;
+  const cursorCredentialFingerprint = cursorCredentials?.fingerprint;
   const existing = localServerProcesses.get(key);
   if (existing && !existing.killed && existing.pid) {
     const env = await context.storage.getEnvironment(environmentId);
@@ -827,19 +822,7 @@ export async function startLocalServerUnlocked(
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "claude-bridge");
     env.CLAUDE_CLI_PATH = resolveClaudeBinary(context);
-    if (context.runtimeFlavor === "agent-test" && context.credentialSources?.has("claude")) {
-      const hostConfigDir = process.env[AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_ENV]?.trim();
-      if (hostConfigDir) env.CLAUDE_CONFIG_DIR = hostConfigDir;
-      if (!env.ANTHROPIC_API_KEY && agentTestHostHome) {
-        const credentials = await getHostClaudeCredentials(
-          process.platform,
-          agentTestHostHome,
-          hostConfigDir,
-        );
-        const accessToken = getClaudeOAuthAccessToken(credentials);
-        if (accessToken) env.ANTHROPIC_AUTH_TOKEN = accessToken;
-      }
-    }
+    await applyClaudeHostCredentialEnvironment(context, env);
   } else if (kind === "codex") {
     command = resolveBunBinary(context);
     cwd = getBridgePath(context, "codex-bridge");

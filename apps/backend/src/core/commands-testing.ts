@@ -177,6 +177,9 @@ export const __testing = {
   getLocalServerProcess(key: string): ChildProcessWithoutNullStreams | undefined {
     return localServerProcesses.get(key);
   },
+  getLocalServerProcessCount(): number {
+    return localServerProcesses.size;
+  },
   releaseLocalServerOwnership,
   LOCAL_SERVER_HEALTH_ATTEMPTS,
   ACP_LOCAL_SERVER_HEALTH_ATTEMPTS,

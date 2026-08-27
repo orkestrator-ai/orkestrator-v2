@@ -73,6 +73,34 @@ export async function ensureHostPiModelCatalog(): Promise<
   return invoke("ensure_host_pi_model_catalog");
 }
 
+/** Force a provider's host catalogue to refresh without creating an environment. */
+type NonOpenCodeAgent = Exclude<
+  import("@orkestrator/protocol/agent-platforms").AgentPlatform,
+  "opencode"
+>;
+type HostModelCatalogRefreshResult = {
+  agent: import("@orkestrator/protocol/agent-platforms").AgentPlatform;
+  modelCount: number;
+};
+
+export function refreshHostAgentModelCatalog(
+  agent: "opencode",
+  projectId: string,
+): Promise<HostModelCatalogRefreshResult>;
+export function refreshHostAgentModelCatalog(
+  agent: NonOpenCodeAgent,
+  projectId?: never,
+): Promise<HostModelCatalogRefreshResult>;
+export async function refreshHostAgentModelCatalog(
+  agent: import("@orkestrator/protocol/agent-platforms").AgentPlatform,
+  projectId?: string,
+): Promise<HostModelCatalogRefreshResult> {
+  return invoke("refresh_host_agent_model_catalog", {
+    agent,
+    ...(projectId ? { projectId } : {}),
+  });
+}
+
 /** Backend-normalized model catalogue consumed by the provider-neutral composer. */
 export async function getNativeAgentModelCatalog(
   environmentId: string,

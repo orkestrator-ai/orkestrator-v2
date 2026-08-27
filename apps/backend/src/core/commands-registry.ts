@@ -35,6 +35,7 @@ import { registerSessionCommands } from "./commands-registry-sessions.js";
 import { registerTeardownCommands } from "./commands-registry-teardown.js";
 import { registerTerminalCommands } from "./commands-registry-terminal.js";
 import { registerToolingCommands } from "./commands-registry-tools.js";
+import { refreshHostModelCatalog } from "./host-model-catalog-refresh.js";
 
 export type { CommandRegistryOptions } from "./commands-registry-types.js";
 
@@ -125,6 +126,7 @@ export function createCommandRegistry(
     validatedClaudeModelCatalogs,
     extensionDiscoveryCache,
     runProjectCreationCommand,
+    refreshHostModelCatalog: options.modelCatalogRefresh ?? refreshHostModelCatalog,
     conditionalManifestSnapshot,
     schedulePendingEnvironmentRename,
   };

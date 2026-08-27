@@ -2478,4 +2478,41 @@ describe("App terminal overlay actions", () => {
       initialPrompt: "Create setup script",
     });
   });
+
+  test("create-script overlay applies the configured action default", async () => {
+    resetStores({
+      environments: [
+        {
+          ...makeEnvironment("env-visible", "project-1"),
+          status: "stopped",
+          agentSettings: {
+            defaultAgent: "claude",
+            actionDefaults: {
+              createScript: {
+                platform: "codex",
+                model: "gpt-5.6-sol",
+                reasoningEffort: "high",
+              },
+            },
+          },
+        },
+      ],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-visible",
+    });
+
+    render(<App />);
+    act(() => screen.getByTestId("create-script-env-visible").click());
+
+    await waitFor(() => {
+      expect(mockStartEnvironment).toHaveBeenCalledWith("env-visible", "Create setup script");
+    });
+    expect(useClaudeOptionsStore.getState().getOptions("env-visible")).toMatchObject({
+      launchAgent: true,
+      agentType: "codex",
+      initialPrompt: "Create setup script",
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
+  });
 });

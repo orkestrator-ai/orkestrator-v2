@@ -2083,6 +2083,26 @@ export function TerminalContainer({
     environmentId,
   ]);
 
+  // The registration effect above owns the callable surface and its teardown,
+  // while this keeps the count reactive as pane state changes. The create
+  // callback reads the store imperatively and therefore has stable identity;
+  // without this separate subscription, the context retained the count from
+  // mount even as tabs were added or removed.
+  const registeredTabCount = currentEnvState
+    ? getAllLeaves(currentEnvState.root).flatMap((leaf) => leaf.tabs).length
+    : 0;
+  useEffect(() => {
+    if (!isActive || !isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
+    setTabCount(registeredTabCount);
+  }, [
+    containerId,
+    isActive,
+    isEnvironmentRunning,
+    isLocalEnvironmentReady,
+    registeredTabCount,
+    setTabCount,
+  ]);
+
   // Handle drag start - track which tab is being dragged
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveDragId(event.active.id as string);

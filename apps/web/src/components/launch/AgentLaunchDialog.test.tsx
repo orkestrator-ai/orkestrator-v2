@@ -94,6 +94,27 @@ function submit() {
 }
 
 describe("AgentLaunchDialog", () => {
+  test("adapts the shared model picker for run-script creation", () => {
+    const { onConfirm } = renderDialog({
+      kind: "create-script",
+      targetBranch: undefined,
+      preferredModels: { claude: "claude-a" },
+      preferredReasoningEfforts: { claude: "high" },
+    });
+
+    expect(screen.getByRole("heading", { name: "Configure run script" })).toBeTruthy();
+    expect(screen.getByText(/orkestrator-ai.json/)).toBeTruthy();
+    expect(screen.getByText(/Claude · Claude A · high effort/)).toBeTruthy();
+    expect(screen.queryByText(/into main/) === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+    expect(onConfirm).toHaveBeenCalledWith({
+      agent: "claude",
+      model: "claude-a",
+      reasoningEffort: "high",
+    });
+  });
+
   test("adapts the shared model picker for conflict resolution", () => {
     const { onConfirm } = renderDialog({
       kind: "resolve-conflicts",

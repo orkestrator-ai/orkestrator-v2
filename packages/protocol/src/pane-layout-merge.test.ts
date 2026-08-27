@@ -122,6 +122,7 @@ describe("mergePersistedPaneLayouts", () => {
         environmentId: "env-1",
         containerId: "container-1",
         sessionId: "session-old",
+        requireExistingResumeSession: true,
       },
     };
     const makeInput = (tab: TabInfo) =>
@@ -157,6 +158,7 @@ describe("mergePersistedPaneLayouts", () => {
           environmentId: "env-1",
           containerId: "container-1",
           sessionId: "session-new",
+          requireExistingResumeSession: true,
         },
       },
     ]);

@@ -1580,6 +1580,25 @@ export function TerminalContainer({
         }
       }
 
+      // Selected durable workflows use caller-owned ids as idempotent focus
+      // intents. Other callers retain collision reporting so they can roll back
+      // any state they created specifically for a new tab.
+      const requestedTabId = options?.tabId?.trim();
+      if (requestedTabId) {
+        const openTab = allTabs.find((tab) => tab.id === requestedTabId);
+        if (openTab) {
+          if (options?.activateExistingTab !== true) {
+            console.warn("[TerminalContainer] Refusing duplicate tab ID:", requestedTabId);
+            return false;
+          }
+          const pane = usePaneLayoutStore.getState().findPaneWithTab(openTab.id, environmentId);
+          if (!pane) return false;
+          usePaneLayoutStore.getState().setActivePane(pane.id, environmentId);
+          usePaneLayoutStore.getState().setActiveTab(pane.id, openTab.id, environmentId);
+          return true;
+        }
+      }
+
       if (allTabs.length >= MAX_TABS) {
         rendererDebugLog("[TerminalContainer] Maximum tab limit reached:", MAX_TABS);
         showTabLimitReachedToast(MAX_TABS);
@@ -1629,12 +1648,7 @@ export function TerminalContainer({
         return true;
       }
 
-      const requestedTabId = options?.tabId?.trim();
       const newTabId = requestedTabId || createUniqueTabId("tab");
-      if (allTabs.some((tab) => tab.id === newTabId)) {
-        console.warn("[TerminalContainer] Refusing duplicate tab ID:", newTabId);
-        return false;
-      }
 
       if (type === "agent-native") {
         const newTab = createAgentNativeTab({
@@ -1690,6 +1704,7 @@ export function TerminalContainer({
           environmentId,
           isLocal: isLocalEnvironment,
           sessionId: options?.resumeSessionId,
+          requireExistingResumeSession: options?.requireExistingResumeSession,
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
@@ -1734,6 +1749,7 @@ export function TerminalContainer({
           initialReasoningEffort: options?.initialReasoningEffort,
           initialConversationMode: options?.initialConversationMode,
           sessionId: options?.resumeSessionId,
+          requireExistingResumeSession: options?.requireExistingResumeSession,
           deferPlatform: !prelockNativePlatform,
         });
         rendererDebugLog(
@@ -1761,6 +1777,7 @@ export function TerminalContainer({
           environmentId,
           isLocal: isLocalEnvironment,
           sessionId: options?.resumeSessionId,
+          requireExistingResumeSession: options?.requireExistingResumeSession,
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
@@ -1792,6 +1809,7 @@ export function TerminalContainer({
           environmentId,
           isLocal: isLocalEnvironment,
           sessionId: options?.resumeSessionId,
+          requireExistingResumeSession: options?.requireExistingResumeSession,
           initialPrompt: options?.initialPrompt,
           displayTitle: options?.displayTitle,
           isReviewTab: options?.isReviewTab,
@@ -2081,6 +2099,26 @@ export function TerminalContainer({
     setCreateFileTab,
     setOpenFilePaths,
     environmentId,
+  ]);
+
+  // The registration effect above owns the callable surface and its teardown,
+  // while this keeps the count reactive as pane state changes. The create
+  // callback reads the store imperatively and therefore has stable identity;
+  // without this separate subscription, the context retained the count from
+  // mount even as tabs were added or removed.
+  const registeredTabCount = currentEnvState
+    ? getAllLeaves(currentEnvState.root).flatMap((leaf) => leaf.tabs).length
+    : 0;
+  useEffect(() => {
+    if (!isActive || !isEnvironmentRunning || (!containerId && !isLocalEnvironmentReady)) return;
+    setTabCount(registeredTabCount);
+  }, [
+    containerId,
+    isActive,
+    isEnvironmentRunning,
+    isLocalEnvironmentReady,
+    registeredTabCount,
+    setTabCount,
   ]);
 
   // Handle drag start - track which tab is being dragged

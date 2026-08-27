@@ -37,6 +37,7 @@ import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   isReviewReconciliation,
   parseStructuredReviewReport,
+  stripStructuredReviewProvenance,
   type ReviewFindingPool,
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
@@ -1130,7 +1131,9 @@ export class LoopedReviewService {
       workflow.currentPass = 0;
       delete workflow.dispatch;
     } else if (dispatch.kind === "discover") {
-      const report = definiteResult(() => parseStructuredReviewReport(result.value));
+      const report = stripStructuredReviewProvenance(
+        definiteResult(() => parseStructuredReviewReport(result.value)),
+      );
       const pass = workflow.rounds
         .find((entry) => entry.round === workflow.currentRound)
         ?.passes.find(

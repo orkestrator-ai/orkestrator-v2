@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { AlertTriangle, GitPullRequest, Loader2 } from "lucide-react";
+import { AlertTriangle, FilePlus2, GitPullRequest, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,7 +30,7 @@ export interface AgentLaunchSelection {
 }
 
 /** The workflow being launched. Every entry restyles the same picker. */
-export type AgentLaunchKind = "create-pr" | "resolve-conflicts";
+export type AgentLaunchKind = "create-pr" | "create-script" | "resolve-conflicts";
 
 interface AgentLaunchDialogProps {
   kind?: AgentLaunchKind;
@@ -44,7 +44,7 @@ interface AgentLaunchDialogProps {
   preferredModels?: Partial<Record<LaunchAgent, string>>;
   preferredReasoningEfforts?: Partial<Record<LaunchAgent, string>>;
   /** Base branch the launch targets, shown so it can be verified. */
-  targetBranch: string;
+  targetBranch?: string;
   returnFocusRef?: RefObject<HTMLElement | null>;
   returnFocusFallback?: () => HTMLElement | null;
   confirmDisabled?: boolean;
@@ -165,14 +165,23 @@ export function AgentLaunchDialog({
   };
 
   const isResolve = kind === "resolve-conflicts";
+  const isScript = kind === "create-script";
   const summary = [
     agentLabel(agent),
     selectedModel?.name ?? model,
     effectiveEffort === "default" ? "default effort" : `${effectiveEffort} effort`,
-    `${isResolve ? "against" : "into"} ${targetBranch}`,
+    ...(isScript ? [] : [`${isResolve ? "against" : "into"} ${targetBranch}`]),
   ].join(" · ");
-  const pickerId = isResolve ? "resolve-conflicts-model" : "create-pr-model";
-  const confirmLabel = isResolve ? "Resolve conflicts" : "Create pull request";
+  const pickerId = isScript
+    ? "create-run-script-model"
+    : isResolve
+      ? "resolve-conflicts-model"
+      : "create-pr-model";
+  const confirmLabel = isScript
+    ? "Create run script"
+    : isResolve
+      ? "Resolve conflicts"
+      : "Create pull request";
 
   return (
     <Dialog
@@ -197,16 +206,27 @@ export function AgentLaunchDialog({
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
-              {isResolve ? (
+              {isScript ? (
+                <FilePlus2 className="size-4" />
+              ) : isResolve ? (
                 <AlertTriangle className="size-4" />
               ) : (
                 <GitPullRequest className="size-4" />
               )}
             </span>
-            {isResolve ? "Configure conflict resolution" : "Configure pull request"}
+            {isScript
+              ? "Configure run script"
+              : isResolve
+                ? "Configure conflict resolution"
+                : "Configure pull request"}
           </DialogTitle>
           <DialogDescription>
-            {isResolve ? (
+            {isScript ? (
+              <>
+                Launch an agent to create or update the run commands in{" "}
+                <span className="text-zinc-300">orkestrator-ai.json</span> for this workspace.
+              </>
+            ) : isResolve ? (
               <>
                 Launch an agent to resolve this pull request&apos;s merge conflicts against{" "}
                 <span className="text-zinc-300">{targetBranch}</span>, then commit and push the

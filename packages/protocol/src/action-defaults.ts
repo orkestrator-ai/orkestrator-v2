@@ -1,18 +1,16 @@
 /**
- * Application-level agent/model defaults for the toolbar actions that can be
- * launched with a single click.
+ * Application-level agent/model defaults for configurable toolbar workflows.
  *
- * Right-clicking those buttons opens a launch dialog that configures the run
- * explicitly, and a plain click has no such surface. Both read the same entry:
- * the dialog opens on it and the click launches it, so the button and the
- * dialog behind it can never name different runs. An entry is a whole decision
- * — platform, model and reasoning level together — because a model id is only
- * meaningful inside its own platform's catalogue.
+ * Each workflow's launch dialog opens on the same entry used by its direct
+ * action, when it has one. An entry is a whole decision — platform, model and
+ * reasoning level together — because a model id is only meaningful inside its
+ * own platform's catalogue.
  */
 import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
 
 export const ACTION_DEFAULT_KEYS = Object.freeze([
   "newProject",
+  "createScript",
   "review",
   "review2",
   "fixReviewIssues",

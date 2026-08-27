@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -72,14 +72,34 @@ export function multiReviewFixSessionTabOptions(
   const session = workflow.fixSession;
   if (!session?.providerSessionId) return null;
   return {
+    tabId: `multi-review-fix:${workflow.id}`,
+    activateExistingTab: true,
     agentLaunchMode: "native",
     resumeSessionId: session.providerSessionId,
+    requireExistingResumeSession: true,
     displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
     isReviewTab: true,
     initialAgentModel: workflow.fixModel.model === "default" ? undefined : workflow.fixModel.model,
     initialReasoningEffort: workflow.fixModel.reasoningEffort,
     initialConversationMode: "build",
   };
+}
+
+type FixSessionOpenOutcome = "opened" | "no-session" | "environment-unavailable" | "tab-rejected";
+
+function openFixSessionError(
+  outcome: Exclude<FixSessionOpenOutcome, "opened">,
+  source: "automatic" | "manual",
+): string {
+  if (outcome === "no-session") return "The consolidation session is no longer available";
+  if (outcome === "environment-unavailable") {
+    return source === "automatic"
+      ? "The fix request was delivered, but this environment cannot open agent tabs right now. When it is ready, use Open fix session."
+      : "The environment is not ready to open the fix session.";
+  }
+  return source === "automatic"
+    ? "The fix request was delivered, but its tab could not be opened. Close another tab if needed, then use Open fix session."
+    : "The fix session tab could not be opened. Close another tab if the workspace is at its limit, then try again.";
 }
 
 /**
@@ -129,11 +149,29 @@ function MultiReviewOverviewTab({
   const workflow = useMultiReviewStore((state) => state.workflows.get(data.workflowId));
   const replaceWorkflow = useMultiReviewStore((state) => state.replaceWorkflow);
   const [error, setError] = useState<string | null>(null);
+  const [presentationNotice, setPresentationNotice] = useState<string | null>(null);
+  const [openAfterDelivery, setOpenAfterDelivery] = useState(false);
   const [pending, setPending] = useState(false);
   const [stoppingReviewerId, setStoppingReviewerId] = useState<string | null>(null);
   const [customFixPromptOpen, setCustomFixPromptOpen] = useState(false);
   const [customFixError, setCustomFixError] = useState<string | null>(null);
   const modelCatalog = useReviewModelCatalog(workflow?.projectId ?? "", customFixPromptOpen);
+  const mountedRef = useRef(false);
+  const isActiveRef = useRef(isActive);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+    // The user navigated away after requesting the handoff. Delivery continues
+    // in the backend, but a hidden review tab must never change pane focus.
+    if (!isActive) setOpenAfterDelivery(false);
+  }, [isActive]);
 
   const hydrate = useCallback(async () => {
     setError(null);
@@ -149,19 +187,40 @@ function MultiReviewOverviewTab({
     void hydrate();
   }, [hydrate, isActive]);
 
-  const openFixSession = (
-    target: MultiReviewWorkflow | undefined = workflow,
-  ): "opened" | "no-session" | "tab-unavailable" => {
-    if (!target) return "no-session";
-    const options = multiReviewFixSessionTabOptions(target);
-    if (!options) return "no-session";
-    return createTab?.(target.fixModel.agent, options) === true ? "opened" : "tab-unavailable";
-  };
+  const openFixSession = useCallback(
+    (target: MultiReviewWorkflow | undefined): FixSessionOpenOutcome => {
+      if (!target) return "no-session";
+      const options = multiReviewFixSessionTabOptions(target);
+      if (!options) return "no-session";
+      if (!createTab) return "environment-unavailable";
+      return createTab(target.fixModel.agent, options) ? "opened" : "tab-rejected";
+    },
+    [createTab],
+  );
 
-  const openFixSessionError = (outcome: "no-session" | "tab-unavailable"): string =>
-    outcome === "no-session"
-      ? "The consolidation session is no longer available"
-      : "The environment is not ready or the maximum tab count was reached.";
+  const presentFixSession = useCallback(
+    (target: MultiReviewWorkflow | undefined, source: "automatic" | "manual") => {
+      setPresentationNotice(null);
+      const outcome = openFixSession(target);
+      if (outcome === "opened") {
+        setError(null);
+        return;
+      }
+      if (outcome === "no-session") {
+        setError(openFixSessionError(outcome, source));
+        return;
+      }
+      setError(null);
+      setPresentationNotice(openFixSessionError(outcome, source));
+    },
+    [openFixSession],
+  );
+
+  useEffect(() => {
+    if (!openAfterDelivery || !workflow || workflow.addressPromptPending === true) return;
+    setOpenAfterDelivery(false);
+    if (isActive && workflow.phase === "interactive") presentFixSession(workflow, "automatic");
+  }, [isActive, openAfterDelivery, presentFixSession, workflow]);
 
   const run = async (command: () => Promise<NonNullable<typeof workflow>>) => {
     if (pending) return;
@@ -195,22 +254,27 @@ function MultiReviewOverviewTab({
   };
 
   // The backend commits the handoff intent and owns provider adoption, dispatch,
-  // and retries. Presentation waits for the authoritative acknowledgement so a
-  // missing provider session can never make the tab create an empty fallback.
+  // and retries. Presentation waits for the authoritative delivery acknowledgement
+  // so the provider session is live and the address turn is ordered first.
   const addressAll = async () => {
     if (pending) return;
     setPending(true);
     setError(null);
+    setPresentationNotice(null);
     try {
       // The workflow id is enough to record the intent. Eligibility, provider
       // adoption and prompt dispatch all belong to the backend; a stale local
       // snapshot or an unavailable tab presenter must never suppress the click.
       const handedOff = await commands.address(data.workflowId);
       replaceWorkflow(handedOff);
+      if (mountedRef.current && isActiveRef.current) setOpenAfterDelivery(true);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      if (mountedRef.current) {
+        setOpenAfterDelivery(false);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
     } finally {
-      setPending(false);
+      if (mountedRef.current) setPending(false);
     }
   };
 
@@ -218,11 +282,11 @@ function MultiReviewOverviewTab({
     if (pending || !workflow) return;
     setPending(true);
     setError(null);
+    setPresentationNotice(null);
     try {
       // Opening is presentation-only. A pending dispatch is owned and retried
       // by the backend supervisor even when no review component is mounted.
-      const outcome = openFixSession(workflow);
-      if (outcome !== "opened") setError(openFixSessionError(outcome));
+      presentFixSession(workflow, "manual");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -439,10 +503,24 @@ function MultiReviewOverviewTab({
             </div>
           )}
 
+          {presentationNotice && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500">
+              {presentationNotice}
+            </div>
+          )}
+
+          {workflow.phase === "interactive" &&
+            workflow.addressPromptPending !== true &&
+            workflow.fixSession?.providerSessionId &&
+            !presentationNotice && (
+              <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
+                The fix request was delivered. The fix session is ready to open.
+              </div>
+            )}
+
           {workflow.addressPromptPending === true && !workflow.error && (
             <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
-              The fix request was recorded and will be delivered in the background. Open the fix
-              session when delivery completes.
+              The fix request was recorded and is being delivered in the background.
             </div>
           )}
         </div>

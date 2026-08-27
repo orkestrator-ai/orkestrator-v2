@@ -1173,6 +1173,7 @@ describe("TerminalContainer", () => {
             options={{
               agentLaunchMode: "native",
               resumeSessionId: "provider-thread-1",
+              requireExistingResumeSession: true,
               isReviewTab: true,
             }}
           />
@@ -1184,7 +1185,10 @@ describe("TerminalContainer", () => {
           expect.objectContaining({
             type: "agent-native",
             isReviewTab: true,
-            nativeAgentData: expect.objectContaining({ sessionId: "provider-thread-1" }),
+            nativeAgentData: expect.objectContaining({
+              sessionId: "provider-thread-1",
+              requireExistingResumeSession: true,
+            }),
           }),
         ),
       );

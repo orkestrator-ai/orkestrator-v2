@@ -1428,25 +1428,149 @@ describe("ActionBar editor and run commands", () => {
     expect(createTabMock).not.toHaveBeenCalled();
   });
 
-  test("creates agent-authored run scripts with every context-menu provider", () => {
+  test("configures an agent-authored run script in a modal", () => {
+    currentActionDefaults = {
+      createScript: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
+    };
     render(<ActionBar />);
 
     const runButton = screen.getByRole("button", { name: "Run commands" });
     fireEvent.contextMenu(runButton);
-    expectProviderMenuOrder("Create Script with");
 
-    for (const [label, agent] of [
-      ["Claude", "claude"],
-      ["Codex", "codex"],
-      ["OpenCode", "opencode"],
-    ] as const) {
-      fireEvent.contextMenu(runButton);
-      fireEvent.click(screen.getByRole("button", { name: `Create Script with ${label}` }));
-      expect(createTabMock).toHaveBeenLastCalledWith(agent, {
+    expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy();
+    expect(screen.queryByText("Create Script with Claude") === null).toBe(true);
+    const picker = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
+    expect(picker.textContent).toContain("Sonnet");
+    expect(picker.textContent).toContain("High");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+    expect(createTabMock).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        agentLaunchMode: "native",
+        displayTitle: "Run Script",
         initialPrompt: expect.any(String),
-      });
-    }
+        initialAgentModel: "sonnet",
+        initialReasoningEffort: "high",
+      }),
+    );
   });
+
+  test("opens script configuration with an explanation when launch eligibility is blocked", () => {
+    currentEnvironment = { ...currentEnvironment, status: "stopped" };
+    const stopped = render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+    expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("no longer running");
+    expect(
+      (screen.getByRole("button", { name: "Create run script" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    stopped.unmount();
+
+    currentEnvironment = { ...selectedEnvironment };
+    currentTabCount = 10;
+    render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+
+    expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toContain("maximum number of tabs");
+  });
+
+  test("revalidates every script launch prerequisite while the dialog is open", () => {
+    const view = render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+
+    currentEnvironment = { ...currentEnvironment, status: "stopped" };
+    view.rerender(<ActionBar />);
+    expect(screen.getByRole("alert").textContent).toContain("no longer running");
+
+    currentEnvironment = { ...currentEnvironment, status: "running" };
+    currentTabCount = 10;
+    view.rerender(<ActionBar />);
+    expect(screen.getByRole("alert").textContent).toContain("maximum number of tabs");
+
+    currentTabCount = 0;
+    currentCreateTabRegistered = false;
+    view.rerender(<ActionBar />);
+    const alert = screen.getByRole("alert").textContent ?? "";
+    expect(alert).toContain("not ready to open a new tab");
+    expect(alert).not.toContain("maximum number of tabs");
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("disables a script launch when the selected environment changes", () => {
+    const view = render(<ActionBar />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+
+    currentSelectedEnvironmentId = "env-2";
+    currentEnvironment = { ...currentEnvironment, id: "env-2", name: "other-environment" };
+    view.rerender(<ActionBar />);
+
+    expect(screen.getByRole("alert").textContent).toContain("selected environment changed");
+    expect(
+      (screen.getByRole("button", { name: "Create run script" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(createTabMock).not.toHaveBeenCalled();
+  });
+
+  test("clears script launch errors on cancel and succeeds when retried", () => {
+    createTabMock.mockReturnValueOnce(false);
+    render(<ActionBar />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+    expect(screen.getByRole("alert").textContent).toContain("could not be created");
+    expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Configure run script" }) === null).toBe(true);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Run commands" }));
+    expect(screen.queryByRole("alert") === null).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+
+    expect(screen.queryByRole("dialog", { name: "Configure run script" }) === null).toBe(true);
+    expect(createTabMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("opens script configuration on long press without also running commands", async () => {
+    currentWorkspaceReady = true;
+    readContainerFileMock.mockImplementationOnce(async () => ({
+      content: JSON.stringify({ run: ["bun test"] }),
+    }));
+    render(<ActionBar presentation="grid" />);
+
+    const runButton = screen.getByRole("button", { name: "Run commands" });
+    await waitFor(() => expect(runButton.getAttribute("aria-disabled")).toBe("false"));
+    fireEvent.pointerDown(runButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    fireEvent.pointerUp(runButton, {
+      pointerId: 1,
+      pointerType: "touch",
+      clientX: 24,
+      clientY: 24,
+    });
+
+    await waitFor(
+      () => expect(screen.getByRole("dialog", { name: "Configure run script" })).toBeTruthy(),
+      { timeout: 10_000 },
+    );
+    fireEvent.click(runButton);
+    expect(createTabMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create run script" }));
+    expect(createTabMock).toHaveBeenCalledTimes(1);
+    expect(createTabMock).toHaveBeenCalledWith(
+      "codex",
+      expect.objectContaining({ agentLaunchMode: "native", displayTitle: "Run Script" }),
+    );
+  }, 20_000);
 });
 
 describe("ActionBar toolbar interactions", () => {

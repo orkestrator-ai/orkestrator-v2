@@ -61,6 +61,7 @@ function restoreNativeAgentData(
     containerId: context.containerId ?? undefined,
     environmentId: context.environmentId,
     sessionId: nonEmptyString(source.sessionId) ?? undefined,
+    requireExistingResumeSession: optionalBoolean(source.requireExistingResumeSession),
     isLocal: context.isLocal,
   };
 }

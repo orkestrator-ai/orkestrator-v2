@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import {
   AlertTriangle,
   Eye,
+  FilePlus2,
   FolderPlus,
   GitPullRequest,
   RotateCcw,
@@ -57,6 +58,11 @@ const ACTION_DEFINITIONS: Record<
     label: "New environments",
     description: "Preselected every time you create an environment here.",
     icon: <FolderPlus className="h-4 w-4" />,
+  },
+  createScript: {
+    label: "Create run script",
+    description: "Preselected when you configure a script from the Run Commands button.",
+    icon: <FilePlus2 className="h-4 w-4" />,
   },
   review: {
     label: "Review",
@@ -318,15 +324,12 @@ export function AgentDefaultsPane({
         <div>
           <h3 className="text-sm font-medium text-foreground">Action defaults</h3>
           <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            The agent, model and reasoning level each toolbar action uses when its button is
-            clicked. Right-click (or long-press) a button to configure a single run — that dialog
-            opens on the default set here, and confirming it never changes these settings.
+            The agent, model and reasoning level each toolbar workflow uses. Configure dialogs open
+            on the default set here, and confirming a single run never changes these settings.
           </p>
           <p className="mt-2 max-w-2xl text-xs leading-relaxed text-muted-foreground">
             An action default is what that action uses, whichever agent the environment was created
-            with — the click and the configure dialog read the same value, so you can still change
-            the run before it starts. The Default agent above applies only to actions left on
-            Inherit at every level.
+            with. The Default agent above applies only to actions left on Inherit at every level.
           </p>
         </div>
         <div className="space-y-3">

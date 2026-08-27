@@ -15,11 +15,13 @@ describe("normalizeActionDefaults", () => {
   it("keeps well-formed entries and trims their strings", () => {
     expect(
       normalizeActionDefaults({
+        createScript: { platform: "claude", model: " sonnet ", reasoningEffort: " high " },
         review: { platform: "codex", model: " gpt-5.4 ", reasoningEffort: " high " },
         review2: { platform: "claude", model: " opus " },
         fixReviewIssues: { platform: "codex", model: " gpt-5.6 " },
       }),
     ).toEqual({
+      createScript: { platform: "claude", model: "sonnet", reasoningEffort: "high" },
       review: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
       review2: { platform: "claude", model: "opus" },
       fixReviewIssues: { platform: "codex", model: "gpt-5.6" },

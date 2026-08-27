@@ -14,6 +14,7 @@ import {
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   safeParseStructuredReviewReport,
+  stripStructuredReviewProvenance,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
@@ -897,7 +898,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       await this.repairStructuredReport(pipeline, provider, session, parsed.error);
       return;
     }
-    const report = parsed.data;
+    const report = stripStructuredReviewProvenance(parsed.data);
     session.structuredResultStatus = "accepted";
     pipeline.structuredReview = report;
     if (report.issues.length || report.testCoverageGaps.length) {

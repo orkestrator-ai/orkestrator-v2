@@ -504,6 +504,7 @@ export function LoopedReviewTab({
         displayTitle: `${sessionLabel(session.phase, session.round, session.pass)} · Provider`,
         isReviewTab: true,
         resumeSessionId: resolved.providerSessionId,
+        requireExistingResumeSession: true,
       });
       if (!created) throw new Error("A provider-session tab could not be opened");
     } catch (reason) {

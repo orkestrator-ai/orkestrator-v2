@@ -577,6 +577,40 @@ describe("LoopedReviewService", () => {
     });
   });
 
+  test("strips provider-invented provenance from discovery reports", async () => {
+    await harness(async (service, storage, provider) => {
+      provider.reviewReport = {
+        ...issueReport,
+        issues: issueReport.issues.map((issue) => ({
+          ...issue,
+          reviewModels: ["provider-invented-model"],
+          reviewSourceIds: ["provider-invented-source"],
+        })),
+      };
+      const started = await service.start({
+        environmentId: "env-1",
+        projectId: "project-1",
+        agent: "claude",
+        model: "model",
+        targetBranch: "main",
+        allowance: 1,
+      });
+
+      for (let index = 0; index < 20; index += 1) {
+        await service.advanceNow(started.id);
+        const current = await snapshot(storage, started.id);
+        const report = current.rounds
+          .flatMap((round) => round.passes)
+          .find((pass) => pass.report)?.report;
+        if (!report) continue;
+        expect(report.issues[0]).not.toHaveProperty("reviewModels");
+        expect(report.issues[0]).not.toHaveProperty("reviewSourceIds");
+        return;
+      }
+      throw new Error("Discovery report was not persisted");
+    });
+  });
+
   test("applies new, updated, existing, and coverage-gap reconciliation across allowance rounds", async () => {
     await harness(async (service, storage, provider) => {
       const initialGap = { file: "src/controller.test.ts", untestedBehavior: "restart recovery" };

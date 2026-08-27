@@ -119,6 +119,10 @@ export interface ReviewStrength {
 }
 
 export interface ReviewIssue {
+  /** Models whose independent reports substantiate this finding. */
+  reviewModels?: string[];
+  /** Backend-issued source finding IDs cited during multi-review consolidation. */
+  reviewSourceIds?: string[];
   severity: ReviewSeverity;
   confidence: number;
   category: ReviewIssueCategory;
@@ -134,6 +138,10 @@ export interface ReviewIssue {
 }
 
 export interface ReviewCoverageGap {
+  /** Models whose independent reports substantiate this gap. */
+  reviewModels?: string[];
+  /** Backend-issued source finding IDs cited during multi-review consolidation. */
+  reviewSourceIds?: string[];
   file: string;
   untestedBehavior: string;
 }

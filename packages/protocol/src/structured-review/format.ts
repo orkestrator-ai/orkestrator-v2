@@ -39,6 +39,7 @@ function formatIssue(issue: ReviewIssue, index: number): string {
   const lines = [
     `### ${index + 1}. [${issue.severity}][conf:${issue.confidence}][${issue.category}]`,
     `#### ${text(issue.title)}`,
+    ...(issue.reviewModels?.length ? [bullet("Review models", issue.reviewModels.join(", "))] : []),
     bullet("File", location(issue.file, issue.line)),
     bullet("Symbol", issue.symbol),
     bullet("Description", issue.description),
@@ -54,7 +55,8 @@ function formatIssue(issue: ReviewIssue, index: number): string {
 }
 
 function formatCoverageGap(gap: ReviewCoverageGap): string {
-  return `- ${text(gap.file)} — ${text(gap.untestedBehavior)}`;
+  const models = gap.reviewModels?.length ? ` [${gap.reviewModels.join(", ")}]` : "";
+  return `- ${text(gap.file)}${models} — ${text(gap.untestedBehavior)}`;
 }
 
 /**

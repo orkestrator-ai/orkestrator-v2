@@ -38,6 +38,7 @@ const report: StructuredReviewReport = {
   strengths: [{ description: "Typed boundary", file: "src/example.ts", line: 12 }],
   issues: [
     {
+      reviewModels: ["gpt-5.6", "claude-opus-4.1"],
       severity: "P1",
       confidence: 91,
       category: "correctness",
@@ -54,6 +55,7 @@ const report: StructuredReviewReport = {
   ],
   testCoverageGaps: [
     {
+      reviewModels: ["gpt-5.6"],
       file: "src/example.test.ts",
       untestedBehavior: "Recovery after disconnect.",
     },
@@ -90,6 +92,23 @@ describe("StructuredReviewReportView", () => {
       ),
     ).toBeTruthy();
     expect(screen.getByText("0 not run")).toBeTruthy();
+    expect(screen.getAllByRole("note", { name: "Review model: gpt-5.6" })).toHaveLength(2);
+    expect(screen.getByRole("note", { name: "Review model: claude-opus-4.1" })).toBeTruthy();
+  });
+
+  test("renders legacy reports without provenance pills", () => {
+    render(
+      <StructuredReviewReportView
+        report={{
+          ...report,
+          issues: report.issues.map(({ reviewModels: _models, ...issue }) => issue),
+          testCoverageGaps: report.testCoverageGaps.map(({ reviewModels: _models, ...gap }) => gap),
+        }}
+      />,
+    );
+
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(screen.getByRole("heading", { name: /Retry state can drift/ })).toBeTruthy();
   });
 
   test("hides raw JSON until deliberate inspection", () => {

@@ -17,7 +17,9 @@ import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
   safeParseStructuredReviewReport,
+  stripStructuredReviewProvenance,
   type ReviewContractValidationIssue,
+  type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { Environment } from "./models.js";
@@ -72,6 +74,163 @@ function nowIso(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function reviewerProvenanceLabel(
+  reviewer: Pick<MultiReviewModelSelection, "agent" | "model">,
+): string {
+  return `${reviewer.agent}/${reviewer.model}`;
+}
+
+/** Provider output cannot authoritatively identify its own launch model. */
+function attributeReportFindings(
+  report: StructuredReviewReport,
+  reviewer: Pick<MultiReviewModelSelection, "agent" | "model">,
+): StructuredReviewReport {
+  const clean = stripStructuredReviewProvenance(report);
+  const label = reviewerProvenanceLabel(reviewer);
+  return {
+    ...clean,
+    issues: clean.issues.map((issue) => ({ ...issue, reviewModels: [label] })),
+    testCoverageGaps: clean.testCoverageGaps.map((gap) => ({
+      ...gap,
+      reviewModels: [label],
+    })),
+  };
+}
+
+type SourceFindingKind = "issue" | "coverage-gap";
+
+interface ProvenanceSource {
+  kind: SourceFindingKind;
+  model: string;
+}
+
+function sourceFindingId(
+  reviewerIndex: number,
+  kind: SourceFindingKind,
+  findingIndex: number,
+): string {
+  return `reviewer-${reviewerIndex + 1}/${kind}-${findingIndex + 1}`;
+}
+
+function consolidationReports(
+  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
+): Parameters<typeof createMultiReviewConsolidationPrompt>[0]["reports"] {
+  return reviewers.flatMap((reviewer, reviewerIndex) => {
+    if (reviewer.status !== "completed" || !reviewer.report) return [];
+    return [
+      {
+        reviewerId: reviewer.id,
+        agent: reviewer.agent,
+        model: reviewer.model,
+        report: {
+          ...reviewer.report,
+          issues: reviewer.report.issues.map((issue, findingIndex) => ({
+            ...issue,
+            reviewSourceIds: [sourceFindingId(reviewerIndex, "issue", findingIndex)],
+          })),
+          testCoverageGaps: reviewer.report.testCoverageGaps.map((gap, findingIndex) => ({
+            ...gap,
+            reviewSourceIds: [sourceFindingId(reviewerIndex, "coverage-gap", findingIndex)],
+          })),
+        },
+      },
+    ];
+  });
+}
+
+function provenanceSources(
+  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
+): ReadonlyMap<string, ProvenanceSource> {
+  const sources = new Map<string, ProvenanceSource>();
+  reviewers.forEach((reviewer, reviewerIndex) => {
+    if (reviewer.status !== "completed" || !reviewer.report) return;
+    const model = reviewerProvenanceLabel(reviewer);
+    reviewer.report.issues.forEach((_issue, findingIndex) => {
+      sources.set(sourceFindingId(reviewerIndex, "issue", findingIndex), {
+        kind: "issue",
+        model,
+      });
+    });
+    reviewer.report.testCoverageGaps.forEach((_gap, findingIndex) => {
+      sources.set(sourceFindingId(reviewerIndex, "coverage-gap", findingIndex), {
+        kind: "coverage-gap",
+        model,
+      });
+    });
+  });
+  return sources;
+}
+
+function deriveConsolidatedProvenance(
+  report: StructuredReviewReport,
+  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
+): { report: StructuredReviewReport; issues: ReviewContractValidationIssue[] } {
+  const issues: ReviewContractValidationIssue[] = [];
+  const sources = provenanceSources(reviewers);
+  const inspect = (
+    reviewModels: string[] | undefined,
+    reviewSourceIds: string[] | undefined,
+    kind: SourceFindingKind,
+    path: string,
+  ): string[] => {
+    if (reviewModels?.length) {
+      issues.push({
+        path: `${path}.reviewModels`,
+        code: "invalid_value",
+        message: "Consolidated findings must cite source IDs; the backend derives review models.",
+      });
+    }
+    if (!reviewSourceIds?.length) {
+      issues.push({
+        path: `${path}.reviewSourceIds`,
+        code: "missing_field",
+        message: "Every consolidated finding must cite at least one source finding ID.",
+      });
+      return [];
+    }
+    const models: string[] = [];
+    reviewSourceIds.forEach((sourceId, index) => {
+      const source = sources.get(sourceId);
+      if (!source || source.kind !== kind) {
+        issues.push({
+          path: `${path}.reviewSourceIds[${index}]`,
+          code: "invalid_value",
+          message: `Source finding ${JSON.stringify(sourceId)} does not identify a ${kind} in the supplied reviewer reports.`,
+        });
+      } else if (!models.includes(source.model)) {
+        models.push(source.model);
+      }
+    });
+    return models;
+  };
+
+  const derived = stripStructuredReviewProvenance(report);
+  return {
+    issues,
+    report: {
+      ...derived,
+      issues: report.issues.map((finding, index) => ({
+        ...derived.issues[index]!,
+        reviewModels: inspect(
+          finding.reviewModels,
+          finding.reviewSourceIds,
+          "issue",
+          `$.issues[${index}]`,
+        ),
+      })),
+      testCoverageGaps: report.testCoverageGaps.map((finding, index) => ({
+        ...derived.testCoverageGaps[index]!,
+        reviewModels: inspect(
+          finding.reviewModels,
+          finding.reviewSourceIds,
+          "coverage-gap",
+          `$.testCoverageGaps[${index}]`,
+        ),
+      })),
+    },
+  };
 }
 
 class FixResultValidationError extends Error {
@@ -1169,7 +1328,7 @@ export class MultiReviewService {
     if (!parsed.success) {
       return this.prepareReviewerReportRepair(workflow, token, reviewer, parsed.error);
     }
-    reviewer.report = parsed.data;
+    reviewer.report = attributeReportFindings(parsed.data, reviewer);
     reviewer.status = "completed";
     reviewer.completedAt = nowIso();
     delete reviewer.schemaRepairPrompt;
@@ -1476,18 +1635,7 @@ export class MultiReviewService {
           prompt = createMultiReviewConsolidationPrompt({
             targetBranch: workflow.targetBranch,
             worktree: this.promptWorktreeSnapshot(reviewSnapshot),
-            reports: workflow.reviewers.flatMap((reviewer) =>
-              reviewer.status === "completed" && reviewer.report
-                ? [
-                    {
-                      reviewerId: reviewer.id,
-                      agent: reviewer.agent,
-                      model: reviewer.model,
-                      report: reviewer.report,
-                    },
-                  ]
-                : [],
-            ),
+            reports: consolidationReports(workflow.reviewers),
           });
         } else {
           prompt = addressPrompt(workflow.consolidatedReport!);
@@ -1575,7 +1723,18 @@ export class MultiReviewService {
         await this.prepareFixSessionSchemaRepair(workflow, token, request, session, parsed.error);
         return;
       }
-      workflow.consolidatedReport = parsed.data;
+      const provenance = deriveConsolidatedProvenance(parsed.data, workflow.reviewers);
+      if (provenance.issues.length > 0) {
+        await this.prepareFixSessionSchemaRepair(
+          workflow,
+          token,
+          request,
+          session,
+          new ReviewContractValidationError("structured-review-report", provenance.issues),
+        );
+        return;
+      }
+      workflow.consolidatedReport = provenance.report;
       workflow.phase = "ready";
       session.status = "idle";
       session.completedAt = nowIso();

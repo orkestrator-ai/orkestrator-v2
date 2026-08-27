@@ -110,7 +110,22 @@ describe("multi review consolidation prompt", () => {
   test("distrusts a narrower scope when the change was uncommitted", () => {
     const prompt = createMultiReviewConsolidationPrompt({
       targetBranch: "main",
-      reports: [{ reviewerId: "a", agent: "codex", model: "gpt", report }],
+      reports: [
+        {
+          reviewerId: "a",
+          agent: "codex",
+          model: "gpt",
+          report: {
+            ...report,
+            issues: [
+              {
+                reviewSourceIds: ["reviewer-1/issue-1"],
+                title: "Finding",
+              } as StructuredReviewReport["issues"][number],
+            ],
+          },
+        },
+      ],
       worktree: {
         status: "dirty",
         head: "1111111111111111111111111111111111111111",
@@ -121,6 +136,9 @@ describe("multi review consolidation prompt", () => {
     expect(prompt).toContain(
       "A report whose scope covers only the committed range examined an incomplete snapshot",
     );
+    expect(prompt).toContain("copy the IDs of every source finding");
+    expect(prompt).toContain("Set reviewModels to null");
+    expect(prompt).toContain('"reviewSourceIds":["reviewer-1/');
     expect(prompt).toContain("record the narrower scope as a limitation");
   });
 

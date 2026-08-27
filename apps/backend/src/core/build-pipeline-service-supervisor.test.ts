@@ -97,6 +97,7 @@ class FakeProvider implements BuildPipelineProvider {
     interaction?: ProviderSessionRegistration;
   }> = [];
   private counter = 0;
+  reviewReport: StructuredReviewReport = cleanReview;
 
   registerSession(sessionId: string, interaction?: ProviderSessionRegistration): void {
     this.registered.push({ sessionId, interaction });
@@ -148,7 +149,7 @@ class FakeProvider implements BuildPipelineProvider {
       provider: "claude",
       requestId,
       value: (phase === "review"
-        ? cleanReview
+        ? this.reviewReport
         : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
@@ -409,6 +410,39 @@ describe("BuildPipelineService", () => {
       );
       expect(verificationDispatch?.schema).toBe(VERIFICATION_VERDICT_SCHEMA);
       expect(completed.verificationResult).toBe("pass");
+    });
+  });
+
+  test("strips provider-invented review provenance before persistence", async () => {
+    await withService(async (service, storage, provider) => {
+      provider.reviewReport = {
+        ...cleanReview,
+        issues: [
+          {
+            reviewModels: ["provider-invented-model"],
+            reviewSourceIds: ["provider-invented-source"],
+            severity: "P2",
+            confidence: 80,
+            category: "correctness",
+            title: "Review finding",
+            file: "src/app.ts",
+            line: 1,
+            symbol: "run",
+            description: "A finding that enters the address stage.",
+            evidence: "The provider returned it.",
+            suggestion: "Address it.",
+            verification: "Run the pipeline.",
+          },
+        ],
+        verdict: { ready: "with-fixes", reasoning: "One fix remains." },
+      };
+      const started = await service.start(startInput());
+
+      for (let pass = 0; pass < 8; pass += 1) await service.advanceNow(started.id);
+
+      const completed = await pipeline(storage, started.id);
+      expect(completed.structuredReview?.issues[0]).not.toHaveProperty("reviewModels");
+      expect(completed.structuredReview?.issues[0]).not.toHaveProperty("reviewSourceIds");
     });
   });
 

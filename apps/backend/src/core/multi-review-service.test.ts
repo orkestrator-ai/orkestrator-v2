@@ -81,6 +81,7 @@ const consolidatedReport: StructuredReviewReport = {
   ...cleanReport,
   issues: [
     {
+      reviewSourceIds: ["reviewer-1/issue-1"],
       severity: "P1",
       confidence: 92,
       category: "correctness",
@@ -94,7 +95,13 @@ const consolidatedReport: StructuredReviewReport = {
       verification: "Add a regression test",
     },
   ],
-  testCoverageGaps: [{ file: "src/a.test.ts", untestedBehavior: "Failure branch" }],
+  testCoverageGaps: [
+    {
+      reviewSourceIds: ["reviewer-1/coverage-gap-1"],
+      file: "src/a.test.ts",
+      untestedBehavior: "Failure branch",
+    },
+  ],
   verdict: { ready: "with-fixes", reasoning: "One fix remains" },
   reviewSummary: "One consolidated issue and one coverage gap.",
 };
@@ -113,6 +120,8 @@ class Provider implements BuildPipelineProvider {
    */
   readonly sessionFailures = new Map<string, string>();
   readonly attached: string[] = [];
+  readonly consolidationSessions = new Set<string>();
+  readonly consolidationSessionsWithFindings = new Set<string>();
   sessions = 0;
   statusValue: ProviderStatus = "idle";
   statusCalls = 0;
@@ -124,10 +133,16 @@ class Provider implements BuildPipelineProvider {
   fixComplete = true;
   invalidReviewerReports = 0;
   invalidConsolidatedReports = 0;
+  missingConsolidatedProvenanceReports = 0;
+  invalidConsolidatedProvenanceReports = 0;
+  missingCoverageGapProvenanceReports = 0;
+  providerAuthoredConsolidatedModels = 0;
   schemaFailureReports = 0;
   invalidFixResults = 0;
   fixStructuredFailure: StructuredOutputFailureCode | null = null;
   messagesValue: unknown[] = [];
+  reviewerReport: StructuredReviewReport = cleanReport;
+  consolidationReport: StructuredReviewReport = consolidatedReport;
   messagesCalls = 0;
   readonly messageOptions: Array<{ limit?: number } | undefined> = [];
   disposeCalls = 0;
@@ -152,8 +167,14 @@ class Provider implements BuildPipelineProvider {
   async prepareDispatch(sessionId: string) {
     this.attached.push(sessionId);
   }
-  async send(_sessionId: string, prompt: string, options: ProviderSendOptions) {
+  async send(sessionId: string, prompt: string, options: ProviderSendOptions) {
     this.sends.set(options.requestId, { prompt, options });
+    if (prompt.includes("<multi-review-reports-json>")) {
+      this.consolidationSessions.add(sessionId);
+      if (prompt.includes('"reviewSourceIds":["reviewer-')) {
+        this.consolidationSessionsWithFindings.add(sessionId);
+      }
+    }
     if (prompt.includes("<structured-review-findings-json>")) {
       this.fixSends += 1;
       if (this.ambiguousFixOnce) {
@@ -186,7 +207,7 @@ class Provider implements BuildPipelineProvider {
   ): Promise<StructuredOutputResult<T> | null> {
     if (!this.returnStructured) return null;
     const sent = this.sends.get(requestId)!;
-    const isConsolidation = sent.prompt.includes("<multi-review-reports-json>");
+    const isConsolidation = this.consolidationSessions.has(sessionId);
     if (sent.options.schema === REVIEW_FIX_RESULT_JSON_SCHEMA) {
       if (this.fixStructuredFailure) {
         const code = this.fixStructuredFailure;
@@ -258,6 +279,67 @@ class Provider implements BuildPipelineProvider {
           value: { ...consolidatedReport, ready: true } as T,
         };
       }
+      if (isConsolidation && this.missingConsolidatedProvenanceReports > 0) {
+        this.missingConsolidatedProvenanceReports -= 1;
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: {
+            ...consolidatedReport,
+            issues: consolidatedReport.issues.map(
+              ({ reviewSourceIds: _sourceIds, ...issue }) => issue,
+            ),
+            testCoverageGaps: consolidatedReport.testCoverageGaps.map(
+              ({ reviewSourceIds: _sourceIds, ...gap }) => gap,
+            ),
+          } as T,
+        };
+      }
+      if (isConsolidation && this.invalidConsolidatedProvenanceReports > 0) {
+        this.invalidConsolidatedProvenanceReports -= 1;
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: {
+            ...this.consolidationReport,
+            issues: this.consolidationReport.issues.map((issue) => ({
+              ...issue,
+              reviewSourceIds: ["reviewer-1/coverage-gap-1"],
+            })),
+          } as T,
+        };
+      }
+      if (isConsolidation && this.providerAuthoredConsolidatedModels > 0) {
+        this.providerAuthoredConsolidatedModels -= 1;
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: {
+            ...this.consolidationReport,
+            issues: this.consolidationReport.issues.map((issue) => ({
+              ...issue,
+              reviewModels: ["codex/default"],
+            })),
+          } as T,
+        };
+      }
+      if (isConsolidation && this.missingCoverageGapProvenanceReports > 0) {
+        this.missingCoverageGapProvenanceReports -= 1;
+        return {
+          ok: true,
+          provider: "claude",
+          requestId,
+          value: {
+            ...this.consolidationReport,
+            testCoverageGaps: this.consolidationReport.testCoverageGaps.map(
+              ({ reviewSourceIds: _sourceIds, ...gap }) => gap,
+            ),
+          } as T,
+        };
+      }
       if (sessionId === "session-1" && this.invalidReviewerReports > 0) {
         this.invalidReviewerReports -= 1;
         return {
@@ -268,8 +350,10 @@ class Provider implements BuildPipelineProvider {
         };
       }
     }
-    const value = sent.prompt.includes("<multi-review-reports-json>")
-      ? consolidatedReport
+    const value = isConsolidation
+      ? this.consolidationSessionsWithFindings.has(sessionId)
+        ? this.consolidationReport
+        : cleanReport
       : sent.prompt.includes("<structured-review-findings-json>")
         ? {
             complete: this.fixComplete,
@@ -283,7 +367,7 @@ class Provider implements BuildPipelineProvider {
             // or an explicit limitation.
             limitations: this.fixComplete ? [] : ["Two findings need product input"],
           }
-        : cleanReport;
+        : this.reviewerReport;
     return { ok: true, provider: "claude", requestId, value: value as T };
   }
   async abort(sessionId: string): Promise<void> {
@@ -1332,6 +1416,191 @@ test("MultiReviewService asks the fix model to correct an invalid consolidated r
   });
 });
 
+test("MultiReviewService stamps reviewer findings with the configured model", async () => {
+  const provider = new Provider();
+  provider.reviewerReport = {
+    ...consolidatedReport,
+    issues: consolidatedReport.issues.map((issue) => ({
+      ...issue,
+      reviewModels: ["provider-invented-model"],
+    })),
+  };
+  await withService(
+    "env-review-model-attribution",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      const ready = await snapshot(started.id);
+      expect(ready?.reviewers[0]?.report?.issues[0]?.reviewModels).toEqual(["claude/opus"]);
+      expect(ready?.reviewers[0]?.report?.testCoverageGaps[0]?.reviewModels).toEqual([
+        "claude/opus",
+      ]);
+    },
+  );
+});
+
+test("MultiReviewService repairs consolidated findings without source provenance", async () => {
+  const provider = new Provider();
+  provider.missingConsolidatedProvenanceReports = 1;
+  await withService(
+    "env-consolidation-provenance-repair",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      const repair = [...provider.sends.values()].find((sent) =>
+        sent.prompt.includes("repair attempt 1 of 3"),
+      );
+      expect(repair?.prompt).toContain("$.issues[0].reviewSourceIds");
+      expect(repair?.prompt).toContain("source finding ID");
+    },
+  );
+});
+
+test("MultiReviewService derives all provenance labels from cited source IDs", async () => {
+  const provider = new Provider();
+  provider.consolidationReport = {
+    ...consolidatedReport,
+    issues: consolidatedReport.issues.map((issue) => ({
+      ...issue,
+      reviewSourceIds: ["reviewer-1/issue-1", "reviewer-2/issue-1"],
+    })),
+    testCoverageGaps: consolidatedReport.testCoverageGaps.map((gap) => ({
+      ...gap,
+      reviewSourceIds: ["reviewer-1/coverage-gap-1", "reviewer-2/coverage-gap-1"],
+    })),
+  };
+  provider.reviewerReport = consolidatedReport;
+  await withService(
+    "env-derived-consolidation-provenance",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start([
+        { agent: "claude", model: "default" },
+        { agent: "codex", model: "default" },
+      ]);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      const ready = await snapshot(started.id);
+      expect(ready?.reviewers.map((reviewer) => reviewer.report?.issues[0]?.reviewModels)).toEqual([
+        ["claude/default"],
+        ["codex/default"],
+      ]);
+      expect(ready?.consolidatedReport?.issues[0]?.reviewModels).toEqual([
+        "claude/default",
+        "codex/default",
+      ]);
+      expect(ready?.consolidatedReport?.issues[0]).not.toHaveProperty("reviewSourceIds");
+      const consolidation = [...provider.sends.values()].find((sent) =>
+        sent.prompt.includes("<multi-review-reports-json>"),
+      );
+      expect(consolidation?.prompt).toContain('"reviewSourceIds":["reviewer-1/issue-1"]');
+      expect(consolidation?.prompt).toContain('"reviewSourceIds":["reviewer-2/issue-1"]');
+    },
+  );
+});
+
+test("MultiReviewService rejects a participating model label supplied by the provider", async () => {
+  const provider = new Provider();
+  provider.reviewerReport = consolidatedReport;
+  provider.providerAuthoredConsolidatedModels = 1;
+  await withService(
+    "env-provider-authored-consolidation-model",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start([
+        { agent: "claude", model: "default" },
+        { agent: "codex", model: "default" },
+      ]);
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+
+      const repair = [...provider.sends.values()].find((sent) =>
+        sent.prompt.includes("repair attempt 1 of 3"),
+      );
+      expect(repair?.prompt).toContain("$.issues[0].reviewModels");
+      expect(repair?.prompt).toContain("backend derives review models");
+      expect((await snapshot(started.id))?.consolidatedReport?.issues[0]?.reviewModels).toEqual([
+        "claude/default",
+      ]);
+    },
+  );
+});
+
+test("MultiReviewService repairs invalid and missing source citations", async () => {
+  for (const [environmentId, configure, expectedPath] of [
+    [
+      "env-invalid-source-citation",
+      (provider: Provider) => {
+        provider.reviewerReport = consolidatedReport;
+        provider.invalidConsolidatedProvenanceReports = 1;
+      },
+      "$.issues[0].reviewSourceIds[0]",
+    ],
+    [
+      "env-missing-gap-citation",
+      (provider: Provider) => {
+        provider.reviewerReport = consolidatedReport;
+        provider.missingCoverageGapProvenanceReports = 1;
+      },
+      "$.testCoverageGaps[0].reviewSourceIds",
+    ],
+  ] as const) {
+    const provider = new Provider();
+    configure(provider);
+    await withService(environmentId, provider, async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const repair = [...provider.sends.values()].find((sent) =>
+        sent.prompt.includes("repair attempt 1 of 3"),
+      );
+      expect(repair?.prompt).toContain(expectedPath);
+    });
+  }
+});
+
+test("MultiReviewService bounds repeated provenance repairs", async () => {
+  const provider = new Provider();
+  provider.missingConsolidatedProvenanceReports = 4;
+  await withService(
+    "env-provenance-repair-bound",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+
+      const failed = await snapshot(started.id);
+      expect(failed?.activeRequest?.schemaRepairAttempts).toBe(3);
+      expect(failed?.error).toContain("3 repair attempts");
+      expect(
+        [...provider.sends.values()].filter((sent) =>
+          sent.prompt.includes("<structured-review-contract-errors-json>"),
+        ),
+      ).toHaveLength(3);
+    },
+  );
+});
+
 test("MultiReviewService repairs provider-level schema failures with their details", async () => {
   const provider = new Provider();
   provider.schemaFailureReports = 1;
@@ -1667,6 +1936,7 @@ test("MultiReviewService owns fan-out, consolidation, and the interactive fix ha
     setupScriptsComplete: true,
   });
   const provider = new Provider();
+  provider.reviewerReport = consolidatedReport;
   const service = new MultiReviewService(storage, stableReviewInvoker, {
     autoAdvance: false,
     provider: async () => provider,

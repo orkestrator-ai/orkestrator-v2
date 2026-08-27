@@ -74,8 +74,20 @@ const reviewIssueSchema = {
     "suggestion",
     "verification",
     "alternativeFixes",
+    "reviewModels",
+    "reviewSourceIds",
   ],
   properties: {
+    reviewModels: {
+      anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+      description:
+        "Backend-derived models whose reports substantiate this finding. Providers must return null.",
+    },
+    reviewSourceIds: {
+      anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+      description:
+        "Backend-issued source finding IDs. Copy every supporting ID during multi-model consolidation; null otherwise.",
+    },
     severity: {
       type: "string",
       enum: REVIEW_SEVERITIES,
@@ -128,8 +140,18 @@ const reviewIssueSchema = {
 const coverageGapSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["file", "untestedBehavior"],
+  required: ["file", "untestedBehavior", "reviewModels", "reviewSourceIds"],
   properties: {
+    reviewModels: {
+      anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+      description:
+        "Backend-derived models whose reports substantiate this gap. Providers must return null.",
+    },
+    reviewSourceIds: {
+      anyOf: [{ type: "array", items: { type: "string" } }, { type: "null" }],
+      description:
+        "Backend-issued source coverage-gap IDs. Copy every supporting ID during multi-model consolidation; null otherwise.",
+    },
     file: {
       type: "string",
       description: "Repository-relative path of the file whose behaviour lacks coverage.",

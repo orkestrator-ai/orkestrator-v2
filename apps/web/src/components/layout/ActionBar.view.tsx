@@ -36,7 +36,6 @@ import {
   Copy,
   ExternalLink,
   Eye,
-  FilePlus2,
   FolderGit2,
   FolderTree,
   GitMerge,
@@ -237,6 +236,11 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     resolveLaunchEnvironmentIdRef,
     reviewDialogOpen,
     setReviewDialogOpen,
+    setScriptDialogEnvironmentId,
+    scriptLaunchError,
+    setScriptLaunchError,
+    scriptDialogOpen,
+    createScriptButtonRef,
     loopedReviewDialogOpen,
     setLoopedReviewDialogOpen,
     multiReviewDialogOpen,
@@ -295,8 +299,10 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
     handleConfiguredReview,
     handleMultiReview,
     handleLoopedReview,
-    handleRun,
-    handleCreateScript,
+    openScriptDialog,
+    scriptLongPress,
+    scriptEligibilityError,
+    handleConfiguredCreateScript,
     handleCreateAgentTab,
     handleCreateNativeTab,
     handleCreateBrowserTab,
@@ -328,6 +334,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   // Configure dialogs open on the Settings action default, which is the same
   // value `actionDefaultFor` gives a plain click on the same button.
   const reviewLaunchDefaults = launchDialogDefaultsFor("review");
+  const scriptLaunchDefaults = launchDialogDefaultsFor("createScript");
   // These roles did not exist in older configs. An unset or disabled entry
   // keeps the previous behaviour of following Review rather than silently
   // switching to the environment's generic agent.
@@ -694,93 +701,57 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   </ToolbarTooltipTrigger>
 
                   {/* Play Button - Run Commands */}
-                  <ContextMenu>
-                    <ToolbarContextMenuTrigger
-                      tooltip={
-                        <>
-                          <p>Run Commands</p>
-                          <p className="text-xs text-muted-foreground">
-                            {setupRunning
-                              ? "Waiting for setup scripts to finish..."
-                              : hasRunCommands
-                                ? "Execute run commands from orkestrator-ai.json"
-                                : "Add 'run' array to orkestrator-ai.json to enable"}
-                          </p>
-                          <p className="text-xs text-muted-foreground">
-                            ⌘P · Right-click for script menu
-                          </p>
-                        </>
-                      }
+                  <ToolbarTooltipTrigger
+                    tooltip={
+                      <>
+                        <p>Run Commands</p>
+                        <p className="text-xs text-muted-foreground">
+                          {setupRunning
+                            ? "Waiting for setup scripts to finish..."
+                            : hasRunCommands
+                              ? "Execute run commands from orkestrator-ai.json"
+                              : "Add 'run' array to orkestrator-ai.json to enable"}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          ⌘P · Right-click or long-press to create a script
+                        </p>
+                      </>
+                    }
+                  >
+                    <Button
+                      ref={createScriptButtonRef}
+                      variant="ghost"
+                      size="icon"
+                      className={cn(
+                        "h-8 w-8 touch-manipulation",
+                        !canRunCommands && "cursor-not-allowed opacity-50",
+                      )}
+                      onClick={(event) => {
+                        if (scriptLongPress.shouldSuppressClick()) {
+                          event.preventDefault();
+                          return;
+                        }
+                        handleRunButtonClick();
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        scriptLongPress.cancel();
+                        openScriptDialog();
+                      }}
+                      {...scriptLongPress.handlers}
+                      data-toolbar-custom-context-menu="true"
+                      aria-disabled={!canRunCommands}
+                      aria-label="Run commands"
+                      disabled={!selectedEnvironment}
                     >
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className={`h-8 w-8 ${!canRunCommands ? "opacity-50 cursor-not-allowed" : ""}`}
-                        onClick={handleRunButtonClick}
-                        aria-disabled={!canRunCommands}
-                        aria-label="Run commands"
-                        disabled={!selectedEnvironment}
-                      >
-                        {isLoadingRunCommands || setupRunning ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Play className="h-4 w-4" />
-                        )}
-                        {isGrid && <span className="truncate text-xs">Run commands</span>}
-                      </Button>
-                    </ToolbarContextMenuTrigger>
-                    <ContextMenuContent>
-                      <ContextMenuItem onClick={handleRun} disabled={!canRunCommands}>
-                        <Play className="mr-2 h-4 w-4" />
-                        Run Commands
-                      </ContextMenuItem>
-                      {enabledAgents.has("claude") && (
-                        <ContextMenuItem
-                          onClick={() => handleCreateScript("claude")}
-                          disabled={!canCreateTab || !isRunning}
-                        >
-                          <FilePlus2 className="mr-2 h-4 w-4" />
-                          Create Script with Claude
-                        </ContextMenuItem>
+                      {isLoadingRunCommands || setupRunning ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Play className="h-4 w-4" />
                       )}
-                      {enabledAgents.has("codex") && (
-                        <ContextMenuItem
-                          onClick={() => handleCreateScript("codex")}
-                          disabled={!canCreateTab || !isRunning}
-                        >
-                          <FilePlus2 className="mr-2 h-4 w-4" />
-                          Create Script with Codex
-                        </ContextMenuItem>
-                      )}
-                      {enabledAgents.has("opencode") && (
-                        <ContextMenuItem
-                          onClick={() => handleCreateScript("opencode")}
-                          disabled={!canCreateTab || !isRunning}
-                        >
-                          <FilePlus2 className="mr-2 h-4 w-4" />
-                          Create Script with OpenCode
-                        </ContextMenuItem>
-                      )}
-                      {enabledAgents.has("cursor") && (
-                        <ContextMenuItem
-                          onClick={() => handleCreateScript("cursor")}
-                          disabled={!canCreateTab || !isRunning}
-                        >
-                          <FilePlus2 className="mr-2 h-4 w-4" />
-                          Create Script with Cursor Agent
-                        </ContextMenuItem>
-                      )}
-                      {enabledAgents.has("grok") && (
-                        <ContextMenuItem
-                          onClick={() => handleCreateScript("grok")}
-                          disabled={!canCreateTab || !isRunning}
-                        >
-                          <FilePlus2 className="mr-2 h-4 w-4" />
-                          Create Script with Grok Build
-                        </ContextMenuItem>
-                      )}
-                    </ContextMenuContent>
-                  </ContextMenu>
+                      {isGrid && <span className="truncate text-xs">Run commands</span>}
+                    </Button>
+                  </ToolbarTooltipTrigger>
                   <div className={cn("mx-2 h-4 w-px bg-border", isGrid && "hidden")} />
 
                   <ToolbarTooltipTrigger
@@ -1335,6 +1306,30 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
         fixModelDefaults={fixReviewIssuesLaunchDefaults}
         busy={multiReviewLaunchPending}
         onConfirm={handleMultiReview}
+      />
+      <AgentLaunchDialog
+        kind="create-script"
+        open={scriptDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setScriptDialogEnvironmentId(null);
+            setScriptLaunchError(null);
+          }
+        }}
+        defaultAgent={scriptLaunchDefaults.defaultAgent}
+        catalog={reviewModelCatalog}
+        enabledAgents={enabledAgentList}
+        preferredModels={scriptLaunchDefaults.preferredModels}
+        preferredReasoningEfforts={scriptLaunchDefaults.preferredReasoningEfforts}
+        returnFocusRef={createScriptButtonRef}
+        returnFocusFallback={() =>
+          window.matchMedia(MOBILE_SHELL_MEDIA_QUERY).matches
+            ? document.querySelector<HTMLButtonElement>(MOBILE_TOOLS_TRIGGER_SELECTOR)
+            : null
+        }
+        confirmDisabled={Boolean(scriptEligibilityError)}
+        error={scriptEligibilityError ?? scriptLaunchError}
+        onConfirm={handleConfiguredCreateScript}
       />
       <AgentLaunchDialog
         open={prDialogOpen}

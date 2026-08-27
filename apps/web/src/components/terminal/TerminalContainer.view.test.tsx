@@ -6733,6 +6733,36 @@ describe("TerminalContainer", () => {
     });
   });
 
+  test("keeps the shared tab count synchronized as pane tabs change", async () => {
+    function TabCountHarness() {
+      const { createTab, tabCount } = useTerminalContext();
+      return (
+        <div>
+          <output data-testid="shared-tab-count">{tabCount}</output>
+          <button type="button" onClick={() => createTab?.("plain")}>
+            Add tab through context
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <TabCountHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("shared-tab-count").textContent).toBe("1"));
+    act(() => screen.getByRole("button", { name: "Add tab through context" }).click());
+    await waitFor(() => expect(screen.getByTestId("shared-tab-count").textContent).toBe("2"));
+  });
+
   /**
    * A Multi Review workflow outlives the tab that launched it, so the launcher
    * reattaches to an already-active one rather than failing. Asking for a

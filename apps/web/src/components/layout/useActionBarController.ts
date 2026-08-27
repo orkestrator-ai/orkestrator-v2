@@ -111,6 +111,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   const selectedEnvironmentIdRef = useRef(selectedEnvironmentId);
   selectedEnvironmentIdRef.current = selectedEnvironmentId;
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
+  const [scriptDialogEnvironmentId, setScriptDialogEnvironmentId] = useState<string | null>(null);
+  const [scriptLaunchError, setScriptLaunchError] = useState<string | null>(null);
+  const scriptDialogOpen = scriptDialogEnvironmentId !== null;
+  const createScriptButtonRef = useRef<HTMLButtonElement>(null);
   const [loopedReviewDialogOpen, setLoopedReviewDialogOpen] = useState(false);
   const [multiReviewDialogOpen, setMultiReviewDialogOpen] = useState(false);
   const [multiReviewLaunchPending, setMultiReviewLaunchPending] = useState(false);
@@ -136,6 +140,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
 
   const anyLaunchDialogOpen =
     reviewDialogOpen ||
+    scriptDialogOpen ||
     loopedReviewDialogOpen ||
     multiReviewDialogOpen ||
     prDialogOpen ||
@@ -852,13 +857,73 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
   }, [createTab, canCreateTab, runCommands]);
 
   const handleCreateScript = useCallback(
-    (agentOverride?: DefaultAgent) => {
-      if (!createTab || !canCreateTab || !isRunning) return;
+    (
+      agentOverride?: DefaultAgent,
+      launchOptions?: {
+        agentLaunchMode?: AgentLaunchModeOverride;
+        initialAgentModel?: string;
+        initialReasoningEffort?: string;
+      },
+    ): boolean => {
+      if (!createTab || !canCreateTab || !isRunning) return false;
 
+      const actionDefault = actionDefaultFor("createScript");
+      const agent = agentOverride || actionDefault.agent;
+      const defaultForAgent = agent === actionDefault.agent ? actionDefault : undefined;
+      const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
+      const initialReasoningEffort =
+        launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
       const initialPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
-      createTab(agentOverride || defaultAgent, { initialPrompt });
+      return createTab(agent, {
+        initialPrompt,
+        displayTitle: "Run Script",
+        agentLaunchMode: "native",
+        ...launchOptions,
+        ...(initialAgentModel ? { initialAgentModel } : {}),
+        ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
+      });
     },
-    [createTab, canCreateTab, isRunning, isLocalEnvironment, defaultAgent],
+    [actionDefaultFor, createTab, canCreateTab, isRunning, isLocalEnvironment],
+  );
+
+  const openScriptDialog = useCallback(() => {
+    if (!selectedEnvironmentId) return;
+    setScriptLaunchError(null);
+    setScriptDialogEnvironmentId(selectedEnvironmentId);
+  }, [selectedEnvironmentId]);
+
+  const scriptLongPress = useLongPressAction(openScriptDialog, Boolean(selectedEnvironmentId));
+
+  const scriptEligibilityError = !scriptDialogEnvironmentId
+    ? null
+    : selectedEnvironmentId !== scriptDialogEnvironmentId
+      ? "The selected environment changed. Close this dialog and reopen it from the intended environment."
+      : !isRunning
+        ? "The environment is no longer running."
+        : tabCount >= MAX_TABS
+          ? "The maximum number of tabs has been reached."
+          : !canCreateTab
+            ? "This environment is not ready to open a new tab yet."
+            : null;
+
+  const handleConfiguredCreateScript = useCallback(
+    (selection: AgentLaunchSelection) => {
+      if (!scriptDialogEnvironmentId || scriptEligibilityError) return;
+      const created = handleCreateScript(selection.agent, {
+        agentLaunchMode: "native",
+        initialAgentModel: selection.model,
+        initialReasoningEffort: selection.reasoningEffort,
+      });
+      if (!created) {
+        setScriptLaunchError(
+          "The run-script agent tab could not be created. Check the environment and tab limit, then try again.",
+        );
+        return;
+      }
+      setScriptLaunchError(null);
+      setScriptDialogEnvironmentId(null);
+    },
+    [handleCreateScript, scriptDialogEnvironmentId, scriptEligibilityError],
   );
 
   const handleCreateAgentTab = useCallback(
@@ -1589,6 +1654,12 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     selectedEnvironmentIdRef,
     reviewDialogOpen,
     setReviewDialogOpen,
+    scriptDialogEnvironmentId,
+    setScriptDialogEnvironmentId,
+    scriptLaunchError,
+    setScriptLaunchError,
+    scriptDialogOpen,
+    createScriptButtonRef,
     loopedReviewDialogOpen,
     setLoopedReviewDialogOpen,
     multiReviewDialogOpen,
@@ -1666,8 +1737,10 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     handleConfiguredReview,
     handleMultiReview,
     handleLoopedReview,
-    handleRun,
-    handleCreateScript,
+    openScriptDialog,
+    scriptLongPress,
+    scriptEligibilityError,
+    handleConfiguredCreateScript,
     handleCreateAgentTab,
     handleCreateNativeTab,
     handleCreateBrowserTab,

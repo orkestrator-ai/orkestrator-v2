@@ -1,4 +1,8 @@
-import { resolvedDefaultAgent } from "@/lib/agent-settings";
+import {
+  agentSettingsTiers,
+  resolvedActionDefault,
+  resolvedDefaultAgent,
+} from "@/lib/agent-settings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@/lib/native/events";
 import { exit } from "@/lib/native/process";
@@ -596,6 +600,10 @@ function App() {
             resolvedDefaultAgent(config, environment?.projectId, environment),
           initialPrompt: launchPrompt,
           initialPromptAttachments: existingOptions?.initialPromptAttachments ?? storedAttachments,
+          ...(existingOptions?.model ? { model: existingOptions.model } : {}),
+          ...(existingOptions?.reasoningEffort
+            ? { reasoningEffort: existingOptions.reasoningEffort }
+            : {}),
         });
       } else if (existingOptions?.initialPrompt?.trim()) {
         clearClaudeOptions(environmentId);
@@ -624,12 +632,21 @@ function App() {
   const handleCreateScriptFromOverlay = useCallback(
     async (environmentId: string, initialPrompt: string) => {
       const environment = getEnvironmentById(environmentId);
-      const agentType = resolvedDefaultAgent(config, environment?.projectId, environment);
+      const enabledAgents = config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"];
+      const actionDefault = resolvedActionDefault(
+        agentSettingsTiers(config, environment?.projectId, environment),
+        "createScript",
+        enabledAgents,
+      );
 
       setClaudeOptions(environmentId, {
         launchAgent: true,
-        agentType,
+        agentType: actionDefault.agent,
         initialPrompt,
+        ...(actionDefault.model ? { model: actionDefault.model } : {}),
+        ...(actionDefault.reasoningEffort
+          ? { reasoningEffort: actionDefault.reasoningEffort }
+          : {}),
       });
 
       const started = await handleStartEnvironmentFromOverlay(environmentId, initialPrompt);

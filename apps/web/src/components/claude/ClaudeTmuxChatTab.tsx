@@ -15,7 +15,6 @@ import { ClaudeTmuxInteractiveTerminal } from "@/components/claude/ClaudeTmuxInt
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
 import { formatElapsed } from "@/lib/format-elapsed";
 import { createUuid } from "@/lib/uuid";
-import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   answerSelectionPrompt,
   answerPreToolUse,
@@ -72,7 +71,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
-import { getClaudeModelCatalog, renameEnvironmentFromPrompt } from "@/lib/backend";
+import { getClaudeModelCatalog } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 
@@ -748,16 +747,6 @@ export function ClaudeTmuxChatTab({
     // above) clears it when the turn ends.
     setTabBusy(storeKey, true);
     try {
-      if (text && !resumedSession && messages.length === 0) {
-        const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-        if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
-          try {
-            await renameEnvironmentFromPrompt(environmentId, text);
-          } catch (e) {
-            console.warn("[ClaudeTmuxChatTab] Failed to rename environment from prompt:", e);
-          }
-        }
-      }
       const prompt = buildTmuxPromptWithAttachments(text, attachments, containerId);
       await submitToTmux(tabId, prompt, environmentId);
       if (clearDraftOnSuccess) {

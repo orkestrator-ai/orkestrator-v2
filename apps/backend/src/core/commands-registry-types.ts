@@ -55,4 +55,10 @@ export type RegistryDependencies = {
     load: () => Promise<T> | T,
   ) => Promise<T | ConditionalResourceSnapshot<T>>;
   schedulePendingEnvironmentRename: (environmentId: string, context: CommandContext) => void;
+  prepareEnvironmentFirstPrompt: (
+    environmentId: string,
+    prompt: string,
+    context: CommandContext,
+  ) => Promise<void>;
+  reconcilePendingEnvironmentRenames: (context: CommandContext) => Promise<void>;
 };

@@ -1587,7 +1587,7 @@ exit 42
   );
 
   test(
-    "resumes a persisted rename while rehydrating an already-running environment",
+    "reconciles a persisted rename without an environment-list hydration",
     async () => {
       const worktreePath = await createGitRepoOnBranch("timestamp-name");
       const environment = createEnvironment({
@@ -1606,12 +1606,12 @@ exit 42
 
       await withFakeCodex(codexSlugScript("Reconcile Session State"), async () => {
         await expect(
-          commands.get("get_environments")?.({ projectId: environment.projectId }, context),
-        ).resolves.toEqual([expect.objectContaining({ id: environment.id, status: "running" })]);
+          commands.get("reconcile_pending_environment_renames")?.({}, context),
+        ).resolves.toBeUndefined();
 
         await waitForCondition(
           () => emitted.some(({ event }) => event === "environment-renamed"),
-          "rehydrated pending environment rename",
+          "backend-reconciled pending environment rename",
         );
       });
 
@@ -1621,6 +1621,300 @@ exit 42
     },
     ASYNC_TEST_BUDGET_MS,
   );
+
+  test(
+    "does not re-enter the lifecycle queue when setup dispatch prepares naming",
+    async () => {
+      const worktreePath = await createGitRepoOnBranch("20260415-123456");
+      const environment = createEnvironment({
+        id: "env-reentrant-first-prompt",
+        name: "20260415-123456",
+        branch: "20260415-123456",
+        environmentType: "local",
+        worktreePath,
+        status: "stopped",
+        setupScriptsComplete: false,
+        createdFromCommit: "base-commit",
+        pendingAgentLaunch: true,
+      });
+      const { context, emitted } = createContext(environment);
+      await isolateCodexBinaryLookup(context);
+      const commands = createCommandRegistry();
+      context.nativeAgents = {
+        reconcileInitialLaunch: async () => {
+          await commands.get("prepare_environment_first_prompt")?.(
+            {
+              environmentId: environment.id,
+              prompt: "Review the lifecycle queue",
+            },
+            context,
+          );
+        },
+      } as CommandContext["nativeAgents"];
+
+      await withFakeCodex(codexSlugScript("Review Lifecycle Queue"), async () => {
+        await expect(
+          commands.get("start_environment")?.({ environmentId: environment.id }, context),
+        ).resolves.toEqual(
+          expect.objectContaining({
+            environment: expect.objectContaining({ status: "running" }),
+          }),
+        );
+        await waitForCondition(
+          () => emitted.some(({ event }) => event === "environment-renamed"),
+          "lifecycle-queued first-prompt rename",
+        );
+      });
+
+      expect(environment.name).toBe("review-lifecycle-queue");
+      expect(environment.pendingRenamePrompt).toBeUndefined();
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
+
+  test("coalesces concurrent first-prompt preparation into one rename", async () => {
+    const environment = createEnvironment({
+      id: "env-concurrent-first-prompt",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      status: "running",
+      worktreePath: undefined,
+    });
+    const { context, emitted } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(
+      `#!/bin/sh
+printf 'invoke\n' >> "$FAKE_CODEX_LOG"
+out=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then out="$argument"; fi
+  previous="$argument"
+done
+printf '%s\n' '{"slug":"Concurrent Prompt"}' > "$out"
+`,
+      async (logPath) => {
+        await Promise.all([
+          commands.get("prepare_environment_first_prompt")?.(
+            { environmentId: environment.id, prompt: "The first prompt" },
+            context,
+          ),
+          commands.get("prepare_environment_first_prompt")?.(
+            { environmentId: environment.id, prompt: "The first prompt" },
+            context,
+          ),
+        ]);
+        await waitForCondition(
+          () => emitted.some(({ event }) => event === "environment-renamed"),
+          "coalesced environment rename",
+        );
+        const invocations = (await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean);
+        expect(invocations).toHaveLength(1);
+      },
+    );
+  });
+
+  test("preserves a manual rename interleaved with first-prompt preparation", async () => {
+    const environment = createEnvironment({
+      id: "env-manual-rename-race",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const updateEnvironment = context.storage.updateEnvironment.bind(context.storage);
+    let interleaveManualRename = true;
+    context.storage.updateEnvironment = (async (environmentId, update) => {
+      const updated = await updateEnvironment(environmentId, update);
+      if (interleaveManualRename && update.pendingRenamePrompt !== undefined) {
+        interleaveManualRename = false;
+        Object.assign(environment, {
+          name: "manual-choice",
+          branch: "manual-choice",
+          pendingRenamePrompt: undefined,
+        });
+      }
+      return updated;
+    }) as typeof context.storage.updateEnvironment;
+
+    await expect(
+      commands.get("prepare_environment_first_prompt")?.(
+        { environmentId: environment.id, prompt: "Do not overwrite the manual choice" },
+        context,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(environment.name).toBe("manual-choice");
+    expect(environment.branch).toBe("manual-choice");
+    expect(environment.pendingRenamePrompt).toBeUndefined();
+    expect(context.environmentLifecycleTasks.pendingCount()).toBe(0);
+  });
+
+  test("backs off failed reconciliation for 30 seconds and clears the floor after success", async () => {
+    const environment = createEnvironment({
+      id: "env-rename-backoff",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      status: "running",
+      worktreePath: undefined,
+      pendingRenamePrompt: "Retry this prompt",
+    });
+    const { context } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    const now = spyOn(Date, "now").mockReturnValue(100_000);
+
+    try {
+      await withFakeCodex(
+        `#!/bin/sh
+printf 'invoke\n' >> "$FAKE_CODEX_LOG"
+invocations="$(wc -l < "$FAKE_CODEX_LOG" | tr -d ' ')"
+if [ "$invocations" = "1" ]; then
+  printf 'codex auth required\n' >&2
+  exit 1
+fi
+out=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then out="$argument"; fi
+  previous="$argument"
+done
+printf '%s\n' '{"slug":"Retry Recovered"}' > "$out"
+`,
+        async (logPath) => {
+          await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          expect(warn).toHaveBeenCalledTimes(1);
+
+          now.mockReturnValue(129_999);
+          await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(1);
+
+          now.mockReturnValue(130_000);
+          await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          expect(environment.name).toBe("retry-recovered");
+          expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(2);
+          expect(warn).toHaveBeenCalledTimes(1);
+
+          Object.assign(environment, {
+            name: "20260415-123456",
+            branch: "20260415-123456",
+            pendingRenamePrompt: "A later durable intent",
+          });
+          await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(3);
+          expect(environment.pendingRenamePrompt).toBeUndefined();
+        },
+      );
+    } finally {
+      now.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  test("lets an explicit first prompt bypass rename retry backoff", async () => {
+    const environment = createEnvironment({
+      id: "env-explicit-rename-retry",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      status: "running",
+      worktreePath: undefined,
+      pendingRenamePrompt: "Retry this prompt",
+    });
+    const { context } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await withFakeCodex(
+        `#!/bin/sh
+printf 'invoke\n' >> "$FAKE_CODEX_LOG"
+printf 'codex auth required\n' >&2
+exit 1
+`,
+        async (logPath) => {
+          await commands.get("reconcile_pending_environment_renames")?.({}, context);
+          await commands.get("prepare_environment_first_prompt")?.(
+            { environmentId: environment.id, prompt: "Retry this prompt" },
+            context,
+          );
+          await waitForCondition(
+            () => warn.mock.calls.length === 2,
+            "explicit first-prompt retry during backoff",
+          );
+          expect((await fs.readFile(logPath, "utf8")).split("\n").filter(Boolean)).toHaveLength(2);
+        },
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("keeps rename intent while stopped and reconciles it after the environment runs", async () => {
+    const environment = createEnvironment({
+      id: "env-stopped-rename-intent",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      status: "stopped",
+      worktreePath: undefined,
+    });
+    const { context, emitted } = createContext(environment);
+    await isolateCodexBinaryLookup(context);
+    const commands = createCommandRegistry();
+
+    await withFakeCodex(codexSlugScript("Started Later"), async () => {
+      await commands.get("prepare_environment_first_prompt")?.(
+        { environmentId: environment.id, prompt: "Name this after startup" },
+        context,
+      );
+      await waitForCondition(
+        () => context.environmentLifecycleTasks.pendingCount() === 0,
+        "stopped rename task to leave the lifecycle queue",
+      );
+      expect(environment.name).toBe("20260415-123456");
+      expect(environment.pendingRenamePrompt).toBe("Name this after startup");
+
+      environment.status = "running";
+      await commands.get("reconcile_pending_environment_renames")?.({}, context);
+      expect(emitted.some(({ event }) => event === "environment-renamed")).toBe(true);
+    });
+
+    expect(environment.name).toBe("started-later");
+    expect(environment.pendingRenamePrompt).toBeUndefined();
+  });
+
+  test("does not throw when rename scheduling is refused during shutdown", async () => {
+    const environment = createEnvironment({
+      id: "env-rename-during-shutdown",
+      name: "20260415-123456",
+      branch: "20260415-123456",
+      status: "running",
+    });
+    const { context } = createContext(environment);
+    const commands = createCommandRegistry();
+    const warn = spyOn(console, "warn").mockImplementation(() => undefined);
+    await context.environmentLifecycleTasks.beginShutdown();
+
+    try {
+      await expect(
+        commands.get("prepare_environment_first_prompt")?.(
+          { environmentId: environment.id, prompt: "Keep this intent durable" },
+          context,
+        ),
+      ).resolves.toBeUndefined();
+      await waitForCondition(
+        () => warn.mock.calls.length === 1,
+        "shutdown rename admission failure to be contained",
+      );
+      expect(environment.pendingRenamePrompt).toBe("Keep this intent durable");
+    } finally {
+      warn.mockRestore();
+    }
+  });
 
   test("does not run codex exec for initial-prompt-only environment naming", async () => {
     const { context } = createContext([], { project: LOCAL_PROJECT_FOR_CREATE });

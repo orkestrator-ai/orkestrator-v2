@@ -1595,12 +1595,15 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined();
   });
 
-  test("keeps a first prompt durable and non-reentrant while environment rename is pending", async () => {
-    let releaseRename!: () => void;
-    const renameGate = new Promise<void>((resolve) => {
-      releaseRename = resolve;
+  test("keeps a first prompt durable and non-reentrant while backend dispatch is pending", async () => {
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
     });
-    renameEnvironmentFromPromptMock.mockImplementationOnce(async () => renameGate);
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await dispatchGate;
+      return { outcome: "accepted", requestId: input.requestId };
+    });
     useEnvironmentStore.setState({
       environments: [
         {
@@ -1620,14 +1623,15 @@ describe("AgentNativeTab", () => {
     const sendButton = await screen.findByTitle("Send");
     fireEvent.click(sendButton);
 
-    await waitFor(() => expect(renameEnvironmentFromPromptMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
     const pendingDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
     expect(pendingDraft?.text).toBe("Keep this first prompt");
     expect(pendingDraft?.requestId).toMatch(/\S/);
     await waitFor(() => expect(screen.queryByTitle("Send") === null).toBe(true));
     expect(input.getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
 
     view.unmount();
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
@@ -1638,8 +1642,7 @@ describe("AgentNativeTab", () => {
     remounted.unmount();
 
     const stableRequestId = pendingDraft!.requestId;
-    releaseRename();
-    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    releaseDispatch();
     expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
       prompt: "Keep this first prompt",
       requestId: stableRequestId,

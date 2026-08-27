@@ -2065,7 +2065,72 @@ describe("NativeAgentService", () => {
     });
   });
 
-  describe("environment renaming from the first queued prompt", () => {
+  describe("backend-owned environment naming from the first prompt", () => {
+    test("prepares a direct first prompt before provider dispatch", async () => {
+      const order: string[] = [];
+      const { provider, send } = createProviderStub("codex");
+      send.mockImplementation(async () => {
+        order.push("send");
+      });
+      await withService(
+        {
+          prefix: "orkestrator-native-direct-rename-",
+          environment: { name: "20260729-174746" },
+          provider: async () => provider,
+          invoke: (async <T>(command: string): Promise<T> => {
+            order.push(command);
+            return undefined as T;
+          }) as Invoke,
+        },
+        async ({ service }) => {
+          await service.dispatchPrompt({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "env-env-1:tab-1",
+            prompt: "Add a login page",
+            requestId: "direct-first-prompt",
+          });
+        },
+      );
+
+      expect(order).toEqual(["prepare_environment_first_prompt", "send"]);
+    });
+
+    test("does not rename an adopted session whose provider transcript is non-empty", async () => {
+      const { provider, send } = createProviderStub("codex", {
+        messages: async () => [
+          {
+            id: "existing-user-message",
+            role: "user",
+            content: "Earlier work",
+            parts: [{ type: "text", content: "Earlier work" }],
+            createdAt: new Date(0).toISOString(),
+          },
+        ],
+      });
+      const invoke = mock(async () => undefined) as unknown as Invoke;
+      await withService(
+        {
+          prefix: "orkestrator-native-adopted-rename-",
+          environment: { name: "20260729-174746" },
+          provider: async () => provider,
+          invoke,
+        },
+        async ({ service }) => {
+          await service.dispatchPrompt({
+            environmentId: "env-1",
+            agent: "codex",
+            logicalSessionKey: "env-env-1:tab-1",
+            prompt: "Continue the work",
+            requestId: "adopted-prompt",
+          });
+        },
+      );
+
+      expect(invoke).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
     test.each([
       ["a legacy timestamp name", "20260729-174746"],
       ["a compact timestamp name", "202607291747460"],
@@ -2091,7 +2156,7 @@ describe("NativeAgentService", () => {
 
           expect(invoked).toEqual([
             {
-              command: "rename_environment_from_prompt",
+              command: "prepare_environment_first_prompt",
               args: { environmentId: "env-1", prompt: "Add a login page" },
             },
           ]);
@@ -2141,7 +2206,7 @@ describe("NativeAgentService", () => {
           await internals(service).drainPromptQueues();
           // Only the first prompt of a session names the environment; the second
           // would overwrite a name derived from the work that is already running.
-          expect(invoked).toEqual(["rename_environment_from_prompt"]);
+          expect(invoked).toEqual(["prepare_environment_first_prompt"]);
         },
       );
     });

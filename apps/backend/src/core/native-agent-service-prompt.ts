@@ -1,4 +1,5 @@
 import * as shared from "./native-agent-service-shared.js";
+import { isGeneratedEnvironmentName } from "./environment-name.js";
 import {
   INTERACTION_MONITOR_DEFAULT_CONCURRENCY,
   INTERACTION_MONITOR_DEFAULT_MAX_RETRIES,
@@ -163,6 +164,7 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
         error instanceof Error ? error.message : error,
       );
     });
+    await this.prepareEnvironmentFirstPrompt(input, session, provider);
     /*
      * Validate liveness before opening the durable dispatch window, but do not
      * keep the global environments.json mutation lock across provider I/O.
@@ -230,6 +232,36 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
       const remaining = (this.providerDispatchCounts.get(provider) ?? 1) - 1;
       if (remaining > 0) this.providerDispatchCounts.set(provider, remaining);
       else this.providerDispatchCounts.delete(provider);
+    }
+  }
+
+  /**
+   * Persist and complete first-prompt naming at the backend dispatch boundary.
+   *
+   * The provider transcript is authoritative for adopted sessions: an empty
+   * local request journal alone does not prove that this is the conversation's
+   * first prompt. Naming failure remains cosmetic and never blocks dispatch.
+   */
+  private async prepareEnvironmentFirstPrompt(
+    input: DispatchNativeAgentPromptInput,
+    session: PersistedNativeAgentSession,
+    provider: NativeAgentRuntimeProvider,
+  ): Promise<void> {
+    if ((session.dispatchedRequestIds?.length ?? 0) > 0 || !nonBlank(input.prompt)) return;
+    try {
+      const environment = await this.storage.getEnvironment(input.environmentId);
+      if (!environment || !isGeneratedEnvironmentName(environment.name)) return;
+      const messages = await provider.messages(session.providerSessionId);
+      if (messages.length > 0) return;
+      await this.invoke("prepare_environment_first_prompt", {
+        environmentId: input.environmentId,
+        prompt: input.prompt,
+      });
+    } catch (error) {
+      console.warn(
+        `[native-agent] Failed to prepare first-prompt naming for ${input.environmentId}:`,
+        error instanceof Error ? error.name : "unknown error",
+      );
     }
   }
 

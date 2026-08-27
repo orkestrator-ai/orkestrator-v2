@@ -21,7 +21,6 @@ import {
   inspectOpenCodeIncompleteTurn,
   isAgentTurnEndTransition,
   isEnvironmentReadyForAgents,
-  isGeneratedEnvironmentName,
   nonBlank,
   openCodeIncompleteTurnRequestId,
   readProviderStatus,
@@ -969,12 +968,6 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
       return;
     }
     try {
-      // Only the first prompt in a session names the environment, and only while
-      // it still carries a generated name — the same guard the renderer applied
-      // before draining moved to the backend.
-      if ((session.dispatchedRequestIds?.length ?? 0) === 0) {
-        await this.renameEnvironmentFromFirstPrompt(queue.environmentId, message.text);
-      }
       await this.dispatchPrompt({
         environmentId: queue.environmentId,
         agent,
@@ -1212,34 +1205,6 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         },
       });
       throw error;
-    }
-  }
-
-  /**
-   * Name the environment from its first prompt.
-   *
-   * Draining moved out of the renderer, and this call moved with the rest of
-   * `handleSend` — so an environment whose first prompt arrived through the
-   * queue kept its generated timestamp name. A failure here must never block the
-   * prompt: the name is cosmetic, the dispatch is not.
-   */
-  protected async renameEnvironmentFromFirstPrompt(
-    environmentId: string,
-    prompt: unknown,
-  ): Promise<void> {
-    if (!nonBlank(prompt)) return;
-    const environment = await this.storage.getEnvironment(environmentId);
-    if (!environment || !isGeneratedEnvironmentName(environment.name)) return;
-    try {
-      await this.invoke("rename_environment_from_prompt", {
-        environmentId,
-        prompt,
-      });
-    } catch (error) {
-      console.warn(
-        `[native-agent] Failed to rename ${environmentId} from its first prompt:`,
-        error instanceof Error ? error.name : "unknown error",
-      );
     }
   }
 

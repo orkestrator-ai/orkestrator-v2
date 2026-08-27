@@ -10,6 +10,32 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `startup completes a persisted environment rename without renderer hydration` (`apps/backend/src/core/index.test.ts`)
+
+- **Status:** resolved
+- **Date observed:** 2026-08-27
+- **Original command:**
+  `bun --cwd=apps/backend test --preload ../../tests/setup-node.ts src/core --parallel=4`
+- **Worker configuration:** four Bun workers over the backend core suite.
+- **Failure:** `expect(received).toContain(expected)` expected the emitted event
+  list to contain `environment-renamed`, but received only `resource-changed`.
+  The case failed after 873.04 ms and reproduced again after 119.29 ms.
+- **Suite counts:** 2,090 total, 2,088 passed, 2 failed in the original run.
+- **Isolated rerun:** the owning `index.test.ts` file passed eight consecutive
+  isolated runs before the fix, confirming an aggregate timing race rather than
+  a deterministic failure.
+- **Hypothesis:** confirmed below; the test polled an earlier observable effect
+  and then asserted a later one.
+- **Root cause:** `renameEnvironmentToName` persists the environment before it
+  emits `environment-renamed`. The test waited only for the stored name, so a
+  parallel run could satisfy the wait in the interval before event emission.
+- **Fix:** current backend-owned environment naming change; wait for the
+  `environment-renamed` event, then assert the persisted name, branch, and
+  cleared durable prompt.
+- **Verification:** the owning file passed 26/26, and
+  `bun test --preload ../../tests/setup-node.ts src/core --parallel=4 --only-failures`
+  passed ten consecutive runs after the fix.
+
 ## `MultiReviewService resumes a persisted address attempt after restart` (`apps/backend/src/core/multi-review-service.test.ts:632`)
 
 - **Status:** open
@@ -33,6 +59,32 @@ history rather than two partial ones.
   aggregate execution or timing. The available output does not establish a
   narrower shared-state or scheduling cause; a recurrence should capture the
   activity-source writes around shutdown, init, and pending-dispatch clearing.
+- **Recurrence:** on 2026-08-27, `bun run test` reproduced the same expected
+  `idle` / received `working` activity mismatch after 127.76 ms in the backend
+  workspace group (`2,192 passed, 2 failed` across 2,194 tests). The owning file
+  immediately passed 79/79 in isolation; the other aggregate failure was the
+  related missing-consolidation-session case recorded below.
+
+## `MultiReviewService fails recoverably when the consolidation session is missing` (`apps/backend/src/core/multi-review-service.test.ts:545`)
+
+- **Status:** open
+- **Date observed:** 2026-08-27
+- **Original command:** `bun run test` (complete concurrent cross-platform
+  suite).
+- **Worker configuration:** `scripts/test-all.ts` ran four test groups
+  concurrently; the backend workspace package used two Bun workers.
+- **Failure:** after the missing consolidation session was converted to a
+  recoverable workflow failure, the environment's `multi-review` activity
+  source was expected to be `idle` but remained `working` (duration: 102.14 ms).
+- **Suite counts:** backend workspace group — 2,194 total, 2,192 passed, 2
+  failed. The other failure was the related persisted-address recurrence above.
+- **Isolated rerun:** `bun test src/core/multi-review-service.test.ts --only-failures`
+  from `apps/backend` -> 79 passed, 0 failed in 5.08 s.
+- **Hypothesis:** the failure has the same aggregate-only stale activity-source
+  shape as the persisted-address case. The available output establishes that
+  workflow failure state settled before the environment activity write became
+  observable, but does not yet identify whether the cause is a delayed write or
+  cross-test state; a recurrence should trace those activity-source updates.
 
 ## `opencode-client getSessionMessages > falls back to string conversion when circular tool payloads cannot be serialized` (`apps/web/src/lib/opencode-sessions.test.ts`)
 
@@ -289,6 +341,16 @@ history rather than two partial ones.
   not touch ActionBar or its shortcut handler. Evidence:
   `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
   `/var/folders/.../orkestrator-test-run.IB45Lu`.
+- **Recurrence (backend environment naming, 2026-08-27):** a second `bun run
+  test` failed the same keyboard-shortcut case at `ActionBar.test.tsx:5450`
+  after 30.31 ms. The expected run-command call was absent while the mock again
+  contained the preceding plain, native-agent, and Codex review-tab calls. The
+  web workspace group reported 5,531 passed, 1 skipped, and 1 failed across 242
+  files; the other three top-level groups passed. The immediate isolated rerun,
+  `bun test src/components/layout/ActionBar.test.tsx` from `apps/web`, passed
+  198/198 with 770 assertions in 14.59 s; the target passed in 21.45 ms. The
+  environment-naming change does not touch `ActionBar`, its shortcut handler,
+  or run-command loading.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
 
 ## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)
@@ -1875,6 +1937,16 @@ Post-fix stress verification:
   `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx` passed
   189/189 in 14.54 s. Consistent with the hypothesis below: the bare
   `setTimeout(575)` has no margin left once the whole file is running behind.
+- **Recurrence (backend environment naming, 2026-08-27):** `bun run test`
+  (`scripts/test-all.ts`, four top-level groups concurrently; web package at two
+  workers) failed this case after 620.13 ms at `ActionBar.test.tsx:3161` with
+  the same missing `Configure conflict resolution` dialog. The web package
+  reported 5,531 passed, 1 skipped, and 1 failed across 242 files; the other
+  three top-level groups passed. The immediate isolated rerun,
+  `bun test src/components/layout/ActionBar.test.tsx` from `apps/web`, passed
+  198/198 with 770 assertions in 14.10 s; the target passed in 612.04 ms. The
+  environment-naming change does not touch `ActionBar`, its long-press timer, or
+  conflict-resolution launch state.
 - **Hypothesis:** the same wall-clock race already documented and fixed for
   `clears active long-press click suppression when the action bar unmounts`
   above. The case fires a touch `pointerDown`, sleeps a bare

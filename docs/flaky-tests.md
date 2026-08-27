@@ -12,7 +12,7 @@ history rather than two partial ones.
 
 ## `MultiReviewService resumes a persisted address attempt after restart` (`apps/backend/src/core/multi-review-service.test.ts:632`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-26
 - **Original command:** `bun run test` (complete concurrent cross-platform
   suite).
@@ -36,7 +36,7 @@ history rather than two partial ones.
 
 ## `opencode-client getSessionMessages > falls back to string conversion when circular tool payloads cannot be serialized` (`apps/web/src/lib/opencode-sessions.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-25
 - **Original command:** `bun run test:logged -- --name web-pkg-final -- bun run --cwd apps/web test`
 - **Worker configuration:** the `apps/web` package script ran its own Bun worker
@@ -64,7 +64,7 @@ history rather than two partial ones.
 
 ## `NativeAgentService > retries once past a parked dispatch the provider can now vouch for` (`apps/backend/src/core/native-agent-service-dispatch.test.ts:767`)
 
-- **Status:** open
+- **Status:** open — targeted stress has not identified a root cause or fix
 - **Date observed:** 2026-08-25
 - **Original command:**
   `bun --cwd apps/backend test src/core/http-bridge-provider.test.ts`; the
@@ -167,7 +167,7 @@ history rather than two partial ones.
 
 ## `ACP bridge > announces overflow when earlier stream chunks leave no room for the marker` (`bridges/acp-bridge/src/acp-http.test.ts:191`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-24
 - **Original command:** `bun run test:logged -- --name final6 -- bun run test` (complete concurrent cross-platform suite)
 - **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was inside the bridges group, 2,833 tests across 99 files in 68.71 s.
@@ -215,7 +215,7 @@ history rather than two partial ones.
 
 ## `remote gateway > keeps a slow but progressing proxy body alive past the idle timeout` (`tests/unit/electron/gateway-proxy.test.ts:674`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
 - **Worker configuration:** four Bun workers over `tests/`, run concurrently with three typechecks and two other Bun test groups on the same host.
@@ -227,7 +227,7 @@ history rather than two partial ones.
 
 ## `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:1704`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test` (complete concurrent cross-platform suite)
 - **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was inside `@orkestrator/web:test:workspace`, 5,095 tests across 222 files in 118.5 s.
@@ -293,7 +293,7 @@ history rather than two partial ones.
 
 ## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
 - **Worker configuration:** root group only, four Bun workers.
@@ -305,7 +305,7 @@ history rather than two partial ones.
 
 ## `Electron backend process supervisor > reports backend readiness before slow managed Serve initialization finishes` (`tests/unit/electron/backend-process.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Direction:** the inverse of this file's usual pattern — it failed *in isolation* and passed in the aggregate suite, so it is recorded here rather than dismissed.
 - **Original command:** `bun run test:logged -- --name cred-focused2 -- bun test tests/unit/electron/backend-process.test.ts tests/unit/claude-credential-injection.test.ts --parallel=2 --only-failures`
@@ -316,11 +316,14 @@ history rather than two partial ones.
 - **Follow-up:** after the live `dev:test` profile finished starting, the owning file passed alone (32 passed, 14.18 s) and the complete aggregate `bun run test` passed in 104.9 s.
 - **Recurrence:** during credential-isolation follow-up on the same date, `bun test tests/unit/electron/backend-process.test.ts --parallel=2 --only-failures` failed at `waitForPath(.../status-started)` after 7,182.99 ms (27 passed, 1 failed); an immediate single-test rerun with `-t "reports backend readiness before slow managed Serve initialization finishes"` passed in 7.1 s.
 - **Aggregate recurrence:** `bun run test` at `ea9d79bdfdd3b2d4f5e0754b1ed6d2adf619e98e` timed out at the same `status-started` wait after 5,497.76 ms; the exact test passed alone in 3.1 s.
+- **Recurrence (2026-08-27):** `bun run test` timed out waiting for
+  `status-started` after 10,448.97 ms. The owning file then passed alone: 29
+  tests, zero failures.
 - **Hypothesis:** the case drives real backend startup against a fake `tailscale` shim in a temp directory. Concurrent process pressure from a starting `dev:test` profile appears to make the shim invocation fail rather than merely run slowly, so the failure is contention-shaped like the existing "Standalone backend shutdown and Tailscale Serve lifecycle" family. A recurrence should capture whether the shim was ever created and whether the failure is a spawn error or a non-zero exit before changing the Serve assertions.
 
 ## Aggregate process-contention recurrences (credential-isolation follow-up)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name final-full-test -- bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the root group used four Bun workers and the bridges group used two.
@@ -328,6 +331,11 @@ history rather than two partial ones.
 - **Suite counts:** backend workspace: 1,892 passed and 1 failed across 73 files; root/agent-support: 3,742 passed and 4 failed across 180 files (two are listed here, one is the separately recorded backend-readiness recurrence, and one was an outdated changed-code fixture corrected in this follow-up); bridges: 2,649 passed and 1 failed across 91 files.
 - **Isolated reruns:** each exact failed test passed alone through `test:logged`: PR recheck in 0.6 s, runtime environment in 0.7 s, malformed framing in 2.1 s, and Codex title limit in 0.5 s.
 - **Second aggregate run:** `bun run test` at `26c100220c905c67fa8efe3a12f606c90e610d1a` passed the complete workspace group, then the six-worker root group reported 3,742 passed and 4 timed-out tests after 268.8 s. The malformed-framing and backend-readiness cases recurred; `stops local merges when draft inspection or readiness fails` and `treats empty, null, and non-boolean draft output as non-draft` were newly observed at 5,017.69 ms and 5,001.10 ms. Those two exact PR tests passed alone in 2.4 s and 3.4 s respectively.
+- **Recurrence (2026-08-27):** `bun run test` reported 3,848 passed, one
+  skipped, five failed, and three associated errors in the root group. The
+  failures were the Linux file-manager fallback; three direct-container Claude
+  credential cases in `commands-registry-docker.test.ts`; and backend readiness.
+  The three owning files passed alone (61/61, 12/12, and 29/29).
 - **Hypothesis:** these cases cross real timer or subprocess boundaries and exhausted generic aggregate budgets while the independently scheduled groups competed for process startup. The isolated passes confirm this observation as contention-shaped; recurrence counts should be gathered before changing product assertions.
 
 ## Root-suite 5000 ms timeout cluster (`tests/unit/electron/`, `tests/unit/test-diagnostic-bounds.test.ts`)
@@ -339,7 +347,7 @@ rather than independent defects. Every owning file passes alone, and the failing
 set is not stable between runs, which is the signature this registry already
 records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4`
 - **Worker configuration:** `--parallel=4` (which implies `--isolate`). Run concurrently with a second `bun test --test-worker` fleet from another worktree on the same host; load average during the run was 18.67 / 27.53 / 21.07.
@@ -354,13 +362,20 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
   - Run 2 — `remote gateway > serializes invoke results once and keeps command metrics private and bounded` (5059.89 ms). 3,741 passed, 1 skipped, 1 failed, 179 files, 244.2 s. Isolated rerun of `gateway-support-extra.test.ts` → 23 passed, 0 failed, in **1.03 s**.
   - Run 3 — `bounded test diagnostics > never passes a DOM-producing query result directly to toBeNull` (`tests/unit/test-diagnostic-bounds.test.ts`, 5011.17 ms) and `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`tests/unit/electron/commands-registry-environments.test.ts`, 5006.02 ms). 3,740 passed, 1 skipped, 2 failed, 361.4 s. Both owning files passed alone: 12 passed in 2.18 s, and 114 passed in 43.40 s.
 - **Recurrence (2026-08-17, `claude-task-layout`):** one further occurrence of the same 5000 ms-deadline cluster, in the full four-group `scripts/test-all.ts` run rather than the root group alone: `Electron backend command registry > rejects malformed container status framing and invalid encoded sections` (`commands-registry-terminal.test.ts`, 5018.26 ms), alongside `scripts/test-all.ts > the non-iOS groups run concurrently, not one after another` (1008.70 ms) — see that test's own entry. The run took 229.6 s against ~137 s for the same command minutes earlier on the same tree, so the host was materially slower; both owning files passed alone immediately afterwards (64 passed and 32 passed, exit 0). No new evidence about mechanism, and the change under review touched only transcript settle positions in `apps/web`, `apps/backend/src/core/http-bridge-provider.ts`, `bridges/claude-bridge` message normalization and the protocol summary — none of which these files load.
+- **Recurrence (2026-08-27):**
+  `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
+  reported 3,845 passed, one skipped, two failed, and two associated errors
+  across 185 files in 237.76 s. `verifies a PR against the trusted project and
+  environment branches` timed out at 5,021.86 ms, and `falls back to the parent
+  directory when Linux FileManager1 fails` timed out at 5,001.17 ms. Their
+  combined isolated rerun passed 117 tests in 14.23 s.
 - **Widened scope:** run 3 shows the cluster is not confined to the gateway and command-registry files. `test-diagnostic-bounds.test.ts` walks every test file in the repository and needs 2.18 s even alone, so it sits close to the 5000 ms deadline before any contention is added; it is the clearest example of a deadline that is too tight for the work rather than a test that hangs. A test needing 1–2 s alone but exceeding 5 s under `--parallel=4` is being starved.
 - **Hypothesis:** All three are fixed-deadline (5000 ms) assertions in files that spawn child processes and bind loopback ports. Under the observed load they lose the CPU long enough to cross the deadline, and the gateway proxy's `502` is the same starvation surfacing as an upstream connect failure rather than a timeout. The `commands-registry-environments.test.ts` file failing on a *different* pair of tests in isolation is the strongest evidence that the deadline, not any one test's logic, is what is being hit. A fix should replace the fixed deadlines in these three files with progress-based waits, or raise them proportionally to detected host load; do not simply widen the constant, which moves the threshold without removing the race.
 - **Not attributable to the change under review:** the diff that surfaced this (`packages/protocol/src/action-defaults.ts` and the settings/toolbar wiring) touches none of these files or the code they exercise.
 
 ## `live session read paths > denies an oversized blocking hook without broadcasting truncated approval data` (`tests/unit/electron/tmux-session.test.ts:1166`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-16
 - **Original command:** `bun run test:logged -- --name full-tests -- bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was in the root/agent-support group.
@@ -373,7 +388,7 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 
 ## `ACP bridge > quarantines an unusable state file instead of refusing to start` (`bridges/acp-bridge/src/acp-persistence.test.ts:448`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-16
 - **Original command:** `bun run test:logged -- --name review-current-full-tests -- bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the bridges group used two Bun workers.
@@ -399,7 +414,7 @@ records for the `tmux-backend.test.ts` and `standalone.test.ts` clusters below.
 
 ## `Pi ACP background discovery > does not re-adopt a settled child's directory for the next unnamed launch` (`bridges/acp-bridge/src/acp-cursor-background.test.ts:1200`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-25
 - **Original command:** `bun run test`
 - **Worker configuration:** `scripts/test-all.ts` ran workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the bridges group used two Bun workers.
@@ -674,7 +689,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `scripts/test-all.ts > the non-iOS groups run concurrently, not one after another` (`tests/unit/test-all.test.ts`)
 
-- **Status:** open again — recurred 2026-08-17 past the one-second bound its fix introduced (see the recurrence note at the end of this entry).
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-15
 - **Original command:** `bun run test`
 - **Worker configuration:** root group at four workers while the other aggregate
@@ -1486,7 +1501,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `process and platform command behavior > launches browser, file manager, and editors without a shell` (`tests/unit/electron/commands-process-coverage.test.ts`)
 
-- **Status:** resolved — see the 2026-08-16 resolution sweep above
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-14
 - **Original command:** `set -o pipefail; bun test ./tests --parallel 2>&1 | tee /tmp/ork-fix-root-tests.log` on an 18-worker macOS host
 - **Failure:** the test exceeded Bun's 5,000 ms budget (reported duration 5,002.42 ms) with no assertion message.
@@ -1497,6 +1512,12 @@ recorded against the file that actually ran, not against the historical name.
 - **Hypothesis (not confirmed):** the test asserts that browser/file-manager/editor launches happen without a shell, so it waits on spawned child processes; under a loaded 18-worker run those spawns are contending with every other suite's children. The 1.30 s isolated cost makes an outright hang unlikely. Whether the wait is on process spawn or on a fake-binary lookup has not been established.
 - **Clean rerun of the whole group:** a later `bun test ./tests --parallel` on the same host and branch reported 3,638 passed, 1 skipped, 0 failed in 118.36 s — half the wall time of the failing run (237.95 s) and with this test passing, which is consistent with contention rather than a defect in the test.
 - **Next step:** instrument which awaited spawn is outstanding at timeout before changing the budget, since a raised budget would hide a genuine spawn regression here.
+- **Related recurrence (2026-08-27):** the sibling `falls back to the parent
+  directory when Linux FileManager1 fails` timed out at 5,001.17 ms in the
+  four-worker root suite, left a dangling `xdg-open`, and passed in the combined
+  117-test isolated rerun. Its assertions already name both expected launcher
+  invocations, so it now carries an explicit outer budget while retaining the
+  exact spawn sequence.
 
 ## Environmental, not flaky: `tests/unit/electron/*` on a host without `tmux`
 
@@ -1822,7 +1843,7 @@ Post-fix stress verification:
 
 ## `ACP bridge > keeps a completed turn idle when Cursor replay is failed` (`bridges/acp-bridge/src/acp-transcript.test.ts:1410`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-16
 - **Original command:** `bun run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures`, at `8f15f6c3f15dbe854c38b2f5b013b88d047f9d01` on `fix-todo-rendering`.
 - **Worker configuration:** The bridges group ran on its own with `--parallel=2`, not under `scripts/test-all.ts`. No other suite was running against this clone.
@@ -1835,7 +1856,7 @@ Post-fix stress verification:
 
 ## `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:1704`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, on `native-composer-capabilities` (working tree: composer capability gating).
 - **Worker configuration:** Workspace web group under `scripts/test-all.ts`, with the root, bridge, and protocol-lockfile groups running concurrently.
@@ -1848,7 +1869,7 @@ Post-fix stress verification:
 
 ## `ActionBar workflow tabs > opens the Resolve modal after a mobile long press without launching a default resolve` (`apps/web/src/components/layout/ActionBar.test.tsx:2910`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-16
 - **Original command:**
   `bun run test:logged -- --name web-all -- bun --cwd=apps/web test --parallel=4 --only-failures`,
@@ -1890,7 +1911,7 @@ Post-fix stress verification:
 
 ## Electron command-registry fixture-shim timeouts (four tests, three files)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Tests:**
   - `Electron backend command registry > rolls back a local rename when push configuration fails` (`tests/unit/electron/commands-registry-environments.test.ts:1667`, assertion at `:1672`)
@@ -1908,6 +1929,11 @@ Post-fix stress verification:
 - **Follow-up:** the identical whole-group command passed on a rerun later the same day, exit 0 in 161.9 s — under half the failing run's 361.24 s. The wall-clock gap is the useful part of that observation: the failing run was roughly 2.2x slower overall, which is consistent with host contention rather than with anything specific to these four cases.
 - **Related:** the "Command-registry Git fixture, deduplicated/admitted container starts, and process-launch coverage" row of the 2026-08-16 resolution sweep. That sweep raised the shared condition deadline to 10 s and gave several cases explicit budgets precisely because the shared helper's deadline had grown past Bun's 5 s default. These four cases wait on real `git`/`docker`/`gh` shims but carry **no** `ASYNC_TEST_BUDGET_MS`, so Bun's 5 s default still wins and reports a generic timeout instead of naming the condition.
 - **Hypothesis:** Same family as that sweep row rather than a new product defect — the change in flight touched only `bridges/acp-bridge`, which none of these files load. Under `--parallel=4` the real `git`/`docker`/`gh` shim processes under `$TMPDIR` are slow enough to exceed the 5 s outer budget; the timeout then interrupts the case mid-flight and its `finally` tears the shim down, which is what produces the trailing "command failed"/"promise rejected" errors *after* the timeout rather than before it. The log also shows repeated "killed 1 dangling process" lines around them. A recurrence should record how long the shim command actually took before any budget is raised: give each of the four an explicit `ASYNC_TEST_BUDGET_MS` so the named condition wins the race and the real latency is visible, rather than widening a tolerance against a generic timeout.
+- **Recurrence (2026-08-27):** `verifies a PR against the trusted project and
+  environment branches` timed out at 5,021.86 ms in the four-worker root suite
+  and then passed with its owner in isolation. It uses the same real `gh` shim
+  and teardown boundary, so it now carries `ASYNC_TEST_BUDGET_MS` without
+  changing its repository, canonical-URL, head-branch, or base-branch checks.
 - **Recurrence (terminal case only), 2026-08-17:** `rejects malformed container
   status framing and invalid encoded sections` failed alone under
   `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
@@ -1934,7 +1960,7 @@ Post-fix stress verification:
 
 ## `ACP bridge > bounds remembered provider message ids during a large replay` (`bridges/acp-bridge/src/acp-transcript.test.ts:136`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at
   `5b9c6e68` on `investigate-sub-agent`, with an uncommitted codex-bridge
@@ -1976,7 +2002,7 @@ Post-fix stress verification:
 
 ## `ACP bridge > starts local-default Cursor ACP without project MCP auto-approval` (`bridges/acp-bridge/src/acp-prompt.test.ts:50`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name bridge-tests -- bun test bridges --parallel=2 --only-failures`,
   at `d70f1ac7` on `investigate-sub-agent`, with a clean tree.
@@ -2019,7 +2045,7 @@ Post-fix stress verification:
 
 ## `ACP bridge > keeps each assistant message on the model that produced it when the model changes` (`bridges/acp-bridge/src/acp-transcript.test.ts`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `3773514b` on `claude-task-layout`, with a working tree carrying web-only transcript-pinning changes.
 - **Worker configuration:** the full four-group `scripts/test-all.ts` run, so the bridges group shared the host with the workspace, root and protocol groups. This is the loudest configuration in which this family has been recorded.
@@ -2031,7 +2057,7 @@ Post-fix stress verification:
 
 ## `remote gateway > returns 502 and releases admission when an eligible buffered proxy body aborts` (`tests/unit/electron/gateway-proxy.test.ts:810`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `3773514b` on `claude-task-layout`, with a working tree carrying web-only transcript-pinning changes plus this document.
 - **Worker configuration:** the full four-group `scripts/test-all.ts` run, so the root group shared the host with the workspace, bridges and protocol groups.
@@ -2042,7 +2068,7 @@ Post-fix stress verification:
 - **Hypothesis:** the test aborts the upstream body and then asserts on both the status and the response text. When the abort lands before the gateway's error body is flushed and read, Bun's fetch surfaces its own socket-closed JSON instead, so the assertion sees a different — but equally correct — 502 body. The behaviour under test (502 plus admission release) was not violated in this run. Before touching the gateway, a recurrence should establish whether the assertion should accept either body shape, or whether the gateway should be made to flush its error body before the socket closes; the change in flight was confined to `apps/web` transcript rendering and `docs/`, and loads no gateway code.
 ## `useVirtuosoScrollState > scroll state persistence > keeps retrying until the Virtuoso handle is ready while the scroller stays mounted` (`tests/unit/hooks/useVirtuosoScrollState.test.ts:1576`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test:logged -- --name root-tests -- bun test ./tests --parallel=4 --only-failures`
 - **Worker configuration:** four Bun workers over `tests/`, run immediately after a full `apps/web` suite and a bridge suite on the same host.
@@ -2053,7 +2079,7 @@ Post-fix stress verification:
 
 ## `ACP bridge > omits model attribution entirely when the agent advertises no model` (`bridges/acp-bridge/src/acp-session.test.ts:156`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-18
 - **Original command:** `bun run test:logged -- --name full-suite -- bun run test`, at `5a5797eb` on `add-playwright-docker`, with a working tree carrying the Docker/Playwright review fixes (`docker/`, `apps/backend/src/core/commands-containers.ts`, `tests/unit/version-drift.test.ts`, `e2e/`, `AGENTS.md`).
 - **Worker configuration:** the full four-group `scripts/test-all.ts` run, so the bridges group shared the host with the workspace, root and protocol groups.
@@ -2066,7 +2092,7 @@ Post-fix stress verification:
 
 ## `FeaturesView` owning-file worker crash (`tests/unit/components/FeaturesView.test.tsx`)
 
-- **Status:** open
+- **Status:** open — targeted stress has not identified a root cause or fix
 - **Date observed:** 2026-08-18
 - **Original command:** `bun run test:logged -- --name full-tests-rebased -- bun run test`, at `8c1dc1f3` on `questions-ui-layout` after rebasing the web-only native-agent question change onto `origin/main`.
 - **Worker configuration:** the full four-group `scripts/test-all.ts` run; the root and agent-support group used six parallel Bun workers while sharing the host with the workspace, bridges, and protocol-lockfile groups.
@@ -2078,7 +2104,7 @@ Post-fix stress verification:
 
 ## CreateEnvironmentDialog compact agent controls default mode (`tests/unit/components/CreateEnvironmentDialog.test.tsx`)
 
-- **Status:** open
+- **Status:** resolved — see the 2026-08-27 resolution sweep below
 - **Date observed:** 2026-08-26
 - **Original command:** `bun test apps/backend/src/core/extension-discovery.test.ts bridges/acp-bridge/src/grok-runtime.test.ts apps/desktop/electron/agent-platform-selection.test.ts tests/unit/electron/toolchain-startup.test.ts tests/unit/electron/commands-registry-tools.test.ts tests/unit/components/CreateEnvironmentDialog.test.tsx tests/unit/components/EnvironmentSettingsDialog.test.tsx`
 - **Worker configuration:** one Bun test process running seven explicitly selected files.
@@ -2086,3 +2112,30 @@ Post-fix stress verification:
 - **Suite counts:** 179 total, 178 passed, 1 failed.
 - **Isolated rerun:** `bun test tests/unit/components/CreateEnvironmentDialog.test.tsx` → 105 passed, 0 failed in 5.62 s.
 - **Hypothesis:** the result depends on state shared with another file in the combined Bun process; the owning file resets enough state to pass in isolation, but the exact leaking state has not been identified.
+
+## 2026-08-27 resolution sweep
+
+This sweep resolves only entries with an identified cause, a concrete fix, and
+focused verification. The unattributed NativeAgent and FeaturesView incidents
+remain open. Aggregate validation after the initial sweep exposed further
+process-contention recurrences; the updated fixes subsequently passed the
+complete concurrent suite. “This change” is the fix reference for the rows
+below.
+
+| Entries | Root cause | Fix | Verification |
+| --- | --- | --- | --- |
+| Multi Review address restart and missing-session activity | The tests treated the persisted workflow transition as if the derived environment activity write had completed in the same operation. `save()` deliberately persists the workflow first and then projects its activity, so aggregate scheduling could expose the durable terminal workflow during that short projection window. | Wait for both authoritative snapshots: the terminal/pending workflow condition and `agentActivitySources.multi-review === idle`. The missing-session case that failed the initial full run was fixed at the same boundary. | The owner passed 79/79 in isolation, then 237/237 across three repetitions while the ACP, root, and web stress groups ran concurrently. |
+| OpenCode circular tool-payload fallback | The deliberately circular value drives the serializer's exception/fallback path; under a saturated host it exhausted Bun's generic outer test budget even though the fallback result was correct. | Give this CPU-bound exceptional-path case an explicit 30-second outer budget without changing either assertion. | The owner passed as part of a concurrent two-file web run: 252 tests, 893 assertions, zero failures. |
+| ACP startup/readiness family: overflow, persistence quarantine, replay bounds/status/model attribution, and local-default prompt | The shared `afterEach` sent `SIGTERM`, immediately forgot every child, and deleted its state directories without awaiting exit. Bridge-heavy files therefore accumulated children still shutting down while later cases spawned more processes; cleanup could also race a child's final state access. | Materialize the child set, await `stopChild` for every process, delete each child from tracking in `finally` even when it already exited, and only then delete temporary directories. | A focused harness regression covers live and already-exited children plus fixture-deletion ordering. The final two-worker bridge run passed 3,152 tests, skipped 11, and failed zero. |
+| Pi ACP settled-child re-adoption | `/activity` becoming `working` and the transcript projecting the new child card are separate asynchronous updates. Checking only arrival allowed a wrongly re-adopted card's transient active state to pass. | Poll for arrival, then require `working` activity and an active `cursor-subagent-2` card to persist across more than one complete background-discovery cycle. | The focused ACP run passed 35 tests with 164 assertions. |
+| Gateway slow-progress and buffered-abort cases | The slow-progress fixture left only a 3:1 gap-to-timeout ratio, so host starvation could legitimately make one test-produced gap look idle. On deliberate abort, Bun can surface several socket-close messages. | Use a 25:1 progress-to-idle margin while keeping total transfer time beyond the idle deadline. Require the abort body to match a known abort/socket-close error, plus 502 and successful compressed recovery. | Included in the focused 293-test root/UI run with zero failures. |
+| ActionBar keyboard shortcuts and Resolve long press | Shortcut cases could dispatch before the async Run control was enabled; the current test now waits for that accessible control before key events. The Resolve case slept just past the long-press threshold and synchronously queried before React necessarily committed the dialog. | Keep the shortcut readiness boundary and replace the Resolve dialog's immediate query with the bounded accessible `findByRole` condition. | The two shortcut cases and Resolve case passed 20 repetitions each (60 tests, 400 assertions) under concurrent load. |
+| Electron command shims and aggregate 5-second timeout clusters | Subprocess-backed `git`, `gh`, Docker, launcher, runtime-shell, gateway, title-generation, backend-startup, and repository-scan cases could outlive Bun's generic outer deadline. Cleanup then removed a shim underneath the still-running command, producing misleading follow-on failures. The readiness case additionally gave the post-start shim only a two-second inner observation window. | Retain bounded condition diagnostics and give the affected subprocess-backed cases explicit outer budgets, including PR verification, Linux fallback, three direct-container credential cases, and slow managed-Serve readiness; give the readiness signal a ten-second diagnostic window. | The seven affected Electron owners passed inside the focused 293-test run. The complete `bun run test` then passed all four groups: root/agent-support in 72.7 s and bridges in 52.1 s. |
+| Oversized tmux blocking hook | The deny response and removal of the pending approval file are separate filesystem observations. The test synchronously checked deletion immediately after the response appeared. | Poll the pending path's absence with the existing bounded diagnostic before asserting that no truncated approval event was broadcast. | Included in the 577-test root stress run. |
+| `scripts/test-all.ts` concurrency assertion | The original five-millisecond and replacement one-second bounds both assumed artifact pruning would finish within an arbitrary threshold. Removing the bound entirely made a sequential regression deadlock on the deliberately held WORKSPACE gate. | Use a 15-second diagnostic bound and a 30-second test budget, capture the groups that started before releasing WORKSPACE, then assert against that captured set after the run settles. | Included in the focused 293-test root/UI run. |
+| Virtuoso delayed-handle retry | The assertion slept for 30 ms before readiness, while readiness advances through animation frames; replacing that sleep with arrival polling stopped observing later duplicate retries. | Wait for the first `scrollToIndex` call, then retain a short settling interval before asserting the final call arrays contain exactly one activation. | Included in the focused 293-test root/UI run. |
+| Create Environment default mode | The owning module captured “defaults” with each Zustand store's mutable `getState()` at module evaluation. In a combined Bun process, another loaded test could mutate that singleton before this file captured it, turning a contaminated terminal mode into the baseline restored by `beforeEach`. | Capture immutable store creation baselines through `getInitialState()` for config and all model stores. | The exact historical mixed-file command passed 179/179 with 683 assertions; it also passed inside the 577-test root stress run. |
+
+Focused validation and the passing complete concurrent suite are recorded in
+the rows above. NativeAgent and FeaturesView remain open because stress passes
+alone do not supply the root cause and fix required for resolution.

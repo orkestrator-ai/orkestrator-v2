@@ -101,16 +101,20 @@ export const ONE_PIXEL_PNG = Buffer.from(
   "base64",
 );
 
-afterEach(async () => {
-  for (const child of children) child.kill("SIGTERM");
-  children.clear();
+export async function cleanupTrackedResources(): Promise<void> {
+  // A signal is only a request. Await every exit before deleting its state
+  // directory or allowing the next test to start another bridge; otherwise
+  // bridge-heavy files accumulate shutting-down children under parallel load.
+  await Promise.all(Array.from(children, (child) => stopChild(child)));
   await Promise.all(
-    [...temporaryDirectories].map((directory) =>
+    Array.from(temporaryDirectories, (directory) =>
       fs.rm(directory, { recursive: true, force: true }),
     ),
   );
   temporaryDirectories.clear();
-});
+}
+
+afterEach(cleanupTrackedResources);
 
 export async function temporaryDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(resolve(os.tmpdir(), "acp-bridge-test-"));
@@ -261,11 +265,18 @@ export async function spawnBridge(
 }
 
 export async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>((resolvePromise) => child.once("exit", () => resolvePromise()));
-  child.kill("SIGTERM");
-  await exited;
-  children.delete(child);
+  try {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise<void>((resolvePromise) =>
+      child.once("exit", () => resolvePromise()),
+    );
+    child.kill("SIGTERM");
+    await exited;
+  } finally {
+    // Explicit test cleanup also calls stopChild. Deregister settled children
+    // on every path so the shared afterEach never retains dead processes.
+    children.delete(child);
+  }
 }
 
 export async function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {

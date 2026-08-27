@@ -1285,7 +1285,7 @@ describe("live session read paths", () => {
           },
         }),
       );
-      expect(existsSync(pending)).toBe(false);
+      await waitFor(() => !existsSync(pending), 5_000);
       expect(
         emitted.some(
           (entry) =>

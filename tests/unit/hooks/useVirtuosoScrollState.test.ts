@@ -1681,7 +1681,10 @@ describe("useVirtuosoScrollState", () => {
         });
         rerender({ isActive: true });
 
+        await waitFor(() => expect(scrollToIndexCalls).toHaveLength(1));
         await act(async () => {
+          // Let any incorrectly retained readiness retry fire before checking
+          // the one-shot activation invariant.
           await new Promise((resolve) => setTimeout(resolve, 30));
         });
 

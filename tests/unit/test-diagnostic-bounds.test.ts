@@ -62,7 +62,7 @@ describe("bounded test diagnostics", () => {
       }
     }
     expect(offenders).toEqual([]);
-  });
+  }, 30_000);
 
   test("detects and faithfully rewrites DOM-producing absence assertions", () => {
     const source = [

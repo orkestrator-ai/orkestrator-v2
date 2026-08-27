@@ -139,20 +139,21 @@ describe("scripts/test-all.ts", () => {
     const { dependencies, started } = createDependencies({ gate });
 
     const run = runAllTests(dependencies);
-    // Pruning old runner artifacts precedes group creation and can take more
-    // than one event-loop turn on a busy host. Wait for the observable group
-    // boundary rather than assuming it occurs within five milliseconds.
-    const deadline = Date.now() + 1_000;
+    // Pruning old runner artifacts precedes group creation. Keep this wait
+    // bounded and capture the pre-release starts so a sequential regression
+    // names the missing groups instead of deadlocking on the WORKSPACE gate.
+    const deadline = Date.now() + 15_000;
     while (started.length < 4 && Date.now() < deadline) await Bun.sleep(5);
-
-    // Sequential execution would have started only the first group by now.
-    expect(started).toContain(ROOT);
-    expect(started).toContain(BRIDGES);
-    expect(started).toContain(PROTOCOL);
+    const startedBeforeRelease = Array.from(started);
 
     release();
     expect(await run).toBe(0);
-  });
+
+    // Sequential execution would have started only WORKSPACE before release.
+    expect(startedBeforeRelease).toContain(ROOT);
+    expect(startedBeforeRelease).toContain(BRIDGES);
+    expect(startedBeforeRelease).toContain(PROTOCOL);
+  }, 30_000);
 
   test("passes a bounded worker count so concurrent groups cannot oversubscribe", () => {
     const groups = buildConcurrentGroups(10);

@@ -9,7 +9,10 @@ import { useConfigStore } from "@/stores/configStore";
 import type { TabInfo } from "@/types/paneLayout";
 import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
-import type { NativeAgentSessionProjection } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  type NativeAgentSessionProjection,
+} from "@orkestrator/protocol/native-agent";
 import { invoke as nativeInvoke } from "@/lib/native/backend";
 import {
   createAgentHandoffSnapshot,
@@ -136,14 +139,6 @@ const mockGetCodexRuntimeHealth = mock<(_client: unknown, _sessionId: string) =>
   async () => null,
 );
 const mockStartCodexNativeReview = mock(async () => true);
-const mockSteerCodexSession = mock<
-  (
-    _client: unknown,
-    _sessionId: string,
-    _text: string,
-    _requestId: string,
-  ) => Promise<realCodexClient.CodexSteerOutcome>
->(async () => ({ outcome: "accepted" }));
 
 mock.module("@/lib/claude-client", () => ({
   ...realClaudeClientSnapshot,
@@ -175,7 +170,6 @@ mock.module("@/lib/codex-client", () => ({
   getSessionStatus: mockGetCodexSessionStatus,
   getCodexRuntimeHealth: mockGetCodexRuntimeHealth,
   startCodexNativeReview: mockStartCodexNativeReview,
-  steerCodexSession: mockSteerCodexSession,
 }));
 
 const {
@@ -388,7 +382,6 @@ beforeEach(() => {
   mockGetCodexSessionStatus.mockClear();
   mockGetCodexRuntimeHealth.mockClear();
   mockStartCodexNativeReview.mockClear();
-  mockSteerCodexSession.mockClear();
 
   mockForkClaudeSession.mockImplementation(async () => ({
     sessionId: "claude-fork",
@@ -448,7 +441,6 @@ beforeEach(() => {
   mockGetCodexSessionStatus.mockImplementation(async () => ({ status: "idle" }));
   mockGetCodexRuntimeHealth.mockImplementation(async () => null);
   mockStartCodexNativeReview.mockImplementation(async () => true);
-  mockSteerCodexSession.mockImplementation(async () => ({ outcome: "accepted" }));
   resetAgentHandoffCache();
 
   seedPaneLayout();
@@ -4125,7 +4117,28 @@ describe("AgentInfoButton OpenCode sharing", () => {
   });
 });
 
-describe("AgentInfoButton Codex steering", () => {
+describe("AgentInfoButton backend-owned steering", () => {
+  function seedProjection(
+    tabId = TAB_ID,
+    phase: NativeAgentSessionProjection["turn"]["phase"] = "running",
+    platform: "codex" | "pi" = "codex",
+  ) {
+    const key = createSessionKey(ENVIRONMENT_ID, tabId);
+    useNativeAgentProjectionStore.getState().setProjection(key, {
+      platform,
+      environmentId: ENVIRONMENT_ID,
+      sessionId: `${platform}-${tabId}`,
+      connection: "connected",
+      turn: { phase },
+      messages: [],
+      interactions: [],
+      composerControls: [],
+      capabilities: nativeAgentCapabilities(platform),
+      revision: 1,
+      generation: `${platform}-generation`,
+    });
+  }
+
   function seedRunningCodex(tabId = TAB_ID) {
     useCodexStore.setState({
       clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
@@ -4140,185 +4153,153 @@ describe("AgentInfoButton Codex steering", () => {
         ],
       ]),
     } as never);
+    seedProjection(TAB_ID);
+    seedProjection(tabId);
   }
 
-  test("only offers the steer panel while a turn is running", () => {
+  function steerOutcome(outcome: {
+    outcome: "applied" | "idle" | "mismatch" | "unknown";
+    requestId?: string;
+  }) {
+    nativeInvokeMock.mockImplementation((command: string) => {
+      if (command === "perform_native_agent_session_action") return Promise.resolve(outcome);
+      if (command === "get_cursor_account_usage") return new Promise(() => undefined);
+      return Promise.resolve();
+    });
+  }
+
+  test("only offers the steer panel when the backend projection enables a running turn", () => {
     useCodexStore.setState({
       clients: new Map([[ENVIRONMENT_ID, CODEX_CLIENT]]),
       sessions: new Map([
         [CODEX_KEY, { sessionId: "codex-session-1", messages: [], isLoading: false }],
       ]),
     } as never);
+    seedProjection(TAB_ID, "idle");
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
     expect(screen.queryByPlaceholderText("Correct or redirect Codex") === null).toBe(true);
   });
 
-  test("sends the trimmed text to the active turn and clears the field", async () => {
+  test("hides the panel while backend-owned steer recovery is parked", () => {
     seedRunningCodex();
+    const key = createSessionKey(ENVIRONMENT_ID, TAB_ID);
+    useNativeAgentProjectionStore.getState().setProjection(key, {
+      ...useNativeAgentProjectionStore.getState().projections.get(key)!,
+      recoverableDispatch: {
+        requestId: "backend-steer-recovery",
+        kind: "steer",
+        createdAt: "2026-08-28T10:00:00.000Z",
+      },
+    });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
+
+    expect(screen.queryByPlaceholderText("Correct or redirect Codex") === null).toBe(true);
+  });
+
+  test("routes trimmed intent through the backend without a renderer request id", async () => {
+    seedRunningCodex();
+    steerOutcome({ outcome: "applied" });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
 
     const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
-    expect(screen.getByRole("button", { name: "Send now" }).hasAttribute("disabled")).toBe(true);
-
     fireEvent.change(input, { target: { value: "   stop and summarise   " } });
     fireEvent.click(screen.getByRole("button", { name: "Send now" }));
 
-    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
-    const [client, sessionId, text, requestId] = mockSteerCodexSession.mock.calls[0]!;
-    expect(client).toBe(CODEX_CLIENT);
-    expect(sessionId).toBe(`codex-${TAB_ID}`);
-    expect(text).toBe("stop and summarise");
-    expect(typeof requestId).toBe("string");
     await waitFor(() =>
       expect(
-        (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
-      ).toBe(""),
+        nativeInvokeMock.mock.calls.some(
+          ([command]) => command === "perform_native_agent_session_action",
+        ),
+      ).toBe(true),
     );
-  });
-
-  test("reports a turn that moved on and keeps the text for a retry", async () => {
-    seedRunningCodex();
-    mockSteerCodexSession.mockImplementation(async () => ({ outcome: "mismatch" }));
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
-      target: { value: "wait" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "The active turn changed; your steering message was not sent.",
-      ),
+    const call = nativeInvokeMock.mock.calls.find(
+      ([command]) => command === "perform_native_agent_session_action",
     );
-    expect(
-      (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
-    ).toBe("wait");
+    expect(call).toBeDefined();
+    if (!call) throw new Error("Expected a native agent action call");
+    expect(call[1]).toMatchObject({
+      environmentId: ENVIRONMENT_ID,
+      agent: "codex",
+      action: { kind: "steer", text: "stop and summarise" },
+    });
+    expect((call[1] as { action: object }).action).not.toHaveProperty("requestId");
+    await waitFor(() => expect(input.value).toBe(""));
+    expect(mockToastSuccess).toHaveBeenCalledWith("Sent to the active turn");
   });
 
-  test.each([
-    [
-      { outcome: "idle" } as const,
-      "There is no active Codex turn to steer. Start a turn, then use /steer while it is running.",
-    ],
-    [{ outcome: "not-found" } as const, "The Codex session is no longer available."],
-    [
-      { outcome: "rejected", httpStatus: 503 } as const,
-      "Codex rejected the steering message (HTTP 503).",
-    ],
-  ])("reports the %j steer outcome and preserves the text", async (outcome, message) => {
+  test("keeps the text while backend-owned recovery is unresolved", async () => {
     seedRunningCodex();
-    mockSteerCodexSession.mockImplementation(async () => outcome);
+    steerOutcome({ outcome: "unknown", requestId: "opaque-backend-id" });
     render(<AgentInfoButton activeTab={codexTab()} />);
     open();
-    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
-      target: { value: "wait" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
 
-    await waitFor(() => expect(mockToastError).toHaveBeenCalledWith(message));
-    expect(
-      (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
-    ).toBe("wait");
-  });
-
-  test("reuses an ambiguous request id without clearing the text", async () => {
-    seedRunningCodex();
-    mockSteerCodexSession.mockImplementation(async (_client, _sessionId, _text, requestId) => ({
-      outcome: "unknown",
-      requestId,
-    }));
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
-      target: { value: "wait" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-
-    await waitFor(() =>
-      expect(mockToastError).toHaveBeenCalledWith(
-        "Could not confirm whether Codex received your steering message. Retry the unchanged steering message to check safely.",
-      ),
-    );
-    expect(
-      (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
-    ).toBe("wait");
-
-    const firstRequestId = mockSteerCodexSession.mock.calls[0]![3];
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(2));
-    expect(mockSteerCodexSession.mock.calls[1]![3]).toBe(firstRequestId);
-  });
-
-  test("reuses one pending request id until a definitive outcome clears it", async () => {
-    seedRunningCodex();
-    let attempt = 0;
-    mockSteerCodexSession.mockImplementation(async (_client, _sessionId, _text, requestId) => {
-      attempt += 1;
-      return attempt <= 2
-        ? { outcome: "unknown" as const, requestId }
-        : { outcome: "accepted" as const };
-    });
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
-      target: { value: "wait" },
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
-    const firstRequestId = mockSteerCodexSession.mock.calls[0]![3];
-
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(2));
-    expect(mockSteerCodexSession.mock.calls[1]![3]).toBe(firstRequestId);
-
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(3));
-    expect(mockSteerCodexSession.mock.calls[2]![3]).toBe(firstRequestId);
-    await waitFor(() =>
-      expect(
-        (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
-      ).toBe(""),
-    );
-
-    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
-      target: { value: "wait" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(4));
-    expect(mockSteerCodexSession.mock.calls[3]![3]).not.toBe(firstRequestId);
-  });
-
-  test("does not reuse an ambiguous request id after the steering text changes", async () => {
-    seedRunningCodex();
-    mockSteerCodexSession.mockImplementation(async (_client, _sessionId, _text, requestId) => ({
-      outcome: "unknown",
-      requestId,
-    }));
-    render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    const input = screen.getByPlaceholderText("Correct or redirect Codex");
+    const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "wait" } });
     fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(1));
-    const firstRequestId = mockSteerCodexSession.mock.calls[0]![3];
 
-    fireEvent.change(input, { target: { value: "stop instead" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-    await waitFor(() => expect(mockSteerCodexSession).toHaveBeenCalledTimes(2));
-    expect(mockSteerCodexSession.mock.calls[1]![3]).not.toBe(firstRequestId);
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith(
+        "Delivery is unconfirmed. Resolve the backend recovery card in the chat tab before sending another instruction.",
+      ),
+    );
+    expect(input.value).toBe("wait");
   });
 
-  test("text typed for one session is not carried into another", async () => {
-    /*
-     * A single app-level instance serves every tab, so unsent steer text used
-     * to survive a tab switch and get posted to the new session's active turn.
-     */
-    seedRunningCodex("tab-2");
+  test("reports an authoritative run mismatch without clearing the text", async () => {
+    seedRunningCodex();
+    steerOutcome({ outcome: "mismatch" });
+    render(<AgentInfoButton activeTab={codexTab()} />);
+    open();
 
+    const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "wait" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("The active turn changed before delivery."),
+    );
+    expect(input.value).toBe("wait");
+  });
+
+  test("uses the same capability-driven backend action for Pi", async () => {
+    seedProjection(TAB_ID, "running", "pi");
+    steerOutcome({ outcome: "applied" });
+    const tab = {
+      ...codexTab(),
+      nativeAgentData: {
+        platform: "pi",
+        environmentId: ENVIRONMENT_ID,
+        containerId: "container-1",
+        isLocal: false,
+      },
+    } as TabInfo;
+    render(<AgentInfoButton activeTab={tab} />);
+    open();
+
+    expect(screen.getByText(/Sends directly to the current Pi turn/)).not.toBeNull();
+    expect(screen.queryByText(/current Codex turn/) === null).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Pi"), {
+      target: { value: "finish the current tool first" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
+
+    await waitFor(() =>
+      expect(
+        nativeInvokeMock.mock.calls.some(
+          ([command, args]) =>
+            command === "perform_native_agent_session_action" &&
+            (args as { agent?: string })?.agent === "pi",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  test("does not carry unsent steering text into another session", () => {
+    seedRunningCodex("tab-2");
     const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
     open();
     fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
@@ -4328,71 +4309,9 @@ describe("AgentInfoButton Codex steering", () => {
     rerender(<AgentInfoButton activeTab={codexTab({ id: "tab-2" })} />);
     reopen();
 
-    const input = screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement;
-    expect(input.value).toBe("");
-    expect(screen.getByRole("button", { name: "Send now" }).hasAttribute("disabled")).toBe(true);
-    expect(mockSteerCodexSession).not.toHaveBeenCalled();
-  });
-
-  test("same-tab resume clears unsent steering text", () => {
-    seedRunningCodex();
-    const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
-      target: { value: "belongs to the old rollout" },
-    });
-
-    act(() => {
-      useCodexStore.setState({
-        sessions: new Map([
-          [CODEX_KEY, { sessionId: "codex-resumed", messages: [], isLoading: true }],
-        ]),
-      } as never);
-    });
-    rerender(<AgentInfoButton activeTab={codexTab()} />);
-    reopen();
-
     expect(
       (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
     ).toBe("");
-  });
-
-  test("a delayed steer completion cannot clear the resumed session's draft", async () => {
-    seedRunningCodex();
-    let releaseSteer: (outcome: realCodexClient.CodexSteerOutcome) => void = () => {};
-    mockSteerCodexSession.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          releaseSteer = resolve;
-        }),
-    );
-    const { rerender } = render(<AgentInfoButton activeTab={codexTab()} />);
-    open();
-    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
-      target: { value: "old session text" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Send now" }));
-
-    act(() => {
-      useCodexStore.setState({
-        sessions: new Map([
-          [CODEX_KEY, { sessionId: "codex-resumed", messages: [], isLoading: true }],
-        ]),
-      } as never);
-    });
-    rerender(<AgentInfoButton activeTab={codexTab()} />);
-    reopen();
-    fireEvent.change(screen.getByPlaceholderText("Correct or redirect Codex"), {
-      target: { value: "new session text" },
-    });
-
-    await act(async () => {
-      releaseSteer({ outcome: "accepted" });
-    });
-    expect(
-      (screen.getByPlaceholderText("Correct or redirect Codex") as HTMLInputElement).value,
-    ).toBe("new session text");
-    expect(mockToastSuccess).not.toHaveBeenCalledWith("Sent to the active turn");
   });
 });
 

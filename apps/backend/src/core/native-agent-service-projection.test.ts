@@ -85,6 +85,7 @@ function createProviderStub(
     refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
     prepareDispatch?: NativeAgentRuntimeProvider["prepareDispatch"];
     dispatchStatus?: NativeAgentRuntimeProvider["dispatchStatus"];
+    steerSupported?: NativeAgentRuntimeProvider["steerSupported"];
   } = {},
 ) {
   const createSession = mock(behaviour.createSession ?? (async () => "provider-session"));
@@ -113,6 +114,11 @@ function createProviderStub(
   const refreshCatalog = behaviour.refreshCatalog ? mock(behaviour.refreshCatalog) : undefined;
   const prepareDispatch = behaviour.prepareDispatch ? mock(behaviour.prepareDispatch) : undefined;
   const dispatchStatus = behaviour.dispatchStatus ? mock(behaviour.dispatchStatus) : undefined;
+  const steerSupported = nativeAgentCapabilities(agent).actions?.steer
+    ? mock(behaviour.steerSupported ?? (async () => true))
+    : behaviour.steerSupported
+      ? mock(behaviour.steerSupported)
+      : undefined;
   const provider = {
     agent,
     createSession,
@@ -135,12 +141,14 @@ function createProviderStub(
     dismissSuggestedPrompt,
     prepareDispatch,
     dispatchStatus,
+    steerSupported,
     dispose,
   } as unknown as NativeAgentRuntimeProvider;
   return {
     provider,
     prepareDispatch,
     dispatchStatus,
+    steerSupported,
     createSession,
     registerSession,
     send,
@@ -1937,6 +1945,36 @@ describe("NativeAgentService", () => {
           await service.ensureSession(identity);
           const projection = await service.getProjection(identity);
           expect(projection?.capabilities).toEqual(nativeAgentCapabilities(agent));
+        },
+      );
+    },
+  );
+
+  test.each(["codex", "pi"] as const)(
+    "removes steering from an unqualified %s bridge projection",
+    async (agent) => {
+      const stub = createProviderStub(agent, {
+        interactiveSnapshot: async () => ({ status: "running", messages: [] }),
+        steerSupported: async () => false,
+      });
+      await withService(
+        {
+          prefix: `orkestrator-native-${agent}-steer-qualification-`,
+          provider: async () => stub.provider,
+        },
+        async ({ service }) => {
+          const identity = {
+            environmentId: "env-1",
+            agent,
+            logicalSessionKey: `env-env-1:tab-${agent}-steer-qualification`,
+          };
+          await service.ensureSession(identity);
+          const projection = await service.getProjection(identity);
+          expect(stub.steerSupported).toHaveBeenCalledWith("provider-session");
+          expect(projection?.capabilities.actions?.steer).toBe(false);
+          expect(
+            projection?.slashCommands?.some((command) => command.name === "/steer") ?? false,
+          ).toBe(false);
         },
       );
     },

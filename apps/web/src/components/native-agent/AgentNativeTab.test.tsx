@@ -4298,7 +4298,7 @@ describe("AgentNativeTab", () => {
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });
 
-    test("reuses the request id when a steer could not be confirmed", async () => {
+    test("leaves unconfirmed steer recovery to the backend", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });
       performNativeAgentSessionActionMock.mockImplementation(
         async () => ({ outcome: "unknown" as const }) as never,
@@ -4320,16 +4320,10 @@ describe("AgentNativeTab", () => {
 
       await steer();
       await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1));
-      await screen.findByText(/reuses the same request id/);
-      await steer();
-      await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(2));
-
-      const [first, second] = performNativeAgentSessionActionMock.mock.calls;
-      // An unconfirmed action may already have reached the provider; resending
-      // the same text must deduplicate rather than steer the turn twice.
-      expect((second![0].action as { requestId?: string }).requestId).toBe(
-        (first![0].action as { requestId?: string }).requestId,
-      );
+      await screen.findByText(/Use the recovery card above/);
+      const action = performNativeAgentSessionActionMock.mock.calls[0]![0].action;
+      expect(action).toEqual({ kind: "steer", text: "narrow the scope" });
+      expect(action).not.toHaveProperty("requestId");
       performNativeAgentSessionActionMock.mockImplementation(async () => ({
         outcome: "applied" as const,
       }));

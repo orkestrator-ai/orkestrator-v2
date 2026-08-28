@@ -828,6 +828,7 @@ describe("HTTP bridge provider", () => {
       if (url.endsWith("/config") && init.method === "POST") {
         return Response.json({ ...composer, selectedReasoningId: "xhigh" });
       }
+      if (url.includes("/steer/dispatch")) return Response.json({ dispatch: "unknown" });
       if (url.endsWith("/steer")) return Response.json({ outcome: "applied" });
       return new Response(null, { status: 404 });
     }, piConnection);
@@ -845,11 +846,13 @@ describe("HTTP bridge provider", () => {
         reasoningId: "xhigh",
       }),
     ).resolves.toMatchObject({ selectedReasoningId: "xhigh" });
+    await expect(provider.steerSupported!("pi/session")).resolves.toBe(true);
     await expect(
       provider.performSessionAction!("pi/session", {
         kind: "steer",
         text: "Prioritize the regression test",
         requestId: "steer-1",
+        expectedRunId: "pi:generation:1",
       }),
     ).resolves.toEqual({ outcome: "applied" });
 
@@ -858,6 +861,10 @@ describe("HTTP bridge provider", () => {
         ["http://pi.test/session/pi%2Fsession/status", "GET"],
         ["http://pi.test/session/pi%2Fsession/messages", "GET"],
         ["http://pi.test/session/pi%2Fsession/config", "POST"],
+        [
+          "http://pi.test/session/pi%2Fsession/steer/dispatch?requestId=orkestrator-steer-qualification",
+          "GET",
+        ],
         ["http://pi.test/session/pi%2Fsession/steer", "POST"],
       ]),
     );
@@ -866,7 +873,70 @@ describe("HTTP bridge provider", () => {
     ).toEqual({ modelId: "anthropic/claude-opus-4-5", reasoningId: "xhigh" });
     expect(
       JSON.parse(String(requests.find((request) => request.url.endsWith("/steer"))!.init.body)),
-    ).toEqual({ input: "Prioritize the regression test", requestId: "steer-1" });
+    ).toEqual({
+      input: "Prioritize the regression test",
+      requestId: "steer-1",
+      expectedRunId: "pi:generation:1",
+    });
+  });
+
+  test("does not qualify an older steering bridge whose no-touch route is absent", async () => {
+    const { provider } = httpProvider(() => new Response(null, { status: 404 }), codexConnection);
+
+    await expect(provider.steerSupported!("codex-session")).resolves.toBe(false);
+  });
+
+  test("preserves positive evidence that Pi dropped an undelivered steer", async () => {
+    const { provider } = httpProvider(() => Response.json({ dispatch: "absent" }), piConnection);
+    await expect(provider.steerStatus!("pi-session", "steer-dropped")).resolves.toBe("absent");
+  });
+
+  test.each([
+    ["idle" as const, { outcome: "idle" as const }],
+    ["mismatch" as const, { outcome: "mismatch" as const }],
+  ])("preserves the Codex %s steer outcome carried by a 409", async (outcome, expected) => {
+    const { provider } = httpProvider(
+      () => Response.json({ outcome }, { status: 409 }),
+      codexConnection,
+    );
+
+    await expect(
+      provider.performSessionAction!("codex-session", {
+        kind: "steer",
+        text: "Keep the change narrow",
+        requestId: `steer-${outcome}`,
+        expectedRunId: "turn-1",
+      }),
+    ).resolves.toEqual(expected);
+  });
+
+  test("treats a vanished Codex steer session as an ambiguous provider failure", async () => {
+    const { provider } = httpProvider(
+      () => Response.json({ error: "Session not found" }, { status: 404 }),
+      codexConnection,
+    );
+
+    await expect(
+      provider.performSessionAction!("codex-session", {
+        kind: "steer",
+        text: "Keep the change narrow",
+        requestId: "steer-missing",
+        expectedRunId: "turn-1",
+      }),
+    ).rejects.toThrow("Codex steer");
+  });
+
+  test.each([
+    [{ status: "idle" }, { state: "idle" as const }],
+    [{ status: "running" }, { state: "unknown" as const }],
+    [{ status: "running", turnId: "x".repeat(513) }, { state: "unknown" as const }],
+    [
+      { status: "running", turnId: "turn-1" },
+      { state: "running" as const, runId: "turn-1" },
+    ],
+  ])("maps a steer run snapshot without inventing idleness: %j", async (status, expected) => {
+    const { provider } = httpProvider(() => Response.json(status), codexConnection);
+    await expect(provider.activeSteerRun!("codex-session")).resolves.toEqual(expected);
   });
 
   test("refreshes Pi's bridge-owned model runtime before re-listing", async () => {

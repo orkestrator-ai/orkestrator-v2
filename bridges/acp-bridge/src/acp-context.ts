@@ -7,6 +7,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import type { AcpTurnUsage } from "./usage.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
+import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 
 export type Provider = "cursor" | "grok";
 export type JsonObject = Record<string, unknown>;
@@ -229,6 +230,8 @@ export interface SessionState {
   revision: number;
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
+  /** Dormant Grok extension correlation; runtime steer remains unadvertised. */
+  grokInterjectionJournal: Map<string, GrokInterjectionJournalEntry>;
   approvals: Map<string, ApprovalState>;
   outputTruncated: boolean;
   uncheckedTranscriptBytes: number;
@@ -331,6 +334,7 @@ export interface PersistedSession {
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
+  grokInterjectionJournal?: GrokInterjectionJournalEntry[];
   composer?: NativeAgentComposerState;
   sessionConfig?: AcpNormalizedSessionConfig;
   usage?: PersistedUsage;
@@ -494,6 +498,7 @@ export const MAX_STRUCTURED_RESULTS = 4;
 export const MAX_STRUCTURED_RESULT_BYTES = 1024 * 1024;
 export const TRANSCRIPT_CHECK_INTERVAL_BYTES = 64 * 1024;
 export const MAX_PROMPT_JOURNAL = 512;
+export const MAX_PERSISTED_GROK_INTERJECTION_BYTES = 512 * 1024;
 export const MAX_STATE_FILE_BYTES = parseBoundedInteger(
   process.env.ACP_MAX_STATE_FILE_BYTES,
   16 * 1024 * 1024,
@@ -813,7 +818,11 @@ export class AcpProcess {
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonObject;
         pending.reject(
-          new Error(typeof error.message === "string" ? error.message : "ACP request failed"),
+          new AcpRpcError(
+            typeof error.message === "string" ? error.message : "ACP request failed",
+            typeof error.code === "number" ? error.code : undefined,
+            error.data,
+          ),
         );
       } else {
         pending.resolve(message.result);
@@ -968,6 +977,16 @@ export class HttpError extends Error {
   constructor(
     readonly status: number,
     message: string,
+  ) {
+    super(message);
+  }
+}
+
+export class AcpRpcError extends Error {
+  constructor(
+    message: string,
+    readonly code?: number,
+    readonly data?: unknown,
   ) {
     super(message);
   }

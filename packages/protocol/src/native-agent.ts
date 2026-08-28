@@ -335,6 +335,8 @@ export type NativeAgentDispatchOutcome =
 export interface NativeAgentRecoverableDispatch {
   requestId: string;
   createdAt: string;
+  /** Omitted by older backends, where every recoverable dispatch was a prompt. */
+  kind?: "prompt" | "steer";
 }
 
 export type NativeAgentTurnPhase =
@@ -527,7 +529,7 @@ export type NativeAgentSessionAction =
   | { kind: "redo" }
   | { kind: "share" }
   | { kind: "unshare" }
-  | { kind: "steer"; text: string; requestId: string }
+  | { kind: "steer"; text: string }
   | { kind: "review" };
 
 export interface NativeAgentSessionActionOutcome {

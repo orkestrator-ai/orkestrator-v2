@@ -80,6 +80,7 @@ import {
 import { reconcileStaleToolParts } from "./acp-reconciliation.js";
 import { emptySessionConfig } from "./acp-persistence.js";
 import { persistState, schedulePersist } from "./acp-persist-writer.js";
+import { applyGrokInterjectionBroadcast } from "./grok-interjection.js";
 
 export async function listResumableSessions(): Promise<JsonObject[]> {
   if (sessionListProbe) return sessionListProbe;
@@ -238,6 +239,7 @@ export async function resumeSessionReserved(
       revision: 0,
       structured: new Map(),
       promptJournal: new Map(),
+      grokInterjectionJournal: new Map(),
       approvals: new Map(),
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
@@ -368,6 +370,7 @@ export async function createSessionReserved(
       revision: 0,
       structured: new Map(),
       promptJournal: new Map(),
+      grokInterjectionJournal: new Map(),
       approvals: new Map(),
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
@@ -881,6 +884,36 @@ export async function applyComposerPatch(
 }
 
 export function applyVendorUpdate(state: SessionState, method: string, params: JsonObject): void {
+  const interjection = applyGrokInterjectionBroadcast(
+    state.grokInterjectionJournal,
+    state.acpSessionId,
+    method,
+    params,
+  );
+  if (interjection) {
+    // Grok wire is normalized at the bridge boundary. Downstream transcript
+    // code sees an ordinary user message and never learns the extension shape.
+    const messageId = `grok-interjection:${interjection.interjectionId}`;
+    if (!state.messages.some((message) => message.id === messageId)) {
+      state.messages.push({
+        id: messageId,
+        role: "user",
+        content: interjection.text,
+        parts: [
+          {
+            type: "text",
+            content: interjection.text,
+            sourcePartId: `${messageId}:0`,
+            sourceMessageId: messageId,
+          },
+        ],
+        createdAt: new Date().toISOString(),
+      });
+    }
+    state.revision += 1;
+    schedulePersist();
+    return;
+  }
   if (isCursorTaskMethod(method)) {
     applyCursorTask(state, params);
     return;

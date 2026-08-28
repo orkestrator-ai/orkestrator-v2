@@ -19,7 +19,12 @@ import { denyAllApprovals } from "./interactions.js";
 import { schedulePersist } from "./persistence.js";
 import { boundTranscript } from "./transcript.js";
 import { withTimeout } from "./timeout.js";
-import { type JsonObject, type PromptJournalEntry, type SessionState } from "./state.js";
+import {
+  setSteerJournal,
+  type JsonObject,
+  type PromptJournalEntry,
+  type SessionState,
+} from "./state.js";
 
 export const STRUCTURED_PROMPT_INSTRUCTION_PREFIX = "End your turn with exactly one JSON value";
 
@@ -105,11 +110,12 @@ export async function dispatchPrompt(
 
   // Never rejects: every terminal path is recorded on the session, and an
   // unobserved rejection here would take the whole bridge down.
-  return { completion: followRun(state, run, promptSequence, input) };
+  return { completion: followRun(state, session, run, promptSequence, input) };
 }
 
 async function followRun(
   state: SessionState,
+  session: AgentSession,
   run: Promise<void>,
   promptSequence: number,
   input: DispatchInput,
@@ -117,7 +123,7 @@ async function followRun(
   try {
     await withTimeout(run, PROMPT_TIMEOUT_MS, "The Pi turn exceeded its time budget");
     if (!turnStillOwned(state, promptSequence)) return;
-    finishTurn(state, input);
+    finishTurn(state, session, input);
   } catch (error) {
     // The timeout rejects the wait, not the run: `session.prompt` is still
     // executing, and `settleTurn` is about to drop the only handle that can
@@ -135,12 +141,12 @@ async function followRun(
       // terminal state here, or the tab stays "running" forever.
     }
     if (!turnStillOwned(state, promptSequence)) return;
-    failTurn(state, error, input);
+    failTurn(state, session, error, input);
   }
 }
 
-function finishTurn(state: SessionState, input: DispatchInput): void {
-  settleTurn(state);
+function finishTurn(state: SessionState, session: AgentSession, input: DispatchInput): void {
+  settleTurn(state, session);
   // A cancelled turn is not an error: the user asked for it, and the partial
   // transcript is the honest record of what ran.
   state.status = "idle";
@@ -153,8 +159,13 @@ function finishTurn(state: SessionState, input: DispatchInput): void {
   schedulePersist();
 }
 
-function failTurn(state: SessionState, error: unknown, input: DispatchInput): void {
-  settleTurn(state);
+function failTurn(
+  state: SessionState,
+  session: AgentSession,
+  error: unknown,
+  input: DispatchInput,
+): void {
+  settleTurn(state, session);
   state.status = "error";
   state.error = errorText(error);
   recordUsage(state);
@@ -173,8 +184,29 @@ function failTurn(state: SessionState, error: unknown, input: DispatchInput): vo
  * safe answer — the turn it belonged to is over, so running the tool now would
  * execute against a run that no longer exists.
  */
-function settleTurn(state: SessionState): void {
+function settleTurn(state: SessionState, session: AgentSession): void {
   denyAllApprovals(state, "The turn ended before this tool call was approved.");
+  if (state.pendingSteerDeliveries.length > 0) {
+    // Pi retains an undrained steer in the Agent queue after abort/end. It
+    // would otherwise be consumed by a later ordinary prompt, violating the
+    // same-run contract. There is no selective public removal API; at this
+    // terminal boundary every legitimate follow-up should already be drained.
+    let cleared = false;
+    try {
+      session.clearQueue();
+      cleared = true;
+    } catch {
+      // The bridge record remains ambiguous, never accepted, if cleanup fails.
+    }
+    for (const pending of state.pendingSteerDeliveries) {
+      const entry = state.steerJournal.get(pending.requestId);
+      if (entry && entry.state !== "delivered") {
+        setSteerJournal(state, { ...entry, state: cleared ? "dropped" : "ambiguous" });
+      }
+    }
+    state.pendingSteerDeliveries = [];
+    state.queue.steering = [];
+  }
   state.cancelTurn = undefined;
   state.compacting = false;
 }

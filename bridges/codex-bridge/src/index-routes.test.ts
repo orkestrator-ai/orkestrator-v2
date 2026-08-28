@@ -1261,6 +1261,32 @@ describe("steer route outcomes", () => {
       requestId: "req-steer",
     });
   });
+
+  test("serves content-free no-touch steer reconciliation", async () => {
+    const calls: unknown[] = [];
+    await withRuntimeMethod(
+      "steerDispatchStatus",
+      async (sessionId: string, requestId: string) => {
+        calls.push({ sessionId, requestId });
+        return requestId === "known" ? "dispatched" : "unknown";
+      },
+      async () => {
+        expect(
+          await (await app.request("/session/session-1/steer/dispatch?requestId=known")).json(),
+        ).toEqual({ dispatch: "dispatched" });
+        expect(
+          await (await app.request("/session/session-1/steer/dispatch?requestId=missing")).json(),
+        ).toEqual({ dispatch: "unknown" });
+        expect(
+          await (await app.request("/session/session-1/steer/dispatch?requestId=%20%20")).json(),
+        ).toEqual({ dispatch: "unknown" });
+      },
+    );
+    expect(calls).toEqual([
+      { sessionId: "session-1", requestId: "known" },
+      { sessionId: "session-1", requestId: "missing" },
+    ]);
+  });
 });
 
 describe("review route outcomes", () => {

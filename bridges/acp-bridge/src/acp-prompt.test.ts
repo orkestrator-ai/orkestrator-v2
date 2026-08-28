@@ -15,6 +15,7 @@ import {
   temporaryDirectory,
   waitFor,
 } from "./acp-test-harness.js";
+import { formatAcpRpcError } from "./acp-errors.js";
 import {
   FLATTENED_RETRIABLE_PROVIDER_SUFFIX,
   RETRIABLE_PROVIDER_ERROR,
@@ -120,6 +121,18 @@ describe("ACP bridge", () => {
     expect(RETRIABLE_PROVIDER_ERROR.test(answer)).toBe(false);
     expect(FLATTENED_RETRIABLE_PROVIDER_SUFFIX.test(answer)).toBe(false);
     expect(answer.replace(FLATTENED_RETRIABLE_PROVIDER_SUFFIX, "")).toBe(answer);
+  });
+
+  test("keeps RPC error formatting from crossing the retry paragraph boundary", () => {
+    const wrapped = formatAcpRpcError({
+      message: "RetriableError: [unavailable]\nPING timed out",
+    });
+    const separateParagraph = formatAcpRpcError({
+      message: "RetriableError: [unavailable]\n\nActual successful response",
+    });
+
+    expect(RETRIABLE_PROVIDER_ERROR.test(wrapped)).toBe(true);
+    expect(RETRIABLE_PROVIDER_ERROR.test(separateParagraph)).toBe(false);
   });
 
   // The flattened detail is deliberately bounded to the final line. A provider

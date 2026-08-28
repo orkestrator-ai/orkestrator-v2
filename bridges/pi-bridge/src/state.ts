@@ -12,6 +12,7 @@ import type {
   NativeAgentComposerState,
   NativeAgentSlashCommand,
 } from "@orkestrator/protocol/native-agent";
+import { bridgeGeneration, MAX_STEER_JOURNAL } from "./config.js";
 
 export type JsonObject = Record<string, unknown>;
 export type SessionStatus = "idle" | "running" | "error";
@@ -90,6 +91,14 @@ export interface PromptJournalEntry {
   acceptedAt: number;
 }
 
+export interface SteerJournalEntry {
+  requestId: string;
+  inputDigest: string;
+  expectedRunId: string;
+  state: "prepared" | "queued" | "delivered" | "dropped" | "ambiguous";
+  createdAt: number;
+}
+
 export interface TurnUsage {
   inputTokens?: number;
   outputTokens?: number;
@@ -148,6 +157,9 @@ export interface SessionState {
   revision: number;
   structured: Map<string, unknown>;
   promptJournal: Map<string, PromptJournalEntry>;
+  steerJournal: Map<string, SteerJournalEntry>;
+  /** Live FIFO used to correlate Pi's authoritative user delivery event. */
+  pendingSteerDeliveries: Array<{ requestId: string; text: string }>;
   /** Tool calls parked on a human decision, newest last. */
   approvals: Map<string, PendingApproval>;
   /** Merge source for the next todo update; restored from the newest part. */
@@ -230,6 +242,7 @@ export interface PersistedSession {
   revision: number;
   structured: Array<[string, unknown]>;
   promptJournal: PromptJournalEntry[];
+  steerJournal?: SteerJournalEntry[];
   composer?: NativeAgentComposerState;
   usage?: PersistedUsage;
 }
@@ -255,6 +268,20 @@ export const sessionCreations = new Map<string, Promise<SessionState>>();
  * Weakly held, so a trimmed part or an evicted message takes its entry with it.
  */
 export const saturatedText = new WeakSet<BridgeMessage | BridgeMessagePart>();
+
+export function piRunId(state: Pick<SessionState, "promptSequence">): string {
+  return `pi:${bridgeGeneration}:${state.promptSequence}`;
+}
+
+export function setSteerJournal(state: SessionState, entry: SteerJournalEntry): void {
+  state.steerJournal.delete(entry.requestId);
+  state.steerJournal.set(entry.requestId, entry);
+  while (state.steerJournal.size > MAX_STEER_JOURNAL) {
+    const oldest = state.steerJournal.keys().next();
+    if (oldest.done) break;
+    state.steerJournal.delete(oldest.value);
+  }
+}
 
 /**
  * Live source state for a tool part, keyed off the part itself.

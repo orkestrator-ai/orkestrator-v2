@@ -101,6 +101,7 @@ mock.module("@/components/claude/ClaudeTmuxChatTab", () => ({
     isReviewTab,
     initialAgentModel,
     initialReasoningEffort,
+    initialFastMode,
     refreshRequestId,
     ownsGlobalShortcuts,
   }: {
@@ -108,12 +109,14 @@ mock.module("@/components/claude/ClaudeTmuxChatTab", () => ({
     isReviewTab?: boolean;
     initialAgentModel?: string;
     initialReasoningEffort?: string;
+    initialFastMode?: boolean;
     refreshRequestId?: number;
     ownsGlobalShortcuts?: boolean;
   }) => (
     <div
       data-agent-model={initialAgentModel}
       data-reasoning-effort={initialReasoningEffort}
+      data-fast-mode={String(initialFastMode)}
       data-refresh-request-id={refreshRequestId}
       data-review-tab={String(Boolean(isReviewTab))}
       data-owns-global-shortcuts={String(Boolean(ownsGlobalShortcuts))}
@@ -571,6 +574,7 @@ describe("PaneLeafContainer", () => {
           isReviewTab: true,
           initialAgentModel: "claude-tmux-review",
           initialReasoningEffort: "xhigh",
+          initialFastMode: true,
           claudeTmuxData: { environmentId: "env-visible" },
         },
         {
@@ -624,6 +628,7 @@ describe("PaneLeafContainer", () => {
     expect((await screen.findByTestId("claude-tmux-tab")).dataset).toMatchObject({
       agentModel: "claude-tmux-review",
       reasoningEffort: "xhigh",
+      fastMode: "true",
     });
     expect((await screen.findByTestId("codex-tab")).dataset).toMatchObject({
       agentModel: "codex-review",

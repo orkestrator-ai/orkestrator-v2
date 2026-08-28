@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { newSessionState } from "./agent-session.js";
 import { dispatchPrompt, journal, setStructuredResult, type DispatchInput } from "./prompt.js";
+import { publicSteerDispatch } from "./public.js";
 import type { SessionState } from "./state.js";
 
 // The timeout is read from the environment at import, and six hours is not a
@@ -24,6 +25,7 @@ interface StubSession {
   fail: (error: unknown) => void;
   accept: (accepted: boolean) => void;
   aborted: () => number;
+  cleared: () => number;
   never: boolean;
 }
 
@@ -38,6 +40,7 @@ function stubSession(options: { autoAccept?: boolean; onAbort?: () => void } = {
   let rejectRun: (error: unknown) => void = () => undefined;
   let announce: (accepted: boolean) => void = () => undefined;
   let abortCount = 0;
+  let clearCount = 0;
 
   const run = new Promise<void>((resolve, reject) => {
     settleRun = resolve;
@@ -57,6 +60,10 @@ function stubSession(options: { autoAccept?: boolean; onAbort?: () => void } = {
       // is the honest stub.
       settleRun();
     },
+    clearQueue: () => {
+      clearCount += 1;
+      return { steering: [], followUp: [] };
+    },
     getContextUsage: () => undefined,
     getSessionStats: () => ({ cost: 0 }),
   } as unknown as AgentSession;
@@ -67,6 +74,7 @@ function stubSession(options: { autoAccept?: boolean; onAbort?: () => void } = {
     fail: (error) => rejectRun(error),
     accept: (accepted) => announce(accepted),
     aborted: () => abortCount,
+    cleared: () => clearCount,
     never: false,
   };
 }
@@ -135,6 +143,53 @@ describe("dispatchPrompt", () => {
     // Everything the turn was holding is released, or the next turn inherits it.
     expect(state.cancelTurn).toBeUndefined();
     expect(state.compacting).toBe(false);
+  });
+
+  test("clears an undelivered steer when its target run ends", async () => {
+    const state = runningState();
+    const stub = stubSession();
+    state.pendingSteerDeliveries.push({ requestId: "steer-late", text: "too late" });
+    state.steerJournal.set("steer-late", {
+      requestId: "steer-late",
+      inputDigest: "a".repeat(64),
+      expectedRunId: "pi:generation:1",
+      state: "queued",
+      createdAt: 1,
+    });
+    state.queue.steering = ["too late"];
+
+    const handle = await dispatchPrompt(state, stub.session, input());
+    stub.finish();
+    await handle.completion;
+
+    expect(stub.cleared()).toBe(1);
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.queue.steering).toEqual([]);
+    expect(state.steerJournal.get("steer-late")?.state).toBe("dropped");
+    expect(publicSteerDispatch(state, "steer-late")).toEqual({ dispatch: "absent" });
+  });
+
+  test("keeps an undelivered steer ambiguous when Pi refuses to clear its queue", async () => {
+    const state = runningState();
+    const stub = stubSession();
+    state.pendingSteerDeliveries.push({ requestId: "steer-unclear", text: "too late" });
+    state.steerJournal.set("steer-unclear", {
+      requestId: "steer-unclear",
+      inputDigest: "b".repeat(64),
+      expectedRunId: "pi:generation:1",
+      state: "queued",
+      createdAt: 1,
+    });
+    stub.session.clearQueue = () => {
+      throw new Error("queue unavailable");
+    };
+
+    const handle = await dispatchPrompt(state, stub.session, input());
+    stub.finish();
+    await handle.completion;
+
+    expect(state.steerJournal.get("steer-unclear")?.state).toBe("ambiguous");
+    expect(publicSteerDispatch(state, "steer-unclear")).toEqual({ dispatch: "unknown" });
   });
 
   test("records a failed turn with the text Pi refused with", async () => {

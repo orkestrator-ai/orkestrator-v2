@@ -138,6 +138,28 @@ export class AmbiguousPromptDispatchError extends ProviderUnavailableError {
  * lost record can never be mistaken for a prompt that was never sent.
  */
 export type ProviderDispatchStatus = "dispatched" | "unknown";
+/** Steering additionally reports positive evidence that a queued instruction was removed. */
+export type ProviderSteerDispatchStatus = ProviderDispatchStatus | "absent";
+
+/** The provider run a backend-owned steer may still target. */
+export type ProviderActiveSteerRun =
+  | { state: "running"; runId: string }
+  | { state: "idle" }
+  | { state: "unknown" }
+  | { state: "unsupported" };
+
+/**
+ * Private action shape used only after the backend has persisted admission.
+ * The public renderer action deliberately carries neither identity nor a run.
+ */
+export type ProviderNativeAgentSessionAction =
+  | Exclude<NativeAgentSessionAction, { kind: "steer" }>
+  | {
+      kind: "steer";
+      text: string;
+      requestId: string;
+      expectedRunId: string;
+    };
 
 export interface ProviderCreateSessionOptions {
   clientSessionKey?: string;
@@ -275,9 +297,15 @@ export interface NativeAgentRuntimeProvider extends AgentSessionProvider {
   refreshCatalog?(): Promise<void> | void;
   stopBackgroundTask?(sessionId: string, taskId: string): Promise<void>;
   dismissSuggestedPrompt?(sessionId: string): Promise<void>;
+  /** User-initiated authoritative snapshot used before opening a steer barrier. */
+  activeSteerRun?(sessionId: string): Promise<ProviderActiveSteerRun>;
+  /** No-touch runtime qualification for this exact bridge/session surface. */
+  steerSupported?(sessionId: string): Promise<boolean>;
+  /** No-touch reconciliation; never attaches, hydrates, or changes liveness. */
+  steerStatus?(sessionId: string, requestId: string): Promise<ProviderSteerDispatchStatus>;
   performSessionAction?(
     sessionId: string,
-    action: NativeAgentSessionAction,
+    action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome>;
 }
 
@@ -288,6 +316,7 @@ export interface BridgeConnection {
   directory?: string;
   model?: string;
   effort?: string;
+  fastMode?: boolean;
   requestTimeoutMs?: number;
 }
 

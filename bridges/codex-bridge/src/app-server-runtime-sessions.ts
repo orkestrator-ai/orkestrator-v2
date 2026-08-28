@@ -657,6 +657,33 @@ export abstract class AppServerRuntimeSessions extends AppServerRuntimeLifecycle
     }
   }
 
+  /**
+   * No-touch positive reconciliation for the backend coordinator.
+   *
+   * It does not attach, refresh liveness, or render. A missing cache entry is
+   * checked against authoritative thread history; every failure remains
+   * `unknown`, never evidence that the request was absent.
+   */
+  async steerDispatchStatus(
+    sessionId: string,
+    requestId: string,
+  ): Promise<"dispatched" | "unknown"> {
+    const session = this.registry.getSession(sessionId);
+    if (!session?.threadId) return "unknown";
+    const previous = this.steerRequests.get(requestId);
+    if (previous?.threadId === session.threadId && previous.state === "accepted") {
+      return "dispatched";
+    }
+    try {
+      const reconciled = await this.options.engine.reconcileRequest(session.threadId, requestId);
+      return reconciled.result === "attach" || reconciled.result === "terminal"
+        ? "dispatched"
+        : "unknown";
+    } catch {
+      return "unknown";
+    }
+  }
+
   protected rememberSteerRequest(
     requestId: string,
     record: {

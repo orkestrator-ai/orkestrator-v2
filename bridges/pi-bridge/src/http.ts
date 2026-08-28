@@ -6,7 +6,7 @@
  * a Pi session be driven by the same backend, store and renderer code as every
  * other platform, with no branch anywhere downstream.
  */
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { gzip } from "node:zlib";
@@ -41,6 +41,7 @@ import {
   parseFromIndex,
   publicActivity,
   publicDispatch,
+  publicSteerDispatch,
   publicQueue,
   publicSession,
   publicStatus,
@@ -64,6 +65,8 @@ import {
   clientSessionKeys,
   isObject,
   nonBlank,
+  piRunId,
+  setSteerJournal,
   sessions,
   type BridgeFilePart,
   type JsonObject,
@@ -78,6 +81,14 @@ class HttpError extends Error {
     super(message);
     this.name = "HttpError";
   }
+}
+
+const DEFAULT_DELETE_CANCEL_TIMEOUT_MS = 5_000;
+let deleteCancelTimeoutMs = DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
+
+/** Shorten the best-effort DELETE cancellation budget in deterministic tests. */
+export function setDeleteCancelTimeoutForTests(timeoutMs?: number): void {
+  deleteCancelTimeoutMs = timeoutMs ?? DEFAULT_DELETE_CANCEL_TIMEOUT_MS;
 }
 
 /**
@@ -253,7 +264,13 @@ async function routeSession(
   // Liveness only. `/activity` and `/dispatch` deliberately do not touch it:
   // the backend sweeps every persisted session every couple of seconds, so
   // refreshing on those would put idle detaching permanently out of reach.
-  if (action !== "activity" && action !== "dispatch") state.lastAccessed = Date.now();
+  if (
+    action !== "activity" &&
+    action !== "dispatch" &&
+    !(action === "steer" && subject === "dispatch")
+  ) {
+    state.lastAccessed = Date.now();
+  }
 
   // `restoreComposer` drops the persisted model rows by design. Rehydrate on
   // the routes that publish or mutate composer state so a restarted bridge's
@@ -303,6 +320,9 @@ async function routeSession(
   }
   if (action === "dispatch" && request.method === "GET") {
     return json(response, 200, publicDispatch(state, url.searchParams.get("requestId") || ""));
+  }
+  if (action === "steer" && subject === "dispatch" && request.method === "GET") {
+    return json(response, 200, publicSteerDispatch(state, url.searchParams.get("requestId") || ""));
   }
   if (action === "queue" && request.method === "GET") {
     return json(response, 200, publicQueue(state));
@@ -383,7 +403,14 @@ async function handleDelete(response: ServerResponse, state: SessionState): Prom
   // nothing will read, rather than running to completion against a detached
   // session.
   try {
-    state.cancelTurn?.();
+    const cancel = state.cancelTurn;
+    if (cancel) {
+      await withTimeout(
+        cancel(),
+        deleteCancelTimeoutMs,
+        "Pi cancellation timed out while deleting the session",
+      );
+    }
   } catch {
     // Best-effort: a cancel handle that throws must not strand the session in
     // the map, which is the leak this route exists to close.
@@ -482,12 +509,89 @@ async function handleSteer(
   state: SessionState,
 ): Promise<void> {
   const body = await readJson(request);
-  const text = typeof body.input === "string" ? body.input.trim() : "";
+  const text = readBoundedString(body.input, 64 * 1024, "input");
+  const requestId = readBoundedString(body.requestId, 512, "requestId");
+  const expectedRunId = readBoundedString(body.expectedRunId, 512, "expectedRunId");
   if (!text) throw new HttpError(400, "input is required");
   const session = state.session;
-  if (!session || state.status !== "running") return json(response, 200, { outcome: "idle" });
-  await session.steer(text);
-  return json(response, 200, { outcome: "applied" });
+  // Preserve the race-friendly idle answer even for an older caller that does
+  // not know the run-pinning fields. No provider boundary can be crossed here.
+  if (!session || state.status !== "running" || state.dispatching) {
+    return json(response, 200, { outcome: "idle" });
+  }
+  if (!requestId) throw new HttpError(400, "requestId is required");
+  if (!expectedRunId) throw new HttpError(400, "expectedRunId is required");
+  const inputDigest = createHash("sha256").update(text).digest("hex");
+  const previous = state.steerJournal.get(requestId);
+  if (previous) {
+    if (previous.inputDigest !== inputDigest || previous.expectedRunId !== expectedRunId) {
+      return json(response, 409, { outcome: "unknown", requestId });
+    }
+    return json(
+      response,
+      previous.state === "delivered" ? 202 : 503,
+      previous.state === "delivered"
+        ? { outcome: "applied", requestId, duplicate: true }
+        : { outcome: "unknown", requestId },
+    );
+  }
+  if (piRunId(state) !== expectedRunId) {
+    return json(response, 409, { outcome: "mismatch" });
+  }
+
+  const prepared = {
+    requestId,
+    inputDigest,
+    expectedRunId,
+    state: "prepared" as const,
+    createdAt: Date.now(),
+  };
+  setSteerJournal(state, prepared);
+  await persistBarrier();
+
+  // The persistence barrier yields. Re-check immediately before crossing the
+  // SDK boundary so an ended or replaced run cannot inherit this instruction.
+  if (
+    state.session !== session ||
+    state.status !== "running" ||
+    state.dispatching ||
+    piRunId(state) !== expectedRunId
+  ) {
+    state.steerJournal.delete(requestId);
+    await persistBarrier();
+    return json(response, 409, {
+      outcome: state.status === "running" ? "mismatch" : "idle",
+    });
+  }
+
+  // Register correlation before entering Pi. `steer()` queues synchronously
+  // inside an async method, so its delivery event may win the microtask race
+  // with this continuation.
+  state.pendingSteerDeliveries.push({ requestId, text });
+  try {
+    await session.steer(text);
+  } catch {
+    const pendingIndex = state.pendingSteerDeliveries.findIndex(
+      (candidate) => candidate.requestId === requestId,
+    );
+    if (pendingIndex >= 0) state.pendingSteerDeliveries.splice(pendingIndex, 1);
+    setSteerJournal(state, { ...prepared, state: "ambiguous" });
+    await persistBarrier();
+    return json(response, 503, { outcome: "unknown", requestId });
+  }
+  if (state.steerJournal.get(requestId)?.state !== "delivered") {
+    setSteerJournal(state, { ...prepared, state: "queued" });
+  }
+  // Pi owns the queue only in memory. If this write or the process dies, the
+  // backend must retain an unknown card and never resend the instruction.
+  await persistBarrier();
+  return json(
+    response,
+    202,
+    state.steerJournal.get(requestId)?.state === "delivered"
+      ? { outcome: "applied", requestId }
+      : { outcome: "unknown", requestId },
+  );
 }
 
 async function handleFork(
@@ -547,6 +651,9 @@ async function handlePrompt(
   const attachments = parsePromptAttachments(body.attachments);
   if (!prompt && attachments.length === 0) {
     throw new HttpError(400, "prompt or attachment is required");
+  }
+  if (/^\/steer(?:\s|$)/i.test(prompt)) {
+    throw new HttpError(409, "There is no active Pi turn to steer");
   }
 
   if (requestId && state.promptJournal.has(requestId)) {

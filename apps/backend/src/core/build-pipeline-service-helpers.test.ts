@@ -19,6 +19,7 @@ import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/s
 import { StorageService } from "./storage.js";
 
 import { BuildPipelineService } from "./build-pipeline-service.js";
+import { connectionDefaultsFor } from "./build-pipeline-service-helpers.js";
 
 import type {
   BuildPipelineProvider,
@@ -72,6 +73,28 @@ const cleanReview: StructuredReviewReport = {
   summaryOfChange: "Implemented the task.",
   reviewSummary: "No findings.",
 };
+
+describe("build pipeline connection defaults", () => {
+  test("resolves repository speed independently and preserves explicit Normal", () => {
+    expect(
+      connectionDefaultsFor(
+        "codex",
+        {
+          global: {
+            agentSettings: {
+              platforms: { codex: { model: "global-model", fastMode: true } },
+            },
+          },
+        } as never,
+        {
+          agentSettings: {
+            platforms: { codex: { reasoningEffort: "xhigh", fastMode: false } },
+          },
+        },
+      ),
+    ).toEqual({ model: "global-model", effort: "xhigh", fastMode: false });
+  });
+});
 
 class FakeProvider implements BuildPipelineProvider {
   readonly agent = "claude" as const;

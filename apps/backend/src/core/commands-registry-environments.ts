@@ -70,8 +70,13 @@ export function registerEnvironmentCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  const { conditionalManifestSnapshot, schedulePendingEnvironmentRename, extensionDiscoveryCache } =
-    dependencies;
+  const {
+    conditionalManifestSnapshot,
+    schedulePendingEnvironmentRename,
+    prepareEnvironmentFirstPrompt,
+    reconcilePendingEnvironmentRenames,
+    extensionDiscoveryCache,
+  } = dependencies;
   register("get_log_directory", (_args, { storage }) => storage.getLogDirectory());
   register("get_log_storage_stats", (args, { storage }) => {
     assertOnlyKeys(args, [], "arguments");
@@ -117,14 +122,6 @@ export function registerEnvironmentCommands(
     for (const environment of synced) {
       if (environment.cleanupAfterMergeRequestedAt) {
         scheduleMergeCleanupRecovery(environment.id, context);
-      }
-    }
-    // Rehydration is also the recovery path after a backend restart. If startup
-    // completed before the process exited, resume any persisted rename intent
-    // without requiring the user to stop and start the environment again.
-    for (const environment of synced) {
-      if (environment.status === "running" && environment.pendingRenamePrompt?.trim()) {
-        schedulePendingEnvironmentRename(environment.id, context);
       }
     }
     // Same recovery argument for diff watchers: reconciling here re-arms them
@@ -269,6 +266,17 @@ export function registerEnvironmentCommands(
     const envId = asString(environmentId, "environmentId");
     await renameEnvironmentFromPrompt(envId, asString(prompt, "prompt"), context);
     await syncPrMonitorTracking(context);
+  });
+  register("prepare_environment_first_prompt", async ({ environmentId, prompt }, context) => {
+    await prepareEnvironmentFirstPrompt(
+      asString(environmentId, "environmentId"),
+      asString(prompt, "prompt"),
+      context,
+    );
+  });
+  register("reconcile_pending_environment_renames", async (args, context) => {
+    assertOnlyKeys(args, [], "arguments");
+    await reconcilePendingEnvironmentRenames(context);
   });
   register("get_environment_status", async ({ environmentId }, context) => {
     const { storage } = context;

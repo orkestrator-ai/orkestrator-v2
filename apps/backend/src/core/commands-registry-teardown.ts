@@ -25,9 +25,10 @@ export function registerTeardownCommands(
   register: CommandRegistrar,
   dependencies: RegistryDependencies,
 ): void {
-  const { commands, options } = dependencies;
+  const { commands, options, prepareEnvironmentFirstPrompt } = dependencies;
   registerTmuxBackendCommands(register, {
     claudeStatePolls: options.claudeStatePolls,
+    prepareEnvironmentFirstPrompt,
   });
 
   type TabTeardownIntent = NonNullable<Environment["tabTeardownIntents"]>[string];

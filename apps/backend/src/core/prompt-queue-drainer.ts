@@ -6,6 +6,7 @@ import {
 } from "@orkestrator/protocol/tmux-prompt";
 import type { StorageService } from "./storage.js";
 import type { Environment } from "./models.js";
+import { isGeneratedEnvironmentName } from "./environment-name.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -15,9 +16,6 @@ const TMUX_AGENT = "claude-tmux";
 const QUEUE_RETRY_BASE_MS = 2_000;
 const QUEUE_RETRY_CEILING_MS = 60_000;
 const MAX_QUEUE_DISPATCH_ATTEMPTS = 5;
-
-const LEGACY_TIMESTAMP_ENVIRONMENT_NAME = /^\d{8}-\d{6}$/;
-const COMPACT_TIMESTAMP_ENVIRONMENT_NAME = /^\d{15}$/;
 
 /** Backend view of a tmux tab, as `claude_tmux_status` reports it. */
 interface TmuxStatusSnapshot {
@@ -37,18 +35,6 @@ function isEnvironmentReadyForAgents(environment: Environment): boolean {
   return (
     environment.status === "running" &&
     (environment.setupPhase === "ready" || environment.setupScriptsComplete === true)
-  );
-}
-
-/**
- * True for a name generated before the environment had a prompt-derived title.
- *
- * A renamed environment is skipped, so a still-generated name is exactly the
- * condition "no first prompt has driven a rename yet".
- */
-function isGeneratedEnvironmentName(name: string): boolean {
-  return (
-    LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name) || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name)
   );
 }
 
@@ -489,7 +475,7 @@ export class PromptQueueDrainer {
   ): Promise<void> {
     if (!nonBlank(prompt) || !isGeneratedEnvironmentName(environment.name)) return;
     try {
-      await this.invoke("rename_environment_from_prompt", {
+      await this.invoke("prepare_environment_first_prompt", {
         environmentId: environment.id,
         prompt,
       });

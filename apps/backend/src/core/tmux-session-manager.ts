@@ -102,6 +102,7 @@ export class TmuxSession {
   readonly claudeHome: string;
   readonly workspace: string;
   readonly resumed: boolean;
+  private firstPromptClaimed: boolean;
   private readonly tmuxCommand = "tmux";
   private readonly claudeCommand: string;
   private readonly startedAtUnix: number;
@@ -151,6 +152,9 @@ export class TmuxSession {
     claudeCommand?: string,
   ) {
     this.resumed = resumeSessionId !== undefined;
+    // A resumed provider session already has authoritative conversation state,
+    // even if its transcript has not been discovered by this backend yet.
+    this.firstPromptClaimed = this.resumed;
     this.sessionId = resumeSessionId ?? randomUUID();
     this.tmuxSession = tmuxSessionName(environmentId, tabId);
     this.workspace = backend.kind === "local" ? (backend.cwd ?? process.cwd()) : "/workspace";
@@ -185,6 +189,13 @@ export class TmuxSession {
   activityState(): "idle" | "working" | "waiting" {
     if (this.busy) return "working";
     return this.observation.prompt ? "waiting" : "idle";
+  }
+
+  /** Atomically reserves this fresh session's first user prompt for naming. */
+  claimFirstPromptForNaming(): boolean {
+    if (this.firstPromptClaimed) return false;
+    this.firstPromptClaimed = true;
+    return true;
   }
 
   async discoverTranscriptPath(): Promise<string | undefined> {
@@ -282,6 +293,7 @@ export class TmuxSession {
 
     const alive = await this.tmuxAlive();
     const launchedNew = !alive;
+    const preserveResumedFastMode = this.resumed && fastMode === undefined;
     const requestedFastMode = fastMode ?? false;
     const launchFastMode = requestedFastMode && helpText.includes("--settings");
     if (launchedNew && requestedFastMode && !launchFastMode) {
@@ -344,6 +356,13 @@ export class TmuxSession {
         throw error;
       }
       await this.inputMutex.runExclusive(async () => {
+        if (preserveResumedFastMode) {
+          // A resume with no explicit one-shot choice must let Claude restore
+          // the conversation's own speed instead of labelling it Normal before
+          // the resumed process can report its state.
+          this.fastMode = null;
+          return;
+        }
         this.fastMode = launchFastMode;
         await this.persistFastModeOptionWithRetry(launchFastMode).catch((error) => {
           console.warn("[tmux] failed to persist launch fast mode", error);

@@ -41,13 +41,11 @@ import {
 import {
   CodexForkError,
   compactCodexSession,
-  describeCodexSteerFailure,
   forkCodexSession,
   getCodexRuntimeHealth,
   getSessionMessages as getCodexSessionMessages,
   getSessionStatus as getCodexSessionStatus,
   startCodexNativeReview,
-  steerCodexSession,
 } from "@/lib/codex-client";
 import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { createUuid } from "@/lib/uuid";
@@ -104,12 +102,6 @@ interface SessionValueState<T> {
 interface ControlUpdateState {
   actionId: number;
   sessionIdentity: string;
-}
-
-interface CodexSteerRetry {
-  sessionIdentity: string;
-  text: string;
-  requestId: string;
 }
 
 const EMPTY_CLAUDE_TASKS: Record<string, never> = {};
@@ -187,7 +179,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
   const controlUpdateIdRef = useRef(0);
   const controlUpdateInFlightRef = useRef<ControlUpdateState | null>(null);
   const shareVersionRef = useRef(0);
-  const codexSteerRetryRef = useRef<CodexSteerRetry | null>(null);
   const activeSession = useMemo(() => resolveActiveNativeSession(activeTab), [activeTab]);
   const enabledAgentPlatforms = useConfigStore(
     (state) => state.config.global.enabledAgentPlatforms ?? ["claude", "codex", "opencode"],
@@ -887,7 +878,6 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
     setHandoffOpen(false);
     setRuntimeNoticeDialogId(null);
     shareVersionRef.current += 1;
-    codexSteerRetryRef.current = null;
     setShareState({ sessionIdentity, value: false });
     setSteerState({ sessionIdentity, value: "" });
   }, [sessionIdentity]);
@@ -1523,7 +1513,9 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                 </div>
               ) : null}
 
-              {activeSession.provider === "codex" && currentSessionId && currentSessionLoading ? (
+              {neutralProjection?.capabilities.actions?.steer &&
+              neutralProjection.turn.phase === "running" &&
+              !neutralProjection.recoverableDispatch ? (
                 <div className="space-y-2 border-t border-border/60 pt-4">
                   <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground/70">
                     Active turn
@@ -1533,19 +1525,12 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                       value={steerText}
                       onChange={(event) => {
                         const value = event.target.value;
-                        const retry = codexSteerRetryRef.current;
-                        if (
-                          retry &&
-                          (retry.sessionIdentity !== sessionIdentity || retry.text !== value.trim())
-                        ) {
-                          codexSteerRetryRef.current = null;
-                        }
                         setSteerState({
                           sessionIdentity,
                           value,
                         });
                       }}
-                      placeholder="Correct or redirect Codex"
+                      placeholder={`Correct or redirect ${AGENT_PLATFORM_LABELS[activeSession.provider]}`}
                       className="h-8 text-xs"
                     />
                     <Button
@@ -1557,55 +1542,22 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           "steer",
                           async ({ isCurrent, sessionIdentity: actionIdentity }) => {
                             const text = steerText.trim();
-                            const pendingRetry = codexSteerRetryRef.current;
-                            const reusesAmbiguousRequest =
-                              pendingRetry?.sessionIdentity === actionIdentity &&
-                              pendingRetry.text === text;
-                            const requestId = reusesAmbiguousRequest
-                              ? pendingRetry.requestId
-                              : createUuid();
-                            if (!reusesAmbiguousRequest) {
-                              codexSteerRetryRef.current = null;
+                            const outcome = await performNativeAgentSessionAction({
+                              environmentId: activeSession.environmentId,
+                              agent: activeSession.provider,
+                              logicalSessionKey: activeSession.sessionKey,
+                              action: { kind: "steer", text },
+                            });
+                            if (outcome.outcome === "unknown") {
+                              throw new Error(
+                                "Delivery is unconfirmed. Resolve the backend recovery card in the chat tab before sending another instruction.",
+                              );
                             }
-                            const outcome = codexClient
-                              ? await steerCodexSession(
-                                  codexClient,
-                                  currentSessionId,
-                                  text,
-                                  requestId,
-                                )
-                              : await performNativeAgentSessionAction({
-                                  environmentId: activeSession.environmentId,
-                                  agent: activeSession.provider,
-                                  logicalSessionKey: activeSession.sessionKey,
-                                  action: { kind: "steer", text, requestId },
-                                }).then((result) =>
-                                  result.outcome === "applied"
-                                    ? { outcome: "accepted" as const }
-                                    : result.outcome === "unknown"
-                                      ? {
-                                          outcome: "unknown" as const,
-                                          requestId: result.requestId ?? requestId,
-                                        }
-                                      : result.outcome === "mismatch"
-                                        ? { outcome: "mismatch" as const }
-                                        : { outcome: "idle" as const },
-                                );
-                            if (outcome.outcome === "unknown" && isCurrent()) {
-                              codexSteerRetryRef.current = {
-                                sessionIdentity: actionIdentity,
-                                text,
-                                requestId: outcome.requestId,
-                              };
-                            } else if (
-                              outcome.outcome !== "unknown" &&
-                              codexSteerRetryRef.current?.requestId === requestId
-                            ) {
-                              codexSteerRetryRef.current = null;
+                            if (outcome.outcome === "mismatch") {
+                              throw new Error("The active turn changed before delivery.");
                             }
-                            const failure = describeCodexSteerFailure(outcome);
-                            if (failure) {
-                              throw new Error(failure);
+                            if (outcome.outcome === "idle") {
+                              throw new Error("There is no active turn to steer.");
                             }
                             if (isCurrent()) {
                               setSteerState({
@@ -1622,7 +1574,8 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                     </Button>
                   </div>
                   <p className="text-[10px] leading-relaxed text-muted-foreground">
-                    Sends directly to the current Codex turn. Regular compose messages still queue.
+                    Sends directly to the current {AGENT_PLATFORM_LABELS[activeSession.provider]}{" "}
+                    turn. Regular compose messages still queue.
                   </p>
                 </div>
               ) : null}

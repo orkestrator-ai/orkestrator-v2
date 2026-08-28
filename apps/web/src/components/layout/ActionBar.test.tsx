@@ -178,6 +178,8 @@ let currentEnvironment: Environment = selectedEnvironment;
 let currentSelectedEnvironmentId: string | null = selectedEnvironment.id;
 let currentClaudeModel = "claude-default-model";
 let currentCodexModel = "codex-default-model";
+let currentClaudeFastMode: boolean | undefined;
+let currentCodexFastMode: boolean | undefined;
 let currentCodexReasoningEffort = "medium";
 let currentOpenCodeModel = "opencode/default-model";
 let currentSelectedProjectId: string | null = selectedProject.id;
@@ -504,8 +506,12 @@ mock.module("@/stores", () => ({
               defaultAgent: currentDefaultAgent,
               actionDefaults: currentActionDefaults,
               platforms: {
-                claude: { model: currentClaudeModel },
-                codex: { model: currentCodexModel, reasoningEffort: currentCodexReasoningEffort },
+                claude: { model: currentClaudeModel, fastMode: currentClaudeFastMode },
+                codex: {
+                  model: currentCodexModel,
+                  reasoningEffort: currentCodexReasoningEffort,
+                  fastMode: currentCodexFastMode,
+                },
                 opencode: { model: currentOpenCodeModel },
               },
             },
@@ -812,6 +818,8 @@ beforeEach(() => {
   currentActionDefaults = undefined;
   currentClaudeModel = "claude-default-model";
   currentCodexModel = "codex-default-model";
+  currentClaudeFastMode = undefined;
+  currentCodexFastMode = undefined;
   currentCodexReasoningEffort = "medium";
   currentOpenCodeModel = "opencode/default-model";
   currentPreferredEditor = "vscode";
@@ -2084,8 +2092,9 @@ describe("ActionBar workflow tabs", () => {
       hasMergeConflicts: null,
     };
     currentReviewPrompt = "Inspect origin/{{targetBranch}}...HEAD for release blockers.";
-    currentCodexModel = "gpt-review-default";
+    currentCodexModel = "gpt-5.4";
     currentCodexReasoningEffort = "xhigh";
+    currentCodexFastMode = false;
 
     render(<ActionBar />);
     fireEvent.keyDown(window, { key: "r", code: "KeyR", metaKey: true });
@@ -2097,6 +2106,7 @@ describe("ActionBar workflow tabs", () => {
         'User review instruction (JSON string): "Inspect origin/main...HEAD for release blockers."',
       ),
       isReviewTab: true,
+      initialFastMode: false,
     });
     await waitFor(() =>
       expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
@@ -2107,18 +2117,16 @@ describe("ActionBar workflow tabs", () => {
           text: expect.stringContaining(
             'User review instruction (JSON string): "Inspect origin/main...HEAD for release blockers."',
           ),
-          model: "gpt-review-default",
+          model: "gpt-5.4",
           reasoningEffort: "xhigh",
           mode: "build",
-          // Speed is a per-session model-picker choice, so a queued turn starts
-          // at normal rather than inheriting a stored default.
           fastMode: false,
         }),
       ),
     );
   });
 
-  test("preserves the Claude model default and starts a one-click review at normal speed", async () => {
+  test("preserves the Claude model and Fast defaults for a one-click review", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
       agentSettings: { defaultAgent: "claude" },
@@ -2126,20 +2134,23 @@ describe("ActionBar workflow tabs", () => {
       prState: null,
       hasMergeConflicts: null,
     };
-    currentClaudeModel = "claude-review-default";
+    currentClaudeModel = "claude-sonnet-5";
+    currentClaudeFastMode = true;
 
     render(<ActionBar />);
     fireEvent.click(screen.getByRole("button", { name: "Code review" }));
+
+    expect(createTabMock.mock.calls.at(-1)?.[1]).toMatchObject({ initialFastMode: true });
 
     await waitFor(() =>
       expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
         expect.stringMatching(/^claude\u0000env-env-1:tab-/),
         "env-1",
         expect.objectContaining({
-          model: "claude-review-default",
+          model: "claude-sonnet-5",
           effort: "high",
           planModeEnabled: false,
-          fastModeEnabled: false,
+          fastModeEnabled: true,
         }),
       ),
     );
@@ -2278,10 +2289,13 @@ describe("ActionBar workflow tabs", () => {
     expect(clearTabInitialPromptMock).not.toHaveBeenCalled();
   });
 
-  test("durably queues a configured Claude PR at normal speed", async () => {
+  test("durably queues a configured Claude PR with an explicit Normal default", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      agentSettings: { defaultAgent: "claude" },
+      agentSettings: {
+        defaultAgent: "claude",
+        platforms: { claude: { fastMode: false } },
+      },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -2296,6 +2310,7 @@ describe("ActionBar workflow tabs", () => {
     expect(tabOptions).toMatchObject({
       agentLaunchMode: "native",
       displayTitle: "PR",
+      initialFastMode: false,
     });
     expect(tabOptions.tabId).toMatch(/^tab-/);
     await waitFor(() =>
@@ -2309,8 +2324,6 @@ describe("ActionBar workflow tabs", () => {
           // Claude reads `planModeEnabled` for its execution mode and treats an
           // absent field as build, so a PR launch must never arrive in plan mode.
           mode: "build",
-          // Speed is a per-session model-picker choice, so a queued turn starts
-          // at normal rather than inheriting a stored default.
           fastMode: false,
         }),
       ),
@@ -2320,10 +2333,13 @@ describe("ActionBar workflow tabs", () => {
     );
   });
 
-  test("durably queues a configured Codex PR at normal speed", async () => {
+  test("durably queues a configured Codex PR with an environment Fast override", async () => {
     currentEnvironment = {
       ...selectedEnvironment,
-      agentSettings: { defaultAgent: "codex" },
+      agentSettings: {
+        defaultAgent: "codex",
+        platforms: { codex: { fastMode: true } },
+      },
       prUrl: null,
       prState: null,
       hasMergeConflicts: null,
@@ -2336,6 +2352,7 @@ describe("ActionBar workflow tabs", () => {
 
     const tabOptions = createTabMock.mock.calls.at(-1)?.[1] as { tabId?: string };
     expect(tabOptions.tabId).toMatch(/^tab-/);
+    expect(tabOptions).toMatchObject({ initialFastMode: true });
     await waitFor(() =>
       expect(enqueuePromptQueueMessageMock).toHaveBeenCalledWith(
         promptQueueKey("codex", `env-env-1:${tabOptions.tabId}`),
@@ -2343,9 +2360,7 @@ describe("ActionBar workflow tabs", () => {
         expect.objectContaining({
           id: `initial-prompt:env-1:${tabOptions.tabId}`,
           mode: "build",
-          // Speed is a per-session model-picker choice, so a queued turn starts
-          // at normal rather than inheriting a stored default.
-          fastMode: false,
+          fastMode: true,
         }),
       ),
     );

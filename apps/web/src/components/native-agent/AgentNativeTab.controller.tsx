@@ -43,7 +43,7 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
-import { adoptNativeAgentSession, renameEnvironmentFromPrompt } from "@/lib/backend";
+import { adoptNativeAgentSession } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
@@ -72,8 +72,9 @@ import {
 } from "./native-agent-fork";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
+import { modelSupportsSpeed } from "@/lib/agent-launch";
+import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import { resolveWorkspaceAttachment } from "@/lib/chat/workspace-attachments";
-import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -142,9 +143,16 @@ export function SharedNativeAgentController({
   );
   const configuredModel = configured.model;
   const configuredReasoning = configured.reasoningEffort;
-  // Speed is a per-session choice made in the model picker rather than a stored
-  // default, so a new tab starts at normal.
-  const configuredFastMode = undefined;
+  const speedCatalog = useMemo(
+    () => buildReviewModelCatalog(data.environmentId),
+    [data.environmentId],
+  );
+  const speedCompatible = modelSupportsSpeed(
+    platform,
+    speedCatalog,
+    initialAgentModel ?? configuredModel,
+  );
+  const configuredFastMode = speedCompatible ? configured.fastMode : undefined;
   const setupPending = isSetupBlocked({ setupPhase: environment?.setupPhase });
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
@@ -166,19 +174,12 @@ export function SharedNativeAgentController({
   const [forkInFlight, setForkInFlight] = useState(false);
   const [planTransitionPending, setPlanTransitionPending] = useState(false);
   const [suggestionDismissPending, setSuggestionDismissPending] = useState(false);
-  const [namingEnvironment, setNamingEnvironment] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
   const forkLatchRef = useRef(false);
   const submitInFlightRef = useRef(false);
   const transcriptConfirmedRequestIdRef = useRef<string | null>(null);
-  /** Last session action whose delivery the provider could not confirm. */
-  const ambiguousActionRef = useRef<{
-    kind: string;
-    text: string;
-    requestId: string;
-  } | null>(null);
   const {
     sessionKey,
     runtimeProjection: projection,
@@ -224,6 +225,9 @@ export function SharedNativeAgentController({
     initialConversationMode:
       initialConversationMode ??
       (adapter.capabilities.composer.mode && !data.sessionId ? "build" : undefined),
+    // One-shot launch options have already been checked by the workflow that
+    // snapshotted them. Only tier-derived defaults need protection from a
+    // later model change leaving an incompatible stored value behind.
     initialFastMode,
     initialExecutionProfileId,
     defaultFastMode: configuredFastMode,
@@ -411,22 +415,9 @@ export function SharedNativeAgentController({
               optimisticPrompt.createdAt,
             ),
           ];
-    if (!namingEnvironment) return withOptimistic;
-    // Renaming the environment also renames the branch, and it runs before the
-    // first prompt is dispatched. Without this the tab looks stalled.
-    return [
-      ...withOptimistic,
-      {
-        id: `native-naming:${sessionKey}`,
-        role: "system" as const,
-        content: "Naming environment...",
-        parts: [{ type: "text" as const, content: "Naming environment..." }],
-        createdAt: new Date().toISOString(),
-      },
-    ];
+    return withOptimistic;
   }, [
     handoff.displayMessages,
-    namingEnvironment,
     optimisticPrompt,
     projection?.sessionId,
     sessionKey,
@@ -726,14 +717,14 @@ export function SharedNativeAgentController({
         return false;
       }
       /*
-       * A command the runtime performs on the live turn (Codex `/steer`) is not a
+       * A command the runtime performs on the live turn (`/steer`) is not a
        * prompt: queueing it would run it after the turn it was meant to redirect.
        * Capability-gated, so any provider that reports the action gets it.
        */
       const sessionAction = resolveSessionActionCommand(
         userPrompt,
         projection?.capabilities,
-        isRunning,
+        isRunning && !recoverableDispatch,
       );
       if (sessionAction) {
         if (sessionAction.error) {
@@ -747,29 +738,8 @@ export function SharedNativeAgentController({
         setSendError(null);
         submitInFlightRef.current = true;
         setIsSubmitting(true);
-        /*
-         * An unconfirmed action may already have reached the provider. Resending
-         * the same text reuses its request id so the provider deduplicates it,
-         * rather than steering the turn twice.
-         */
-        const ambiguous = ambiguousActionRef.current;
-        const actionRequestId =
-          requestId ??
-          draft.requestId ??
-          (ambiguous?.kind === sessionAction.kind && ambiguous.text === sessionAction.text
-            ? ambiguous.requestId
-            : crypto.randomUUID());
-        updateDraft(sessionKey, { requestId: actionRequestId });
         try {
-          const outcome = await performAction({
-            kind: sessionAction.kind,
-            text: sessionAction.text,
-            requestId: actionRequestId,
-          });
-          ambiguousActionRef.current =
-            outcome.outcome === "unknown"
-              ? { kind: sessionAction.kind, text: sessionAction.text, requestId: actionRequestId }
-              : null;
+          const outcome = await performAction(sessionAction);
           if (outcome.outcome === "applied") {
             clearDraft(sessionKey);
             discardProvisionalDraft();
@@ -778,7 +748,7 @@ export function SharedNativeAgentController({
           }
           setSendError(
             outcome.outcome === "unknown"
-              ? `Could not confirm whether ${label} received the steering text. Resending reuses the same request id.`
+              ? `Could not confirm whether ${label} received the steering text. Use the recovery card above to retry or discard it.`
               : outcome.outcome === "mismatch"
                 ? "The turn moved on before the steering text was delivered."
                 : `${label} is no longer running a turn to steer.`,
@@ -792,7 +762,6 @@ export function SharedNativeAgentController({
         updateDraft(sessionKey, {
           text,
           mentions: draft.mentions,
-          requestId: actionRequestId,
         });
         return false;
       }
@@ -820,22 +789,6 @@ export function SharedNativeAgentController({
         createdAt: new Date().toISOString(),
         requestId: dispatchRequestId,
       });
-      if (
-        (projection?.messages.length ?? 0) === 0 &&
-        environment &&
-        isDefaultTimestampEnvironmentName(environment.name)
-      ) {
-        // Renaming also renames the branch, so it runs before dispatch and can
-        // take a moment. Say what is happening instead of showing a stalled send.
-        setNamingEnvironment(true);
-        try {
-          await renameEnvironmentFromPrompt(data.environmentId, userPrompt);
-        } catch (error) {
-          console.warn("[AgentNativeTab] Failed to rename environment from first prompt:", error);
-        } finally {
-          setNamingEnvironment(false);
-        }
-      }
       const options = {
         requestId: dispatchRequestId,
         model: composer?.selectedModelId,
@@ -937,7 +890,6 @@ export function SharedNativeAgentController({
       draft.attachments,
       draft.mentions,
       draft.requestId,
-      environment,
       enqueue,
       handoff.pendingHistory,
       isDispatching,
@@ -946,7 +898,6 @@ export function SharedNativeAgentController({
       performAction,
       platform,
       projection?.capabilities,
-      projection?.messages.length,
       projection?.sessionId,
       projection?.slashCommands,
       recoverableDispatch,
@@ -1378,9 +1329,9 @@ export function SharedNativeAgentController({
         className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-100"
       >
         <span>
-          {label} did not confirm your last message, so it may or may not have been received.
-          Retrying sends it under the same request id, so it cannot run twice. Until you choose,
-          this session will not accept a new message.
+          {recoverableDispatch.kind === "steer"
+            ? `${label} has not confirmed delivery of the steering instruction. The backend is retaining its original identity and will not silently send a second copy. Until you choose, this session will not accept another instruction or message.`
+            : `${label} did not confirm your last message, so it may or may not have been received. Retrying sends it under the same request id, so it cannot run twice. Until you choose, this session will not accept a new message.`}
         </span>
         <div className="flex shrink-0 items-center gap-2">
           <Button
@@ -1391,7 +1342,9 @@ export function SharedNativeAgentController({
             onClick={() => {
               void retryRecoverableDispatch().then((outcome) => {
                 if (outcome.outcome === "accepted") {
-                  clearConfirmedDraft(recoverableDispatch.requestId);
+                  if (recoverableDispatch.kind !== "steer") {
+                    clearConfirmedDraft(recoverableDispatch.requestId);
+                  }
                   setSendError(null);
                   setOptimisticPrompt(null);
                 } else if (outcome.outcome === "rejected") {
@@ -1402,7 +1355,7 @@ export function SharedNativeAgentController({
               });
             }}
           >
-            Retry send
+            {recoverableDispatch.kind === "steer" ? "Retry steer" : "Retry send"}
           </Button>
           <Button
             type="button"

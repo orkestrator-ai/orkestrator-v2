@@ -34,6 +34,13 @@ export interface AgentPlatformSettings {
   /** A model id from this platform's own catalogue. */
   model?: string;
   reasoningEffort?: string;
+  /**
+   * Fast vs normal speed for platforms that expose a toggle.
+   *
+   * Absent means inherit / provider default. `false` is an explicit Normal
+   * choice, not "unset" — the same three-state the model picker uses.
+   */
+  fastMode?: boolean;
   /** Claude only; meaningful when the resolved mode is `native`. */
   claudeNativeBackend?: ClaudeNativeBackend;
 }
@@ -68,6 +75,8 @@ export interface ResolvedAgentPlatformSettings {
   mode: AgentLaunchMode;
   model?: string;
   reasoningEffort?: string;
+  /** Absent when no tier named a speed; `false` is an explicit Normal choice. */
+  fastMode?: boolean;
   /** Only meaningful when `platform` is `claude` and `mode` is `native`. */
   claudeNativeBackend: ClaudeNativeBackend;
 }
@@ -138,6 +147,9 @@ export function resolveAgentPlatformSettings(
   const reasoningEffort =
     environment?.reasoningEffort ?? repository?.reasoningEffort ?? global?.reasoningEffort;
 
+  // `false` is a stored Normal choice, so this cannot use truthiness.
+  const fastMode = environment?.fastMode ?? repository?.fastMode ?? global?.fastMode;
+
   const claudeNativeBackend =
     environment?.claudeNativeBackend ??
     repository?.claudeNativeBackend ??
@@ -148,6 +160,7 @@ export function resolveAgentPlatformSettings(
     mode,
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
     claudeNativeBackend,
   };
 }
@@ -178,6 +191,7 @@ function normalizePlatformSettings(
   const model = typeof record.model === "string" ? record.model.trim() : "";
   const reasoningEffort =
     typeof record.reasoningEffort === "string" ? record.reasoningEffort.trim() : "";
+  const fastMode = typeof record.fastMode === "boolean" ? record.fastMode : undefined;
   const claudeNativeBackend =
     record.claudeNativeBackend === "sdk" || record.claudeNativeBackend === "tmux"
       ? record.claudeNativeBackend
@@ -186,6 +200,7 @@ function normalizePlatformSettings(
     ...(mode ? { mode } : {}),
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
     ...(claudeNativeBackend ? { claudeNativeBackend } : {}),
   };
   // An all-empty block is "inherit everything", which is what absence already

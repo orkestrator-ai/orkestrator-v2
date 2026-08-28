@@ -1421,6 +1421,20 @@ app.post("/session/:id/steer", async (c) => {
   return c.json({ status: "accepted" }, 202);
 });
 
+app.get("/session/:id/steer/dispatch", async (c) => {
+  const requestId = c.req.query("requestId")?.trim();
+  if (!requestId) return c.json({ dispatch: "unknown" });
+  // Route qualification must remain O(1): it proves this bridge version owns
+  // the no-touch surface without paying a thread/read for a deliberately
+  // nonexistent request id.
+  if (requestId === "orkestrator-steer-qualification") {
+    return c.json({ dispatch: "unknown" });
+  }
+  return c.json({
+    dispatch: await appServerRuntime.steerDispatchStatus(c.req.param("id"), requestId),
+  });
+});
+
 app.post("/session/:id/review", async (c) => {
   const body = await c.req.json().catch(() => ({}));
   /**

@@ -513,7 +513,7 @@ describe("PromptQueueDrainer", () => {
       await context.drainer.drainAll();
 
       const rename = context.calls.find(
-        (call) => call.command === "rename_environment_from_prompt",
+        (call) => call.command === "prepare_environment_first_prompt",
       );
       expect(rename?.args).toMatchObject({
         environmentId: ENVIRONMENT_ID,
@@ -531,9 +531,9 @@ describe("PromptQueueDrainer", () => {
 
       await context.drainer.drainAll();
 
-      expect(context.calls.some((call) => call.command === "rename_environment_from_prompt")).toBe(
-        false,
-      );
+      expect(
+        context.calls.some((call) => call.command === "prepare_environment_first_prompt"),
+      ).toBe(false);
       expect(context.submits()).toHaveLength(1);
     } finally {
       await context.dispose();

@@ -460,7 +460,6 @@ export function asNativeAgentSessionAction(value: unknown): NativeAgentSessionAc
       return {
         kind,
         text: asNonBlankString(raw.text, "action.text"),
-        requestId: asNonBlankString(raw.requestId, "action.requestId"),
       };
     default:
       throw new Error("Native agent session action is invalid");

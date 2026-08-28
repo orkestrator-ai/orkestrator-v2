@@ -4,13 +4,16 @@ import type {
   BridgeConnection,
   NativeAgentRuntimeProvider,
   ProviderActivityState,
+  ProviderActiveSteerRun,
   ProviderCreateSessionOptions,
   ProviderDispatchStatus,
   ProviderExecutionMode,
   ProviderInteractiveSnapshot,
   ProviderSendOptions,
   ProviderSessionRegistration,
+  ProviderSteerDispatchStatus,
   ProviderStatus,
+  ProviderNativeAgentSessionAction,
 } from "./agent-provider-contract.js";
 import {
   AmbiguousPromptDispatchError,
@@ -26,7 +29,6 @@ import type {
   NativeAgentForkOutcome,
   NativeAgentResumeEntry,
   NativeAgentRuntimeSummary,
-  NativeAgentSessionAction,
   NativeAgentSessionActionOutcome,
   NativeAgentSlashCommand,
   NativeAgentTurnPhase,
@@ -247,7 +249,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   model: options.model ?? this.connection.model,
                   reasoningEffort: options.effort ?? this.connection.effort,
                   mode,
-                  ...(typeof options.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
+                  ...(typeof (options.fastMode ?? this.connection.fastMode) === "boolean"
+                    ? { fastMode: options.fastMode ?? this.connection.fastMode }
+                    : {}),
                 }
               : { title: label, clientSessionKey },
         ),
@@ -313,6 +317,61 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     return body?.dispatch === "dispatched" ? "dispatched" : "unknown";
   }
 
+  async activeSteerRun(sessionId: string): Promise<ProviderActiveSteerRun> {
+    if (this.agent !== "codex" && this.agent !== "pi") return { state: "unsupported" };
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/status`,
+      {},
+      this.fetchImpl,
+    );
+    if (response.status === 404)
+      throw new PromptRejectedError(`${this.agent} session was not found`);
+    await assertOkWithErrorDetail(response, `${this.agent} steer status read`);
+    const status = asRecord(await boundedJson(response, `${this.agent} steer status read`));
+    if (status?.status !== "running") return { state: "idle" };
+    const candidateRunId = nonEmptyString(status.turnId);
+    const runId =
+      candidateRunId && Buffer.byteLength(candidateRunId, "utf8") <= 512
+        ? candidateRunId
+        : undefined;
+    return runId ? { state: "running", runId } : { state: "unknown" };
+  }
+
+  async steerSupported(sessionId: string): Promise<boolean> {
+    if (this.agent !== "codex" && this.agent !== "pi") return false;
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/steer/dispatch` +
+        `?requestId=${encodeURIComponent("orkestrator-steer-qualification")}`,
+      {},
+      this.fetchImpl,
+    ).catch(() => null);
+    if (!response?.ok) return false;
+    const body = asRecord(
+      await boundedJson(response, `${this.agent} steer qualification`).catch(() => null),
+    );
+    return body?.dispatch === "unknown" || body?.dispatch === "dispatched";
+  }
+
+  async steerStatus(sessionId: string, requestId: string): Promise<ProviderSteerDispatchStatus> {
+    if (this.agent !== "codex" && this.agent !== "pi") return "unknown";
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}/steer/dispatch` +
+        `?requestId=${encodeURIComponent(requestId)}`,
+      {},
+      this.fetchImpl,
+    );
+    if (!response.ok) return "unknown";
+    const body = asRecord(
+      await boundedJson(response, `${this.agent} steer status`).catch(() => null),
+    );
+    if (body?.dispatch === "dispatched") return "dispatched";
+    if (body?.dispatch === "absent") return "absent";
+    return "unknown";
+  }
+
   async send(sessionId: string, prompt: string, options: ProviderSendOptions): Promise<void> {
     if (this.agent === "codex" && options.mode && this.codexModes.get(sessionId) !== options.mode) {
       await this.ensureCodexMode(sessionId, options.mode);
@@ -338,7 +397,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
               ? {
                   model: options.model ?? this.connection.model,
                   effort: options.effort ?? this.connection.effort,
-                  fastMode: options.fastMode,
+                  fastMode: options.fastMode ?? this.connection.fastMode,
                   agent: options.subAgent,
                   includeLocalSettings: options.includeLocalSettings,
                   promptSuggestions: options.promptSuggestions,
@@ -346,12 +405,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 }
               : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
                 ? {
-                    fastMode: options.fastMode,
+                    fastMode: options.fastMode ?? this.connection.fastMode,
                     model: options.model ?? this.connection.model,
                     reasoningEffort: options.effort ?? this.connection.effort,
                     mode: options.mode,
                   }
-                : { fastMode: options.fastMode }),
+                : { fastMode: options.fastMode ?? this.connection.fastMode }),
           }),
         },
         this.fetchImpl,
@@ -1259,7 +1318,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
 
   async performSessionAction(
     sessionId: string,
-    action: NativeAgentSessionAction,
+    action: ProviderNativeAgentSessionAction,
   ): Promise<NativeAgentSessionActionOutcome> {
     if (this.agent === "cursor" || this.agent === "grok") {
       throw new PromptRejectedError(`${this.agent} does not support session actions`);
@@ -1302,43 +1361,6 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       return { outcome: "applied" };
     }
     if (this.agent === "pi" && action.kind === "steer") {
-      // Pi holds the queue itself and delivers a steering message before the
-      // next model call, so there is no turn id to guard against — the bridge
-      // answers `idle` when nothing is running, which is the same race the
-      // Codex path resolves with `expectedTurnId`.
-      let response: Response;
-      try {
-        response = await bridgeFetch(
-          this.connection,
-          `${base}/steer`,
-          {
-            method: "POST",
-            body: JSON.stringify({ input: action.text, requestId: action.requestId }),
-          },
-          this.fetchImpl,
-        );
-      } catch {
-        return { outcome: "unknown", requestId: action.requestId };
-      }
-      if (response.status === 404) throw new PromptRejectedError("Pi session was not found");
-      await assertOkWithErrorDetail(response, "Pi steer");
-      const payload = asRecord(await boundedJson(response, "Pi steer").catch(() => ({})));
-      return payload?.outcome === "idle" ? { outcome: "idle" } : { outcome: "applied" };
-    }
-    if (this.agent === "codex" && action.kind === "steer") {
-      const statusResponse = await bridgeFetch(
-        this.connection,
-        `${base}/status`,
-        {},
-        this.fetchImpl,
-      );
-      if (statusResponse.status === 404)
-        throw new PromptRejectedError("Codex session was not found");
-      await assertOkWithErrorDetail(statusResponse, "Codex steer status read");
-      const status = asRecord(await boundedJson(statusResponse, "Codex steer status read"));
-      if (status?.status !== "running") return { outcome: "idle" };
-      const turnId = nonEmptyString(status.turnId);
-      if (!turnId) return { outcome: "unknown", requestId: action.requestId };
       let response: Response;
       try {
         response = await bridgeFetch(
@@ -1349,7 +1371,36 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
             body: JSON.stringify({
               input: action.text,
               requestId: action.requestId,
-              expectedTurnId: turnId,
+              expectedRunId: action.expectedRunId,
+            }),
+          },
+          this.fetchImpl,
+        );
+      } catch {
+        return { outcome: "unknown", requestId: action.requestId };
+      }
+      if (response.status === 404) throw new PromptRejectedError("Pi session was not found");
+      const payload = asRecord(await boundedJson(response, "Pi steer").catch(() => ({})));
+      if (payload?.outcome === "unknown") {
+        return { outcome: "unknown", requestId: action.requestId };
+      }
+      if (payload?.outcome === "idle") return { outcome: "idle" };
+      if (payload?.outcome === "mismatch") return { outcome: "mismatch" };
+      await assertOkWithErrorDetail(response, "Pi steer");
+      return { outcome: "applied" };
+    }
+    if (this.agent === "codex" && action.kind === "steer") {
+      let response: Response;
+      try {
+        response = await bridgeFetch(
+          this.connection,
+          `${base}/steer`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              input: action.text,
+              requestId: action.requestId,
+              expectedTurnId: action.expectedRunId,
             }),
           },
           this.fetchImpl,
@@ -1362,6 +1413,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
       );
       if (payload?.outcome === "unknown")
         return { outcome: "unknown", requestId: action.requestId };
+      if (payload?.outcome === "idle") return { outcome: "idle" };
       if (response.status === 409) return { outcome: "mismatch" };
       await assertOkWithErrorDetail(response, "Codex steer");
       return { outcome: "applied" };

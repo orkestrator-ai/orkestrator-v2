@@ -321,7 +321,12 @@ function seedUnassignedDefaultCatalog() {
   getNativeAgentModelCatalogMock.mockImplementation(
     async () =>
       [
-        { platform: "claude", id: "claude-sonnet-5", label: "Claude Sonnet" },
+        {
+          platform: "claude",
+          id: "claude-sonnet-5",
+          label: "Claude Sonnet",
+          supportsSpeed: true,
+        },
         {
           platform: "codex",
           id: "gpt-5.4",
@@ -331,6 +336,7 @@ function seedUnassignedDefaultCatalog() {
             { id: "high", label: "High" },
           ],
           defaultReasoningId: "medium",
+          supportsSpeed: true,
         },
       ] as never,
   );
@@ -649,7 +655,9 @@ describe("AgentNativeTab", () => {
           setupPhase: "ready",
           agentSettings: {
             defaultAgent: "codex",
-            platforms: { codex: { model: "gpt-5.4", reasoningEffort: "high" } },
+            platforms: {
+              codex: { model: "gpt-5.4", reasoningEffort: "high", fastMode: true },
+            },
           },
         } as never,
       ],
@@ -662,6 +670,10 @@ describe("AgentNativeTab", () => {
     await expectUnassignedPicker("codex", "GPT-5.4");
     expect(screen.getByText("High")).toBeTruthy();
     expect(document.querySelector("[data-native-model-platform='claude']") === null).toBe(true);
+    fireEvent.pointerDown(screen.getByTitle(/Choose model/));
+    expect(screen.getByRole("menuitemradio", { name: /^Fast/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
   });
 
   test("unassigned composer adopts the repository default when the environment inherits", async () => {
@@ -921,6 +933,7 @@ describe("AgentNativeTab", () => {
             label: "Claude M",
             reasoning,
             defaultReasoningId: "medium",
+            supportsSpeed: true,
           },
           {
             platform: "codex",
@@ -928,6 +941,7 @@ describe("AgentNativeTab", () => {
             label: "Codex M",
             reasoning,
             defaultReasoningId: "medium",
+            supportsSpeed: true,
           },
         ] as never,
     );
@@ -944,6 +958,12 @@ describe("AgentNativeTab", () => {
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["claude", "codex"],
       favoriteModels: [{ platform: "codex", modelId: "codex-m" }],
+      agentSettings: {
+        platforms: {
+          claude: { fastMode: false },
+          codex: { fastMode: true },
+        },
+      },
     } as never);
     const sessionKey = createSessionKey("env-1", "tab-effort-platform-switch");
     useNativeComposeStore.getState().updateDraft(sessionKey, {
@@ -973,6 +993,7 @@ describe("AgentNativeTab", () => {
     // could produce it here.
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId).toBe("medium");
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe("codex");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.fastMode).toBe(true);
   });
 
   test("keeps a still-supported effort when the model switch stays on one platform", async () => {
@@ -1595,12 +1616,15 @@ describe("AgentNativeTab", () => {
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)).toBeUndefined();
   });
 
-  test("keeps a first prompt durable and non-reentrant while environment rename is pending", async () => {
-    let releaseRename!: () => void;
-    const renameGate = new Promise<void>((resolve) => {
-      releaseRename = resolve;
+  test("keeps a first prompt durable and non-reentrant while backend dispatch is pending", async () => {
+    let releaseDispatch!: () => void;
+    const dispatchGate = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
     });
-    renameEnvironmentFromPromptMock.mockImplementationOnce(async () => renameGate);
+    dispatchNativeAgentIntentMock.mockImplementationOnce(async (input) => {
+      await dispatchGate;
+      return { outcome: "accepted", requestId: input.requestId };
+    });
     useEnvironmentStore.setState({
       environments: [
         {
@@ -1620,14 +1644,15 @@ describe("AgentNativeTab", () => {
     const sendButton = await screen.findByTitle("Send");
     fireEvent.click(sendButton);
 
-    await waitFor(() => expect(renameEnvironmentFromPromptMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
     const pendingDraft = useNativeComposeStore.getState().drafts.get(sessionKey);
     expect(pendingDraft?.text).toBe("Keep this first prompt");
     expect(pendingDraft?.requestId).toMatch(/\S/);
     await waitFor(() => expect(screen.queryByTitle("Send") === null).toBe(true));
     expect(input.getAttribute("aria-disabled")).toBe("true");
     fireEvent.keyDown(input, { key: "Enter" });
-    expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
+    expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1);
 
     view.unmount();
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.text).toBe(
@@ -1638,8 +1663,7 @@ describe("AgentNativeTab", () => {
     remounted.unmount();
 
     const stableRequestId = pendingDraft!.requestId;
-    releaseRename();
-    await waitFor(() => expect(dispatchNativeAgentIntentMock).toHaveBeenCalledTimes(1));
+    releaseDispatch();
     expect(dispatchNativeAgentIntentMock.mock.calls[0]?.[0]).toMatchObject({
       prompt: "Keep this first prompt",
       requestId: stableRequestId,
@@ -2162,6 +2186,70 @@ describe("AgentNativeTab", () => {
     useConfigStore.getState().updateGlobalConfig({
       agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
     });
+  });
+
+  test("applies a configured Cursor fast-mode default to a new session", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["cursor"],
+      agentSettings: { platforms: { cursor: { fastMode: true } } },
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-cursor-fast-default"
+        data={{
+          platform: "cursor",
+          environmentId: "env-1",
+          containerId: "container-1",
+          isLocal: false,
+        }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "cursor",
+      fastMode: true,
+    });
+  });
+
+  test("drops a configured speed default for a model that does not support it", async () => {
+    useAgentModelCatalogStore.setState({
+      cursorModels: [
+        {
+          platform: "cursor",
+          id: "normal-only",
+          label: "Normal only",
+          supportsSpeed: false,
+        },
+      ],
+      grokModels: [],
+      piModels: [],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["cursor"],
+      agentSettings: {
+        platforms: { cursor: { model: "normal-only", fastMode: true } },
+      },
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-cursor-unsupported-fast-default"
+        data={{
+          platform: "cursor",
+          environmentId: "env-1",
+          containerId: "container-1",
+          isLocal: false,
+        }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    const input = ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(input.fastMode).toBeUndefined();
   });
 
   test("consumes a mode-only launch option before a resumed tab remounts", async () => {
@@ -4328,7 +4416,7 @@ describe("AgentNativeTab", () => {
       expect(dispatchNativeAgentIntentMock).not.toHaveBeenCalled();
     });
 
-    test("reuses the request id when a steer could not be confirmed", async () => {
+    test("leaves unconfirmed steer recovery to the backend", async () => {
       seedProjection({ phase: "running", actions: { steer: true } });
       performNativeAgentSessionActionMock.mockImplementation(
         async () => ({ outcome: "unknown" as const }) as never,
@@ -4350,16 +4438,10 @@ describe("AgentNativeTab", () => {
 
       await steer();
       await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(1));
-      await screen.findByText(/reuses the same request id/);
-      await steer();
-      await waitFor(() => expect(performNativeAgentSessionActionMock).toHaveBeenCalledTimes(2));
-
-      const [first, second] = performNativeAgentSessionActionMock.mock.calls;
-      // An unconfirmed action may already have reached the provider; resending
-      // the same text must deduplicate rather than steer the turn twice.
-      expect((second![0].action as { requestId?: string }).requestId).toBe(
-        (first![0].action as { requestId?: string }).requestId,
-      );
+      await screen.findByText(/Use the recovery card above/);
+      const action = performNativeAgentSessionActionMock.mock.calls[0]![0].action;
+      expect(action).toEqual({ kind: "steer", text: "narrow the scope" });
+      expect(action).not.toHaveProperty("requestId");
       performNativeAgentSessionActionMock.mockImplementation(async () => ({
         outcome: "applied" as const,
       }));

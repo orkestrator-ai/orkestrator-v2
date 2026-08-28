@@ -15,7 +15,6 @@ import { ClaudeTmuxInteractiveTerminal } from "@/components/claude/ClaudeTmuxInt
 import { ResumeTmuxSessionDialog } from "@/components/claude/ResumeTmuxSessionDialog";
 import { formatElapsed } from "@/lib/format-elapsed";
 import { createUuid } from "@/lib/uuid";
-import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import {
   answerSelectionPrompt,
   answerPreToolUse,
@@ -72,7 +71,7 @@ import { usePaneLayoutStore } from "@/stores/paneLayoutStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useConfigStore } from "@/stores/configStore";
 import { enqueueAgentPrompt, removeAgentPrompt } from "@/lib/prompt-queue-sources";
-import { getClaudeModelCatalog, renameEnvironmentFromPrompt } from "@/lib/backend";
+import { getClaudeModelCatalog } from "@/lib/backend";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import type { ClaudeTmuxData } from "@/types/paneLayout";
 
@@ -86,6 +85,7 @@ interface Props {
   isReviewTab?: boolean;
   initialAgentModel?: string;
   initialReasoningEffort?: string;
+  initialFastMode?: boolean;
   refreshRequestId?: number;
 }
 
@@ -131,6 +131,7 @@ export function ClaudeTmuxChatTab({
   isReviewTab = false,
   initialAgentModel,
   initialReasoningEffort,
+  initialFastMode,
   refreshRequestId = 0,
 }: Props) {
   const { environmentId, containerId } = data;
@@ -143,12 +144,13 @@ export function ClaudeTmuxChatTab({
   const config = useConfigStore((state) => state.config);
   // Same resolver native Claude uses: a repository or environment model must
   // outrank the application default, including when this tab is tmux-backed.
-  const persistedClaudeModel = resolvedPlatformSettings(
+  const persistedClaudeSettings = resolvedPlatformSettings(
     config,
     environment?.projectId,
     environment,
     "claude",
-  ).model;
+  );
+  const persistedClaudeModel = persistedClaudeSettings.model;
 
   const scopedTabState = useClaudeTmuxStore((s) => s.tabs.get(stateKey));
   const legacyTabState = useClaudeTmuxStore((s) => s.tabs.get(tabId));
@@ -193,12 +195,18 @@ export function ClaudeTmuxChatTab({
   const initialLaunchOptionsRef = useRef({
     model: initialAgentModel,
     reasoningEffort: initialReasoningEffort,
+    fastMode: initialFastMode,
   });
   const initialLaunchModel = initialLaunchOptionsRef.current.model;
   const initialLaunchReasoningEffort = initialLaunchOptionsRef.current.reasoningEffort;
+  const initialLaunchFastMode = initialLaunchOptionsRef.current.fastMode;
   const initialLaunchModelPendingRef = useRef(Boolean(initialLaunchModel));
   const initialLaunchOptionsPendingRef = useRef(
-    Boolean(initialLaunchModel || initialLaunchReasoningEffort),
+    Boolean(
+      initialLaunchModel ||
+      initialLaunchReasoningEffort ||
+      typeof initialLaunchFastMode === "boolean",
+    ),
   );
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     const snapshot = useConfigStore.getState().config;
@@ -211,7 +219,9 @@ export function ClaudeTmuxChatTab({
   const [modelSwitching, setModelSwitching] = useState(false);
   const [effortSwitching, setEffortSwitching] = useState(false);
   const [fastModeSwitching, setFastModeSwitching] = useState(false);
-  const [fastModeEnabled, setFastModeEnabled] = useState<boolean | null>(false);
+  const [fastModeEnabled, setFastModeEnabled] = useState<boolean | null>(
+    initialLaunchFastMode ?? persistedClaudeSettings.fastMode ?? false,
+  );
   const [modeSwitching, setModeSwitching] = useState(false);
   const [planMode, setPlanMode] = useState(false);
   const [resumeDialogOpen, setResumeDialogOpen] = useState(false);
@@ -694,7 +704,13 @@ export function ClaudeTmuxChatTab({
         initialPrompt,
         model: selectedModel,
         effort: effortOptions.length > 0 ? effectiveEffort : undefined,
-        fastMode: selectedModelObj.supportsFastMode === true && fastModeEnabled === true,
+        // A resumed conversation owns its existing speed. Applying the current
+        // settings default here would rewrite it before the tmux process can
+        // report the restored state.
+        fastMode:
+          resumeSessionId === undefined
+            ? selectedModelObj.supportsFastMode !== false && fastModeEnabled === true
+            : undefined,
         resumeSessionId,
         replaceExisting,
       }).catch((e) => {
@@ -748,16 +764,6 @@ export function ClaudeTmuxChatTab({
     // above) clears it when the turn ends.
     setTabBusy(storeKey, true);
     try {
-      if (text && !resumedSession && messages.length === 0) {
-        const environment = useEnvironmentStore.getState().getEnvironmentById(environmentId);
-        if (environment && isDefaultTimestampEnvironmentName(environment.name)) {
-          try {
-            await renameEnvironmentFromPrompt(environmentId, text);
-          } catch (e) {
-            console.warn("[ClaudeTmuxChatTab] Failed to rename environment from prompt:", e);
-          }
-        }
-      }
       const prompt = buildTmuxPromptWithAttachments(text, attachments, containerId);
       await submitToTmux(tabId, prompt, environmentId);
       if (clearDraftOnSuccess) {
@@ -1021,7 +1027,7 @@ export function ClaudeTmuxChatTab({
 
   const handleSelectModel = async (modelId: string) => {
     if (modelId === selectedModel || settingsSwitching) return;
-    const nextSupportsFastMode = getTmuxModel(modelId, availableModels).supportsFastMode === true;
+    const nextSupportsFastMode = getTmuxModel(modelId, availableModels).supportsFastMode !== false;
 
     if (!hasStarted || !running) {
       setSelectedModel(modelId);
@@ -1433,7 +1439,7 @@ export function ClaudeTmuxChatTab({
                 void handleSelectEffort(level);
               }}
               fastModeEnabled={fastModeEnabled}
-              fastModeAvailable={selectedModelObj.supportsFastMode === true}
+              fastModeAvailable={selectedModelObj.supportsFastMode !== false}
               onSelectFastMode={(enabled) => {
                 void handleSelectFastMode(enabled);
               }}

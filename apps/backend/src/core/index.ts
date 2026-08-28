@@ -323,6 +323,20 @@ export class OrkestratorBackend {
     await this.multiReviews.init().catch((error) => {
       console.warn("[backend] Failed to restore multi reviews:", error);
     });
+    const reconcilePendingEnvironmentRenames = this.commands.get(
+      "reconcile_pending_environment_renames",
+    );
+    if (reconcilePendingEnvironmentRenames) {
+      // Naming intent is durable backend work. Complete startup reconciliation
+      // before native launch recovery, even when no renderer has mounted the
+      // environment. First-prompt preparation itself only schedules this work:
+      // it may be called while environment start already owns the lifecycle queue.
+      await Promise.resolve(reconcilePendingEnvironmentRenames({}, this.context)).catch(
+        (error: unknown) => {
+          console.warn("[backend] Failed to reconcile pending environment renames:", error);
+        },
+      );
+    }
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
     });
@@ -457,6 +471,13 @@ export class OrkestratorBackend {
           .catch((error) => {
             console.warn("[backend] Failed to prune agent mail:", error);
           });
+      }
+      if (reconcilePendingEnvironmentRenames) {
+        void Promise.resolve(reconcilePendingEnvironmentRenames({}, this.context)).catch(
+          (error: unknown) => {
+            console.warn("[backend] Failed to reconcile pending environment renames:", error);
+          },
+        );
       }
     }, 2_000);
     this.nativeActivitySweep.unref?.();

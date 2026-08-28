@@ -656,6 +656,27 @@ export function handlePromptTools(
     write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
     return true;
   }
+  if (prompt.startsWith("FAILCREDITSSUBAGENT")) {
+    write({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "fake-session",
+        update: {
+          sessionUpdate: "subagent_finished",
+          subagent_id: "grok-subagent-1",
+          status: "failed",
+          error: `Session error: Internal error: ${JSON.stringify({
+            message: "API error (status 402 Payment Required): Grok Build usage balance exhausted",
+            http_status: 402,
+            promptUsage: { inputTokens: 1_081_795, outputTokens: 4_052 },
+          })}`,
+        },
+      },
+    });
+    write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
+    return true;
+  }
   if (prompt.startsWith("FAILTOOL")) {
     write({
       jsonrpc: "2.0",

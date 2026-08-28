@@ -21,6 +21,7 @@ import {
   isAcpTodosToolName,
   preserveTaskLaunchArgs,
   ensureAcpToolSource,
+  finishSubagentTool,
   omitActiveSpawnDuration,
   renderAcpToolSource,
   stampSubagentRuntimeDuration,
@@ -484,6 +485,69 @@ describe("sub-agent runtime duration", () => {
     source.rawOutput = part.toolOutput;
     stampSubagentRuntimeDuration(part, Date.parse(part.createdAt!) + 5_400);
     expect(part.toolArgs?.durationMs).toBe(84);
+  });
+});
+
+describe("sub-agent lifecycle errors", () => {
+  test("does not invent an error for a failed child without a lifecycle error", () => {
+    const part = spawnTaskPart({ agentState: "failed" });
+    const source = ensureAcpToolSource(part);
+
+    renderAcpToolSource(part, source);
+
+    expect(part.agentState).toBe("failed");
+    expect(part).not.toHaveProperty("toolError");
+  });
+
+  test("preserves a persisted lifecycle error through source reconstruction", () => {
+    const part = spawnTaskPart({
+      agentState: "failed",
+      toolError: "Grok Build usage balance is exhausted. Add usage credits, then retry.",
+    });
+    const source = ensureAcpToolSource(part);
+    source.rawOutput = JSON.stringify({ status: "completed", isBackground: true });
+
+    renderAcpToolSource(part, source);
+
+    expect(part.agentState).toBe("failed");
+    expect(part.toolError).toBe(
+      "Grok Build usage balance is exhausted. Add usage credits, then retry.",
+    );
+  });
+
+  test("charges a newly rendered lifecycle error to transcript accounting", () => {
+    const part = spawnTaskPart({ createdAt: undefined });
+    const source = ensureAcpToolSource(part);
+    const chargedBytes = Buffer.byteLength(JSON.stringify(part));
+    source.chargedBytes = chargedBytes;
+    const state = {
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant" as const,
+          content: "",
+          createdAt: "2026-03-21T10:00:00.000Z",
+          parts: [part],
+        },
+      ],
+      activeSubagentToolIds: new Set([part.toolUseId]),
+      activeSubagentDescriptors: new Map([[part.toolUseId, {}]]),
+      subagentToolIds: new Map([["child-wait-1", part.toolUseId]]),
+      revision: 0,
+      uncheckedTranscriptBytes: 0,
+    };
+
+    finishSubagentTool(state as never, part.toolUseId, "failed", "Provider child failed");
+
+    expect(part.toolError).toBe("Provider child failed");
+    expect(state.uncheckedTranscriptBytes).toBe(
+      Buffer.byteLength(JSON.stringify(part)) - chargedBytes,
+    );
+    expect(state.uncheckedTranscriptBytes).toBeGreaterThan(0);
+    expect(state.revision).toBe(1);
+    expect(state.activeSubagentToolIds.size).toBe(0);
+    expect(state.activeSubagentDescriptors.size).toBe(0);
+    expect(state.subagentToolIds.size).toBe(0);
   });
 });
 

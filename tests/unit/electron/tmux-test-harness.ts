@@ -715,11 +715,11 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
 
-export function createHandlers() {
+export function createHandlers(options: Parameters<typeof registerTmuxBackendCommands>[1] = {}) {
   const handlers = new Map<string, (args: Record<string, unknown>, context: unknown) => unknown>();
   registerTmuxBackendCommands((name, handler) => {
     handlers.set(name, handler as (args: Record<string, unknown>, context: unknown) => unknown);
-  });
+  }, options);
   return handlers;
 }
 

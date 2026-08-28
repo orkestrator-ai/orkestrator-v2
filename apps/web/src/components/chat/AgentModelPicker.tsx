@@ -90,6 +90,13 @@ interface AgentModelPickerProps {
    */
   speedCapable?: boolean;
   onFastModeChange?: (enabled: boolean) => void;
+  /**
+   * Settings-only inherit row. Sessions omit this; they have a live snapshot
+   * rather than a parent tier to fall through to.
+   */
+  speedInherit?: { label: string; selected: boolean };
+  /** Clears a stored speed so the parent tier / provider default applies. */
+  onFastModeInherit?: () => void;
   disabled?: boolean;
   title?: string;
   onRefreshModels?: () => void;
@@ -511,22 +518,57 @@ function ReasoningItems({
   );
 }
 
+/** Fast/Normal radios, plus an optional settings inherit row. */
 function SpeedItems({
   fastModeEnabled = false,
   fastModeAvailable = false,
   disabled,
   onFastModeChange,
+  speedInherit,
+  onFastModeInherit,
 }: Pick<
   AgentModelPickerProps,
-  "fastModeEnabled" | "fastModeAvailable" | "disabled" | "onFastModeChange"
+  | "fastModeEnabled"
+  | "fastModeAvailable"
+  | "disabled"
+  | "onFastModeChange"
+  | "speedInherit"
+  | "onFastModeInherit"
 >) {
   const canChange = fastModeAvailable && Boolean(onFastModeChange) && !disabled;
+  const selectedValue = speedInherit?.selected
+    ? "inherit"
+    : fastModeEnabled === null
+      ? ""
+      : fastModeEnabled
+        ? "fast"
+        : "normal";
 
   return (
     <DropdownMenuRadioGroup
-      value={fastModeEnabled === null ? "" : fastModeEnabled ? "fast" : "normal"}
-      onValueChange={(value) => onFastModeChange?.(value === "fast")}
+      value={selectedValue}
+      onValueChange={(value) => {
+        if (value === "inherit") {
+          onFastModeInherit?.();
+          return;
+        }
+        onFastModeChange?.(value === "fast");
+      }}
     >
+      {speedInherit ? (
+        <DropdownMenuRadioItem
+          value="inherit"
+          disabled={disabled || !onFastModeInherit}
+          className={RADIO_ROW_CLASS}
+        >
+          <span className="flex min-w-0 flex-col">
+            <span>{speedInherit.label}</span>
+            <span className="text-xs text-muted-foreground">
+              Use the parent or provider default
+            </span>
+          </span>
+        </DropdownMenuRadioItem>
+      ) : null}
       <DropdownMenuRadioItem value="normal" disabled={!canChange} className={RADIO_ROW_CLASS}>
         <span className="flex min-w-0 flex-col">
           <span>Normal</span>
@@ -573,6 +615,8 @@ export function AgentModelPicker({
   fastModeAvailable = false,
   speedCapable = true,
   onFastModeChange,
+  speedInherit,
+  onFastModeInherit,
   disabled = false,
   title,
   onRefreshModels,
@@ -679,8 +723,9 @@ export function AgentModelPicker({
   // model name — so its permanently-null flag must not paint "? speed" onto the
   // trigger. Gating on `onFastModeChange` instead would also hide the hint from
   // Claude and Codex, whose callback is absent for exactly as long as the value
-  // is unknown, which is the window the hint exists to describe.
-  const fastModeUnknown = speedCapable && fastModeEnabled === null;
+  // is unknown, which is the window the hint exists to describe. Settings inherit
+  // reuses null for "no stored choice" and must not look like an unknown snapshot.
+  const fastModeUnknown = speedCapable && fastModeEnabled === null && !speedInherit;
   const showReasoningControls = reasoningOptions.length > 0;
   const displayLabel = selectedReasoningLabel
     ? `${selectedModelLabel} (${selectedReasoningLabel}${fastModeEnabled ? " ⚡" : ""}${fastModeUnknown ? "; speed unknown" : ""})`
@@ -911,6 +956,8 @@ export function AgentModelPicker({
               fastModeAvailable={fastModeAvailable}
               disabled={disabled}
               onFastModeChange={onFastModeChange}
+              speedInherit={speedInherit}
+              onFastModeInherit={onFastModeInherit}
             />
           </div>
         ) : isMobile ? (
@@ -1057,13 +1104,15 @@ export function AgentModelPicker({
                       Fast <Zap className="h-3 w-3 text-amber-500" />
                     </span>
                     <span className="truncate text-xs text-muted-foreground">
-                      {!fastModeAvailable
-                        ? "Unavailable"
-                        : fastModeEnabled === null
-                          ? "Unknown"
-                          : fastModeEnabled
-                            ? "On"
-                            : "Off"}
+                      {speedInherit?.selected
+                        ? speedInherit.label
+                        : !fastModeAvailable
+                          ? "Unavailable"
+                          : fastModeEnabled === null
+                            ? "Unknown"
+                            : fastModeEnabled
+                              ? "On"
+                              : "Off"}
                     </span>
                   </span>
                   <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -1204,6 +1253,8 @@ export function AgentModelPicker({
                     fastModeAvailable={fastModeAvailable}
                     disabled={disabled}
                     onFastModeChange={onFastModeChange}
+                    speedInherit={speedInherit}
+                    onFastModeInherit={onFastModeInherit}
                   />
                 </div>
               </div>

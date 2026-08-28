@@ -55,9 +55,10 @@ import type {
   OpenCodeIncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
+  PersistedNativeAgentPendingSteer,
 } from "./models.js";
 import type { StorageService } from "./storage.js";
-import { PendingNativeAgentDispatchError } from "./storage.js";
+import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
   createNativeAgentProvider,
@@ -66,6 +67,7 @@ import {
   readProviderStatus,
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
+  type ProviderNativeAgentSessionAction,
   type ProviderInteractiveSnapshot,
   type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
@@ -478,20 +480,11 @@ export function isEnvironmentReadyForAgents(environment: Environment): boolean {
   );
 }
 
-export const LEGACY_TIMESTAMP_ENVIRONMENT_NAME = /^\d{8}-\d{6}$/;
-export const COMPACT_TIMESTAMP_ENVIRONMENT_NAME = /^\d{15}$/;
-
-/**
- * True for a name generated before the environment had a prompt-derived title.
- *
- * Twin of `apps/web/src/lib/environment-name.ts` — the renderer applies the same
- * guard on its own send path, and both must agree on which names are renameable.
- */
-export function isGeneratedEnvironmentName(name: string): boolean {
-  return (
-    LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name) || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name)
-  );
-}
+export {
+  COMPACT_TIMESTAMP_ENVIRONMENT_NAME,
+  isGeneratedEnvironmentName,
+  LEGACY_TIMESTAMP_ENVIRONMENT_NAME,
+} from "./environment-name.js";
 
 export function nativeAgentSessionStorageKey(
   environmentId: string,
@@ -551,6 +544,7 @@ export {
   resolveStartupLaunchFromSettings,
   resolveAgentPlatformSettings,
   PendingNativeAgentDispatchError,
+  PendingNativeAgentSteerError,
   AmbiguousPromptDispatchError,
   createNativeAgentProvider,
   PromptRejectedError,
@@ -593,9 +587,11 @@ export type {
   OpenCodeIncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
+  PersistedNativeAgentPendingSteer,
   StorageService,
   BridgeConnection,
   NativeAgentRuntimeProvider,
+  ProviderNativeAgentSessionAction,
   ProviderInteractiveSnapshot,
   ProviderInteractionObservationEvent,
   ProviderExecutionMode,

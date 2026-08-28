@@ -1069,6 +1069,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       },
     });
     const internals = backend as unknown as {
+      commands: Map<string, (args: Record<string, unknown>, context: unknown) => unknown>;
       buildPipelines: { init: () => Promise<void> };
       nativeAgents: {
         init: () => Promise<void>;
@@ -1084,6 +1085,11 @@ describe("native-agent activity reconciliation lifecycle", () => {
     internals.nativeAgents.reconcileAgentActivity = mock(async () => undefined);
     internals.promptQueues.drainAll = mock(async () => undefined);
     internals.promptQueues.shutdown = mock(async () => undefined);
+    const reconcilePendingEnvironmentRenames = mock(async () => undefined);
+    internals.commands.set(
+      "reconcile_pending_environment_renames",
+      reconcilePendingEnvironmentRenames,
+    );
 
     const { intervals, clearIntervalSpy, tick, restore } = controlledIntervals();
 
@@ -1091,6 +1097,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await backend.init();
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(1);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(1);
+      expect(reconcilePendingEnvironmentRenames).toHaveBeenCalledTimes(1);
       const nativeSweep = intervals.find((interval) => interval.delay === 2_000);
       expect(nativeSweep).toBeDefined();
       expect(nativeSweep!.unref).toHaveBeenCalledTimes(1);
@@ -1099,6 +1106,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await Promise.resolve();
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(2);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(2);
+      expect(reconcilePendingEnvironmentRenames).toHaveBeenCalledTimes(2);
 
       await backend.shutdown();
       expect(internals.promptQueues.shutdown).toHaveBeenCalledTimes(1);
@@ -1109,6 +1117,7 @@ describe("native-agent activity reconciliation lifecycle", () => {
       await Promise.resolve();
       expect(internals.nativeAgents.reconcileAgentActivity).toHaveBeenCalledTimes(2);
       expect(internals.promptQueues.drainAll).toHaveBeenCalledTimes(2);
+      expect(reconcilePendingEnvironmentRenames).toHaveBeenCalledTimes(2);
     } finally {
       await backend.shutdown().catch(() => undefined);
       restore();
@@ -1417,6 +1426,75 @@ test("startup reconciles a persisted creating environment before accepting comma
         lifecycleError: expect.stringContaining("interrupted"),
       }),
     ]);
+  } finally {
+    await backend.shutdown().catch(() => undefined);
+    await fs.rm(dataDir, { recursive: true, force: true });
+  }
+});
+
+test("startup completes a persisted environment rename without renderer hydration", async () => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "ork-backend-rename-recovery-"));
+  const toolchainBinDir = path.join(dataDir, "bin");
+  await fs.mkdir(toolchainBinDir, { recursive: true });
+  const codexPath = path.join(toolchainBinDir, "codex");
+  await fs.writeFile(
+    codexPath,
+    `#!/bin/sh
+out=""
+previous=""
+for argument in "$@"; do
+  if [ "$previous" = "--output-last-message" ]; then out="$argument"; fi
+  previous="$argument"
+done
+[ -n "$out" ] || exit 2
+printf '%s\n' '{"slug":"Backend Managed Name"}' > "$out"
+`,
+    { mode: 0o755 },
+  );
+  const storage = new StorageService(dataDir);
+  await storage.init();
+  await storage.addEnvironment({
+    ...createEnvironment("project", {
+      name: "20260827-154209",
+      environmentType: "local",
+      pendingRenamePrompt: "Keep naming active when no renderer is mounted",
+    }),
+    id: "pending-backend-rename",
+    status: "running",
+    setupScriptsComplete: true,
+    setupPhase: "ready",
+  });
+  const events: string[] = [];
+  const backend = new OrkestratorBackend({
+    dataDir,
+    toolchainBinDir,
+    appRoot: "",
+    resourceRoot: "",
+    emit: (event) => events.push(event),
+    agentTools: fakeAgentTools(),
+    startupReapers: {
+      localServers: async () => [],
+      claudeTmuxRuntimes: async () => [],
+    },
+  });
+  try {
+    await backend.init();
+    const internalStorage = (backend as unknown as { context: { storage: StorageService } }).context
+      .storage;
+    // The event is emitted after persistence, so waiting on it covers both
+    // observable effects and cannot race the assertion below.
+    await waitForCondition(
+      () => events.includes("environment-renamed"),
+      "the backend-owned environment rename event",
+    );
+
+    const renamed = await internalStorage.getEnvironment("pending-backend-rename");
+    expect(renamed).toMatchObject({
+      name: "backend-managed-name",
+      branch: "backend-managed-name",
+    });
+    expect(renamed).not.toHaveProperty("pendingRenamePrompt");
+    expect(events).toContain("environment-renamed");
   } finally {
     await backend.shutdown().catch(() => undefined);
     await fs.rm(dataDir, { recursive: true, force: true });

@@ -1,5 +1,6 @@
 import { describe, expect, jest, mock, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -10,7 +11,11 @@ import {
   INTERACTIVE_AGENT_INTERACTION_POLICY,
   UNATTENDED_AGENT_INTERACTION_POLICY,
 } from "@orkestrator/protocol/agent-interactions";
-import { PendingNativeAgentDispatchError, StorageService } from "./storage.js";
+import {
+  PendingNativeAgentDispatchError,
+  PendingNativeAgentSteerError,
+  StorageService,
+} from "./storage.js";
 
 async function withStorage(
   run: (first: StorageService, second: StorageService) => Promise<void>,
@@ -857,6 +862,76 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
+  test("persists one bounded steer barrier and reuses its backend identity exactly", async () => {
+    await withStorage(async (first, second) => {
+      await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
+      const text = "x".repeat(64 * 1024);
+      const pending = {
+        requestId: "steer-a",
+        text,
+        inputDigest: createHash("sha256").update(text).digest("hex"),
+        expectedRunId: "pi:generation:1",
+        state: "prepared" as const,
+        createdAt: new Date(1).toISOString(),
+      };
+      const firstDispatch = mock(async () => ({
+        outcome: "unknown" as const,
+        requestId: pending.requestId,
+      }));
+      await expect(
+        first.dispatchNativeAgentSteerOnce(input.key, pending, firstDispatch),
+      ).resolves.toEqual({ outcome: "unknown", requestId: pending.requestId });
+      expect(firstDispatch).toHaveBeenCalledTimes(1);
+      expect((await second.getNativeAgentSession(input.key))?.pendingSteer).toMatchObject({
+        ...pending,
+        state: "unknown",
+      });
+
+      const competing = { ...pending, requestId: "steer-b" };
+      const refusal = await second
+        .dispatchNativeAgentSteerOnce(input.key, competing, async () => ({ outcome: "applied" }))
+        .catch((error: unknown) => error);
+      expect(refusal).toBeInstanceOf(PendingNativeAgentSteerError);
+      expect((refusal as PendingNativeAgentSteerError).pendingRequestId).toBe("steer-a");
+
+      const exactRetry = mock(async () => ({ outcome: "applied" as const }));
+      await expect(
+        second.dispatchNativeAgentSteerOnce(input.key, pending, exactRetry),
+      ).resolves.toEqual({ outcome: "applied" });
+      expect(exactRetry).toHaveBeenCalledTimes(1);
+      expect((await first.getNativeAgentSession(input.key))?.pendingSteer).toBeUndefined();
+
+      const escapedText = '"'.repeat(64 * 1024);
+      const escapedPending = {
+        ...pending,
+        requestId: "steer-escaped",
+        text: escapedText,
+        inputDigest: createHash("sha256").update(escapedText).digest("hex"),
+      };
+      const escapedDispatch = mock(async () => ({ outcome: "applied" as const }));
+      await expect(
+        first.dispatchNativeAgentSteerOnce(input.key, escapedPending, escapedDispatch),
+      ).resolves.toEqual({ outcome: "applied" });
+      expect(escapedDispatch).toHaveBeenCalledTimes(1);
+
+      const oversizedText = `${text}x`;
+      const oversizedDispatch = mock(async () => ({ outcome: "applied" as const }));
+      await expect(
+        first.dispatchNativeAgentSteerOnce(
+          input.key,
+          {
+            ...pending,
+            requestId: "steer-oversized",
+            text: oversizedText,
+            inputDigest: createHash("sha256").update(oversizedText).digest("hex"),
+          },
+          oversizedDispatch,
+        ),
+      ).rejects.toThrow("steer record is invalid");
+      expect(oversizedDispatch).not.toHaveBeenCalled();
+    });
+  });
+
   test("names the parked request when it refuses a competing dispatch", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
@@ -923,7 +998,7 @@ describe("StorageService native agent sessions", () => {
     });
   });
 
-  test("scrubs resolved and invalidated dispatch content from every retained backup", async () => {
+  test("scrubs resolved and invalidated dispatch and steer content from every retained backup", async () => {
     await withStorage(async (first) => {
       await first.getOrCreateNativeAgentSession(input, async () => "provider-session");
       const file = path.join(first.getDataDir(), "native-agent-sessions.json");
@@ -967,6 +1042,37 @@ describe("StorageService native agent sessions", () => {
       expect(await first.clearPendingNativeAgentDispatch(input.key, "cleared")).toBe(true);
       expect((await allNativeSessionFiles()).join("\n")).not.toContain(clearedSecret);
 
+      const appliedSteerSecret = "APPLIED-STEER-CONTENT";
+      const appliedSteer = {
+        requestId: "applied-steer",
+        text: appliedSteerSecret,
+        inputDigest: createHash("sha256").update(appliedSteerSecret).digest("hex"),
+        expectedRunId: "turn-1",
+        state: "prepared" as const,
+        createdAt: new Date(3).toISOString(),
+      };
+      await first.dispatchNativeAgentSteerOnce(input.key, appliedSteer, async () => ({
+        outcome: "applied",
+      }));
+      expect((await allNativeSessionFiles()).join("\n")).not.toContain(appliedSteerSecret);
+
+      const discardedSteerSecret = "DISCARDED-STEER-CONTENT";
+      const discardedSteer = {
+        ...appliedSteer,
+        requestId: "discarded-steer",
+        text: discardedSteerSecret,
+        inputDigest: createHash("sha256").update(discardedSteerSecret).digest("hex"),
+        createdAt: new Date(4).toISOString(),
+      };
+      await first.dispatchNativeAgentSteerOnce(input.key, discardedSteer, async () => ({
+        outcome: "unknown",
+        requestId: discardedSteer.requestId,
+      }));
+      expect(await first.clearPendingNativeAgentSteer(input.key, discardedSteer.requestId)).toBe(
+        true,
+      );
+      expect((await allNativeSessionFiles()).join("\n")).not.toContain(discardedSteerSecret);
+
       const invalidatedSecret = "INVALIDATED-PROMPT-CONTENT";
       await expect(
         first.dispatchNativeAgentPromptOnce(
@@ -978,7 +1084,7 @@ describe("StorageService native agent sessions", () => {
           {
             requestId: "invalidated",
             prompt: invalidatedSecret,
-            createdAt: new Date(3).toISOString(),
+            createdAt: new Date(5).toISOString(),
           },
         ),
       ).rejects.toThrow("ambiguous");

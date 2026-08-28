@@ -18,6 +18,7 @@ import {
   clientSessionKeys,
   isObject,
   nonBlank,
+  setSteerJournal,
   sessions,
   type PersistedSession,
   type PersistedState,
@@ -175,6 +176,11 @@ function toPersisted(state: SessionState): PersistedSession {
         ? { ...entry, state: "ambiguous" as const }
         : entry,
     ),
+    steerJournal: Array.from(state.steerJournal.values()).map((entry) =>
+      entry.state === "prepared" || entry.state === "queued"
+        ? { ...entry, state: "ambiguous" as const }
+        : entry,
+    ),
     composer: state.composer,
     ...(state.usage ? { usage: state.usage } : {}),
   };
@@ -247,6 +253,30 @@ function restoreSession(entry: unknown): SessionState | undefined {
         requestId: journalEntry.requestId,
         state: readJournalState(journalEntry.state),
         acceptedAt: readCount(journalEntry.acceptedAt),
+      });
+    }
+  }
+  if (Array.isArray(entry.steerJournal)) {
+    for (const journalEntry of entry.steerJournal) {
+      if (
+        !isObject(journalEntry) ||
+        !nonBlank(journalEntry.requestId) ||
+        !nonBlank(journalEntry.inputDigest) ||
+        !nonBlank(journalEntry.expectedRunId)
+      ) {
+        continue;
+      }
+      setSteerJournal(state, {
+        requestId: journalEntry.requestId,
+        inputDigest: journalEntry.inputDigest,
+        expectedRunId: journalEntry.expectedRunId,
+        state:
+          journalEntry.state === "delivered"
+            ? "delivered"
+            : journalEntry.state === "dropped"
+              ? "dropped"
+              : "ambiguous",
+        createdAt: readCount(journalEntry.createdAt),
       });
     }
   }

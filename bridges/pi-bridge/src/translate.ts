@@ -24,6 +24,7 @@ import {
 import {
   isObject,
   nonBlank,
+  setSteerJournal,
   toolSourceStates,
   type BridgeMessage,
   type BridgeTextPart,
@@ -62,6 +63,10 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
   if (!isObject(event) || !nonBlank(event.type)) return;
 
   switch (event.type) {
+    case "message_start":
+      if (!turnFramesWelcome(state)) break;
+      applySteerDelivery(state, event.message);
+      break;
     case "message_update":
       if (!turnFramesWelcome(state)) break;
       applyMessageUpdate(state, event.assistantMessageEvent);
@@ -120,6 +125,64 @@ export function applySessionEvent(state: SessionState, event: unknown): void {
   // Synchronous by design: this function runs on Pi's SDK listener and must
   // never await a renderer, persistence or any other downstream consumer.
   boundTranscriptDuringStreaming(state);
+}
+
+/**
+ * Pi emits the queued steering instruction as an ordinary user message at the
+ * safe-point where it joins the run. That event, not the HTTP request, owns the
+ * permanent transcript row and the positive reconciliation record.
+ */
+function applySteerDelivery(state: SessionState, value: unknown): void {
+  if (!isObject(value) || value.role !== "user") return;
+  const pending = state.pendingSteerDeliveries[0];
+  if (!pending) return;
+  const text = messageText(value.content);
+  if (!text || text !== pending.text) return;
+
+  state.pendingSteerDeliveries.shift();
+  const entry = state.steerJournal.get(pending.requestId);
+  if (entry) setSteerJournal(state, { ...entry, state: "delivered" });
+
+  // Anything Pi emits after this user frame belongs below a fresh assistant
+  // boundary. The pre-steer row may already contain prose and tool cards.
+  state.currentAssistantMessageId = undefined;
+  state.openTextParts.clear();
+  const messageId = randomBytes(12).toString("hex");
+  const message: BridgeMessage = {
+    id: messageId,
+    role: "user",
+    content: text,
+    parts: [
+      {
+        type: "text",
+        content: text,
+        sourcePartId: `${messageId}:0`,
+        sourceMessageId: messageId,
+      },
+    ],
+    createdAt: messageCreatedAt(value.timestamp),
+  };
+  state.messages.push(message);
+  chargeTranscript(state, Buffer.byteLength(JSON.stringify(message)));
+  state.revision += 1;
+}
+
+function messageText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((part) =>
+      isObject(part) && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+    )
+    .join("\n");
+}
+
+function messageCreatedAt(value: unknown): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const date = new Date(value);
+    if (Number.isFinite(date.getTime())) return date.toISOString();
+  }
+  return new Date().toISOString();
 }
 
 /**

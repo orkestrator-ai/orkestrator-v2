@@ -185,7 +185,14 @@ export async function cleanupEnvironmentTmux(
 
 export function registerTmuxBackendCommands(
   register: RegisterCommand,
-  options: { claudeStatePolls?: ClaudeStatePollManager } = {},
+  options: {
+    claudeStatePolls?: ClaudeStatePollManager;
+    prepareEnvironmentFirstPrompt?: (
+      environmentId: string,
+      prompt: string,
+      context: CommandContext,
+    ) => Promise<void>;
+  } = {},
 ): void {
   // Tests inject a manager so the polling commands can be exercised without a
   // Docker daemon; production keeps the single process-wide instance.
@@ -213,6 +220,21 @@ export function registerTmuxBackendCommands(
       const tab = asString(tabId, "tabId");
       const resumeId = asOptionalString(resumeSessionId);
       const replace = replaceExisting === true;
+      const firstPrompt = asOptionalString(initialPrompt)?.trim();
+      // Naming persists durable intent only and schedules lifecycle work. Keep
+      // it outside the tmux install lock so deletion never takes the lifecycle
+      // queue and this mutex in the opposite order.
+      if (firstPrompt && !resumeId && options.prepareEnvironmentFirstPrompt) {
+        try {
+          await options.prepareEnvironmentFirstPrompt(envId, firstPrompt, context);
+        } catch (error) {
+          // Naming is cosmetic; starting the user's agent is not.
+          console.warn(
+            `[tmux] Failed to prepare first-prompt naming for ${envId}:`,
+            error instanceof Error ? error.name : "unknown error",
+          );
+        }
+      }
       return tmuxManager.installLock(envId).runExclusive(async () => {
         const environment = await context.storage.getEnvironment(envId);
         if (!environment || environment.deletionRequestedAt) {
@@ -225,6 +247,7 @@ export function registerTmuxBackendCommands(
         }
 
         const session = await getOrCreateSession(context, envId, tab, resumeId);
+        if (firstPrompt) session.claimFirstPromptForNaming();
         await installWorkspaceHooks(session.backend, session.workspaceHookPaths);
         await session.startAfterHooksInstalled(
           context,
@@ -326,7 +349,24 @@ export function registerTmuxBackendCommands(
   );
   register("claude_tmux_submit", async ({ tabId, text, environmentId }, context) => {
     const envId = asString(environmentId, "environmentId");
-    await requireSession(envId, asString(tabId, "tabId")).submit(asString(text, "text"));
+    const session = requireSession(envId, asString(tabId, "tabId"));
+    const prompt = asString(text, "text");
+    if (
+      prompt.trim() &&
+      session.claimFirstPromptForNaming() &&
+      options.prepareEnvironmentFirstPrompt
+    ) {
+      try {
+        await options.prepareEnvironmentFirstPrompt(envId, prompt, context);
+      } catch (error) {
+        // Naming is cosmetic; submitting the user's prompt is not.
+        console.warn(
+          `[tmux] Failed to prepare first-prompt naming for ${envId}:`,
+          error instanceof Error ? error.name : "unknown error",
+        );
+      }
+    }
+    await session.submit(prompt);
     await persistTmuxEnvironmentActivity(context, envId);
   });
   register("claude_tmux_submit_queued", async ({ tabId, text, environmentId }, context) => {
@@ -341,7 +381,9 @@ export function registerTmuxBackendCommands(
       if (!environment || environment.deletionRequestedAt) {
         throw new Error(`environment ${envId} is being deleted`);
       }
-      await requireSession(envId, tab).submit(prompt);
+      const session = requireSession(envId, tab);
+      if (prompt.trim()) session.claimFirstPromptForNaming();
+      await session.submit(prompt);
       await persistTmuxEnvironmentActivity(context, envId);
     });
   });

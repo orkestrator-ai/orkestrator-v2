@@ -39,6 +39,7 @@ import { getReviewAgent, type ReviewLaunchSelection } from "@/components/review/
 import { type MultiReviewLaunchSelection } from "@/components/review/MultiReviewLaunchDialog";
 import { type AgentLaunchSelection } from "@/components/launch/AgentLaunchDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
+import { modelSupportsSpeed } from "@/lib/agent-launch";
 import { useLongPressAction } from "@/hooks/useLongPressAction";
 import { promptQueueKey } from "@/lib/prompt-queue-persistence";
 import { createSessionKey } from "@/lib/utils";
@@ -327,16 +328,23 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
     (key: ActionDefaultKey) => resolvedActionDefault(settingsTiers, key, enabledAgentList),
     [enabledAgentList, settingsTiers],
   );
-  const { preferredModelsByPlatform, preferredEffortsByPlatform } = useMemo(() => {
-    const models: Partial<Record<DefaultAgent, string>> = {};
-    const efforts: Partial<Record<DefaultAgent, string>> = {};
-    for (const platform of enabledAgentList) {
-      const resolved = resolveAgentPlatformSettings(settingsTiers, platform);
-      if (resolved.model) models[platform] = resolved.model;
-      if (resolved.reasoningEffort) efforts[platform] = resolved.reasoningEffort;
-    }
-    return { preferredModelsByPlatform: models, preferredEffortsByPlatform: efforts };
-  }, [enabledAgentList, settingsTiers]);
+  const { preferredModelsByPlatform, preferredEffortsByPlatform, preferredFastModesByPlatform } =
+    useMemo(() => {
+      const models: Partial<Record<DefaultAgent, string>> = {};
+      const efforts: Partial<Record<DefaultAgent, string>> = {};
+      const fastModes: Partial<Record<DefaultAgent, boolean>> = {};
+      for (const platform of enabledAgentList) {
+        const resolved = resolveAgentPlatformSettings(settingsTiers, platform);
+        if (resolved.model) models[platform] = resolved.model;
+        if (resolved.reasoningEffort) efforts[platform] = resolved.reasoningEffort;
+        if (typeof resolved.fastMode === "boolean") fastModes[platform] = resolved.fastMode;
+      }
+      return {
+        preferredModelsByPlatform: models,
+        preferredEffortsByPlatform: efforts,
+        preferredFastModesByPlatform: fastModes,
+      };
+    }, [enabledAgentList, settingsTiers]);
   /** Settings action defaults as launch-dialog preferences. */
   const launchDialogDefaultsFor = useCallback(
     (key: ActionDefaultKey) => {
@@ -384,6 +392,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         agentLaunchMode?: AgentLaunchModeOverride;
         initialAgentModel?: string;
         initialReasoningEffort?: string;
+        initialFastMode?: boolean;
       },
     ) => {
       if (!createTab || !selectedEnvironmentId || !selectedProjectId || !canCreateTab) return;
@@ -407,6 +416,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
       const initialReasoningEffort =
         launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
+      const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
+      const configuredFastMode =
+        launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+      const initialFastMode =
+        typeof configuredFastMode === "boolean" &&
+        modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
+          ? configuredFastMode
+          : undefined;
       const tabId = `tab-${createUuid()}`;
       const created = createTab(agent, {
         tabId,
@@ -420,6 +437,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         ...launchOptions,
         ...(initialAgentModel ? { initialAgentModel } : {}),
         ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
+        // Written after the caller options so an unsupported explicit speed
+        // choice is erased rather than leaking through the spread above.
+        initialFastMode,
       });
       if (!created) {
         toast.error("Could not open review", {
@@ -433,7 +453,6 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       // When neither the dialog nor a configured default named a model, the
       // queued turn falls back to the platform's globally configured one. The tab
       // is left to resolve that itself, which is why it is not passed above.
-      const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
       const model = requestedModel === "default" ? undefined : requestedModel;
       const reasoningEffort = initialReasoningEffort ?? preferredEffortsByPlatform[agent];
       const queuedReview =
@@ -446,7 +465,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
               model,
               effort: reasoningEffort ?? "high",
               planModeEnabled: false,
-              fastModeEnabled: false,
+              ...(typeof initialFastMode === "boolean" ? { fastModeEnabled: initialFastMode } : {}),
             }
           : agent === "codex"
             ? {
@@ -457,7 +476,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
                 model,
                 reasoningEffort: reasoningEffort ?? "high",
                 mode: "build" as const,
-                fastMode: false,
+                ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
               }
             : {
                 id: requestId,
@@ -467,6 +486,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
                 model,
                 variant: reasoningEffort,
                 mode: "build" as const,
+                ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
               };
 
       // Do not await UI lifecycle work after this hand-off. The queue mutation is
@@ -496,6 +516,8 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       canCreateTab,
       preferredModelsByPlatform,
       preferredEffortsByPlatform,
+      preferredFastModesByPlatform,
+      reviewModelCatalog,
       config.global.reviewInstruction,
       config.repositories,
       createTab,
@@ -886,6 +908,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         agentLaunchMode?: AgentLaunchModeOverride;
         initialAgentModel?: string;
         initialReasoningEffort?: string;
+        initialFastMode?: boolean;
       },
     ): boolean => {
       if (!createTab || !canCreateTab || !isRunning) return false;
@@ -896,6 +919,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
       const initialReasoningEffort =
         launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
+      const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
+      const configuredFastMode =
+        launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+      const initialFastMode =
+        typeof configuredFastMode === "boolean" &&
+        modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
+          ? configuredFastMode
+          : undefined;
       const initialPrompt = createOrkestratorScriptPrompt(isLocalEnvironment);
       return createTab(agent, {
         initialPrompt,
@@ -904,9 +935,19 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         ...launchOptions,
         ...(initialAgentModel ? { initialAgentModel } : {}),
         ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
+        initialFastMode,
       });
     },
-    [actionDefaultFor, createTab, canCreateTab, isRunning, isLocalEnvironment],
+    [
+      actionDefaultFor,
+      createTab,
+      canCreateTab,
+      isRunning,
+      isLocalEnvironment,
+      preferredFastModesByPlatform,
+      preferredModelsByPlatform,
+      reviewModelCatalog,
+    ],
   );
 
   const openScriptDialog = useCallback(() => {
@@ -1157,6 +1198,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         agentLaunchMode?: AgentLaunchModeOverride;
         initialAgentModel?: string;
         initialReasoningEffort?: string;
+        initialFastMode?: boolean;
       },
       targetBranchOverride?: string,
     ): boolean => {
@@ -1183,6 +1225,14 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       const initialAgentModel = launchOptions?.initialAgentModel ?? defaultForAgent?.model;
       const initialReasoningEffort =
         launchOptions?.initialReasoningEffort ?? defaultForAgent?.reasoningEffort;
+      const requestedModel = initialAgentModel ?? preferredModelsByPlatform[agent];
+      const configuredFastMode =
+        launchOptions?.initialFastMode ?? preferredFastModesByPlatform[agent];
+      const initialFastMode =
+        typeof configuredFastMode === "boolean" &&
+        modelSupportsSpeed(agent, reviewModelCatalog, requestedModel)
+          ? configuredFastMode
+          : undefined;
       // Cursor is SDK-only. Grok is native unless explicitly opened as a CLI.
       // Give backend-owned launches a stable identity before the tab mounts so
       // the queue can own the turn immediately.
@@ -1199,12 +1249,13 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
         ...launchOptions,
         ...(initialAgentModel ? { initialAgentModel } : {}),
         ...(initialReasoningEffort ? { initialReasoningEffort } : {}),
+        initialFastMode,
       });
       if (!created) return false;
 
       if (tabId) {
         const requestId = `initial-prompt:${selectedEnvironmentId}:${tabId}`;
-        const model = initialAgentModel === "default" ? undefined : initialAgentModel;
+        const model = requestedModel === "default" ? undefined : requestedModel;
         const reasoningEffort = initialReasoningEffort;
         const queuedPrompt = {
           id: requestId,
@@ -1214,10 +1265,7 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
           ...(model ? { model } : {}),
           ...(reasoningEffort ? { reasoningEffort } : {}),
           mode: "build" as const,
-          // Stated rather than omitted: speed is a per-session model-picker
-          // choice, and saying "normal" explicitly keeps this path identical to
-          // the review queue instead of relying on each provider's own default.
-          ...(agent === "claude" || agent === "codex" ? { fastMode: false } : {}),
+          ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
         };
         const logicalSessionKey = createSessionKey(selectedEnvironmentId, tabId);
 
@@ -1252,6 +1300,9 @@ export function useActionBarController({ presentation }: ActionBarControllerInpu
       createTab,
       hasPR,
       isRunning,
+      preferredFastModesByPlatform,
+      preferredModelsByPlatform,
+      reviewModelCatalog,
       selectedEnvironmentId,
       selectedProjectId,
       setModeCreatePending,

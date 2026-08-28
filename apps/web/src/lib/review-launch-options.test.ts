@@ -60,6 +60,7 @@ describe("buildReviewModelCatalog", () => {
           name: "Claude Live",
           description: "Live Claude model",
           reasoningEfforts: ["low", "xhigh"],
+          supportsSpeed: true,
         },
       ],
       codex: [
@@ -68,6 +69,7 @@ describe("buildReviewModelCatalog", () => {
           name: "Codex Live",
           description: "Live Codex model",
           reasoningEfforts: ["medium", "high"],
+          supportsSpeed: true,
         },
       ],
       cursor: [{ id: "default", name: "Cursor automatic", reasoningEfforts: [] }],
@@ -132,6 +134,19 @@ describe("buildReviewModelCatalog", () => {
     ]);
   });
 
+  test("defaults omitted Claude speed capability to supported and honours explicit false", () => {
+    useClaudeStore.setState({
+      models: [
+        { id: "default-allow", name: "Default allow" },
+        { id: "explicit-deny", name: "Explicit deny", supportsFastMode: false },
+      ] as any,
+    });
+
+    const [defaultAllow, explicitDeny] = buildReviewModelCatalog(null).claude;
+    expect(defaultAllow?.supportsSpeed).toBe(true);
+    expect(explicitDeny?.supportsSpeed).toBeUndefined();
+  });
+
   test("uses the shared backend-hydrated Cursor, Grok, and Pi catalogues", () => {
     useAgentModelCatalogStore.getState().setAcpModels([
       {
@@ -144,6 +159,7 @@ describe("buildReviewModelCatalog", () => {
           { id: "high", label: "High" },
           { id: "high", label: "High duplicate" },
         ],
+        supportsSpeed: true,
       },
       {
         platform: "grok",
@@ -167,6 +183,7 @@ describe("buildReviewModelCatalog", () => {
         name: "Composer 2.5",
         description: "Cursor model",
         reasoningEfforts: ["high"],
+        supportsSpeed: true,
       },
     ]);
     expect(catalog.grok).toEqual([

@@ -52,6 +52,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { ComposeBar, type ImageAttachment } from "@/components/terminal/ComposeBar";
+import { TerminalWarningBanner } from "@/components/terminal/TerminalWarningBanner";
 import { CheckCircle2 } from "lucide-react";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { buildAgentLaunchCommand } from "@/lib/agent-launch-command";
@@ -158,6 +159,18 @@ export function PersistentTerminal({
   const [isComposeBarOpen, setIsComposeBarOpen] = useState(false);
   const [replayWarning, setReplayWarning] = useState<string | null>(null);
   const [bootstrapWarning, setBootstrapWarning] = useState<string | null>(null);
+  // Dismissal is remembered as the exact message that was dismissed, not as a
+  // boolean, and each warning slot keeps its own record.
+  //
+  // Clearing the warning state instead would only hide the banner until the
+  // next time the same condition is observed. A truncated backend ring is a
+  // property of the buffer rather than a one-off event, so every snapshot
+  // reconciliation — on reconnect, and on any revision or generation gap —
+  // re-raises the identical message and would re-open a banner the user had
+  // already closed. Comparing the text means a *different* degradation still
+  // surfaces, while the one that was dismissed stays dismissed.
+  const [dismissedReplayWarning, setDismissedReplayWarning] = useState<string | null>(null);
+  const [dismissedBootstrapWarning, setDismissedBootstrapWarning] = useState<string | null>(null);
   const composeBarOpenRef = useRef(false); // Ref for synchronous access in key handler
   const dataBufferRef = useRef<string>("");
   const setupCompleteRef = useRef(false);
@@ -1875,16 +1888,33 @@ export function PersistentTerminal({
     }
   }, [tabId, onSetupComplete]);
 
+  // Each slot is suppressed only while it still holds the exact message that
+  // was dismissed, so dismissing the bootstrap warning uncovers a replay
+  // warning underneath it rather than hiding both.
+  const visibleBootstrapWarning =
+    bootstrapWarning !== null && bootstrapWarning !== dismissedBootstrapWarning
+      ? bootstrapWarning
+      : null;
+  const visibleReplayWarning =
+    replayWarning !== null && replayWarning !== dismissedReplayWarning ? replayWarning : null;
+  const visibleWarning = visibleBootstrapWarning ?? visibleReplayWarning;
+
+  const handleDismissWarning = useCallback(() => {
+    if (visibleBootstrapWarning !== null) {
+      setDismissedBootstrapWarning(visibleBootstrapWarning);
+    } else if (visibleReplayWarning !== null) {
+      setDismissedReplayWarning(visibleReplayWarning);
+    }
+    // The dismiss button unmounts with the banner, which would drop focus to
+    // the document body and silently stop keystrokes reaching xterm. Hand it
+    // back the way closing the compose bar does.
+    terminal.focus();
+  }, [terminal, visibleBootstrapWarning, visibleReplayWarning]);
+
   return (
     <>
-      {(bootstrapWarning || replayWarning) && isActive && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="absolute top-2 left-2 z-20 max-w-[min(36rem,calc(100%-1rem))] rounded-md border border-amber-500/40 bg-amber-950/90 px-2.5 py-1.5 text-xs text-amber-100 shadow-md backdrop-blur-sm"
-        >
-          {bootstrapWarning || replayWarning}
-        </div>
+      {visibleWarning !== null && isActive && (
+        <TerminalWarningBanner message={visibleWarning} onDismiss={handleDismissWarning} />
       )}
       {isSetupTab &&
         isActive &&

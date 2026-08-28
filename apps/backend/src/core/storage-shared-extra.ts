@@ -183,6 +183,14 @@ export class PendingNativeAgentDispatchError extends Error {
   }
 }
 
+/** A prompt or second steer collided with an unresolved steering instruction. */
+export class PendingNativeAgentSteerError extends Error {
+  constructor(readonly pendingRequestId: string) {
+    super(`Native agent steer ${pendingRequestId} is still awaiting recovery`);
+    this.name = "PendingNativeAgentSteerError";
+  }
+}
+
 export function parseUpdateObject(value: unknown): JsonRecord {
   return isRecord(value) ? value : {};
 }

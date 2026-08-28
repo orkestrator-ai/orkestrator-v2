@@ -99,6 +99,24 @@ describe("resolveAgentPlatformSettings", () => {
     });
   });
 
+  test("resolves fastMode independently, including an explicit false", () => {
+    // Normal is a stored choice, not "unset". A repository that pins Normal
+    // must not fall through to the app's Fast.
+    const resolved = resolveAgentPlatformSettings(
+      {
+        repository: platformTier("cursor", { fastMode: false }),
+        global: platformTier("cursor", { fastMode: true, model: "grok-4.6" }),
+      },
+      "cursor",
+    );
+    expect(resolved).toEqual({
+      mode: "native",
+      model: "grok-4.6",
+      fastMode: false,
+      claudeNativeBackend: DEFAULT_CLAUDE_NATIVE_BACKEND,
+    });
+  });
+
   test("one platform's settings never leak into another", () => {
     const tiers = { global: platformTier("claude", { mode: "native", model: "opus[1m]" }) };
     expect(resolveAgentPlatformSettings(tiers, "codex")).toEqual({
@@ -234,6 +252,12 @@ describe("normalizeAgentSettings", () => {
       model: "gpt-5.6-sol",
       reasoningEffort: "high",
     });
+  });
+
+  test("keeps an explicit false fastMode rather than treating it as unset", () => {
+    expect(
+      normalizeAgentSettings({ platforms: { cursor: { fastMode: false } } }).platforms?.cursor,
+    ).toEqual({ fastMode: false });
   });
 });
 

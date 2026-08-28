@@ -726,7 +726,7 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       }
       const providerCacheKey = `${input.environmentId}\0${input.agent}`;
       generation = this.providerConnections.get(providerCacheKey) ?? `in-process:${input.agent}`;
-      const capabilities = nativeCapabilities(input.agent);
+      const advertisedCapabilities = nativeCapabilities(input.agent);
       // These reads describe independent parts of one projection. Keeping
       // them serial made a transcript wait for every approval, queue and slash
       // command round trip in turn, even though none produces message text.
@@ -743,16 +743,39 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
       const interactionSnapshotPromise = resolved.provider.interactions
         ? resolved.provider.interactions.listPendingInteractions(resolved.session.providerSessionId)
         : Promise.resolve({ requests: [], revision: 0 });
-      const queuePromise = capabilities.queue
+      const queuePromise = advertisedCapabilities.queue
         ? this.storage.getPromptQueue(`${input.agent}\0${input.logicalSessionKey}`)
         : Promise.resolve(null);
       const slashCommandsPromise = this.projectionSlashCommands(input, resolved.provider);
-      const [snapshot, interactionSnapshot, queue, slashCommands] = await Promise.all([
-        snapshotPromise,
-        interactionSnapshotPromise,
-        queuePromise,
-        slashCommandsPromise,
-      ]);
+      const steerSupportedPromise = advertisedCapabilities.actions?.steer
+        ? (resolved.provider
+            .steerSupported?.(resolved.session.providerSessionId)
+            .catch(() => false) ?? Promise.resolve(false))
+        : Promise.resolve(false);
+      const [snapshot, interactionSnapshot, queue, discoveredSlashCommands, steerSupported] =
+        await Promise.all([
+          snapshotPromise,
+          interactionSnapshotPromise,
+          queuePromise,
+          slashCommandsPromise,
+          steerSupportedPromise,
+        ]);
+      const capabilities =
+        !advertisedCapabilities.actions?.steer || steerSupported
+          ? advertisedCapabilities
+          : {
+              ...advertisedCapabilities,
+              actions: {
+                ...advertisedCapabilities.actions,
+                steer: false,
+              },
+            };
+      // Runtime action commands are merged from the static table before the
+      // bridge qualification finishes. Never leave `/steer` behind when this
+      // exact bridge cannot prove the reliable steering surface.
+      const slashCommands = capabilities.actions?.steer
+        ? discoveredSlashCommands
+        : discoveredSlashCommands.filter((command) => command.name !== "/steer");
       if (snapshot.providerGeneration !== undefined) {
         generation = `${generation}:${String(snapshot.providerGeneration)}`;
       }
@@ -880,6 +903,14 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
           resolved.provider,
         );
       }
+      if (resolved.session.pendingSteer) {
+        this.scheduleAmbiguousSteerSettle(
+          input,
+          key,
+          resolved.session.pendingSteer.requestId,
+          resolved.provider,
+        );
+      }
       const projection: NativeAgentSessionProjection = {
         platform: input.agent,
         environmentId: input.environmentId,
@@ -943,11 +974,16 @@ export abstract class NativeAgentServiceProjection extends NativeAgentServiceDis
               ),
             }
           : {}),
-        ...(resolved.session.pendingDispatch
+        ...(resolved.session.pendingDispatch || resolved.session.pendingSteer
           ? {
               recoverableDispatch: {
-                requestId: resolved.session.pendingDispatch.requestId,
-                createdAt: resolved.session.pendingDispatch.createdAt,
+                requestId:
+                  resolved.session.pendingDispatch?.requestId ??
+                  resolved.session.pendingSteer!.requestId,
+                createdAt:
+                  resolved.session.pendingDispatch?.createdAt ??
+                  resolved.session.pendingSteer!.createdAt,
+                kind: resolved.session.pendingDispatch ? ("prompt" as const) : ("steer" as const),
               },
             }
           : {}),

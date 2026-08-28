@@ -26,7 +26,13 @@ import { Label } from "@/components/ui/label";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
-import { effortLabel, modelsForAgent, type AgentModelCatalog } from "@/lib/agent-launch";
+import {
+  effortLabel,
+  modelsForAgent,
+  platformOwnsSpeed,
+  toPickerModel,
+  type AgentModelCatalog,
+} from "@/lib/agent-launch";
 import { TIER_LABELS, withPlatformField, type AgentSettingsTierName } from "@/lib/agent-settings";
 import { cn } from "@/lib/utils";
 import {
@@ -154,21 +160,16 @@ export function AgentDefaultsPane({
       )
     : undefined;
   const effectiveModel = storedForAgent?.model ?? resolvedForAgent.model;
-  const reasoningModel = models.find(
-    (model) => model.id === effectiveModel || model.resolvedModel === effectiveModel,
-  );
+  const reasoningModel = effectiveModel
+    ? models.find((model) => model.id === effectiveModel || model.resolvedModel === effectiveModel)
+    : models[0];
 
   const pickerModels = useMemo<AgentModel[]>(
     () =>
       enabledPlatforms.flatMap((platform) =>
         modelsForAgent(catalog, platform)
           .filter((option) => !(platform === "opencode" && option.id === "default"))
-          .map((option) => ({
-            platform,
-            id: option.id,
-            label: option.name,
-            description: option.description,
-          })),
+          .map((option) => toPickerModel(platform, option)),
       ),
     [catalog, enabledPlatforms],
   );
@@ -183,6 +184,21 @@ export function AgentDefaultsPane({
       ...ids.map((effort) => ({ id: effort, label: effortLabel(effort) })),
     ];
   }, [reasoningModel, storedForAgent?.reasoningEffort, canInherit]);
+
+  const speedCapable = platformOwnsSpeed(effectiveAgent);
+  const selectedSupportsSpeed = reasoningModel?.supportsSpeed === true;
+  const inheritedSpeed = resolveAgentPlatformSettings(parentTiers, effectiveAgent).fastMode;
+
+  const setModel = (platform: AgentPlatform, modelId: string): AgentSettingsTier => {
+    let next = withPlatformField(tier, platform, "model", modelId);
+    const nextModel = modelsForAgent(catalog, platform).find(
+      (model) => model.id === modelId || model.resolvedModel === modelId,
+    );
+    if (nextModel?.supportsSpeed !== true) {
+      next = withPlatformField(next, platform, "fastMode", undefined);
+    }
+    return next;
+  };
 
   const actionDefaults: ActionDefaults = tier?.actionDefaults ?? {};
   const inheritedActions: ActionDefaults = resolveActionDefaults(parentTiers);
@@ -285,12 +301,10 @@ export function AgentDefaultsPane({
                     resolvedForAgent.model ?? "provider default"
                   }`
             }
-            onModelChange={(nextModelId) =>
-              onChange(withPlatformField(tier, effectiveAgent, "model", nextModelId))
-            }
+            onModelChange={(nextModelId) => onChange(setModel(effectiveAgent, nextModelId))}
             onModelSelect={(nextModel) =>
               onChange({
-                ...withPlatformField(tier, nextModel.platform, "model", nextModel.id),
+                ...setModel(nextModel.platform, nextModel.id),
                 defaultAgent: nextModel.platform,
               })
             }
@@ -310,6 +324,30 @@ export function AgentDefaultsPane({
                   nextId === INHERIT ? undefined : nextId,
                 ),
               )
+            }
+            speedCapable={speedCapable}
+            fastModeAvailable={speedCapable && selectedSupportsSpeed}
+            fastModeEnabled={
+              speedCapable ? (storedForAgent?.fastMode ?? inheritedSpeed ?? null) : false
+            }
+            speedInherit={
+              speedCapable
+                ? {
+                    label: canInherit ? "Inherit" : "Provider default",
+                    selected: storedForAgent?.fastMode === undefined,
+                  }
+                : undefined
+            }
+            onFastModeChange={
+              speedCapable
+                ? (enabled) =>
+                    onChange(withPlatformField(tier, effectiveAgent, "fastMode", enabled))
+                : undefined
+            }
+            onFastModeInherit={
+              speedCapable
+                ? () => onChange(withPlatformField(tier, effectiveAgent, "fastMode", undefined))
+                : undefined
             }
             className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
           />

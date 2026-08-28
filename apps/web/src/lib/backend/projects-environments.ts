@@ -167,18 +167,6 @@ export async function renameEnvironment(environmentId: string, name: string): Pr
   return invoke<Environment>("rename_environment", { environmentId, name });
 }
 
-/**
- * Trigger background AI-generated rename from a prompt.
- * Used by native mode chat tabs to rename timestamp-named environments
- * after the first user message.
- */
-export async function renameEnvironmentFromPrompt(
-  environmentId: string,
-  prompt: string,
-): Promise<void> {
-  return invoke<void>("rename_environment_from_prompt", { environmentId, prompt });
-}
-
 export async function getEnvironmentStatus(environmentId: string): Promise<EnvironmentStatus> {
   return invoke<EnvironmentStatus>("get_environment_status", { environmentId });
 }

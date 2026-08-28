@@ -492,6 +492,153 @@ describe("Electron tmux backend command registration", () => {
     });
   });
 
+  test("prepares initial-prompt naming in the backend before starting Claude", async () => {
+    const prepared: Array<{ environmentId: string; prompt: string }> = [];
+    const handlers = createHandlers({
+      prepareEnvironmentFirstPrompt: async (environmentId, prompt) => {
+        prepared.push({ environmentId, prompt });
+      },
+    });
+
+    await withFakeTmuxRuntime(async ({ environment }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      await invoke(
+        handlers,
+        "claude_tmux_start",
+        {
+          tabId: "backend-naming",
+          environmentId: environment.id,
+          initialPrompt: "Inspect the workspace",
+        },
+        context,
+      );
+
+      expect(prepared).toEqual([
+        { environmentId: environment.id, prompt: "Inspect the workspace" },
+      ]);
+      await invoke(
+        handlers,
+        "claude_tmux_stop",
+        { tabId: "backend-naming", environmentId: environment.id },
+        context,
+      );
+    });
+  });
+
+  test("prepares naming from the first direct prompt exactly once", async () => {
+    const prepared: Array<{ environmentId: string; prompt: string }> = [];
+    const handlers = createHandlers({
+      prepareEnvironmentFirstPrompt: async (environmentId, prompt) => {
+        prepared.push({ environmentId, prompt });
+      },
+    });
+
+    await withFakeTmuxRuntime(async ({ environment }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = { tabId: "direct-first-prompt", environmentId: environment.id };
+      await invoke(handlers, "claude_tmux_start", args, context);
+
+      await invoke(
+        handlers,
+        "claude_tmux_submit",
+        { ...args, text: "Name this environment" },
+        context,
+      );
+      await invoke(
+        handlers,
+        "claude_tmux_submit",
+        { ...args, text: "This is the second prompt" },
+        context,
+      );
+
+      expect(prepared).toEqual([
+        { environmentId: environment.id, prompt: "Name this environment" },
+      ]);
+      await invoke(handlers, "claude_tmux_stop", args, context);
+    });
+  });
+
+  test("does not name a resumed tmux conversation from its first local submit", async () => {
+    const prepared: string[] = [];
+    const handlers = createHandlers({
+      prepareEnvironmentFirstPrompt: async (_environmentId, prompt) => {
+        prepared.push(prompt);
+      },
+    });
+
+    await withFakeTmuxRuntime(async ({ environment }) => {
+      const context = {
+        storage: { getEnvironment: async () => environment },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = {
+        tabId: "resumed-first-local-prompt",
+        environmentId: environment.id,
+        resumeSessionId: "provider-session-before-restart",
+      };
+      await invoke(handlers, "claude_tmux_start", args, context);
+      await invoke(
+        handlers,
+        "claude_tmux_submit",
+        { ...args, text: "Continue the existing conversation" },
+        context,
+      );
+
+      expect(prepared).toEqual([]);
+      await invoke(handlers, "claude_tmux_stop", args, context);
+    });
+  });
+
+  test("does not hold the tmux install lock while first-prompt naming is prepared", async () => {
+    const namingGate = deferred<void>();
+    let namingStarted = false;
+    const handlers = createHandlers({
+      prepareEnvironmentFirstPrompt: async () => {
+        namingStarted = true;
+        await namingGate.promise;
+      },
+    });
+
+    await withFakeTmuxRuntime(async ({ environment }) => {
+      const context = {
+        storage: {
+          getEnvironment: async () => environment,
+          loadEnvironments: async () => [environment],
+        },
+        emit: () => undefined,
+        appRoot: "",
+        resourceRoot: "",
+      };
+      const args = {
+        tabId: "delete-during-naming",
+        environmentId: environment.id,
+        initialPrompt: "Inspect the workspace",
+      };
+      const start = invoke(handlers, "claude_tmux_start", args, context);
+      await waitFor(() => namingStarted);
+
+      environment.deletionRequestedAt = new Date().toISOString();
+      await expect(
+        cleanupEnvironmentTmux(environment.id, context as unknown as CommandContext),
+      ).resolves.toBeUndefined();
+
+      namingGate.resolve();
+      await expect(start).rejects.toThrow(`environment ${environment.id} is being deleted`);
+    });
+  });
+
   test("serializes stop behind an in-flight start so no tmux session is orphaned", async () => {
     const handlers = createHandlers();
 

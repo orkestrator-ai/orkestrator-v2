@@ -43,7 +43,7 @@ import {
   useVirtuosoScrollState,
   clearPersistedVirtuosoState,
 } from "@/hooks/useVirtuosoScrollState";
-import { adoptNativeAgentSession, renameEnvironmentFromPrompt } from "@/lib/backend";
+import { adoptNativeAgentSession } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import { prependAgentHandoffHistory } from "@/lib/agent-handoff";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
@@ -72,7 +72,6 @@ import {
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
 import { resolveWorkspaceAttachment } from "@/lib/chat/workspace-attachments";
-import { isDefaultTimestampEnvironmentName } from "@/lib/environment-name";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
 import { useEnvironmentStore } from "@/stores/environmentStore";
@@ -165,7 +164,6 @@ export function SharedNativeAgentController({
   const [forkInFlight, setForkInFlight] = useState(false);
   const [planTransitionPending, setPlanTransitionPending] = useState(false);
   const [suggestionDismissPending, setSuggestionDismissPending] = useState(false);
-  const [namingEnvironment, setNamingEnvironment] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [dismissedPlanReviewId, setDismissedPlanReviewId] = useState<string | null>(null);
@@ -399,22 +397,9 @@ export function SharedNativeAgentController({
               optimisticPrompt.createdAt,
             ),
           ];
-    if (!namingEnvironment) return withOptimistic;
-    // Renaming the environment also renames the branch, and it runs before the
-    // first prompt is dispatched. Without this the tab looks stalled.
-    return [
-      ...withOptimistic,
-      {
-        id: `native-naming:${sessionKey}`,
-        role: "system" as const,
-        content: "Naming environment...",
-        parts: [{ type: "text" as const, content: "Naming environment..." }],
-        createdAt: new Date().toISOString(),
-      },
-    ];
+    return withOptimistic;
   }, [
     handoff.displayMessages,
-    namingEnvironment,
     optimisticPrompt,
     projection?.sessionId,
     sessionKey,
@@ -808,22 +793,6 @@ export function SharedNativeAgentController({
         createdAt: new Date().toISOString(),
         requestId: dispatchRequestId,
       });
-      if (
-        (projection?.messages.length ?? 0) === 0 &&
-        environment &&
-        isDefaultTimestampEnvironmentName(environment.name)
-      ) {
-        // Renaming also renames the branch, so it runs before dispatch and can
-        // take a moment. Say what is happening instead of showing a stalled send.
-        setNamingEnvironment(true);
-        try {
-          await renameEnvironmentFromPrompt(data.environmentId, userPrompt);
-        } catch (error) {
-          console.warn("[AgentNativeTab] Failed to rename environment from first prompt:", error);
-        } finally {
-          setNamingEnvironment(false);
-        }
-      }
       const options = {
         requestId: dispatchRequestId,
         model: composer?.selectedModelId,
@@ -925,7 +894,6 @@ export function SharedNativeAgentController({
       draft.attachments,
       draft.mentions,
       draft.requestId,
-      environment,
       enqueue,
       handoff.pendingHistory,
       isDispatching,
@@ -934,7 +902,6 @@ export function SharedNativeAgentController({
       performAction,
       platform,
       projection?.capabilities,
-      projection?.messages.length,
       projection?.sessionId,
       projection?.slashCommands,
       recoverableDispatch,

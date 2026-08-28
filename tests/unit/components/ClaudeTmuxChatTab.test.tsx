@@ -3302,7 +3302,7 @@ Running 1 Explore agent...
     });
   });
 
-  test("renames a timestamp-named environment before submitting the first tmux prompt", async () => {
+  test("submits a first tmux prompt without renderer-owned environment naming", async () => {
     const callOrder: string[] = [];
     renameEnvironmentFromPromptMock.mockImplementationOnce(async () => {
       callOrder.push("rename");
@@ -3329,16 +3329,13 @@ Running 1 Explore agent...
     fireEvent.click(screen.getByTitle("Send (↵)"));
 
     await waitFor(() => {
-      expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith(
-        "env-1",
-        "Implement the billing export",
-      );
       expect(submitMock).toHaveBeenCalledWith("tab-1", "Implement the billing export", "env-1");
     });
-    expect(callOrder).toEqual(["rename", "submit"]);
+    expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
+    expect(callOrder).toEqual(["submit"]);
   });
 
-  test("renames a compact Electron timestamp environment before submitting the first tmux prompt", async () => {
+  test("leaves compact timestamp naming to the tmux backend", async () => {
     seedEnvironment({
       name: "202604151234567",
       branch: "202604151234567",
@@ -3361,12 +3358,9 @@ Running 1 Explore agent...
     fireEvent.click(screen.getByTitle("Send (↵)"));
 
     await waitFor(() => {
-      expect(renameEnvironmentFromPromptMock).toHaveBeenCalledWith(
-        "env-1",
-        "Implement the billing export",
-      );
       expect(submitMock).toHaveBeenCalledWith("tab-1", "Implement the billing export", "env-1");
     });
+    expect(renameEnvironmentFromPromptMock).not.toHaveBeenCalled();
   });
 
   test("does not rename a custom-named environment before submitting a tmux prompt", async () => {

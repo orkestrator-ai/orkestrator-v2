@@ -470,20 +470,11 @@ export function isEnvironmentReadyForAgents(environment: Environment): boolean {
   );
 }
 
-export const LEGACY_TIMESTAMP_ENVIRONMENT_NAME = /^\d{8}-\d{6}$/;
-export const COMPACT_TIMESTAMP_ENVIRONMENT_NAME = /^\d{15}$/;
-
-/**
- * True for a name generated before the environment had a prompt-derived title.
- *
- * Twin of `apps/web/src/lib/environment-name.ts` — the renderer applies the same
- * guard on its own send path, and both must agree on which names are renameable.
- */
-export function isGeneratedEnvironmentName(name: string): boolean {
-  return (
-    LEGACY_TIMESTAMP_ENVIRONMENT_NAME.test(name) || COMPACT_TIMESTAMP_ENVIRONMENT_NAME.test(name)
-  );
-}
+export {
+  COMPACT_TIMESTAMP_ENVIRONMENT_NAME,
+  isGeneratedEnvironmentName,
+  LEGACY_TIMESTAMP_ENVIRONMENT_NAME,
+} from "./environment-name.js";
 
 export function nativeAgentSessionStorageKey(
   environmentId: string,

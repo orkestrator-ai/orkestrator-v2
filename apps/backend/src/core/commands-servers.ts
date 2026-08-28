@@ -1119,6 +1119,13 @@ export async function deleteEnvironment(
       await storage.deleteBuildPipelinesByEnvironment(environmentId, environment?.buildPipelineId);
       // Queued prompts for a deleted environment can never be dispatched.
       await storage.deletePromptQueuesByEnvironment(environmentId);
+      // StorageService owns this in production. Keep the deletion seam tolerant
+      // of legacy/embedded command adapters that intentionally implement only
+      // the older lifecycle subset; their absence cannot justify stranding an
+      // otherwise deletable environment.
+      if (typeof storage.deleteAgentMailByEnvironment === "function") {
+        await storage.deleteAgentMailByEnvironment(environmentId);
+      }
       // Best-effort, like its siblings: leaving a stale session mapping behind
       // is recoverable, but aborting here would strand the environment record
       // itself because `removeEnvironment` below would never run.

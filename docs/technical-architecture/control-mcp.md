@@ -56,10 +56,17 @@ can create environments, launch jobs, read transcripts, and update tickets.
 - Create a validated environment with an initial agent prompt.
 - Launch a new job in an existing running environment.
 - Send a new prompt to an existing native-agent tab.
+- Discover durable agent mailboxes with `list_mailboxes`.
+- Send an inbox-only external message to one mailbox with `send_message`.
 
-Agent launches, prompt dispatches, ticket creation, and comment appends use a
-caller-provided `requestId`. Reuse the same ID only when retrying the same
-action after an ambiguous response. Ticket field updates are naturally
+Control-MCP messages are always classified as external and are never injected
+into an agent turn. The destination's user can inspect and acknowledge them in
+the global inbox. `send_message` requires a stable `requestId`; retrying the
+same request with different content is rejected.
+
+Agent launches, prompt dispatches, agent messages, ticket creation, and comment
+appends use a caller-provided `requestId`. Reuse the same ID only when retrying
+the same action after an ambiguous response. Ticket field updates are naturally
 idempotent because they replace the specified values.
 
 ## First prompt

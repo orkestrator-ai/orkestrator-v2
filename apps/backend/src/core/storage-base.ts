@@ -165,6 +165,7 @@ export abstract class StorageBase {
   protected fileDraftMutation: Promise<unknown> = Promise.resolve();
   protected kanbanMutation: Promise<unknown> = Promise.resolve();
   protected agentHandoffMutation: Promise<unknown> = Promise.resolve();
+  protected agentMailMutation: Promise<unknown> = Promise.resolve();
   protected changeListener: ResourceChangeListener | null = null;
   protected changeRevision = 0;
   protected abstract recoverExpiredPromptQueueClaims(): Promise<void>;
@@ -317,6 +318,10 @@ export abstract class StorageBase {
     return this.file("agent-handoffs.json");
   }
 
+  protected agentMailFile(): string {
+    return this.file("agent-mail.json");
+  }
+
   protected kanbanFile(): string {
     return this.file("kanban.json");
   }
@@ -355,6 +360,8 @@ export abstract class StorageBase {
         return this.buildPipelinesFile();
       case "prompt-queue":
         return this.promptQueuesFile();
+      case "agent-mail-summary":
+        return this.agentMailFile();
     }
   }
 

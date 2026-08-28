@@ -25,6 +25,7 @@ import { dispatchMultiReviewAddressPrompt } from "./multi-review-address-dispatc
 import { MultiReviewService } from "./multi-review-service.js";
 import { FeaturePlanningService } from "./feature-planning.js";
 import { PromptQueueDrainer } from "./prompt-queue-drainer.js";
+import { AgentMailService } from "./agent-mail-service.js";
 import {
   ENVIRONMENT_LIFECYCLE_DRAIN_TIMEOUT_MS,
   EnvironmentLifecycleTaskTracker,
@@ -40,6 +41,7 @@ export class OrkestratorBackend {
   private readonly multiReviews: MultiReviewService;
   private readonly featurePlanning: FeaturePlanningService;
   private readonly promptQueues: PromptQueueDrainer;
+  private readonly agentMail: AgentMailService;
   private readonly environmentLifecycleTasks: EnvironmentLifecycleTaskTracker;
   private readonly environmentLifecycleDrainTimeoutMs: number;
   private shuttingDown = false;
@@ -225,6 +227,7 @@ export class OrkestratorBackend {
         return (await handler(args, context)) as T;
       },
     );
+    this.agentMail = new AgentMailService(storage, this.nativeAgents, this.promptQueues);
     this.reapPidServers = options.startupReapers?.localServers ?? reapOrphanedLocalServers;
     this.reapTmuxRuntimes =
       options.startupReapers?.claudeTmuxRuntimes ?? reapOrphanedClaudeTmuxRuntimes;
@@ -337,6 +340,9 @@ export class OrkestratorBackend {
     await this.nativeAgents.init().catch((error) => {
       console.warn("[backend] Failed to restore native agent launches:", error);
     });
+    await this.agentMail.init().catch((error) => {
+      console.warn("[backend] Failed to restore agent mail:", error);
+    });
     const reconcileOrphanedTabResources = this.commands.get("reconcile_orphaned_tab_resources");
     if (reconcileOrphanedTabResources) {
       await Promise.resolve(reconcileOrphanedTabResources({}, this.context)).catch(
@@ -412,6 +418,9 @@ export class OrkestratorBackend {
     await this.promptQueues.drainAll().catch((error) => {
       console.warn("[backend] Failed to drain tmux prompt queues:", error);
     });
+    await this.agentMail.drainInjects().catch((error) => {
+      console.warn("[backend] Failed to drain agent mail:", error);
+    });
     let tabTeardownReconcileInFlight: Promise<void> | null = null;
     const reconcileTabTeardownsOnce = (): void => {
       if (!reconcileTabTeardowns || tabTeardownReconcileInFlight) return;
@@ -436,6 +445,7 @@ export class OrkestratorBackend {
           orphanReconcileInFlight = null;
         });
     };
+    let mailRetentionTick = 0;
     this.nativeActivitySweep ??= setInterval(() => {
       void this.nativeAgents.reconcileAgentActivity().catch((error) => {
         console.warn("[backend] Failed to reconcile native agent activity:", error);
@@ -448,6 +458,20 @@ export class OrkestratorBackend {
       void this.promptQueues.drainAll().catch((error) => {
         console.warn("[backend] Failed to drain tmux prompt queues:", error);
       });
+      void this.agentMail.drainInjects().catch((error) => {
+        console.warn("[backend] Failed to drain agent mail:", error);
+      });
+      mailRetentionTick += 1;
+      if (mailRetentionTick % 30 === 0) {
+        void this.context.storage
+          .loadConfig()
+          .then((config) =>
+            this.context.storage.pruneAgentMail(config.global.agentMessaging?.retentionDays ?? 14),
+          )
+          .catch((error) => {
+            console.warn("[backend] Failed to prune agent mail:", error);
+          });
+      }
       if (reconcilePendingEnvironmentRenames) {
         void Promise.resolve(reconcilePendingEnvironmentRenames({}, this.context)).catch(
           (error: unknown) => {

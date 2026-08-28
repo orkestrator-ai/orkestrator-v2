@@ -25,6 +25,8 @@ export const RESOURCE_KINDS = [
   "prompt-queue",
   "compose-draft",
   "file-draft",
+  "agent-mail",
+  "agent-mail-summary",
 ] as const;
 
 export type ResourceKind = (typeof RESOURCE_KINDS)[number];
@@ -49,6 +51,7 @@ export const RESOURCE_MANIFEST_KINDS = [
   "multi-review",
   "build-pipeline",
   "prompt-queue",
+  "agent-mail-summary",
 ] as const satisfies readonly ResourceKind[];
 
 export type ResourceManifestKind = (typeof RESOURCE_MANIFEST_KINDS)[number];

@@ -60,6 +60,21 @@ async function withDeleteCommand<T>(
 }
 
 describe("delete_environment durable child-state cleanup", () => {
+  test("purges agent mail before removing the environment", async () => {
+    await withDeleteCommand(
+      async (storage) => storage.addEnvironment(environment()).then(() => undefined),
+      async (invokeDelete, storage) => {
+        const original = storage.deleteAgentMailByEnvironment.bind(storage);
+        const purge = mock(async (environmentId: string) => original(environmentId));
+        storage.deleteAgentMailByEnvironment = purge;
+
+        await invokeDelete();
+        expect(purge).toHaveBeenCalledWith("e1");
+        expect(await storage.getEnvironment("e1")).toBeNull();
+      },
+    );
+  });
+
   test("revokes the environment's project-scoped agent-tools credential", async () => {
     await withDeleteCommand(
       async (storage) => storage.addEnvironment(environment()).then(() => undefined),

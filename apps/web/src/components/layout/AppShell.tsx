@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils";
 import { MOBILE_SHELL_MEDIA_QUERY, MobileAppShellLayout } from "./MobileAppShellLayout";
 import { getApplicationTitle } from "@/lib/application-title";
 import { AgentInfoButton } from "./AgentInfoButton";
+import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
 
 interface AppShellProps {
   children?: React.ReactNode;
@@ -99,7 +100,12 @@ export function AppShell({ children }: AppShellProps) {
           filesPanelOpen={filesPanelOpen}
           centralPanelStyle={centralPanelThemeVars}
           actionBar={<ActionBar presentation="grid" />}
-          agentInfoButton={<AgentInfoButton activeTab={activeTab} mobile />}
+          agentInfoButton={
+            <div className="flex items-center gap-1">
+              <AgentMailButton />
+              <AgentInfoButton activeTab={activeTab} mobile />
+            </div>
+          }
           sidebar={<Sidebar />}
           filesPanel={<FilesPanel />}
           onTitleBarMouseDown={handleTitleBarMouseDown}
@@ -125,11 +131,12 @@ export function AppShell({ children }: AppShellProps) {
               wraps the same slot the same way.
             */}
             <div
-              className="absolute right-1 top-1"
+              className="absolute right-1 top-1 flex items-center gap-1"
               data-testid="desktop-agent-info-slot"
               style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
               onMouseDown={(event) => event.stopPropagation()}
             >
+              <AgentMailButton />
               <AgentInfoButton activeTab={activeTab} />
             </div>
           </div>

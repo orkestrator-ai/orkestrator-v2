@@ -160,7 +160,9 @@ export abstract class StorageConfig extends StorageProjects {
     );
     const config = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
     const normalized = normalizePersistedConfig(config);
-    if (configExists) return normalized;
+    if (configExists) {
+      return normalized;
+    }
     const sidecar = await this.loadJson<unknown>(this.agentPlatformsFile(), () => null);
     if (!sidecar || !isRecord(sidecar)) return normalized;
     const enabledAgentPlatforms = normalizeAgentPlatforms(sidecar.enabled, []);
@@ -180,6 +182,24 @@ export abstract class StorageConfig extends StorageProjects {
             },
           },
         };
+  }
+
+  /**
+   * Persist the one-shot schema migration before services begin concurrent
+   * reads. Re-read under the same cross-process lock used by every config
+   * writer so a stale migration snapshot cannot revert a settings save.
+   */
+  protected async migrateConfigSchema(): Promise<void> {
+    await this.enqueueConfigMutation(async () => {
+      const configExists = await fs.access(this.configFile()).then(
+        () => true,
+        () => false,
+      );
+      if (!configExists) return;
+      const current = await this.loadJsonCached<AppConfig>(this.configFile(), defaultConfig);
+      if (current.schemaVersion === 2) return;
+      await this.saveJson(this.configFile(), normalizePersistedConfig(current));
+    });
   }
 
   async saveConfig(

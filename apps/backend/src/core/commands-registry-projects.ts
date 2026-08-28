@@ -119,9 +119,13 @@ export function registerProjectCommands(
       runProjectCreationCommand,
     );
   });
-  register("remove_project", ({ projectId }, { storage }) =>
-    storage.removeProject(asString(projectId, "projectId")),
-  );
+  register("remove_project", async ({ projectId }, { storage }) => {
+    const id = asString(projectId, "projectId");
+    if (typeof storage.deleteAgentMailByProject === "function") {
+      await storage.deleteAgentMailByProject(id);
+    }
+    return storage.removeProject(id);
+  });
   register("get_project", ({ projectId }, { storage }) =>
     storage.getProject(asString(projectId, "projectId")),
   );

@@ -142,7 +142,15 @@ export interface DispatchNativeAgentPromptInput extends EnsureNativeAgentSession
   executionAgent?: string;
   includeLocalSettings?: boolean;
   promptSuggestions?: boolean;
+  /** Explicit literal-text override for backend-authored prompts such as mail. */
+  allowProviderCommands?: boolean;
 }
+
+export type MailInjectDispatchOutcome =
+  | { outcome: "accepted"; requestId: string }
+  | { outcome: "held"; reason: "parked" | "queue" | "draft" | "busy" }
+  | { outcome: "unknown"; requestId: string; error: string }
+  | { outcome: "rejected"; error: string };
 
 export interface AdoptNativeAgentSessionInput extends EnsureNativeAgentSessionInput {
   providerSessionId: string;

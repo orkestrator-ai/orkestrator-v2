@@ -25,6 +25,7 @@ import { useLoopedReviewStore } from "@/stores/loopedReviewStore";
 import { useMultiReviewStore } from "@/stores/multiReviewStore";
 import { StackedEyes } from "@/components/review/MultiReviewLaunchDialog";
 import { useFileDirtyStore } from "@/stores";
+import { AgentMailButton } from "@/components/agent-mail/AgentMailButton";
 import type { TabType } from "@/contexts";
 import { getWorkflowTabTitle } from "./workflow-tab-title";
 
@@ -48,6 +49,8 @@ const isBuildTab = (type: TabType): boolean => type === "claude-build";
 
 interface DraggableTabProps {
   tab: TabInfo;
+  /** Owning environment, used for environment-scoped authoritative state. */
+  environmentId?: string;
   paneId: string;
   index: number;
   isActive: boolean;
@@ -71,6 +74,7 @@ interface DraggableTabProps {
 
 export function DraggableTab({
   tab,
+  environmentId,
   paneId,
   index,
   isActive,
@@ -147,6 +151,7 @@ export function DraggableTab({
   const isDirty = useFileDirtyStore((state) =>
     tab.type === "file" ? state.isDirty(tab.id) : false,
   );
+  const owningEnvironmentId = environmentId ?? nativeAgentData?.environmentId;
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -273,7 +278,11 @@ export function DraggableTab({
 
   const title = getTabTitle();
   const icon = getTabIcon();
-  const titleElement = <span className="max-w-[120px] truncate">{title}</span>;
+  const titleElement = (
+    <>
+      <span className="max-w-[120px] truncate">{title}</span>
+    </>
+  );
   const isFileTab = tab.type === "file" && !!tab.fileData;
   const tooltipContent = isFileTab
     ? tab.fileData?.filePath
@@ -326,6 +335,9 @@ export function DraggableTab({
         >
           <X className="h-3 w-3" />
         </button>
+      )}
+      {owningEnvironmentId && (
+        <AgentMailButton environmentId={owningEnvironmentId} tabId={tab.id} variant="tab" />
       )}
     </div>
   );

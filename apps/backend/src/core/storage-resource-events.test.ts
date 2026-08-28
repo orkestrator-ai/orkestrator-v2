@@ -71,6 +71,7 @@ const RESOURCE_MANIFEST_FILES: Record<ResourceManifestKind, string> = {
   "multi-review": "multi-reviews.json",
   "build-pipeline": "build-pipelines.json",
   "prompt-queue": "prompt-queues.json",
+  "agent-mail-summary": "agent-mail.json",
 };
 
 async function replaceManifestFile(

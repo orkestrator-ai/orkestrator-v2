@@ -30,6 +30,7 @@ import { registerDockerCommands } from "./commands-registry-docker.js";
 import { registerEnvironmentCommands } from "./commands-registry-environments.js";
 import { registerGitHubCommands } from "./commands-registry-github.js";
 import { registerKanbanCommands } from "./commands-registry-kanban.js";
+import { registerAgentMailCommands } from "./commands-registry-mail.js";
 import { registerLinearCommands } from "./commands-registry-linear.js";
 import { registerNativeAgentCommands } from "./commands-registry-native.js";
 import { registerPullRequestCommands } from "./commands-registry-pr.js";
@@ -244,6 +245,7 @@ export function createCommandRegistry(
   registerTerminalCommands(register, dependencies);
   registerPullRequestCommands(register, dependencies);
   registerKanbanCommands(register, dependencies);
+  registerAgentMailCommands(register);
   registerTeardownCommands(register, dependencies);
 
   return commands;

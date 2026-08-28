@@ -5,3 +5,4 @@ export * from "./backend/docker-skills";
 export * from "./backend/files-sessions";
 export * from "./backend/workflows";
 export * from "./backend/kanban";
+export * from "./backend/agent-mail";

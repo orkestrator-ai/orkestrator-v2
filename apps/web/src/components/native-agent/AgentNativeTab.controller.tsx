@@ -54,6 +54,7 @@ import {
 } from "@/lib/chat/native-message-adapters";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 import {
+  createPeerMailNativeMessageFromCarrier,
   createOptimisticNativeMessage,
   isClientOnlyNativeMessage,
   TURN_STOPPED_BY_USER,
@@ -302,7 +303,17 @@ export function SharedNativeAgentController({
       : source;
   }, [claudeBackgroundTasksById, platform, projection?.messages]);
   const normalizedMessages = useMemo(
-    () => normalizeNativeMessages(decoratedMessages),
+    () =>
+      normalizeNativeMessages(decoratedMessages).flatMap((message) => {
+        if (
+          message.role !== "user" ||
+          !message.content.trimStart().startsWith('<orkestrator-peer-message version="1">')
+        ) {
+          return [message];
+        }
+        const peerMail = createPeerMailNativeMessageFromCarrier(message);
+        return peerMail ? [peerMail] : [];
+      }),
     [decoratedMessages],
   );
   const handoff = useAgentHandoff(
@@ -374,7 +385,7 @@ export function SharedNativeAgentController({
     state.turnStopMarkers.get(sessionKey),
   );
   const displayMessages = useMemo(() => {
-    const base =
+    const providerBase =
       turnStopMarker &&
       turnStopMarker.sessionId === projection?.sessionId &&
       !handoff.displayMessages.some(
@@ -391,6 +402,7 @@ export function SharedNativeAgentController({
             },
           ]
         : handoff.displayMessages;
+    const base = providerBase;
     const withOptimistic =
       !optimisticPrompt || transcriptEchoedOptimistic
         ? base

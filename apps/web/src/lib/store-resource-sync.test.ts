@@ -84,6 +84,7 @@ const { useMultiReviewStore } = await import("@/stores/multiReviewStore");
 const { usePaneLayoutStore } = await import("@/stores/paneLayoutStore");
 const { invalidateProjectSnapshots, useProjectStore } = await import("@/stores/projectStore");
 const { useSessionStore } = await import("@/stores/sessionStore");
+const { useAgentMailStore } = await import("@/stores/agentMailStore");
 const { PANE_LAYOUT_VERSION } = await import("@/types/paneLayout");
 
 const startTestStoreResourceSync = (options: Parameters<typeof startStoreResourceSync>[0] = {}) =>
@@ -93,6 +94,7 @@ const startTestStoreResourceSync = (options: Parameters<typeof startStoreResourc
       useEnvironmentStore
         .getState()
         .environments.filter((environment) => environment.projectId === projectId),
+    getAgentMailSummary: async () => ({ revision: 0, mailboxes: [] }),
     ...options,
   });
 
@@ -171,6 +173,12 @@ beforeEach(() => {
     hydration: new Map(),
     activeEnvironmentId: null,
   });
+  useConfigStore.setState({
+    config: structuredClone(useConfigStore.getInitialState().config),
+    isLoading: false,
+    error: null,
+  });
+  useAgentMailStore.setState(useAgentMailStore.getInitialState());
   detach = startTestStoreResourceSync();
 });
 
@@ -178,6 +186,64 @@ afterEach(() => {
   detach?.();
   detach = null;
   resetResourceSync();
+});
+
+describe("agent-mail binding", () => {
+  test("adopts authoritative summaries only while messaging is enabled", async () => {
+    detach?.();
+    const getAgentMailSummary = mock(async () => ({
+      revision: 4,
+      mailboxes: [
+        {
+          mailboxId: "env-1\0tab-1",
+          projectId: "project-1",
+          environmentId: "env-1",
+          tabId: "tab-1",
+          unreadCount: 2,
+          pendingInjectCount: 0,
+          failedInjectCount: 0,
+          revision: 4,
+        },
+      ],
+    }));
+    detach = startTestStoreResourceSync({ getAgentMailSummary });
+    dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 1 });
+    await tick();
+    expect(getAgentMailSummary).toHaveBeenCalledTimes(1);
+    expect(useAgentMailStore.getState().summary.get("env-1\0tab-1")?.unreadCount).toBe(2);
+
+    useConfigStore.getState().updateGlobalConfig({
+      agentMessaging: {
+        ...useConfigStore.getState().config.global.agentMessaging!,
+        enabled: false,
+      },
+    });
+    dispatchResourceChange({ resource: "agent-mail-summary", id: "all", revision: 2 });
+    await tick();
+    expect(getAgentMailSummary).toHaveBeenCalledTimes(1);
+    expect(useAgentMailStore.getState().summary.size).toBe(0);
+  });
+
+  test("refreshes an already-hydrated mailbox on its record event", async () => {
+    const mailboxId = "env-1\0tab-1";
+    useAgentMailStore.setState({
+      mailboxes: new Map([
+        [
+          mailboxId,
+          {
+            descriptor: { mailboxId, environmentId: "env-1", tabId: "tab-1" },
+            messages: [],
+            revision: 1,
+          } as never,
+        ],
+      ]),
+    });
+    const refreshMailbox = mock(async () => undefined);
+    useAgentMailStore.setState({ refreshMailbox });
+    dispatchResourceChange({ resource: "agent-mail", id: mailboxId, revision: 1 });
+    await tick();
+    expect(refreshMailbox).toHaveBeenCalledWith("env-1", "tab-1");
+  });
 });
 
 describe("prompt-queue binding", () => {
@@ -1734,6 +1800,8 @@ describe("authoritative resync", () => {
         getProjects: async () => (await invokeCommand("get_projects", {})) as never,
         getEnvironmentSnapshots: async (projectId: string) =>
           (await invokeCommand("get_environment_snapshots", { projectId })) as never,
+        getAgentMailSummary: async () =>
+          (await invokeCommand("get_agent_mail_summary", {})) as never,
       });
       stopTransport = startResourceSync({
         loadManifest: async (knownGeneration, knownRevisions) => {

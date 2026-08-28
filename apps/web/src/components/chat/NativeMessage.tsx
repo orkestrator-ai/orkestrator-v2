@@ -14,6 +14,7 @@ import {
   messageHasVisibleContent,
   normalizeNativeMessage,
 } from "@/lib/chat/native-message-adapters";
+import { PEER_MAIL_MESSAGE_PREFIX } from "@/lib/chat/client-only-messages";
 import {
   AgentPlatformContext,
   BackgroundTaskStopContext,
@@ -57,6 +58,7 @@ export const NativeMessage = memo(function NativeMessage({
   const isUser = message.role === "user";
   const isError = message.id.startsWith(ERROR_MESSAGE_PREFIX);
   const isSystem = message.role === "system" || message.id.startsWith(SYSTEM_MESSAGE_PREFIX);
+  const isPeerMail = message.id.startsWith(PEER_MAIL_MESSAGE_PREFIX);
   const isContinuation =
     !isUser &&
     !isSystem &&
@@ -132,6 +134,24 @@ export const NativeMessage = memo(function NativeMessage({
   if (isError) {
     return (
       <MessageErrorAlert content={message.content} timestampLabel={formatTime(message.createdAt)} />
+    );
+  }
+
+  if (isPeerMail) {
+    const [heading, warning, ...body] = message.content.split("\n");
+    return (
+      <div className="px-2 py-3 @sm:px-4">
+        <div className="mx-auto max-w-3xl rounded-lg border border-cyan-400/20 bg-cyan-400/[0.035] p-3">
+          <p className="text-xs font-medium text-cyan-200">{heading}</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">{warning}</p>
+          <p
+            data-agent-chat-search-content="true"
+            className="mt-3 whitespace-pre-wrap break-words text-sm leading-relaxed"
+          >
+            {body.join("\n").trimStart()}
+          </p>
+        </div>
+      </div>
     );
   }
 

@@ -16,6 +16,7 @@ import {
 } from "@orkestrator/protocol/agent-interactions";
 
 import {
+  AmbiguousPromptDispatchError,
   createNativeAgentProvider,
   PromptRejectedError,
   ProviderSessionFailedError,
@@ -3112,6 +3113,184 @@ describe("NativeAgentService", () => {
       await service.shutdown();
       await fs.rm(dataDir, { recursive: true, force: true });
     }
+  });
+
+  test("holds native mail behind a compose draft without leaving the session parked", async () => {
+    const provider = createProviderStub("claude");
+    await withService(
+      {
+        prefix: "orkestrator-native-mail-draft-",
+        provider: async () => provider.provider,
+      },
+      async ({ storage, service }) => {
+        const logicalSessionKey = "env-env-1:tab-mail";
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey,
+          origin: "interactive-native" as const,
+        };
+        const session = await service.ensureSession(identity);
+        internals(service).observedSessionActivity.set(session.key, {
+          providerSessionId: session.providerSessionId,
+          state: "idle",
+        });
+        await storage.saveComposeDraft(
+          `claude:env-1:${encodeURIComponent(logicalSessionKey)}`,
+          "environment",
+          "env-1",
+          { text: "user draft", mentions: [], attachments: [] },
+        );
+
+        expect(
+          await service.dispatchMailInject({
+            ...identity,
+            prompt: "peer mail",
+            requestId: "mail-held",
+          }),
+        ).toEqual({ outcome: "held", reason: "draft" });
+        expect((await storage.getNativeAgentSession(session.key))?.pendingDispatch).toBeUndefined();
+
+        await storage.deleteComposeDraft(`claude:env-1:${encodeURIComponent(logicalSessionKey)}`);
+        await service.dispatchPrompt({
+          ...identity,
+          prompt: "user prompt",
+          requestId: "user-after-held-mail",
+        });
+        expect(provider.send).toHaveBeenCalledTimes(1);
+        expect(provider.send.mock.calls[0]?.[1]).toBe("user prompt");
+
+        internals(service).observedSessionActivity.set(session.key, {
+          providerSessionId: session.providerSessionId,
+          state: "idle",
+        });
+        expect(
+          await service.dispatchMailInject({
+            ...identity,
+            prompt: "/literal-peer-text",
+            requestId: "mail-literal",
+          }),
+        ).toMatchObject({ outcome: "accepted" });
+        expect(provider.send.mock.calls[1]?.[2]).toMatchObject({
+          allowProviderCommands: false,
+        });
+
+        internals(service).observedSessionActivity.delete(session.key);
+        expect(
+          await service.dispatchMailInject({
+            ...identity,
+            prompt: "cold peer mail",
+            requestId: "mail-cold-idle",
+          }),
+        ).toMatchObject({ outcome: "accepted" });
+        expect(provider.status).toHaveBeenCalledWith(session.providerSessionId);
+      },
+    );
+  });
+
+  test("rechecks native activity under the dispatch fence before injecting mail", async () => {
+    let signalUserSend: (() => void) | undefined;
+    const userSendEntered = new Promise<void>((resolve) => {
+      signalUserSend = resolve;
+    });
+    let releaseUserSend: (() => void) | undefined;
+    const userSendBarrier = new Promise<void>((resolve) => {
+      releaseUserSend = resolve;
+    });
+    const provider = createProviderStub("claude", {
+      send: async (_sessionId, prompt) => {
+        if (prompt !== "user prompt") return;
+        signalUserSend?.();
+        await userSendBarrier;
+      },
+    });
+    try {
+      await withService(
+        {
+          prefix: "orkestrator-native-mail-activity-race-",
+          provider: async () => provider.provider,
+        },
+        async ({ service }) => {
+          const logicalSessionKey = "env-env-1:tab-mail-race";
+          const identity = {
+            environmentId: "env-1",
+            agent: "claude" as const,
+            logicalSessionKey,
+            origin: "interactive-native" as const,
+          };
+          const session = await service.ensureSession(identity);
+          internals(service).observedSessionActivity.set(session.key, {
+            providerSessionId: session.providerSessionId,
+            state: "idle",
+          });
+
+          const userDispatch = service.dispatchPrompt({
+            ...identity,
+            prompt: "user prompt",
+            requestId: "user-first",
+          });
+          await userSendEntered;
+          const mailDispatch = service.dispatchMailInject({
+            ...identity,
+            prompt: "peer mail",
+            requestId: "mail-second",
+          });
+          releaseUserSend?.();
+
+          await userDispatch;
+          expect(await mailDispatch).toEqual({ outcome: "held", reason: "busy" });
+          expect(provider.send).toHaveBeenCalledTimes(1);
+        },
+      );
+    } finally {
+      releaseUserSend?.();
+    }
+  });
+
+  test("maps ambiguous and parked native mail dispatches without losing the recovery row", async () => {
+    const provider = createProviderStub("claude", {
+      send: async () => {
+        throw new AmbiguousPromptDispatchError("provider acknowledgement lost");
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-mail-ambiguous-",
+        provider: async () => provider.provider,
+      },
+      async ({ storage, service }) => {
+        const logicalSessionKey = "env-env-1:tab-mail-ambiguous";
+        const identity = {
+          environmentId: "env-1",
+          agent: "claude" as const,
+          logicalSessionKey,
+          origin: "interactive-native" as const,
+        };
+        const session = await service.ensureSession(identity);
+        internals(service).observedSessionActivity.set(session.key, {
+          providerSessionId: session.providerSessionId,
+          state: "idle",
+        });
+
+        expect(
+          await service.dispatchMailInject({
+            ...identity,
+            prompt: "first mail",
+            requestId: "mail-ambiguous",
+          }),
+        ).toMatchObject({ outcome: "unknown", requestId: "mail-ambiguous" });
+        expect((await storage.getNativeAgentSession(session.key))?.pendingDispatch).toMatchObject({
+          requestId: "mail-ambiguous",
+        });
+        expect(
+          await service.dispatchMailInject({
+            ...identity,
+            prompt: "second mail",
+            requestId: "mail-blocked",
+          }),
+        ).toEqual({ outcome: "held", reason: "parked" });
+      },
+    );
   });
 
   test("parks permanent rejection visibly but retains transient in-flight work", async () => {

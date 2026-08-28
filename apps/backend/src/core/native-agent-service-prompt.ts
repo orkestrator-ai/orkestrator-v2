@@ -18,6 +18,8 @@ import {
   nativeAgentSessionStorageKey,
   nonBlank,
   readProviderStatus,
+  AmbiguousPromptDispatchError,
+  PendingNativeAgentDispatchError,
 } from "./native-agent-service-shared.js";
 type BuildPipelineAgent = shared.BuildPipelineAgent;
 type PipelineSessionPhase = shared.PipelineSessionPhase;
@@ -65,6 +67,7 @@ type NativeAgentServiceOptions = shared.NativeAgentServiceOptions;
 type AgentInteractionObservation = shared.AgentInteractionObservation;
 type OpenCodeRecoveryCandidate = shared.OpenCodeRecoveryCandidate;
 type PromptDispatchPreparation = shared.PromptDispatchPreparation;
+type MailInjectDispatchOutcome = shared.MailInjectDispatchOutcome;
 export type NativeAgentServiceLayerTypes = [
   BuildPipelineAgent,
   PipelineSessionPhase,
@@ -117,6 +120,94 @@ export type NativeAgentServiceLayerTypes = [
 import { NativeAgentServiceProjection } from "./native-agent-service-projection.ts";
 
 export abstract class NativeAgentServicePrompt extends NativeAgentServiceProjection {
+  sessionActivitySnapshot(
+    environmentId: string,
+    agent: BuildPipelineAgent,
+    logicalSessionKey: string,
+  ): AgentActivityState | "unknown" {
+    const observed = this.observedSessionActivity.get(
+      nativeAgentSessionStorageKey(environmentId, agent, logicalSessionKey),
+    );
+    return observed?.state ?? "unknown";
+  }
+
+  async reconcileMailInject(
+    input: NativeAgentProjectionInput & { requestId: string },
+  ): Promise<"dispatched" | "unknown"> {
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
+    );
+    const session = await this.storage.getNativeAgentSession(key);
+    if (session?.dispatchedRequestIds?.includes(input.requestId)) return "dispatched";
+    if (session?.pendingDispatch?.requestId !== input.requestId) return "unknown";
+    return (await this.settleAmbiguousDispatch(input, key, input.requestId))
+      ? "dispatched"
+      : "unknown";
+  }
+
+  async dispatchMailInject(
+    input: DispatchNativeAgentPromptInput,
+  ): Promise<MailInjectDispatchOutcome> {
+    let heldReason: "parked" | "queue" | "draft" | "busy" | undefined;
+    try {
+      await this.dispatchPromptInternal(
+        { ...input, allowProviderCommands: false },
+        async (session, provider) => {
+          if (session.pendingDispatch && session.pendingDispatch.requestId !== input.requestId) {
+            heldReason = "parked";
+            return { dispatch: false };
+          }
+          const queueKey = `${input.agent}\0${input.logicalSessionKey}`;
+          const queue = await this.storage.getPromptQueue(queueKey);
+          if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
+            heldReason = "queue";
+            return { dispatch: false };
+          }
+          const draftKey = `${input.agent}:${input.environmentId}:${encodeURIComponent(input.logicalSessionKey)}`;
+          const draft = await this.storage.getComposeDraft(draftKey);
+          if (this.composeDraftHoldsQueue(draft?.value)) {
+            heldReason = "draft";
+            return { dispatch: false };
+          }
+          // The service-level idle observation happens before the message is
+          // claimed. Recheck under the same durable per-session fence as a
+          // normal prompt so whichever dispatch entered first has priority.
+          const activity = this.sessionActivitySnapshot(
+            input.environmentId,
+            input.agent,
+            input.logicalSessionKey,
+          );
+          if (
+            activity !== "idle" &&
+            (activity !== "unknown" ||
+              (await readProviderStatus(provider, session.providerSessionId)).status !== "idle")
+          ) {
+            heldReason = "busy";
+            return { dispatch: false };
+          }
+          return { dispatch: true };
+        },
+        true,
+      );
+      return heldReason
+        ? { outcome: "held", reason: heldReason }
+        : { outcome: "accepted", requestId: input.requestId };
+    } catch (error) {
+      if (error instanceof PendingNativeAgentDispatchError) {
+        return { outcome: "held", reason: "parked" };
+      }
+      if (error instanceof AmbiguousPromptDispatchError) {
+        return { outcome: "unknown", requestId: input.requestId, error: error.message };
+      }
+      return {
+        outcome: "rejected",
+        error: error instanceof Error ? error.message : "Mail dispatch failed",
+      };
+    }
+  }
+
   async dispatchPrompt(
     input: DispatchNativeAgentPromptInput,
   ): Promise<PersistedNativeAgentSession> {
@@ -201,7 +292,8 @@ export abstract class NativeAgentServicePrompt extends NativeAgentServiceProject
             requestId: input.requestId,
             // Only a person typing into the composer can mean "run this
             // command"; workflow-authored prompts are literal text.
-            allowProviderCommands: durable.origin === "interactive-native",
+            allowProviderCommands:
+              input.allowProviderCommands ?? durable.origin === "interactive-native",
             images: input.images,
             attachments: input.attachments,
             schema: input.schema,

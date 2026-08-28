@@ -56,6 +56,8 @@ export interface CreateTabOptions {
   initialReasoningEffort?: string;
   /** One-shot Build/Plan selection applied when the agent tab is locked. */
   initialConversationMode?: "build" | "plan";
+  /** One-shot Fast/Normal selection applied when the agent tab is locked. */
+  initialFastMode?: boolean;
   /** Initial backend-local address for browser tabs. */
   initialUrl?: string;
   /** Existing authoritative workflow opened by a looped-review tab. */

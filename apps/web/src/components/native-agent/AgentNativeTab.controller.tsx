@@ -71,6 +71,8 @@ import {
 } from "./native-agent-fork";
 import { composeDraftKey, discardComposeDraft } from "@/lib/compose-draft-persistence";
 import { composerOccupiedError } from "@/lib/prompt-queue-errors";
+import { modelSupportsSpeed } from "@/lib/agent-launch";
+import { buildReviewModelCatalog } from "@/lib/review-launch-options";
 import { resolveWorkspaceAttachment } from "@/lib/chat/workspace-attachments";
 import { createSessionKey } from "@/lib/utils";
 import { useConfigStore } from "@/stores/configStore";
@@ -140,9 +142,16 @@ export function SharedNativeAgentController({
   );
   const configuredModel = configured.model;
   const configuredReasoning = configured.reasoningEffort;
-  // Speed is a per-session choice made in the model picker rather than a stored
-  // default, so a new tab starts at normal.
-  const configuredFastMode = undefined;
+  const speedCatalog = useMemo(
+    () => buildReviewModelCatalog(data.environmentId),
+    [data.environmentId],
+  );
+  const speedCompatible = modelSupportsSpeed(
+    platform,
+    speedCatalog,
+    initialAgentModel ?? configuredModel,
+  );
+  const configuredFastMode = speedCompatible ? configured.fastMode : undefined;
   const setupPending = isSetupBlocked({ setupPhase: environment?.setupPhase });
   const inputRef = useRef<MentionableInputRef>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
@@ -221,6 +230,9 @@ export function SharedNativeAgentController({
     initialConversationMode:
       initialConversationMode ??
       (adapter.capabilities.composer.mode && !data.sessionId ? "build" : undefined),
+    // One-shot launch options have already been checked by the workflow that
+    // snapshotted them. Only tier-derived defaults need protection from a
+    // later model change leaving an incompatible stored value behind.
     initialFastMode,
     initialExecutionProfileId,
     defaultFastMode: configuredFastMode,

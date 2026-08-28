@@ -70,14 +70,37 @@ const OPENCODE_MODE_FOLLOWERS: readonly AgentPlatform[] = ["opencode", "cursor",
 
 /** Global tier: per-platform modes, the four invisible model fields, and both defaults. */
 export function migrateGlobalAgentSettings(global: JsonRecord): AgentSettingsTier {
-  // An already-migrated config is authoritative. Re-reading the legacy fields
-  // would resurrect values the user has since changed through the new panes.
-  if (isRecord(global.agentSettings)) return normalizeAgentSettings(global.agentSettings);
+  // An already-migrated config is authoritative for every field it names. The
+  // fast-mode keys were stripped by the first tier-unification release before
+  // this field existed, though, so preserve a still-present key when its new
+  // destination has never been written. Already stripped values cannot be
+  // reconstructed here.
+  if (isRecord(global.agentSettings)) {
+    let migrated = normalizeAgentSettings(global.agentSettings);
+    const legacyFastModes: Array<["claude" | "codex", unknown]> = [
+      ["claude", global.claudeNativeFastModeDefault],
+      ["codex", global.codexNativeFastModeDefault],
+    ];
+    for (const [platform, legacyFastMode] of legacyFastModes) {
+      if (
+        typeof legacyFastMode === "boolean" &&
+        migrated.platforms?.[platform]?.fastMode === undefined
+      ) {
+        const platforms = { ...migrated.platforms };
+        platforms[platform] = { ...platforms[platform], fastMode: legacyFastMode };
+        migrated = { ...migrated, platforms };
+      }
+    }
+    return migrated;
+  }
 
   const platforms: Partial<Record<AgentPlatform, AgentPlatformSettings>> = {};
   mergeInto(platforms, "claude", {
     ...(launchMode(global.claudeMode) ? { mode: launchMode(global.claudeMode)! } : {}),
     ...(trimmed(global.claudeModel) ? { model: trimmed(global.claudeModel)! } : {}),
+    ...(typeof global.claudeNativeFastModeDefault === "boolean"
+      ? { fastMode: global.claudeNativeFastModeDefault }
+      : {}),
     ...(claudeBackend(global.claudeNativeBackend)
       ? { claudeNativeBackend: claudeBackend(global.claudeNativeBackend)! }
       : {}),
@@ -87,6 +110,9 @@ export function migrateGlobalAgentSettings(global: JsonRecord): AgentSettingsTie
     ...(trimmed(global.codexModel) ? { model: trimmed(global.codexModel)! } : {}),
     ...(trimmed(global.codexReasoningEffort)
       ? { reasoningEffort: trimmed(global.codexReasoningEffort)! }
+      : {}),
+    ...(typeof global.codexNativeFastModeDefault === "boolean"
+      ? { fastMode: global.codexNativeFastModeDefault }
       : {}),
   });
 

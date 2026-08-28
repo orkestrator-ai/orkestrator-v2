@@ -1390,16 +1390,18 @@ exit 0
           resumeSessionId,
         },
         context,
-      )) as { session_id: string; resumed: boolean };
+      )) as { session_id: string; resumed: boolean; fast_mode: boolean | null };
 
       expect(status.session_id).toBe(resumeSessionId);
       expect(status.resumed).toBe(true);
+      expect(status.fast_mode).toBeNull();
 
       const launchLog = await fs.readFile(log, "utf8");
       expect(launchLog).toContain(` --resume ${resumeSessionId}`);
       expect(launchLog).not.toContain("--session-id");
       expect(launchLog).toContain(" --model 'opus'");
       expect(launchLog).toContain(" --effort 'medium'");
+      expect(launchLog).not.toContain(" --settings ");
       // The probe runs on the resume path too — a resumed session is still a
       // fresh CLI process and needs the same thinking display.
       expect(launchLog).toContain(" --thinking adaptive --thinking-display summarized");

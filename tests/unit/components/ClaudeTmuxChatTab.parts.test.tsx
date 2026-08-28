@@ -637,6 +637,35 @@ function seedEnvironment(overrides: Partial<Environment> = {}) {
   });
 }
 
+function seedModelsWithExplicitlyUnsupportedSpeed(): void {
+  useClaudeStore.setState({
+    models: [
+      {
+        id: "default",
+        name: "Default (recommended)",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high", "xhigh", "max"],
+        supportsFastMode: true,
+      },
+      {
+        id: "sonnet",
+        name: "Sonnet",
+        supportsEffort: true,
+        supportedEffortLevels: ["low", "medium", "high"],
+        supportsFastMode: false,
+      },
+      {
+        id: "haiku",
+        name: "Haiku",
+        supportsEffort: false,
+        supportedEffortLevels: [],
+        supportsFastMode: false,
+      },
+    ] as ClaudeModel[],
+    modelCatalogs: new Map(),
+  });
+}
+
 describe("ClaudeTmuxChatTab", () => {
   afterEach(() => {
     dateNowSpy?.mockRestore();
@@ -3040,6 +3069,7 @@ describe("ClaudeTmuxChatTab", () => {
 
   test("clears a pre-launch fast selection before starting an unsupported model", async () => {
     seedPane();
+    seedModelsWithExplicitlyUnsupportedSpeed();
     useConfigStore.setState((state) => ({
       ...state,
       config: {
@@ -3172,6 +3202,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("turns fast mode off before switching to a model that does not support it", async () => {
+    seedModelsWithExplicitlyUnsupportedSpeed();
     const operations: string[] = [];
     switchFastModeMock.mockImplementation(async (_tabId, enabled) => {
       operations.push(`fast:${enabled}`);
@@ -3232,6 +3263,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("does not switch models when disabling fast mode is rejected", async () => {
+    seedModelsWithExplicitlyUnsupportedSpeed();
     switchFastModeMock.mockImplementation(async (_tabId, enabled) => {
       if (!enabled) throw new Error("could not disable fast mode");
     });
@@ -3285,6 +3317,7 @@ describe("ClaudeTmuxChatTab", () => {
   });
 
   test("keeps the previous model in Normal mode when its switch fails after disabling Fast", async () => {
+    seedModelsWithExplicitlyUnsupportedSpeed();
     switchModelMock.mockImplementationOnce(async () => {
       throw new Error("model switch failed");
     });
@@ -3830,7 +3863,7 @@ describe("ClaudeTmuxChatTab", () => {
         initialPrompt: undefined,
         model: "default",
         effort: "high",
-        fastMode: false,
+        fastMode: undefined,
         resumeSessionId: "resume-1",
         replaceExisting: true,
       });

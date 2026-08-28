@@ -293,6 +293,7 @@ export class TmuxSession {
 
     const alive = await this.tmuxAlive();
     const launchedNew = !alive;
+    const preserveResumedFastMode = this.resumed && fastMode === undefined;
     const requestedFastMode = fastMode ?? false;
     const launchFastMode = requestedFastMode && helpText.includes("--settings");
     if (launchedNew && requestedFastMode && !launchFastMode) {
@@ -354,6 +355,13 @@ export class TmuxSession {
         throw error;
       }
       await this.inputMutex.runExclusive(async () => {
+        if (preserveResumedFastMode) {
+          // A resume with no explicit one-shot choice must let Claude restore
+          // the conversation's own speed instead of labelling it Normal before
+          // the resumed process can report its state.
+          this.fastMode = null;
+          return;
+        }
         this.fastMode = launchFastMode;
         await this.persistFastModeOptionWithRetry(launchFastMode).catch((error) => {
           console.warn("[tmux] failed to persist launch fast mode", error);

@@ -150,7 +150,7 @@ export function repositoryAgent(
 }
 
 /**
- * The connection-level model and reasoning effort for one harness.
+ * The connection-level model, reasoning effort, and speed for one harness.
  *
  * Both come from the shared tier resolver, so a step that pinned a harness
  * other than the repository's default gets *that* harness's own model rather
@@ -165,7 +165,7 @@ export function connectionDefaultsFor(
   agent: BuildPipelineAgent,
   config: Pick<AppConfig, "global">,
   repository: { agentSettings?: AgentSettingsTier },
-): { model?: string; effort?: string } {
+): { model?: string; effort?: string; fastMode?: boolean } {
   const resolved = resolveAgentPlatformSettings(
     { repository: repository.agentSettings, global: config.global.agentSettings },
     agent,
@@ -173,6 +173,7 @@ export function connectionDefaultsFor(
   return {
     ...(resolved.model && resolved.model !== "default" ? { model: resolved.model } : {}),
     ...(resolved.reasoningEffort ? { effort: resolved.reasoningEffort } : {}),
+    ...(typeof resolved.fastMode === "boolean" ? { fastMode: resolved.fastMode } : {}),
   };
 }
 

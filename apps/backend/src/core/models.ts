@@ -671,10 +671,10 @@ export interface AppConfig {
      *
      * Supersedes `defaultAgent`, the three `*Mode` fields,
      * `claudeNativeBackend`, `actionDefaults`, and the four model/effort fields
-     * that had no UI at all. The two `*NativeFastModeDefault` fields are
-     * dropped rather than migrated: speed is a per-session choice made in the
-     * model picker, and OpenCode expresses it as a `-fast` model id rather than
-     * a toggle.
+     * that had no UI at all. Speed now lives on each platform block as
+     * `fastMode`, the same Fast/Normal axis the model picker exposes. A legacy
+     * `*NativeFastModeDefault` key is migrated when it is still present; an
+     * earlier release may already have stripped it before this field existed.
      */
     agentSettings?: AgentSettingsTier;
     /**

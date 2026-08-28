@@ -321,7 +321,12 @@ function seedUnassignedDefaultCatalog() {
   getNativeAgentModelCatalogMock.mockImplementation(
     async () =>
       [
-        { platform: "claude", id: "claude-sonnet-5", label: "Claude Sonnet" },
+        {
+          platform: "claude",
+          id: "claude-sonnet-5",
+          label: "Claude Sonnet",
+          supportsSpeed: true,
+        },
         {
           platform: "codex",
           id: "gpt-5.4",
@@ -331,6 +336,7 @@ function seedUnassignedDefaultCatalog() {
             { id: "high", label: "High" },
           ],
           defaultReasoningId: "medium",
+          supportsSpeed: true,
         },
       ] as never,
   );
@@ -649,7 +655,9 @@ describe("AgentNativeTab", () => {
           setupPhase: "ready",
           agentSettings: {
             defaultAgent: "codex",
-            platforms: { codex: { model: "gpt-5.4", reasoningEffort: "high" } },
+            platforms: {
+              codex: { model: "gpt-5.4", reasoningEffort: "high", fastMode: true },
+            },
           },
         } as never,
       ],
@@ -662,6 +670,10 @@ describe("AgentNativeTab", () => {
     await expectUnassignedPicker("codex", "GPT-5.4");
     expect(screen.getByText("High")).toBeTruthy();
     expect(document.querySelector("[data-native-model-platform='claude']") === null).toBe(true);
+    fireEvent.pointerDown(screen.getByTitle(/Choose model/));
+    expect(screen.getByRole("menuitemradio", { name: /^Fast/ }).getAttribute("aria-checked")).toBe(
+      "true",
+    );
   });
 
   test("unassigned composer adopts the repository default when the environment inherits", async () => {
@@ -921,6 +933,7 @@ describe("AgentNativeTab", () => {
             label: "Claude M",
             reasoning,
             defaultReasoningId: "medium",
+            supportsSpeed: true,
           },
           {
             platform: "codex",
@@ -928,6 +941,7 @@ describe("AgentNativeTab", () => {
             label: "Codex M",
             reasoning,
             defaultReasoningId: "medium",
+            supportsSpeed: true,
           },
         ] as never,
     );
@@ -944,6 +958,12 @@ describe("AgentNativeTab", () => {
     useConfigStore.getState().updateGlobalConfig({
       enabledAgentPlatforms: ["claude", "codex"],
       favoriteModels: [{ platform: "codex", modelId: "codex-m" }],
+      agentSettings: {
+        platforms: {
+          claude: { fastMode: false },
+          codex: { fastMode: true },
+        },
+      },
     } as never);
     const sessionKey = createSessionKey("env-1", "tab-effort-platform-switch");
     useNativeComposeStore.getState().updateDraft(sessionKey, {
@@ -973,6 +993,7 @@ describe("AgentNativeTab", () => {
     // could produce it here.
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.reasoningId).toBe("medium");
     expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.platform).toBe("codex");
+    expect(useNativeComposeStore.getState().drafts.get(sessionKey)?.fastMode).toBe(true);
   });
 
   test("keeps a still-supported effort when the model switch stays on one platform", async () => {
@@ -2132,6 +2153,70 @@ describe("AgentNativeTab", () => {
     useConfigStore.getState().updateGlobalConfig({
       agentSettings: { platforms: { claude: { model: "claude-sonnet-5" } } },
     });
+  });
+
+  test("applies a configured Cursor fast-mode default to a new session", async () => {
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["cursor"],
+      agentSettings: { platforms: { cursor: { fastMode: true } } },
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-cursor-fast-default"
+        data={{
+          platform: "cursor",
+          environmentId: "env-1",
+          containerId: "container-1",
+          isLocal: false,
+        }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    expect(ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      agent: "cursor",
+      fastMode: true,
+    });
+  });
+
+  test("drops a configured speed default for a model that does not support it", async () => {
+    useAgentModelCatalogStore.setState({
+      cursorModels: [
+        {
+          platform: "cursor",
+          id: "normal-only",
+          label: "Normal only",
+          supportsSpeed: false,
+        },
+      ],
+      grokModels: [],
+      piModels: [],
+    });
+    useConfigStore.getState().updateGlobalConfig({
+      enabledAgentPlatforms: ["cursor"],
+      agentSettings: {
+        platforms: { cursor: { model: "normal-only", fastMode: true } },
+      },
+    });
+
+    render(
+      <AgentNativeTab
+        tabId="tab-cursor-unsupported-fast-default"
+        data={{
+          platform: "cursor",
+          environmentId: "env-1",
+          containerId: "container-1",
+          isLocal: false,
+        }}
+        isActive
+      />,
+    );
+
+    await waitFor(() => expect(ensureNativeAgentSessionMock).toHaveBeenCalled());
+    const input = ensureNativeAgentSessionMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(input.fastMode).toBeUndefined();
   });
 
   test("consumes a mode-only launch option before a resumed tab remounts", async () => {

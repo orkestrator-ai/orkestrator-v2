@@ -339,6 +339,7 @@ export const PaneLeafContainer = memo(function PaneLeafContainer({
                     isReviewTab={tab.isReviewTab}
                     initialAgentModel={tab.initialAgentModel}
                     initialReasoningEffort={tab.initialReasoningEffort}
+                    initialFastMode={tab.initialFastMode}
                     refreshRequestId={tabRefreshRequestIds.get(tab.id) ?? 0}
                   />
                 </LazyLoadBoundary>

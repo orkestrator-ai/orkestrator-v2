@@ -4,6 +4,9 @@ import {
   defaultEffortFor,
   effortLabel,
   firstModelFor,
+  modelSupportsSpeed,
+  platformOwnsSpeed,
+  toPickerModel,
   type AgentModelCatalog,
 } from "./agent-launch";
 
@@ -156,5 +159,68 @@ describe("firstModelFor resolved-model matching", () => {
 
   test("ignores a resolved model on another agent's entries", () => {
     expect(firstModelFor("codex", aliased, { codex: "claude-sonnet-5" })).toBe("codex-a");
+  });
+});
+
+describe("toPickerModel", () => {
+  test("carries the speed flag into the shared picker shape", () => {
+    expect(
+      toPickerModel("cursor", {
+        id: "grok-4.6",
+        name: "Cursor Grok 4.6",
+        description: "Grok on Cursor",
+        reasoningEfforts: ["high"],
+        supportsSpeed: true,
+      }),
+    ).toEqual({
+      platform: "cursor",
+      id: "grok-4.6",
+      label: "Cursor Grok 4.6",
+      description: "Grok on Cursor",
+      supportsSpeed: true,
+    });
+  });
+
+  test("omits speed when the catalog entry does not advertise it", () => {
+    expect(
+      toPickerModel("opencode", { id: "default", name: "Default", reasoningEfforts: [] }),
+    ).toEqual({
+      platform: "opencode",
+      id: "default",
+      label: "Default",
+    });
+  });
+});
+
+describe("modelSupportsSpeed", () => {
+  const speedCatalog: AgentModelCatalog = {
+    claude: [
+      { id: "fast", name: "Fast", reasoningEfforts: [], supportsSpeed: true },
+      { id: "normal-only", name: "Normal only", reasoningEfforts: [] },
+    ],
+    codex: [],
+    opencode: [],
+  };
+
+  test("accepts an unpinned provider default and a supported resolved model", () => {
+    expect(modelSupportsSpeed("claude", speedCatalog, undefined)).toBe(true);
+    expect(modelSupportsSpeed("claude", speedCatalog, "fast")).toBe(true);
+  });
+
+  test("rejects an explicitly unsupported, missing, or platform-ineligible model", () => {
+    expect(modelSupportsSpeed("claude", speedCatalog, "normal-only")).toBe(false);
+    expect(modelSupportsSpeed("claude", speedCatalog, "retired")).toBe(false);
+    expect(modelSupportsSpeed("opencode", speedCatalog, undefined)).toBe(false);
+  });
+});
+
+describe("platformOwnsSpeed", () => {
+  test("Cursor, Claude, Codex and Grok own a speed surface; OpenCode and Pi do not", () => {
+    expect(platformOwnsSpeed("cursor")).toBe(true);
+    expect(platformOwnsSpeed("claude")).toBe(true);
+    expect(platformOwnsSpeed("codex")).toBe(true);
+    expect(platformOwnsSpeed("grok")).toBe(true);
+    expect(platformOwnsSpeed("opencode")).toBe(false);
+    expect(platformOwnsSpeed("pi")).toBe(false);
   });
 });

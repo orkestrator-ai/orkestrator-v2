@@ -1101,6 +1101,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
         model,
         reasoningEffort,
         ...(conversationMode ? { mode: conversationMode } : {}),
+        ...(typeof resolved.fastMode === "boolean" ? { fastMode: resolved.fastMode } : {}),
         // A file-only turn needs non-blank text before its final workspace paths
         // can be resolved inside the dispatch lock below.
         prompt: prompt || (files.length > 0 ? "Use the attached file." : ""),
@@ -1135,6 +1136,7 @@ export abstract class NativeAgentServiceReconciliation extends NativeAgentServic
               model,
               reasoningEffort,
               ...(conversationMode ? { sessionMode: conversationMode } : {}),
+              ...(typeof resolved.fastMode === "boolean" ? { fastMode: resolved.fastMode } : {}),
             });
 
       // The provider mapping is not enough to satisfy the launch: the user

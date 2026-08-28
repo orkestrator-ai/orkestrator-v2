@@ -247,7 +247,9 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                   model: options.model ?? this.connection.model,
                   reasoningEffort: options.effort ?? this.connection.effort,
                   mode,
-                  ...(typeof options.fastMode === "boolean" ? { fastMode: options.fastMode } : {}),
+                  ...(typeof (options.fastMode ?? this.connection.fastMode) === "boolean"
+                    ? { fastMode: options.fastMode ?? this.connection.fastMode }
+                    : {}),
                 }
               : { title: label, clientSessionKey },
         ),
@@ -338,7 +340,7 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
               ? {
                   model: options.model ?? this.connection.model,
                   effort: options.effort ?? this.connection.effort,
-                  fastMode: options.fastMode,
+                  fastMode: options.fastMode ?? this.connection.fastMode,
                   agent: options.subAgent,
                   includeLocalSettings: options.includeLocalSettings,
                   promptSuggestions: options.promptSuggestions,
@@ -346,12 +348,12 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
                 }
               : this.agent === "cursor" || this.agent === "grok" || this.agent === "pi"
                 ? {
-                    fastMode: options.fastMode,
+                    fastMode: options.fastMode ?? this.connection.fastMode,
                     model: options.model ?? this.connection.model,
                     reasoningEffort: options.effort ?? this.connection.effort,
                     mode: options.mode,
                   }
-                : { fastMode: options.fastMode }),
+                : { fastMode: options.fastMode ?? this.connection.fastMode }),
           }),
         },
         this.fetchImpl,

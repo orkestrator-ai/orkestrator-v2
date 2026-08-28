@@ -168,12 +168,31 @@ describe("migrateGlobalAgentSettings", () => {
     expect(migrated.platforms?.claude?.mode).toBe("native");
   });
 
-  test("drops the fast-mode defaults rather than carrying them forward", () => {
+  test("migrates the legacy fast-mode defaults onto each platform block", () => {
     const migrated = migrateGlobalAgentSettings({
+      claudeNativeFastModeDefault: true,
+      codexNativeFastModeDefault: false,
+    });
+    expect(migrated.platforms?.claude?.fastMode).toBe(true);
+    expect(migrated.platforms?.codex?.fastMode).toBe(false);
+  });
+
+  test("fills an unset speed in an already-migrated block from a still-present legacy key", () => {
+    const migrated = migrateGlobalAgentSettings({
+      agentSettings: {
+        platforms: {
+          claude: { model: "sonnet" },
+          codex: { fastMode: false },
+        },
+      },
       claudeNativeFastModeDefault: true,
       codexNativeFastModeDefault: true,
     });
-    expect(JSON.stringify(migrated)).not.toContain("FastMode");
+
+    expect(migrated.platforms?.claude).toEqual({ model: "sonnet", fastMode: true });
+    // A value already written through the new settings surface remains
+    // authoritative over the stale legacy key.
+    expect(migrated.platforms?.codex?.fastMode).toBe(false);
   });
 });
 

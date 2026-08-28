@@ -3384,7 +3384,7 @@ describe("TerminalContainer", () => {
             ...state.config.global.agentSettings,
             platforms: {
               ...state.config.global.agentSettings?.platforms,
-              claude: { mode: "native", claudeNativeBackend: "tmux" },
+              claude: { mode: "native", claudeNativeBackend: "tmux", fastMode: true },
             },
           },
         },
@@ -3433,6 +3433,7 @@ describe("TerminalContainer", () => {
       expect(envHidden.root.tabs).toHaveLength(1);
       expect(envHidden.root.tabs[0]?.type).toBe("claude-tmux");
       expect(envHidden.root.tabs[0]?.initialPrompt).toBe("Use tmux");
+      expect(envHidden.root.tabs[0]?.initialFastMode).toBe(true);
       expect(envHidden.root.tabs[0]?.claudeTmuxData).toEqual({
         containerId: undefined,
         environmentId: "env-hidden",
@@ -3452,7 +3453,7 @@ describe("TerminalContainer", () => {
             ...state.config.global.agentSettings,
             platforms: {
               ...state.config.global.agentSettings?.platforms,
-              claude: { mode: "native", claudeNativeBackend: "tmux" },
+              claude: { mode: "native", claudeNativeBackend: "tmux", fastMode: true },
             },
           },
         },
@@ -3501,6 +3502,7 @@ describe("TerminalContainer", () => {
       expect(envHidden.root.tabs).toHaveLength(1);
       expect(envHidden.root.tabs[0]?.type).toBe("claude-tmux");
       expect(envHidden.root.tabs[0]?.initialPrompt).toBe("After setup");
+      expect(envHidden.root.tabs[0]?.initialFastMode).toBe(true);
       expect(envHidden.root.activeTabId).toBe("startup-agent");
     });
   });
@@ -5210,7 +5212,7 @@ describe("TerminalContainer", () => {
             ...state.config.global.agentSettings,
             platforms: {
               ...state.config.global.agentSettings?.platforms,
-              claude: { mode: "native", claudeNativeBackend: "tmux" },
+              claude: { mode: "native", claudeNativeBackend: "tmux", fastMode: true },
             },
           },
         },
@@ -5257,6 +5259,7 @@ describe("TerminalContainer", () => {
         agentType: "claude",
         launchMode: "native",
         claudeNativeBackend: "tmux",
+        fastMode: true,
       });
     });
 
@@ -5273,6 +5276,7 @@ describe("TerminalContainer", () => {
 
       const tmuxTab = envHidden.root.tabs.find((tab) => tab.type === "claude-tmux");
       expect(tmuxTab?.initialPrompt).toBe("Continue in tmux");
+      expect(tmuxTab?.initialFastMode).toBe(true);
       expect(tmuxTab?.claudeTmuxData).toEqual({
         containerId: "container-hidden",
         environmentId: "env-hidden",

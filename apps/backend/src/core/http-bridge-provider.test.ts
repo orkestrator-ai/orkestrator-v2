@@ -39,6 +39,22 @@ describe("HTTP bridge provider", () => {
     expect(JSON.parse(String(request.init.body))).toEqual({ title: "Build task" });
   });
 
+  test("uses the connection speed default for session creation and prompt dispatch", async () => {
+    const cursor = httpProvider(() => Response.json({ sessionId: "cursor-session" }), {
+      ...cursorConnection,
+      fastMode: true,
+    });
+    await cursor.provider.createSession("build", "Fast cursor");
+    expect(JSON.parse(String(cursor.requests[0]!.init.body))).toMatchObject({ fastMode: true });
+
+    const claude = httpProvider(() => Response.json({}), {
+      ...claudeConnection,
+      fastMode: false,
+    });
+    await claude.provider.send("claude-session", "Build it", { requestId: "request-1" });
+    expect(JSON.parse(String(claude.requests[0]!.init.body))).toMatchObject({ fastMode: false });
+  });
+
   test.each([
     ["cursor" as const, cursorConnection],
     ["grok" as const, grokConnection],

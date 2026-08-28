@@ -288,6 +288,7 @@ export interface BridgeConnection {
   directory?: string;
   model?: string;
   effort?: string;
+  fastMode?: boolean;
   requestTimeoutMs?: number;
 }
 

@@ -23,6 +23,7 @@ export interface PendingNativeAgentLaunch {
   claudeNativeBackend?: ClaudeNativeBackend;
   model?: string;
   reasoningEffort?: string;
+  fastMode?: boolean;
   /** Provider session already created by the backend startup coordinator. */
   providerSessionId?: string;
 }

@@ -8,16 +8,22 @@
  * three dialogs used to expose different subsets of these settings under
  * different names.
  *
- * Speed is deliberately absent. It is a per-session choice made in the compose
- * bar's model picker, and OpenCode does not have one at all — it expresses
- * speed as a `-fast` model id rather than a toggle.
+ * Speed is the same Fast/Normal axis the compose-bar picker uses. Platforms
+ * that own a toggle (Cursor, Claude, Codex, Grok) persist it here so new
+ * sessions start on that choice; OpenCode still encodes speed in the model id.
  */
 import { useMemo } from "react";
 import { Bot, Loader2, RefreshCw, Terminal } from "lucide-react";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { Button } from "@/components/ui/button";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
-import { effortLabel, modelsForAgent, type AgentModelCatalog } from "@/lib/agent-launch";
+import {
+  effortLabel,
+  modelsForAgent,
+  platformOwnsSpeed,
+  toPickerModel,
+  type AgentModelCatalog,
+} from "@/lib/agent-launch";
 import { inheritedFrom, withPlatformField, TIER_LABELS } from "@/lib/agent-settings";
 import { AGENT_PLATFORM_LABELS, type AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import {
@@ -123,6 +129,7 @@ export function AgentPlatformPane({
           description: model.description,
           reasoningEfforts: model.supportedEffortLevels ?? [],
           resolvedModel: model.resolvedModel,
+          ...(model.supportsFastMode !== false ? { supportsSpeed: true as const } : {}),
         }))
       : catalogModels;
   const pickerModels = useMemo<AgentModel[]>(
@@ -131,12 +138,7 @@ export function AgentPlatformPane({
         // A synthesised OpenCode `default` is a UI placeholder no server knows,
         // so offering it here would persist a selection that disappears.
         .filter((option) => !(platform === "opencode" && option.id === "default"))
-        .map((option) => ({
-          platform,
-          id: option.id,
-          label: option.name,
-          description: option.description,
-        })),
+        .map((option) => toPickerModel(platform, option)),
     [models, platform],
   );
   const selectedModel = stored?.model
@@ -144,9 +146,9 @@ export function AgentPlatformPane({
     : undefined;
   const modelMissingFromCatalog = Boolean(stored?.model && !selectedModel);
   const effectiveModel = stored?.model ?? inherited.model;
-  const reasoningModel = models.find(
-    (model) => model.id === effectiveModel || model.resolvedModel === effectiveModel,
-  );
+  const reasoningModel = effectiveModel
+    ? models.find((model) => model.id === effectiveModel || model.resolvedModel === effectiveModel)
+    : models[0];
 
   const reasoningOptions = useMemo<AgentReasoningOption[]>(() => {
     const efforts = reasoningModel?.reasoningEfforts ?? [];
@@ -165,9 +167,21 @@ export function AgentPlatformPane({
     field: K,
     value: AgentPlatformSettings[K] | undefined,
   ) => onChange(withPlatformField(tier, platform, field, value));
+  const setModel = (modelId: string) => {
+    let next = withPlatformField(tier, platform, "model", modelId);
+    const nextModel = models.find(
+      (model) => model.id === modelId || model.resolvedModel === modelId,
+    );
+    if (nextModel?.supportsSpeed !== true) {
+      next = withPlatformField(next, platform, "fastMode", undefined);
+    }
+    onChange(next);
+  };
 
   const modeSource = inheritedFrom(parentTiers, platform, "mode");
   const modelSource = inheritedFrom(parentTiers, platform, "model");
+  const speedCapable = platformOwnsSpeed(platform);
+  const selectedSupportsSpeed = reasoningModel?.supportsSpeed === true;
 
   return (
     <div className="max-w-2xl space-y-8">
@@ -301,8 +315,8 @@ export function AgentPlatformPane({
                   ? `Inherit${inherited.model ? ` — ${inherited.model}` : ""} (from ${TIER_LABELS[modelSource]})`
                   : `${label} default`
             }
-            onModelChange={(nextModelId) => set("model", nextModelId)}
-            onModelSelect={(nextModel) => set("model", nextModel.id)}
+            onModelChange={setModel}
+            onModelSelect={(nextModel) => setModel(nextModel.id)}
             reasoningOptions={reasoningOptions}
             selectedReasoningId={stored?.reasoningEffort ?? INHERIT}
             selectedReasoningLabel={
@@ -312,6 +326,21 @@ export function AgentPlatformPane({
             onReasoningChange={(nextId) =>
               set("reasoningEffort", nextId === INHERIT ? undefined : nextId)
             }
+            speedCapable={speedCapable}
+            fastModeAvailable={speedCapable && selectedSupportsSpeed}
+            fastModeEnabled={
+              speedCapable ? (stored?.fastMode ?? inherited.fastMode ?? null) : false
+            }
+            speedInherit={
+              speedCapable
+                ? {
+                    label: canInherit ? "Inherit" : "Provider default",
+                    selected: stored?.fastMode === undefined,
+                  }
+                : undefined
+            }
+            onFastModeChange={speedCapable ? (enabled) => set("fastMode", enabled) : undefined}
+            onFastModeInherit={speedCapable ? () => set("fastMode", undefined) : undefined}
             className="min-h-11 w-full max-w-none justify-start border border-zinc-700/80 bg-zinc-900 py-2.5 text-sm text-zinc-100 md:max-w-none md:flex-1"
           />
         ) : (

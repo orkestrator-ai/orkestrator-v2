@@ -105,6 +105,7 @@ async function createWindow(): Promise<void> {
   const createdWindow = await createMainWindow({
     BrowserWindowCtor: BrowserWindow,
     menu: Menu,
+    writeClipboardText: (text) => clipboard.writeText(text),
     dirname: __dirname,
     isDev,
     appPath: app.getAppPath(),

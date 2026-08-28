@@ -11,6 +11,7 @@ type ContextMenuMenu = Parameters<typeof installDefaultContextMenu>[1];
 export type CreateMainWindowOptions = {
   BrowserWindowCtor: BrowserWindowConstructor;
   menu: ContextMenuMenu;
+  writeClipboardText: (text: string) => void;
   dirname: string;
   isDev: boolean;
   appPath: string;
@@ -64,7 +65,7 @@ export async function createMainWindow(options: CreateMainWindowOptions): Promis
     },
   });
 
-  installDefaultContextMenu(mainWindow, options.menu);
+  installDefaultContextMenu(mainWindow, options.menu, options.writeClipboardText);
   mainWindow.webContents.on("will-navigate", (event) => {
     if (!isTrustedRendererUrl(event.url, trustedRendererUrl)) {
       event.preventDefault();

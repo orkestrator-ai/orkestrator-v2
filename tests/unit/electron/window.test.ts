@@ -14,6 +14,7 @@ function createHarness() {
       popup: mock(() => undefined),
     })),
   };
+  const writeClipboardText = mock((_text: string) => undefined);
 
   class FakeBrowserWindow {
     readonly webContents = {
@@ -31,7 +32,7 @@ function createHarness() {
     }
   }
 
-  return { FakeBrowserWindow, menu, webContentsListeners, windows };
+  return { FakeBrowserWindow, menu, writeClipboardText, webContentsListeners, windows };
 }
 
 describe("createMainWindow", () => {
@@ -57,6 +58,7 @@ describe("createMainWindow", () => {
     const window = await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
       dirname: "/app/apps/desktop/dist/electron",
       isDev: false,
       appPath: "/app",
@@ -91,6 +93,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
       dirname: "/app/apps/desktop/dist/electron",
       isDev: true,
       appPath: "/app",
@@ -108,6 +111,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
       dirname: "/app/apps/desktop/dist/electron",
       isDev: true,
       appPath: "/app",
@@ -122,6 +126,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
       dirname: "/app/apps/desktop/dist/electron",
       isDev: false,
       appPath: "/app",
@@ -154,6 +159,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
       dirname: "/app/apps/desktop/dist/electron",
       isDev: false,
       appPath: "/app",
@@ -184,6 +190,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
       dirname: "/app/apps/desktop/dist/electron",
       isDev: false,
       appPath: "/app",
@@ -217,6 +224,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
       dirname: "/app/apps/desktop/dist/electron",
       isDev: true,
       appPath: "/app",
@@ -259,6 +267,7 @@ describe("createMainWindow", () => {
     await createMainWindow({
       BrowserWindowCtor: harness.FakeBrowserWindow as never,
       menu: harness.menu,
+      writeClipboardText: harness.writeClipboardText,
       dirname: "/app/apps/desktop/dist/electron",
       isDev: true,
       appPath: "/app",

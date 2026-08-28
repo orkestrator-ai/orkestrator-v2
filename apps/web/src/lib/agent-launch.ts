@@ -6,7 +6,11 @@
  * launcher cannot drift on what a catalog is or how a default is resolved.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import { resolveReasoningId } from "@orkestrator/protocol/native-agent";
+import {
+  nativeAgentCapabilities,
+  resolveReasoningId,
+  type AgentModel,
+} from "@orkestrator/protocol/native-agent";
 
 export type LaunchAgent = AgentPlatform;
 
@@ -24,6 +28,8 @@ export interface AgentModelOption {
    * catalog ids are already the concrete model.
    */
   resolvedModel?: string;
+  /** True when this model exposes a Fast/Normal speed toggle. */
+  supportsSpeed?: boolean;
 }
 
 export type AgentModelCatalog = Record<"claude" | "codex" | "opencode", AgentModelOption[]> &
@@ -95,4 +101,41 @@ export function defaultEffortFor(
 
 export function effortLabel(effort: string): string {
   return effort === "xhigh" ? "Extra high" : effort.charAt(0).toUpperCase() + effort.slice(1);
+}
+
+/**
+ * Map a launch-catalog option into the shared picker model shape.
+ *
+ * Settings and launchers share this so `supportsSpeed` cannot be dropped on
+ * the way into `AgentModelPicker`.
+ */
+export function toPickerModel(platform: LaunchAgent, option: AgentModelOption): AgentModel {
+  return {
+    platform,
+    id: option.id,
+    label: option.name,
+    ...(option.description ? { description: option.description } : {}),
+    ...(option.supportsSpeed ? { supportsSpeed: true } : {}),
+  };
+}
+
+/** Whether this platform's composer owns a Fast/Normal surface. */
+export function platformOwnsSpeed(platform: LaunchAgent): boolean {
+  return nativeAgentCapabilities(platform).composer.speed;
+}
+
+/** Whether the effective model can honour a stored Fast/Normal default. */
+export function modelSupportsSpeed(
+  platform: LaunchAgent,
+  catalog: AgentModelCatalog,
+  modelId: string | undefined,
+): boolean {
+  if (!platformOwnsSpeed(platform)) return false;
+  // With no pin, the provider chooses its model. Platform capability is the
+  // only authoritative fact available until that session publishes a catalog.
+  if (!modelId) return true;
+  const model = modelsForAgent(catalog, platform).find(
+    (option) => option.id === modelId || option.resolvedModel === modelId,
+  );
+  return model?.supportsSpeed === true;
 }

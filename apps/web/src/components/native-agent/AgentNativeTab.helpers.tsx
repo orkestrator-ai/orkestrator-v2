@@ -366,18 +366,18 @@ export function UnassignedNativeAgentComposer({
     platform,
   );
   const selectedAdapter = findNativeAgentAdapter(platform);
-  // Speed is a per-session choice made in the model picker, so a draft with no
-  // explicit choice starts at normal rather than inheriting a stored default.
-  const effectiveFastMode = hasDraft ? draft.fastMode : false;
+  // A draft with no explicit choice follows the stored platform default, then
+  // Normal. OpenCode has no toggle, so this stays false there.
+  const effectiveFastMode = hasDraft ? draft.fastMode : (configured.fastMode ?? false);
   const updateDraft = useCallback(
     (key: string, update: Partial<typeof draft>) => {
       const current = useNativeComposeStore.getState().drafts.get(key);
       updateStoreDraft(key, {
-        ...(current ? {} : { fastMode: false }),
+        ...(current ? {} : { fastMode: configured.fastMode ?? false }),
         ...update,
       });
     },
-    [updateStoreDraft],
+    [configured.fastMode, updateStoreDraft],
   );
   useNativeComposeDraftPersistence(
     "agent-native",
@@ -726,12 +726,18 @@ export function UnassignedNativeAgentComposer({
                   const current = useNativeComposeStore.getState().drafts.get(sessionKey);
                   if ((current?.platform ?? platform) === next) return;
                   const nextAdapter = findNativeAgentAdapter(next);
+                  const nextFastMode = resolvedPlatformSettings(
+                    config,
+                    environment?.projectId,
+                    environment,
+                    next,
+                  ).fastMode;
                   updateDraft(sessionKey, {
                     platform: next,
                     modelId: undefined,
                     reasoningId: undefined,
                     executionProfileId: undefined,
-                    fastMode: false,
+                    fastMode: nextFastMode ?? false,
                     // Per type, not all-or-nothing: Codex takes images and
                     // refuses files, and its bridge rejects the entire prompt
                     // rather than dropping the entry it cannot use.

@@ -610,6 +610,21 @@ describe("AgentModelPicker", () => {
     expect(onFastModeChange).toHaveBeenCalledWith(true);
   });
 
+  test("selects the settings inherit row", () => {
+    setMobileViewport(false);
+    const onFastModeInherit = mock(() => {});
+    renderPicker({
+      fastModeEnabled: true,
+      speedInherit: { label: "Inherit", selected: false },
+      onFastModeInherit,
+    });
+    openPicker();
+
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Inherit/ }));
+
+    expect(onFastModeInherit).toHaveBeenCalledTimes(1);
+  });
+
   test("walks the desktop platform rail with Left and Right", () => {
     setMobileViewport(false);
     const onPlatformChange = mock(() => {});
@@ -865,6 +880,30 @@ describe("AgentModelPicker", () => {
     expect(screen.queryByRole("group", { name: "Speed mode" }) === null).toBe(true);
     expect(screen.queryByText("Normal") === null).toBe(true);
     expect(screen.queryByText("Fast") === null).toBe(true);
+  });
+
+  test("offers an inherit speed row for settings without treating it as unknown", () => {
+    setMobileViewport(false);
+    const onFastModeInherit = mock(() => {});
+    const { onFastModeChange } = renderPicker({
+      fastModeEnabled: null,
+      speedInherit: { label: "Provider default", selected: true },
+      onFastModeInherit,
+    });
+    const trigger = screen.getByTitle("Choose model, reasoning, and speed");
+    expect(trigger.textContent).not.toContain("? speed");
+    fireEvent.pointerDown(trigger);
+
+    const inherit = screen.getByRole("menuitemradio", { name: /Provider default/ });
+    expect(inherit.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("menuitemradio", { name: /Normal/ }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    fireEvent.click(inherit);
+    expect(onFastModeInherit).toHaveBeenCalledTimes(1);
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(screen.getByRole("menuitemradio", { name: /Fast/ }));
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
   });
 
   test("filters searchable metadata with normalized queries, orders favorites, and refreshes", () => {

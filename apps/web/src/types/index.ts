@@ -514,9 +514,9 @@ export interface GlobalConfig {
    * Application-wide agent defaults — the widest tier. Supersedes
    * `defaultAgent`, the three `*Mode` fields, `claudeNativeBackend`,
    * `actionDefaults`, and the four model/effort fields that had no UI at all.
-   * The two `*NativeFastModeDefault` fields are gone entirely: speed is a
-   * per-session model-picker choice, and OpenCode expresses it as a `-fast`
-   * model id rather than a toggle.
+   * Speed is `platforms[agent].fastMode`, the same Fast/Normal axis the model
+   * picker exposes. A legacy `*NativeFastModeDefault` key migrates when it is
+   * still present; an earlier release may already have stripped it.
    */
   agentSettings?: AgentSettingsTier;
   /** Editable preference embedded inside Orkestrator's fixed review contract. */

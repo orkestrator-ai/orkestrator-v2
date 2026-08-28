@@ -2250,7 +2250,7 @@ describe("NativeAgentService", () => {
     });
 
     test("publishes Cursor's native startup tab before consuming the launch", async () => {
-      const { provider } = createProviderStub("cursor");
+      const { provider, createSession } = createProviderStub("cursor");
       await withService(
         {
           prefix: "orkestrator-native-cursor-startup-tab-",
@@ -2266,6 +2266,12 @@ describe("NativeAgentService", () => {
 
           const converged = await storage.getEnvironment("env-1");
           expect(converged).toMatchObject({ pendingAgentLaunch: false });
+          const launchOptions = (
+            createSession.mock.calls[0] as unknown as
+              | [unknown, unknown, { fastMode?: boolean }]
+              | undefined
+          )?.[2];
+          expect(launchOptions?.fastMode).toBeUndefined();
           // Both halves of the launch are durable now, so the transient snapshot
           // is cleared rather than left running for the life of the environment.
           expect(converged?.startupAgentSession).toBeUndefined();
@@ -2560,8 +2566,10 @@ describe("NativeAgentService", () => {
           prefix: "orkestrator-native-launch-precedence-",
           environment: {
             pendingAgentLaunch: true,
-            defaultAgent: "codex",
-            codexMode: "native",
+            agentSettings: {
+              defaultAgent: "codex",
+              platforms: { codex: { mode: "native", fastMode: true } },
+            },
             initialAgentModel: "env-model",
             initialReasoningEffort: "env-effort",
           },
@@ -2582,7 +2590,11 @@ describe("NativeAgentService", () => {
           expect(createSession).toHaveBeenCalledWith(
             "build",
             "Agent Session",
-            expect.objectContaining({ model: "env-model", effort: "env-effort" }),
+            expect.objectContaining({
+              model: "env-model",
+              effort: "env-effort",
+              fastMode: true,
+            }),
           );
           expect((await storage.getPaneLayout("env-1"))?.root).toMatchObject({
             tabs: [
@@ -2601,8 +2613,10 @@ describe("NativeAgentService", () => {
           prefix: "orkestrator-native-launch-image-only-",
           environment: {
             pendingAgentLaunch: true,
-            defaultAgent: "codex",
-            codexMode: "native",
+            agentSettings: {
+              defaultAgent: "codex",
+              platforms: { codex: { mode: "native", fastMode: false } },
+            },
             initialPrompt: "   ",
             initialPromptAttachments: [
               {
@@ -2624,6 +2638,7 @@ describe("NativeAgentService", () => {
             expect.objectContaining({
               requestId: "initial-prompt:env-1:startup-agent",
               images: [{ filename: "reference.png", data: "cG5n" }],
+              fastMode: false,
             }),
           );
           const converged = await storage.getEnvironment("env-1");

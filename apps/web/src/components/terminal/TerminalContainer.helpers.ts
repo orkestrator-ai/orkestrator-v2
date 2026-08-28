@@ -325,6 +325,7 @@ export function createClaudeNativeLikeTab({
   initialAgentModel,
   initialReasoningEffort,
   initialConversationMode,
+  initialFastMode,
   sessionId,
   requireExistingResumeSession,
   deferPlatform = false,
@@ -340,6 +341,7 @@ export function createClaudeNativeLikeTab({
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   initialConversationMode?: "build" | "plan";
+  initialFastMode?: boolean;
   sessionId?: string;
   requireExistingResumeSession?: boolean;
   deferPlatform?: boolean;
@@ -358,6 +360,7 @@ export function createClaudeNativeLikeTab({
       isReviewTab,
       initialAgentModel,
       initialReasoningEffort,
+      ...(typeof initialFastMode === "boolean" ? { initialFastMode } : {}),
     };
   }
 
@@ -378,6 +381,7 @@ export function createClaudeNativeLikeTab({
     initialAgentModel,
     initialReasoningEffort,
     initialConversationMode,
+    ...(typeof initialFastMode === "boolean" ? { initialFastMode } : {}),
   };
 }
 
@@ -395,6 +399,7 @@ export function createAgentNativeTab({
   initialAgentModel,
   initialReasoningEffort,
   initialConversationMode,
+  initialFastMode,
 }: {
   id: string;
   platform: AgentPlatform | undefined;
@@ -409,6 +414,7 @@ export function createAgentNativeTab({
   initialAgentModel?: string;
   initialReasoningEffort?: string;
   initialConversationMode?: "build" | "plan";
+  initialFastMode?: boolean;
 }): TabInfo {
   return {
     id,
@@ -427,6 +433,7 @@ export function createAgentNativeTab({
     initialAgentModel,
     initialReasoningEffort,
     initialConversationMode,
+    ...(typeof initialFastMode === "boolean" ? { initialFastMode } : {}),
   };
 }
 

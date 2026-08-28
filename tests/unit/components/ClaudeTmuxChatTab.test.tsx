@@ -2927,7 +2927,7 @@ Running 1 Explore agent...
         initialPrompt: undefined,
         model: "sonnet",
         effort: "high",
-        fastMode: false,
+        fastMode: undefined,
         resumeSessionId: "resume-1",
         replaceExisting: true,
       });

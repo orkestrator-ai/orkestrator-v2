@@ -28,6 +28,7 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
     description: "Opus 5 with 1M context · Best for everyday, complex tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     resolvedModel: "claude-opus-5[1m]",
+    supportsSpeed: true,
   },
   {
     id: "opus[1m]",
@@ -35,6 +36,7 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
     description: "Opus 5 with 1M context · Best for everyday, complex tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     resolvedModel: "claude-opus-5[1m]",
+    supportsSpeed: true,
   },
   {
     id: "claude-fable-5[1m]",
@@ -42,6 +44,7 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
     description: "Most capable for difficult, long-running tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     resolvedModel: "claude-fable-5",
+    supportsSpeed: true,
   },
   {
     id: "sonnet",
@@ -49,6 +52,7 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
     description: "Sonnet 5 · Efficient for routine tasks",
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     resolvedModel: "claude-sonnet-5",
+    supportsSpeed: true,
   },
   {
     id: "haiku",
@@ -56,6 +60,7 @@ const CLAUDE_FALLBACK_MODELS: ReviewModelOption[] = [
     description: "Fastest for quick tasks",
     reasoningEfforts: [],
     resolvedModel: "claude-haiku-4-5-20251001",
+    supportsSpeed: true,
   },
 ];
 
@@ -118,6 +123,7 @@ export function buildReviewModelCatalog(
         ? ["low", "medium", "high"]
         : [],
     ...(model.resolvedModel ? { resolvedModel: model.resolvedModel } : {}),
+    ...(model.supportsFastMode !== false ? { supportsSpeed: true as const } : {}),
   }));
   const claude = liveClaudeModels.length > 0 ? liveClaudeModels : CLAUDE_FALLBACK_MODELS;
 
@@ -127,6 +133,7 @@ export function buildReviewModelCatalog(
     name: model.name,
     description: model.description,
     reasoningEfforts: [...(model.reasoningEfforts ?? ["medium", "high"])],
+    supportsSpeed: true as const,
   }));
 
   const openCodeState = useOpenCodeStore.getState();
@@ -157,6 +164,7 @@ export function buildReviewModelCatalog(
       reasoningEfforts: Array.from(
         new Set(model.reasoning?.map((option) => option.id).filter((id) => id !== "default") ?? []),
       ),
+      ...(model.supportsSpeed ? { supportsSpeed: true as const } : {}),
     }));
   const cursor = toLaunchOptions(cachedAcpCatalog.cursorModels);
   const grok = toLaunchOptions(cachedAcpCatalog.grokModels);

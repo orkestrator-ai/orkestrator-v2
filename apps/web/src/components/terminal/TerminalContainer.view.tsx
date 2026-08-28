@@ -748,6 +748,9 @@ export function TerminalContainer({
         providerSessionId: startupSession?.providerSessionId,
         model: startupSession?.model ?? environment.initialAgentModel,
         reasoningEffort: startupSession?.reasoningEffort ?? environment.initialReasoningEffort,
+        ...(typeof resolveAgentPlatformSettings(tiers, agentType).fastMode === "boolean"
+          ? { fastMode: resolveAgentPlatformSettings(tiers, agentType).fastMode }
+          : {}),
       });
       return;
     }
@@ -824,6 +827,9 @@ export function TerminalContainer({
         agentType === "claude" && launchMode === "native" ? claudeNativeBackend : undefined,
       model: environment.initialAgentModel,
       reasoningEffort: environment.initialReasoningEffort,
+      ...(typeof resolveAgentPlatformSettings(tiers, agentType).fastMode === "boolean"
+        ? { fastMode: resolveAgentPlatformSettings(tiers, agentType).fastMode }
+        : {}),
     });
   }, [
     claudeMode,
@@ -1155,11 +1161,13 @@ export function TerminalContainer({
       let pendingInitialPrompt: string | undefined;
       let initialAgentModel: string | undefined;
       let initialReasoningEffort: string | undefined;
+      let initialFastMode: boolean | undefined;
       const launchAgent = claudeOptions?.launchAgent ?? false;
       if (launchAgent) {
         initialTabType = claudeOptions!.agentType;
         initialAgentModel = claudeOptions!.model;
         initialReasoningEffort = claudeOptions!.reasoningEffort;
+        initialFastMode = resolveAgentPlatformSettings(tiers, initialTabType).fastMode;
         setHasAppliedClaudeOptions(true);
         if (claudeOptions!.initialPrompt?.trim()) {
           pendingInitialPrompt = claudeOptions!.initialPrompt.trim();
@@ -1198,6 +1206,7 @@ export function TerminalContainer({
             claudeNativeBackend: useNativeClaude ? claudeNativeBackend : undefined,
             model: initialAgentModel,
             reasoningEffort: initialReasoningEffort,
+            ...(typeof initialFastMode === "boolean" ? { fastMode: initialFastMode } : {}),
           });
         }
 
@@ -1235,6 +1244,7 @@ export function TerminalContainer({
             initialPrompt: pendingInitialPrompt,
             initialAgentModel,
             initialReasoningEffort,
+            initialFastMode,
           }),
           environmentId,
         );
@@ -1251,6 +1261,7 @@ export function TerminalContainer({
             initialPrompt: pendingInitialPrompt,
             initialAgentModel,
             initialReasoningEffort,
+            initialFastMode,
           }),
           environmentId,
         );
@@ -1263,6 +1274,7 @@ export function TerminalContainer({
             initialPrompt: pendingInitialPrompt,
             initialAgentModel,
             initialReasoningEffort,
+            initialFastMode,
           },
           environmentId,
         );
@@ -1276,6 +1288,7 @@ export function TerminalContainer({
     setupPhase,
     backendSetupRunning,
     claudeOptions,
+    tiers,
     initialize,
     addTab,
     environmentId,
@@ -1426,6 +1439,7 @@ export function TerminalContainer({
             initialPrompt: pending.initialPrompt,
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
+            initialFastMode: pending.fastMode,
           };
           addTab(targetPaneId, newTab, environmentId);
         } else if (isClaudeNative) {
@@ -1440,6 +1454,7 @@ export function TerminalContainer({
             initialPrompt: pending.initialPrompt,
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
+            initialFastMode: pending.fastMode,
           });
           addTab(targetPaneId, newTab, environmentId);
         } else {
@@ -1453,6 +1468,7 @@ export function TerminalContainer({
             initialPrompt: pending.initialPrompt,
             initialAgentModel: pending.model,
             initialReasoningEffort: pending.reasoningEffort,
+            initialFastMode: pending.fastMode,
           });
           addTab(targetPaneId, newTab, environmentId);
         }
@@ -1693,7 +1709,8 @@ export function TerminalContainer({
         options?.resumeSessionId ||
         options?.initialAgentModel ||
         options?.initialReasoningEffort ||
-        options?.initialConversationMode,
+        options?.initialConversationMode ||
+        options?.initialFastMode !== undefined,
       );
 
       // Check if we should create an opencode-native tab instead
@@ -1712,6 +1729,7 @@ export function TerminalContainer({
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
           initialConversationMode: options?.initialConversationMode,
+          initialFastMode: options?.initialFastMode,
         });
         rendererDebugLog(
           "[TerminalContainer] Creating opencode-native tab:",
@@ -1749,6 +1767,9 @@ export function TerminalContainer({
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
           initialConversationMode: options?.initialConversationMode,
+          initialFastMode: options?.resumeSessionId
+            ? undefined
+            : (options?.initialFastMode ?? claude.fastMode),
           sessionId: options?.resumeSessionId,
           requireExistingResumeSession: options?.requireExistingResumeSession,
           deferPlatform: !prelockNativePlatform,
@@ -1785,6 +1806,7 @@ export function TerminalContainer({
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
           initialConversationMode: options?.initialConversationMode,
+          initialFastMode: options?.initialFastMode,
         });
         rendererDebugLog(
           "[TerminalContainer] Creating codex-native tab:",
@@ -1817,6 +1839,7 @@ export function TerminalContainer({
           initialAgentModel: options?.initialAgentModel,
           initialReasoningEffort: options?.initialReasoningEffort,
           initialConversationMode: options?.initialConversationMode,
+          initialFastMode: options?.initialFastMode,
         });
         seedDeferredNativePlatform(newTab, provider);
         addTab(activePaneId, newTab, environmentId);
@@ -1856,6 +1879,7 @@ export function TerminalContainer({
       opencodeMode,
       claudeMode,
       claudeNativeBackend,
+      claude.fastMode,
       codexMode,
       piMode,
       isLocalEnvironmentReady,

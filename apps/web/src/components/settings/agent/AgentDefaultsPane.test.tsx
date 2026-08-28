@@ -24,10 +24,35 @@ mock.module("@/components/chat/AgentModelPicker", () => ({
       </button>
       <button
         type="button"
+        aria-label={`${props.id} choose Claude Slow`}
+        onClick={() =>
+          props.onModelSelect?.({ platform: "claude", id: "claude-slow", label: "Claude Slow" })
+        }
+      >
+        Choose Claude Slow
+      </button>
+      <button
+        type="button"
         aria-label={`${props.id} choose high reasoning`}
         onClick={() => props.onReasoningChange?.("high")}
       >
         Choose high reasoning
+      </button>
+      <span data-testid={`${props.id} speed-value`}>{String(props.fastModeEnabled)}</span>
+      <span data-testid={`${props.id} speed-inherit`}>{String(props.speedInherit?.selected)}</span>
+      <button
+        type="button"
+        aria-label={`${props.id} choose Fast`}
+        onClick={() => props.onFastModeChange?.(true)}
+      >
+        Choose Fast
+      </button>
+      <button
+        type="button"
+        aria-label={`${props.id} inherit speed`}
+        onClick={() => props.onFastModeInherit?.()}
+      >
+        Inherit speed
       </button>
     </div>
   ),
@@ -41,7 +66,15 @@ afterAll(() => {
 });
 
 const catalog: AgentModelCatalog = {
-  claude: [{ id: "claude-a", name: "Claude A", reasoningEfforts: ["low", "high"] }],
+  claude: [
+    {
+      id: "claude-a",
+      name: "Claude A",
+      reasoningEfforts: ["low", "high"],
+      supportsSpeed: true,
+    },
+    { id: "claude-slow", name: "Claude Slow", reasoningEfforts: [] },
+  ],
   codex: [{ id: "codex-a", name: "Codex A", reasoningEfforts: ["medium", "high"] }],
   opencode: [],
 };
@@ -116,5 +149,38 @@ describe("AgentDefaultsPane create-script defaults", () => {
       );
       view.unmount();
     }
+  });
+});
+
+describe("AgentDefaultsPane speed defaults", () => {
+  test("writes Fast and clears it back to provider default", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    expect(screen.getByTestId("agent-default-model speed-value").textContent).toBe("null");
+    expect(screen.getByTestId("agent-default-model speed-inherit").textContent).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "agent-default-model choose Fast" }));
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        platforms: expect.objectContaining({ claude: expect.objectContaining({ fastMode: true }) }),
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "agent-default-model inherit speed" }));
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
+  });
+
+  test("clears Fast when the selected model does not support speed", () => {
+    const onChange = mock((_tier: AgentSettingsTier) => undefined);
+    render(<SettingsHarness scope="global" onChange={onChange} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "agent-default-model choose Fast" }));
+    fireEvent.click(screen.getByRole("button", { name: "agent-default-model choose Claude Slow" }));
+
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude).toMatchObject({
+      model: "claude-slow",
+    });
+    expect(onChange.mock.calls.at(-1)?.[0].platforms?.claude?.fastMode).toBeUndefined();
   });
 });

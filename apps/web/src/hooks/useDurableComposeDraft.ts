@@ -83,11 +83,17 @@ export function useDurableComposeDraft<T>({
 
   const reportPersistenceError = useCallback(
     (error: unknown, draftKey: string): void => {
+      const discarding = clearedKeyRef.current === draftKey || isEmptyRef.current(valueRef.current);
       if (!(error instanceof DraftRevisionConflictError)) {
         console.warn(`[${namespace}] Failed to persist draft:`, error);
+        toast.error(discarding ? "Draft could not be cleared" : "Draft could not be saved", {
+          id: `compose-draft-persistence:${draftKey}`,
+          description: discarding
+            ? "The saved recovery draft could not be removed. It may reappear the next time you open this view."
+            : "Your input is still here, but it may be lost if you close or reload this view. Copy it somewhere safe or try editing again.",
+        });
         return;
       }
-      const discarding = clearedKeyRef.current === draftKey || isEmptyRef.current(valueRef.current);
       toast.error("Draft changed in another window", {
         id: `compose-draft-conflict:${draftKey}`,
         description: discarding

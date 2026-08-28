@@ -239,7 +239,7 @@ describe("kanbanStore project notes", () => {
     await useKanbanStore.getState().loadNotes("project-2");
 
     // The error is what keeps the editor disabled: an empty enabled editor
-    // autosaves its first keystroke over the project's real notes.
+    // saves its first keystroke over the project's real notes.
     expect(useKanbanStore.getState()).toMatchObject({
       notes: "",
       notesLoading: false,

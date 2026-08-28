@@ -10,6 +10,29 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `SkillsSettings > copies the selected path and reports clipboard failures` (`apps/web/src/components/settings/SkillsSettings.test.tsx:730`)
+
+- **Status:** open
+- **Date observed:** 2026-08-28
+- **Original command:** `bun run --cwd apps/web test`
+- **Worker configuration:** the web package ran `bun test src --parallel` with
+  Bun's default parallel worker pool.
+- **Failure:** the case was reported failed after 83.61 ms. The aggregate output
+  exceeded the capture budget before the assertion detail was retained.
+- **Suite counts:** 5,570 total, 5,568 passed, 1 skipped, 1 failed across 244
+  files in 23.95 s.
+- **Isolated rerun:** `bun --cwd=apps/web test
+  src/components/settings/SkillsSettings.test.tsx` -> 45 passed, 0 failed; the
+  target passed in 1,572.97 ms.
+- **Hypothesis:** the test waits for the component's real copy-confirmation
+  timeout to restore the button before exercising the rejection path. Its
+  aggregate-only failure and much longer successful isolated duration establish
+  timing sensitivity, but the missing assertion detail does not identify a
+  narrower cause. A recurrence should retain that assertion before changing the
+  timeout or expectation.
+- **Follow-up:** an immediate rerun of `bun run --cwd apps/web test` passed all
+  5,569 active tests with 1 skipped across the same 244 files in 23.54 s.
+
 ## `startup completes a persisted environment rename without renderer hydration` (`apps/backend/src/core/index.test.ts:1435`)
 
 - **Status:** resolved

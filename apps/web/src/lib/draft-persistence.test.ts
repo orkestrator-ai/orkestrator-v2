@@ -798,7 +798,11 @@ describe("useDurableComposeDraft", () => {
     // the only signal that the recovery record outlived the submit.
     expect((rejection as Error).message).toBe("delete failed");
     expect(warn).toHaveBeenCalled();
-    expect(toastError).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("Draft could not be cleared", {
+      id: "compose-draft-persistence:test:project-hook-discard-failure:value",
+      description:
+        "The saved recovery draft could not be removed. It may reappear the next time you open this view.",
+    });
     warn.mockRestore();
     unmount();
   });

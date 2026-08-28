@@ -1,11 +1,15 @@
 import { afterAll, afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import * as realBackend from "@/lib/backend";
+import { mockToastError } from "../../../../../tests/mocks/sonner";
 
 const realBackendSnapshot = { ...realBackend };
 const getProjectNotesMock = mock(async (_projectId: string) => ({ content: "saved notes" }));
 const saveProjectNotesMock = mock(async (_projectId: string, _content: string) => {});
-const getComposeDraftMock = mock(async () => null);
+const getComposeDraftMock = mock(
+  async (..._args: unknown[]): Promise<Awaited<ReturnType<typeof realBackend.getComposeDraft>>> =>
+    null,
+);
 const saveComposeDraftMock = mock(async (..._args: unknown[]) => undefined);
 const deleteComposeDraftMock = mock(async (..._args: unknown[]) => undefined);
 
@@ -37,9 +41,6 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-
-/** Matches the inactivity delay `handleChange` schedules its autosave with. */
-const AUTOSAVE_DELAY_MS = 1000;
 
 describe("ProjectNotesView", () => {
   beforeEach(() => {
@@ -85,6 +86,8 @@ describe("ProjectNotesView", () => {
       expect(saveProjectNotesMock).toHaveBeenCalledWith("project-1", "replacement"),
     );
     await waitFor(() => expect(deleteComposeDraftMock).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("Unsaved changes")).toBeNull());
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
   });
 
   test("does not erase text typed while an older save is in flight", async () => {
@@ -135,54 +138,60 @@ describe("ProjectNotesView", () => {
     await waitFor(() => expect(deleteComposeDraftMock).toHaveBeenCalledTimes(1));
   });
 
-  // The editor autosaves a second after the last keystroke. That path captures
-  // the edit revision when the timer is scheduled, so it is the one that decides
-  // whether the durable recovery record may be discarded.
-  test("autosaves after a pause and discards the recovery record", async () => {
+  test("does not schedule a project-notes autosave while typing", async () => {
     render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
+    const setTimeoutSpy = spyOn(globalThis, "setTimeout");
 
-    fireEvent.change(editor, { target: { value: "typed and left alone" } });
-    expect(saveProjectNotesMock).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
-    });
-
-    expect(saveProjectNotesMock).toHaveBeenCalledWith("project-1", "typed and left alone");
-    await waitFor(() => expect(deleteComposeDraftMock).toHaveBeenCalled());
-    expect(screen.queryByText("Unsaved changes") === null).toBe(true);
+    try {
+      fireEvent.change(editor, { target: { value: "first edit" } });
+      fireEvent.change(editor, { target: { value: "typed and left alone" } });
+      expect(saveProjectNotesMock).not.toHaveBeenCalled();
+      // Durable draft persistence still schedules its 400 ms debounce. The
+      // removed shared-note autosave used a separate 1000 ms timer.
+      expect(setTimeoutSpy.mock.calls.some((call) => call[1] === 1_000)).toBe(false);
+      expect(deleteComposeDraftMock).not.toHaveBeenCalled();
+      expect((editor as HTMLTextAreaElement).value).toBe("typed and left alone");
+      expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
-  test("keeps a newer keystroke recoverable when an autosave completes behind it", async () => {
-    const pendingSave = deferred<void>();
-    saveProjectNotesMock.mockImplementationOnce(() => pendingSave.promise);
+  test("restores an unsaved durable draft after remount", async () => {
+    const firstView = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    const firstEditor = await screen.findByPlaceholderText(/Write project notes here/);
+    await waitFor(() => expect((firstEditor as HTMLTextAreaElement).value).toBe("saved notes"));
+
+    fireEvent.change(firstEditor, { target: { value: "recovered after remount" } });
+    firstView.unmount();
+    await waitFor(() => expect(saveComposeDraftMock).toHaveBeenCalled());
+
+    getComposeDraftMock.mockResolvedValue({
+      draftKey: "project-notes:project-1:editor",
+      ownerType: "project",
+      ownerId: "project-1",
+      value: "recovered after remount",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+      revision: 1,
+    });
     render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
-    const editor = await screen.findByPlaceholderText(/Write project notes here/);
-    await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
+    const restoredEditor = await screen.findByPlaceholderText(/Write project notes here/);
 
-    fireEvent.change(editor, { target: { value: "autosaved edit" } });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
-    });
-    await waitFor(() => expect(saveProjectNotesMock).toHaveBeenCalledTimes(1));
-
-    fireEvent.change(editor, { target: { value: "typed while autosaving" } });
-    await act(async () => pendingSave.resolve());
-
-    // The revision captured when the timer was scheduled is older than the live
-    // editor, so the newer text stays in the durable draft.
-    expect(deleteComposeDraftMock).not.toHaveBeenCalled();
-    expect((editor as HTMLTextAreaElement).value).toBe("typed while autosaving");
+    await waitFor(() =>
+      expect((restoredEditor as HTMLTextAreaElement).value).toBe("recovered after remount"),
+    );
+    expect(screen.getByText("Unsaved changes")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(false);
   });
 
-  test("cancels a pending autosave on unmount but still flushes the durable draft", async () => {
+  test("flushes the durable draft on unmount without saving project notes", async () => {
     const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
     const editor = await screen.findByPlaceholderText(/Write project notes here/);
     await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
 
-    fireEvent.change(editor, { target: { value: "unmounted before the autosave" } });
+    fireEvent.change(editor, { target: { value: "unmounted before saving" } });
     view.unmount();
 
     await waitFor(() =>
@@ -190,14 +199,32 @@ describe("ProjectNotesView", () => {
         "project-notes:project-1:editor",
         "project",
         "project-1",
-        "unmounted before the autosave",
+        "unmounted before saving",
         0,
       ),
     );
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
-    });
     expect(saveProjectNotesMock).not.toHaveBeenCalled();
+  });
+
+  test("warns when an unsaved draft cannot be persisted on unmount", async () => {
+    const warning = spyOn(console, "warn").mockImplementation(() => undefined);
+    saveComposeDraftMock.mockRejectedValueOnce(new Error("draft storage unavailable"));
+    const view = render(<ProjectNotesView projectId="project-1" onBack={() => {}} />);
+    const editor = await screen.findByPlaceholderText(/Write project notes here/);
+    await waitFor(() => expect((editor as HTMLTextAreaElement).value).toBe("saved notes"));
+
+    fireEvent.change(editor, { target: { value: "not durably stored" } });
+    view.unmount();
+
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith("Draft could not be saved", {
+        id: "compose-draft-persistence:project-notes:project-1:editor",
+        description:
+          "Your input is still here, but it may be lost if you close or reload this view. Copy it somewhere safe or try editing again.",
+      }),
+    );
+    expect(saveProjectNotesMock).not.toHaveBeenCalled();
+    warning.mockRestore();
   });
 
   test("discards the draft of the project the save belonged to after a switch", async () => {
@@ -271,16 +298,13 @@ describe("ProjectNotesView", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("notes unavailable");
     const editor = screen.getByPlaceholderText(/Write project notes here/) as HTMLTextAreaElement;
-    // An enabled empty editor would autosave its first keystroke over the real
+    // An enabled empty editor could save its first keystroke over the real
     // backend notes, which the failed load never read.
     expect(editor.disabled).toBe(true);
     expect(editor.value).toBe("");
     expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
 
     fireEvent.change(editor, { target: { value: "x" } });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, AUTOSAVE_DELAY_MS + 100));
-    });
     expect(saveProjectNotesMock).not.toHaveBeenCalled();
     expect(saveComposeDraftMock).not.toHaveBeenCalled();
 

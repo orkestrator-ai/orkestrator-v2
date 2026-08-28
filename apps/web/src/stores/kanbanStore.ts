@@ -253,7 +253,7 @@ export const useKanbanStore = create<KanbanState>()((set, get) => ({
     } catch (error) {
       console.error("[KanbanStore] Failed to load notes:", error);
       // The empty notes above are not this project's content, so the editor has
-      // to stay disabled: a keystroke into it would autosave over the real
+      // to stay disabled: saving a keystroke into it could overwrite the real
       // backend notes.
       if (get().currentNotesProjectId === projectId) {
         set({

@@ -43,6 +43,10 @@ import {
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
 import { isEmptyAgentSettings, type AgentSettingsTier } from "@orkestrator/protocol/agent-settings";
+import {
+  DEFAULT_AGENT_MESSAGING_SETTINGS,
+  normalizeAgentMessagingSettings,
+} from "@orkestrator/protocol/agent-mail";
 import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import {
   DEFAULT_DEBUG_LOG_RETENTION_DAYS,
@@ -1538,6 +1542,12 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     global.codexMaxConcurrentThreads,
   );
   const debugLogRetentionDays = normalizeDebugLogRetentionDays(global.debugLogRetentionDays);
+  const agentMessaging = normalizeAgentMessagingSettings(
+    global.agentMessaging,
+    config.schemaVersion === 2
+      ? { ...DEFAULT_AGENT_MESSAGING_SETTINGS }
+      : { ...DEFAULT_AGENT_MESSAGING_SETTINGS, enabled: false },
+  );
   const hasExplicitGitHubCredentialSource = typeof global.useHostGitHubCredentials === "boolean";
   const hasLegacyGitHubToken =
     typeof global.githubToken === "string" && global.githubToken.trim().length > 0;
@@ -1632,13 +1642,16 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
     JSON.stringify(global.enabledAgentPlatforms) === JSON.stringify(enabledAgentPlatforms) &&
     JSON.stringify(global.favoriteModels ?? []) === JSON.stringify(favoriteModels) &&
     JSON.stringify(global.openCodeModelProviders) === JSON.stringify(openCodeModelProviders) &&
-    JSON.stringify(global.agentSettings) === JSON.stringify(agentSettings)
+    JSON.stringify(global.agentSettings) === JSON.stringify(agentSettings) &&
+    JSON.stringify(global.agentMessaging) === JSON.stringify(agentMessaging) &&
+    config.schemaVersion === 2
   ) {
     return reviewInstructionSanitized;
   }
 
   return {
     ...reviewInstructionSanitized,
+    schemaVersion: 2,
     repositories,
     global: {
       ...nextGlobal,
@@ -1648,6 +1661,7 @@ export function normalizePersistedConfig(config: AppConfig): AppConfig {
       enabledAgentPlatforms,
       favoriteModels,
       openCodeModelProviders,
+      agentMessaging,
     } as unknown as AppConfig["global"],
   };
 }
@@ -1729,6 +1743,7 @@ export function extractRepoName(gitUrl: string): string {
 
 export function defaultConfig(): AppConfig {
   return {
+    schemaVersion: 2,
     version: "1.0.0",
     global: {
       containerResources: { cpuCores: 2, memoryGb: 4 },
@@ -1738,6 +1753,7 @@ export function defaultConfig(): AppConfig {
       allowedDomains: [...DEFAULT_ALLOWED_DOMAINS],
       enabledAgentPlatforms: [...LEGACY_ENABLED_AGENT_PLATFORMS],
       favoriteModels: [],
+      agentMessaging: { ...DEFAULT_AGENT_MESSAGING_SETTINGS },
       agentSettings: {
         defaultAgent: "claude",
         platforms: {

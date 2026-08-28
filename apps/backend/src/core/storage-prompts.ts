@@ -164,6 +164,33 @@ export abstract class StoragePrompts extends StorageNative {
   }
 
   /**
+   * Run the irreversible tmux mail submission boundary only while the user
+   * prompt queue is authoritatively empty. Holding the prompt-queue mutation
+   * lock across the short terminal submission means a concurrent enqueue is
+   * ordered entirely before (and blocks mail) or entirely after it; it cannot
+   * land between a final read and the terminal side effect.
+   */
+  async withEmptyPromptQueueForMail<T>(
+    queueKey: string,
+    environmentId: string,
+    operation: () => Promise<T>,
+  ): Promise<{ empty: false } | { empty: true; value: T }> {
+    if (!isNonBlankString(queueKey)) throw new Error("Prompt queue key must not be blank");
+    if (!isNonBlankString(environmentId)) {
+      throw new Error("Prompt queue environment ID must not be blank");
+    }
+    assertPromptQueueKeyOwner(queueKey, environmentId);
+    return this.enqueuePromptQueueMutation(async () => {
+      await this.assertEnvironmentAcceptsBackgroundState(environmentId, "Agent mail");
+      const queue = (await this.loadPromptQueues())[queueKey];
+      if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
+        return { empty: false };
+      }
+      return { empty: true, value: await operation() };
+    });
+  }
+
+  /**
    * Replaces a tab's queue wholesale under a compare-and-swap revision.
    *
    * Whole-list writes rather than per-item operations because the contended

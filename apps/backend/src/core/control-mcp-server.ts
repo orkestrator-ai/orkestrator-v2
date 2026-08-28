@@ -461,7 +461,13 @@ function readAnnotations() {
   };
 }
 
-function createControlMcp(invoke: ControlMcpInvoker): McpServer {
+async function createControlMcp(invoke: ControlMcpInvoker): Promise<McpServer> {
+  const config = await invoke<unknown>("get_config");
+  const messagingEnabled =
+    isRecord(config) &&
+    isRecord(config.global) &&
+    isRecord(config.global.agentMessaging) &&
+    config.global.agentMessaging.enabled === true;
   const server = new McpServer(
     { name: "orkestrator-control", version: "1.0.0" },
     {
@@ -955,6 +961,62 @@ function createControlMcp(invoke: ControlMcpInvoker): McpServer {
       return toolResult({ environmentId, tabId, ...outcome });
     },
   );
+
+  if (messagingEnabled) {
+    server.registerTool(
+      "list_mailboxes",
+      {
+        title: "List agent mailboxes",
+        description:
+          "List durable agent-message destinations without transcript or filesystem content.",
+        inputSchema: z.object({
+          q: z.string().trim().max(200).optional(),
+          offset: z.number().int().min(0).default(0),
+          limit: z.number().int().min(1).max(200).default(100),
+        }),
+        annotations: readAnnotations(),
+      },
+      async ({ q, offset, limit }) => {
+        const page = await invoke<unknown>("list_agent_mailboxes", { q, offset, limit });
+        if (!isRecord(page)) throw new Error("Mailbox directory returned no result");
+        return toolResult(page);
+      },
+    );
+
+    server.registerTool(
+      "send_message",
+      {
+        title: "Send an external agent message",
+        description:
+          "Durably place text in one Orkestrator tab inbox. External messages are never auto-injected into an agent turn.",
+        inputSchema: z.object({
+          requestId: z.string().trim().min(1).max(256),
+          toEnvironmentId: z.string().trim().min(1).max(200),
+          toTabId: z.string().trim().min(1).max(200),
+          subject: z.string().trim().max(200).optional(),
+          body: z
+            .string()
+            .min(1)
+            .refine(
+              (value) => Buffer.byteLength(value, "utf8") <= 32 * 1024,
+              "body must be at most 32 KiB UTF-8",
+            ),
+        }),
+        annotations: {
+          readOnlyHint: false,
+          destructiveHint: true,
+          idempotentHint: true,
+          openWorldHint: false,
+        },
+      },
+      async (input) => {
+        const message = await invoke<unknown>("send_external_agent_mail", input);
+        if (!isRecord(message)) throw new Error("Message send returned no result");
+        const { body: _body, ...summary } = message;
+        return toolResult({ message: summary });
+      },
+    );
+  }
 
   return server;
 }

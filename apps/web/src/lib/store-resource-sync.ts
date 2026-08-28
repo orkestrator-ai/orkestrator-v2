@@ -1,4 +1,10 @@
-import { getConfig, getEnvironmentSnapshots, getPaneLayout, getProjects } from "@/lib/backend";
+import {
+  getAgentMailSummary,
+  getConfig,
+  getEnvironmentSnapshots,
+  getPaneLayout,
+  getProjects,
+} from "@/lib/backend";
 import {
   onResourceChanged,
   onResourceResync,
@@ -37,6 +43,7 @@ import {
   useProjectStore,
 } from "@/stores/projectStore";
 import { useSessionStore } from "@/stores/sessionStore";
+import { useAgentMailStore } from "@/stores/agentMailStore";
 import type { ResourceManifestKind } from "@orkestrator/protocol/resource-events";
 
 /**
@@ -56,6 +63,7 @@ interface StoreResourceSyncOptions {
   getProjects?: typeof getProjects;
   getEnvironmentSnapshots?: typeof getEnvironmentSnapshots;
   getPaneLayout?: typeof getPaneLayout;
+  getAgentMailSummary?: typeof getAgentMailSummary;
   adoptPaneLayout?: typeof adoptPersistedPaneLayout;
   onPaneLayoutWriteSettled?: typeof onPaneLayoutWriteSettled;
   listen?: typeof listen;
@@ -89,11 +97,27 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
       const config = await (options.getConfig ?? getConfig)();
       if (!disposed && generation === configRequestGeneration) {
         useConfigStore.getState().setConfig(config);
+        const messagingEnabled = (config as { global?: { agentMessaging?: { enabled?: boolean } } })
+          ?.global?.agentMessaging?.enabled;
+        if (messagingEnabled === false) {
+          useAgentMailStore.getState().clear();
+        }
       }
     } catch (error) {
       console.warn("[store-resource-sync] Failed to refresh config:", error);
       throw error;
     }
+  };
+
+  const refreshAgentMailSummary = async (): Promise<void> => {
+    const enabled = useConfigStore.getState().config?.global?.agentMessaging?.enabled;
+    if (enabled === false) {
+      useAgentMailStore.getState().clear();
+      return;
+    }
+    if (enabled !== true) return;
+    const snapshot = await (options.getAgentMailSummary ?? getAgentMailSummary)();
+    if (!disposed) useAgentMailStore.getState().setSummary(snapshot);
   };
 
   const refreshBuildPipelinesForProject = async (projectId: string): Promise<void> => {
@@ -358,6 +382,7 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
     const kanban = useKanbanStore.getState();
     const featurePlan = useFeaturePlanStore.getState();
     if (includes("config")) tasks.push(refreshConfig());
+    if (includes("agent-mail-summary")) tasks.push(refreshAgentMailSummary());
 
     for (const { id: environmentId } of environments) {
       if (includes("prompt-queue")) {
@@ -432,6 +457,27 @@ export function startStoreResourceSync(options: StoreResourceSyncOptions = {}): 
   };
 
   unsubscribes.push(onResourceResync(requestStoreResync));
+
+  unsubscribes.push(
+    onResourceChanged("agent-mail-summary", () => {
+      void refreshAgentMailSummary().catch((error) => {
+        console.warn("[store-resource-sync] Failed to refresh agent mail summary:", error);
+      });
+    }),
+  );
+
+  unsubscribes.push(
+    onResourceChanged("agent-mail", ({ id: mailboxId }) => {
+      const existing = useAgentMailStore.getState().mailboxes.get(mailboxId);
+      if (!existing) return;
+      void useAgentMailStore
+        .getState()
+        .refreshMailbox(existing.descriptor.environmentId, existing.descriptor.tabId)
+        .catch((error) => {
+          console.warn("[store-resource-sync] Failed to refresh agent mailbox:", error);
+        });
+    }),
+  );
 
   unsubscribes.push(
     onResourceChanged("prompt-queue", ({ id: environmentId }) => {

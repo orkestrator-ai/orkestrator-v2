@@ -297,6 +297,7 @@ export class TmuxSession {
               environment.id,
               environment.projectId,
               agentToolConnectionTarget(this.backend.kind),
+              this.tabId,
             );
             agentMcpConfigPath = `${this.workspaceHookPaths.root}/agent-mcp.json`;
             await this.backend.writePrivateFile(agentMcpConfigPath, agentMcpConfigJson(connection));

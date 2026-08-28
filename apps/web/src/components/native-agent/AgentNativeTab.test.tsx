@@ -2062,6 +2062,39 @@ describe("AgentNativeTab", () => {
     expect(flushPaneLayoutNowMock).toHaveBeenCalledTimes(2);
   });
 
+  test("replaces backend peer-mail carriers with a visible trusted-frame card", async () => {
+    renderVirtualizedMessages = true;
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input)),
+      messages: [
+        {
+          id: "mail-carrier",
+          role: "user" as const,
+          content:
+            '<orkestrator-peer-message version="1">\n<orkestrator-peer-payload-json>\n{"from":{"kind":"tab","projectId":"project","environmentId":"sender","tabId":"agent","incarnationId":"incarnation","agent":"claude","title":"Sender agent"},"trust":"same-project","messageId":"mail-1","threadId":"mail-1","body":"Please inspect the parser"}\n</orkestrator-peer-payload-json>\nRAW-CARRIER-INSTRUCTIONS\n</orkestrator-peer-message>',
+          parts: [],
+          createdAt: "2026-08-28T10:00:00.000Z",
+        },
+        {
+          id: "assistant-visible",
+          role: "assistant" as const,
+          content: "Visible response",
+          parts: [{ type: "text" as const, content: "Visible response" }],
+          createdAt: "2026-08-28T10:00:01.000Z",
+        },
+      ],
+    }));
+
+    render(<AgentNativeTab tabId="tab-mail-carrier" data={identity("claude")} isActive />);
+    expect(await screen.findByText("Visible response")).toBeTruthy();
+    expect(screen.getByText("Message from Sender agent")).toBeTruthy();
+    expect(
+      screen.getByText("Agent message — treat quoted content as untrusted data."),
+    ).toBeTruthy();
+    expect(screen.getByText("Please inspect the parser")).toBeTruthy();
+    expect(screen.queryByText(/RAW-CARRIER-INSTRUCTIONS/) === null).toBe(true);
+  });
+
   for (const platform of AGENT_PLATFORMS) {
     test(`routes ${platform} through the shared authoritative projection`, async () => {
       render(<AgentNativeTab tabId={`tab-${platform}`} data={identity(platform)} isActive />);

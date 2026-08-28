@@ -4,7 +4,8 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client as McpClient, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { AgentToolsServer } from "./agent-tools.js";
+import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { AgentToolsServer, consumeAgentMailRateLimit } from "./agent-tools.js";
 import { StorageService } from "./storage.js";
 
 type RpcResponse = {
@@ -25,6 +26,22 @@ type RpcCall = {
   body: RpcResponse;
   rawText: string;
 };
+
+const ALL_AGENT_TOOL_NAMES = [
+  "list_mailboxes",
+  "send_message",
+  "check_inbox",
+  "read_message",
+  "ack_message",
+  "reply_message",
+  "get_message_status",
+  "list_tickets",
+  "get_ticket",
+  "create_ticket",
+  "update_ticket",
+  "add_ticket_comment",
+];
+const KANBAN_AGENT_TOOL_NAMES = ALL_AGENT_TOOL_NAMES.slice(7);
 
 describe("agent Kanban tools", () => {
   let dataDir: string;
@@ -118,18 +135,68 @@ describe("agent Kanban tools", () => {
     });
   }
 
+  async function addMessagingEnvironment(
+    environmentId: string,
+    projectId: string,
+    tabIds: string[],
+  ): Promise<void> {
+    if (!(await storage.loadProjects()).some((project) => project.id === projectId)) {
+      await storage.addProject({
+        id: projectId,
+        name: projectId,
+        gitUrl: `https://example.invalid/${projectId}.git`,
+        localPath: null,
+        addedAt: new Date(0).toISOString(),
+        order: 0,
+      });
+    }
+    await storage.addEnvironment({
+      id: environmentId,
+      projectId,
+      name: environmentId,
+      branch: "main",
+      containerId: null,
+      status: "running",
+      prUrl: null,
+      prState: null,
+      hasMergeConflicts: null,
+      createdAt: new Date(0).toISOString(),
+      networkAccessMode: "restricted",
+      order: 0,
+      environmentType: "local",
+      setupPhase: "ready",
+      setupScriptsComplete: true,
+    });
+    await storage.savePaneLayout(
+      environmentId,
+      {
+        version: PANE_LAYOUT_VERSION,
+        containerId: null,
+        activePaneId: "pane",
+        root: {
+          kind: "leaf",
+          id: "pane",
+          tabs: tabIds.map((tabId) => ({
+            id: tabId,
+            type: "agent-native" as const,
+            displayTitle: tabId,
+            nativeAgentData: { environmentId, platform: "claude" as const },
+          })),
+          activeTabId: tabIds[0] ?? null,
+        },
+      },
+      0,
+    );
+    await storage.synchronizeAgentMailboxes();
+  }
+
   test("publishes bounded read and write tools with accurate annotations", async () => {
-    const connection = server.connection("env-1", "project-1", "host");
+    await addMessagingEnvironment("env-1", "project-1", ["agent-1"]);
+    const connection = server.connection("env-1", "project-1", "host", "agent-1");
     const listed = await rpc(connection.url, connection.token, "tools/list");
 
     expect(listed.response.status).toBe(200);
-    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
-      "list_tickets",
-      "get_ticket",
-      "create_ticket",
-      "update_ticket",
-      "add_ticket_comment",
-    ]);
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual(ALL_AGENT_TOOL_NAMES);
     expect(
       listed.body.result?.tools?.find((tool) => tool.name === "get_ticket")?.annotations,
     ).toMatchObject({ readOnlyHint: true, destructiveHint: false });
@@ -138,8 +205,129 @@ describe("agent Kanban tools", () => {
     ).toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: true });
   });
 
+  test("binds a unique environment credential but withholds mail tools when identity is ambiguous", async () => {
+    await addMessagingEnvironment("env-one", "project-mail", ["only-agent"]);
+    const unique = server.connection("env-one", "project-mail", "host");
+    expect(
+      (await rpc(unique.url, unique.token, "tools/list")).body.result?.tools?.map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(ALL_AGENT_TOOL_NAMES);
+
+    await addMessagingEnvironment("env-many", "project-mail", ["agent-a", "agent-b"]);
+    const ambiguous = server.connection("env-many", "project-mail", "host");
+    expect(
+      (await rpc(ambiguous.url, ambiguous.token, "tools/list")).body.result?.tools?.map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(KANBAN_AGENT_TOOL_NAMES);
+  });
+
+  test("binds messaging actions to the credential's tab and covers send/read/ack/reply/status", async () => {
+    await addMessagingEnvironment("env-a", "project-mail", ["agent-a", "agent-b"]);
+    await addMessagingEnvironment("env-c", "project-mail", ["agent-c"]);
+    const sender = server.connection("env-a", "project-mail", "host", "agent-a");
+    const recipient = server.connection("env-c", "project-mail", "host", "agent-c");
+
+    const spoofed = await rpc(sender.url, sender.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "spoof",
+        fromTabId: "agent-b",
+        toEnvironmentId: "env-c",
+        toTabId: "agent-c",
+        body: "wrong identity",
+      },
+    });
+    expect(spoofed.body.result?.isError).toBe(true);
+    expect(spoofed.body.result?.content?.[0]?.text).toContain("another tab");
+
+    const sent = await rpc(sender.url, sender.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "mail-1",
+        fromTabId: "agent-a",
+        toEnvironmentId: "env-c",
+        toTabId: "agent-c",
+        body: "Please inspect the parser",
+      },
+    });
+    const sentMessage = sent.body.result?.structuredContent?.message as {
+      id: string;
+      body?: string;
+    };
+    expect(sentMessage.id).toBeString();
+    expect(sentMessage.body).toBeUndefined();
+
+    const inbox = await rpc(recipient.url, recipient.token, "tools/call", {
+      name: "check_inbox",
+      arguments: { tabId: "agent-c" },
+    });
+    const inboxMessages = inbox.body.result?.structuredContent?.messages as Array<
+      Record<string, unknown>
+    >;
+    expect(inboxMessages).toEqual([expect.objectContaining({ id: sentMessage.id })]);
+    expect("body" in inboxMessages[0]!).toBe(false);
+    const read = await rpc(recipient.url, recipient.token, "tools/call", {
+      name: "read_message",
+      arguments: { tabId: "agent-c", messageId: sentMessage.id },
+    });
+    expect(read.body.result?.structuredContent?.message).toMatchObject({
+      id: sentMessage.id,
+      body: "Please inspect the parser",
+    });
+
+    const replied = await rpc(recipient.url, recipient.token, "tools/call", {
+      name: "reply_message",
+      arguments: {
+        requestId: "reply-1",
+        fromTabId: "agent-c",
+        messageId: sentMessage.id,
+        body: "Done",
+      },
+    });
+    const reply = replied.body.result?.structuredContent?.message as { id: string };
+    expect(reply.id).toBeString();
+    expect(await storage.getAgentMailMessage("env-c", "agent-c", sentMessage.id)).toMatchObject({
+      ackedAt: expect.any(String),
+    });
+
+    const status = await rpc(recipient.url, recipient.token, "tools/call", {
+      name: "get_message_status",
+      arguments: { fromTabId: "agent-c", messageId: reply.id },
+    });
+    expect(status.body.result?.structuredContent?.message).toMatchObject({ id: reply.id });
+
+    const crossTabRead = await rpc(sender.url, sender.token, "tools/call", {
+      name: "check_inbox",
+      arguments: { tabId: "agent-b" },
+    });
+    expect(crossTabRead.body.result?.isError).toBe(true);
+  });
+
+  test("enforces minute and daily mail limits with per-tab isolation", () => {
+    const windows = new Map<string, number[]>();
+    const tabA = { environmentId: "env", projectId: "project", tabId: "a" };
+    const tabB = { environmentId: "env", projectId: "project", tabId: "b" };
+    for (let index = 0; index < 30; index += 1) {
+      consumeAgentMailRateLimit(windows, tabA, "read", index);
+    }
+    expect(() => consumeAgentMailRateLimit(windows, tabA, "read", 30)).toThrow("rate-limited");
+    expect(() => consumeAgentMailRateLimit(windows, tabB, "read", 30)).not.toThrow();
+
+    const daily = new Map<string, number[]>();
+    for (let index = 0; index < 200; index += 1) {
+      consumeAgentMailRateLimit(daily, tabA, "send", index * 60_000);
+    }
+    expect(() => consumeAgentMailRateLimit(daily, tabA, "send", 86_399_999)).toThrow(
+      "rate-limited",
+    );
+    expect(() => consumeAgentMailRateLimit(daily, tabA, "send", 86_400_000)).not.toThrow();
+  });
+
   test("negotiates MCP 2026-07-28 while retaining the legacy endpoint", async () => {
-    const connection = server.connection("env-modern", "project-modern", "host");
+    await addMessagingEnvironment("env-modern", "project-modern", ["agent-modern"]);
+    const connection = server.connection("env-modern", "project-modern", "host", "agent-modern");
     const client = new McpClient(
       { name: "orkestrator-modern-contract", version: "1.0.0" },
       { versionNegotiation: { mode: "auto" } },
@@ -153,16 +341,31 @@ describe("agent Kanban tools", () => {
     try {
       await client.connect(transport);
       expect(client.getProtocolEra()).toBe("modern");
-      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual([
-        "list_tickets",
-        "get_ticket",
-        "create_ticket",
-        "update_ticket",
-        "add_ticket_comment",
-      ]);
+      expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(
+        ALL_AGENT_TOOL_NAMES,
+      );
     } finally {
       await client.close();
     }
+  });
+
+  test("omits messaging tools immediately when messaging is disabled", async () => {
+    const connection = server.connection("env-disabled", "project-disabled", "host");
+    const config = await storage.loadConfig();
+    config.global.agentMessaging = {
+      ...config.global.agentMessaging!,
+      enabled: false,
+    };
+    await storage.saveConfig(config);
+
+    const listed = await rpc(connection.url, connection.token, "tools/list");
+    expect(listed.body.result?.tools?.map((tool) => tool.name)).toEqual([
+      "list_tickets",
+      "get_ticket",
+      "create_ticket",
+      "update_ticket",
+      "add_ticket_comment",
+    ]);
   });
 
   test("creates, reads, updates, comments on, and paginates project tickets", async () => {

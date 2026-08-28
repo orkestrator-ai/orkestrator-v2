@@ -321,7 +321,7 @@ history rather than two partial ones.
 
 ## `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:1704`)
 
-- **Status:** resolved — see the 2026-08-27 resolution sweep below
+- **Status:** open — recurred after the 2026-08-27 resolution sweep
 - **Date observed:** 2026-08-17
 - **Original command:** `bun run test` (complete concurrent cross-platform suite)
 - **Worker configuration:** `scripts/test-all.ts` ran the workspace, root/agent-support, bridges, and protocol-lockfile groups concurrently; the failure was inside `@orkestrator/web:test:workspace`, 5,095 tests across 222 files in 118.5 s.
@@ -395,7 +395,58 @@ history rather than two partial ones.
   not touch ActionBar or its shortcut handler. Evidence:
   `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
   `/var/folders/.../orkestrator-test-run.CkFtcL`.
+- **Recurrence (agent messaging implementation, 2026-08-28):** `bun run test`
+  failed `ActionBar keyboard shortcuts and tab guards > dispatches tab,
+  workflow, editor, and panel shortcuts` at `ActionBar.test.tsx:5452` after
+  14.06 ms. The expected `createTabMock("plain", { initialCommands: ["bun
+  test"] })` call was absent while the mock contained the preceding plain,
+  native-agent, and Codex review-tab calls. The web workspace group reported
+  5,561 passed, 1 skipped, and 1 failed across 243 files in 66.17 s; the
+  backend workspace and the root, bridge, and protocol-lockfile groups passed.
+  The immediate isolated rerun, `bun test
+  src/components/layout/ActionBar.test.tsx --only-failures` from `apps/web`,
+  passed all 198 tests with 770 assertions in 14.81 s. The implementation does
+  not touch ActionBar or its shortcut handler. Evidence:
+  `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
+  `/var/folders/.../orkestrator-test-run.qqfO2R`.
+- **Recurrence (agent messaging review fixes, 2026-08-28):** `bun run test`
+  failed the same keyboard-shortcut case at `ActionBar.test.tsx:5452` after
+  24.89 ms. The expected `createTabMock("plain", { initialCommands: ["bun
+  test"] })` call was absent while the mock contained the preceding plain,
+  native-agent, and Codex review-tab calls. The web workspace group reported
+  5,572 passed, 1 skipped, and 1 failed across 245 files in 65.61 seconds; the
+  backend workspace and the root, bridge, and protocol-lockfile groups passed.
+  The immediate isolated rerun, `bun test
+  src/components/layout/ActionBar.test.tsx` from `apps/web`, passed all 198
+  tests with 772 assertions in 14.27 seconds. The review fixes do not touch
+  ActionBar or its shortcut handler. Evidence:
+  `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
+  `/var/folders/.../orkestrator-test-run.KTh5f2`.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
+
+## `ACP bridge > drops malformed persisted tool parts on load` (`bridges/acp-bridge/src/acp-persistence.test.ts:419`)
+
+- **Status:** open
+- **Date observed:** 2026-08-28
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran the workspace,
+  root/agent-support, bridges, and protocol-lockfile groups concurrently; the
+  bridge group used two Bun workers.
+- **Failure:** bridge startup timed out after 15 seconds in
+  `acp-test-harness.ts:200` with `Timed out waiting for ACP state: false` while
+  the case restarted the bridge at `acp-persistence.test.ts:474` (duration:
+  15,004 ms).
+- **Suite counts:** bridge group — 3,151 passed, 11 skipped, and 1 failed across
+  118 files in 66.64 seconds. The workspace, root/agent-support, and
+  protocol-lockfile groups passed.
+- **Isolated rerun:** `bun test src/acp-persistence.test.ts` from
+  `bridges/acp-bridge` passed all 12 tests with 61 assertions in 1.02 seconds;
+  the target passed in 28.94 ms.
+- **Hypothesis:** This has the same aggregate-only bridge-startup signature as
+  the existing ACP readiness family: the persisted-state assertion did not
+  fail, because the replacement bridge never became healthy within the harness
+  deadline. A recurrence should capture child startup and shutdown timing before
+  changing either the malformed-part expectations or the readiness budget.
 
 ## `Electron backend command registry > treats empty, null, and non-boolean draft output as non-draft` (`tests/unit/electron/commands-registry-pr.test.ts:650`)
 

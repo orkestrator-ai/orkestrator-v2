@@ -7,6 +7,7 @@ import { DEFAULT_CLAUDE_MODE } from "@orkestrator/protocol/startup-launch";
 import { DEFAULT_DEBUG_LOG_RETENTION_DAYS } from "@orkestrator/protocol/debug-logging";
 
 const DEFAULT_CONFIG: AppConfig = {
+  schemaVersion: 2,
   version: "1.0",
   global: {
     containerResources: {
@@ -16,6 +17,13 @@ const DEFAULT_CONFIG: AppConfig = {
     envFilePatterns: [".env.local", ".env"],
     useHostGitHubCredentials: true,
     useHostClaudeCredentials: true,
+    agentMessaging: {
+      enabled: true,
+      allowCrossProject: false,
+      defaultInjectPolicy: "off",
+      retentionDays: 14,
+      paused: false,
+    },
     allowedDomains: [
       // Package registries and runtimes
       "registry.npmjs.org",

@@ -9,6 +9,7 @@
     "./agent-platforms": "./src/agent-platforms.ts",
     "./agent-settings": "./src/agent-settings.ts",
     "./agent-interactions": "./src/agent-interactions.ts",
+    "./agent-mail": "./src/agent-mail.ts",
     "./agent-slash-commands": "./src/agent-slash-commands.ts",
     "./browser-preview": "./src/browser-preview.ts",
     "./bridge-readiness": "./src/bridge-readiness.ts",

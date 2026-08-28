@@ -31,6 +31,7 @@ export type CommandContext = {
       environmentId: string,
       projectId: string,
       target: "host" | "container",
+      tabId?: string,
     ): AgentToolConnection;
     revokeEnvironment(environmentId: string): void;
   };

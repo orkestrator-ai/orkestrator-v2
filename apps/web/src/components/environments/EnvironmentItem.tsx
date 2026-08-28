@@ -54,6 +54,8 @@ import {
 import { toast } from "sonner";
 import type { AgentActivityState, Environment } from "@/types";
 import { useEnvironmentStore, useEnvironmentDiffStore, useBuildPipelineStore } from "@/stores";
+import { useAgentMailStore } from "@/stores/agentMailStore";
+import { useConfigStore } from "@/stores/configStore";
 import { parseUsableAgentActivityTime, useAgentActivityStore } from "@/stores/agentActivityStore";
 import { cn } from "@/lib/utils";
 import * as backend from "@/lib/backend";
@@ -227,6 +229,17 @@ export const EnvironmentItem = memo(function EnvironmentItem({
   );
   // Backend-owned, so the badge agrees across every connected client.
   const hasUnreadActivity = environment.hasUnreadWork === true;
+  const messagingEnabled = useConfigStore(
+    (state) => state.config.global.agentMessaging?.enabled === true,
+  );
+  const unreadMail = useAgentMailStore((state) => {
+    if (!messagingEnabled) return 0;
+    let count = 0;
+    for (const mailbox of state.summary.values()) {
+      if (mailbox.environmentId === environment.id) count += mailbox.unreadCount;
+    }
+    return count;
+  });
 
   const isLocalEnvironment = environment.environmentType === "local";
   // Local environments are always considered "running" - they exist or they don't
@@ -479,6 +492,14 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                       className="h-3 w-3 shrink-0 fill-amber-400/20 text-amber-400"
                       aria-label="New completed activity"
                     />
+                  )}
+                  {unreadMail > 0 && (
+                    <span
+                      className="min-w-4 rounded-full bg-cyan-400/90 px-1 text-center font-mono text-[9px] leading-4 text-zinc-950"
+                      aria-label={`${unreadMail} unread agent messages`}
+                    >
+                      {unreadMail > 99 ? "99+" : unreadMail}
+                    </span>
                   )}
                 </span>
                 {subtitle && (

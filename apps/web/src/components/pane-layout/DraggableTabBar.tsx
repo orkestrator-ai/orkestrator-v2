@@ -358,6 +358,7 @@ export function DraggableTabBar({
               <DraggableTab
                 key={tab.id}
                 tab={tab}
+                environmentId={environmentId}
                 paneId={pane.id}
                 index={index}
                 isActive={isActive}

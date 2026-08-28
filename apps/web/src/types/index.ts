@@ -521,6 +521,7 @@ export interface GlobalConfig {
   agentSettings?: AgentSettingsTier;
   /** Editable preference embedded inside Orkestrator's fixed review contract. */
   reviewInstruction?: string;
+  agentMessaging?: import("@orkestrator/protocol/agent-mail").AgentMessagingSettings;
 }
 
 export type { GatewayTokenSettings, WebClientStatus } from "./webClient.js";
@@ -562,6 +563,7 @@ export interface LastEnvironmentAgentSelection {
 }
 
 export interface AppConfig {
+  schemaVersion?: number;
   version: string;
   desktopConnections?: import("@orkestrator/protocol/connections").StoredDesktopConnections;
   global: GlobalConfig;

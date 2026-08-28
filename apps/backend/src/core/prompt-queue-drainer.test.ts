@@ -25,6 +25,7 @@ interface Harness {
   tmux: { running: boolean; busy: boolean } | null;
   fail: { start?: string; submit?: string };
   onStatus?: () => Promise<void>;
+  onSubmit?: () => Promise<void>;
   queue(): Promise<Awaited<ReturnType<StorageService["getPromptQueue"]>>>;
   dispose(): Promise<void>;
 }
@@ -81,6 +82,7 @@ async function harness(
         return context.tmux as T;
       }
       if (command === "claude_tmux_submit_queued") {
+        await context.onSubmit?.();
         if (context.fail.submit) throw new Error(context.fail.submit);
         return undefined as T;
       }
@@ -116,6 +118,69 @@ async function enqueue(
 }
 
 describe("PromptQueueDrainer", () => {
+  test("holds mail instead of starting a stopped tmux session", async () => {
+    const context = await harness();
+    try {
+      context.tmux = null;
+      expect(
+        await context.drainer.dispatchMailInject({
+          environmentId: ENVIRONMENT_ID,
+          tabId: TAB_ID,
+          text: "Peer mail",
+        }),
+      ).toEqual({ outcome: "held", reason: "busy" });
+      expect(context.calls.some((call) => call.command === "claude_tmux_start")).toBe(false);
+      expect(context.submits()).toHaveLength(0);
+    } finally {
+      await context.dispose();
+    }
+  });
+
+  test("serializes mail submission with a concurrent user queue append", async () => {
+    const context = await harness();
+    try {
+      let releaseSubmit!: () => void;
+      let submitStarted!: () => void;
+      const submitted = new Promise<void>((resolve) => {
+        submitStarted = resolve;
+      });
+      const blocked = new Promise<void>((resolve) => {
+        releaseSubmit = resolve;
+      });
+      context.onSubmit = async () => {
+        submitStarted();
+        await blocked;
+      };
+
+      const mail = context.drainer.dispatchMailInject({
+        environmentId: ENVIRONMENT_ID,
+        tabId: TAB_ID,
+        text: "Peer mail",
+      });
+      await submitted;
+      let enqueueSettled = false;
+      const user = context.storage
+        .enqueuePromptQueueMessage(QUEUE_KEY, ENVIRONMENT_ID, {
+          id: "user-prompt",
+          text: "User work",
+          attachments: [],
+        })
+        .finally(() => {
+          enqueueSettled = true;
+        });
+      await Promise.resolve();
+      expect(enqueueSettled).toBe(false);
+      releaseSubmit();
+      expect(await mail).toEqual({ outcome: "accepted" });
+      await user;
+      expect((await context.queue())?.messages).toEqual([
+        expect.objectContaining({ id: "user-prompt" }),
+      ]);
+    } finally {
+      await context.dispose();
+    }
+  });
+
   test("types a queued prompt into the pane and acknowledges the claim", async () => {
     const context = await harness();
     try {

@@ -47,4 +47,5 @@ export type {
 } from "./buildPipelineStore";
 export type { PrMonitorEnvironmentState } from "./prMonitorStore";
 export { useEnvironmentDiffStore } from "./environmentDiffStore";
+export { useAgentMailStore } from "./agentMailStore";
 export type { EnvironmentDiffStats } from "./environmentDiffStore";

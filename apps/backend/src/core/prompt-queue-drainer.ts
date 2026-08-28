@@ -1,5 +1,6 @@
 import {
   buildTmuxPromptWithAttachments,
+  createClaudeTmuxStateKey,
   parseClaudeTmuxStateKey,
   parseTmuxPromptAttachments,
 } from "@orkestrator/protocol/tmux-prompt";
@@ -114,6 +115,72 @@ export class PromptQueueDrainer {
     });
     this.sweep = sweep;
     return sweep;
+  }
+
+  async dispatchMailInject(input: {
+    environmentId: string;
+    tabId: string;
+    text: string;
+  }): Promise<
+    | { outcome: "accepted" }
+    | { outcome: "held"; reason: "queue" | "draft" | "busy" | "environment-unready" }
+    | { outcome: "unknown" }
+  > {
+    const stateKey = createClaudeTmuxStateKey(input.environmentId, input.tabId);
+    const queueKey = `${TMUX_AGENT}\0${stateKey}`;
+    const draftKey = `${TMUX_AGENT}:${input.environmentId}:${encodeURIComponent(stateKey)}`;
+    const [environment, queue, draft] = await Promise.all([
+      this.storage.getEnvironment(input.environmentId),
+      this.storage.getPromptQueue(queueKey),
+      this.storage.getComposeDraft(draftKey),
+    ]);
+    if (
+      !environment ||
+      environment.deletionRequestedAt ||
+      !isEnvironmentReadyForAgents(environment)
+    ) {
+      return { outcome: "held", reason: "environment-unready" };
+    }
+    if (queue && (queue.inFlight !== undefined || queue.messages.length > 0)) {
+      return { outcome: "held", reason: "queue" };
+    }
+    if (this.composeDraftHoldsQueue(draft?.value)) return { outcome: "held", reason: "draft" };
+    const status = await this.invoke<TmuxStatusSnapshot | null>("claude_tmux_status", {
+      environmentId: input.environmentId,
+      tabId: input.tabId,
+    });
+    // Mail is not user work and must never resurrect a stopped session.
+    if (!status?.running || status.busy === true) return { outcome: "held", reason: "busy" };
+    const [latestQueue, latestDraft] = await Promise.all([
+      this.storage.getPromptQueue(queueKey),
+      this.storage.getComposeDraft(draftKey),
+    ]);
+    if (latestQueue && (latestQueue.inFlight !== undefined || latestQueue.messages.length > 0)) {
+      return { outcome: "held", reason: "queue" };
+    }
+    if (this.composeDraftHoldsQueue(latestDraft?.value))
+      return { outcome: "held", reason: "draft" };
+    const boundary = await this.storage.withEmptyPromptQueueForMail(
+      queueKey,
+      input.environmentId,
+      async () => {
+        const finalDraft = await this.storage.getComposeDraft(draftKey);
+        if (this.composeDraftHoldsQueue(finalDraft?.value)) {
+          return { outcome: "held", reason: "draft" } as const;
+        }
+        try {
+          await this.invoke("claude_tmux_submit_queued", {
+            environmentId: input.environmentId,
+            tabId: input.tabId,
+            text: input.text,
+          });
+          return { outcome: "accepted" } as const;
+        } catch {
+          return { outcome: "unknown" } as const;
+        }
+      },
+    );
+    return boundary.empty ? boundary.value : { outcome: "held", reason: "queue" };
   }
 
   private async runSweep(): Promise<void> {

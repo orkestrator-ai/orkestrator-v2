@@ -26,6 +26,8 @@ import { FolderGit2, Trash2, ChevronRight, Plus, Settings2, LayoutGrid } from "l
 import type { Project, Environment } from "@/types";
 import { cn } from "@/lib/utils";
 import { SortableEnvironmentItem } from "./SortableEnvironmentItem";
+import { useAgentMailStore } from "@/stores/agentMailStore";
+import { useConfigStore } from "@/stores/configStore";
 
 interface SortableProjectGroupProps {
   project: Project;
@@ -106,6 +108,17 @@ export function SortableProjectGroup({
 
   // Count running environments
   const runningCount = environments.filter((e) => e.status === "running").length;
+  const messagingEnabled = useConfigStore(
+    (state) => state.config.global.agentMessaging?.enabled === true,
+  );
+  const unreadMail = useAgentMailStore((state) => {
+    if (!messagingEnabled) return 0;
+    let count = 0;
+    for (const mailbox of state.summary.values()) {
+      if (mailbox.projectId === project.id) count += mailbox.unreadCount;
+    }
+    return count;
+  });
 
   return (
     <>
@@ -148,6 +161,14 @@ export function SortableProjectGroup({
                   {environments.length > 0 && (
                     <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-zinc-800 px-1 text-[10px] text-zinc-300">
                       {environments.length}
+                    </span>
+                  )}
+                  {unreadMail > 0 && (
+                    <span
+                      className="flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-cyan-400/90 px-1 font-mono text-[9px] text-zinc-950"
+                      aria-label={`${unreadMail} unread agent messages`}
+                    >
+                      {unreadMail > 99 ? "99+" : unreadMail}
                     </span>
                   )}
                 </button>

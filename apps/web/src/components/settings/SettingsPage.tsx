@@ -15,6 +15,7 @@ import {
   Boxes,
   SlidersHorizontal,
   Cable,
+  MessagesSquare,
 } from "lucide-react";
 import {
   ClaudeIcon,
@@ -28,6 +29,7 @@ import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { McpSettings } from "./McpSettings";
 import { FullscreenSettingsLayout, type SettingsMenuItem } from "./FullscreenSettingsLayout";
+import { MessagingSettings } from "./MessagingSettings";
 
 const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "general", label: "General", icon: <Settings2 className="h-4 w-4" /> },
@@ -45,6 +47,7 @@ const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },
   { id: "web-client", label: "Web client", icon: <Globe2 className="h-4 w-4" /> },
   { id: "mcp", label: "MCP", icon: <Cable className="h-4 w-4" /> },
+  { id: "messaging", label: "Messaging", icon: <MessagesSquare className="h-4 w-4" /> },
   { id: "container", label: "Container", icon: <Container className="h-4 w-4" /> },
   { id: "experimental", label: "Experimental", icon: <FlaskConical className="h-4 w-4" /> },
   { id: "debug", label: "Debug", icon: <Bug className="h-4 w-4" /> },
@@ -94,6 +97,8 @@ export function SettingsPage({ open, onOpenChange }: SettingsPageProps) {
           <SkillsSettings />
         ) : activeSection === "mcp" ? (
           <McpSettings />
+        ) : activeSection === "messaging" ? (
+          <MessagingSettings />
         ) : isLoading && !initialLoadDone ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />

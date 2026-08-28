@@ -81,7 +81,9 @@ describe("Orkestrator control MCP server", () => {
           result = { id: "project-1", name: "Orkestrator" };
           break;
         case "get_config":
-          result = { global: { enabledAgentPlatforms: ["codex"] } };
+          result = {
+            global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: true } },
+          };
           break;
         case "get_environment_snapshots":
           result = [
@@ -193,6 +195,8 @@ describe("Orkestrator control MCP server", () => {
       "launch_environment",
       "launch_job",
       "send_prompt_to_tab",
+      "list_mailboxes",
+      "send_message",
     ]);
     for (const name of ["launch_environment", "launch_job", "send_prompt_to_tab"]) {
       expect(
@@ -221,6 +225,72 @@ describe("Orkestrator control MCP server", () => {
     });
     expect(JSON.stringify(projects.body.result?.structuredContent)).not.toContain("/private");
     expect(JSON.stringify(projects.body.result?.structuredContent)).not.toContain("git@");
+  });
+
+  test("lists mailboxes and sends body-free external-message results", async () => {
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    overrides.set("list_agent_mailboxes", () => ({
+      mailboxes: [
+        {
+          mailboxId: "env-1\0agent",
+          environmentId: "env-1",
+          tabId: "agent",
+          title: "Agent",
+        },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 100,
+    }));
+    overrides.set("send_external_agent_mail", (args) => ({
+      id: "message-1",
+      requestId: args.requestId,
+      placement: "stored",
+      body: args.body,
+    }));
+
+    const listed = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "list_mailboxes",
+      arguments: {},
+    });
+    expect(listed.body.result?.structuredContent).toMatchObject({ total: 1 });
+
+    const sent = await rpc(descriptor.url, descriptor.token, "tools/call", {
+      name: "send_message",
+      arguments: {
+        requestId: "external-request",
+        toEnvironmentId: "env-1",
+        toTabId: "agent",
+        body: "sensitive body",
+      },
+    });
+    expect(sent.body.result?.structuredContent).toEqual({
+      message: {
+        id: "message-1",
+        requestId: "external-request",
+        placement: "stored",
+      },
+    });
+    expect(invocations.at(-1)).toEqual({
+      command: "send_external_agent_mail",
+      args: {
+        requestId: "external-request",
+        toEnvironmentId: "env-1",
+        toTabId: "agent",
+        body: "sensitive body",
+      },
+    });
+  });
+
+  test("does not publish messaging tools while messaging is disabled", async () => {
+    overrides.set("get_config", () => ({
+      global: { enabledAgentPlatforms: ["codex"], agentMessaging: { enabled: false } },
+    }));
+    const descriptor = await readControlMcpDescriptor(server.getInfo()!.descriptorFile);
+    const listed = await rpc(descriptor.url, descriptor.token, "tools/list");
+    const names = listed.body.result?.tools?.map(({ name }) => name) ?? [];
+    expect(names).not.toContain("list_mailboxes");
+    expect(names).not.toContain("send_message");
   });
 
   test("validates and routes an idempotent job launch into an existing environment", async () => {

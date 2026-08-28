@@ -597,6 +597,22 @@ export abstract class StorageNative extends StorageReviews {
       const outcome = await dispatch(session);
       if (outcome?.dispatched === false) {
         if (outcome.openCodeIncompleteTurnNotice === undefined) {
+          // A preparation refusal happens before provider.send. The durable
+          // pending row was opened only to protect the provider side effect,
+          // so retaining it here would park a request that was never sent and
+          // block every later request id for this session.
+          if (session.pendingDispatch?.requestId === requestId) {
+            const updated: PersistedNativeAgentSession = {
+              ...session,
+              pendingDispatch: undefined,
+              updatedAt: nowIso(),
+            };
+            sessions[key] = updated;
+            await this.saveNativeAgentSessions(sessions, opaque);
+            await this.scrubPendingNativeAgentDispatchBackups(key, requestId);
+            this.announce("native-agent-session", session.environmentId);
+            return { session: updated, dispatched: false };
+          }
           if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
           return { session, dispatched: false };
         }

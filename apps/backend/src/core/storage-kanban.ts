@@ -74,7 +74,7 @@ type LoadedNativeAgentSessions = shared.LoadedNativeAgentSessions;
 type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogStore;
 type ResourceChangeListener = shared.ResourceChangeListener;
 
-import { StorageDrafts } from "./storage-drafts.ts";
+import { StorageAgentMail } from "./storage-agent-mail.ts";
 
 function stableKanbanId(namespace: string, requestId: string): string {
   const hex = createHash("sha256").update(namespace).update("\0").update(requestId).digest("hex");
@@ -146,7 +146,7 @@ export type StorageLayerTypes = [
   ResourceChangeListener,
 ];
 
-export class StorageKanban extends StorageDrafts {
+export class StorageKanban extends StorageAgentMail {
   async getKanbanTasks(projectId: string): Promise<KanbanTask[]> {
     const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
     return tasks.filter((task) => task.projectId === projectId);

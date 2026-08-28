@@ -23,7 +23,7 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
   const project = getProjectById(projectId);
   // A failed load leaves an empty editor that is not this project's content, so
   // it must stay disabled until a retry succeeds. An enabled empty editor
-  // autosaves its first keystroke over the real backend notes.
+  // could save its first keystroke over the real backend notes.
   const notesReady = currentNotesProjectId === projectId && !notesLoading && !notesError;
   const [draft, setDraft, , discardDurableDraft] = useDurableComposeDraft<string>({
     ownerType: "project",
@@ -36,7 +36,6 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
     enabled: notesReady,
   });
   const isDirty = notesReady && draft !== notes;
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editRevisionRef = useRef(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -75,35 +74,13 @@ export function ProjectNotesView({ projectId, onBack }: ProjectNotesViewProps) {
       if (!notesReady) return;
       editRevisionRef.current += 1;
       setDraft(value);
-
-      // Auto-save after 1 second of inactivity
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-      const editRevision = editRevisionRef.current;
-      saveTimeoutRef.current = setTimeout(() => {
-        void persistNotes(value, editRevision);
-      }, 1000);
     },
-    [notesReady, persistNotes, setDraft],
+    [notesReady, setDraft],
   );
 
   const handleSaveNow = () => {
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-    }
     void persistNotes(draft, editRevisionRef.current);
   };
-
-  // The durable draft hook flushes on unmount; only cancel the convenience
-  // auto-save timer here so a hidden view cannot race a later explicit save.
-  useEffect(() => {
-    return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-    };
-  }, []);
 
   return (
     <div className="flex flex-col h-full bg-background">

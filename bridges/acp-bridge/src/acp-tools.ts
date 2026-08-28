@@ -67,6 +67,7 @@ import {
   truncateUtf8,
 } from "./acp-transcript.js";
 import { schedulePersist } from "./acp-persist-writer.js";
+import { formatAcpProviderError } from "./acp-errors.js";
 
 export function pushToolPart(
   state: SessionState,
@@ -797,7 +798,11 @@ export function renderAcpToolSource(part: BridgeToolPart, source: AcpToolSourceS
   setOptionalPartField(
     part,
     "toolError",
-    source.toolState === "failure" ? (output ?? "Tool call failed") : undefined,
+    source.toolState === "failure"
+      ? (output ?? "Tool call failed")
+      : source.agentState === "failed"
+        ? source.lifecycleError
+        : undefined,
   );
 
   const diff = aggregateAcpToolDiffs(
@@ -885,6 +890,7 @@ export function ensureAcpToolSource(part: BridgeToolPart): AcpToolSourceState {
     toolState: part.toolState,
     agentState: part.agentState,
     rawOutput: part.toolOutput,
+    lifecycleError: part.agentState === "failed" ? part.toolError : undefined,
     contentDiffs: part.toolDiff ? [part.toolDiff] : [],
   };
   acpToolSourceStates.set(part, source);
@@ -1808,10 +1814,15 @@ export function applySubagentFinished(state: SessionState, update: JsonObject): 
   if (!subagentId) return;
   const toolUseId = state.subagentToolIds.get(subagentId);
   if (!toolUseId) return;
+  const agentState =
+    terminalAgentState(typeof update.status === "string" ? update.status : undefined) ?? "finished";
   finishSubagentTool(
     state,
     toolUseId,
-    terminalAgentState(typeof update.status === "string" ? update.status : undefined) ?? "finished",
+    agentState,
+    agentState === "failed" && update.error != null
+      ? formatAcpProviderError(update.error, "Sub-agent failed", provider)
+      : undefined,
   );
 }
 
@@ -1819,15 +1830,24 @@ export function finishSubagentTool(
   state: SessionState,
   toolUseId: string,
   agentState: "finished" | "failed",
+  lifecycleError?: string,
 ): void {
   const part = findToolPart(state, toolUseId)?.part;
+  let mutation: { part: BridgeToolPart; source: AcpToolSourceState } | undefined;
   if (part && part.agentState !== "finished" && part.agentState !== "failed") {
     part.agentState = agentState;
-    const source = acpToolSourceStates.get(part);
-    if (source) source.agentState = agentState;
+    const source = ensureAcpToolSource(part);
+    source.agentState = agentState;
+    if (lifecycleError) source.lifecycleError = lifecycleError;
+    renderAcpToolSource(part, source);
     stampSubagentRuntimeDuration(part);
+    mutation = { part, source };
   }
   settleActiveSubagent(state, toolUseId);
+  if (mutation) {
+    commitToolPartMutation(state, mutation.part, mutation.source);
+    return;
+  }
   state.revision += 1;
   schedulePersist();
 }

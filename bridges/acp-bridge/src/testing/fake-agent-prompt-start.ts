@@ -62,6 +62,22 @@ export function handlePromptStart(message: JsonObject): boolean {
       write({ jsonrpc: "2.0", id: message.id, result: { stopReason: "end_turn" } });
       return true;
     }
+    if (prompt.startsWith("CREDITSEXHAUSTED:")) {
+      write({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: {
+          code: -32603,
+          message: "Internal error",
+          data: {
+            message: "API error (status 402 Payment Required): Grok Build usage balance exhausted",
+            http_status: 402,
+            promptUsage: { inputTokens: 1_081_795, outputTokens: 4_052 },
+          },
+        },
+      });
+      return true;
+    }
     const resumesResourceExhaustedScenario = prompt.startsWith(
       "Continue from where the interrupted turn stopped.",
     );

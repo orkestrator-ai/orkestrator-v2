@@ -7,6 +7,7 @@ import type {
 } from "@orkestrator/protocol/native-agent";
 import type { AcpTurnUsage } from "./usage.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
+import { formatAcpRpcError } from "./acp-errors.js";
 
 export type Provider = "cursor" | "grok";
 export type JsonObject = Record<string, unknown>;
@@ -106,6 +107,8 @@ export interface AcpToolSourceState {
   agentState?: BridgeToolPart["agentState"];
   contentOutput?: string;
   rawOutput?: string;
+  /** Bounded provider failure from a terminal child-lifecycle notification. */
+  lifecycleError?: string;
   contentDiffs: BridgeToolDiff[];
   locationPath?: string;
   /**
@@ -812,9 +815,7 @@ export class AcpProcess {
       pending.cleanupAbort?.();
       if (message.error && typeof message.error === "object") {
         const error = message.error as JsonObject;
-        pending.reject(
-          new Error(typeof error.message === "string" ? error.message : "ACP request failed"),
-        );
+        pending.reject(new Error(formatAcpRpcError(error, provider)));
       } else {
         pending.resolve(message.result);
       }

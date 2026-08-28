@@ -1928,6 +1928,10 @@ describe("PersistentTerminal", () => {
     );
     expect(terminal.write).not.toHaveBeenCalledWith(arbitraryTail);
     expect(screen.getByRole("status").textContent).toContain("Terminal history was truncated");
+
+    fireEvent.click(screen.getByRole("button", { name: /Terminal history was truncated/i }));
+
+    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("preserves xterm parser state and discards a truncated tail when no durable history exists", async () => {

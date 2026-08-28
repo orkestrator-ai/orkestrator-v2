@@ -1883,7 +1883,15 @@ export function PersistentTerminal({
           aria-live="polite"
           className="absolute top-2 left-2 z-20 max-w-[min(36rem,calc(100%-1rem))] rounded-md border border-amber-500/40 bg-amber-950/90 px-2.5 py-1.5 text-xs text-amber-100 shadow-md backdrop-blur-sm"
         >
-          {bootstrapWarning || replayWarning}
+          {bootstrapWarning || (
+            <button
+              type="button"
+              className="cursor-pointer text-left"
+              onClick={() => setReplayWarning(null)}
+            >
+              {replayWarning}
+            </button>
+          )}
         </div>
       )}
       {isSetupTab &&

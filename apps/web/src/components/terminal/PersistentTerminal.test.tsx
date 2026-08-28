@@ -1928,6 +1928,137 @@ describe("PersistentTerminal", () => {
     );
     expect(terminal.write).not.toHaveBeenCalledWith(arbitraryTail);
     expect(screen.getByRole("status").textContent).toContain("Terminal history was truncated");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss terminal warning" }));
+
+    expect(screen.queryByRole("status") === null).toBe(true);
+  });
+
+  describe("warning dismissal", () => {
+    const renderForWarnings = (tabType: "plain" | "claude" = "plain") => {
+      const terminalData = createTerminalData();
+      render(
+        <PersistentTerminal
+          terminalData={terminalData}
+          tabId="tab-1"
+          tabType={tabType}
+          containerId="container-1"
+          environmentId="env-1"
+          isEnvironmentVisible
+          isActive
+          isFocused
+          isFirstTab={false}
+          paneId="pane-1"
+        />,
+      );
+      return terminalData.terminal as unknown as MockTerminal;
+    };
+
+    const replay = (degraded: "truncated" | "snapshot-error") => {
+      act(() => {
+        lastUseTerminalOptions!.onReplay!(new Uint8Array(), {
+          preserveExisting: true,
+          degraded,
+        });
+      });
+    };
+
+    const dismiss = () => {
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss terminal warning" }));
+    };
+
+    it("keeps the replay warning dismissed when the same degradation is observed again", async () => {
+      renderForWarnings();
+      await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
+
+      replay("truncated");
+      expect(screen.getByRole("status").textContent).toContain("Terminal history was truncated");
+      dismiss();
+      expect(screen.queryByRole("status") === null).toBe(true);
+
+      // A truncated backend ring is re-reported by every later reconciliation.
+      // The banner must not come back for a warning the user already closed.
+      replay("truncated");
+      replay("truncated");
+
+      expect(screen.queryByRole("status") === null).toBe(true);
+    });
+
+    it("surfaces a different degradation after an earlier warning was dismissed", async () => {
+      renderForWarnings();
+      await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
+
+      replay("truncated");
+      dismiss();
+      expect(screen.queryByRole("status") === null).toBe(true);
+
+      replay("snapshot-error");
+
+      expect(screen.getByRole("status").textContent).toContain(
+        "Terminal history could not be synchronized",
+      );
+    });
+
+    it("returns focus to the terminal when a warning is dismissed", async () => {
+      const terminal = renderForWarnings();
+      await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
+
+      replay("truncated");
+      terminal.focus.mockClear();
+      dismiss();
+
+      expect(terminal.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("exposes the dismiss control as a focusable button named for its action", async () => {
+      renderForWarnings();
+      await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
+
+      replay("truncated");
+      const control = screen.getByRole("button", { name: "Dismiss terminal warning" });
+      control.focus();
+
+      // A real button carries native Enter/Space activation, so naming and
+      // focusability are what the keyboard path actually depends on.
+      expect(control.tagName).toBe("BUTTON");
+      expect(control.getAttribute("type")).toBe("button");
+      expect(document.activeElement === control).toBe(true);
+    });
+
+    it("dismisses the bootstrap warning independently and then reveals the replay warning", async () => {
+      invokeMock.mockImplementation(async (command: string) =>
+        command === "bootstrap_terminal_session"
+          ? { bootstrapped: false, delivered: false, duplicate: false }
+          : undefined,
+      );
+      renderForWarnings("claude");
+      await waitFor(() => expect(lastUseTerminalOptions?.onReplay).toBeDefined());
+
+      replay("truncated");
+      act(() => {
+        terminalOnData?.(new TextEncoder().encode("shell output ".repeat(12)));
+      });
+
+      // The bootstrap warning takes the bounded retry budget to appear, and it
+      // takes precedence over the replay warning already on screen.
+      await waitFor(
+        () =>
+          expect(screen.getByRole("status").textContent).toContain(
+            "launch command could not start",
+          ),
+        { timeout: 2_000 },
+      );
+
+      dismiss();
+
+      // Dismissing the bootstrap warning must uncover the replay warning it was
+      // covering, not suppress both.
+      expect(screen.getByRole("status").textContent).toContain("Terminal history was truncated");
+
+      dismiss();
+
+      expect(screen.queryByRole("status") === null).toBe(true);
+    });
   });
 
   it("preserves xterm parser state and discards a truncated tail when no durable history exists", async () => {

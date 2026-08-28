@@ -732,6 +732,50 @@ describe("ACP bridge", () => {
     });
   }
 
+  test("shows Grok credit exhaustion on a failed sub-agent card", async () => {
+    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+    const read = () =>
+      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+        response.json(),
+      ) as Promise<{
+        status: string;
+        messages: Array<{ parts: Array<Record<string, unknown>> }>;
+      }>;
+    const subagent = (session: Awaited<ReturnType<typeof read>>) =>
+      session.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "grok-subagent-tool-1");
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "BACKGROUNDSUBAGENT: validate" }),
+    });
+    await waitFor(read, (session) => subagent(session)?.agentState === "active");
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "FAILCREDITSSUBAGENT" }),
+    });
+    const failed = await waitFor(
+      read,
+      (session) => session.status === "idle" && subagent(session)?.agentState === "failed",
+    );
+    expect(subagent(failed)).toMatchObject({
+      toolState: "success",
+      agentState: "failed",
+      toolError:
+        "Grok Build usage balance is exhausted. Add usage credits, then retry this message.",
+    });
+    expect(JSON.stringify(subagent(failed))).not.toContain("Internal error");
+    expect(JSON.stringify(subagent(failed))).not.toContain("promptUsage");
+  });
+
   test("enriches a settled Cursor read while a same-kind sibling is still in flight", async () => {
     const directory = await temporaryDirectory();
     const lifecycleFile = resolve(directory, "cursor-pending-sibling.log");
@@ -1241,6 +1285,33 @@ describe("ACP bridge", () => {
     );
     expect(session.messages.at(-1)?.content).not.toContain("resource_exhausted");
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toHaveLength(2);
+  });
+
+  test("surfaces Grok credit exhaustion instead of its generic ACP error", async () => {
+    const { base, headers } = await spawnBridge({ env: { ACP_PROVIDER: "grok" } });
+    const created = (await nativeFetch(`${base}/session/create`, {
+      method: "POST",
+      headers,
+    }).then((response) => response.json())) as { id: string };
+
+    await nativeFetch(`${base}/session/${created.id}/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ prompt: "CREDITSEXHAUSTED: stop clearly" }),
+    });
+    const session = await waitFor(
+      async () =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<{ status: string; error?: string }>,
+      (value) => value.status === "error",
+    );
+
+    expect(session.error).toBe(
+      "Grok Build usage balance is exhausted. Add usage credits, then retry this message.",
+    );
+    expect(session.error).not.toContain("Internal error");
+    expect(session.error).not.toContain("promptUsage");
   });
 
   test("rolls back a keyed session when initial configuration fails", async () => {

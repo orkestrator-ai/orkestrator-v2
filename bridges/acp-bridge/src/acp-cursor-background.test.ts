@@ -385,85 +385,95 @@ describe("ACP Cursor background continuation", () => {
     ]);
   });
 
-  test("continues with a failed status when the child transcript is aborted", async () => {
-    const directory = await temporaryDirectory();
-    const transcripts = resolve(directory, "transcripts");
-    const counterFile = resolve(directory, "prompts.log");
-    const agentId = "child-wait-1";
-    const childDir = resolve(transcripts, agentId);
-    await fs.mkdir(childDir, { recursive: true });
-    const jsonl = resolve(childDir, `${agentId}.jsonl`);
+  for (const [label, terminalStatus] of [
+    ["aborted", "aborted"],
+    ["an unrecognized terminal status", "still-running"],
+  ] as const) {
+    test(`continues with a failed status when the child transcript has ${label}`, async () => {
+      const directory = await temporaryDirectory();
+      const transcripts = resolve(directory, "transcripts");
+      const counterFile = resolve(directory, "prompts.log");
+      const agentId = "child-wait-1";
+      const childDir = resolve(transcripts, agentId);
+      await fs.mkdir(childDir, { recursive: true });
+      const jsonl = resolve(childDir, `${agentId}.jsonl`);
 
-    const { base, headers } = await spawnBridge({
-      env: {
-        ACP_CURSOR_BACKGROUND_CONTINUE: "1",
-        ACP_CURSOR_BACKGROUND_WAIT_MS: "8000",
-        CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts,
-        FAKE_ACP_COUNTER_FILE: counterFile,
-      },
+      const { base, headers } = await spawnBridge({
+        env: {
+          ACP_CURSOR_BACKGROUND_CONTINUE: "1",
+          ACP_CURSOR_BACKGROUND_WAIT_MS: "8000",
+          CURSOR_AGENT_TRANSCRIPTS_DIR: transcripts,
+          FAKE_ACP_COUNTER_FILE: counterFile,
+        },
+      });
+      const created = (await nativeFetch(`${base}/session/create`, {
+        method: "POST",
+        headers,
+      }).then((response) => response.json())) as { id: string };
+      const read = async (): Promise<SessionSnapshot> =>
+        nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
+          response.json(),
+        ) as Promise<SessionSnapshot>;
+
+      expect(
+        (
+          await nativeFetch(`${base}/session/${created.id}/prompt`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
+          })
+        ).status,
+      ).toBe(202);
+
+      await waitFor(
+        read,
+        (value) =>
+          value.status === "running" &&
+          value.messages.some((message) =>
+            message.parts.some(
+              (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
+            ),
+          ),
+      );
+
+      await fs.writeFile(
+        jsonl,
+        `${JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "Stopped before finishing." }] },
+        })}\n${JSON.stringify({ type: "turn_ended", status: terminalStatus })}\n`,
+      );
+
+      const settled = await waitFor(
+        read,
+        (value) =>
+          value.status === "idle" &&
+          value.messages.some((message) =>
+            message.parts.some(
+              (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "failed",
+            ),
+          ),
+      );
+      expect(
+        settled.messages.some(
+          (message) =>
+            message.role === "user" &&
+            message.content?.startsWith("Background subagent finished.") === true &&
+            message.content.includes("Status: failed") === true &&
+            message.content.includes("Status: finished") !== true,
+        ),
+      ).toBe(true);
+      expect(
+        settled.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.toolUseId === "cursor-subagent-1"),
+      ).not.toHaveProperty("toolError");
+      expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual([
+        "prompt",
+        "prompt",
+      ]);
     });
-    const created = (await nativeFetch(`${base}/session/create`, {
-      method: "POST",
-      headers,
-    }).then((response) => response.json())) as { id: string };
-    const read = async (): Promise<SessionSnapshot> =>
-      nativeFetch(`${base}/session/${created.id}`, { headers }).then((response) =>
-        response.json(),
-      ) as Promise<SessionSnapshot>;
-
-    expect(
-      (
-        await nativeFetch(`${base}/session/${created.id}/prompt`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ prompt: "CURSORBACKGROUNDCHILD" }),
-        })
-      ).status,
-    ).toBe(202);
-
-    await waitFor(
-      read,
-      (value) =>
-        value.status === "running" &&
-        value.messages.some((message) =>
-          message.parts.some(
-            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "active",
-          ),
-        ),
-    );
-
-    await fs.writeFile(
-      jsonl,
-      `${JSON.stringify({
-        type: "assistant",
-        message: { content: [{ type: "text", text: "Stopped before finishing." }] },
-      })}\n${JSON.stringify({ type: "turn_ended", status: "aborted" })}\n`,
-    );
-
-    const settled = await waitFor(
-      read,
-      (value) =>
-        value.status === "idle" &&
-        value.messages.some((message) =>
-          message.parts.some(
-            (part) => part.toolUseId === "cursor-subagent-1" && part.agentState === "failed",
-          ),
-        ),
-    );
-    expect(
-      settled.messages.some(
-        (message) =>
-          message.role === "user" &&
-          message.content?.startsWith("Background subagent finished.") === true &&
-          message.content.includes("Status: failed") === true &&
-          message.content.includes("Status: finished") !== true,
-      ),
-    ).toBe(true);
-    expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual([
-      "prompt",
-      "prompt",
-    ]);
-  });
+  }
 
   test("cancels the parent wait without injecting a continuation", async () => {
     const directory = await temporaryDirectory();
@@ -534,6 +544,11 @@ describe("ACP Cursor background continuation", () => {
           message.content?.startsWith("Background subagent finished.") === true,
       ),
     ).toBe(false);
+    expect(
+      settled.messages
+        .flatMap((message) => message.parts)
+        .find((part) => part.toolUseId === "cursor-subagent-1"),
+    ).not.toHaveProperty("toolError");
     expect((await fs.readFile(counterFile, "utf8")).trim().split("\n")).toEqual(["prompt"]);
     expect(
       await nativeFetch(`${base}/session/${created.id}/activity`, { headers }).then((response) =>

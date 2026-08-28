@@ -169,6 +169,59 @@ describe("writing", () => {
     // is nothing a successor could do with it but deny it, so it is not stored.
     expect(JSON.stringify(await readState())).not.toContain("call-1");
   });
+
+  test("keeps delivered steer evidence and makes an in-flight queue ambiguous", async () => {
+    const state = newSessionState();
+    state.steerJournal.set("queued", {
+      requestId: "queued",
+      inputDigest: "digest-1",
+      expectedRunId: "pi:generation:1",
+      state: "queued",
+      createdAt: 1,
+    });
+    state.steerJournal.set("delivered", {
+      requestId: "delivered",
+      inputDigest: "digest-2",
+      expectedRunId: "pi:generation:1",
+      state: "delivered",
+      createdAt: 2,
+    });
+    state.steerJournal.set("dropped", {
+      requestId: "dropped",
+      inputDigest: "digest-3",
+      expectedRunId: "pi:generation:1",
+      state: "dropped",
+      createdAt: 3,
+    });
+    sessions.set(state.id, state);
+
+    schedulePersist();
+    await drainPersistence();
+
+    expect((await readState()).sessions[0]?.steerJournal).toEqual([
+      {
+        requestId: "queued",
+        inputDigest: "digest-1",
+        expectedRunId: "pi:generation:1",
+        state: "ambiguous",
+        createdAt: 1,
+      },
+      {
+        requestId: "delivered",
+        inputDigest: "digest-2",
+        expectedRunId: "pi:generation:1",
+        state: "delivered",
+        createdAt: 2,
+      },
+      {
+        requestId: "dropped",
+        inputDigest: "digest-3",
+        expectedRunId: "pi:generation:1",
+        state: "dropped",
+        createdAt: 3,
+      },
+    ]);
+  });
 });
 
 describe("loading", () => {
@@ -188,6 +241,15 @@ describe("loading", () => {
           ],
           structured: [["req-1", { ok: true }]],
           promptJournal: [{ requestId: "req-1", state: "completed", acceptedAt: 3 }],
+          steerJournal: [
+            {
+              requestId: "steer-dropped",
+              inputDigest: "digest",
+              expectedRunId: "pi:generation:1",
+              state: "dropped",
+              createdAt: 4,
+            },
+          ],
           composer: {
             models: [{ platform: "pi", id: "anthropic/claude-opus-4-5", label: "stale" }],
             selectedModelId: "anthropic/claude-opus-4-5",
@@ -207,6 +269,7 @@ describe("loading", () => {
     expect(restored.revision).toBe(7);
     expect(restored.messages).toHaveLength(1);
     expect(restored.structured.get("req-1")).toEqual({ ok: true });
+    expect(restored.steerJournal.get("steer-dropped")?.state).toBe("dropped");
     expect(clientSessionKeys.get("tab-1")).toBe("session-1");
     // The selection survives; the catalogue does not, because reviving a stale
     // one would offer models the account may no longer reach.

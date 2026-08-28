@@ -20,6 +20,7 @@ import {
   MAX_PROMPT_JOURNAL,
   MAX_CURSOR_SETTLED_CLAIMS,
   MAX_PERSISTED_PROMPT_JOURNAL_BYTES,
+  MAX_PERSISTED_GROK_INTERJECTION_BYTES,
   MAX_PERSISTED_SESSION_CONFIG_BYTES,
   MAX_PERSISTED_STRUCTURED_BYTES,
   MAX_SESSIONS,
@@ -65,6 +66,11 @@ import {
   type PromptJournalEntry,
   type SessionState,
 } from "./acp-context.js";
+import {
+  MAX_GROK_INTERJECTION_JOURNAL,
+  setGrokInterjectionJournal,
+  type GrokInterjectionJournalEntry,
+} from "./grok-interjection.js";
 import {
   indexActiveSubagentsFromTranscript,
   boundedModelId,
@@ -297,6 +303,7 @@ export async function loadPersistedState(): Promise<void> {
           : [],
       ),
       promptJournal: new Map(),
+      grokInterjectionJournal: new Map(),
       approvals: new Map(),
       outputTruncated: false,
       uncheckedTranscriptBytes: 0,
@@ -342,6 +349,39 @@ export async function loadPersistedState(): Promise<void> {
           acceptedAt: Number.isSafeInteger(rawEntry.acceptedAt) ? Number(rawEntry.acceptedAt) : 0,
         };
         state.promptJournal.set(entry.requestId, entry);
+      }
+    }
+    if (Array.isArray(candidate.grokInterjectionJournal)) {
+      let retainedBytes = 0;
+      for (const rawEntry of candidate.grokInterjectionJournal.slice(
+        -MAX_GROK_INTERJECTION_JOURNAL,
+      )) {
+        if (!isObject(rawEntry)) continue;
+        const stateValue = rawEntry.state;
+        if (
+          typeof rawEntry.requestId !== "string" ||
+          typeof rawEntry.expectedRunId !== "string" ||
+          typeof rawEntry.inputDigest !== "string" ||
+          !/^[a-f0-9]{64}$/.test(rawEntry.inputDigest) ||
+          (stateValue !== "prepared" &&
+            stateValue !== "queued" &&
+            stateValue !== "delivered" &&
+            stateValue !== "ambiguous")
+        ) {
+          continue;
+        }
+        const entry: GrokInterjectionJournalEntry = {
+          requestId: rawEntry.requestId.slice(0, 512),
+          expectedRunId: rawEntry.expectedRunId.slice(0, 512),
+          inputDigest: rawEntry.inputDigest,
+          state: stateValue === "prepared" || stateValue === "queued" ? "ambiguous" : stateValue,
+          createdAt: Number.isSafeInteger(rawEntry.createdAt) ? Number(rawEntry.createdAt) : 0,
+          updatedAt: Number.isSafeInteger(rawEntry.updatedAt) ? Number(rawEntry.updatedAt) : 0,
+        };
+        const bytes = Buffer.byteLength(JSON.stringify(entry));
+        if (retainedBytes + bytes > MAX_PERSISTED_GROK_INTERJECTION_BYTES) continue;
+        retainedBytes += bytes;
+        setGrokInterjectionJournal(state.grokInterjectionJournal, entry);
       }
     }
     indexActiveSubagentsFromTranscript(state);

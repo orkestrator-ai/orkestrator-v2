@@ -150,6 +150,20 @@ history rather than two partial ones.
   callback, or `syncWorkflowActivity`, so the evidence remains consistent with
   the existing activity-source timing cluster rather than a deterministic
   reviewer-fan-out regression.
+- **Recurrence (native steering bridge qualification, 2026-08-28):** a command
+  intended to select one projection file appended that path to the backend
+  package script instead, so Bun ran the complete backend suite with its
+  default parallel worker pool. This case again observed
+  `agentActivitySources["multi-review"].state` as `working` instead of `idle`
+  after the durable address intent cleared (205.46 ms); that run reported 2,247
+  passing and 3 failing tests across 93 files, with the other two failures both
+  deterministic assertions in the new projection test and subsequently fixed.
+  The correctly isolated rerun,
+  `bun run test:logged -- --name steer-multi-review-isolated-3 -- bun test
+  --cwd apps/backend --preload ../../tests/setup-node.ts
+  ./src/core/multi-review-service.test.ts`, passed. The steering changes do not
+  touch Multi Review activity writes, so this remains evidence for the existing
+  aggregate-only activity-projection timing cluster.
 
 ## `MultiReviewService fails recoverably when the consolidation session is missing` (`apps/backend/src/core/multi-review-service.test.ts:550`)
 

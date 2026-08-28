@@ -474,6 +474,22 @@ export interface PersistedNativeAgentPendingDispatch {
 }
 
 /**
+ * One steering instruction whose provider admission is still unresolved.
+ *
+ * Unlike an ordinary prompt, the backend owns this request id. The renderer
+ * contributes only the text; keeping the exact run and input here is what lets
+ * any later renderer retry or discard the same operation after a restart.
+ */
+export interface PersistedNativeAgentPendingSteer {
+  requestId: string;
+  text: string;
+  inputDigest: string;
+  expectedRunId: string;
+  state: "prepared" | "unknown";
+  createdAt: string;
+}
+
+/**
  * Durable mapping between a logical UI tab and the provider session that owns
  * its transcript. The backend creates this mapping atomically, so any number of
  * renderers asking for the same tab receive the same provider session.
@@ -492,6 +508,8 @@ export interface PersistedNativeAgentSession {
   dispatchedRequestIds?: string[];
   /** Retained only while the provider outcome is ambiguous. */
   pendingDispatch?: PersistedNativeAgentPendingDispatch;
+  /** Retained until an ambiguous steer is authoritatively reconciled or discarded. */
+  pendingSteer?: PersistedNativeAgentPendingSteer;
   /** Content-free authoritative outcome rehydrated by every OpenCode tab. */
   openCodeIncompleteTurnNotice?: OpenCodeIncompleteTurnNotice;
   createdAt: string;

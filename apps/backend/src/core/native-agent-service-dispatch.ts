@@ -1,9 +1,12 @@
 import * as shared from "./native-agent-service-shared.js";
+import { randomUUID } from "node:crypto";
 import {
   AmbiguousPromptDispatchError,
   BUILD_PIPELINE_AGENTS,
   PARKED_DISPATCH_CONFLICT_MESSAGE,
   PendingNativeAgentDispatchError,
+  PendingNativeAgentSteerError,
+  createHash,
   isFallbackExecutionProfileId,
   nativeAgentSessionStorageKey,
   nativeCapabilities,
@@ -37,6 +40,7 @@ type Environment = shared.Environment;
 type OpenCodeIncompleteTurnNotice = shared.OpenCodeIncompleteTurnNotice;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
+type PersistedNativeAgentPendingSteer = shared.PersistedNativeAgentPendingSteer;
 type StorageService = shared.StorageService;
 type BridgeConnection = shared.BridgeConnection;
 type NativeAgentRuntimeProvider = shared.NativeAgentRuntimeProvider;
@@ -192,6 +196,16 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
         void this.refreshProjection(input, true).catch(() => undefined);
         return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
       }
+      if (error instanceof PendingNativeAgentSteerError) {
+        if (
+          allowRecoveryRetry &&
+          (await this.settleAmbiguousSteer(input, key, error.pendingRequestId))
+        ) {
+          return this.attemptDispatch(input, false, preserveExistingPending);
+        }
+        void this.refreshProjection(input, true).catch(() => undefined);
+        return { outcome: "rejected", error: PARKED_DISPATCH_CONFLICT_MESSAGE };
+      }
       if (error instanceof AmbiguousPromptDispatchError) {
         // Ask the provider before handing the ambiguity to the user. A lost
         // acknowledgement is not the same fact as a lost prompt, and the
@@ -232,10 +246,16 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (!nonBlank(input.requestId)) {
       throw new Error("Recoverable native agent request ID must not be blank");
     }
-    const discarded = await this.storage.clearPendingNativeAgentDispatch(
-      nativeAgentSessionStorageKey(input.environmentId, input.agent, input.logicalSessionKey),
-      input.requestId,
+    const key = nativeAgentSessionStorageKey(
+      input.environmentId,
+      input.agent,
+      input.logicalSessionKey,
     );
+    const session = await this.storage.getNativeAgentSession(key);
+    const discarded =
+      session?.pendingSteer?.requestId === input.requestId
+        ? await this.storage.clearPendingNativeAgentSteer(key, input.requestId)
+        : await this.storage.clearPendingNativeAgentDispatch(key, input.requestId);
     if (discarded) {
       void this.refreshProjection(input, true).catch(() => undefined);
     }
@@ -310,6 +330,53 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     ).catch(() => undefined);
   }
 
+  protected async settleAmbiguousSteer(
+    input: NativeAgentProjectionInput,
+    key: string,
+    requestId: string,
+    resolved?: NativeAgentRuntimeProvider,
+  ): Promise<"dispatched" | "absent" | undefined> {
+    try {
+      const provider = resolved ?? (await this.provider(input));
+      if (!provider.steerStatus) return undefined;
+      const session = await this.storage.getNativeAgentSession(key);
+      if (session?.pendingSteer?.requestId !== requestId) return undefined;
+      const status = await provider.steerStatus(session.providerSessionId, requestId);
+      if (status === "dispatched") {
+        return (await this.storage.confirmNativeAgentSteer(key, requestId))
+          ? "dispatched"
+          : undefined;
+      }
+      if (status === "absent") {
+        return (await this.storage.clearPendingNativeAgentSteer(key, requestId))
+          ? "absent"
+          : undefined;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  protected scheduleAmbiguousSteerSettle(
+    input: NativeAgentProjectionInput,
+    key: string,
+    requestId: string,
+    resolved: NativeAgentRuntimeProvider,
+  ): void {
+    const inFlight = `steer\0${key}\0${requestId}`;
+    if (this.settlingDispatches.has(inFlight)) return;
+    this.settlingDispatches.add(inFlight);
+    void this.trackScan(
+      this.settleAmbiguousSteer(input, key, requestId, resolved)
+        .then((settled) => {
+          if (settled) void this.refreshProjection(input, true).catch(() => undefined);
+        })
+        .catch(() => undefined)
+        .finally(() => this.settlingDispatches.delete(inFlight)),
+    ).catch(() => undefined);
+  }
+
   async retryRecoverableDispatch(
     input: NativeAgentProjectionInput & { requestId: string },
   ): Promise<NativeAgentDispatchOutcome> {
@@ -324,17 +391,70 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     );
     const session = await this.storage.getNativeAgentSession(key);
     const pending = session?.pendingDispatch;
-    if (!session || !pending) {
+    const pendingSteer = session?.pendingSteer;
+    if (!session || (!pending && !pendingSteer)) {
       return {
         outcome: "rejected",
         error: "There is no recoverable dispatch for this session",
       };
     }
-    if (pending.requestId !== input.requestId) {
+    if ((pending?.requestId ?? pendingSteer?.requestId) !== input.requestId) {
       return {
         outcome: "rejected",
         error: "The recoverable dispatch changed; refresh before retrying",
       };
+    }
+    if (pendingSteer) {
+      const resolved = await this.resolveProjectionSession(input);
+      if (!resolved?.provider.performSessionAction || !resolved.provider.steerSupported) {
+        return { outcome: "rejected", error: `${input.agent} does not support steer` };
+      }
+      const qualified = await resolved.provider
+        .steerSupported(resolved.session.providerSessionId)
+        .catch(() => false);
+      if (!qualified) {
+        return {
+          outcome: "rejected",
+          error: `${input.agent} bridge does not support reliable steering; recovery remains parked`,
+        };
+      }
+      const settlement = await this.settleAmbiguousSteer(
+        input,
+        key,
+        input.requestId,
+        resolved.provider,
+      );
+      if (settlement === "dispatched") {
+        this.invalidateProjection(key);
+        return { outcome: "accepted", requestId: input.requestId };
+      }
+      const outcome = await this.dispatchPersistedSteer(
+        resolved.provider,
+        resolved.session.providerSessionId,
+        key,
+        pendingSteer,
+      );
+      this.invalidateProjection(key);
+      if (outcome.outcome === "applied") {
+        return { outcome: "accepted", requestId: input.requestId };
+      }
+      if (outcome.outcome === "unknown") {
+        return {
+          outcome: "unknown",
+          requestId: input.requestId,
+          error: "The steering instruction is still being reconciled.",
+        };
+      }
+      return {
+        outcome: "rejected",
+        error:
+          outcome.outcome === "mismatch"
+            ? "The active turn changed before the instruction could be delivered."
+            : "There is no active turn to steer.",
+      };
+    }
+    if (!pending) {
+      return { outcome: "rejected", error: "There is no recoverable dispatch for this session" };
     }
     return this.dispatchIntentInternal(
       {
@@ -492,12 +612,108 @@ export abstract class NativeAgentServiceDispatch extends NativeAgentServiceBase 
     if (!resolved.provider.performSessionAction) {
       throw new Error(`${input.agent} does not support ${input.action.kind}`);
     }
+    if (input.action.kind === "steer") {
+      return this.performProjectionSteer(input, resolved, input.action);
+    }
     const outcome = await resolved.provider.performSessionAction(
       resolved.session.providerSessionId,
       input.action,
     );
     this.invalidateProjection(resolved.key);
     return outcome;
+  }
+
+  private async performProjectionSteer(
+    input: NativeAgentProjectionInput,
+    resolved: {
+      key: string;
+      session: PersistedNativeAgentSession;
+      provider: NativeAgentRuntimeProvider;
+    },
+    action: Extract<NativeAgentSessionAction, { kind: "steer" }>,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    const text = action.text.trim();
+    if (!text) throw new Error("Steering text must not be blank");
+    if (Buffer.byteLength(text, "utf8") > 64 * 1024) {
+      throw new Error("Steering text exceeds the 64 KB limit");
+    }
+    if (
+      !resolved.provider.activeSteerRun ||
+      !resolved.provider.steerSupported ||
+      !resolved.provider.steerStatus
+    ) {
+      throw new Error(`${input.agent} does not support reliable steering`);
+    }
+    if (resolved.session.pendingDispatch) {
+      throw new PendingNativeAgentDispatchError(resolved.session.pendingDispatch.requestId);
+    }
+    if (resolved.session.pendingSteer) {
+      this.scheduleAmbiguousSteerSettle(
+        input,
+        resolved.key,
+        resolved.session.pendingSteer.requestId,
+        resolved.provider,
+      );
+      return { outcome: "unknown", requestId: resolved.session.pendingSteer.requestId };
+    }
+
+    if (!(await resolved.provider.steerSupported(resolved.session.providerSessionId))) {
+      throw new Error(`${input.agent} bridge does not support reliable steering`);
+    }
+    const active = await resolved.provider.activeSteerRun(resolved.session.providerSessionId);
+    if (active.state === "unsupported") {
+      throw new Error(`${input.agent} does not support reliable steering`);
+    }
+    if (active.state === "idle") return { outcome: "idle" };
+    if (active.state === "unknown") {
+      throw new Error(`${input.agent} active turn is not ready to steer`);
+    }
+
+    const pending: PersistedNativeAgentPendingSteer = {
+      requestId: randomUUID(),
+      text,
+      inputDigest: createHash("sha256").update(text).digest("hex"),
+      expectedRunId: active.runId,
+      state: "prepared",
+      createdAt: new Date().toISOString(),
+    };
+    const outcome = await this.dispatchPersistedSteer(
+      resolved.provider,
+      resolved.session.providerSessionId,
+      resolved.key,
+      pending,
+    );
+    this.invalidateProjection(resolved.key);
+    return outcome;
+  }
+
+  private async dispatchPersistedSteer(
+    provider: NativeAgentRuntimeProvider,
+    providerSessionId: string,
+    key: string,
+    pending: PersistedNativeAgentPendingSteer,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    if (!provider.performSessionAction) {
+      throw new Error(`${provider.agent} does not support steer`);
+    }
+    try {
+      return await this.storage.dispatchNativeAgentSteerOnce(key, pending, () =>
+        provider.performSessionAction!(providerSessionId, {
+          kind: "steer",
+          text: pending.text,
+          requestId: pending.requestId,
+          expectedRunId: pending.expectedRunId,
+        }),
+      );
+    } catch (error) {
+      if (
+        error instanceof PendingNativeAgentDispatchError ||
+        error instanceof PendingNativeAgentSteerError
+      ) {
+        throw new Error(PARKED_DISPATCH_CONFLICT_MESSAGE);
+      }
+      throw error;
+    }
   }
 
   async updateProjectionControls(

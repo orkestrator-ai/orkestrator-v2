@@ -1060,4 +1060,20 @@ export abstract class StorageBase {
       };
     });
   }
+
+  protected async scrubPendingNativeAgentSteerBackups(
+    key: string,
+    requestId: string,
+  ): Promise<void> {
+    await this.transformSensitiveJsonBackups(this.nativeAgentSessionsFile(), (records) => {
+      const stored = records[key];
+      if (!isRecord(stored)) return records;
+      const pending = stored.pendingSteer;
+      if (!isRecord(pending) || pending.requestId !== requestId) return records;
+      return {
+        ...records,
+        [key]: { ...stored, pendingSteer: undefined },
+      };
+    });
+  }
 }

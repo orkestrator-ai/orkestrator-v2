@@ -207,6 +207,8 @@ export function newSessionState(clientSessionKey?: string): SessionState {
     revision: 0,
     structured: new Map(),
     promptJournal: new Map(),
+    steerJournal: new Map(),
+    pendingSteerDeliveries: [],
     approvals: new Map(),
     todos: [],
     composer: emptyComposer(),

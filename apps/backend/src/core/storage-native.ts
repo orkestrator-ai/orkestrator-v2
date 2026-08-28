@@ -1,8 +1,10 @@
 import * as shared from "./storage-shared.js";
 import {
   MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES,
+  MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES,
   NATIVE_AGENT_SESSION_VERSION,
   PendingNativeAgentDispatchError,
+  PendingNativeAgentSteerError,
   isAgentInteractionResolutionJournal,
   isAgentPlatform,
   isNonBlankString,
@@ -52,6 +54,7 @@ type PersistedMultiReviewWorkflow = shared.PersistedMultiReviewWorkflow;
 type PersistedBuildPipeline = shared.PersistedBuildPipeline;
 type PersistedNativeAgentSession = shared.PersistedNativeAgentSession;
 type PersistedNativeAgentPendingDispatch = shared.PersistedNativeAgentPendingDispatch;
+type PersistedNativeAgentPendingSteer = shared.PersistedNativeAgentPendingSteer;
 type PersistedComposeDraft = shared.PersistedComposeDraft;
 type PersistedFileDraft = shared.PersistedFileDraft;
 type PersistedPromptQueue = shared.PersistedPromptQueue;
@@ -78,6 +81,7 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageReviews } from "./storage-reviews.ts";
+import type { NativeAgentSessionActionOutcome } from "@orkestrator/protocol/native-agent";
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -561,6 +565,9 @@ export abstract class StorageNative extends StorageReviews {
       this.assertReadableNativeAgentSession(loaded, key);
       let session = sessions[key];
       if (!session) throw new Error("Native agent session was not found");
+      if (session.pendingSteer) {
+        throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
+      }
       if (session.pendingDispatch && session.pendingDispatch.requestId !== requestId) {
         throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
       }
@@ -696,6 +703,125 @@ export abstract class StorageNative extends StorageReviews {
       this.announce("native-agent-session", session.environmentId);
       return true;
     });
+  }
+
+  /**
+   * Persist one backend-owned steering identity across the provider boundary.
+   *
+   * A provider exception is ambiguous by default: once the request was handed
+   * off, this layer cannot prove which side of admission it occurred on. The
+   * exact record therefore stays parked as `unknown` and every retry reuses it.
+   */
+  async dispatchNativeAgentSteerOnce(
+    key: string,
+    pendingSteer: PersistedNativeAgentPendingSteer,
+    dispatch: (session: PersistedNativeAgentSession) => Promise<NativeAgentSessionActionOutcome>,
+  ): Promise<NativeAgentSessionActionOutcome> {
+    if (
+      !isNonBlankString(key) ||
+      !isNonBlankString(pendingSteer.requestId) ||
+      Buffer.byteLength(pendingSteer.requestId, "utf8") > 512 ||
+      !isNonBlankString(pendingSteer.text) ||
+      Buffer.byteLength(pendingSteer.text, "utf8") > 64 * 1024 ||
+      !/^[a-f0-9]{64}$/.test(pendingSteer.inputDigest) ||
+      !isNonBlankString(pendingSteer.expectedRunId) ||
+      Buffer.byteLength(pendingSteer.expectedRunId, "utf8") > 512
+    ) {
+      throw new Error("Native agent steer record is invalid");
+    }
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(pendingSteer);
+    } catch {
+      throw new Error("Pending native agent steer must be JSON serializable");
+    }
+    if (Buffer.byteLength(serialized, "utf8") > MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES) {
+      throw new Error("Pending native agent steer exceeds its persistence limit");
+    }
+
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      let session = sessions[key];
+      if (!session) throw new Error("Native agent session was not found");
+      if (session.pendingDispatch) {
+        throw new PendingNativeAgentDispatchError(session.pendingDispatch.requestId);
+      }
+      if (session.pendingSteer) {
+        if (session.pendingSteer.requestId !== pendingSteer.requestId) {
+          throw new PendingNativeAgentSteerError(session.pendingSteer.requestId);
+        }
+        if (
+          session.pendingSteer.inputDigest !== pendingSteer.inputDigest ||
+          session.pendingSteer.expectedRunId !== pendingSteer.expectedRunId
+        ) {
+          return { outcome: "unknown", requestId: pendingSteer.requestId };
+        }
+      } else {
+        session = {
+          ...session,
+          pendingSteer,
+          updatedAt: nowIso(),
+        };
+        sessions[key] = session;
+        // The record must be durable before a provider can queue the text.
+        await this.saveNativeAgentSessions(sessions, opaque);
+      }
+
+      let outcome: NativeAgentSessionActionOutcome;
+      try {
+        outcome = await dispatch(session);
+      } catch {
+        outcome = { outcome: "unknown", requestId: pendingSteer.requestId };
+      }
+
+      if (outcome.outcome === "unknown") {
+        sessions[key] = {
+          ...session,
+          pendingSteer: { ...pendingSteer, state: "unknown" },
+          updatedAt: nowIso(),
+        };
+        await this.saveNativeAgentSessions(sessions, opaque);
+        this.announce("native-agent-session", session.environmentId);
+        return { ...outcome, requestId: pendingSteer.requestId };
+      }
+
+      sessions[key] = {
+        ...session,
+        pendingSteer: undefined,
+        updatedAt: nowIso(),
+      };
+      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubPendingNativeAgentSteerBackups(key, pendingSteer.requestId);
+      this.announce("native-agent-session", session.environmentId);
+      return outcome;
+    });
+  }
+
+  async confirmNativeAgentSteer(key: string, requestId: string): Promise<boolean> {
+    if (!isNonBlankString(key) || !isNonBlankString(requestId)) {
+      throw new Error("Native agent steer identity must not be blank");
+    }
+    return this.enqueueNativeAgentSessionMutation(async () => {
+      const loaded = await this.loadNativeAgentSessions();
+      const { sessions, opaque, migrated } = loaded;
+      this.assertReadableNativeAgentSession(loaded, key);
+      const session = sessions[key];
+      if (!session || session.pendingSteer?.requestId !== requestId) {
+        if (migrated) await this.saveNativeAgentSessions(sessions, opaque);
+        return false;
+      }
+      sessions[key] = { ...session, pendingSteer: undefined, updatedAt: nowIso() };
+      await this.saveNativeAgentSessions(sessions, opaque);
+      await this.scrubPendingNativeAgentSteerBackups(key, requestId);
+      this.announce("native-agent-session", session.environmentId);
+      return true;
+    });
+  }
+
+  async clearPendingNativeAgentSteer(key: string, requestId: string): Promise<boolean> {
+    return this.confirmNativeAgentSteer(key, requestId);
   }
 
   async setOpenCodeIncompleteTurnNotice(

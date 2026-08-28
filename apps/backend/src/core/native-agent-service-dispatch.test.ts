@@ -83,6 +83,10 @@ function createProviderStub(
     refreshCatalog?: NativeAgentRuntimeProvider["refreshCatalog"];
     prepareDispatch?: NativeAgentRuntimeProvider["prepareDispatch"];
     dispatchStatus?: NativeAgentRuntimeProvider["dispatchStatus"];
+    activeSteerRun?: NativeAgentRuntimeProvider["activeSteerRun"];
+    steerSupported?: NativeAgentRuntimeProvider["steerSupported"];
+    steerStatus?: NativeAgentRuntimeProvider["steerStatus"];
+    performSessionAction?: NativeAgentRuntimeProvider["performSessionAction"];
   } = {},
 ) {
   const createSession = mock(behaviour.createSession ?? (async () => "provider-session"));
@@ -111,6 +115,16 @@ function createProviderStub(
   const refreshCatalog = behaviour.refreshCatalog ? mock(behaviour.refreshCatalog) : undefined;
   const prepareDispatch = behaviour.prepareDispatch ? mock(behaviour.prepareDispatch) : undefined;
   const dispatchStatus = behaviour.dispatchStatus ? mock(behaviour.dispatchStatus) : undefined;
+  const activeSteerRun = behaviour.activeSteerRun ? mock(behaviour.activeSteerRun) : undefined;
+  const steerSupported = behaviour.steerSupported
+    ? mock(behaviour.steerSupported)
+    : behaviour.activeSteerRun
+      ? mock(async () => true)
+      : undefined;
+  const steerStatus = behaviour.steerStatus ? mock(behaviour.steerStatus) : undefined;
+  const performSessionAction = behaviour.performSessionAction
+    ? mock(behaviour.performSessionAction)
+    : undefined;
   const provider = {
     agent,
     createSession,
@@ -133,12 +147,20 @@ function createProviderStub(
     dismissSuggestedPrompt,
     prepareDispatch,
     dispatchStatus,
+    activeSteerRun,
+    steerSupported,
+    steerStatus,
+    performSessionAction,
     dispose,
   } as unknown as NativeAgentRuntimeProvider;
   return {
     provider,
     prepareDispatch,
     dispatchStatus,
+    activeSteerRun,
+    steerSupported,
+    steerStatus,
+    performSessionAction,
     createSession,
     registerSession,
     send,
@@ -478,6 +500,335 @@ describe("NativeAgentService", () => {
         await expect(service.getProjection(base)).resolves.not.toHaveProperty(
           "recoverableDispatch",
         );
+      },
+    );
+  });
+
+  test("owns steer identity, run pinning, parking, and exact recovery in the backend", async () => {
+    let steerOutcome: "unknown" | "applied" = "unknown";
+    const stub = createProviderStub("codex", {
+      activeSteerRun: async () => ({ state: "running", runId: "turn-7" }),
+      steerStatus: async () => "unknown",
+      performSessionAction: async (_sessionId, action) => {
+        expect(action).toMatchObject({
+          kind: "steer",
+          text: "Keep the change narrow",
+          expectedRunId: "turn-7",
+        });
+        return steerOutcome === "applied"
+          ? { outcome: "applied" }
+          : { outcome: "unknown", requestId: action.kind === "steer" ? action.requestId : "" };
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-backend-steer-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-steer",
+        };
+        await service.ensureSession(identity);
+        const first = await service.performProjectionAction({
+          ...identity,
+          action: { kind: "steer", text: "Keep the change narrow" },
+        });
+        expect(first.outcome).toBe("unknown");
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        const pending = (await storage.getNativeAgentSession(key))?.pendingSteer;
+        expect(pending).toMatchObject({
+          text: "Keep the change narrow",
+          expectedRunId: "turn-7",
+          state: "unknown",
+        });
+        expect(pending?.requestId).toBeString();
+        expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+
+        await expect(service.getProjection(identity)).resolves.toMatchObject({
+          recoverableDispatch: {
+            requestId: pending!.requestId,
+            kind: "steer",
+          },
+        });
+        expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+        await expect(
+          service.dispatchIntent({
+            ...identity,
+            prompt: "This must remain blocked",
+            requestId: "prompt-after-steer",
+          }),
+        ).resolves.toEqual({
+          outcome: "rejected",
+          error:
+            "An earlier message is still awaiting confirmation. Retry or discard it before sending another.",
+        });
+
+        steerOutcome = "applied";
+        await expect(
+          service.retryRecoverableDispatch({ ...identity, requestId: pending!.requestId }),
+        ).resolves.toEqual({ outcome: "accepted", requestId: pending!.requestId });
+        const retryAction = stub.performSessionAction!.mock.calls.at(-1)?.[1];
+        expect(retryAction).toMatchObject({
+          requestId: pending!.requestId,
+          expectedRunId: "turn-7",
+        });
+        expect((await storage.getNativeAgentSession(key))?.pendingSteer).toBeUndefined();
+      },
+    );
+  });
+
+  test("clears a parked steer only on an explicit no-touch positive", async () => {
+    let dispatched = false;
+    const stub = createProviderStub("pi", {
+      activeSteerRun: async () => ({ state: "running", runId: "pi:generation:3" }),
+      steerStatus: async () => (dispatched ? "dispatched" : "unknown"),
+      performSessionAction: async (_sessionId, action) => ({
+        outcome: "unknown",
+        requestId: action.kind === "steer" ? action.requestId : "",
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-steer-reconcile-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi-steer",
+        };
+        await service.ensureSession(identity);
+        const outcome = await service.performProjectionAction({
+          ...identity,
+          action: { kind: "steer", text: "Check the parser" },
+        });
+        const requestId = outcome.requestId!;
+        dispatched = true;
+        await expect(service.retryRecoverableDispatch({ ...identity, requestId })).resolves.toEqual(
+          { outcome: "accepted", requestId },
+        );
+        expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        expect((await storage.getNativeAgentSession(key))?.pendingSteer).toBeUndefined();
+      },
+    );
+  });
+
+  test("clears a provably dropped steer and admits the next prompt", async () => {
+    let steerStatus: "unknown" | "absent" = "unknown";
+    const stub = createProviderStub("pi", {
+      activeSteerRun: async () => ({ state: "running", runId: "pi:generation:4" }),
+      steerStatus: async () => steerStatus,
+      performSessionAction: async (_sessionId, action) => ({
+        outcome: "unknown",
+        requestId: action.kind === "steer" ? action.requestId : "",
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-steer-absent-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi-dropped-steer",
+        };
+        await service.ensureSession(identity);
+        const outcome = await service.performProjectionAction({
+          ...identity,
+          action: { kind: "steer", text: "Check the parser" },
+        });
+        expect(outcome.outcome).toBe("unknown");
+
+        steerStatus = "absent";
+        await expect(
+          service.dispatchIntent({
+            ...identity,
+            prompt: "Continue with the next task",
+            requestId: "prompt-after-dropped-steer",
+          }),
+        ).resolves.toEqual({
+          outcome: "accepted",
+          requestId: "prompt-after-dropped-steer",
+        });
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        expect((await storage.getNativeAgentSession(key))?.pendingSteer).toBeUndefined();
+        expect(stub.send).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
+  test("keeps recovery parked when the current bridge no longer qualifies", async () => {
+    let qualified = true;
+    const stub = createProviderStub("pi", {
+      steerSupported: async () => qualified,
+      activeSteerRun: async () => ({ state: "running", runId: "pi:generation:5" }),
+      steerStatus: async () => "unknown",
+      performSessionAction: async (_sessionId, action) => ({
+        outcome: "unknown",
+        requestId: action.kind === "steer" ? action.requestId : "",
+      }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-steer-requalify-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "pi" as const,
+          logicalSessionKey: "env-env-1:tab-pi-requalify",
+        };
+        await service.ensureSession(identity);
+        const outcome = await service.performProjectionAction({
+          ...identity,
+          action: { kind: "steer", text: "Check the parser" },
+        });
+        const requestId = outcome.requestId!;
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+
+        qualified = false;
+        await expect(service.retryRecoverableDispatch({ ...identity, requestId })).resolves.toEqual(
+          {
+            outcome: "rejected",
+            error: "pi bridge does not support reliable steering; recovery remains parked",
+          },
+        );
+        expect(stub.performSessionAction).toHaveBeenCalledTimes(1);
+        expect((await storage.getNativeAgentSession(key))?.pendingSteer?.requestId).toBe(requestId);
+      },
+    );
+  });
+
+  test("does not describe a running turn without a bindable id as idle", async () => {
+    const stub = createProviderStub("codex", {
+      activeSteerRun: async () => ({ state: "unknown" }),
+      steerStatus: async () => "unknown",
+      performSessionAction: async () => ({ outcome: "applied" }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-steer-unbound-run-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-unbound-run",
+        };
+        await service.ensureSession(identity);
+        await expect(
+          service.performProjectionAction({
+            ...identity,
+            action: { kind: "steer", text: "Keep the change narrow" },
+          }),
+        ).rejects.toThrow("active turn is not ready to steer");
+        expect(stub.performSessionAction).not.toHaveBeenCalled();
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        expect((await storage.getNativeAgentSession(key))?.pendingSteer).toBeUndefined();
+      },
+    );
+  });
+
+  test("parks a steer when the session vanishes at the provider boundary", async () => {
+    const stub = createProviderStub("codex", {
+      activeSteerRun: async () => ({ state: "running", runId: "turn-vanished" }),
+      steerStatus: async () => "unknown",
+      performSessionAction: async () => {
+        throw new PromptRejectedError("Codex session was not found");
+      },
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-steer-vanished-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-vanished-run",
+        };
+        await service.ensureSession(identity);
+        const outcome = await service.performProjectionAction({
+          ...identity,
+          action: { kind: "steer", text: "Keep the change narrow" },
+        });
+        expect(outcome).toMatchObject({ outcome: "unknown" });
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        expect((await storage.getNativeAgentSession(key))?.pendingSteer).toMatchObject({
+          expectedRunId: "turn-vanished",
+          state: "unknown",
+        });
+      },
+    );
+  });
+
+  test("does not open a durability barrier for an older unqualified bridge", async () => {
+    const stub = createProviderStub("codex", {
+      steerSupported: async () => false,
+      activeSteerRun: async () => ({ state: "running", runId: "turn-old" }),
+      steerStatus: async () => "unknown",
+      performSessionAction: async () => ({ outcome: "applied" }),
+    });
+    await withService(
+      {
+        prefix: "orkestrator-native-unqualified-steer-",
+        provider: async () => stub.provider,
+      },
+      async ({ service, storage }) => {
+        const identity = {
+          environmentId: "env-1",
+          agent: "codex" as const,
+          logicalSessionKey: "env-env-1:tab-old-bridge",
+        };
+        await service.ensureSession(identity);
+        await expect(
+          service.performProjectionAction({
+            ...identity,
+            action: { kind: "steer", text: "Do not dispatch this" },
+          }),
+        ).rejects.toThrow("bridge does not support reliable steering");
+        expect(stub.activeSteerRun).not.toHaveBeenCalled();
+        expect(stub.performSessionAction).not.toHaveBeenCalled();
+        const key = nativeAgentSessionStorageKey(
+          identity.environmentId,
+          identity.agent,
+          identity.logicalSessionKey,
+        );
+        expect((await storage.getNativeAgentSession(key))?.pendingSteer).toBeUndefined();
       },
     );
   });

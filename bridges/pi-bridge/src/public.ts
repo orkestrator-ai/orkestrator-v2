@@ -11,7 +11,13 @@ import type {
   NativeAgentRuntimeSummary,
 } from "@orkestrator/protocol/native-agent";
 import { PROVIDER } from "./config.js";
-import { sessionIsBlocked, sessionIsWorking, type JsonObject, type SessionState } from "./state.js";
+import {
+  piRunId,
+  sessionIsBlocked,
+  sessionIsWorking,
+  type JsonObject,
+  type SessionState,
+} from "./state.js";
 
 export function publicSession(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
@@ -19,6 +25,7 @@ export function publicSession(state: SessionState): JsonObject {
     id: state.id,
     provider: PROVIDER,
     status: state.status,
+    ...(state.status === "running" ? { turnId: piRunId(state) } : {}),
     error: state.error,
     ...(state.title ? { title: state.title } : {}),
     messages: state.messages,
@@ -38,6 +45,7 @@ export function publicStatus(state: SessionState): JsonObject {
   const contextUsage = publicContextUsage(state);
   return {
     status: state.status,
+    ...(state.status === "running" ? { turnId: piRunId(state) } : {}),
     error: state.error,
     revision: state.revision,
     // The backend reads the title from this route and no other — `/session/:id`
@@ -118,6 +126,18 @@ export function publicDispatch(state: SessionState, requestId: string): JsonObje
   const dispatched =
     entry?.state === "accepted" || entry?.state === "completed" || entry?.state === "failed";
   return { dispatch: dispatched ? "dispatched" : "unknown" };
+}
+
+export function publicSteerDispatch(state: SessionState, requestId: string): JsonObject {
+  const entry = requestId ? state.steerJournal.get(requestId) : undefined;
+  return {
+    dispatch:
+      entry?.state === "delivered"
+        ? "dispatched"
+        : entry?.state === "dropped"
+          ? "absent"
+          : "unknown",
+  };
 }
 
 /**

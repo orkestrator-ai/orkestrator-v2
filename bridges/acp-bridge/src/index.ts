@@ -10,6 +10,7 @@ export * from "./acp-reconciliation.js";
 export * from "./acp-persist-writer.js";
 export * from "./acp-persistence.js";
 export * from "./acp-http.js";
+export * from "./grok-interjection.js";
 export { server, shutdown } from "./acp-server.js";
 
 import "./acp-server.js";

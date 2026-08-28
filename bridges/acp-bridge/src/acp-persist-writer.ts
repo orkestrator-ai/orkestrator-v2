@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { boundTranscriptResponse } from "@orkestrator/protocol/transcript-window";
 import {
   MAX_PERSISTED_PROMPT_JOURNAL_BYTES,
+  MAX_PERSISTED_GROK_INTERJECTION_BYTES,
   MAX_PERSISTED_SESSION_CONFIG_BYTES,
   MAX_PERSISTED_STRUCTURED_BYTES,
   MAX_CURSOR_SETTLED_CLAIMS,
@@ -19,6 +20,7 @@ import {
 } from "./acp-context.js";
 import type { PersistedState, PromptJournalEntry } from "./acp-context.js";
 import type { AcpNormalizedSessionConfig } from "./session-config.js";
+import type { GrokInterjectionJournalEntry } from "./grok-interjection.js";
 
 /**
  * Writing the bounded state file, and the coalescing scheduler the rest of
@@ -100,9 +102,11 @@ export function boundPersistedSnapshot(snapshot: PersistedState): PersistedState
 export function persistedSnapshot(): PersistedState {
   let retainedStructuredBytes = 0;
   let retainedPromptJournalBytes = 0;
+  let retainedGrokInterjectionBytes = 0;
   let retainedSessionConfigBytes = 0;
   const structuredBySession = new Map<string, Array<[string, unknown]>>();
   const promptJournalBySession = new Map<string, PromptJournalEntry[]>();
+  const grokInterjectionBySession = new Map<string, GrokInterjectionJournalEntry[]>();
   const sessionConfigBySession = new Map<string, AcpNormalizedSessionConfig>();
   const newestSessions = [...sessions.values()].reverse();
   // Prefer the newest sessions and newest results while enforcing one global
@@ -117,6 +121,7 @@ export function persistedSnapshot(): PersistedState {
     }
     structuredBySession.set(state.id, retained);
     promptJournalBySession.set(state.id, []);
+    grokInterjectionBySession.set(state.id, []);
 
     const configBytes = Buffer.byteLength(JSON.stringify(state.sessionConfig));
     if (retainedSessionConfigBytes + configBytes <= MAX_PERSISTED_SESSION_CONFIG_BYTES) {
@@ -143,6 +148,24 @@ export function persistedSnapshot(): PersistedState {
   // a second time.
   retainJournalEntries(true);
   retainJournalEntries(false);
+  const retainGrokInterjections = (unfinished: boolean): void => {
+    for (const state of newestSessions) {
+      const retained = grokInterjectionBySession.get(state.id)!;
+      for (const rawEntry of [...state.grokInterjectionJournal.values()].reverse()) {
+        const isUnfinished = rawEntry.state === "prepared" || rawEntry.state === "queued";
+        if (isUnfinished !== unfinished) continue;
+        const entry = isUnfinished ? { ...rawEntry, state: "ambiguous" as const } : rawEntry;
+        const bytes = Buffer.byteLength(JSON.stringify(entry));
+        if (retainedGrokInterjectionBytes + bytes > MAX_PERSISTED_GROK_INTERJECTION_BYTES) {
+          continue;
+        }
+        retained.unshift(entry);
+        retainedGrokInterjectionBytes += bytes;
+      }
+    }
+  };
+  retainGrokInterjections(true);
+  retainGrokInterjections(false);
   const snapshot: PersistedState = {
     version: 3,
     provider,
@@ -163,6 +186,9 @@ export function persistedSnapshot(): PersistedState {
       revision: state.revision,
       structured: structuredBySession.get(state.id) ?? [],
       promptJournal: promptJournalBySession.get(state.id) ?? [],
+      ...(grokInterjectionBySession.get(state.id)!.length > 0
+        ? { grokInterjectionJournal: grokInterjectionBySession.get(state.id)! }
+        : {}),
       ...(sessionConfigBySession.has(state.id)
         ? { sessionConfig: sessionConfigBySession.get(state.id)! }
         : {}),

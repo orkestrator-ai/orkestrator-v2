@@ -17,6 +17,7 @@ process.env.PI_BRIDGE_LIBRARY_ONLY = "1";
 delete process.env.PI_BRIDGE_STATE_DIR;
 
 const { server, start, shutdown } = await import("./server.js");
+const { setDeleteCancelTimeoutForTests } = await import("./http.js");
 // Read back rather than assumed. In a shared process another suite may have
 // imported `config.ts` before the assignment above, in which case the module
 // froze a different token and every request here would 401 — a failure that
@@ -25,8 +26,9 @@ const { authToken: TOKEN } = await import("./config.js");
 const { newSessionState, setAgentSessionTestHooks } = await import("./agent-session.js");
 const { refreshModels } = await import("./models.js");
 const { setModelRuntimeFactoryForTests } = await import("./runtime.js");
-const { sessions, clientSessionKeys } = await import("./state.js");
+const { sessions, clientSessionKeys, piRunId } = await import("./state.js");
 const { loadPersistedState } = await import("./persistence.js");
+const { applySessionEvent } = await import("./translate.js");
 const { nativeFetch } = await import("./testing/native-fetch.js");
 
 let origin: string;
@@ -810,6 +812,23 @@ describe("closing a session", () => {
     expect(cancelled).toBe(true);
   });
 
+  test("finishes deletion when cancellation never settles", async () => {
+    const state = newSessionState("tab-hung-cancel");
+    sessions.set(state.id, state);
+    clientSessionKeys.set("tab-hung-cancel", state.id);
+    state.status = "running";
+    state.cancelTurn = () => new Promise<void>(() => undefined);
+    setDeleteCancelTimeoutForTests(5);
+    try {
+      const response = await call(`/session/${state.id}`, { method: "DELETE" });
+      expect(response.status).toBe(200);
+      expect(sessions.has(state.id)).toBe(false);
+      expect(clientSessionKeys.has("tab-hung-cancel")).toBe(false);
+    } finally {
+      setDeleteCancelTimeoutForTests();
+    }
+  });
+
   test("answers an unknown session 404 so teardown treats it as gone", async () => {
     const response = await call("/session/never-existed", { method: "DELETE" });
     expect(response.status).toBe(404);
@@ -945,6 +964,203 @@ describe("steering", () => {
       body: JSON.stringify({ input: "   " }),
     });
     expect(response.status).toBe(400);
+  });
+
+  test("pins, deduplicates, and reconciles delivery without requeueing", async () => {
+    let steerCalls = 0;
+    const state = seedSession();
+    state.session = fakeAgentSession({
+      steer: async () => {
+        steerCalls += 1;
+      },
+    });
+    state.status = "running";
+    state.promptSequence = 4;
+    const request = {
+      input: "focus on the parser",
+      requestId: "steer-4",
+      expectedRunId: piRunId(state),
+    };
+
+    const accepted = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+    expect(accepted.status).toBe(202);
+    expect(await accepted.json()).toEqual({ outcome: "unknown", requestId: "steer-4" });
+    expect(steerCalls).toBe(1);
+    expect(state.steerJournal.get("steer-4")?.state).toBe("queued");
+
+    const duplicate = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+    expect(duplicate.status).toBe(503);
+    expect(steerCalls).toBe(1);
+
+    const conflict = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({ ...request, input: "a different instruction" }),
+    });
+    expect(conflict.status).toBe(409);
+    expect(steerCalls).toBe(1);
+
+    const livenessBefore = state.lastAccessed;
+    expect(
+      await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-4`)).json(),
+    ).toEqual({ dispatch: "unknown" });
+    expect(state.lastAccessed).toBe(livenessBefore);
+
+    applySessionEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "a different instruction" }],
+        timestamp: Date.now(),
+      },
+    });
+    expect(state.pendingSteerDeliveries).toHaveLength(1);
+    expect(state.steerJournal.get("steer-4")?.state).toBe("queued");
+    expect(state.messages).toHaveLength(0);
+
+    applySessionEvent(state, {
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: request.input }],
+        timestamp: Date.now(),
+      },
+    });
+    expect(state.messages.at(-1)).toMatchObject({ role: "user", content: request.input });
+    expect(state.steerJournal.get("steer-4")?.state).toBe("delivered");
+    expect(
+      await (await call(`/session/${state.id}/steer/dispatch?requestId=steer-4`)).json(),
+    ).toEqual({ dispatch: "dispatched" });
+
+    const reconciled = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+    expect(reconciled.status).toBe(202);
+    expect(await reconciled.json()).toMatchObject({ outcome: "applied", duplicate: true });
+    expect(steerCalls).toBe(1);
+  });
+
+  test("rejects a steer pinned to a replaced run without entering Pi", async () => {
+    let steerCalls = 0;
+    const state = seedSession();
+    state.session = fakeAgentSession({
+      steer: async () => {
+        steerCalls += 1;
+      },
+    });
+    state.status = "running";
+    state.promptSequence = 2;
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "focus on tests",
+        requestId: "stale-steer",
+        expectedRunId: "pi:old-generation:1",
+      }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ outcome: "mismatch" });
+    expect(steerCalls).toBe(0);
+    expect(state.steerJournal.size).toBe(0);
+  });
+
+  test("does not miss a delivery event emitted before steer returns", async () => {
+    const state = seedSession();
+    state.status = "running";
+    state.promptSequence = 5;
+    state.session = fakeAgentSession({
+      steer: async (text) => {
+        applySessionEvent(state, {
+          type: "message_start",
+          message: {
+            role: "user",
+            content: [{ type: "text", text }],
+            timestamp: Date.now(),
+          },
+        });
+      },
+    });
+    const response = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "preserve the current API",
+        requestId: "steer-fast-delivery",
+        expectedRunId: piRunId(state),
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({
+      outcome: "applied",
+      requestId: "steer-fast-delivery",
+    });
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.get("steer-fast-delivery")?.state).toBe("delivered");
+    expect(state.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "preserve the current API",
+    });
+  });
+
+  test("refuses steering while the initial prompt is still in preflight", async () => {
+    const state = seedSession();
+    let announcePreflight: (accepted: boolean) => void = () => undefined;
+    let rejectFirstRun: (error: unknown) => void = () => undefined;
+    let promptCalls = 0;
+    let steerCalls = 0;
+    const firstRun = new Promise<void>((_resolve, reject) => {
+      rejectFirstRun = reject;
+    });
+    state.session = fakeAgentSession({
+      prompt: (_text: string, options: { preflightResult?: (accepted: boolean) => void }) => {
+        promptCalls += 1;
+        if (promptCalls === 1) {
+          announcePreflight = options.preflightResult ?? (() => undefined);
+          return firstRun;
+        }
+        options.preflightResult?.(true);
+        return Promise.resolve();
+      },
+      steer: async () => {
+        steerCalls += 1;
+      },
+    });
+
+    const firstPrompt = call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "first", requestId: "prompt-preflight" }),
+    });
+    await waitFor(() => state.dispatching && state.status === "running");
+
+    const steer = await call(`/session/${state.id}/steer`, {
+      method: "POST",
+      body: JSON.stringify({
+        input: "must not leak",
+        requestId: "steer-during-preflight",
+        expectedRunId: piRunId(state),
+      }),
+    });
+    expect(await steer.json()).toEqual({ outcome: "idle" });
+    expect(steerCalls).toBe(0);
+
+    announcePreflight(false);
+    rejectFirstRun(new Error("preflight rejected"));
+    expect((await firstPrompt).status).toBe(500);
+    expect(state.pendingSteerDeliveries).toEqual([]);
+    expect(state.steerJournal.size).toBe(0);
+
+    const secondPrompt = await call(`/session/${state.id}/prompt`, {
+      method: "POST",
+      body: JSON.stringify({ prompt: "second", requestId: "prompt-after-preflight" }),
+    });
+    expect(secondPrompt.status).toBe(202);
+    expect(steerCalls).toBe(0);
   });
 });
 

@@ -121,6 +121,7 @@ import type {
   PersistedBuildPipeline,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
+  PersistedNativeAgentPendingSteer,
   PersistedComposeDraft,
   PersistedFileDraft,
   PersistedPromptQueue,
@@ -491,6 +492,8 @@ export async function resizeKanbanImage(rawBytes: Buffer): Promise<Buffer> {
 
 export const MAX_JSON_BACKUPS = 5;
 export const MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES = 32 * 1024 * 1024;
+// Worst-case JSON escaping for a 64 KiB instruction plus bounded ids and fields.
+export const MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES = 400 * 1024;
 export const MAX_SESSIONS_PER_ENVIRONMENT = 20;
 
 export const DEFAULT_ALLOWED_DOMAINS = [
@@ -916,6 +919,29 @@ export function isPersistedNativeAgentSession(
             return (
               Buffer.byteLength(JSON.stringify(value.pendingDispatch), "utf8") <=
               MAX_PERSISTED_NATIVE_AGENT_PENDING_DISPATCH_BYTES
+            );
+          } catch {
+            return false;
+          }
+        })())) &&
+    (value.pendingSteer === undefined ||
+      (isRecord(value.pendingSteer) &&
+        isNonBlankString(value.pendingSteer.requestId) &&
+        Buffer.byteLength(value.pendingSteer.requestId, "utf8") <= 512 &&
+        isNonBlankString(value.pendingSteer.text) &&
+        Buffer.byteLength(value.pendingSteer.text, "utf8") <= 64 * 1024 &&
+        isNonBlankString(value.pendingSteer.inputDigest) &&
+        /^[a-f0-9]{64}$/.test(value.pendingSteer.inputDigest) &&
+        isNonBlankString(value.pendingSteer.expectedRunId) &&
+        Buffer.byteLength(value.pendingSteer.expectedRunId, "utf8") <= 512 &&
+        (value.pendingSteer.state === "prepared" || value.pendingSteer.state === "unknown") &&
+        typeof value.pendingSteer.createdAt === "string" &&
+        Number.isFinite(Date.parse(value.pendingSteer.createdAt)) &&
+        (() => {
+          try {
+            return (
+              Buffer.byteLength(JSON.stringify(value.pendingSteer), "utf8") <=
+              MAX_PERSISTED_NATIVE_AGENT_PENDING_STEER_BYTES
             );
           } catch {
             return false;
@@ -1963,6 +1989,7 @@ export type {
   ResourceRevisionMap,
   ResourceSnapshotRevision,
   AgentModel,
+  PersistedNativeAgentPendingSteer,
   AgentActivityState,
   AgentActivitySource,
   AgentModelCatalogCache,

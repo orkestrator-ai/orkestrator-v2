@@ -55,9 +55,10 @@ import type {
   OpenCodeIncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
+  PersistedNativeAgentPendingSteer,
 } from "./models.js";
 import type { StorageService } from "./storage.js";
-import { PendingNativeAgentDispatchError } from "./storage.js";
+import { PendingNativeAgentDispatchError, PendingNativeAgentSteerError } from "./storage.js";
 import {
   AmbiguousPromptDispatchError,
   createNativeAgentProvider,
@@ -66,6 +67,7 @@ import {
   readProviderStatus,
   type BridgeConnection,
   type NativeAgentRuntimeProvider,
+  type ProviderNativeAgentSessionAction,
   type ProviderInteractiveSnapshot,
   type ProviderInteractionObservationEvent,
   type ProviderExecutionMode,
@@ -534,6 +536,7 @@ export {
   resolveStartupLaunchFromSettings,
   resolveAgentPlatformSettings,
   PendingNativeAgentDispatchError,
+  PendingNativeAgentSteerError,
   AmbiguousPromptDispatchError,
   createNativeAgentProvider,
   PromptRejectedError,
@@ -576,9 +579,11 @@ export type {
   OpenCodeIncompleteTurnNotice,
   PersistedNativeAgentSession,
   PersistedNativeAgentPendingDispatch,
+  PersistedNativeAgentPendingSteer,
   StorageService,
   BridgeConnection,
   NativeAgentRuntimeProvider,
+  ProviderNativeAgentSessionAction,
   ProviderInteractiveSnapshot,
   ProviderInteractionObservationEvent,
   ProviderExecutionMode,

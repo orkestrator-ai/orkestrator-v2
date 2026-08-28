@@ -1,12 +1,25 @@
-import { isAgentPlatform, type AgentPlatform } from "./agent-platforms.js";
+import type { AgentPlatform } from "./agent-platforms.js";
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import { getReviewInstructionValidationError } from "./review-prompt.js";
 import { isSafeLoopedReviewTargetBranch } from "./review-workflow.js";
+import {
+  REVIEW_FANOUT_MAX_REVIEWERS,
+  REVIEW_FANOUT_MAX_SNAPSHOT_PATHS,
+  REVIEW_FANOUT_MIN_REVIEWERS,
+  isReviewerModelSelection,
+  isReviewerModelSelectionFields,
+  isReviewerRecordList,
+  isReviewWorktreeSnapshotRecord,
+  type ReviewerModelSelection,
+  type ReviewerRecord,
+  type ReviewerStatus,
+  type ReviewWorktreeSnapshotRecord,
+} from "./review-fanout.js";
 
 export const MULTI_REVIEW_WORKFLOW_VERSION = 1 as const;
-export const MULTI_REVIEW_MIN_REVIEWERS = 1;
-export const MULTI_REVIEW_MAX_REVIEWERS = 32;
-export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = 10_000;
+export const MULTI_REVIEW_MIN_REVIEWERS = REVIEW_FANOUT_MIN_REVIEWERS;
+export const MULTI_REVIEW_MAX_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
+export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
 export const MULTI_REVIEW_ADDRESS_PROMPT =
   "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.";
 /** Stable pane label for current Multi Review fix tabs. */
@@ -14,49 +27,26 @@ export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
 /** Former pane title retained for restored layouts and backend session metadata. */
 export const MULTI_REVIEW_LEGACY_FIX_TAB_TITLE = "Multi Review · Fix";
 
-export interface MultiReviewModelSelection {
-  agent: AgentPlatform;
-  model: string;
-  reasoningEffort?: string;
-}
+/**
+ * Aliases of the shared fan-out records.
+ *
+ * The reviewer machinery is the same program in Multi Review and in the build
+ * pipeline's review stage, so its records live in `review-fanout` and both
+ * owners embed them. These names stay because the Multi Review read model,
+ * its storage and its tab all speak them.
+ */
+export type MultiReviewModelSelection = ReviewerModelSelection;
 
-export type MultiReviewReviewerStatus =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled";
+export type MultiReviewReviewerStatus = ReviewerStatus;
 
-export interface MultiReviewReviewer extends MultiReviewModelSelection {
-  id: string;
-  status: MultiReviewReviewerStatus;
-  sessionKey?: string;
-  providerSessionId?: string;
-  requestId?: string;
-  dispatchState?: "prepared" | "dispatching" | "sent";
-  /** Durable correction turn for a rejected structured report. */
-  schemaRepairAttempts?: number;
-  schemaRepairPrompt?: string;
-  idleResultPolls?: number;
-  /** Last time the supervisor observed this reviewer's transcript change. */
-  progressAt?: string;
-  /**
-   * SHA-256 of the last progress probe. Survives a backend restart so the next
-   * probe can compare against known state instead of inventing a new baseline.
-   */
-  progressDigest?: string;
-  /** Set once the reviewer has produced no transcript activity for too long. */
-  stalledSince?: string;
-  report?: StructuredReviewReport;
-  error?: string;
-  startedAt?: string;
-  completedAt?: string;
-}
+export type MultiReviewReviewer = ReviewerRecord;
 
 /** Authoritative read model for one reviewer's provider transcript. */
 export interface MultiReviewReviewerTranscript {
   workflowId: string;
   reviewerId: string;
+  /** Authoritative parent state, used to offer recovery from this nested view. */
+  workflowPhase: MultiReviewPhase;
   agent: AgentPlatform;
   model: string;
   reasoningEffort?: string;
@@ -101,13 +91,7 @@ export interface MultiReviewFixSession extends MultiReviewModelSelection {
 }
 
 /** Durable identity shared by every reviewer and the consolidation turn. */
-export interface MultiReviewWorktreeSnapshot {
-  status: "clean" | "dirty";
-  head: string;
-  paths: string[];
-  fingerprint: string;
-  capturedAt: string;
-}
+export type MultiReviewWorktreeSnapshot = ReviewWorktreeSnapshotRecord;
 
 export interface MultiReviewWorkflow {
   version: typeof MULTI_REVIEW_WORKFLOW_VERSION;
@@ -178,15 +162,9 @@ function nonBlank(value: unknown, max = 512): value is string {
   return typeof value === "string" && value.trim().length > 0 && value.length <= max;
 }
 
-export function isMultiReviewModelSelection(value: unknown): value is MultiReviewModelSelection {
-  if (!record(value) || !hasOnlyKeys(value, ["agent", "model", "reasoningEffort"])) return false;
-  return isMultiReviewModelSelectionFields(value);
-}
+export const isMultiReviewModelSelection = isReviewerModelSelection;
 
-function isMultiReviewModelSelectionFields(value: Record<string, unknown>): boolean {
-  if (!isAgentPlatform(value.agent) || !nonBlank(value.model)) return false;
-  return value.reasoningEffort === undefined || nonBlank(value.reasoningEffort, 128);
-}
+const isMultiReviewModelSelectionFields = isReviewerModelSelectionFields;
 
 export function isStartMultiReviewInput(value: unknown): value is StartMultiReviewInput {
   if (
@@ -225,42 +203,12 @@ const PHASES = new Set<MultiReviewPhase>([
   "cancelled",
   "failed",
 ]);
-const REVIEWER_STATUSES = new Set<MultiReviewReviewerStatus>([
-  "pending",
-  "running",
-  "completed",
-  "failed",
-  "cancelled",
-]);
-
 function optionalString(value: unknown, max: number): boolean {
   return value === undefined || (typeof value === "string" && value.length <= max);
 }
 
 function optionalDate(value: unknown): boolean {
   return value === undefined || (typeof value === "string" && Number.isFinite(Date.parse(value)));
-}
-
-function isMultiReviewWorktreeSnapshot(value: unknown): value is MultiReviewWorktreeSnapshot {
-  return (
-    record(value) &&
-    hasOnlyKeys(value, ["status", "head", "paths", "fingerprint", "capturedAt"]) &&
-    (value.status === "clean" || value.status === "dirty") &&
-    typeof value.head === "string" &&
-    /^[0-9a-f]{40,64}$/i.test(value.head) &&
-    Array.isArray(value.paths) &&
-    value.paths.length <= MULTI_REVIEW_MAX_SNAPSHOT_PATHS &&
-    value.paths.every(
-      (entry) => typeof entry === "string" && entry.length > 0 && entry.length <= 4_096,
-    ) &&
-    (value.status === "clean" ? value.paths.length === 0 : value.paths.length > 0) &&
-    typeof value.fingerprint === "string" &&
-    /^[0-9a-f]{64}$/i.test(value.fingerprint) &&
-    // `Date.parse` coerces, so the string check cannot be left to the cast:
-    // a numeric 0 stringifies to "0" and parses as a valid date.
-    typeof value.capturedAt === "string" &&
-    Number.isFinite(Date.parse(value.capturedAt))
-  );
 }
 
 function optionalPollCount(value: unknown): boolean {
@@ -426,7 +374,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     (value.controllerFence !== undefined && !nonBlank(value.controllerFence)) ||
     (value.fixSession !== undefined && !isFixSession(value.fixSession)) ||
     (value.reviewWorktreeSnapshot !== undefined &&
-      !isMultiReviewWorktreeSnapshot(value.reviewWorktreeSnapshot)) ||
+      !isReviewWorktreeSnapshotRecord(value.reviewWorktreeSnapshot)) ||
     (value.reviewSnapshotStale !== undefined && typeof value.reviewSnapshotStale !== "boolean") ||
     (value.activeRequest !== undefined && !isActiveRequest(value.activeRequest)) ||
     !optionalDate(value.cancellingSince) ||
@@ -440,61 +388,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
   ) {
     return false;
   }
-  if (
-    !value.reviewers.every(
-      (entry) =>
-        record(entry) &&
-        hasOnlyKeys(entry, [
-          "agent",
-          "model",
-          "reasoningEffort",
-          "id",
-          "status",
-          "sessionKey",
-          "providerSessionId",
-          "requestId",
-          "dispatchState",
-          "idleResultPolls",
-          "report",
-          "schemaRepairAttempts",
-          "schemaRepairPrompt",
-          "error",
-          "progressAt",
-          "progressDigest",
-          "stalledSince",
-          "startedAt",
-          "completedAt",
-        ]) &&
-        isMultiReviewModelSelectionFields(entry) &&
-        nonBlank(entry.id) &&
-        REVIEWER_STATUSES.has(entry.status as MultiReviewReviewerStatus) &&
-        (entry.sessionKey === undefined || nonBlank(entry.sessionKey)) &&
-        (entry.providerSessionId === undefined || nonBlank(entry.providerSessionId)) &&
-        (entry.requestId === undefined || nonBlank(entry.requestId)) &&
-        (entry.dispatchState === undefined ||
-          ["prepared", "dispatching", "sent"].includes(entry.dispatchState as string)) &&
-        optionalRepairAttempts(entry.schemaRepairAttempts) &&
-        optionalString(entry.schemaRepairPrompt, 100_000) &&
-        optionalPollCount(entry.idleResultPolls) &&
-        optionalString(entry.error, 4_096) &&
-        optionalDate(entry.progressAt) &&
-        optionalProgressDigest(entry.progressDigest) &&
-        optionalDate(entry.stalledSince) &&
-        optionalDate(entry.startedAt) &&
-        optionalDate(entry.completedAt) &&
-        (entry.report === undefined || isStructuredReviewReport(entry.report)),
-    )
-  ) {
-    return false;
-  }
-  if (new Set(value.reviewers.map((entry) => entry.id)).size !== value.reviewers.length)
-    return false;
-  if (
-    value.reviewers.some(
-      (entry) => entry.status === "completed" && !isStructuredReviewReport(entry.report),
-    )
-  )
-    return false;
+  if (!isReviewerRecordList(value.reviewers)) return false;
   if (
     (value.phase === "ready" ||
       value.phase === "fixing" ||

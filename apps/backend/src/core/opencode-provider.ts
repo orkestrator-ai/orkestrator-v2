@@ -1379,6 +1379,20 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     }
   }
 
+  async closeSession(sessionId: string): Promise<void> {
+    try {
+      const response = await this.client.session.delete(
+        { sessionID: sessionId },
+        this.requestOptions(),
+      );
+      assertSdkResponse(response, "OpenCode session delete");
+    } catch (error) {
+      throw new ProviderUnavailableError("OpenCode session delete is unavailable", {
+        cause: error,
+      });
+    }
+  }
+
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;

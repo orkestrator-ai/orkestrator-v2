@@ -1128,6 +1128,7 @@ describe("MultiReviewReviewerTab", () => {
     const loadTranscript = mock(async () => ({
       workflowId: "multi-1",
       reviewerId: "reviewer-1",
+      workflowPhase: "ready" as const,
       agent: "codex" as const,
       model: "gpt-5.6",
       reasoningEffort: "high",
@@ -1224,6 +1225,7 @@ describe("MultiReviewReviewerTab", () => {
     const completed: MultiReviewReviewerTranscript = {
       workflowId: "multi-1",
       reviewerId: "reviewer-1",
+      workflowPhase: "ready",
       agent: "codex",
       model: "gpt-5.6",
       status: "completed",
@@ -1304,6 +1306,7 @@ describe("MultiReviewReviewerTab", () => {
     const running: MultiReviewReviewerTranscript = {
       workflowId: "multi-1",
       reviewerId: "reviewer-1",
+      workflowPhase: "reviewing",
       agent: "codex",
       model: "gpt-5.6",
       status: "running",
@@ -1395,6 +1398,7 @@ describe("MultiReviewReviewerTab", () => {
     const completed: MultiReviewReviewerTranscript = {
       workflowId: "multi-1",
       reviewerId: "reviewer-1",
+      workflowPhase: "ready",
       agent: "codex",
       model: "gpt-5.6",
       status: "completed",
@@ -1458,6 +1462,7 @@ describe("MultiReviewReviewerTab", () => {
     const running: MultiReviewReviewerTranscript = {
       workflowId: "multi-1",
       reviewerId: "reviewer-1",
+      workflowPhase: "reviewing",
       agent: "codex",
       model: "gpt-5.6",
       status: "running",
@@ -1553,6 +1558,7 @@ describe("MultiReviewReviewerTab", () => {
     const staleSnapshot: MultiReviewReviewerTranscript = {
       workflowId: "multi-1",
       reviewerId: "reviewer-1",
+      workflowPhase: "reviewing",
       agent: "codex",
       model: "stale-inactive-model",
       status: "running",
@@ -1649,6 +1655,7 @@ describe("MultiReviewReviewerTab stop control", () => {
   const runningSnapshot: MultiReviewReviewerTranscript = {
     workflowId: "multi-1",
     reviewerId: "reviewer-1",
+    workflowPhase: "reviewing",
     agent: "cursor",
     model: "composer-1",
     status: "running",
@@ -1686,6 +1693,64 @@ describe("MultiReviewReviewerTab stop control", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: "Stop this reviewer" }) === null).toBe(true),
     );
+  });
+
+  test("restarts a failed workflow from its stopped reviewer transcript", async () => {
+    const failedWorkflow: MultiReviewWorkflow = {
+      ...reviewingWorkflow(),
+      phase: "failed",
+      backendRevision: 8,
+      error: "No reviewer produced a valid report: 1 reviewer was stopped",
+      reviewers: [
+        {
+          ...reviewingWorkflow().reviewers[0]!,
+          status: "cancelled",
+          completedAt: "2026-08-14T00:10:00.000Z",
+        },
+      ],
+    };
+    const restartedWorkflow: MultiReviewWorkflow = {
+      ...failedWorkflow,
+      phase: "reviewing",
+      backendRevision: 9,
+      error: undefined,
+      reviewers: [{ ...failedWorkflow.reviewers[0]!, status: "pending" }],
+    };
+    let current: MultiReviewReviewerTranscript = {
+      ...runningSnapshot,
+      workflowPhase: "failed",
+      status: "cancelled",
+    };
+    const loadTranscript = mock(async () => current);
+    const retryReview = mock(async () => {
+      current = { ...current, workflowPhase: "reviewing", status: "pending", messages: [] };
+      return restartedWorkflow;
+    });
+    useMultiReviewStore.getState().replaceWorkflow(failedWorkflow);
+
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        retryReview={retryReview}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Restart failed review" }));
+    await waitFor(() => expect(retryReview).toHaveBeenCalledWith("multi-1"));
+    await waitFor(() =>
+      expect(useMultiReviewStore.getState().workflows.get("multi-1")?.phase).toBe("reviewing"),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Restart failed review" }) === null).toBe(true),
+    );
+    expect(screen.getByRole("button", { name: "Refresh reviewer transcript" })).toBeTruthy();
   });
 
   test("surfaces a stall on a reviewer that is still running", async () => {

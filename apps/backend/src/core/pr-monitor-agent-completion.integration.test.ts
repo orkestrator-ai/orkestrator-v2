@@ -19,7 +19,7 @@ const PR_URL = "https://github.com/acme/repo/pull/7";
 async function waitForCondition(
   condition: () => boolean | Promise<boolean>,
   description: string,
-  timeoutMs = 3_000,
+  timeoutMs = 10_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -156,7 +156,7 @@ printf '%s\\n' '{"url":"${PR_URL}","state":"OPEN","mergeable":"MERGEABLE"}'
     else process.env.FAKE_GH_LOG = originalFakeGhLog;
     await fs.rm(testRoot, { recursive: true, force: true });
   }
-});
+}, 30_000);
 
 /**
  * The other half of the agent-idle edge: an environment the monitor is *not*

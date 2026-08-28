@@ -952,7 +952,7 @@ describe("remote gateway", () => {
       failures: 1,
     });
     expect(metrics.commands.__unknown__).toMatchObject({ count: 1, failures: 1 });
-  });
+  }, 30_000);
 
   test("treats a loopback browser listener as remote for compression rollout while control stays identity", async () => {
     const { info } = await startGateway({

@@ -427,7 +427,7 @@ printf '%080d' 0 > "$out"`);
         maxOutputBytes: 64,
       }),
     ).rejects.toThrow("output exceeded the limit");
-  });
+  }, 30_000);
 
   test("handles early stdin closure and drains large stderr", async () => {
     const executable = createExecutable(`

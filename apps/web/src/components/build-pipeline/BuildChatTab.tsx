@@ -466,7 +466,14 @@ export function BuildChatTab({
     !interactionFailure &&
     pipeline.sessions.length > 0 &&
     Boolean(pipeline.environmentId);
-  const canSendMessage = pipeline.phase !== "complete" && pipeline.phase !== "failed";
+  const canSendMessage =
+    pipeline.phase !== "complete" &&
+    pipeline.phase !== "failed" &&
+    !(
+      (pipeline.reviewers?.length ?? 0) > 1 &&
+      (pipeline.phase === "reviewing" ||
+        (pipeline.phase === "paused" && pipeline.pausedFromPhase === "reviewing"))
+    );
   const queuedMessages = pipeline.pendingUserMessages?.length ?? 0;
   // Names the harness of the session on screen, which per-step configuration
   // can make different from the pipeline's build agent.

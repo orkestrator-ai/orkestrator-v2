@@ -635,6 +635,9 @@ describe("StorageService resource change announcements", () => {
         0,
       );
       expect(changes.at(-1)).toMatchObject({ resource: "pane-layout", id: "e1" });
+      changes.length = 0;
+      await storage.removeMultiReviewTabs("e1", "missing-workflow");
+      expect(changes).toEqual([]);
 
       await storage.saveLoopedReviewWorkflow("w1", "e1", 1, { id: "w1" });
       expect(changes.at(-1)).toMatchObject({ resource: "looped-review", id: "w1" });

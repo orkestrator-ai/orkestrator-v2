@@ -10,6 +10,7 @@ import {
   executionModeForSessionPhase,
   isBuildPipeline,
   isActiveBuildPhase,
+  usesReviewFanout,
 } from "@orkestrator/protocol/build-pipeline";
 import {
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -38,6 +39,11 @@ import {
   type ReviewWorktreeSnapshot,
 } from "./build-pipeline-prompts.js";
 import { buildReviewHandoffPrompt, prependReviewHandoff } from "./build-pipeline-handoff.js";
+import {
+  BuildPipelineReviewFanout,
+  type ReviewFanoutStep,
+} from "./build-pipeline-review-fanout.js";
+import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { probeReviewWorktreeOnce } from "./review-worktree-probe.js";
 import { BuildPipelineServiceBase } from "./build-pipeline-service-base.js";
 import {
@@ -60,6 +66,37 @@ import {
 } from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServiceBase {
+  /**
+   * Progress clocks for the reviewer fan-out.
+   *
+   * Held on the supervisor rather than per pass so a reviewer's stall baseline
+   * survives between ticks; entries are dropped when a session settles, so it
+   * cannot grow with pipeline history.
+   */
+  private readonly reviewProgress = new MultiReviewProgressTracker();
+  private reviewFanoutRunner: BuildPipelineReviewFanout | null = null;
+
+  protected reviewFanout(): BuildPipelineReviewFanout {
+    if (!this.reviewFanoutRunner) {
+      this.reviewFanoutRunner = new BuildPipelineReviewFanout({
+        invoke: (command, args) => this.invoke(command, args),
+        provider: (pipeline, agent) => this.provider(pipeline, agent),
+        save: async (pipeline) => {
+          await this.save(pipeline, pipeline.backendRevision);
+        },
+        stepSettings: (pipeline, sessionPhase) => this.stepSettings(pipeline, sessionPhase),
+        refreshTranscript: (session, provider) => this.refreshTranscript(session, provider),
+        shouldPersistTranscript: (session) => this.shouldPersistTranscript(session),
+        targetBranch: async (pipeline) => {
+          const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+          return repository.prBaseBranch || "main";
+        },
+        progress: this.reviewProgress,
+      });
+    }
+    return this.reviewFanoutRunner;
+  }
+
   protected requestTick(): Promise<void> {
     if (this.tickPromise) {
       this.tickRequested = true;
@@ -134,9 +171,22 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         (await this.findLinkedEnvironment(pipeline)) ??
         (await this.invoke<Environment>("create_environment", {
           projectId: pipeline.projectId,
-          networkAccessMode: pipeline.environmentType === "containerized" ? "restricted" : "full",
+          // A launcher that collected a network mode wins; otherwise a
+          // container is restricted, which is the app's own default, and a
+          // local worktree has no firewall to apply one to.
+          networkAccessMode:
+            pipeline.environmentOptions?.networkAccessMode ??
+            (pipeline.environmentType === "containerized" ? "restricted" : "full"),
           environmentType: pipeline.environmentType,
           buildPipelineId: pipeline.id,
+          // An explicit name suppresses the rename-from-prompt path in
+          // `create_environment`, so it is only sent when the user chose one.
+          ...(pipeline.environmentOptions?.name?.trim()
+            ? { name: pipeline.environmentOptions.name.trim() }
+            : {}),
+          ...(pipeline.environmentOptions?.portMappings?.length
+            ? { portMappings: pipeline.environmentOptions.portMappings }
+            : {}),
           namingPrompt:
             namingPrompt ?? this.provisioningPrompts.get(pipeline.id) ?? pipeline.taskTitle,
         }));
@@ -207,6 +257,34 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       } else {
         await this.startStage(pipeline, sessionPhase, phase);
       }
+      return;
+    }
+
+    // The fan-out drives several reviewer sessions at once, so it cannot go
+    // through the single-session path below. It owns the whole `reviewing`
+    // phase and hands back one consolidated report.
+    // Gated on the configuration rather than on the live record: a pipeline
+    // that crashed between opening this stage and persisting its state has the
+    // phase and no fan-out, and falling through to the single-session path
+    // below would read whichever session happens to be current as the review.
+    if (pipeline.phase === "reviewing" && usesReviewFanout(pipeline)) {
+      // Handled here rather than on the idle path below: that path is reached
+      // through the current session, and the fan-out has several.
+      if (pipeline.reviewRetryRequested) {
+        await this.abandonReviewFanout(pipeline, "idle");
+        delete pipeline.reviewRetryRequested;
+        delete pipeline.reviewFanout;
+        delete pipeline.structuredReview;
+        delete pipeline.verificationResult;
+        delete pipeline.verificationFeedback;
+        await this.startStage(pipeline, "review", "reviewing");
+        return;
+      }
+      if (!pipeline.reviewFanout) {
+        await this.startStage(pipeline, "review", "reviewing");
+        return;
+      }
+      await this.advanceReviewFanout(pipeline);
       return;
     }
 
@@ -600,6 +678,30 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     await this.startStage(pipeline, stage, pipeline.phase as ResumableBuildPhase);
   }
 
+  /**
+   * Applies one pass of the multi-model review stage.
+   *
+   * The fan-out reports what happened rather than mutating the phase itself,
+   * so that the transition into `addressing` stays where every other stage
+   * transition is, and a failure is raised the same way any other stage's is.
+   */
+  protected async advanceReviewFanout(pipeline: BuildPipeline): Promise<void> {
+    const step: ReviewFanoutStep = await this.reviewFanout().advance(pipeline);
+    if (step.kind === "working") return;
+    if (step.kind === "failed") throw new Error(step.error);
+    // The address stage opens first, and only then is the record dropped.
+    // Doing it the other way round leaves a window in which the phase is still
+    // `reviewing` with nothing to drive it, which the branch above would have
+    // to recover from by re-running every reviewer.
+    await this.startStage(pipeline, "address", "addressing");
+    // Everything downstream reads `structuredReview`, which the fan-out has
+    // already written. Dropping the record keeps the snapshot from carrying a
+    // completed fan-out through the rest of the run — and makes a later review
+    // iteration start a fresh one rather than resume this one.
+    delete pipeline.reviewFanout;
+    await this.save(pipeline, pipeline.backendRevision);
+  }
+
   protected async startStage(
     pipeline: BuildPipeline,
     sessionPhase: PipelineSessionPhase,
@@ -610,6 +712,18 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       mode?: ProviderExecutionMode;
     },
   ): Promise<void> {
+    // A multi-reviewer pipeline has no single review session to open, so the
+    // review stage is delegated whole. An `override` is a hand-written prompt
+    // for one session — a retry or a user message — and is never a fan-out.
+    if (sessionPhase === "review" && !override && usesReviewFanout(pipeline)) {
+      try {
+        await this.reviewFanout().start(pipeline);
+      } catch (error) {
+        if (error instanceof ProviderUnavailableError) throw error;
+        throw new PreSessionStageStartError(error, phase);
+      }
+      return;
+    }
     const dispatch = await (async () => {
       if (sessionPhase === "build") {
         await this.updateKanbanLifecycle(pipeline, {

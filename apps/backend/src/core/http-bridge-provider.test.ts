@@ -423,7 +423,7 @@ describe("HTTP bridge provider", () => {
     );
   });
 
-  test("reads status and messages, dispatches prompts, and aborts sessions", async () => {
+  test("reads status and messages, dispatches prompts, aborts, and closes sessions", async () => {
     const { provider, requests } = httpProvider((url) => {
       if (url.endsWith("/session/session%2F1")) {
         return Response.json({ status: "running" });
@@ -442,13 +442,16 @@ describe("HTTP bridge provider", () => {
       images: [{ filename: "screen.webp", data: "AA==" }],
     });
     await provider.abort("session/1");
+    await provider.closeSession!("session/1");
 
     expect(requests.map((request) => request.url)).toEqual([
       "http://claude.test/session/session%2F1",
       "http://claude.test/session/session%2F1/messages",
       "http://claude.test/session/session%2F1/prompt",
       "http://claude.test/session/session%2F1/abort",
+      "http://claude.test/session/session%2F1",
     ]);
+    expect(requests[4]!.init.method).toBe("DELETE");
     // Every bridge validator requires `path`: the Claude route rejects the whole
     // request without one and the Codex route silently drops the entry. So a
     // base64 image is staged into the workspace and attached by path.
@@ -466,6 +469,43 @@ describe("HTTP bridge provider", () => {
         },
       ],
     });
+  });
+
+  test("treats a missing close session as success and propagates other close failures", async () => {
+    const missing = httpProvider(() => new Response(null, { status: 404 }));
+    await expect(missing.provider.closeSession!("missing-session")).resolves.toBeUndefined();
+
+    const failed = httpProvider(() =>
+      Response.json({ error: "bridge unavailable" }, { status: 503 }),
+    );
+    await expect(failed.provider.closeSession!("live-session")).rejects.toThrow(
+      "bridge unavailable",
+    );
+  });
+
+  test("forgets a closed Codex session's cached execution mode", async () => {
+    const { provider, requests } = httpProvider((url, init) => {
+      if (url.endsWith("/session/create")) return Response.json({ sessionId: "session-1" });
+      if (init.method === "DELETE") return Response.json({});
+      if (url.endsWith("/config")) {
+        return Response.json({
+          mode: "plan",
+          model: "gpt-5-codex",
+          modelReasoningEffort: "high",
+          fastMode: false,
+          durable: true,
+        });
+      }
+      return Response.json({});
+    }, codexConnection);
+
+    await provider.createSession("review", "Review", { mode: "plan" });
+    await provider.closeSession!("session-1");
+    await provider.send("session-1", "Continue", { requestId: "request-1", mode: "plan" });
+
+    expect(requests.map((request) => request.url)).toContain(
+      "http://codex.test/session/session-1/config",
+    );
   });
 
   test("projects Claude's authoritative plan mode in the interactive snapshot", async () => {

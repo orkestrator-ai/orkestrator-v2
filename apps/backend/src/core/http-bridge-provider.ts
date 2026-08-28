@@ -1393,4 +1393,15 @@ export class HttpBridgeProvider implements NativeAgentRuntimeProvider {
     );
     assertOk(response, `${this.agent} abort`);
   }
+
+  async closeSession(sessionId: string): Promise<void> {
+    const response = await bridgeFetch(
+      this.connection,
+      `/session/${encodeURIComponent(sessionId)}`,
+      { method: "DELETE" },
+      this.fetchImpl,
+    );
+    if (response.status !== 404) await assertOkWithErrorDetail(response, `${this.agent} close`);
+    this.codexModes.delete(sessionId);
+  }
 }

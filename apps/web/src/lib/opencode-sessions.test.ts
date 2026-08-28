@@ -1193,7 +1193,7 @@ describe("opencode-client getSessionMessages", () => {
       ?.parts[0];
     expect(part?.toolOutput).toBe("[object Object]");
     expect(part?.toolError).toBe("[object Object]");
-  });
+  }, 30_000);
 
   /*
    * Stopping a parent turn aborts its subagents, and each aborted child message

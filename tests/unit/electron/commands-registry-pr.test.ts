@@ -669,18 +669,20 @@ exit 1
     );
   });
 
-  test("stops local merges when draft inspection or readiness fails", async () => {
-    const worktreePath = await createTempDir("ork-electron-merge-failure-worktree-");
-    const environment = createEnvironment({
-      worktreePath,
-      prUrl: "https://github.com/acme/repo/pull/42",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
+  test(
+    "stops local merges when draft inspection or readiness fails",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-merge-failure-worktree-");
+      const environment = createEnvironment({
+        worktreePath,
+        prUrl: "https://github.com/acme/repo/pull/42",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
 
-    for (const failure of ["draft-status", "ready"] as const) {
-      await withFakeGh(
-        `#!/bin/sh
+      for (const failure of ["draft-status", "ready"] as const) {
+        await withFakeGh(
+          `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   ${failure === "draft-status" ? "printf 'draft lookup failed\\n' >&2; exit 41" : "printf 'true\\n'; exit 0"}
@@ -692,36 +694,40 @@ fi
 printf 'merge must not be submitted: %s\\n' "$*" >&2
 exit 43
 `,
-        async (logPath) => {
-          await expect(
-            commands.get("merge_pr_local")?.(
-              { environmentId: environment.id, method: "squash", deleteBranch: false },
-              context,
-            ),
-          ).rejects.toThrow(failure === "draft-status" ? "draft lookup failed" : "ready failed");
+          async (logPath) => {
+            await expect(
+              commands.get("merge_pr_local")?.(
+                { environmentId: environment.id, method: "squash", deleteBranch: false },
+                context,
+              ),
+            ).rejects.toThrow(failure === "draft-status" ? "draft lookup failed" : "ready failed");
 
-          const ghLog = await fs.readFile(logPath, "utf8");
-          expect(ghLog).not.toContain("api repos/acme/repo/pulls/42/merge");
-        },
-      );
-    }
-  });
+            const ghLog = await fs.readFile(logPath, "utf8");
+            expect(ghLog).not.toContain("api repos/acme/repo/pulls/42/merge");
+          },
+        );
+      }
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
-  test("treats empty, null, and non-boolean draft output as non-draft", async () => {
-    const worktreePath = await createTempDir("ork-electron-merge-malformed-draft-worktree-");
-    const environment = createEnvironment({
-      worktreePath,
-      prUrl: "https://github.com/acme/repo/pull/42",
-    });
-    const { context } = createContext(environment);
-    const commands = createCommandRegistry();
-    const previousStatus = process.env.FAKE_DRAFT_STATUS;
+  test(
+    "treats empty, null, and non-boolean draft output as non-draft",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-merge-malformed-draft-worktree-");
+      const environment = createEnvironment({
+        worktreePath,
+        prUrl: "https://github.com/acme/repo/pull/42",
+      });
+      const { context } = createContext(environment);
+      const commands = createCommandRegistry();
+      const previousStatus = process.env.FAKE_DRAFT_STATUS;
 
-    try {
-      for (const status of ["", "null", "unexpected"]) {
-        process.env.FAKE_DRAFT_STATUS = status;
-        await withFakeGh(
-          `#!/bin/sh
+      try {
+        for (const status of ["", "null", "unexpected"]) {
+          process.env.FAKE_DRAFT_STATUS = status;
+          await withFakeGh(
+            `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   printf '%s\\n' "$FAKE_DRAFT_STATUS"
@@ -734,25 +740,27 @@ fi
 printf 'unexpected gh args: %s\\n' "$*" >&2
 exit 1
 `,
-          async (logPath) => {
-            await expect(
-              commands.get("merge_pr_local")?.(
-                { environmentId: environment.id, method: "squash", deleteBranch: false },
-                context,
-              ),
-            ).resolves.toEqual({ outcome: "merged" });
+            async (logPath) => {
+              await expect(
+                commands.get("merge_pr_local")?.(
+                  { environmentId: environment.id, method: "squash", deleteBranch: false },
+                  context,
+                ),
+              ).resolves.toEqual({ outcome: "merged" });
 
-            const ghLog = await fs.readFile(logPath, "utf8");
-            expect(ghLog).not.toContain("pr ready");
-            expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge");
-          },
-        );
+              const ghLog = await fs.readFile(logPath, "utf8");
+              expect(ghLog).not.toContain("pr ready");
+              expect(ghLog).toContain("api repos/acme/repo/pulls/42/merge");
+            },
+          );
+        }
+      } finally {
+        if (previousStatus === undefined) delete process.env.FAKE_DRAFT_STATUS;
+        else process.env.FAKE_DRAFT_STATUS = previousStatus;
       }
-    } finally {
-      if (previousStatus === undefined) delete process.env.FAKE_DRAFT_STATUS;
-      else process.env.FAKE_DRAFT_STATUS = previousStatus;
-    }
-  });
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test("deletes the remote head branch after local API merge when requested", async () => {
     const worktreePath = await createTempDir("ork-electron-merge-delete-worktree-");
@@ -1285,89 +1293,93 @@ exit 1
     );
   });
 
-  test("verifies a PR against the trusted project and environment branches", async () => {
-    const worktreePath = await createTempDir("ork-electron-verify-pr-");
-    const environment = createEnvironment({
-      worktreePath,
-      branch: "feature/local",
-    });
-    const { context } = createContext(environment, {
-      project: {
-        id: "project-1",
-        name: "repo",
-        gitUrl: "https://github.com/acme/repo.git",
-        localPath: null,
-        addedAt: new Date(0).toISOString(),
-        order: 0,
-      },
-    });
-    const commands = createCommandRegistry();
+  test(
+    "verifies a PR against the trusted project and environment branches",
+    async () => {
+      const worktreePath = await createTempDir("ork-electron-verify-pr-");
+      const environment = createEnvironment({
+        worktreePath,
+        branch: "feature/local",
+      });
+      const { context } = createContext(environment, {
+        project: {
+          id: "project-1",
+          name: "repo",
+          gitUrl: "https://github.com/acme/repo.git",
+          localPath: null,
+          addedAt: new Date(0).toISOString(),
+          order: 0,
+        },
+      });
+      const commands = createCommandRegistry();
 
-    await withFakeGh(
-      `#!/bin/sh
+      await withFakeGh(
+        `#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"feature/local","baseRefName":"main","state":"OPEN"}'
 `,
-      async (logPath) => {
-        const verified = await commands.get("verify_environment_pr")?.(
-          {
-            environmentId: environment.id,
-            prUrl: "https://github.com/acme/repo/pull/42",
-            targetBranch: "main",
-          },
-          context,
-        );
-        expect(verified).toEqual({
-          url: "https://github.com/acme/repo/pull/42",
-          headRefName: "feature/local",
-          baseRefName: "main",
-          state: "OPEN",
-        });
-        expect(await fs.readFile(logPath, "utf8")).toContain(
-          "pr view https://github.com/acme/repo/pull/42 --json url,headRefName,baseRefName,state",
-        );
-      },
-    );
-
-    await expect(
-      commands.get("verify_environment_pr")?.(
-        {
-          environmentId: environment.id,
-          prUrl: "https://github.com/other/repo/pull/42",
-          targetBranch: "main",
-        },
-        context,
-      ),
-    ).rejects.toThrow("different repository");
-    await expect(
-      commands.get("verify_environment_pr")?.(
-        {
-          environmentId: environment.id,
-          prUrl: "https://github.com/acme/repo/pull/42/",
-          targetBranch: "main",
-        },
-        context,
-      ),
-    ).rejects.toThrow("canonical github.com URL");
-
-    await withFakeGh(
-      `#!/bin/sh
-printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"other-branch","baseRefName":"main","state":"OPEN"}'
-`,
-      async () => {
-        await expect(
-          commands.get("verify_environment_pr")?.(
+        async (logPath) => {
+          const verified = await commands.get("verify_environment_pr")?.(
             {
               environmentId: environment.id,
               prUrl: "https://github.com/acme/repo/pull/42",
               targetBranch: "main",
             },
             context,
-          ),
-        ).rejects.toThrow("head branch does not match");
-      },
-    );
-  });
+          );
+          expect(verified).toEqual({
+            url: "https://github.com/acme/repo/pull/42",
+            headRefName: "feature/local",
+            baseRefName: "main",
+            state: "OPEN",
+          });
+          expect(await fs.readFile(logPath, "utf8")).toContain(
+            "pr view https://github.com/acme/repo/pull/42 --json url,headRefName,baseRefName,state",
+          );
+        },
+      );
+
+      await expect(
+        commands.get("verify_environment_pr")?.(
+          {
+            environmentId: environment.id,
+            prUrl: "https://github.com/other/repo/pull/42",
+            targetBranch: "main",
+          },
+          context,
+        ),
+      ).rejects.toThrow("different repository");
+      await expect(
+        commands.get("verify_environment_pr")?.(
+          {
+            environmentId: environment.id,
+            prUrl: "https://github.com/acme/repo/pull/42/",
+            targetBranch: "main",
+          },
+          context,
+        ),
+      ).rejects.toThrow("canonical github.com URL");
+
+      await withFakeGh(
+        `#!/bin/sh
+printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"other-branch","baseRefName":"main","state":"OPEN"}'
+`,
+        async () => {
+          await expect(
+            commands.get("verify_environment_pr")?.(
+              {
+                environmentId: environment.id,
+                prUrl: "https://github.com/acme/repo/pull/42",
+                targetBranch: "main",
+              },
+              context,
+            ),
+          ).rejects.toThrow("head branch does not match");
+        },
+      );
+    },
+    ASYNC_TEST_BUDGET_MS,
+  );
 
   test(
     "deterministically generates refs, diff, Git-object contents, hashes, and validation evidence",

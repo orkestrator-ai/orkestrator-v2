@@ -1189,10 +1189,16 @@ describe("ACP Cursor background continuation", () => {
     // launch's discovery skew floor and is exactly what an unclaimed scan would
     // hand it. Its own directory does not exist yet, which is the normal state
     // for the first seconds of a background child.
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      expect(await readActivity()).toEqual({ activity: "working" });
-    }
-    const held = await read();
+    expect(await waitFor(readActivity, (value) => value.activity === "working")).toEqual({
+      activity: "working",
+    });
+    const held = await waitFor(read, (value) =>
+      value.messages.some((message) =>
+        message.parts.some(
+          (part) => part.toolUseId === "cursor-subagent-2" && part.agentState === "active",
+        ),
+      ),
+    );
     expect(
       held.messages
         .flatMap((message) => message.parts)
@@ -1205,6 +1211,20 @@ describe("ACP Cursor background continuation", () => {
         .flatMap((message) => message.parts)
         .find((part) => part.toolUseId === "cursor-subagent-1"),
     ).toMatchObject({ agentState: "finished" });
+
+    // Arrival alone is not sufficient: the re-adoption regression also
+    // creates an active card briefly, then settles it on the 200 ms discovery
+    // cycle. Hold the assertion across more than one complete cycle.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await Bun.sleep(60);
+      expect(await readActivity()).toEqual({ activity: "working" });
+      const snapshot = await read();
+      expect(
+        snapshot.messages
+          .flatMap((message) => message.parts)
+          .find((part) => part.toolUseId === "cursor-subagent-2"),
+      ).toMatchObject({ agentState: "active" });
+    }
   });
 
   /**

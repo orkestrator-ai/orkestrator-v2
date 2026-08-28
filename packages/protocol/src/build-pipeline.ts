@@ -1,5 +1,11 @@
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
 import {
+  REVIEW_FANOUT_MAX_REVIEWERS,
+  REVIEW_FANOUT_MIN_REVIEWERS,
+  isReviewFanoutState,
+  type ReviewFanoutState,
+} from "./review-fanout.js";
+import {
   AGENT_INTERACTION_KINDS,
   AGENT_INTERACTION_LIMITS,
   AGENT_INTERACTION_PROVIDERS,
@@ -26,6 +32,30 @@ export const BUILD_PIPELINE_AGENTS: readonly BuildPipelineAgent[] = Object.freez
 ]);
 
 export type BuildPipelineEnvironmentType = "containerized" | "local";
+
+export type BuildPipelineNetworkAccessMode = "restricted" | "full";
+
+export interface BuildPipelinePortMapping {
+  containerPort: number;
+  hostPort: number;
+  protocol: "tcp" | "udp";
+}
+
+/**
+ * Environment shaping a launcher chose before the pipeline existed.
+ *
+ * The pipeline creates its own environment, so a launcher that also collects a
+ * name, a network mode or port mappings has nowhere else to put them. Absent
+ * fields keep the pipeline's own defaults: a name derived from the task title,
+ * and a restricted network for containers.
+ */
+export interface BuildPipelineEnvironmentOptions {
+  name?: string;
+  networkAccessMode?: BuildPipelineNetworkAccessMode;
+  portMappings?: BuildPipelinePortMapping[];
+}
+
+export const MAX_BUILD_PIPELINE_PORT_MAPPINGS = 64;
 
 export type TaskSnapshotImage = {
   filename: string;
@@ -91,6 +121,44 @@ export interface BuildStepConfig {
 }
 
 export type BuildStepConfigs = Partial<Record<BuildStepKey, BuildStepConfig>>;
+
+/**
+ * The reviewers the review step fans out to.
+ *
+ * One entry is the single-reviewer pipeline this has always been. More than one
+ * turns the review stage into the same fan-out Multi Review runs: every
+ * reviewer answers the structured-review contract independently against one
+ * pinned worktree state, and a consolidation turn merges their reports into the
+ * single {@link BuildPipeline.structuredReview} the address stage already
+ * consumes. Nothing downstream of the review stage learns that there was more
+ * than one reviewer.
+ *
+ * Held apart from `steps.review` because a step is one decision and this is a
+ * list. `steps.review` remains the first reviewer, so a launcher that knows
+ * nothing about fan-out still configures reviewer one.
+ */
+export const MAX_BUILD_PIPELINE_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
+
+/**
+ * The effective reviewer list for a pipeline.
+ *
+ * A pipeline started before fan-out existed has no `reviewers`, so its review
+ * step is the whole list. Reading it through here means no caller has to decide
+ * what an absent list means.
+ */
+export function pipelineReviewerConfigs(
+  pipeline: Pick<BuildPipeline, "reviewers" | "steps" | "agentType">,
+): BuildStepConfig[] {
+  if (pipeline.reviewers && pipeline.reviewers.length > 0) return pipeline.reviewers;
+  return [pipeline.steps?.review ?? { agent: pipeline.agentType }];
+}
+
+/** True when the review stage has to run the shared reviewer fan-out. */
+export function usesReviewFanout(
+  pipeline: Pick<BuildPipeline, "reviewers" | "steps" | "agentType">,
+): boolean {
+  return pipelineReviewerConfigs(pipeline).length > 1;
+}
 
 /**
  * Which configured step owns a session phase.
@@ -404,6 +472,17 @@ export interface BuildPipeline {
    * one, falls back to the repository and global defaults.
    */
   steps?: BuildStepConfigs;
+  /** Resolved at start. See {@link pipelineReviewerConfigs}. */
+  reviewers?: BuildStepConfig[];
+  /** Kept until the environment exists, then no longer consulted. */
+  environmentOptions?: BuildPipelineEnvironmentOptions;
+  /**
+   * Live state of the reviewer fan-out, while the review stage is running it.
+   *
+   * Only present for a multi-reviewer pipeline. It is cleared when the stage
+   * finishes, because everything downstream reads `structuredReview`.
+   */
+  reviewFanout?: ReviewFanoutState;
   phase: BuildPhase;
   sessions: PipelineSession[];
   currentSessionIndex: number;
@@ -464,9 +543,16 @@ export interface StartBuildPipelineInput {
   agentType: BuildPipelineAgent;
   /** Per-step harness, model and reasoning chosen in the build launcher. */
   steps?: BuildStepConfigs;
+  /**
+   * Reviewers for the review step. Absent or single-entry keeps the classic
+   * one-reviewer stage; more than one runs the shared reviewer fan-out.
+   */
+  reviewers?: BuildStepConfig[];
   taskTitle: string;
   taskSnapshot: TaskSnapshot;
   source?: BuildPipelineSource;
+  /** Applied when the pipeline creates its own environment. */
+  environmentOptions?: BuildPipelineEnvironmentOptions;
   namingPrompt?: string;
   existingEnvironmentId?: string;
   maxIterations?: number;
@@ -649,6 +735,51 @@ function hasValidValidationWorktreeBaseline(value: Record<string, unknown>): boo
  * carried through the snapshot and silently never consulted, which reads as a
  * setting that was applied when it was not.
  */
+function isPortNumber(value: unknown): boolean {
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= 65_535;
+}
+
+export function isBuildPipelineEnvironmentOptions(
+  value: unknown,
+): value is BuildPipelineEnvironmentOptions {
+  if (!isRecord(value)) return false;
+  if (
+    Object.keys(value).some((key) => !["name", "networkAccessMode", "portMappings"].includes(key))
+  )
+    return false;
+  if (value.name !== undefined && (typeof value.name !== "string" || value.name.length > 256)) {
+    return false;
+  }
+  if (
+    value.networkAccessMode !== undefined &&
+    value.networkAccessMode !== "restricted" &&
+    value.networkAccessMode !== "full"
+  ) {
+    return false;
+  }
+  if (value.portMappings === undefined) return true;
+  return (
+    Array.isArray(value.portMappings) &&
+    value.portMappings.length <= MAX_BUILD_PIPELINE_PORT_MAPPINGS &&
+    value.portMappings.every(
+      (entry) =>
+        isRecord(entry) &&
+        isPortNumber(entry.containerPort) &&
+        isPortNumber(entry.hostPort) &&
+        (entry.protocol === "tcp" || entry.protocol === "udp"),
+    )
+  );
+}
+
+export function isBuildStepConfigList(value: unknown): value is BuildStepConfig[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= REVIEW_FANOUT_MIN_REVIEWERS &&
+    value.length <= REVIEW_FANOUT_MAX_REVIEWERS &&
+    value.every(isBuildStepConfig)
+  );
+}
+
 export function isBuildStepConfigs(value: unknown): value is BuildStepConfigs {
   if (!isRecord(value)) return false;
   return Object.entries(value).every(
@@ -953,6 +1084,10 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
         value.pendingUserMessages.length > MAX_PIPELINE_USER_MESSAGES ||
         !value.pendingUserMessages.every(isUserMessage))) ||
     (value.reviewRetryRequested !== undefined && typeof value.reviewRetryRequested !== "boolean") ||
+    (value.reviewers !== undefined && !isBuildStepConfigList(value.reviewers)) ||
+    (value.environmentOptions !== undefined &&
+      !isBuildPipelineEnvironmentOptions(value.environmentOptions)) ||
+    (value.reviewFanout !== undefined && !isReviewFanoutState(value.reviewFanout)) ||
     (value.source !== undefined && !isPipelineSource(value.source)) ||
     !isOptionalNonBlankString(value.featurePlanId) ||
     !isOptionalNonBlankString(value.admissionKey) ||
@@ -1020,6 +1155,9 @@ export function isStartBuildPipelineInput(value: unknown): value is StartBuildPi
     ENVIRONMENT_TYPES.has(value.environmentType as BuildPipelineEnvironmentType) &&
     AGENTS.has(value.agentType as BuildPipelineAgent) &&
     (value.steps === undefined || isBuildStepConfigs(value.steps)) &&
+    (value.reviewers === undefined || isBuildStepConfigList(value.reviewers)) &&
+    (value.environmentOptions === undefined ||
+      isBuildPipelineEnvironmentOptions(value.environmentOptions)) &&
     isTaskSnapshot(value.taskSnapshot) &&
     (value.source === undefined || isPipelineSource(value.source)) &&
     (value.namingPrompt === undefined || typeof value.namingPrompt === "string") &&

@@ -185,6 +185,10 @@ describe("OpenCode provider runtime", () => {
       await expect(provider.abort("owned-session")).rejects.toBeInstanceOf(
         ProviderUnavailableError,
       );
+      fake.setDeleteResponse({ error: { message: "failed" } });
+      await expect(provider.closeSession!("owned-session")).rejects.toBeInstanceOf(
+        ProviderUnavailableError,
+      );
     } finally {
       await provider.dispose?.();
     }
@@ -202,11 +206,13 @@ describe("OpenCode provider runtime", () => {
       fake.setMessagesResponse({ data: "invalid" });
       await expect(provider.messages("owned-session")).resolves.toEqual([]);
       await expect(provider.abort("owned-session")).resolves.toBeUndefined();
+      await expect(provider.closeSession!("owned-session")).resolves.toBeUndefined();
       expect(fake.messageCalls).toEqual([
         { sessionID: "owned-session" },
         { sessionID: "owned-session" },
       ]);
       expect(fake.abortCalls).toEqual([{ sessionID: "owned-session" }]);
+      expect(fake.deleteCalls).toEqual([{ sessionID: "owned-session" }]);
     } finally {
       await provider.dispose?.();
     }

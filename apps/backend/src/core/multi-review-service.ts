@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  MULTI_REVIEW_MAX_SNAPSHOT_PATHS,
   MULTI_REVIEW_WORKFLOW_VERSION,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
@@ -16,10 +15,7 @@ import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent
 import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
-  safeParseStructuredReviewReport,
-  stripStructuredReviewProvenance,
   type ReviewContractValidationIssue,
-  type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import type { Environment } from "./models.js";
@@ -34,10 +30,7 @@ import {
 } from "./build-pipeline-provider.js";
 import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA, parseFixResult } from "./looped-review-prompts.js";
-import {
-  createMultiReviewConsolidationPrompt,
-  createMultiReviewerPrompt,
-} from "./multi-review-prompts.js";
+import { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
 import { MissingMultiReviewAddressSessionError } from "./multi-review-address-dispatch.js";
 import {
   DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
@@ -47,10 +40,22 @@ import {
   PROGRESS_TRANSCRIPT_TAIL_MESSAGES,
   noProgressElapsedMs,
   stalledMinutes,
-  type ProgressObservation,
 } from "./multi-review-progress.js";
-import { probeReviewWorktree, REVIEW_WORKTREE_PROBE_ATTEMPTS } from "./review-worktree-probe.js";
-import type { ReviewWorktreeSnapshot } from "./build-pipeline-prompts.js";
+import {
+  ReviewFanoutRunner,
+  ReviewSnapshotChangedError,
+  ReviewSnapshotUnverifiableError,
+  assertReviewSnapshotCurrent,
+  attachAgentBeforeDispatch,
+  captureReviewWorktreeSnapshot,
+  commitProgressObservation,
+  consolidationReports,
+  deriveConsolidatedProvenance,
+  parseStructuredReportResult,
+  promptWorktreeSnapshot,
+  resolveUnattendedReviewerInteractions,
+  type ReviewFanoutHost,
+} from "./review-fanout.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 const DEFAULT_POLL_MS = 1_000;
@@ -76,163 +81,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function reviewerProvenanceLabel(
-  reviewer: Pick<MultiReviewModelSelection, "agent" | "model">,
-): string {
-  return `${reviewer.agent}/${reviewer.model}`;
-}
-
-/** Provider output cannot authoritatively identify its own launch model. */
-function attributeReportFindings(
-  report: StructuredReviewReport,
-  reviewer: Pick<MultiReviewModelSelection, "agent" | "model">,
-): StructuredReviewReport {
-  const clean = stripStructuredReviewProvenance(report);
-  const label = reviewerProvenanceLabel(reviewer);
-  return {
-    ...clean,
-    issues: clean.issues.map((issue) => ({ ...issue, reviewModels: [label] })),
-    testCoverageGaps: clean.testCoverageGaps.map((gap) => ({
-      ...gap,
-      reviewModels: [label],
-    })),
-  };
-}
-
-type SourceFindingKind = "issue" | "coverage-gap";
-
-interface ProvenanceSource {
-  kind: SourceFindingKind;
-  model: string;
-}
-
-function sourceFindingId(
-  reviewerIndex: number,
-  kind: SourceFindingKind,
-  findingIndex: number,
-): string {
-  return `reviewer-${reviewerIndex + 1}/${kind}-${findingIndex + 1}`;
-}
-
-function consolidationReports(
-  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
-): Parameters<typeof createMultiReviewConsolidationPrompt>[0]["reports"] {
-  return reviewers.flatMap((reviewer, reviewerIndex) => {
-    if (reviewer.status !== "completed" || !reviewer.report) return [];
-    return [
-      {
-        reviewerId: reviewer.id,
-        agent: reviewer.agent,
-        model: reviewer.model,
-        report: {
-          ...reviewer.report,
-          issues: reviewer.report.issues.map((issue, findingIndex) => ({
-            ...issue,
-            reviewSourceIds: [sourceFindingId(reviewerIndex, "issue", findingIndex)],
-          })),
-          testCoverageGaps: reviewer.report.testCoverageGaps.map((gap, findingIndex) => ({
-            ...gap,
-            reviewSourceIds: [sourceFindingId(reviewerIndex, "coverage-gap", findingIndex)],
-          })),
-        },
-      },
-    ];
-  });
-}
-
-function provenanceSources(
-  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
-): ReadonlyMap<string, ProvenanceSource> {
-  const sources = new Map<string, ProvenanceSource>();
-  reviewers.forEach((reviewer, reviewerIndex) => {
-    if (reviewer.status !== "completed" || !reviewer.report) return;
-    const model = reviewerProvenanceLabel(reviewer);
-    reviewer.report.issues.forEach((_issue, findingIndex) => {
-      sources.set(sourceFindingId(reviewerIndex, "issue", findingIndex), {
-        kind: "issue",
-        model,
-      });
-    });
-    reviewer.report.testCoverageGaps.forEach((_gap, findingIndex) => {
-      sources.set(sourceFindingId(reviewerIndex, "coverage-gap", findingIndex), {
-        kind: "coverage-gap",
-        model,
-      });
-    });
-  });
-  return sources;
-}
-
-function deriveConsolidatedProvenance(
-  report: StructuredReviewReport,
-  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
-): { report: StructuredReviewReport; issues: ReviewContractValidationIssue[] } {
-  const issues: ReviewContractValidationIssue[] = [];
-  const sources = provenanceSources(reviewers);
-  const inspect = (
-    reviewModels: string[] | undefined,
-    reviewSourceIds: string[] | undefined,
-    kind: SourceFindingKind,
-    path: string,
-  ): string[] => {
-    if (reviewModels?.length) {
-      issues.push({
-        path: `${path}.reviewModels`,
-        code: "invalid_value",
-        message: "Consolidated findings must cite source IDs; the backend derives review models.",
-      });
-    }
-    if (!reviewSourceIds?.length) {
-      issues.push({
-        path: `${path}.reviewSourceIds`,
-        code: "missing_field",
-        message: "Every consolidated finding must cite at least one source finding ID.",
-      });
-      return [];
-    }
-    const models: string[] = [];
-    reviewSourceIds.forEach((sourceId, index) => {
-      const source = sources.get(sourceId);
-      if (!source || source.kind !== kind) {
-        issues.push({
-          path: `${path}.reviewSourceIds[${index}]`,
-          code: "invalid_value",
-          message: `Source finding ${JSON.stringify(sourceId)} does not identify a ${kind} in the supplied reviewer reports.`,
-        });
-      } else if (!models.includes(source.model)) {
-        models.push(source.model);
-      }
-    });
-    return models;
-  };
-
-  const derived = stripStructuredReviewProvenance(report);
-  return {
-    issues,
-    report: {
-      ...derived,
-      issues: report.issues.map((finding, index) => ({
-        ...derived.issues[index]!,
-        reviewModels: inspect(
-          finding.reviewModels,
-          finding.reviewSourceIds,
-          "issue",
-          `$.issues[${index}]`,
-        ),
-      })),
-      testCoverageGaps: report.testCoverageGaps.map((finding, index) => ({
-        ...derived.testCoverageGaps[index]!,
-        reviewModels: inspect(
-          finding.reviewModels,
-          finding.reviewSourceIds,
-          "coverage-gap",
-          `$.testCoverageGaps[${index}]`,
-        ),
-      })),
-    },
-  };
-}
-
 class FixResultValidationError extends Error {
   readonly issues: readonly ReviewContractValidationIssue[];
 
@@ -242,32 +90,6 @@ class FixResultValidationError extends Error {
     this.name = "FixResultValidationError";
     this.issues = [{ path, code: "invalid_value", message: this.message }];
   }
-}
-
-/** The review source is known to differ from the snapshot every reviewer saw. */
-class ReviewSnapshotChangedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ReviewSnapshotChangedError";
-  }
-}
-
-/**
- * The review source could not be observed at all. Deliberately distinct from
- * drift: it does not mark the snapshot stale, so a retry resumes from the
- * completed reports instead of discarding them.
- */
-class ReviewSnapshotUnverifiableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ReviewSnapshotUnverifiableError";
-  }
-}
-
-function samePathSet(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  const remaining = new Set(right);
-  return left.every((entry) => remaining.delete(entry)) && remaining.size === 0;
 }
 
 function isSupervisedPhase(phase: MultiReviewPhase): boolean {
@@ -286,25 +108,6 @@ function hasWorkflowActivity(workflow: MultiReviewWorkflow): boolean {
     workflow.reviewers.some((reviewer) => reviewer.status === "running") ||
     workflow.fixSession?.status === "running"
   );
-}
-
-const NO_VALID_REPORT_ERROR = "No reviewer produced a valid report";
-
-/** Summarises why every reviewer failed, deduplicating a shared root cause. */
-function multiReviewFailureSummary(
-  reviewers: readonly MultiReviewWorkflow["reviewers"][number][],
-): string {
-  const reasons = [
-    ...new Set(reviewers.flatMap((reviewer) => (reviewer.error ? [reviewer.error] : []))),
-  ];
-  // A stopped reviewer carries no error, so without this the user who stopped
-  // the whole panel would be told the models failed to produce a report.
-  const stopped = reviewers.filter((reviewer) => reviewer.status === "cancelled").length;
-  if (stopped > 0) {
-    reasons.push(`${stopped} reviewer${stopped === 1 ? " was" : "s were"} stopped`);
-  }
-  if (reasons.length === 0) return NO_VALID_REPORT_ERROR;
-  return `${NO_VALID_REPORT_ERROR}: ${reasons.join("; ")}`.slice(0, 4_096);
 }
 
 export interface MultiReviewServiceOptions {
@@ -454,6 +257,7 @@ export class MultiReviewService {
     return {
       workflowId: workflow.id,
       reviewerId: reviewer.id,
+      workflowPhase: workflow.phase,
       agent: reviewer.agent,
       model: reviewer.model,
       ...(reviewer.reasoningEffort ? { reasoningEffort: reviewer.reasoningEffort } : {}),
@@ -608,16 +412,14 @@ export class MultiReviewService {
         const hasReport = workflow.reviewers.some(
           (reviewer) => reviewer.status === "completed" && reviewer.report !== undefined,
         );
-        // A panel the user stopped in full has nothing to consolidate, and the
-        // consolidation branch below would otherwise ask the fix model to merge an
-        // empty set of reports. Retrying that failure means running those
-        // reviewers again.
-        const restartable =
-          failedReviewers.length > 0
-            ? failedReviewers
-            : hasReport
-              ? []
-              : workflow.reviewers.filter((reviewer) => reviewer.status === "cancelled");
+        // With no surviving report there is nothing to consolidate, so retry
+        // every failed or stopped reviewer. If a report did survive, preserve
+        // the user's stop choices and retry only failures from the requested panel.
+        const restartable = hasReport
+          ? failedReviewers
+          : workflow.reviewers.filter(
+              (reviewer) => reviewer.status === "failed" || reviewer.status === "cancelled",
+            );
         if (restartable.length > 0) {
           for (const reviewer of restartable) {
             // Retrying allocates a fresh session, so the abandoned one must be
@@ -739,6 +541,111 @@ export class MultiReviewService {
       const saved = await this.save(workflow, token);
       void this.advanceNow(workflowId);
       return saved;
+    });
+  }
+
+  /**
+   * Tear down an entire workflow from one parent-tab close intent.
+   *
+   * This is intentionally stronger than cancel: every reviewer and fix session
+   * is closed, every pane tab owned by the workflow is removed authoritatively,
+   * and the durable workflow is deleted so a replacement can start immediately.
+   */
+  async close(workflowId: string): Promise<void> {
+    const closeRequestedAt = nowIso();
+    return this.withLock(workflowId, async () => {
+      const existing = await this.storage.getMultiReviewWorkflow(workflowId);
+      if (!existing) return;
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error("The Multi Review controller is busy");
+      const { workflow, token } = controlled;
+      try {
+        if (!isMultiReviewTerminalPhase(workflow.phase)) {
+          throw new Error("Cancel or finish the running Multi Review before deleting it");
+        }
+        const targets = [
+          ...workflow.reviewers.flatMap((reviewer) =>
+            reviewer.providerSessionId
+              ? [
+                  {
+                    selection: reviewer as MultiReviewModelSelection,
+                    sessionId: reviewer.providerSessionId,
+                  },
+                ]
+              : [],
+          ),
+          ...(workflow.fixSession?.providerSessionId
+            ? [
+                {
+                  selection: workflow.fixModel,
+                  sessionId: workflow.fixSession.providerSessionId,
+                },
+              ]
+            : []),
+        ];
+        const uniqueTargets = [
+          ...new Map(
+            targets.map((target) => [`${target.selection.agent}:${target.sessionId}`, target]),
+          ).values(),
+        ];
+        const shutdowns = await Promise.allSettled(
+          uniqueTargets.map(async ({ selection, sessionId }) => {
+            const provider = await this.provider(workflow, selection);
+            const confirmStopped = async (): Promise<void> => {
+              const observed = await readProviderStatus(provider, sessionId);
+              if (observed.status === "running" || observed.status === "blocked") {
+                throw new Error(`session remained ${observed.status} after abort`);
+              }
+            };
+            if (!provider.closeSession) {
+              await provider.abort(sessionId);
+              await confirmStopped();
+              return;
+            }
+            try {
+              await provider.closeSession(sessionId);
+            } catch (closeError) {
+              try {
+                await provider.abort(sessionId);
+                await confirmStopped();
+              } catch (abortError) {
+                throw new Error(
+                  `Could not stop ${selection.agent} session ${sessionId}: ` +
+                    `${errorMessage(closeError)}; abort also failed: ${errorMessage(abortError)}`,
+                );
+              }
+            }
+          }),
+        );
+        const failures = shutdowns.flatMap((result) =>
+          result.status === "rejected" ? [errorMessage(result.reason)] : [],
+        );
+        if (failures.length > 0) {
+          throw new Error(`Could not close Multi Review sessions: ${failures.join("; ")}`);
+        }
+
+        // Delete the durable recovery record before its tabs. If the pane write
+        // fails, stale tabs can still reconcile against a missing workflow; the
+        // inverse would strand a live record with every recovery surface gone.
+        await this.storage.deleteMultiReviewWorkflow(workflow.id);
+        this.addressDispatchRetryAt.delete(workflow.id);
+        const cleanup = await Promise.allSettled([
+          this.storage.removeMultiReviewTabs(workflow.environmentId, workflow.id),
+          this.syncEnvironmentActivity(workflow.environmentId, closeRequestedAt),
+        ]);
+        for (const result of cleanup) {
+          if (result.status === "rejected") {
+            // The destructive commit already succeeded. Returning an error now
+            // would make the renderer retain a tab for a workflow that no
+            // longer exists; stale durable tabs reconcile away on hydration.
+            console.warn("[multi-review] Post-delete cleanup failed:", result.reason);
+          }
+        }
+      } finally {
+        // Closing owns only a short-lived destructive claim. Failed provider
+        // creation or shutdown must not leave the workflow fenced forever.
+        await this.release(workflow, token);
+      }
     });
   }
 
@@ -876,6 +783,29 @@ export class MultiReviewService {
       workflow.environmentId,
       desired,
       nowIso(),
+      "multi-review",
+    );
+  }
+
+  /** Recompute the shared activity source after deleting one of several workflows. */
+  private async syncEnvironmentActivity(
+    environmentId: string,
+    occurredAt = nowIso(),
+  ): Promise<void> {
+    const records = await this.storage.listMultiReviewWorkflows(environmentId);
+    const desired = records.some(
+      (record) => isMultiReviewWorkflow(record.snapshot) && hasWorkflowActivity(record.snapshot),
+    )
+      ? "working"
+      : "idle";
+    const environment = await this.storage.getEnvironment(environmentId);
+    if (!environment || environment.agentActivitySources?.["multi-review"]?.state === desired) {
+      return;
+    }
+    await this.storage.setEnvironmentAgentActivity(
+      environmentId,
+      desired,
+      occurredAt,
       "multi-review",
     );
   }
@@ -1104,306 +1034,53 @@ export class MultiReviewService {
     }
   }
 
-  private async advanceReviewers(workflow: MultiReviewWorkflow, token: string): Promise<void> {
-    for (let index = 0; index < workflow.reviewers.length; index++) {
-      const reviewer = workflow.reviewers[index]!;
-      if (
-        reviewer.status === "completed" ||
-        reviewer.status === "failed" ||
-        reviewer.status === "cancelled"
-      )
-        continue;
-      let done: "continue" | "stop";
-      try {
-        done = await this.advanceReviewer(workflow, token, reviewer, index);
-      } catch (error) {
-        if (error instanceof ControllerFenceError) throw error;
-        if (
-          error instanceof ReviewSnapshotChangedError ||
-          error instanceof ReviewSnapshotUnverifiableError
-        ) {
-          // These end the whole pass rather than one reviewer, so the abort the
-          // handler below performs has to happen here instead.
-          await this.abandonLiveReviewerSessions(workflow);
-          throw error;
-        }
-        // A reviewer is one independent input to the consolidated result. Keep
-        // its failure local so the remaining reviewers can still produce a
-        // valid report for the workflow.
-        // The failure may have been raised while the provider turn was still
-        // executing. Abort the session best-effort so that turn cannot keep
-        // running through consolidation and the fix stage; the session id is
-        // kept so the read-only transcript stays reachable and a later retry
-        // can abort again without harm.
-        if (reviewer.providerSessionId) {
-          await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
-          this.progress.forget(reviewer.providerSessionId);
-        }
-        reviewer.status = "failed";
-        reviewer.error = errorMessage(error).slice(0, 4_096);
-        delete reviewer.idleResultPolls;
-        delete reviewer.stalledSince;
+  /**
+   * The reviewer fan-out, as this workflow's owner sees it.
+   *
+   * Everything inside one reviewer's turn is the shared runner's business.
+   * What stays here is what only Multi Review knows: where the state is
+   * persisted, which lease fences it, and what the phase becomes once every
+   * reviewer has settled.
+   */
+  private reviewFanoutHost(workflow: MultiReviewWorkflow, token: string): ReviewFanoutHost {
+    return {
+      workflowId: workflow.id,
+      targetBranch: workflow.targetBranch,
+      reviewInstruction: workflow.reviewInstruction,
+      label: "Multi Review",
+      sessionKeyFor: (reviewer) => `multi-review:${workflow.id}:reviewer:${reviewer.id}`,
+      sessionLabelFor: (_reviewer, index) => `Multi Review · Reviewer ${index + 1}`,
+      provider: (selection) => this.provider(workflow, selection),
+      save: async () => {
         await this.save(workflow, token);
-        done = "continue";
-      }
-      if (done === "stop") return;
-    }
+      },
+      assertFence: () => this.assertFence(workflow.id, token),
+      reviewSnapshot: async () =>
+        promptWorktreeSnapshot(await this.assertReviewSnapshotCurrent(workflow, token)),
+      resolveUnattendedInteractions: (provider, providerSessionId) =>
+        this.resolveUnattendedInteractions(workflow, token, provider, providerSessionId),
+      abandonSession: (selection, providerSessionId) =>
+        this.abandonSession(workflow, selection, providerSessionId),
+      progress: this.progress,
+      stallWarningMs: this.stallWarningMs(),
+      stallAbandonMs: this.stallAbandonMs(),
+    };
+  }
 
-    if (
-      workflow.reviewers.some(
-        (reviewer) => reviewer.status === "pending" || reviewer.status === "running",
-      )
-    )
-      return;
-
-    const completedReviewers = workflow.reviewers.filter(
-      (reviewer) => reviewer.status === "completed" && reviewer.report !== undefined,
-    );
-    if (completedReviewers.length > 0) {
+  private async advanceReviewers(workflow: MultiReviewWorkflow, token: string): Promise<void> {
+    const runner = new ReviewFanoutRunner(this.reviewFanoutHost(workflow, token));
+    const outcome = await runner.advanceReviewers(workflow.reviewers);
+    if (outcome.kind === "working") return;
+    if (outcome.kind === "ready") {
       workflow.phase = "consolidating";
       delete workflow.error;
       await this.save(workflow, token);
       return;
     }
-
     workflow.phase = "failed";
-    // Reviewers fail locally, so an environment-wide cause (an unreachable
-    // bridge, a deleted worktree) reaches here as the same message on every
-    // reviewer. Carry the distinct causes up rather than reporting a bare
-    // "no valid report", which reads as a model-quality problem instead.
-    workflow.error = multiReviewFailureSummary(workflow.reviewers);
+    workflow.error = outcome.error;
     await this.save(workflow, token);
     await this.release(workflow, token);
-  }
-
-  /** Advances one reviewer. `stop` ends the pass without touching the rest. */
-  private async advanceReviewer(
-    workflow: MultiReviewWorkflow,
-    token: string,
-    reviewer: MultiReviewWorkflow["reviewers"][number],
-    index: number,
-  ): Promise<"continue" | "stop"> {
-    const provider = await this.provider(workflow, reviewer);
-    await this.assertFence(workflow.id, token);
-    if (reviewer.status === "pending") {
-      const sessionKey = `multi-review:${workflow.id}:reviewer:${reviewer.id}`;
-      const providerSessionId = await provider.createSession(
-        "review",
-        `Multi Review · Reviewer ${index + 1}`,
-        {
-          clientSessionKey: sessionKey,
-          mode: "build",
-          model: reviewer.model === "default" ? undefined : reviewer.model,
-          effort: reviewer.reasoningEffort,
-          interaction: {
-            origin: "looped-review",
-            interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-            phase: "review",
-            workflowId: workflow.id,
-            provider: reviewer.agent,
-            fence: sessionKey,
-          },
-        },
-      );
-      await this.assertFence(workflow.id, token);
-      reviewer.sessionKey = sessionKey;
-      reviewer.providerSessionId = providerSessionId;
-      reviewer.requestId = randomUUID();
-      reviewer.dispatchState = "prepared";
-      reviewer.status = "running";
-      reviewer.startedAt = nowIso();
-      delete reviewer.progressAt;
-      delete reviewer.progressDigest;
-      delete reviewer.stalledSince;
-      await this.save(workflow, token);
-    }
-    if (!reviewer.providerSessionId || !reviewer.requestId) return "continue";
-    provider.registerSession?.(reviewer.providerSessionId, {
-      origin: "looped-review",
-      interactionPolicy: UNATTENDED_AGENT_INTERACTION_POLICY,
-      phase: "review",
-      workflowId: workflow.id,
-      provider: reviewer.agent,
-      fence: reviewer.sessionKey,
-    });
-    if (reviewer.dispatchState === "prepared") {
-      // Built before the dispatch is journaled: the worktree probe is a command
-      // round trip that can be slow or fail, and nothing about it is ambiguous
-      // while `dispatchState` is still `prepared`.
-      //
-      // A schema repair re-sends a prompt this reviewer already answered, so it
-      // needs no snapshot. Gating it would turn an already-handled formatting
-      // retry into a whole-workflow failure over drift the reviewer's own
-      // authorised validation writes caused.
-      let prompt = reviewer.schemaRepairPrompt;
-      if (!prompt) {
-        const reviewSnapshot = await this.assertReviewSnapshotCurrent(workflow, token);
-        prompt = createMultiReviewerPrompt({
-          targetBranch: workflow.targetBranch,
-          reviewInstruction: workflow.reviewInstruction,
-          reviewerNumber: index + 1,
-          reviewerCount: workflow.reviewers.length,
-          worktree: this.promptWorktreeSnapshot(reviewSnapshot),
-        });
-      }
-      // Attach the agent process before the at-most-once window opens: a cold
-      // spawn is the slowest thing a dispatch can wait on, and time spent on it
-      // inside the request is time the outcome is unknowable if it fails.
-      await this.attachBeforeDispatch(provider, reviewer.providerSessionId);
-      await this.assertFence(workflow.id, token);
-      reviewer.dispatchState = "dispatching";
-      await this.save(workflow, token);
-      try {
-        await provider.send(reviewer.providerSessionId, prompt, {
-          requestId: reviewer.requestId,
-          schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
-          mode: "build",
-          model: reviewer.model === "default" ? undefined : reviewer.model,
-          effort: reviewer.reasoningEffort,
-        });
-      } catch (error) {
-        if (error instanceof AmbiguousPromptDispatchError) return "stop";
-        throw error;
-      }
-      await this.assertFence(workflow.id, token);
-      reviewer.dispatchState = "sent";
-      await this.save(workflow, token);
-    }
-    if (reviewer.dispatchState === "dispatching") {
-      // Dispatch acceptance is ambiguous after a crash. The stable request id
-      // makes provider reconciliation authoritative; never send it twice.
-      reviewer.dispatchState = "sent";
-      await this.save(workflow, token);
-    }
-    if (reviewer.status !== "running") return "continue";
-    await this.resolveUnattendedInteractions(workflow, token, provider, reviewer.providerSessionId);
-    // Read as data so the terminal-failure branch below fires whether or not
-    // the provider explained itself, and can report the explanation when it did.
-    const { status, error: statusDetail } = await readProviderStatus(
-      provider,
-      reviewer.providerSessionId,
-    );
-    await this.assertFence(workflow.id, token);
-    if (status === "running") {
-      await this.clearStall(workflow, token, reviewer);
-      return this.observeReviewerProgress(workflow, token, provider, reviewer);
-    }
-    if (status === "blocked") {
-      // Every unattended interaction was already resolved above, and a provider
-      // without an interaction surface can never be unblocked from here. Bound
-      // the wait the same way the idle path is bounded rather than polling a
-      // stalled reviewer forever.
-      return this.recordStall(
-        workflow,
-        token,
-        reviewer,
-        "The reviewer stayed blocked without a resolvable interaction",
-      );
-    }
-    if (status === "error" || status === "missing") {
-      reviewer.status = "failed";
-      reviewer.error =
-        status === "missing"
-          ? "The reviewer session no longer exists"
-          : statusDetail
-            ? `The reviewer session failed: ${statusDetail}`
-            : "The reviewer session failed";
-      await this.save(workflow, token);
-      return "continue";
-    }
-    const result = await provider.structured<unknown>(
-      reviewer.providerSessionId,
-      reviewer.requestId,
-    );
-    await this.assertFence(workflow.id, token);
-    if (!result) {
-      return this.recordStall(
-        workflow,
-        token,
-        reviewer,
-        "The reviewer became idle without returning its structured report",
-      );
-    }
-    const parsed = this.parseReportResult(result);
-    if (!parsed.success) {
-      return this.prepareReviewerReportRepair(workflow, token, reviewer, parsed.error);
-    }
-    reviewer.report = attributeReportFindings(parsed.data, reviewer);
-    reviewer.status = "completed";
-    reviewer.completedAt = nowIso();
-    delete reviewer.schemaRepairPrompt;
-    delete reviewer.idleResultPolls;
-    delete reviewer.stalledSince;
-    if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
-    delete reviewer.progressDigest;
-    await this.save(workflow, token);
-    return "continue";
-  }
-
-  /**
-   * Bounds a reviewer that reports `running` without producing anything.
-   *
-   * Provider status alone cannot distinguish a long turn from a wedged one — a
-   * Cursor parent holding its turn open for a background child whose transcript
-   * stopped moving reports `running` indefinitely, and the review phase will not
-   * advance while any reviewer is still running. Transcript movement is the
-   * signal that separates the two, because bridges stream sub-agent activity
-   * into the parent transcript as it happens.
-   *
-   * The warning is durable so the tab can show it; the abandon is what stops one
-   * stuck reviewer from halting consolidation and the fix stage for good.
-   *
-   * A failed or throttled probe is not a fingerprint comparison, but it is not
-   * a pause of the stall clock either: `progressAt` / `startedAt` still decide
-   * whether the session has been silent too long. A restart compares against
-   * the persisted digest so it cannot invent a new baseline or move the clock
-   * forward.
-   */
-  private async observeReviewerProgress(
-    workflow: MultiReviewWorkflow,
-    token: string,
-    provider: BuildPipelineProvider,
-    reviewer: MultiReviewWorkflow["reviewers"][number],
-  ): Promise<"continue"> {
-    const providerSessionId = reviewer.providerSessionId;
-    if (!providerSessionId) return "continue";
-    const previousDigest = reviewer.progressDigest;
-    const observation = await this.progress.observe(
-      providerSessionId,
-      () => provider.messages(providerSessionId, { limit: PROGRESS_TRANSCRIPT_TAIL_MESSAGES }),
-      reviewer.progressDigest,
-    );
-    await this.assertFence(workflow.id, token);
-    const decision = this.commitProgressObservation(reviewer, observation);
-    if (decision === "reset" || decision === "hold") {
-      await this.save(workflow, token);
-      return "continue";
-    }
-    const elapsedMs = noProgressElapsedMs(reviewer.progressAt, reviewer.startedAt);
-    if (elapsedMs === null) {
-      if (reviewer.progressDigest !== previousDigest) await this.save(workflow, token);
-      return "continue";
-    }
-    if (elapsedMs >= this.stallAbandonMs()) {
-      // Best-effort, like every other abandon: the session is unresponsive, so
-      // waiting for it to confirm the abort would reproduce the stall.
-      await this.abandonSession(workflow, reviewer, providerSessionId);
-      this.progress.forget(providerSessionId);
-      reviewer.status = "failed";
-      reviewer.error = `The reviewer produced no activity for ${stalledMinutes(elapsedMs)} minutes and was stopped so the rest of the review could continue`;
-      reviewer.completedAt = nowIso();
-      delete reviewer.stalledSince;
-      delete reviewer.idleResultPolls;
-      await this.save(workflow, token);
-      return "continue";
-    }
-    if (elapsedMs >= this.stallWarningMs() && reviewer.stalledSince === undefined) {
-      reviewer.stalledSince = nowIso();
-      await this.save(workflow, token);
-      return "continue";
-    }
-    if (reviewer.progressDigest !== previousDigest) await this.save(workflow, token);
-    return "continue";
   }
 
   /**
@@ -1428,7 +1105,7 @@ export class MultiReviewService {
       session.progressDigest,
     );
     await this.assertFence(workflow.id, token);
-    const decision = this.commitProgressObservation(session, observation);
+    const decision = commitProgressObservation(session, observation);
     if (decision === "reset" || decision === "hold") {
       await this.save(workflow, token);
       return;
@@ -1453,119 +1130,12 @@ export class MultiReviewService {
     if (session.progressDigest !== previousDigest) await this.save(workflow, token);
   }
 
-  /**
-   * Apply a probe to the durable progress clocks.
-   *
-   * `reset` — the transcript moved; the stall clock starts from now.
-   * `hold` — first comparable sample of a session that has no clock yet; the
-   * caller must not treat it as "unchanged" or a `stallAbandonMs: 0` test would
-   * fail a reviewer on its first successful read.
-   * `evaluate` — unchanged, failed, throttled, or a restart of a session that
-   * already has a durable clock. The caller then applies the stall thresholds.
-   */
-  private commitProgressObservation(
-    target: {
-      progressAt?: string;
-      stalledSince?: string;
-      progressDigest?: string;
-    },
-    observation: ProgressObservation,
-  ): "reset" | "hold" | "evaluate" {
-    if (observation.probed && observation.digest) {
-      target.progressDigest = observation.digest;
-    }
-    if (observation.changed) {
-      target.progressAt = nowIso();
-      delete target.stalledSince;
-      return "reset";
-    }
-    if (observation.baselineEstablished && target.progressAt === undefined) {
-      target.progressAt = nowIso();
-      return "hold";
-    }
-    return "evaluate";
-  }
-
-  /**
-   * Attach the provider's agent process before a prompt is written.
-   *
-   * Best-effort by contract: the prompt request performs the same work and is
-   * the one that answers authoritatively, so a failure here is left for it to
-   * report rather than pre-empting it.
-   */
-  private async attachBeforeDispatch(
-    provider: BuildPipelineProvider,
-    providerSessionId: string,
-  ): Promise<void> {
-    try {
-      await provider.prepareDispatch?.(providerSessionId);
-    } catch (error) {
-      console.warn(
-        "[multi-review] Attaching the agent before dispatch failed:",
-        errorMessage(error),
-      );
-    }
-  }
-
   private stallWarningMs(): number {
     return this.options.stallWarningMs ?? DEFAULT_STALL_WARNING_MS;
   }
 
   private stallAbandonMs(): number {
     return this.options.stallAbandonMs ?? DEFAULT_STALL_ABANDON_MS;
-  }
-
-  private async prepareReviewerReportRepair(
-    workflow: MultiReviewWorkflow,
-    token: string,
-    reviewer: MultiReviewWorkflow["reviewers"][number],
-    error: ReviewContractValidationError,
-  ): Promise<"stop"> {
-    const attempt = (reviewer.schemaRepairAttempts ?? 0) + 1;
-    if (attempt > MAX_SCHEMA_REPAIR_ATTEMPTS) {
-      throw new Error(
-        `${error.message} The reviewer could not produce a valid report in ${MAX_SCHEMA_REPAIR_ATTEMPTS} repair attempts.`,
-      );
-    }
-    reviewer.schemaRepairAttempts = attempt;
-    reviewer.schemaRepairPrompt = structuredReportRepairPrompt(
-      error.issues,
-      attempt,
-      MAX_SCHEMA_REPAIR_ATTEMPTS,
-    );
-    reviewer.requestId = randomUUID();
-    reviewer.dispatchState = "prepared";
-    delete reviewer.idleResultPolls;
-    await this.save(workflow, token);
-    return "stop";
-  }
-
-  /** Counts one stalled poll, failing the reviewer once the bound is reached. */
-  private async recordStall(
-    workflow: MultiReviewWorkflow,
-    token: string,
-    reviewer: MultiReviewWorkflow["reviewers"][number],
-    error: string,
-  ): Promise<"continue" | "stop"> {
-    reviewer.idleResultPolls = (reviewer.idleResultPolls ?? 0) + 1;
-    if (reviewer.idleResultPolls >= MAX_IDLE_RESULT_POLLS) {
-      reviewer.status = "failed";
-      reviewer.error = error;
-    }
-    await this.save(workflow, token);
-    return "continue";
-  }
-
-  /** Observed progress retires the stall count so it cannot accumulate. */
-  private async clearStall(
-    workflow: MultiReviewWorkflow,
-    token: string,
-    reviewer: MultiReviewWorkflow["reviewers"][number],
-  ): Promise<"continue"> {
-    if (reviewer.idleResultPolls === undefined) return "continue";
-    delete reviewer.idleResultPolls;
-    await this.save(workflow, token);
-    return "continue";
   }
 
   private async advanceFixModel(workflow: MultiReviewWorkflow, token: string): Promise<void> {
@@ -1634,7 +1204,7 @@ export class MultiReviewService {
           const reviewSnapshot = await this.assertReviewSnapshotCurrent(workflow, token);
           prompt = createMultiReviewConsolidationPrompt({
             targetBranch: workflow.targetBranch,
-            worktree: this.promptWorktreeSnapshot(reviewSnapshot),
+            worktree: promptWorktreeSnapshot(reviewSnapshot),
             reports: consolidationReports(workflow.reviewers),
           });
         } else {
@@ -1643,7 +1213,7 @@ export class MultiReviewService {
       }
       // Same reason as the reviewer dispatch: pay the cold start before the
       // at-most-once window rather than inside it.
-      await this.attachBeforeDispatch(provider, session.providerSessionId);
+      await attachAgentBeforeDispatch(provider, session.providerSessionId);
       await this.assertFence(workflow.id, token);
       request.state = "dispatching";
       await this.save(workflow, token);
@@ -1782,30 +1352,7 @@ export class MultiReviewService {
   }
 
   private parseReportResult(result: StructuredOutputResult<unknown>) {
-    if (!result.ok) {
-      if (
-        result.error.code === "schema_retry_exhausted" ||
-        result.error.code === "malformed_output"
-      ) {
-        const detailPath =
-          typeof result.error.details?.path === "string" ? result.error.details.path : "$";
-        const detailText = result.error.details
-          ? ` Provider validation details: ${JSON.stringify(result.error.details)}`
-          : "";
-        return {
-          success: false as const,
-          error: new ReviewContractValidationError("structured-review-report", [
-            {
-              path: detailPath,
-              code: "invalid_value",
-              message: `${result.error.message}${detailText}`,
-            },
-          ]),
-        };
-      }
-      throw new Error(result.error.message);
-    }
-    return safeParseStructuredReviewReport(result.value);
+    return parseStructuredReportResult(result);
   }
 
   private async prepareFixSessionSchemaRepair(
@@ -1846,32 +1393,15 @@ export class MultiReviewService {
     await this.save(workflow, token);
   }
 
-  private async resolveUnattendedInteractions(
+  private resolveUnattendedInteractions(
     workflow: MultiReviewWorkflow,
     token: string,
     provider: BuildPipelineProvider,
     providerSessionId: string,
   ): Promise<void> {
-    if (!provider.interactions) return;
-    const snapshot = await provider.interactions.listPendingInteractions(providerSessionId);
-    await this.assertFence(workflow.id, token);
-    for (const request of snapshot.requests) {
-      const action =
-        request.kind === "question" ||
-        request.kind === "mcp-form" ||
-        request.kind === "elicitation" ||
-        request.kind === "terminal-selection"
-          ? ("decline" as const)
-          : ("deny" as const);
-      await provider.interactions.resolveInteraction(providerSessionId, request.id, {
-        version: 1,
-        interactionId: request.id,
-        sessionId: providerSessionId,
-        action,
-        resolvedAt: Date.now(),
-      });
-      await this.assertFence(workflow.id, token);
-    }
+    return resolveUnattendedReviewerInteractions(provider, providerSessionId, () =>
+      this.assertFence(workflow.id, token),
+    );
   }
 
   private async fail(workflowId: string, error: unknown): Promise<void> {
@@ -1983,51 +1513,14 @@ export class MultiReviewService {
   }
 
   /** Captures the one durable source identity every review turn must share. */
-  private async captureReviewWorktreeSnapshot(
+  private captureReviewWorktreeSnapshot(
     environmentId: string,
   ): Promise<MultiReviewWorktreeSnapshot> {
-    const observed = await probeReviewWorktree(
+    return captureReviewWorktreeSnapshot(
       (command, args) => this.invoke(command, args),
       environmentId,
-      REVIEW_WORKTREE_PROBE_ATTEMPTS,
-      // The starting snapshot is the one place content identity is worth its
-      // cost: it is the evidence every reviewer prompt quotes.
-      { fingerprint: true },
+      "Multi Review",
     );
-    if (observed.status === "unknown") {
-      throw new Error(
-        `Multi Review cannot start because the backend could not capture the environment Git state: ${observed.reason}`,
-      );
-    }
-    if (!observed.fingerprint) {
-      throw new Error(
-        "Multi Review cannot start because the worktree probe returned no content fingerprint",
-      );
-    }
-    const paths = observed.status === "dirty" ? [...observed.paths] : [];
-    if (paths.length > MULTI_REVIEW_MAX_SNAPSHOT_PATHS) {
-      throw new Error(
-        `Multi Review cannot start because the worktree has more than ${MULTI_REVIEW_MAX_SNAPSHOT_PATHS} uncommitted paths`,
-      );
-    }
-    return {
-      status: observed.status,
-      head: observed.head,
-      paths,
-      fingerprint: observed.fingerprint,
-      capturedAt: nowIso(),
-    };
-  }
-
-  private promptWorktreeSnapshot(snapshot: MultiReviewWorktreeSnapshot): ReviewWorktreeSnapshot {
-    return snapshot.status === "clean"
-      ? { status: "clean", head: snapshot.head, fingerprint: snapshot.fingerprint }
-      : {
-          status: "dirty",
-          head: snapshot.head,
-          paths: [...snapshot.paths],
-          fingerprint: snapshot.fingerprint,
-        };
   }
 
   /**
@@ -2054,23 +1547,12 @@ export class MultiReviewService {
       await this.save(workflow, token);
       return adopted;
     }
-    const current = await probeReviewWorktree(
+    await assertReviewSnapshotCurrent(
       (command, args) => this.invoke(command, args),
       workflow.environmentId,
+      baseline,
+      "Multi Review",
     );
-    // "Could not look" is not evidence of "has changed". Reporting it as drift
-    // would discard every completed report over a transient exec failure.
-    if (current.status === "unknown") {
-      throw new ReviewSnapshotUnverifiableError(
-        `Multi Review cannot verify its worktree snapshot: ${current.reason}`,
-      );
-    }
-    const currentPaths = current.status === "dirty" ? current.paths : [];
-    if (current.head !== baseline.head || !samePathSet(currentPaths, baseline.paths)) {
-      throw new ReviewSnapshotChangedError(
-        "Multi Review stopped because the environment worktree changed after the review started. Retry to review the new snapshot.",
-      );
-    }
     return baseline;
   }
 
@@ -2085,23 +1567,6 @@ export class MultiReviewService {
         `Multi Review cannot establish its worktree snapshot: ${errorMessage(error)}`,
       );
     }
-  }
-
-  /**
-   * Aborts reviewer turns this workflow is about to stop supervising.
-   *
-   * A snapshot failure escapes the per-reviewer handler that normally does
-   * this, and unlike a lost controller fence there is no other controller that
-   * will inherit the sessions. Left alone they keep running against the very
-   * worktree whose state could not be trusted. The session ids are kept so the
-   * read-only transcripts stay reachable.
-   */
-  private async abandonLiveReviewerSessions(workflow: MultiReviewWorkflow): Promise<void> {
-    await Promise.all(
-      workflow.reviewers
-        .filter((reviewer) => reviewer.status === "running" && reviewer.providerSessionId)
-        .map((reviewer) => this.abandonSession(workflow, reviewer, reviewer.providerSessionId)),
-    );
   }
 
   private providerKey(workflow: MultiReviewWorkflow, selection: MultiReviewModelSelection): string {

@@ -208,6 +208,7 @@ export class StorageKanban extends StorageDrafts {
       acceptanceCriteria?: string;
       status?: KanbanStatus;
       requestId?: string;
+      featureBuildRequestHash?: string;
     } = {},
   ): Promise<KanbanTask> {
     const status = initial.status ?? "backlog";
@@ -226,7 +227,8 @@ export class StorageKanban extends StorageDrafts {
           existing.title !== title ||
           existing.description !== description ||
           existing.acceptanceCriteria !== (initial.acceptanceCriteria ?? "") ||
-          existing.status !== status
+          existing.status !== status ||
+          existing.featureBuildRequestHash !== initial.featureBuildRequestHash
         ) {
           throw new Error("Kanban ticket requestId was already used with different arguments");
         }
@@ -252,12 +254,33 @@ export class StorageKanban extends StorageDrafts {
               .map((candidate) => candidate.order),
           ) + 1,
         prMergeCommented: false,
+        ...(initial.featureBuildRequestHash
+          ? { featureBuildRequestHash: initial.featureBuildRequestHash }
+          : {}),
       };
       tasks.push(task);
       await this.saveJson(this.kanbanFile(), tasks);
       this.announce("kanban", projectId);
       return task;
     });
+  }
+
+  /**
+   * The ticket a previous call with this `requestId` created, if any.
+   *
+   * {@link addKanbanTask} is idempotent, but only while the ticket still looks
+   * exactly as it was created: it rejects a replay whose arguments disagree
+   * with the stored row. A ticket that started a build has usually moved on by
+   * the time a caller retries — a different status, a linked environment — so a
+   * retry has to be able to *find* it rather than re-create it.
+   */
+  async findKanbanTaskByRequestId(
+    projectId: string,
+    requestId: string,
+  ): Promise<KanbanTask | null> {
+    const id = stableKanbanId(`ticket:${projectId}`, requestId);
+    const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
+    return tasks.find((task) => task.id === id && task.projectId === projectId) ?? null;
   }
 
   async updateKanbanTask(

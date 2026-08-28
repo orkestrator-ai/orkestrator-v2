@@ -99,6 +99,7 @@ describe("MultiReviewReviewerTab message containment", () => {
     const loadTranscript = mock(async () => ({
       workflowId: "multi-1",
       reviewerId: "reviewer-1",
+      workflowPhase: "reviewing" as const,
       agent: "claude" as const,
       model: "default",
       status: "running" as const,
@@ -163,6 +164,7 @@ describe("MultiReviewReviewerTab message containment", () => {
       return {
         workflowId: "multi-1",
         reviewerId: "reviewer-1",
+        workflowPhase: "reviewing" as const,
         agent: "claude" as const,
         model: "default",
         status: "running" as const,
@@ -232,6 +234,7 @@ describe("toMultiReviewReviewerMessages machine output", () => {
   const snapshot = (parts: Array<{ type: string; content: string }>) => ({
     workflowId: "multi-1",
     reviewerId: "reviewer-2",
+    workflowPhase: "reviewing" as const,
     agent: "codex" as const,
     model: "gpt-5.6-sol",
     status: "running" as const,

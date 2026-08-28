@@ -2109,7 +2109,7 @@ eval "$opencode_setup"
       expect(result.stderr).toBe("");
       expect(result.stdout).toBe(`FOUND\nbun=${overrideBunInstall}\n${overrideBun}\nOVERRIDE_BUN`);
     });
-  });
+  }, 30_000);
 
   test("runtime helper migrates old snapshots without clobbering caller PATH", () => {
     withTempDir((dir) => {

@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import {
   createContextMenuTemplate,
   installDefaultContextMenu,
+  type ContextMenuActions,
 } from "../../../apps/desktop/electron/context-menu";
 import type { ContextMenuParams, MenuItemConstructorOptions } from "electron";
 
@@ -64,6 +65,16 @@ function roles(template: MenuItemConstructorOptions[]): Array<string | undefined
   return template.filter((item) => item.type !== "separator").map((item) => item.role);
 }
 
+function createActions(overrides: Partial<ContextMenuActions> = {}): ContextMenuActions {
+  return {
+    replaceMisspelling: mock(() => undefined),
+    addToDictionary: mock(() => undefined),
+    copyImageAt: mock(() => undefined),
+    writeClipboardText: mock(() => undefined),
+    ...overrides,
+  };
+}
+
 describe("Electron context menu", () => {
   test("builds the full edit menu for editable fields", () => {
     const template = createContextMenuTemplate(
@@ -122,10 +133,10 @@ describe("Electron context menu", () => {
         misspelledWord: "mispelled",
         dictionarySuggestions: ["misspelled", "misapplied"],
       }),
-      {
+      createActions({
         replaceMisspelling,
         addToDictionary,
-      },
+      }),
     );
 
     expect(template.slice(0, 4).map((item) => item.label ?? item.type)).toEqual([
@@ -149,10 +160,7 @@ describe("Electron context menu", () => {
         formControlType: "text-area",
         dictionarySuggestions: ["unused"],
       }),
-      {
-        replaceMisspelling: mock(() => undefined),
-        addToDictionary: mock(() => undefined),
-      },
+      createActions(),
     );
 
     expect(template[0]?.role).toBe("undo");
@@ -184,10 +192,10 @@ describe("Electron context menu", () => {
         misspelledWord: "orkestrator",
         dictionarySuggestions: [],
       }),
-      {
+      createActions({
         replaceMisspelling,
         addToDictionary,
-      },
+      }),
     );
 
     expect(template.slice(0, 2).map((item) => item.label ?? item.type)).toEqual([
@@ -240,6 +248,91 @@ describe("Electron context menu", () => {
     expect(template.find((item) => item.role === "copy")?.enabled).toBe(true);
   });
 
+  test("copies image contents and the suggested filename with separate actions", () => {
+    const copyImageAt = mock((_x: number, _y: number) => undefined);
+    const writeClipboardText = mock((_text: string) => undefined);
+    const template = createContextMenuTemplate(
+      createParams({
+        x: 42,
+        y: 84,
+        mediaType: "image",
+        hasImageContents: true,
+        suggestedFilename: "diagram.png",
+      }),
+      createActions({
+        copyImageAt,
+        writeClipboardText,
+      }),
+    );
+
+    expect(template.map((item) => item.label)).toEqual(["Copy", "Copy Filename"]);
+    expect(template[0]?.enabled).toBe(true);
+    expect(template[1]).toMatchObject({ enabled: true });
+
+    template[0]?.click?.(undefined as never, undefined as never, undefined as never);
+    template[1]?.click?.(undefined as never, undefined as never, undefined as never);
+    expect(copyImageAt).toHaveBeenCalledWith(42, 84);
+    expect(writeClipboardText).toHaveBeenCalledWith("diagram.png");
+  });
+
+  test("keeps selected-text actions in the image menu", () => {
+    const template = createContextMenuTemplate(
+      createParams({
+        mediaType: "image",
+        hasImageContents: true,
+        selectionText: "selected caption",
+        suggestedFilename: "diagram.png",
+        editFlags: {
+          canUndo: false,
+          canRedo: false,
+          canCut: false,
+          canCopy: true,
+          canPaste: false,
+          canDelete: false,
+          canSelectAll: true,
+          canEditRichly: false,
+        },
+      }),
+      createActions(),
+    );
+
+    expect(template.map((item) => item.label ?? item.type ?? item.role)).toEqual([
+      "Copy",
+      "Copy Filename",
+      "separator",
+      "copy",
+      "selectAll",
+    ]);
+  });
+
+  test("falls back to selected-text actions when image contents or handlers are unavailable", () => {
+    const selectedImageParams = createParams({
+      mediaType: "image",
+      hasImageContents: true,
+      selectionText: "selected caption",
+      editFlags: {
+        canUndo: false,
+        canRedo: false,
+        canCut: false,
+        canCopy: true,
+        canPaste: false,
+        canDelete: false,
+        canSelectAll: true,
+        canEditRichly: false,
+      },
+    });
+
+    expect(roles(createContextMenuTemplate(selectedImageParams))).toEqual(["copy", "selectAll"]);
+    expect(
+      roles(
+        createContextMenuTemplate({
+          ...selectedImageParams,
+          hasImageContents: false,
+        }),
+      ),
+    ).toEqual(["copy", "selectAll"]);
+  });
+
   test("does not show a native menu for empty non-editable app chrome", () => {
     expect(createContextMenuTemplate(createParams())).toEqual([]);
   });
@@ -265,10 +358,57 @@ describe("Electron context menu", () => {
       },
     };
 
-    installDefaultContextMenu(window as never, { buildFromTemplate });
+    installDefaultContextMenu(
+      window as never,
+      { buildFromTemplate },
+      mock(() => undefined),
+    );
     contextMenuListener?.({}, createParams({ selectionText: "copy me" }));
 
     expect(buildFromTemplate).toHaveBeenCalledTimes(1);
+    expect(popup).toHaveBeenCalledWith({ window });
+  });
+
+  test("routes the image copy action through the window webContents", () => {
+    let contextMenuListener: ((event: unknown, params: ContextMenuParams) => void) | null = null;
+    let builtTemplate: MenuItemConstructorOptions[] = [];
+    const popup = mock(() => undefined);
+    const buildFromTemplate = mock((template: MenuItemConstructorOptions[]) => {
+      builtTemplate = template;
+      return { template, popup };
+    });
+    const copyImageAt = mock((_x: number, _y: number) => undefined);
+    const writeClipboardText = mock((_text: string) => undefined);
+    const window = {
+      webContents: {
+        on: mock(
+          (
+            _event: "context-menu",
+            listener: (event: unknown, params: ContextMenuParams) => void,
+          ) => {
+            contextMenuListener = listener;
+          },
+        ),
+        copyImageAt,
+      },
+    };
+
+    installDefaultContextMenu(window as never, { buildFromTemplate }, writeClipboardText);
+    contextMenuListener?.(
+      {},
+      createParams({
+        x: 12,
+        y: 34,
+        mediaType: "image",
+        hasImageContents: true,
+        suggestedFilename: "chart.png",
+      }),
+    );
+    builtTemplate[0]?.click?.(undefined as never, undefined as never, undefined as never);
+    builtTemplate[1]?.click?.(undefined as never, undefined as never, undefined as never);
+
+    expect(copyImageAt).toHaveBeenCalledWith(12, 34);
+    expect(writeClipboardText).toHaveBeenCalledWith("chart.png");
     expect(popup).toHaveBeenCalledWith({ window });
   });
 
@@ -297,7 +437,11 @@ describe("Electron context menu", () => {
       },
     };
 
-    installDefaultContextMenu(window as never, { buildFromTemplate });
+    installDefaultContextMenu(
+      window as never,
+      { buildFromTemplate },
+      mock(() => undefined),
+    );
     contextMenuListener?.(
       {},
       createParams({
@@ -339,7 +483,11 @@ describe("Electron context menu", () => {
       },
     };
 
-    installDefaultContextMenu(window as never, { buildFromTemplate });
+    installDefaultContextMenu(
+      window as never,
+      { buildFromTemplate },
+      mock(() => undefined),
+    );
     contextMenuListener?.({}, createParams());
 
     expect(buildFromTemplate).not.toHaveBeenCalled();

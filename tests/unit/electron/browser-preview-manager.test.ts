@@ -18,6 +18,7 @@ class FakeWebContents extends EventEmitter {
   readonly reload = mock(() => undefined);
   readonly openDevTools = mock(() => undefined);
   readonly inspectElement = mock(() => undefined);
+  readonly copyImageAt = mock((_x: number, _y: number) => undefined);
   readonly replaceMisspelling = mock((_suggestion: string) => undefined);
   readonly session = {
     addWordToSpellCheckerDictionary: mock((_word: string) => true),
@@ -315,6 +316,40 @@ describe("BrowserPreviewManager", () => {
 
     expect(contents.replaceMisspelling).toHaveBeenCalledWith("misspelled");
     expect(contents.session.addWordToSpellCheckerDictionary).toHaveBeenCalledWith("mispelled");
+  });
+
+  test("copies image contents and filenames from a preview", async () => {
+    const harness = createHarness();
+    await harness.manager.attach(input);
+    const contents = harness.views[0]!.webContents;
+
+    contents.emit(
+      "context-menu",
+      {},
+      createContextMenuParams({
+        x: 123,
+        y: 456,
+        mediaType: "image",
+        hasImageContents: true,
+        suggestedFilename: "preview.png",
+      }),
+    );
+
+    const template = harness.menuTemplates[0]!;
+    const copyImage = template.find((item) => item.label === "Copy");
+    const copyFilename = template.find((item) => item.label === "Copy Filename");
+    expect(copyImage?.enabled).toBe(true);
+    expect(copyFilename?.enabled).toBe(true);
+
+    copyImage?.click?.(undefined as never, undefined as never, undefined as never);
+    copyFilename?.click?.(undefined as never, undefined as never, undefined as never);
+
+    expect(contents.copyImageAt).toHaveBeenCalledWith(123, 456);
+    expect(harness.writeClipboardText).toHaveBeenCalledWith("preview.png");
+
+    contents.destroyed = true;
+    copyImage?.click?.(undefined as never, undefined as never, undefined as never);
+    expect(contents.copyImageAt).toHaveBeenCalledTimes(1);
   });
 
   test("routes Cmd+L and Ctrl+L from the native preview to the app address bar", async () => {

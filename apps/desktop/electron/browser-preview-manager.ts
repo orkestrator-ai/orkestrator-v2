@@ -376,6 +376,10 @@ export class BrowserPreviewManager {
         addToDictionary: (word) => {
           contents.session.addWordToSpellCheckerDictionary(word);
         },
+        copyImageAt: (x, y) => {
+          if (!contents.isDestroyed()) contents.copyImageAt(x, y);
+        },
+        writeClipboardText: this.options.writeClipboardText,
       });
       if (defaultTemplate.length > 0) {
         if (template.length > 0) template.push({ type: "separator" });

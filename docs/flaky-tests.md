@@ -10,6 +10,89 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `CreateEnvironmentFlowDialog.test.tsx` Bun worker crash (`tests/unit/components/CreateEnvironmentFlowDialog.test.tsx`)
+
+- **Status:** open
+- **Date observed:** 2026-08-29
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the root/agent-support group used six Bun workers while the workspace and
+  bridge groups were also active.
+- **Failure:** Bun 1.4.0 crashed this file's worker with `SIGSEGV` after 17.61 s
+  and aborted the remaining sibling files. The runner explicitly identified it
+  as a Bun bug rather than a test assertion.
+- **Suite counts:** root/agent-support reported 1,954 passed and 88 failed
+  across 2,042 tests; the 88 failures include files aborted after the worker
+  panic, not 88 independent assertions.
+- **Isolated rerun:** `bun test tests/unit/components/CreateEnvironmentFlowDialog.test.tsx`
+  passed 33/33 with 116 assertions in 1.55 s before the aggregate run, against
+  the same tree.
+- **Hypothesis:** the available evidence establishes only an aggregate-only Bun
+  runtime crash. The same run also pushed unrelated timing tests into
+  multi-minute durations, so a recurrence should retain Bun's crash report and
+  process/resource diagnostics before changing this file's tests.
+
+## `TerminalContainer > keeps launch options while a pending native launch is still outstanding` (`apps/web/src/components/terminal/TerminalContainer.view.test.tsx:6643`)
+
+- **Status:** open
+- **Date observed:** 2026-08-29
+- **Original command:** `bun run test`
+- **Worker configuration:** the web workspace ran its parallel package suite
+  while the root, bridge, build, and protocol work from `scripts/test-all.ts`
+  shared the host.
+- **Failure:** the case exceeded its 12-second outer budget after the aggregate
+  runner reported 384,624.67 ms; a trailing assertion then observed the pending
+  launch already cleared.
+- **Suite counts:** web workspace reported 5,577 passed, 1 skipped, 3 failed,
+  and 1 trailing error across 5,581 tests.
+- **Isolated rerun:** `bun test src/components/terminal/TerminalContainer.view.test.tsx`
+  from `apps/web` passed 126/126 in 10.19 s; the affected 3.5-second timer case
+  passed in 3,505.35 ms.
+- **Hypothesis:** the case deliberately waits 3.5 seconds against real timers.
+  Its isolated duration matches that wait, while the aggregate reported more
+  than six minutes and also timed out unrelated focus and bridge tests. This
+  supports runner/host starvation rather than a launch-state regression.
+
+## `at-most-once dispatch > a delayed retry succeeds and settles the phase after the wait` (`bridges/codex-bridge/src/app-server-runtime-prompt.test.ts:469`)
+
+- **Status:** open
+- **Date observed:** 2026-08-29
+- **Original command:** `bun run test`
+- **Worker configuration:** the bridge group ran two Bun workers while the
+  workspace, root/agent-support, and protocol groups ran concurrently.
+- **Failure:** the case hit Bun's 5-second test timeout after the aggregate
+  runner reported 652,578.36 ms. Cleanup then removed its temporary dispatch
+  journal directory, producing a trailing `ENOENT` assertion error.
+- **Suite counts:** bridge group reported 3,179 passed, 11 skipped, 2 failed,
+  and 1 trailing error across 3,192 tests.
+- **Isolated rerun:** `bun test src/app-server-runtime-prompt.test.ts` from
+  `bridges/codex-bridge` passed 75/75 in 2.23 s; the affected delayed-retry case
+  passed in 44.13 ms.
+- **Hypothesis:** the journal `ENOENT` followed the outer timeout and fixture
+  cleanup. The isolated case completed two orders of magnitude inside its
+  budget, while the aggregate's reported duration exceeded ten minutes, so the
+  evidence points to aggregate runner starvation rather than dispatch logic.
+
+## `ACP bridge > settles the turn before a delayed Cursor replay and enriches only its captured tools` (`bridges/acp-bridge/src/acp-transcript.test.ts:2447`)
+
+- **Status:** open
+- **Date observed:** 2026-08-29
+- **Original command:** `bun run test`
+- **Worker configuration:** the bridge group ran two Bun workers while the
+  workspace, root/agent-support, and protocol groups ran concurrently.
+- **Failure:** the bounded state wait expired after the aggregate runner
+  reported 652,814.96 ms. The final snapshot had completed both turns but had
+  not yet applied the delayed replay enrichment expected by the predicate.
+- **Suite counts:** bridge group reported 3,179 passed, 11 skipped, 2 failed,
+  and 1 trailing error across 3,192 tests.
+- **Isolated rerun:** `bun test src/acp-transcript.test.ts` from
+  `bridges/acp-bridge` passed 70/70 in 18.23 s; the affected case passed in
+  1,774.68 ms.
+- **Hypothesis:** the state machine reached its idle second-turn snapshot, and
+  only the deliberately delayed replay lagged. Together with the ten-minute
+  aggregate duration and green isolated owner, this is evidence of scheduling
+  starvation around the delayed enrichment rather than transcript corruption.
+
 ## `SkillsSettings > copies the selected path and reports clipboard failures` (`apps/web/src/components/settings/SkillsSettings.test.tsx:730`)
 
 - **Status:** open
@@ -521,6 +604,15 @@ history rather than two partial ones.
   ActionBar or its shortcut handler. Evidence:
   `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
   `/var/folders/.../orkestrator-test-run.KTh5f2`.
+- **Recurrence (feature activation, 2026-08-29):** `bun run test` failed the
+  same `dispatches tab, workflow, editor, and panel shortcuts` case at
+  `ActionBar.test.tsx:5467` after 118.84 ms. The expected run-command call was
+  absent while the mock again contained the preceding plain, native-agent, and
+  Codex review-tab calls. The web workspace reported 5,577 passed, 1 skipped,
+  3 failed, and 1 trailing error across 5,581 tests; the aggregate runner also
+  stretched unrelated timer cases into multi-minute durations. The isolated
+  rerun `bun test src/components/layout/ActionBar.test.tsx` from `apps/web`
+  exited 0 against the same tree.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
 
 ## `ACP bridge > drops malformed persisted tool parts on load` (`bridges/acp-bridge/src/acp-persistence.test.ts:419`)
@@ -1174,7 +1266,7 @@ recorded against the file that actually ran, not against the historical name.
 
 ## `MobileAppShellLayout` drawer focus-restoration timeouts (`apps/web/src/components/layout/MobileAppShellLayout.test.tsx`)
 
-- **Status:** resolved — see the 2026-08-16 resolution sweep above
+- **Status:** open — recurred after the 2026-08-16 resolution sweep
 - **Date observed:** 2026-08-14
 - **Affected tests:** `closes the project drawer from its backdrop and restores trigger focus` (5,811.44 ms in the first run, 6,830.57 ms in the second) and `closes the initial project drawer from its close button and restores trigger focus` (16,456.55 ms, second run only).
 - **Original command:** `set -o pipefail; bun test --cwd apps/web --parallel 2>&1 | tee /tmp/ork-web-tests.log`, and again into `/tmp/ork-web-tests2.log`.
@@ -1183,6 +1275,13 @@ recorded against the file that actually ran, not against the historical name.
 - **Suite counts:** first run 4,835 passed, 1 skipped, 4 failed across 211 files (the other three were two `ActionBar` cases updated by the review-picker change in the same commit and a separate deterministic `AgentNativeTab` failure). Second run 4,836 passed, 1 skipped, 3 failed across 211 files in 268.51 seconds.
 - **Isolated rerun:** `set -o pipefail; bun test --cwd apps/web src/components/layout/MobileAppShellLayout.test.tsx --parallel 2>&1 | tee /tmp/ork-mobile-shell.log` -> 24 passed, 0 failed in 9.17 seconds.
 - **Recurrence 2026-08-15:** `closes the initial project drawer from its close button and restores trigger focus` timed out again at 13,029.58 ms during `set -o pipefail; bun test --cwd apps/web --parallel` (4,845 passed, 1 skipped, 2 failed across 211 files in 193.84 seconds; the other failure was the same unrelated deterministic `AgentNativeTab` case). The backdrop case passed in that run. Isolated rerun of the owning file passed 24/0 in 4.23 seconds. Unrelated test processes from another session were competing for CPU during the aggregate run, which is consistent with the mount-cost hypothesis below.
+- **Recurrence 2026-08-29:** `bun run test` timed out `closes the project
+  drawer from its backdrop and restores trigger focus` after the aggregate
+  runner reported 384,107.52 ms against the case's 20-second budget. The web
+  workspace reported 5,577 passed, 1 skipped, 3 failed, and 1 trailing error
+  across 5,581 tests. The isolated rerun `bun test
+  src/components/layout/MobileAppShellLayout.test.tsx` from `apps/web` passed
+  25/25 in 4.38 s; the affected case passed in 1,824.25 ms.
 - **Relationship to the entry above:** these are the two cases produced by that entry's split. The split gave each focus transition its own budget, and the initial-open case has not recurred, but the two close-and-restore transitions still time out under a fully parallel web-package run.
 - **Hypothesis:** each case still mounts the whole mobile shell before it exercises one Radix focus restoration, so the fixed five-second budget is mostly setup. The dismissal assertions themselves hold in isolation, which points at the shared mount cost under 18-way parallelism rather than at the focus behaviour. A lighter mount, or an explicit per-test budget, should be evaluated before the drawer's focus handling is changed.
 

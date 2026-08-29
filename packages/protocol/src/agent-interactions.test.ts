@@ -25,6 +25,7 @@ import {
   isAgentInteractionResolutionJournal,
   isAgentInteractionSnapshot,
   isAgentInteractionWorkflowSummary,
+  isPlanMarkdownPath,
   pruneAgentInteractionResolutionJournal,
   serializeAgentInteractionDraft,
   serializeAgentInteractionTelemetry,
@@ -58,6 +59,17 @@ test("uses one five-minute product timeout and serializes Claude answers lossles
   expect(serializeClaudeQuestionAnswer(['say "yes"', "東京 🦊"], false)).toBe(
     JSON.stringify(['say "yes"', "東京 🦊"]),
   );
+});
+
+test("recognizes plan paths without treating arbitrary Markdown as authorization content", () => {
+  expect(isPlanMarkdownPath("/home/node/.claude/plans/calm-moon.md")).toBe(true);
+  expect(isPlanMarkdownPath("/workspace/docs/plans/cache.md")).toBe(true);
+  expect(isPlanMarkdownPath("/workspace/implementation-plan.md")).toBe(true);
+  expect(isPlanMarkdownPath("C:\\repo\\plans\\release.md")).toBe(true);
+  expect(isPlanMarkdownPath("/workspace/README.md")).toBe(false);
+  expect(isPlanMarkdownPath("/workspace/docs/release-notes.md")).toBe(false);
+  expect(isPlanMarkdownPath("/workspace/explans/release.md")).toBe(false);
+  expect(isPlanMarkdownPath("/workspace/plan.txt")).toBe(false);
 });
 
 function request(
@@ -158,6 +170,25 @@ describe("agent interaction request contract", () => {
 
   test("keeps duplicate labels and comma-containing provider values valid", () => {
     expect(isAgentInteractionRequest(request())).toBe(true);
+  });
+
+  test("accepts plan availability only on plan approvals", () => {
+    const plan = request("plan-approval");
+    plan.presentation.questions = [];
+    plan.presentation.planAvailable = true;
+    expect(isAgentInteractionRequest(plan)).toBe(true);
+    expect(
+      isAgentInteractionRequest({
+        ...plan,
+        presentation: { ...plan.presentation, planAvailable: "yes" },
+      }),
+    ).toBe(false);
+    expect(
+      isAgentInteractionRequest({
+        ...request(),
+        presentation: { ...request().presentation, planAvailable: true },
+      }),
+    ).toBe(false);
   });
 
   test("rejects unknown kinds, duplicate IDs, invalid deadlines, and extra fields", () => {

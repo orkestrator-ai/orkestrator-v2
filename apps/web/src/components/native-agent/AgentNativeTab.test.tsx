@@ -29,6 +29,7 @@ import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
+import { TerminalProvider } from "@/contexts";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
 // Snapshot before installing the stubs so the real modules are restored for
@@ -356,6 +357,7 @@ function pendingInteraction(
   id: string,
 ): AgentInteractionRequest {
   const question = kind === "question";
+  const planApproval = kind === "plan-approval";
   return {
     version: AGENT_INTERACTION_CONTRACT_VERSION,
     id,
@@ -382,13 +384,22 @@ function pendingInteraction(
             },
           ],
         }
-      : {
-          title: "Approve command",
-          body: "Command: bun test",
-          questions: [],
-          confirmLabel: "Approve",
-          declineLabel: "Deny",
-        },
+      : planApproval
+        ? {
+            title: "Approve Claude's plan",
+            body: "# Implementation plan\n\n1. Show the plan in the transcript.",
+            planAvailable: true,
+            questions: [],
+            confirmLabel: "Approve",
+            declineLabel: "Deny",
+          }
+        : {
+            title: "Approve command",
+            body: "Command: bun test",
+            questions: [],
+            confirmLabel: "Approve",
+            declineLabel: "Deny",
+          },
   };
 }
 
@@ -550,12 +561,13 @@ function seedAssignedPane(
 }
 
 describe("AgentNativeTab", () => {
-  test("routes questions into the transcript while approvals stay pinned and docks the empty-session composer", async () => {
+  test("routes questions and plan reviews into the transcript while action approvals stay pinned", async () => {
     renderVirtualizedMessages = true;
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       interactions: [
         pendingInteraction("question", "question-1"),
+        pendingInteraction("plan-approval", "plan-1"),
         pendingInteraction("command-approval", "approval-1"),
       ],
     }));
@@ -567,14 +579,77 @@ describe("AgentNativeTab", () => {
     const composeDock = screen.getByTestId("compose-dock");
     const composer = screen.getByTestId("shared-native-compose-bar");
     const approval = screen.getByText("Approve command");
+    const plan = screen.getByText("Show the plan in the transcript.");
+    const planCard = screen
+      .getByText("Approve Claude's plan")
+      .closest<HTMLElement>('[role="group"]');
 
     expect(transcript.contains(question)).toBe(true);
+    expect(transcript.contains(plan)).toBe(true);
+    expect(planCard).toBeTruthy();
+    expect(
+      (within(planCard!).getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     expect(composeDock.contains(question)).toBe(false);
+    expect(composeDock.contains(plan)).toBe(false);
     expect(composeDock.contains(approval)).toBe(true);
     expect(composeDock.className).not.toContain("top-1/2");
     expect(composer.className).toContain("mb-4");
     expect(composer.className).toContain("mt-2");
     expect(composer.className).not.toContain("my-0");
+  });
+
+  test("uses transcript plan content when the provider plan body is unavailable", async () => {
+    renderVirtualizedMessages = true;
+    const unavailable = pendingInteraction("plan-approval", "plan-unavailable");
+    unavailable.presentation = {
+      title: "Claude's plan is unavailable for approval",
+      body: "Claude asked to leave plan mode without providing a readable plan. Approval is disabled.",
+      planAvailable: false,
+      questions: [],
+      confirmLabel: "Approve",
+      declineLabel: "Deny",
+      confirmDisabled: true,
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "assistant-plan-write",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-29T12:00:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Write",
+              toolName: "Write",
+              toolArgs: {
+                file_path: "/home/node/.claude/plans/fallback-plan.md",
+                content: "# Transcript plan\n\n1. Recover this plan for display.",
+              },
+            },
+          ],
+        },
+      ],
+      interactions: [unavailable],
+    }));
+
+    render(
+      <TerminalProvider>
+        <AgentNativeTab tabId="tab-plan-fallback" data={identity("claude")} isActive />
+      </TerminalProvider>,
+    );
+
+    expect(await screen.findByText("Recover this plan for display.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Claude asked to leave plan mode without providing a readable plan. Approval is disabled.",
+      ),
+    ).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 
   test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(

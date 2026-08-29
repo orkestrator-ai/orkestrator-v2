@@ -1263,6 +1263,9 @@ export async function applySessionPlanMode(
   persist = true,
 ): Promise<void> {
   if (persist) await persistSessionMetadata(session, planMode);
+  if (!planMode || session.planMode !== true) {
+    session.observedPlan = undefined;
+  }
   session.planMode = planMode;
   eventEmitter.emit({
     type: "session.updated",

@@ -1276,20 +1276,19 @@ export function SharedNativeAgentController({
   }
 
   /**
-   * Questions render in the transcript; everything else the turn is blocked on
-   * stays pinned above the composer. An approval gates a command that is about
-   * to run and must not scroll away, whereas a question is a turn in the
-   * conversation and belongs where the conversation is.
+   * Questions and plan reviews are conversational content, so they render as
+   * the last transcript row. Command/file/permission approvals stay pinned
+   * above the composer because they gate an action that is about to run.
    */
   const allInteractions = projection?.interactions ?? [];
-  const questionInteractions = allInteractions.filter(
-    (interaction) => interaction.kind === "question",
+  const transcriptInteractions = allInteractions.filter(
+    (interaction) => interaction.kind === "question" || interaction.kind === "plan-approval",
   );
   const pinnedInteractions = allInteractions.filter(
-    (interaction) => interaction.kind !== "question",
+    (interaction) => interaction.kind !== "question" && interaction.kind !== "plan-approval",
   );
   const composerCentered =
-    messages.length === 0 && !isTurnActive && questionInteractions.length === 0;
+    messages.length === 0 && !isTurnActive && transcriptInteractions.length === 0;
 
   /**
    * The rendered list is also what decides whether anything is pinned at all, so
@@ -1455,17 +1454,27 @@ export function SharedNativeAgentController({
         <NativeAgentInteractionCard
           key={interaction.id}
           interaction={interaction}
-          planContent={interaction.kind === "plan-approval" ? planContent : undefined}
           onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
         />
       ))}
-      transcriptCards={questionInteractions.map((interaction) => (
-        <NativeAgentQuestionCard
-          key={interaction.id}
-          interaction={interaction}
-          onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
-        />
-      ))}
+      transcriptCards={transcriptInteractions.map((interaction) =>
+        interaction.kind === "question" ? (
+          <NativeAgentQuestionCard
+            key={interaction.id}
+            interaction={interaction}
+            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+          />
+        ) : (
+          <NativeAgentInteractionCard
+            key={interaction.id}
+            interaction={interaction}
+            planContent={
+              interaction.presentation.planAvailable ? interaction.presentation.body : planContent
+            }
+            onResolve={(resolution) => resolveInteraction(interaction.id, resolution)}
+          />
+        ),
+      )}
       pinnedAccessory={pinnedCards.length > 0 ? <>{pinnedCards}</> : null}
       topAccessory={
         projection?.suggestedPrompt ? (

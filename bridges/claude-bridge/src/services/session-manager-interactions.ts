@@ -165,6 +165,10 @@ export function respondToPlanApproval(
     debugLog("[session-manager] Plan approval not found for requestId:", requestId);
     return false;
   }
+  if (approved && !isPlanApprovalActionable(approval)) {
+    debugLog("[session-manager] Refusing incomplete plan approval", { requestId });
+    return false;
+  }
 
   console.log("[session-manager] Responding to plan approval", {
     requestId,
@@ -190,6 +194,15 @@ export function respondToPlanApproval(
   });
 
   return true;
+}
+
+/** A positive response is valid only for a complete provider-captured plan. */
+export function isPlanApprovalActionable(approval: PlanApprovalRequest): boolean {
+  return (
+    typeof approval.plan === "string" &&
+    approval.plan.trim().length > 0 &&
+    approval.planTruncated !== true
+  );
 }
 
 /**

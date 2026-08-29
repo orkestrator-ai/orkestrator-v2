@@ -51,6 +51,7 @@ describe("provider-neutral interaction adapters", () => {
         id: "approval-1",
         sessionId: "session-1",
         expiresAt,
+        plan: "# Plan\n\n1. Make the change.\n2. Run the tests.",
       },
     ];
     const upstream: Array<{ url: string; body: unknown }> = [];
@@ -76,6 +77,11 @@ describe("provider-neutral interaction adapters", () => {
     });
     const first = await provider.interactions!.listPendingInteractions("session-1");
     expect(first.requests.map((request) => request.kind)).toEqual(["question", "plan-approval"]);
+    expect(first.requests[1]!.presentation).toMatchObject({
+      body: "# Plan\n\n1. Make the change.\n2. Run the tests.",
+      confirmDisabled: false,
+      planAvailable: true,
+    });
     expect(first.requests[0]!.origin).toBe("build-pipeline");
     expect(
       first.requests[0]!.presentation.questions[0]!.options.map((option) => option.id),
@@ -128,6 +134,81 @@ describe("provider-neutral interaction adapters", () => {
         declineResolution(approval),
       ),
     ).resolves.toMatchObject({ result: "stale" });
+  });
+
+  test("Claude rejects positive resolution for missing, provider-truncated, and oversized plans", async () => {
+    const expiresAt = Date.now() + 60_000;
+    const oversizedPlan = "x".repeat(AGENT_INTERACTION_LIMITS.maxTextLength + 1);
+    let approvals: Array<Record<string, unknown>> = [
+      { id: "missing-plan", expiresAt },
+      { id: "provider-truncated", expiresAt, plan: "# Partial plan…", planTruncated: true },
+      { id: "oversized-plan", expiresAt, plan: oversizedPlan },
+    ];
+    const upstream: Array<{ url: string; body: unknown }> = [];
+    const { provider } = httpProvider(async (url, init) => {
+      if (url.endsWith("/questions")) {
+        return Response.json({
+          questions: [
+            {
+              id: "question-1",
+              expiresAt,
+              questions: [{ question: "Continue reviewing?", options: [] }],
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/plan-approvals")) return Response.json({ approvals });
+      if (url.includes("/plan-approvals/")) {
+        upstream.push({ url, body: JSON.parse(String(init.body)) });
+        approvals = approvals.filter((approval) => !url.includes(String(approval.id)));
+        return Response.json({ status: "rejected" });
+      }
+      return Response.json({ status: "idle" });
+    });
+
+    const snapshot = await provider.interactions!.listPendingInteractions("session-1");
+    expect(snapshot.requests.map((request) => request.kind)).toEqual([
+      "question",
+      "plan-approval",
+      "plan-approval",
+      "plan-approval",
+    ]);
+    const plans = snapshot.requests.filter((request) => request.kind === "plan-approval");
+    expect(plans[0]!.presentation).toMatchObject({
+      confirmDisabled: true,
+      planAvailable: false,
+    });
+    expect(plans[1]!.presentation).toMatchObject({
+      body: "# Partial plan…",
+      confirmDisabled: true,
+      planAvailable: true,
+    });
+    expect(plans[2]!.presentation.body).toHaveLength(AGENT_INTERACTION_LIMITS.maxTextLength);
+    expect(plans[2]!.presentation).toMatchObject({
+      confirmDisabled: true,
+      planAvailable: true,
+    });
+
+    for (const request of plans) {
+      await expect(
+        provider.interactions!.resolveInteraction(
+          "session-1",
+          request.id,
+          answerResolution(request),
+        ),
+      ).resolves.toMatchObject({ result: "rejected" });
+    }
+    expect(upstream).toEqual([]);
+
+    await expect(
+      provider.interactions!.resolveInteraction(
+        "session-1",
+        plans[0]!.id,
+        declineResolution(plans[0]!),
+      ),
+    ).resolves.toMatchObject({ result: "applied" });
+    expect(upstream).toHaveLength(1);
+    expect(upstream[0]!.body).toEqual({ approved: false });
   });
 
   test("lets the first real registration replace an implicit placeholder", async () => {

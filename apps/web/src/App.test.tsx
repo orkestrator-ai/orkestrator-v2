@@ -338,6 +338,7 @@ mock.module("@/lib/native/process", () => ({
 }));
 
 import App, { DOCKER_AVAILABILITY_POLL_INTERVAL_MS } from "./App";
+import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
 
 function makeEnvironment(id: string, projectId: string): Environment {
   return {
@@ -853,6 +854,44 @@ describe("App background processing mounts", () => {
     expect(screen.getByTestId("kanban-board").textContent).toBe("project-1");
     expect(screen.queryByTestId("project-launcher") === null).toBe(true);
     await waitFor(() => expect(mockCheckDocker).toHaveBeenCalled());
+  });
+
+  test("replaces the project board with an activated feature environment after hydration", async () => {
+    const featureEnvironment = makeEnvironment("env-feature", "project-1");
+    let resolveEnvironment: ((environment: Environment) => void) | undefined;
+    mockGetEnvironment.mockImplementationOnce(
+      () =>
+        new Promise<Environment>((resolve) => {
+          resolveEnvironment = resolve;
+        }),
+    );
+    resetStores({
+      environments: [],
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: null,
+    });
+
+    render(<App />);
+    expect(screen.getByTestId("kanban-board").textContent).toBe("project-1");
+
+    act(() => {
+      activateFeatureBuildEnvironment("project-1", {
+        taskId: "task-feature",
+        pipelineId: "pipeline-feature",
+        environmentId: featureEnvironment.id,
+      });
+    });
+
+    expect(useUIStore.getState().selectedEnvironmentId).toBe(featureEnvironment.id);
+    expect(screen.getByTestId("kanban-board").textContent).toBe("project-1");
+
+    await act(async () => {
+      resolveEnvironment?.(featureEnvironment);
+      await Promise.resolve();
+    });
+
+    expect(await screen.findByTestId("terminal-env-feature")).toBeTruthy();
+    expect(screen.queryByTestId("kanban-board") === null).toBe(true);
   });
 
   test("persists same-turn pane intents and flushes them on app teardown", async () => {

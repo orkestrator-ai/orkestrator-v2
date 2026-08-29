@@ -159,6 +159,11 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+async function openTranscriptRefreshMenu() {
+  fireEvent.contextMenu(screen.getByTestId("multi-review-reviewer-transcript-body"));
+  return screen.findByRole("menuitem", { name: "Refresh transcript" });
+}
+
 describe("MultiReviewTab backend snapshot viewer", () => {
   test("opens a reviewer transcript in a separate tab intent", () => {
     const ready = readyWorkflow();
@@ -989,6 +994,150 @@ describe("MultiReviewTab backend snapshot viewer", () => {
     );
   });
 
+  test("offers reviewer-scoped restart and unstick actions from the card context menu", async () => {
+    const reviewing = reviewingWorkflow();
+    reviewing.reviewers[0] = {
+      ...reviewing.reviewers[0]!,
+      requestId: "request-1",
+      dispatchState: "sent",
+    };
+    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    const restartReviewer = mock(async () => reviewing);
+    const unstickReviewer = mock(async () => reviewing);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => reviewing)}
+        commands={{
+          address: mock(async () => reviewing),
+          retry: mock(async () => reviewing),
+          cancel: mock(async () => reviewing),
+          stopReviewer: mock(async () => reviewing),
+          restartReviewer,
+          unstickReviewer,
+        }}
+      />,
+    );
+
+    const firstCard = screen.getByRole("button", {
+      name: "Open Reviewer 1 transcript",
+    }).parentElement!;
+    fireEvent.contextMenu(firstCard);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+    await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith(reviewing.id, "reviewer-1"));
+
+    fireEvent.contextMenu(firstCard);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Unstick" }));
+    await waitFor(() => expect(unstickReviewer).toHaveBeenCalledWith(reviewing.id, "reviewer-1"));
+  });
+
+  test("disables reviewer restart when the worktree snapshot is stale", async () => {
+    const stale = { ...readyWorkflow(), reviewSnapshotStale: true };
+    useMultiReviewStore.getState().replaceWorkflow(stale);
+    const restartReviewer = mock(async () => stale);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: stale.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => stale)}
+        commands={{
+          address: mock(async () => stale),
+          retry: mock(async () => stale),
+          cancel: mock(async () => stale),
+          stopReviewer: mock(async () => stale),
+          restartReviewer,
+          unstickReviewer: mock(async () => stale),
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open Reviewer 1 transcript" }).parentElement!,
+    );
+    const restart = await screen.findByRole("menuitem", { name: "Restart" });
+    expect(restart.hasAttribute("data-disabled")).toBe(true);
+    fireEvent.click(restart);
+    expect(restartReviewer).not.toHaveBeenCalled();
+  });
+
+  test("disables Unstick without a sent turn or a running reviewer", async () => {
+    const reviewing = reviewingWorkflow();
+    reviewing.reviewers[0] = { ...reviewing.reviewers[0]!, dispatchState: undefined };
+    reviewing.reviewers[1] = {
+      ...reviewing.reviewers[1]!,
+      status: "completed",
+      dispatchState: "sent",
+      report,
+    };
+    useMultiReviewStore.getState().replaceWorkflow(reviewing);
+    const unstickReviewer = mock(async () => reviewing);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: reviewing.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => reviewing)}
+        commands={{
+          address: mock(async () => reviewing),
+          retry: mock(async () => reviewing),
+          cancel: mock(async () => reviewing),
+          stopReviewer: mock(async () => reviewing),
+          restartReviewer: mock(async () => reviewing),
+          unstickReviewer,
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open Reviewer 1 transcript" }).parentElement!,
+    );
+    expect(
+      (await screen.findByRole("menuitem", { name: "Unstick" })).hasAttribute("data-disabled"),
+    ).toBe(true);
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open Reviewer 2 transcript" }).parentElement!,
+    );
+    expect(
+      (await screen.findByRole("menuitem", { name: "Unstick" })).hasAttribute("data-disabled"),
+    ).toBe(true);
+    expect(unstickReviewer).not.toHaveBeenCalled();
+  });
+
+  test("can restart a completed reviewer before fix work begins", async () => {
+    const ready = readyWorkflow();
+    useMultiReviewStore.getState().replaceWorkflow(ready);
+    const restarted = { ...reviewingWorkflow(), backendRevision: 8 };
+    const restartReviewer = mock(async () => restarted);
+
+    render(
+      <MultiReviewTab
+        data={{ environmentId: "env-1", workflowId: ready.id, isLocal: true }}
+        isActive
+        hydrateWorkflow={mock(async () => ready)}
+        commands={{
+          address: mock(async () => ready),
+          retry: mock(async () => ready),
+          cancel: mock(async () => ready),
+          stopReviewer: mock(async () => ready),
+          restartReviewer,
+          unstickReviewer: mock(async () => ready),
+        }}
+      />,
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Open Reviewer 1 transcript" }).parentElement!,
+    );
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Restart" }));
+    await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith(ready.id, "reviewer-1"));
+    expect(useMultiReviewStore.getState().workflows.get(ready.id)?.phase).toBe("reviewing");
+  });
+
   test("surfaces a stalled reviewer without claiming it failed", () => {
     const reviewing = reviewingWorkflow();
     useMultiReviewStore.getState().replaceWorkflow({
@@ -1361,10 +1510,7 @@ describe("MultiReviewReviewerTab", () => {
       act(() => intervalCallback?.());
       await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(3));
 
-      const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
-      fireEvent.click(refreshButton);
-      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
-      expect(refreshButton.querySelector(".animate-spin")).toBeTruthy();
+      fireEvent.click(await openTranscriptRefreshMenu());
       // The click waits behind the controlled poll instead of overlapping it.
       expect(loadTranscript).toHaveBeenCalledTimes(3);
 
@@ -1374,14 +1520,11 @@ describe("MultiReviewReviewerTab", () => {
       });
       // With status already stable, only manualRefresh can start this read.
       await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(4));
-      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
-
       await act(async () => {
         resolveManual(refreshed);
         await manual;
       });
       expect(await screen.findByText(/gpt-5.6-refreshed · Read only/)).toBeTruthy();
-      await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
       expect(loadTranscript).toHaveBeenCalledTimes(4);
     } finally {
       unmount?.();
@@ -1436,17 +1579,14 @@ describe("MultiReviewReviewerTab", () => {
     );
 
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
-    const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
-    fireEvent.click(refreshButton);
+    fireEvent.click(await openTranscriptRefreshMenu());
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(3));
-    expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => {
       resolveManual(refreshed);
       await manual;
     });
     expect(await screen.findByText(/gpt-5.6-settled-refresh · Read only/)).toBeTruthy();
-    await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
     expect(loadTranscript).toHaveBeenCalledTimes(3);
   });
 
@@ -1516,33 +1656,25 @@ describe("MultiReviewReviewerTab", () => {
       ));
 
       await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
-      const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
-      fireEvent.click(refreshButton);
-      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(await openTranscriptRefreshMenu());
 
       await act(async () => {
         timeoutCallback?.();
         await Promise.resolve();
       });
-      await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
-
-      fireEvent.click(refreshButton);
+      fireEvent.click(await openTranscriptRefreshMenu());
       await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
-      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
 
       await act(async () => {
         resolveStale(running);
         await stale;
       });
       // The abandoned attempt settling late cannot clear the newer spinner.
-      expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
-
       await act(async () => {
         resolveRetry(refreshed);
         await retry;
       });
       expect(await screen.findByText(/gpt-5.6-timeout-recovery · Read only/)).toBeTruthy();
-      await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
     } finally {
       unmount?.();
       window.setTimeout = originalSetTimeout;
@@ -1583,15 +1715,11 @@ describe("MultiReviewReviewerTab", () => {
     );
 
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(1));
-    const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
-    fireEvent.click(refreshButton);
-    expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(await openTranscriptRefreshMenu());
 
     view.rerender(
       <MultiReviewReviewerTab data={data} isActive={false} loadTranscript={loadTranscript} />,
     );
-    await waitFor(() => expect((refreshButton as HTMLButtonElement).disabled).toBe(false));
-
     await act(async () => {
       resolveStale(staleSnapshot);
       await stale;
@@ -1695,7 +1823,7 @@ describe("MultiReviewReviewerTab stop control", () => {
     );
   });
 
-  test("restarts a failed workflow from its stopped reviewer transcript", async () => {
+  test("restarts only the opened reviewer from the beginning", async () => {
     const failedWorkflow: MultiReviewWorkflow = {
       ...reviewingWorkflow(),
       phase: "failed",
@@ -1722,7 +1850,7 @@ describe("MultiReviewReviewerTab stop control", () => {
       status: "cancelled",
     };
     const loadTranscript = mock(async () => current);
-    const retryReview = mock(async () => {
+    const restartReviewer = mock(async () => {
       current = { ...current, workflowPhase: "reviewing", status: "pending", messages: [] };
       return restartedWorkflow;
     });
@@ -1738,19 +1866,101 @@ describe("MultiReviewReviewerTab stop control", () => {
         }}
         isActive
         loadTranscript={loadTranscript}
-        retryReview={retryReview}
+        restartReviewer={restartReviewer}
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Restart failed review" }));
-    await waitFor(() => expect(retryReview).toHaveBeenCalledWith("multi-1"));
+    fireEvent.click(await screen.findByRole("button", { name: "Restart reviewer" }));
+    await waitFor(() => expect(restartReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1"));
     await waitFor(() =>
       expect(useMultiReviewStore.getState().workflows.get("multi-1")?.phase).toBe("reviewing"),
     );
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "Restart failed review" }) === null).toBe(true),
+    expect(screen.getByRole("button", { name: "Restart reviewer" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Refresh.*transcript/ }) === null).toBe(true);
+    expect(await openTranscriptRefreshMenu()).toBeTruthy();
+  });
+
+  test("unsticks the opened reviewer and re-reads its session", async () => {
+    let current: MultiReviewReviewerTranscript = {
+      ...runningSnapshot,
+      dispatchState: "sent",
+    };
+    const loadTranscript = mock(async () => current);
+    const unstickReviewer = mock(async () => {
+      current = { ...current, model: "composer-continued" };
+      return reviewingWorkflow();
+    });
+
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        unstickReviewer={unstickReviewer}
+      />,
     );
-    expect(screen.getByRole("button", { name: "Refresh reviewer transcript" })).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Unstick reviewer" }));
+    await waitFor(() => expect(unstickReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1"));
+    expect(await screen.findByText(/composer-continued · Read only/)).toBeTruthy();
+  });
+
+  test("hides Unstick when the parent workflow is no longer reviewing", async () => {
+    const loadTranscript = mock(async () => ({
+      ...runningSnapshot,
+      workflowPhase: "ready" as const,
+      dispatchState: "sent" as const,
+    }));
+
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+      />,
+    );
+
+    await waitFor(() => expect(loadTranscript).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Unstick reviewer" }) === null).toBe(true);
+  });
+
+  test("surfaces a stale-snapshot Unstick rejection and settles the control", async () => {
+    const loadTranscript = mock(async () => ({
+      ...runningSnapshot,
+      dispatchState: "sent" as const,
+    }));
+    const unstickReviewer = mock(async () => {
+      throw new Error("A reviewer can only be unstuck while review is running");
+    });
+
+    render(
+      <MultiReviewReviewerTab
+        data={{
+          environmentId: "env-1",
+          workflowId: "multi-1",
+          reviewerId: "reviewer-1",
+          isLocal: true,
+        }}
+        isActive
+        loadTranscript={loadTranscript}
+        unstickReviewer={unstickReviewer}
+      />,
+    );
+
+    const button = await screen.findByRole("button", { name: "Unstick reviewer" });
+    fireEvent.click(button);
+    expect(await screen.findByText(/only be unstuck while review is running/)).toBeTruthy();
+    await waitFor(() => expect(button.hasAttribute("disabled")).toBe(false));
   });
 
   test("surfaces a stall on a reviewer that is still running", async () => {
@@ -1799,7 +2009,7 @@ describe("MultiReviewReviewerTab stop control", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Stop this reviewer" }));
     expect(await screen.findByText(/Multi review reviewer not found/)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+    fireEvent.click(await openTranscriptRefreshMenu());
     await waitFor(() => expect(loadTranscript.mock.calls.length).toBeGreaterThanOrEqual(2));
     expect(screen.getByText(/Multi review reviewer not found/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Stop this reviewer" })).toBeTruthy();
@@ -1836,7 +2046,7 @@ describe("MultiReviewReviewerTab stop control", () => {
     // workflow is terminal for this view: reporting the stale stop error there
     // would hide why the transcript stopped refreshing.
     gone = true;
-    fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+    fireEvent.click(await openTranscriptRefreshMenu());
     expect(await screen.findByText(/Multi review workflow not found/)).toBeTruthy();
     expect(screen.queryByText(/controller is busy/) === null).toBe(true);
   });
@@ -1871,17 +2081,13 @@ describe("MultiReviewReviewerTab stop control", () => {
     );
 
     await screen.findByRole("button", { name: "Stop this reviewer" });
-    fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+    fireEvent.click(await openTranscriptRefreshMenu());
     await waitFor(() => expect(loadTranscript).toHaveBeenCalledTimes(2));
-    const refreshButton = screen.getByRole("button", { name: "Refresh reviewer transcript" });
-    expect((refreshButton as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Stop this reviewer" }));
 
     await waitFor(() => expect(loadTranscript.mock.calls.length).toBeGreaterThanOrEqual(3));
     expect(await screen.findByText(/Stopped · excluded from the consolidated report/)).toBeTruthy();
-    // Stop fences the stalled manual request and must release its toolbar state
-    // before that abandoned request settles.
-    expect((refreshButton as HTMLButtonElement).disabled).toBe(false);
+    // Stop fences the stalled manual request before that abandoned request settles.
     await act(async () => {
       resolveStale(runningSnapshot);
       await stalePoll;

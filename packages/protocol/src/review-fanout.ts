@@ -60,6 +60,8 @@ export interface ReviewerRecord extends ReviewerModelSelection {
   /** Durable correction turn for a rejected structured report. */
   schemaRepairAttempts?: number;
   schemaRepairPrompt?: string;
+  /** User-requested continuation turn after aborting a wedged reviewer. */
+  continuationPrompt?: string;
   idleResultPolls?: number;
   /** Last time the supervisor observed this reviewer's transcript change. */
   progressAt?: string;
@@ -197,6 +199,7 @@ const REVIEWER_KEYS = [
   "report",
   "schemaRepairAttempts",
   "schemaRepairPrompt",
+  "continuationPrompt",
   "error",
   "progressAt",
   "progressDigest",
@@ -223,6 +226,7 @@ export function isReviewerRecord(value: unknown): value is ReviewerRecord {
     (value.dispatchState === undefined || isDispatchState(value.dispatchState)) &&
     optionalRepairAttempts(value.schemaRepairAttempts) &&
     optionalString(value.schemaRepairPrompt, 100_000) &&
+    optionalString(value.continuationPrompt, 4_096) &&
     optionalPollCount(value.idleResultPolls) &&
     optionalString(value.error, 4_096) &&
     optionalDate(value.progressAt) &&

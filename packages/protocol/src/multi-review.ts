@@ -12,6 +12,7 @@ import {
   isReviewWorktreeSnapshotRecord,
   type ReviewerModelSelection,
   type ReviewerRecord,
+  type ReviewDispatchState,
   type ReviewerStatus,
   type ReviewWorktreeSnapshotRecord,
 } from "./review-fanout.js";
@@ -22,6 +23,7 @@ export const MULTI_REVIEW_MAX_REVIEWERS = REVIEW_FANOUT_MAX_REVIEWERS;
 export const MULTI_REVIEW_MAX_SNAPSHOT_PATHS = REVIEW_FANOUT_MAX_SNAPSHOT_PATHS;
 export const MULTI_REVIEW_ADDRESS_PROMPT =
   "Please address all the issues and coverage gaps. Do not go into plan mode. Please implement the fixes.";
+export const MULTI_REVIEW_UNSTICK_PROMPT = "Please continue";
 /** Stable pane label for current Multi Review fix tabs. */
 export const MULTI_REVIEW_FIX_TAB_TITLE = "Fix";
 /** Former pane title retained for restored layouts and backend session metadata. */
@@ -51,6 +53,8 @@ export interface MultiReviewReviewerTranscript {
   model: string;
   reasoningEffort?: string;
   status: MultiReviewReviewerStatus;
+  /** Current turn journal state, used to qualify the reviewer-level Unstick action. */
+  dispatchState?: ReviewDispatchState;
   messages: unknown[];
   report?: StructuredReviewReport;
   error?: string;
@@ -105,6 +109,8 @@ export interface MultiReviewWorkflow {
   reviewInstruction?: string;
   reviewers: MultiReviewReviewer[];
   fixModel: MultiReviewModelSelection;
+  /** Durable key reserved for the next or current consolidation/fix session. */
+  fixSessionKey?: string;
   fixSession?: MultiReviewFixSession;
   reviewWorktreeSnapshot?: MultiReviewWorktreeSnapshot;
   /** Set when the worktree changed before all reports could be consolidated. */
@@ -339,6 +345,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
       "reviewInstruction",
       "reviewers",
       "fixModel",
+      "fixSessionKey",
       "fixSession",
       "phase",
       "reviewWorktreeSnapshot",
@@ -367,6 +374,7 @@ export function isMultiReviewWorkflow(value: unknown): value is MultiReviewWorkf
     value.reviewers.length > MULTI_REVIEW_MAX_REVIEWERS ||
     !record(value.fixModel) ||
     !isMultiReviewModelSelection(value.fixModel) ||
+    (value.fixSessionKey !== undefined && !nonBlank(value.fixSessionKey)) ||
     !Number.isFinite(Date.parse(value.createdAt as string)) ||
     !Number.isFinite(Date.parse(value.updatedAt as string)) ||
     !Number.isSafeInteger(value.backendRevision) ||

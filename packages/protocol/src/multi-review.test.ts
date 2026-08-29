@@ -85,6 +85,8 @@ describe("multi review protocol", () => {
       backendRevision: 2,
     };
     expect(isMultiReviewWorkflow(workflow)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "next-fix-session" })).toBe(true);
+    expect(isMultiReviewWorkflow({ ...workflow, fixSessionKey: "" })).toBe(false);
     expect(isMultiReviewWorkflow({ ...workflow, phase: "interactive" })).toBe(true);
     expect(isMultiReviewWorkflow({ ...workflow, consolidatedReport: undefined })).toBe(false);
     expect(

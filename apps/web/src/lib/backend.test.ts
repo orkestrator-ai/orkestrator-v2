@@ -1650,6 +1650,22 @@ describe("backend native agent and looped review wrappers", () => {
       reviewerId: "reviewer-1",
     });
 
+    await expect(backendWrappers.restartMultiReviewReviewer("multi-1", "reviewer-1")).resolves.toBe(
+      workflow,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("restart_multi_review_reviewer", {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+    });
+
+    await expect(backendWrappers.unstickMultiReviewReviewer("multi-1", "reviewer-1")).resolves.toBe(
+      workflow,
+    );
+    expect(invokeMock).toHaveBeenLastCalledWith("unstick_multi_review_reviewer", {
+      workflowId: "multi-1",
+      reviewerId: "reviewer-1",
+    });
+
     await backendWrappers.getMultiReviewWorkflow("multi-1");
     expect(invokeMock).toHaveBeenLastCalledWith("get_multi_review_workflow", {
       workflowId: "multi-1",

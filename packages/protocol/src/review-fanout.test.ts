@@ -84,6 +84,11 @@ describe("reviewer records", () => {
     expect(isReviewerRecord(reviewer({ progressDigest: "a".repeat(63) }))).toBe(false);
   });
 
+  test("accepts a bounded continuation prompt", () => {
+    expect(isReviewerRecord(reviewer({ continuationPrompt: "Please continue" }))).toBe(true);
+    expect(isReviewerRecord(reviewer({ continuationPrompt: "x".repeat(4_097) }))).toBe(false);
+  });
+
   test("carries whether the model is a real selection or a placeholder", () => {
     // The string alone cannot answer it: `"default"` is a genuine Claude
     // catalog id, so an unpinned reviewer has to say so out loud.

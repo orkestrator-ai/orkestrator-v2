@@ -3667,6 +3667,8 @@ describe("CreateEnvironmentDialog feature builds", () => {
     useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
     mockReadImage.mockReset();
     mockReadImage.mockImplementation(() => Promise.reject(new Error("no image")));
+    toastSuccessMock.mockReset();
+    toastErrorMock.mockReset();
     putImageData.mockReset();
     HTMLCanvasElement.prototype.getContext = (() => ({
       putImageData,
@@ -3808,6 +3810,278 @@ describe("CreateEnvironmentDialog feature builds", () => {
         data: "QUJD",
       },
     ]);
+  });
+
+  test("leaves a text-only feature paste untouched without reading the clipboard", async () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+
+    chooseFeature({ name: "Paste text normally" });
+    const description = screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement;
+    description.focus();
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, "clipboardData", {
+      value: {
+        items: [{ kind: "string", type: "text/plain", getAsFile: () => null }],
+        files: [],
+      },
+    });
+
+    await act(async () => {
+      document.dispatchEvent(pasteEvent);
+      await Promise.resolve();
+    });
+
+    expect(mockReadImage).not.toHaveBeenCalled();
+    expect(pasteEvent.defaultPrevented).toBe(false);
+    expect(
+      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  test("preserves prompt files while feature intent shows only reference images", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    const onCreate = mock(async () => true);
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    const image = new File(["image"], "reference.png", { type: "image/png" });
+    const documentFile = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([image, documentFile]),
+    });
+    expect(await screen.findByAltText("reference.png")).toBeTruthy();
+    expect(await screen.findByText("notes.txt")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    expect(screen.getByAltText("reference.png")).toBeTruthy();
+    expect(screen.queryByText("notes.txt") === null).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    expect(screen.getByAltText("reference.png")).toBeTruthy();
+    expect(screen.getByText("notes.txt")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]![0].initialPromptAttachments.map(({ name }) => name)).toEqual([
+      "reference.png",
+      "notes.txt",
+    ]);
+  });
+
+  test("accepts valid feature images from mixed and extensionless drops", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+    chooseFeature({ name: "Use dropped images" });
+    const image = new File(["image"], "reference.jpg", { type: "image/jpeg" });
+    const unsupported = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([image, unsupported]),
+    });
+    expect(await screen.findByAltText("reference.png")).toBeTruthy();
+    expect(screen.queryByText("notes.txt") === null).toBe(true);
+    expect(toastErrorMock).toHaveBeenCalledWith("Some files were skipped", {
+      description: "1 unsupported file was not attached.",
+    });
+
+    toastErrorMock.mockClear();
+    const extensionless = new File(["image"], "wireframe", { type: "" });
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([extensionless]),
+    });
+    expect(await screen.findByAltText("wireframe.png")).toBeTruthy();
+    expect(mockReadImage).toHaveBeenCalledWith(extensionless);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  test("rejects wholly unsupported feature drops and advertises copy dropEffect", () => {
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+    chooseFeature({ name: "Only references" });
+    const dialog = screen.getByRole("dialog");
+    const dragData = attachmentDataTransfer([]);
+    dragData.dropEffect = "none";
+    const dragEvent = new Event("dragover", { bubbles: true, cancelable: true });
+    Object.defineProperty(dragEvent, "dataTransfer", { value: dragData });
+    fireEvent(dialog, dragEvent);
+    expect(dragData.dropEffect).toBe("copy");
+
+    fireEvent.drop(dialog, {
+      dataTransfer: attachmentDataTransfer([
+        new File(["notes"], "notes.txt", { type: "text/plain" }),
+      ]),
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith("Only images can be attached to a feature build");
+    expect(mockReadImage).not.toHaveBeenCalled();
+  });
+
+  test("cancels an in-flight feature drop when the intent changes", async () => {
+    const pendingImage = deferred<{
+      rgba: () => Promise<Uint8Array>;
+      size: () => Promise<{ width: number; height: number }>;
+    }>();
+    const rgba = mock(async () => new Uint8Array([255, 0, 0, 255]));
+    const size = mock(async () => ({ width: 1, height: 1 }));
+    mockReadImage.mockImplementation(() => pendingImage.promise);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+    chooseFeature({ name: "Cancel stale drop" });
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([
+        new File(["image"], "late.png", { type: "image/png" }),
+      ]),
+    });
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    await act(async () => pendingImage.resolve({ rgba, size }));
+
+    expect(rgba).not.toHaveBeenCalled();
+    expect(screen.queryByAltText("late.png") === null).toBe(true);
+    expect(toastSuccessMock).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("button", { name: "Create Environment" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  test("removes a feature reference before submitting", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    const onCreateFeatureBuild = mock(async () => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+    chooseFeature({ name: "Remove the old reference" });
+    const image = new File(["image"], "obsolete.png", { type: "image/png" });
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([image]),
+    });
+    expect(await screen.findByAltText("obsolete.png")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Remove obsolete.png" }));
+    expect(screen.queryByAltText("obsolete.png") === null).toBe(true);
+
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    expect(onCreateFeatureBuild.mock.calls[0]![0].images).toBeUndefined();
+  });
+
+  test("enforces feature attachment count and total stored-size limits", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+    chooseFeature({ name: "Bound references" });
+    const dialog = screen.getByRole("dialog");
+    const tooMany = Array.from(
+      { length: 21 },
+      (_, index) => new File(["image"], `reference-${index}.png`, { type: "image/png" }),
+    );
+    fireEvent.drop(dialog, { dataTransfer: attachmentDataTransfer(tooMany) });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Too many attachments",
+      expect.objectContaining({ description: expect.stringContaining("20") }),
+    );
+    expect(mockReadImage).not.toHaveBeenCalled();
+
+    toastErrorMock.mockClear();
+    const nearLimitBase64 = "A".repeat(11_184_808);
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      `data:image/png;base64,${nearLimitBase64}`) as typeof HTMLCanvasElement.prototype.toDataURL;
+    const largeImages = Array.from(
+      { length: 3 },
+      (_, index) => new File(["image"], `large-${index}.png`, { type: "image/png" }),
+    );
+    fireEvent.drop(dialog, { dataTransfer: attachmentDataTransfer(largeImages) });
+    await waitFor(
+      () =>
+        expect(toastErrorMock).toHaveBeenCalledWith(
+          "Attachments too large",
+          expect.objectContaining({ description: expect.stringContaining("32MB") }),
+        ),
+      { timeout: 10_000 },
+    );
+    for (const image of largeImages) {
+      expect(screen.queryByAltText(image.name) === null).toBe(true);
+    }
+  });
+
+  test("surfaces backend feature-image validation errors without closing the dialog", async () => {
+    const onOpenChange = mock(() => {});
+    const onCreateFeatureBuild = mock(async () => {
+      throw new Error("Feature images exceed the 32MB total limit");
+    });
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={onOpenChange}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+    chooseFeature({ name: "Reject oversized payload" });
+    submitFeature();
+
+    await waitFor(() =>
+      expect(toastErrorMock).toHaveBeenCalledWith("Could not create environment", {
+        description: "Feature images exceed the 32MB total limit",
+      }),
+    );
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect((screen.getByLabelText(/Feature name/i) as HTMLInputElement).value).toBe(
+      "Reject oversized payload",
+    );
   });
 
   test("submits the configured panel defaults without opening customization", async () => {

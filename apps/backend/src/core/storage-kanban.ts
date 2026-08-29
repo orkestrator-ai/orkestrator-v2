@@ -380,15 +380,49 @@ export class StorageKanban extends StorageAgentMail {
   }
 
   async addKanbanImage(taskId: string, filename: string, data: string): Promise<KanbanTask> {
+    return (await this.persistKanbanImage(taskId, filename, data)).task;
+  }
+
+  /**
+   * Add an already-normalized WebP image exactly once for a durable request.
+   *
+   * Feature-build creation normalizes every image before it creates a ticket,
+   * then uses this path so a retry can finish a partial write without adding a
+   * second copy of images that were already persisted.
+   */
+  async addNormalizedKanbanImageForRequest(
+    taskId: string,
+    filename: string,
+    data: string,
+    requestId: string,
+  ): Promise<{ task: KanbanTask; image: KanbanImage }> {
+    return this.persistKanbanImage(taskId, filename, data, requestId, true);
+  }
+
+  private async persistKanbanImage(
+    taskId: string,
+    filename: string,
+    data: string,
+    requestId?: string,
+    normalized = false,
+  ): Promise<{ task: KanbanTask; image: KanbanImage }> {
     return this.enqueueKanbanMutation(async () => {
       const tasks = await this.loadJson<KanbanTask[]>(this.kanbanFile(), () => []);
       const task = tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`Kanban task not found: ${taskId}`);
 
+      const imageId = requestId ? stableKanbanId(`image:${taskId}`, requestId) : randomUUID();
+      const existing = task.images.find((image) => image.id === imageId);
+      if (existing) {
+        if (existing.filename !== filename) {
+          throw new Error("Kanban image requestId was already used with a different filename");
+        }
+        return { task, image: existing };
+      }
       const rawBytes = Buffer.from(data, "base64");
-      const webpBytes = await resizeKanbanImage(rawBytes);
+      const webpBytes = normalized ? rawBytes : await resizeKanbanImage(rawBytes);
       await fs.mkdir(this.kanbanImagesDir(), { recursive: true });
-      const image: KanbanImage = { id: randomUUID(), filename, createdAt: nowIso() };
+      const image: KanbanImage = { id: imageId, filename, createdAt: nowIso() };
       await fs.writeFile(this.kanbanImageFile(image.id), webpBytes);
       task.images.push(image);
       try {
@@ -398,7 +432,7 @@ export class StorageKanban extends StorageAgentMail {
         throw error;
       }
       this.announce("kanban", task.projectId);
-      return task;
+      return { task, image };
     });
   }
 

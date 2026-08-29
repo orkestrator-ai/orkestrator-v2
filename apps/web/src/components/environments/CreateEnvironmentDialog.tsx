@@ -774,14 +774,16 @@ export function CreateEnvironmentDialog({
   }, []);
 
   const handleBuildIntentChange = useCallback((intent: BuildIntent) => {
+    if (intent === buildIntentRef.current) return;
+    promptPasteRequestIdRef.current += 1;
+    attachmentProcessingGenerationRef.current += 1;
+    activeAttachmentOperationIdsRef.current.clear();
+    promptPasteOperationRef.current = null;
+    setPendingAttachmentOperations(0);
+    attachmentDragDepthRef.current = 0;
+    setIsDraggingAttachments(false);
     buildIntentRef.current = intent;
     setBuildIntent(intent);
-    if (intent !== "feature") return;
-    const images = initialPromptAttachmentsRef.current.filter(
-      (attachment) => attachment.type !== "file",
-    );
-    initialPromptAttachmentsRef.current = images;
-    setInitialPromptAttachments(images);
   }, []);
 
   const beginAttachmentOperation = useCallback(() => {
@@ -806,7 +808,7 @@ export function CreateEnvironmentDialog({
       filename?: string,
       isCurrent: () => boolean = () => true,
     ): Promise<InitialPromptImageAttachment | null> => {
-      const image = await readImage(blob ?? undefined);
+      const image = await readImage(blob);
       if (!isCurrent()) return null;
       const rgba = await image.rgba();
       if (!isCurrent()) return null;
@@ -855,19 +857,24 @@ export function CreateEnvironmentDialog({
   );
 
   const appendInitialPromptAttachments = useCallback(
-    (attachments: InitialPromptImageAttachment[]): boolean => {
+    (attachments: InitialPromptImageAttachment[], intent: BuildIntent): boolean => {
       if (attachments.length === 0) return false;
       const current = initialPromptAttachmentsRef.current;
-      if (current.length + attachments.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
+      const attachmentsForIntent =
+        intent === "feature" ? current.filter((attachment) => attachment.type !== "file") : current;
+      if (attachmentsForIntent.length + attachments.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
         toast.error("Too many attachments", {
-          description: `An initial prompt can include up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} files.`,
+          description: `Up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} attachments can be included.`,
         });
         return false;
       }
-      const durableBytes = serializedInitialPromptAttachmentBytes([...current, ...attachments]);
+      const durableBytes = serializedInitialPromptAttachmentBytes([
+        ...attachmentsForIntent,
+        ...attachments,
+      ]);
       if (durableBytes > MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES) {
         toast.error("Attachments too large", {
-          description: "Initial prompt attachments can use up to 32MB of stored data.",
+          description: "Attachments can use up to 32MB of stored data.",
         });
         return false;
       }
@@ -881,12 +888,17 @@ export function CreateEnvironmentDialog({
 
   const handlePromptPaste = useCallback(
     async (event: ClipboardEvent) => {
-      const isFeatureIntent = () =>
-        buildIntentRef.current === "feature" ||
-        formRef.current?.querySelector("#feature-name") !== null;
       const isPasteTarget = () =>
-        isFeatureIntent() || (launchAgent && document.activeElement === promptRef.current);
+        buildIntentRef.current === "feature" ||
+        (launchAgent && document.activeElement === promptRef.current);
       if (!open || !isPasteTarget()) return;
+
+      const pasteIntent = buildIntentRef.current;
+      const pastedBlob = getPastedImageBlob(event);
+      // A native paste event already exposes its complete readable payload.
+      // If that payload contains no image, leave text paste alone without
+      // starting an operation or asking the browser to read the clipboard.
+      if (event.clipboardData && !pastedBlob) return;
 
       const requestId = ++promptPasteRequestIdRef.current;
       const previousOperation = promptPasteOperationRef.current;
@@ -896,10 +908,10 @@ export function CreateEnvironmentDialog({
       const isCurrentRequest = () =>
         requestId === promptPasteRequestIdRef.current &&
         operation.generation === attachmentProcessingGenerationRef.current &&
+        pasteIntent === buildIntentRef.current &&
         isPasteTarget();
 
       try {
-        const pastedBlob = getPastedImageBlob(event);
         if (pastedBlob) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -914,7 +926,9 @@ export function CreateEnvironmentDialog({
           event.stopImmediatePropagation();
         }
 
-        if (appendInitialPromptAttachments([attachment])) toast.success("Image attached");
+        if (appendInitialPromptAttachments([attachment], pasteIntent)) {
+          toast.success("Image attached");
+        }
       } catch {
         // No image in the clipboard; let normal text paste continue.
       } finally {
@@ -943,15 +957,27 @@ export function CreateEnvironmentDialog({
       event.stopPropagation();
       if (!open || (buildIntent !== "feature" && !launchAgent) || isLoading) return;
 
-      const files = Array.from(event.dataTransfer.files);
-      if (buildIntent === "feature" && files.some((file) => !file.type.startsWith("image/"))) {
-        toast.error("Only images can be attached to a feature build");
-        return;
+      const dropIntent = buildIntentRef.current;
+      let files = Array.from(event.dataTransfer.files);
+      let skippedFeatureFiles = 0;
+      if (dropIntent === "feature") {
+        const imageCandidates = files.filter(
+          (file) => file.type.startsWith("image/") || file.type === "",
+        );
+        skippedFeatureFiles = files.length - imageCandidates.length;
+        files = imageCandidates;
+        if (files.length === 0) {
+          toast.error("Only images can be attached to a feature build");
+          return;
+        }
       }
-      const currentAttachments = initialPromptAttachmentsRef.current;
+      const currentAttachments =
+        dropIntent === "feature"
+          ? initialPromptAttachmentsRef.current.filter((attachment) => attachment.type !== "file")
+          : initialPromptAttachmentsRef.current;
       if (currentAttachments.length + files.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
         toast.error("Too many attachments", {
-          description: `An initial prompt can include up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} files.`,
+          description: `Up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} attachments can be included.`,
         });
         return;
       }
@@ -969,15 +995,20 @@ export function CreateEnvironmentDialog({
       }
       const operation = beginAttachmentOperation();
       const isCurrentOperation = () =>
-        operation.generation === attachmentProcessingGenerationRef.current;
+        operation.generation === attachmentProcessingGenerationRef.current &&
+        dropIntent === buildIntentRef.current;
       try {
         const attachments: InitialPromptImageAttachment[] = [];
         for (const file of files) {
           try {
-            if (file.type.startsWith("image/")) {
+            if (dropIntent === "feature" || file.type.startsWith("image/")) {
               const attachment = await encodeImageAttachment(file, file.name, isCurrentOperation);
               if (!isCurrentOperation()) return;
-              if (attachment) attachments.push(attachment);
+              if (attachment) {
+                attachments.push(attachment);
+              } else if (dropIntent === "feature") {
+                skippedFeatureFiles += 1;
+              }
             } else {
               const buffer = await file.arrayBuffer();
               if (!isCurrentOperation()) return;
@@ -991,14 +1022,23 @@ export function CreateEnvironmentDialog({
           } catch (error) {
             if (!isCurrentOperation()) return;
             console.warn("[CreateEnvironmentDialog] Failed to read dropped attachment:", error);
-            toast.error("Could not attach file", { description: file.name });
+            if (dropIntent === "feature") {
+              skippedFeatureFiles += 1;
+            } else {
+              toast.error("Could not attach file", { description: file.name });
+            }
           }
         }
         if (!isCurrentOperation()) return;
-        if (appendInitialPromptAttachments(attachments)) {
+        if (appendInitialPromptAttachments(attachments, dropIntent)) {
           toast.success(
             `${attachments.length} file${attachments.length === 1 ? "" : "s"} attached`,
           );
+        }
+        if (skippedFeatureFiles > 0) {
+          toast.error("Some files were skipped", {
+            description: `${skippedFeatureFiles} unsupported file${skippedFeatureFiles === 1 ? " was" : "s were"} not attached.`,
+          });
         }
       } finally {
         finishAttachmentOperation(operation);

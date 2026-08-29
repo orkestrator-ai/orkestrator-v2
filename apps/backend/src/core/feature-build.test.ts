@@ -64,6 +64,9 @@ const input = {
   environmentType: "containerized" as const,
   agentType: "claude" as const,
 };
+const validImageBase64 = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>',
+).toString("base64");
 
 describe("createFeatureBuild", () => {
   test("creates one in-progress ticket and starts the build that implements it", async () => {
@@ -161,24 +164,61 @@ describe("createFeatureBuild", () => {
     });
   });
 
-  test("includes attached feature images in the durable pipeline snapshot", async () => {
+  test("persists normalized feature images on the ticket and reuses them on retry", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
-      await createFeatureBuild(
-        {
-          ...input,
-          images: [
-            { filename: "reference.png", data: "QUJD" },
-            { filename: "expected-state.png", data: "REVG" },
-          ],
-        },
-        { storage, buildPipelines: supervisor.service },
-      );
+      const request = {
+        ...input,
+        requestId: "request-with-images",
+        images: [
+          { filename: "reference.png", data: validImageBase64 },
+          { filename: "expected-state.png", data: validImageBase64 },
+        ],
+      };
+      const first = await createFeatureBuild(request, {
+        storage,
+        buildPipelines: supervisor.service,
+      });
 
-      expect(supervisor.started[0]!.taskSnapshot.images).toEqual([
-        { filename: "reference.png", data: "QUJD" },
-        { filename: "expected-state.png", data: "REVG" },
+      const task = (await storage.getKanbanTasks("project-1"))[0]!;
+      expect(task.images.map((image) => image.filename)).toEqual([
+        "reference.png",
+        "expected-state.png",
       ]);
+      const storedImages = await Promise.all(
+        task.images.map(async (image) => ({
+          filename: image.filename,
+          data: await storage.getKanbanImageData(image.id),
+        })),
+      );
+      expect(storedImages.every((image) => image.data.length > 0)).toBe(true);
+      expect(supervisor.started[0]!.taskSnapshot.images).toEqual(storedImages);
+
+      const second = await createFeatureBuild(request, {
+        storage,
+        buildPipelines: supervisor.service,
+      });
+      expect(second.taskId).toBe(first.taskId);
+      const retriedTask = (await storage.getKanbanTasks("project-1"))[0]!;
+      expect(retriedTask.images).toEqual(task.images);
+      expect(supervisor.started[1]!.taskSnapshot.images).toEqual(storedImages);
+    });
+  });
+
+  test("rejects decodable base64 that is not an image before creating a ticket", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      await expect(
+        createFeatureBuild(
+          {
+            ...input,
+            images: [{ filename: "reference.png", data: "QUJD" }],
+          },
+          { storage, buildPipelines: supervisor.service },
+        ),
+      ).rejects.toThrow("not a supported image");
+      expect(await storage.getKanbanTasks("project-1")).toHaveLength(0);
+      expect(supervisor.started).toHaveLength(0);
     });
   });
 
@@ -243,6 +283,33 @@ describe("createFeatureBuild", () => {
         ),
       ).rejects.toThrow("requestId was already used with different arguments");
       expect(await storage.getKanbanTasks("project-1")).toHaveLength(1);
+      expect(supervisor.started).toHaveLength(1);
+    });
+  });
+
+  test("rejects reuse of a request id with a different image list", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      await createFeatureBuild(
+        {
+          ...input,
+          requestId: "request-image-conflict",
+          images: [{ filename: "before.png", data: validImageBase64 }],
+        },
+        { storage, buildPipelines: supervisor.service },
+      );
+
+      await expect(
+        createFeatureBuild(
+          {
+            ...input,
+            requestId: "request-image-conflict",
+            images: [{ filename: "after.png", data: validImageBase64 }],
+          },
+          { storage, buildPipelines: supervisor.service },
+        ),
+      ).rejects.toThrow("requestId was already used with different arguments");
+      expect((await storage.getKanbanTasks("project-1"))[0]!.images).toHaveLength(1);
       expect(supervisor.started).toHaveLength(1);
     });
   });

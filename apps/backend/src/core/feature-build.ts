@@ -23,7 +23,7 @@ import { createHash } from "node:crypto";
 import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
-import type { KanbanTask } from "./storage-shared.js";
+import { resizeKanbanImage, type KanbanTask } from "./storage-shared.js";
 import { assertValidPromptImages } from "./prompt-attachments.js";
 
 export interface FeatureBuildContext {
@@ -51,7 +51,7 @@ export async function createFeatureBuild(
   const title = input.title.trim();
   const description = input.description?.trim() ?? "";
   const acceptanceCriteria = input.acceptanceCriteria?.trim() ?? "";
-  const images = assertValidPromptImages(input.images ?? []);
+  const images = await normalizeFeatureImages(assertValidPromptImages(input.images ?? []));
   const requestId = input.requestId?.trim();
   const requestHash = requestId
     ? featureBuildRequestHash({
@@ -64,7 +64,7 @@ export async function createFeatureBuild(
       })
     : undefined;
 
-  const task = await resolveTask(storage, {
+  let task = await resolveTask(storage, {
     projectId,
     title,
     description,
@@ -72,6 +72,21 @@ export async function createFeatureBuild(
     requestId,
     requestHash,
   });
+
+  const snapshotImages = [];
+  for (const [index, image] of images.entries()) {
+    const persisted = await storage.addNormalizedKanbanImageForRequest(
+      task.id,
+      image.filename,
+      image.data,
+      `feature-build:${index}`,
+    );
+    task = persisted.task;
+    snapshotImages.push({
+      filename: persisted.image.filename,
+      data: await storage.getKanbanImageData(persisted.image.id),
+    });
+  }
 
   const pipeline = await buildPipelines.start({
     taskId: task.id,
@@ -90,7 +105,7 @@ export async function createFeatureBuild(
       description: task.description,
       acceptanceCriteria: task.acceptanceCriteria,
       comments: [],
-      images,
+      images: snapshotImages,
     },
     // Linking the source is what makes the pipeline move this ticket through
     // its lifecycle and attach the environment to it.
@@ -103,6 +118,21 @@ export async function createFeatureBuild(
     pipelineId: pipeline.id,
     ...(pipeline.environmentId ? { environmentId: pipeline.environmentId } : {}),
   };
+}
+
+async function normalizeFeatureImages(
+  images: Array<{ filename: string; data: string }>,
+): Promise<Array<{ filename: string; data: string }>> {
+  const normalized = [];
+  for (const image of images) {
+    try {
+      const webp = await resizeKanbanImage(Buffer.from(image.data, "base64"));
+      normalized.push({ filename: image.filename, data: webp.toString("base64") });
+    } catch {
+      throw new Error(`Feature image is not a supported image: ${image.filename}`);
+    }
+  }
+  return normalized;
 }
 
 /**

@@ -19,9 +19,15 @@
 /**
  * `not-json`: does not open as a JSON document, so it is prose.
  * `incomplete`: opens as one and its delimiters never close — still streaming.
- * `complete`: opens as one and closes, with nothing but whitespace after it.
+ * `complete`: one or more same-line adjacent root documents all close, with no prose.
  */
 export type JsonDocumentState = "not-json" | "incomplete" | "complete";
+
+interface JsonDocumentScan {
+  state: JsonDocumentState;
+  /** Last root document, only when the entire machine-output sequence closed. */
+  lastDocument?: string;
+}
 
 /** Opening fence of a JSON code block, which providers sometimes wrap around it. */
 const OPENING_JSON_FENCE = /^```(?:json[5c]?)?[ \t]*\r?\n/i;
@@ -36,17 +42,19 @@ const CLOSING_FENCE = /\r?\n?```$/;
  * right bias here — the caller uses this to decide whether text is the
  * provider's machine output, and a malformed document is still machine output.
  */
-export function jsonDocumentState(text: string): JsonDocumentState {
+function scanJsonDocuments(text: string): JsonDocumentScan {
   let candidate = text.trim();
-  if (OPENING_JSON_FENCE.test(candidate)) {
+  const fenced = OPENING_JSON_FENCE.test(candidate);
+  if (fenced) {
     candidate = candidate.replace(OPENING_JSON_FENCE, "").replace(CLOSING_FENCE, "").trim();
   }
   const opening = candidate[0];
-  if (opening !== "{" && opening !== "[") return "not-json";
+  if (opening !== "{" && opening !== "[") return { state: "not-json" };
 
   let depth = 0;
   let inString = false;
   let escaped = false;
+  let documentStart = 0;
 
   for (let index = 0; index < candidate.length; index += 1) {
     const character = candidate[index]!;
@@ -70,17 +78,53 @@ export function jsonDocumentState(text: string): JsonDocumentState {
       depth -= 1;
       // Closed below its opening delimiter: this is not a single JSON document,
       // so it is not the provider's machine output.
-      if (depth < 0) return "not-json";
+      if (depth < 0) return { state: "not-json" };
       if (depth === 0) {
-        // Anything but trailing whitespace means prose wrapped around a JSON
-        // snippet — Markdown renders that correctly and it stays visible.
-        return candidate.slice(index + 1).trim().length === 0 ? "complete" : "not-json";
+        const lastDocument = candidate.slice(documentStart, index + 1);
+        let next = index + 1;
+        while (candidate[next] !== undefined && /\s/.test(candidate[next]!)) next += 1;
+        if (next >= candidate.length) return { state: "complete", lastDocument };
+        // Codex can append each schema-constrained progress response to the
+        // same text item. That is still machine output, not prose following a
+        // JSON snippet. Keep scanning so an unfinished final document remains
+        // classified as incomplete and a closed sequence can expose its last
+        // document to the accepted-result filter.
+        if (candidate[next] === "{" || candidate[next] === "[") {
+          const separator = candidate.slice(index + 1, next);
+          // A newline-separated sequence is JSONL, and a fenced sequence was
+          // deliberately presented as source. Keep both visible rather than
+          // silently treating them as provider verdict revisions. Codex's
+          // appended schema responses arrive unfenced on the same line.
+          if (fenced || /[\r\n]/.test(separator)) return { state: "not-json" };
+          documentStart = next;
+          index = next - 1;
+          continue;
+        }
+        // Anything else is prose wrapped around a JSON snippet. Markdown
+        // renders that correctly and it stays visible.
+        return { state: "not-json" };
       }
     }
   }
 
   // Ran out of text inside the document (or inside one of its strings).
-  return "incomplete";
+  return { state: "incomplete" };
+}
+
+export function jsonDocumentState(text: string): JsonDocumentState {
+  return scanJsonDocuments(text).state;
+}
+
+/**
+ * Last document from text made entirely of one or more closed JSON roots.
+ *
+ * The caller still parses and validates this source against its own contract;
+ * delimiter balance here only identifies the boundary without repeatedly
+ * parsing a growing streamed response.
+ */
+export function lastMachineJsonDocument(text: string): string | null {
+  const scan = scanJsonDocuments(text);
+  return scan.state === "complete" ? (scan.lastDocument ?? null) : null;
 }
 
 /**

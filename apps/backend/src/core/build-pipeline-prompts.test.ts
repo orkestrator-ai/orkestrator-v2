@@ -476,9 +476,11 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("may write generated artifacts and tool caches");
     expect(prompt).toContain("Do not edit source files or create commits");
     expect(prompt).toContain("If relevant work is uncommitted");
-    expect(prompt).toContain("Use ordinary prose for interim progress updates");
+    expect(prompt).toContain("commentary or update channel");
+    expect(prompt).toContain("using ordinary prose sentences");
+    expect(prompt).toContain("Do not use the final-response channel for an update");
     expect(prompt).toContain("Never emit a partial or provisional verification verdict");
-    expect(prompt).toContain("make the final assistant message the only JSON object");
+    expect(prompt).toContain("make the final assistant response the only JSON object");
     expect(prompt).toContain('{"complete":true,"rationale":"..."}');
     expect(prompt).toContain("Use Bun.");
   });

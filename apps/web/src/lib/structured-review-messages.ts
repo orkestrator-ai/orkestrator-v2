@@ -1,5 +1,5 @@
 import { parseJsonPayload, type JsonPayload } from "@/lib/chat/json-payload";
-import { isWithheldMachineOutput } from "@/lib/chat/machine-output-text";
+import { isWithheldMachineOutput, lastMachineJsonDocument } from "@/lib/chat/machine-output-text";
 import type { NativeMessage } from "@/lib/chat/native-message-types";
 
 function isPayloadKind(value: string, kind: JsonPayload["kind"]): boolean {
@@ -13,6 +13,18 @@ function hasMessageContent(message: NativeMessage): boolean {
 interface PayloadPosition {
   messageIndex: number;
   partIndex?: number;
+  /** A concatenated machine-output sequence is replaced by its final document. */
+  replacement?: string;
+}
+
+function matchingPayload(
+  value: string,
+  kind: JsonPayload["kind"],
+): { replacement?: string } | null {
+  if (isPayloadKind(value, kind)) return {};
+  const lastDocument = lastMachineJsonDocument(value);
+  if (!lastDocument || !isPayloadKind(lastDocument, kind)) return null;
+  return { replacement: lastDocument };
 }
 
 /** Remove every matching payload, or retain only the last one as authoritative. */
@@ -22,42 +34,69 @@ function showOnlyFinalPayloadMessage(
   showFinal: boolean,
 ): NativeMessage[] {
   let final: PayloadPosition | undefined;
-  const payloadParts = new Set<string>();
-  const payloadContentMessages = new Set<number>();
+  const payloadParts = new Map<string, { replacement?: string }>();
+  const payloadContentMessages = new Map<number, { replacement?: string }>();
 
   messages.forEach((message, messageIndex) => {
     if (message.role !== "assistant") return;
     let foundPart = false;
     message.parts.forEach((part, partIndex) => {
-      if (part.type !== "text" || !isPayloadKind(part.content, kind)) return;
+      if (part.type !== "text") return;
+      const match = matchingPayload(part.content, kind);
+      if (!match) return;
       foundPart = true;
-      payloadParts.add(`${messageIndex}:${partIndex}`);
-      final = { messageIndex, partIndex };
+      payloadParts.set(`${messageIndex}:${partIndex}`, match);
+      final = { messageIndex, partIndex, ...match };
     });
     // Native providers normally duplicate the last text part into `content`.
     // Treat it as a fallback only when this message has no matching text part,
     // otherwise retaining both would duplicate the final payload again.
-    if (!foundPart && isPayloadKind(message.content, kind)) {
-      payloadContentMessages.add(messageIndex);
-      final = { messageIndex };
-    } else if (foundPart && isPayloadKind(message.content, kind)) {
-      payloadContentMessages.add(messageIndex);
+    const contentMatch = matchingPayload(message.content, kind);
+    if (!foundPart && contentMatch) {
+      payloadContentMessages.set(messageIndex, contentMatch);
+      final = { messageIndex, ...contentMatch };
+    } else if (foundPart && contentMatch) {
+      payloadContentMessages.set(messageIndex, contentMatch);
     }
   });
 
   return messages.flatMap((message, messageIndex) => {
     if (message.role !== "assistant") return [message];
-    const parts = message.parts.filter(
-      (_part, partIndex) =>
-        !payloadParts.has(`${messageIndex}:${partIndex}`) ||
-        (showFinal && final?.messageIndex === messageIndex && final.partIndex === partIndex),
-    );
+    let partsChanged = false;
+    const parts = message.parts.flatMap((part, partIndex) => {
+      const match = payloadParts.get(`${messageIndex}:${partIndex}`);
+      if (!match) return [part];
+      if (!(showFinal && final?.messageIndex === messageIndex && final.partIndex === partIndex)) {
+        partsChanged = true;
+        return [];
+      }
+      if (match.replacement && match.replacement !== part.content) {
+        partsChanged = true;
+        return [{ ...part, content: match.replacement }];
+      }
+      return [part];
+    });
     const contentIsPayload = payloadContentMessages.has(messageIndex);
-    const content =
+    const keepContent =
       contentIsPayload &&
-      !(showFinal && final?.messageIndex === messageIndex && final.partIndex === undefined)
-        ? ""
-        : message.content;
+      showFinal &&
+      final?.messageIndex === messageIndex &&
+      final.partIndex === undefined;
+    let content = contentIsPayload
+      ? keepContent
+        ? (payloadContentMessages.get(messageIndex)?.replacement ?? message.content)
+        : ""
+      : message.content;
+    if (!contentIsPayload && partsChanged) {
+      // Some persisted adapters derive `content` by concatenating every text
+      // part rather than mirroring only the final one. Once a provisional
+      // payload part is removed or replaced, rebuild that fallback as well so
+      // transcript search or a content-only renderer cannot recover hidden JSON.
+      content = parts
+        .filter((part) => part.type === "text")
+        .map((part) => part.content)
+        .join("");
+    }
     const filtered = { ...message, content, parts };
     return hasMessageContent(filtered) ? [filtered] : [];
   });
@@ -101,7 +140,17 @@ export function hideMachineOutputText(
     // `content` mirrors the provider's last text part, so it is withheld on the
     // same terms; a message rendered from `content` alone would otherwise put
     // the document straight back on screen.
-    const content = isWithheld(message.content) ? "" : message.content;
+    let content = isWithheld(message.content) ? "" : message.content;
+    if (parts.length !== message.parts.length && content === message.content) {
+      // Persisted pipeline adapters can concatenate every text part into
+      // `content`, so a prose update followed by machine output is neither a
+      // standalone document nor safe to retain verbatim. Once a part was
+      // withheld, rebuild this fallback from the surviving visible text.
+      content = parts
+        .filter((part) => part.type === "text")
+        .map((part) => part.content)
+        .join("");
+    }
     if (parts.length === message.parts.length && content === message.content) {
       return [message];
     }

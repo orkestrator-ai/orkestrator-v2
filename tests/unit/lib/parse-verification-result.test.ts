@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { verificationPrompt } from "../../../apps/backend/src/core/build-pipeline-prompts";
+import {
+  VERIFICATION_OUTPUT_CONTRACT,
+  verificationPrompt,
+} from "../../../apps/backend/src/core/build-pipeline-prompts";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
 
 function pipeline(): BuildPipeline {
@@ -34,11 +37,7 @@ describe("structured verification prompt", () => {
   test("requests the provider-enforced complete/rationale payload", () => {
     const prompt = verificationPrompt(pipeline(), "", "main");
 
-    expect(prompt).toContain("Use ordinary prose for interim progress updates");
-    expect(prompt).toContain("Never emit a partial or provisional verification verdict");
-    expect(prompt).toContain(
-      'make the final assistant message the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}',
-    );
+    expect(prompt).toContain(VERIFICATION_OUTPUT_CONTRACT);
     expect(prompt).toContain("Compare against origin/main");
   });
 

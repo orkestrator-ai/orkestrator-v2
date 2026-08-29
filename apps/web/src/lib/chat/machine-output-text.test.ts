@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { isWithheldMachineOutput, jsonDocumentState } from "./machine-output-text";
+import {
+  isWithheldMachineOutput,
+  jsonDocumentState,
+  lastMachineJsonDocument,
+} from "./machine-output-text";
 
 describe("jsonDocumentState", () => {
   test("treats ordinary prose as prose", () => {
@@ -13,6 +17,28 @@ describe("jsonDocumentState", () => {
     expect(jsonDocumentState('{"reviewScope":{"targetBranch":"main"}}')).toBe("complete");
     expect(jsonDocumentState("[1, 2, 3]")).toBe("complete");
     expect(jsonDocumentState('  {"a":1}  \n')).toBe("complete");
+  });
+
+  test("recognizes adjacent JSON progress responses as one machine-output sequence", () => {
+    const first = '{"complete":false,"rationale":"Tests are still running."}';
+    const final = '{"complete":true,"rationale":"All tests passed."}';
+
+    expect(jsonDocumentState(`${first}${final}`)).toBe("complete");
+    expect(jsonDocumentState(`${first}${final.slice(0, -1)}`)).toBe("incomplete");
+    expect(lastMachineJsonDocument(`${first}${final}`)).toBe(final);
+    expect(lastMachineJsonDocument(`${first}${final.slice(0, -1)}`)).toBeNull();
+  });
+
+  test("keeps newline-separated and fenced JSON sequences visible as source", () => {
+    const first = '{"file":"a.ts"}';
+    const second = '{"file":"b.ts"}';
+
+    expect(jsonDocumentState(`${first}\n${second}`)).toBe("not-json");
+    expect(jsonDocumentState(`\`\`\`json\n${first}${second}\n\`\`\``)).toBe("not-json");
+    expect(jsonDocumentState(`\`\`\`json\n${first}\n\`\`\`\n\`\`\`json\n${second}\n\`\`\``)).toBe(
+      "not-json",
+    );
+    expect(lastMachineJsonDocument(`${first}\n${second}`)).toBeNull();
   });
 
   test("recognizes a document that is still streaming", () => {
@@ -33,11 +59,14 @@ describe("jsonDocumentState", () => {
     expect(jsonDocumentState('{"a":1} and then some commentary')).toBe("not-json");
     expect(jsonDocumentState('Here is the payload: {"a":1}')).toBe("not-json");
     expect(jsonDocumentState("} stray closing brace")).toBe("not-json");
+    expect(lastMachineJsonDocument('{"a":1} and then some commentary')).toBeNull();
   });
 
   test("sees through a JSON code fence", () => {
     expect(jsonDocumentState('```json\n{"a":1}\n```')).toBe("complete");
     expect(jsonDocumentState('```\n{"a":1,')).toBe("incomplete");
+    expect(lastMachineJsonDocument('```json\n{"a":1}\n```')).toBe('{"a":1}');
+    expect(lastMachineJsonDocument('```json\n{"a":1,\n```')).toBeNull();
   });
 
   test("classifies a malformed but closed document as machine output", () => {

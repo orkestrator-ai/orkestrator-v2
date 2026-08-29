@@ -209,6 +209,85 @@ describe("showOnlyFinalVerificationMessage", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]?.content).toBe(final);
   });
+
+  test("extracts only the accepted final verdict from concatenated progress JSON", () => {
+    const concatenated = `${checking}${testing}${final}`;
+    const messages = showOnlyFinalVerificationMessage(
+      [
+        {
+          id: "verification",
+          role: "assistant",
+          content: concatenated,
+          parts: [
+            { type: "text", content: "Running the full validation suite." },
+            { type: "text", content: concatenated },
+          ],
+          createdAt: "2026-08-07T22:00:00.000Z",
+        },
+      ],
+      true,
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe("");
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([
+      "Running the full validation suite.",
+      final,
+    ]);
+  });
+
+  test("rebuilds mixed fallback content when an accepted sequence is replaced", () => {
+    const prose = "Running the full validation suite.";
+    const concatenated = `${checking}${testing}${final}`;
+    const messages = showOnlyFinalVerificationMessage(
+      [
+        {
+          id: "verification",
+          role: "assistant",
+          content: `${prose}${concatenated}`,
+          parts: [
+            { type: "text", content: prose },
+            { type: "text", content: concatenated },
+          ],
+          createdAt: "2026-08-07T22:00:00.000Z",
+        },
+      ],
+      true,
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe(`${prose}${final}`);
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([prose, final]);
+    expect(JSON.stringify(messages)).not.toContain("I am inspecting the committed diff.");
+    expect(JSON.stringify(messages)).not.toContain("The branch is clean");
+  });
+
+  test("hides concatenated provisional verdicts while preserving prose updates", () => {
+    const messages = hideMachineOutputText(
+      showOnlyFinalVerificationMessage(
+        [
+          {
+            id: "verification",
+            role: "assistant",
+            content: `${checking}${testing}`,
+            parts: [
+              { type: "text", content: "The full suite is still running." },
+              { type: "text", content: `${checking}${testing}` },
+            ],
+            createdAt: "2026-08-07T22:00:00.000Z",
+          },
+        ],
+        false,
+      ),
+      { retainPayloadKind: "verification" },
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.content).toBe("");
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([
+      "The full suite is still running.",
+    ]);
+  });
 });
 
 describe("hideMachineOutputText", () => {
@@ -272,6 +351,26 @@ describe("hideMachineOutputText", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]?.parts.map((part) => part.content)).toEqual([commentary]);
+  });
+
+  test("removes machine output from concatenated fallback content", () => {
+    const prose = "The full suite is still running.";
+    const draft = '{"complete":false,"rationale":"Still running"';
+    const messages = hideMachineOutputText([
+      {
+        id: "mixed",
+        role: "assistant",
+        content: `${prose}${draft}`,
+        parts: [
+          { type: "text", content: prose },
+          { type: "text", content: draft },
+        ],
+        createdAt: "2026-08-17T13:00:00.000Z",
+      },
+    ]);
+
+    expect(messages[0]?.content).toBe(prose);
+    expect(messages[0]?.parts.map((part) => part.content)).toEqual([prose]);
   });
 
   test("never withholds the user's own text", () => {

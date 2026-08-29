@@ -808,6 +808,53 @@ describe("BuildChatTab presentation", () => {
     expect(visibleToolInvocations()).toEqual(["bun test", "bun run build"]);
   });
 
+  test("shows only an accepted final verdict extracted from concatenated progress JSON", () => {
+    const prose = "Running the full validation suite.";
+    const inspecting = JSON.stringify({
+      complete: false,
+      rationale: "I am inspecting the committed diff.",
+    });
+    const testing = JSON.stringify({
+      complete: false,
+      rationale: "The branch is clean; I am running tests now.",
+    });
+    const final = JSON.stringify({
+      complete: true,
+      rationale: "All acceptance criteria and validation checks passed.",
+    });
+    const concatenated = `${inspecting}${testing}${final}`;
+    renderTab({
+      ...pipeline,
+      verificationResult: "pass",
+      verificationFeedback: "All acceptance criteria and validation checks passed.",
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[1]!,
+          agent: "codex",
+          structuredResultStatus: "accepted",
+          messages: [
+            {
+              id: "verification-answer",
+              role: "assistant",
+              content: `${prose}${concatenated}`,
+              parts: [
+                { type: "text", content: prose },
+                { type: "text", content: concatenated },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(screen.getAllByText("Verification passed")).toHaveLength(1);
+    expect(screen.queryByText(final) === null).toBe(true);
+    expect(visibleTextContents()).toEqual([prose, final]);
+    expect(JSON.stringify(listProps.messages)).not.toContain("I am inspecting the committed diff.");
+    expect(JSON.stringify(listProps.messages)).not.toContain("The branch is clean");
+  });
+
   test("does not call a provisional running verdict a verification failure", () => {
     const inspecting = JSON.stringify({
       complete: false,
@@ -846,6 +893,55 @@ describe("BuildChatTab presentation", () => {
     expect(screen.queryByText("Verification failed") === null).toBe(true);
     expect(visibleToolInvocations()).toEqual(["bun test"]);
     expect(visibleTextContents()).toEqual([]);
+  });
+
+  test("shows prose updates while withholding concatenated and streaming verification JSON", () => {
+    const waiting = JSON.stringify({
+      complete: false,
+      rationale: "The full suite is still running.",
+    });
+    const checking = JSON.stringify({
+      complete: false,
+      rationale: "Four concurrent test groups remain active.",
+    });
+    const streaming = '{"complete":false,"rationale":"Inspecting the last test group';
+    renderTab({
+      ...pipeline,
+      phase: "verifying",
+      sessions: [
+        pipeline.sessions[0]!,
+        {
+          ...pipeline.sessions[1]!,
+          agent: "codex",
+          status: "running",
+          structuredResultStatus: "pending",
+          messages: [
+            {
+              id: "verification-progress",
+              role: "assistant",
+              content: streaming,
+              parts: [
+                { type: "text", content: "The full suite is still running." },
+                { type: "text", content: `${waiting}${checking}` },
+                {
+                  type: "tool-invocation",
+                  content: "bun run test",
+                  toolName: "bash",
+                  toolState: "pending",
+                },
+                { type: "text", content: streaming },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(visibleTextContents()).toEqual(["The full suite is still running."]);
+    expect(visibleToolInvocations()).toEqual(["bun run test"]);
+    expect(screen.queryByText("Verification failed") === null).toBe(true);
+    expect(JSON.stringify(listProps.messages)).not.toContain("Four concurrent test groups");
+    expect(JSON.stringify(listProps.messages)).not.toContain("Inspecting the last test group");
   });
 
   test("does not reveal an idle provisional verdict after pause or cancellation", () => {

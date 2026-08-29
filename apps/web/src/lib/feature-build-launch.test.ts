@@ -102,6 +102,31 @@ describe("featureBuildStepConfigs", () => {
       model: "opus",
     });
   });
+
+  test("collapses exact duplicate reviewers to the single-review path", () => {
+    const state = models();
+    state.reviewers[1] = { ...state.reviewers[0]!, key: "duplicate-reviewer" };
+
+    expect(featureBuildStepConfigs(state).reviewers).toEqual([
+      { agent: "claude", model: "sonnet", reasoningEffort: "high" },
+    ]);
+  });
+
+  test("preserves one reviewer and falls back safely when the list is empty", () => {
+    const single = models();
+    single.reviewers = [single.reviewers[1]!];
+    expect(featureBuildStepConfigs(single).reviewers).toEqual([
+      { agent: "codex", model: "gpt-5.6" },
+    ]);
+
+    const empty = models();
+    empty.reviewers = [];
+    const configured = featureBuildStepConfigs(empty);
+    expect(configured.reviewers).toEqual([
+      { agent: "claude", model: "opus", reasoningEffort: "max" },
+    ]);
+    expect(configured.steps.review).toEqual(configured.reviewers[0]);
+  });
 });
 
 describe("featureBuildRequest", () => {
@@ -131,13 +156,28 @@ describe("featureBuildRequest", () => {
     });
   });
 
-  test("omits every step when the models panel is closed", () => {
+  test("keeps two default reviewers when the models panel is closed", () => {
     const request = featureBuildRequest({ ...base, customizeModels: false });
     expect(request.steps).toBeUndefined();
-    expect(request.reviewers).toBeUndefined();
+    expect(request.reviewers).toEqual([
+      { agent: "claude", model: "sonnet", reasoningEffort: "high" },
+      { agent: "codex", model: "gpt-5.6" },
+    ]);
     // The pipeline still needs a harness for the build step, and that is the
     // agent the dialog was showing.
     expect(request.agentType).toBe("claude");
+  });
+
+  test("does not send two identical default reviewers when the panel is closed", () => {
+    const duplicateModels = models();
+    duplicateModels.reviewers[1] = {
+      ...duplicateModels.reviewers[0]!,
+      key: "duplicate-reviewer",
+    };
+
+    expect(
+      featureBuildRequest({ ...base, models: duplicateModels, customizeModels: false }).reviewers,
+    ).toEqual([{ agent: "claude", model: "sonnet", reasoningEffort: "high" }]);
   });
 
   test("sends every step when the models panel is open", () => {
@@ -204,6 +244,12 @@ describe("featureBuildIdentity", () => {
       { networkAccessMode: "full" as const },
       { environmentType: "local" as const },
       { customizeModels: true },
+      {
+        models: {
+          ...models(),
+          reviewers: [{ key: "changed-reviewer", agent: "codex" as const, model: "gpt-5.6" }],
+        },
+      },
       { portMappings: [{ containerPort: 5173, hostPort: 5173, protocol: "tcp" as const }] },
     ];
     for (const override of differing) {

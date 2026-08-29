@@ -100,7 +100,12 @@ const reviewIssueSchema = {
       maximum: 100,
       description: "How certain the issue is real, 0-100. Report only issues at 75 or above.",
     },
-    category: { type: "string", enum: REVIEW_ISSUE_CATEGORIES },
+    category: {
+      type: "string",
+      enum: REVIEW_ISSUE_CATEGORIES,
+      description:
+        "The defect category, using this closed vocabulary exactly. Classify the defect itself and put affected domains or hazards in riskProfile.riskAreas; a valid risk-area label is not automatically a valid issue category.",
+    },
     title: { type: "string", description: "Short title naming the defect." },
     file: { type: "string", description: "Repository-relative path of the file the issue is in." },
     line: nullableLineSchema,
@@ -303,10 +308,14 @@ export const STRUCTURED_REVIEW_REPORT_JSON_SCHEMA = {
       properties: {
         changeTypes: {
           type: "array",
+          description:
+            "Kinds of change, using only this closed vocabulary. Do not substitute a value merely because it is a valid issue category or risk-area label; omit a label when no allowed value accurately applies.",
           items: { type: "string", enum: REVIEW_CHANGE_TYPES },
         },
         riskAreas: {
           type: "array",
+          description:
+            "Open-ended affected domains and hazards, such as concurrency, auth, data-loss, or architecture. Put project-specific risk labels here rather than inventing values for changeTypes or issue.category.",
           items: { type: "string" },
         },
         overallRisk: { type: "string", enum: REVIEW_OVERALL_RISKS },

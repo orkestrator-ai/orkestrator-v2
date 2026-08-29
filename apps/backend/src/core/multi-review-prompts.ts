@@ -1,4 +1,7 @@
-import { buildReviewBody } from "@orkestrator/protocol/review-workflow";
+import {
+  buildReviewBody,
+  buildStructuredReviewOutputGuide,
+} from "@orkestrator/protocol/review-workflow";
 import {
   MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION,
   MULTI_REVIEW_CONSOLIDATION_PROMPT_PREFIX,
@@ -84,7 +87,9 @@ ${MULTI_REVIEW_CONSOLIDATION_PROMPT_CONTINUATION}${JSON.stringify(input.targetBr
 - Reconcile disagreements using the supplied evidence; do not decide by majority vote.${scopeReconciliationRule(input.worktree)}
 - Combine useful strengths, limitations, test results, scope details, change explanation, and reviewer commentary without inventing evidence.
 - The output must stand alone. Do not mention reviewer numbers or assume the reader can see the source reports.
-- Do not edit files, run commands, ask questions, or add prose outside the provider-enforced structured result.`;
+- Do not edit files, run commands, ask questions, or add prose outside the provider-enforced structured result.
+
+${buildStructuredReviewOutputGuide()}`;
 }
 
 /**

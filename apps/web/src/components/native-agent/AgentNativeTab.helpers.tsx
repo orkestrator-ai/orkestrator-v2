@@ -6,6 +6,7 @@ import {
   firstEnabledAgentPlatform,
   type AgentPlatform,
 } from "@orkestrator/protocol/agent-platforms";
+import { isPlanMarkdownPath } from "@orkestrator/protocol/agent-interactions";
 import {
   resolveReasoningId,
   type AgentModel,
@@ -42,7 +43,7 @@ import { useNativeComposeBarPaste } from "@/hooks/useNativeComposeBarPaste";
 import { useNativeComposeDraftPersistence } from "@/hooks/useNativeComposeDraftPersistence";
 import { getNativeAgentModelCatalog } from "@/lib/backend";
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
-import type { NativeMessage } from "@/lib/chat/native-message-types";
+import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import {
   snapshotNativeAgentActivity,
   type NativeAgentActivitySnapshot,
@@ -228,27 +229,34 @@ function PlatformIcon({ platform }: { platform: AgentPlatform }) {
 }
 
 export function extractNativePlanContent(messages: readonly NativeMessage[]): string | undefined {
-  const looksLikePlan = (path: string) => {
-    const normalized = path.toLowerCase();
-    const filename = normalized.split("/").at(-1) ?? "";
-    return (
-      /(^|[-_])plan\.md$/.test(filename) ||
-      /plan[-_].*\.md$/.test(filename) ||
-      [".claude/", "docs/plans/", "plans/"].some(
-        (directory) => normalized.includes(directory) && normalized.endsWith(".md"),
-      )
-    );
+  const fromParts = (parts: readonly NativeMessagePart[]): string | undefined => {
+    for (const part of [...parts].reverse()) {
+      if (part.type === "tool-invocation" && part.toolName?.toLowerCase() === "write") {
+        const path = part.toolArgs?.file_path;
+        const content = part.toolArgs?.content;
+        if (typeof path === "string" && isPlanMarkdownPath(path) && typeof content === "string") {
+          return content;
+        }
+      }
+      if (part.type === "tool-group" || part.type === "agent-group") {
+        const nested = fromParts(part.parts);
+        if (nested !== undefined) return nested;
+      }
+      if (part.type === "task-group") {
+        const nested = fromParts([part.task, ...part.childTools]);
+        if (nested !== undefined) return nested;
+      }
+      if (part.type === "subagent" && part.subagentActions) {
+        const nested = fromParts(part.subagentActions);
+        if (nested !== undefined) return nested;
+      }
+    }
+    return undefined;
   };
   for (const message of [...messages].reverse()) {
     if (message.role !== "assistant") continue;
-    for (const part of [...message.parts].reverse()) {
-      if (part.type !== "tool-invocation" || part.toolName?.toLowerCase() !== "write") continue;
-      const path = part.toolArgs?.file_path;
-      const content = part.toolArgs?.content;
-      if (typeof path === "string" && looksLikePlan(path) && typeof content === "string") {
-        return content;
-      }
-    }
+    const content = fromParts(message.parts);
+    if (content !== undefined) return content;
   }
   return undefined;
 }

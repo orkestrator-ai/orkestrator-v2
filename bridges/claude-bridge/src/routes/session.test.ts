@@ -1875,6 +1875,7 @@ describe("session routes", () => {
           id: "a-1",
           sessionId: "s-1",
           toolUseId: "tool-1",
+          plan: "# Complete plan",
         },
       ]);
       const res = await jsonRequest("POST", "/session/s-1/plan-approvals/a-1/respond", {
@@ -1883,6 +1884,26 @@ describe("session routes", () => {
       expect(res.status).toBe(200);
       const data = await jsonBody(res);
       expect(data.status).toBe("approved");
+    });
+
+    test("refuses approval when the pending plan is missing or truncated", async () => {
+      for (const pending of [
+        { id: "a-missing", sessionId: "s-1" },
+        {
+          id: "a-truncated",
+          sessionId: "s-1",
+          plan: "# Partial plan…",
+          planTruncated: true,
+        },
+      ]) {
+        mockGetPendingPlanApprovals.mockImplementationOnce(() => [pending]);
+        const res = await jsonRequest("POST", `/session/s-1/plan-approvals/${pending.id}/respond`, {
+          approved: true,
+        });
+        expect(res.status).toBe(409);
+        expect(await jsonBody(res)).toMatchObject({ status: "rejected" });
+      }
+      expect(mockRespondToPlanApproval).not.toHaveBeenCalled();
     });
 
     test("returns rejected status with feedback", async () => {
@@ -1962,6 +1983,7 @@ describe("session routes", () => {
         {
           id: "a-1",
           sessionId: "s-1",
+          plan: "# Complete plan",
         },
       ]);
       mockRespondToPlanApproval.mockImplementationOnce(() => false);

@@ -29,6 +29,26 @@ export function serializeClaudeQuestionAnswer(
   return multiple || values.length > 1 ? JSON.stringify(values) : (values[0] ?? "");
 }
 
+/**
+ * Whether a Markdown path is plausibly an implementation plan.
+ *
+ * Claude normally writes plans under `.claude/plans/`, while projects may
+ * deliberately keep reviewed plans under `plans/` or `docs/plans/`. Outside
+ * those directories, require a plan-shaped filename so an unrelated README or
+ * release note cannot become the authorization body for ExitPlanMode.
+ */
+export function isPlanMarkdownPath(path: string): boolean {
+  const normalized = path.replaceAll("\\", "/").toLowerCase();
+  if (!normalized.endsWith(".md")) return false;
+  const segments = normalized.split("/").filter(Boolean);
+  const filename = segments.at(-1) ?? "";
+  return (
+    /(^|[-_])plan\.md$/.test(filename) ||
+    /plan[-_].*\.md$/.test(filename) ||
+    segments.slice(0, -1).includes("plans")
+  );
+}
+
 export const AGENT_INTERACTION_LIMITS = Object.freeze({
   maxPendingRequests: 64,
   maxQuestionsPerRequest: 16,
@@ -164,6 +184,8 @@ export interface AgentInteractionPresentation {
   declineLabel?: string;
   /** Fail closed when an authorization request lacks enough detail to approve. */
   confirmDisabled?: boolean;
+  /** For plan approvals, whether `body` is provider-supplied plan Markdown. */
+  planAvailable?: boolean;
   /** Optional broader authorization supported by the provider. */
   approveForSessionLabel?: string;
 }
@@ -401,6 +423,7 @@ const PRESENTATION_KEYS = new Set([
   "confirmLabel",
   "declineLabel",
   "confirmDisabled",
+  "planAvailable",
   "approveForSessionLabel",
 ]);
 const QUESTION_KEYS = new Set([
@@ -568,6 +591,7 @@ function isPresentation(
     !isOptionalBoundedString(value.confirmLabel) ||
     !isOptionalBoundedString(value.declineLabel) ||
     (value.confirmDisabled !== undefined && typeof value.confirmDisabled !== "boolean") ||
+    (value.planAvailable !== undefined && typeof value.planAvailable !== "boolean") ||
     !isOptionalBoundedString(value.approveForSessionLabel) ||
     !Array.isArray(value.questions) ||
     value.questions.length > AGENT_INTERACTION_LIMITS.maxQuestionsPerRequest ||
@@ -577,6 +601,7 @@ function isPresentation(
   }
   const questionIds = value.questions.map((question) => question.id);
   if (!hasUniqueStrings(questionIds)) return false;
+  if (kind !== "plan-approval" && value.planAvailable !== undefined) return false;
   if (kind === "mcp-url" && !isBoundedString(value.url)) return false;
   if (
     (kind === "question" || kind === "mcp-form" || kind === "terminal-selection") &&

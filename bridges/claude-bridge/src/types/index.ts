@@ -208,6 +208,13 @@ export interface ClaudeQueryControl {
   close?: () => void | Promise<void>;
 }
 
+/** Last complete or bounded plan observed while this session remains in plan mode. */
+export interface ObservedPlan {
+  content: string;
+  path: string;
+  truncated: boolean;
+}
+
 /** Session state */
 export interface SessionState {
   id: string;
@@ -271,6 +278,11 @@ export interface SessionState {
    * Absent means "never set", which callers must treat as off.
    */
   planMode?: boolean;
+  /**
+   * Bridge-authoritative plan capture retained across rejection re-prompts.
+   * Cleared whenever the session enters or leaves a plan-mode lifecycle.
+   */
+  observedPlan?: ObservedPlan;
   /**
    * Recently accepted idempotent prompt request ids.
    *
@@ -486,6 +498,10 @@ export interface PlanApprovalRequest {
   id: string;
   sessionId: string;
   toolUseId?: string;
+  /** Markdown plan Claude is asking the user to approve. */
+  plan?: string;
+  /** The plan exceeded the interaction transport limit and cannot be approved safely. */
+  planTruncated?: boolean;
   /** Absolute time when the bridge will deny the unanswered request. */
   expiresAt: number;
 }

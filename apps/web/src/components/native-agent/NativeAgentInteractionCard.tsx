@@ -218,7 +218,11 @@ export function NativeAgentInteractionCard({
       }
       error={error}
       title={interaction.presentation.title}
-      description={interaction.presentation.body}
+      description={
+        interaction.kind === "plan-approval" && interaction.presentation.planAvailable
+          ? undefined
+          : interaction.presentation.body
+      }
       meta={remaining && !expired ? remaining : undefined}
       arrivalAnnouncement={`${interaction.presentation.title} needs a response.`}
       role="group"
@@ -232,7 +236,7 @@ export function NativeAgentInteractionCard({
             </summary>
             <MessageMarkdown
               content={planContent}
-              className="max-h-72 overflow-y-auto border-t border-border/60 px-3 py-2 text-xs"
+              className="border-t border-border/60 px-3 py-2 text-xs"
             />
           </details>
         ) : null}

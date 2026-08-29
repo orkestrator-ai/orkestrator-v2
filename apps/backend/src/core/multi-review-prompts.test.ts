@@ -140,6 +140,15 @@ describe("multi review consolidation prompt", () => {
     expect(prompt).toContain("Set reviewModels to null");
     expect(prompt).toContain('"reviewSourceIds":["reviewer-1/');
     expect(prompt).toContain("record the narrower scope as a limitation");
+    expect(prompt).toContain("## Structured report structural preflight");
+    expect(prompt.indexOf("- Semantically deduplicate equivalent issues")).toBeLessThan(
+      prompt.indexOf("## Structured report structural preflight"),
+    );
+    expect(
+      prompt.indexOf(
+        "- Do not edit files, run commands, ask questions, or add prose outside the provider-enforced structured result.",
+      ),
+    ).toBeLessThan(prompt.indexOf("## Structured report structural preflight"));
   });
 
   test("omits the scope rule when nothing was uncommitted", () => {

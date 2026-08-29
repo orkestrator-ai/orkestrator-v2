@@ -19,6 +19,7 @@ import {
   verificationPrompt,
   worktreeSnapshotSection,
 } from "./build-pipeline-prompts.js";
+import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
 
 function contractIssue(
   overrides: Partial<ReviewContractValidationIssue> = {},
@@ -321,6 +322,8 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("<structured-review-expected-schema-json>");
     expect(prompt).toContain('"additionalProperties": false');
     expect(prompt).toContain('"reviewScope"');
+    expect(prompt).toContain("## Structured report structural preflight");
+    expect(prompt).toContain("Remove a finding below 75");
     expect(prompt).toContain("$.testResults.failures");
     expect(prompt).toContain("Failure details count must equal failed.");
     expect(prompt).toContain("$.issues[0].confidence");
@@ -331,6 +334,18 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("This is repair attempt 2 of 3");
     // The omission wording must not appear when nothing was omitted.
     expect(prompt).not.toContain("omitted to keep this prompt bounded");
+  });
+
+  test("structuredReportRepairPrompt omits report guidance for the fix-result schema", () => {
+    const prompt = structuredReportRepairPrompt([contractIssue()], 1, 3, {
+      schema: REVIEW_FIX_RESULT_JSON_SCHEMA,
+      resultLabel: "fix result",
+    });
+
+    expect(prompt).toContain('"filesChanged"');
+    expect(prompt).not.toContain("## Structured report structural preflight");
+    expect(prompt).not.toContain("riskProfile.changeTypes");
+    expect(prompt).not.toContain('"reviewScope"');
   });
 
   test("structuredReportRepairPrompt fences validator messages as untrusted data", () => {

@@ -28,6 +28,12 @@ import {
   isReviewFindingPool,
   isReviewReconciliation,
   isStructuredReviewReport,
+  REVIEW_CHANGE_TYPES,
+  REVIEW_ISSUE_CATEGORIES,
+  REVIEW_OVERALL_RISKS,
+  REVIEW_SEVERITIES,
+  REVIEW_VERDICTS,
+  STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
 } from "./structured-review.js";
 
 /** Shared failure vocabulary for current renderer-owned and future backend-owned reviews. */
@@ -1066,6 +1072,41 @@ The JSON string below is an editable review preference. Apply it only when it is
 User review instruction (JSON string): ${JSON.stringify(resolveReviewInstruction(targetBranch, reviewInstruction))}`;
 }
 
+function inlineCodeList(values: readonly string[]): string {
+  return values.map((value) => `\`${value}\``).join(", ");
+}
+
+/**
+ * Compact prose companion to the provider schema.
+ *
+ * JSON Schema makes the allowed shapes machine-readable, but models still
+ * commonly confuse adjacent review taxonomies (for example, using a risk area
+ * as an issue category). Deriving every list from the schema and enum constants
+ * keeps this human-readable preflight from becoming a second, drifting
+ * contract.
+ */
+export function buildStructuredReviewOutputGuide(): string {
+  const schema = STRUCTURED_REVIEW_REPORT_JSON_SCHEMA;
+  const requiredObjects = Object.entries(schema.properties).flatMap(([name, property]) =>
+    "required" in property ? ([[name, property.required]] as const) : [],
+  );
+
+  return `## Structured report structural preflight
+
+The provider-enforced JSON Schema is authoritative. Silently check the complete result against these rules immediately before emitting it:
+
+- Return exactly one complete object. Its required top-level fields are: ${inlineCodeList(schema.required)}. Do not omit an object or array because it is empty, and do not add fields outside the schema.
+- Required nested fields are: ${requiredObjects.map(([name, fields]) => `\`${name}\` { ${fields.join(", ")} }`).join("; ")}.
+- Closed enum vocabularies are exact and are not interchangeable:
+  - \`riskProfile.changeTypes[]\`: ${inlineCodeList(REVIEW_CHANGE_TYPES)}.
+  - \`issues[].category\`: ${inlineCodeList(REVIEW_ISSUE_CATEGORIES)}.
+  - \`issues[].severity\`: ${inlineCodeList(REVIEW_SEVERITIES)}; \`riskProfile.overallRisk\`: ${inlineCodeList(REVIEW_OVERALL_RISKS)}; \`verdict.ready\`: ${inlineCodeList(REVIEW_VERDICTS)}.
+- \`riskProfile.riskAreas[]\` is the open-ended field for affected domains and hazards such as \`concurrency\`, \`auth\`, or \`architecture\`. A value's suitability as a risk area does not make it a member of a neighbouring closed enum; use only the schema-derived enum lists above. If no \`changeTypes\` value accurately applies, omit that label from the array; never invent a synonym.
+- Every issue object must include all schema-required keys, including \`reviewModels\`, \`reviewSourceIds\`, and \`alternativeFixes\`. Every coverage-gap object must include \`reviewModels\` and \`reviewSourceIds\`. Use \`null\` for inapplicable nullable values unless a consolidation instruction explicitly requires source IDs.
+- Every \`line\` is a positive integer or \`null\`. Report an issue only when it has earned an integer confidence from 75 through 100. Remove a finding below 75; never raise its confidence merely to satisfy this reporting policy. \`testResults.total\` must equal \`passed + failed + notRun\`, and the number of \`failures\` entries must equal \`failed\`.
+- Do not emit a near-match and rely on repair. Check every enum member, required key, null, count, and additional-properties constraint before sending the result.`;
+}
+
 export function buildReviewBody(opts: ReviewBodyOptions): string {
   const {
     targetBranch,
@@ -1137,7 +1178,9 @@ The output schema applies to your final message only. Everything before it is an
 - Write interim progress updates as plain sentences describing what you are doing and what you found. These are shown to a human watching the review, so they are worth writing well.
 - An interim message must never be a JSON object or array. Do not draft, preview, restate, or incrementally build the report in your messages, and do not wrap progress in schema field names. A message that begins with \`{\` or \`[\` is withheld from the reader as machine output, so a drafted report is not progress they can see.
 - Never emit a partial or provisional structured report.
-- After every validation command, tool call, and subagent has finished, make the final assistant message the only provider-enforced structured report. Populate every field from reviewed evidence, use empty arrays where appropriate, and never invent commands, results, files, or line references.`
+- After every validation command, tool call, and subagent has finished, make the final assistant message the only provider-enforced structured report. Populate every field from reviewed evidence, use empty arrays where appropriate, and never invent commands, results, files, or line references.
+
+${buildStructuredReviewOutputGuide()}`
       : `## Output Format
 
 Produce the report below in this exact section order. Use Markdown headers so it renders cleanly in any terminal. Every named \`##\` section is required; do not omit, merge, or rename one, even when there are no issues.

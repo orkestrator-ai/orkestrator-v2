@@ -11,9 +11,13 @@ import {
   RefreshCw,
   Send,
   Square,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { MAX_PIPELINE_USER_MESSAGE_LENGTH } from "@orkestrator/protocol/build-pipeline";
+import {
+  MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  type ResumableBuildPhase,
+} from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { BuildTabData } from "@/types/paneLayout";
 import {
@@ -77,7 +81,7 @@ const AGENT_LABELS: Record<string, string> = {
   opencode: "OpenCode",
 };
 
-const RETRY_STAGE_LABELS: Record<string, string> = {
+const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
   "creating-environment": "Retry Environment Creation",
   "starting-environment": "Retry Environment Start",
   "waiting-for-setup": "Retry Setup",
@@ -509,6 +513,66 @@ export function BuildChatTab({
   };
 
   /**
+   * The pipeline controls, as data rather than markup.
+   *
+   * Desktop draws them as labelled buttons and a phone draws the same list as
+   * icons, so the label has to be one string both branches read — a second copy
+   * would let the accessible name drift from the visible one.
+   */
+  const headerControls: Array<{
+    key: string;
+    label: string;
+    icon: LucideIcon;
+    variant: "outline" | "ghost";
+    onClick: () => void;
+  }> = [];
+  if (canRetryStage) {
+    headerControls.push({
+      key: "retry-stage",
+      label: RETRY_STAGE_LABELS[pipeline.failureContext!.phase],
+      icon: RefreshCw,
+      variant: "outline",
+      onClick: () => void retryStage(),
+    });
+  }
+  if (canRetryReview) {
+    headerControls.push({
+      key: "retry-review",
+      label: "Retry Review",
+      icon: RefreshCw,
+      variant: "outline",
+      onClick: () => void retryReview(),
+    });
+  }
+  if (active) {
+    headerControls.push({
+      key: "pause",
+      label: "Pause",
+      icon: Pause,
+      variant: "outline",
+      onClick: () => void runControl("pause"),
+    });
+  }
+  if (pipeline.phase === "paused") {
+    headerControls.push({
+      key: "resume",
+      label: "Resume",
+      icon: Play,
+      variant: "outline",
+      onClick: () => void runControl("resume"),
+    });
+  }
+  if (active || pipeline.phase === "paused") {
+    headerControls.push({
+      key: "cancel",
+      label: "Cancel",
+      icon: Square,
+      variant: "ghost",
+      onClick: () => void runControl("cancel"),
+    });
+  }
+
+  /**
    * Move the selection to another stage from the keyboard.
    *
    * Taking `role="tab"` is a promise that arrow keys move between stages and
@@ -567,81 +631,67 @@ export function BuildChatTab({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex items-center justify-between gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3">
-        <div className="min-w-0">
+      <div
+        data-testid="build-pipeline-header"
+        className={cn(
+          "flex items-center gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3",
+          isMobile && "gap-2 px-3 py-2",
+        )}
+      >
+        <div data-testid="build-pipeline-header-summary" className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{pipeline.taskTitle}</div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             {active ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
             ) : pipeline.phase === "complete" ? (
-              <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+              <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
             ) : pipeline.phase === "failed" ? (
-              <AlertCircle className="h-3 w-3 text-destructive" />
+              <AlertCircle className="h-3 w-3 shrink-0 text-destructive" />
             ) : (
-              <Circle className="h-3 w-3" />
+              <Circle className="h-3 w-3 shrink-0" />
             )}
-            <span>{phaseLabel}</span>
-            <span>·</span>
-            <span className="capitalize">{displayedAgent}</span>
+            <span className="truncate">{phaseLabel}</span>
+            <span aria-hidden="true">·</span>
+            <span className="truncate capitalize">{displayedAgent}</span>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {canRetryStage && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={controlPending}
-              onClick={() => void retryStage()}
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              {RETRY_STAGE_LABELS[pipeline.failureContext!.phase] ?? "Retry Failed Stage"}
-            </Button>
-          )}
-          {canRetryReview && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={controlPending}
-              onClick={() => void retryReview()}
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              Retry Review
-            </Button>
-          )}
-          {active && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={controlPending}
-              onClick={() => void runControl("pause")}
-            >
-              <Pause className="mr-1.5 h-3.5 w-3.5" />
-              Pause
-            </Button>
-          )}
-          {pipeline.phase === "paused" && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={controlPending}
-              onClick={() => void runControl("resume")}
-            >
-              <Play className="mr-1.5 h-3.5 w-3.5" />
-              Resume
-            </Button>
-          )}
-          {(active || pipeline.phase === "paused") && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={controlPending}
-              onClick={() => void runControl("cancel")}
-            >
-              <Square className="mr-1.5 h-3.5 w-3.5" />
-              Cancel
-            </Button>
-          )}
-        </div>
+        {headerControls.length > 0 && (
+          <div
+            data-testid="build-pipeline-header-controls"
+            className="flex shrink-0 items-center gap-1.5"
+          >
+            {headerControls.map(({ key, label, icon: Icon, variant, onClick }) =>
+              // A phone has no room for three labelled buttons beside a title:
+              // they used to push the status line under them and clip the last
+              // control off the screen. The label moves to the accessible name,
+              // which is what the tests and a screen reader read either way.
+              isMobile ? (
+                <Button
+                  key={key}
+                  size="icon"
+                  variant={variant}
+                  aria-label={label}
+                  title={label}
+                  disabled={controlPending}
+                  onClick={onClick}
+                >
+                  <Icon className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  key={key}
+                  size="sm"
+                  variant={variant}
+                  disabled={controlPending}
+                  onClick={onClick}
+                >
+                  <Icon className="mr-1.5 h-3.5 w-3.5" />
+                  {label}
+                </Button>
+              ),
+            )}
+          </div>
+        )}
       </div>
 
       {pipeline.error && !interactionFailure && (

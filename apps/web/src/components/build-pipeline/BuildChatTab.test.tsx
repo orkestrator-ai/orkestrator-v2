@@ -10,6 +10,7 @@ import * as realBackend from "@/lib/backend";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 import { findPreviousNativeMessage } from "@/lib/chat/native-message-adapters";
 import { mockToastError, mockToastSuccess } from "../../../../../tests/mocks/sonner";
+import { restoreMatchMedia, setMobileViewport } from "../../../../../tests/mocks/match-media";
 import { TEST_STRUCTURED_REVIEW_REPORT } from "./structured-review-test-fixture";
 
 const realBackendSnapshot = { ...realBackend };
@@ -116,6 +117,7 @@ const { BuildChatTab } = await import("./BuildChatTab");
 afterAll(() => {
   mock.module("@/lib/backend", () => realBackendSnapshot);
   mock.module("@/components/chat/VirtualizedMessageList", () => realVirtualizedMessageListSnapshot);
+  restoreMatchMedia();
 });
 
 const pipeline: BuildPipeline = {
@@ -307,6 +309,93 @@ describe("BuildChatTab backend projection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(cancelBuildPipelineMock).toHaveBeenCalledWith(pipeline.id));
     await waitFor(() => expect(screen.getByText("Build cancelled")).toBeTruthy());
+  });
+
+  test("routes the mobile icon controls through their backend actions", async () => {
+    setMobileViewport(true);
+    try {
+      pauseBuildPipelineMock.mockImplementationOnce(async (pipelineId: string) => ({
+        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        phase: "paused" as const,
+        backendRevision: 14,
+      }));
+      resumeBuildPipelineMock.mockImplementationOnce(async (pipelineId: string) => ({
+        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        phase: "building" as const,
+        backendRevision: 15,
+      }));
+      cancelBuildPipelineMock.mockImplementationOnce(async (pipelineId: string) => ({
+        ...useBuildPipelineStore.getState().pipelines.get(pipelineId)!,
+        phase: "failed" as const,
+        error: "Build cancelled",
+        backendRevision: 16,
+      }));
+      useBuildPipelineStore.getState().replacePipeline({
+        ...pipeline,
+        phase: "building",
+        backendRevision: 9,
+      });
+      const data = {
+        pipelineId: pipeline.id,
+        environmentId: pipeline.environmentId,
+        taskId: pipeline.taskId,
+        isLocal: true,
+      };
+      render(<BuildChatTab data={data} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry Review" }));
+      await waitFor(() => expect(retryReviewMock).toHaveBeenCalledWith(pipeline.id));
+      await waitFor(() =>
+        expect((screen.getByRole("button", { name: "Pause" }) as HTMLButtonElement).disabled).toBe(
+          false,
+        ),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+      await waitFor(() => expect(pauseBuildPipelineMock).toHaveBeenCalledWith(pipeline.id));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+      await waitFor(() => expect(resumeBuildPipelineMock).toHaveBeenCalledWith(pipeline.id));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy());
+
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      await waitFor(() => expect(cancelBuildPipelineMock).toHaveBeenCalledWith(pipeline.id));
+    } finally {
+      setMobileViewport(false);
+    }
+  });
+
+  test("routes the mobile failed-stage icon through the retry action", async () => {
+    setMobileViewport(true);
+    try {
+      useBuildPipelineStore.getState().replacePipeline({
+        ...pipeline,
+        phase: "failed",
+        error: "Verification did not complete",
+        failureContext: {
+          phase: "verifying",
+          kind: "stage-transition",
+          sessionId: "verify-session",
+        },
+        backendRevision: 9,
+      });
+      render(
+        <BuildChatTab
+          data={{
+            pipelineId: pipeline.id,
+            environmentId: pipeline.environmentId,
+            taskId: pipeline.taskId,
+            isLocal: true,
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry Verification Stage" }));
+      await waitFor(() => expect(retryStageMock).toHaveBeenCalledWith(pipeline.id));
+    } finally {
+      setMobileViewport(false);
+    }
   });
 
   test("re-enables a control when the backend rejects it", async () => {

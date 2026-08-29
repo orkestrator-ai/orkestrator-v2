@@ -19,6 +19,9 @@ mock.module("@/components/chat/AgentModelPicker", () => ({
         ) : null}
         {props.selectedModelLabel}
       </button>
+      <span data-testid={`${props.id} selected-platform-model-count`}>
+        {props.models.filter((model) => model.platform === props.selectedPlatform).length}
+      </span>
       <button
         type="button"
         aria-label={`${props.id} choose Codex A`}
@@ -161,6 +164,63 @@ describe("AgentDefaultsPane create-script defaults", () => {
       expect(picker.querySelector("[data-native-model-platform='codex']") === null).toBe(true);
     },
   );
+
+  test("falls back to the effective agent when the inherited provider is disabled", () => {
+    const repository: AgentSettingsTier = { defaultAgent: "codex" };
+    render(
+      <AgentDefaultsPane
+        tier={repository}
+        onChange={() => {}}
+        tiers={{
+          global: {
+            defaultAgent: "codex",
+            actionDefaults: {
+              createScript: { platform: "cursor", model: "cursor-a" },
+            },
+          },
+          repository,
+        }}
+        canInherit
+        enabledPlatforms={["claude", "codex", "opencode"]}
+        catalog={catalog}
+        scopeLabel="this repository"
+      />,
+    );
+
+    const picker = screen.getByRole("combobox", {
+      name: "Create run script default agent, model and reasoning",
+    });
+    expect(picker.textContent).toBe("Inherit");
+    expect(picker.querySelector("[data-native-model-platform='codex']")).toBeTruthy();
+    expect(picker.querySelector("[data-native-model-platform='cursor']") === null).toBe(true);
+    expect(
+      screen.getByTestId("action-default-createScript selected-platform-model-count").textContent,
+    ).toBe("1");
+  });
+
+  test("uses the effective agent when there is no inherited action entry", () => {
+    const repository: AgentSettingsTier = { defaultAgent: "codex" };
+    render(
+      <AgentDefaultsPane
+        tier={repository}
+        onChange={() => {}}
+        tiers={{ global: { defaultAgent: "claude" }, repository }}
+        canInherit
+        enabledPlatforms={["claude", "codex", "opencode"]}
+        catalog={catalog}
+        scopeLabel="this repository"
+      />,
+    );
+
+    const picker = screen.getByRole("combobox", {
+      name: "Create run script default agent, model and reasoning",
+    });
+    expect(picker.textContent).toBe("Inherit");
+    expect(picker.querySelector("[data-native-model-platform='codex']")).toBeTruthy();
+    expect(
+      screen.getByTestId("action-default-createScript selected-platform-model-count").textContent,
+    ).toBe("1");
+  });
 
   test("renders and persists provider, model, and reasoning changes at every settings tier", () => {
     for (const scope of ["global", "repository", "environment"] as const) {

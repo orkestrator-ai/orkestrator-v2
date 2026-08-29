@@ -717,6 +717,7 @@ export class ReviewFanoutRunner {
       delete reviewer.progressAt;
       delete reviewer.progressDigest;
       delete reviewer.stalledSince;
+      delete reviewer.continuationPrompt;
       await host.save();
     }
     if (!reviewer.providerSessionId || !reviewer.requestId) return "continue";
@@ -733,7 +734,7 @@ export class ReviewFanoutRunner {
       // needs no snapshot. Gating it would turn an already-handled formatting
       // retry into a whole-workflow failure over drift the reviewer's own
       // authorised validation writes caused.
-      let prompt = reviewer.schemaRepairPrompt;
+      let prompt = reviewer.schemaRepairPrompt ?? reviewer.continuationPrompt;
       if (!prompt) {
         const worktree = await host.reviewSnapshot();
         prompt = createMultiReviewerPrompt({
@@ -765,12 +766,14 @@ export class ReviewFanoutRunner {
       }
       await host.assertFence();
       reviewer.dispatchState = "sent";
+      delete reviewer.continuationPrompt;
       await host.save();
     }
     if (reviewer.dispatchState === "dispatching") {
       // Dispatch acceptance is ambiguous after a crash. The stable request id
       // makes provider reconciliation authoritative; never send it twice.
       reviewer.dispatchState = "sent";
+      delete reviewer.continuationPrompt;
       await host.save();
     }
     if (reviewer.status !== "running") return "continue";
@@ -827,6 +830,7 @@ export class ReviewFanoutRunner {
     reviewer.status = "completed";
     reviewer.completedAt = nowIso();
     delete reviewer.schemaRepairPrompt;
+    delete reviewer.continuationPrompt;
     delete reviewer.idleResultPolls;
     delete reviewer.stalledSince;
     this.host.progress.forget(reviewer.providerSessionId);

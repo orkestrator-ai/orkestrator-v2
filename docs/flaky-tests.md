@@ -10,6 +10,29 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `json file cache > slices > shares a single parse between concurrent cold readers` (`bridges/claude-bridge/src/services/json-file-cache.test.ts:132`)
+
+- **Status:** open
+- **Date observed:** 2026-08-29
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the bridge group used six Bun workers.
+- **Failure:** `getJsonFileParseCount()` was expected to be `1` but was `2` after
+  the three concurrent readers returned their expected values (duration: 0.49
+  ms).
+- **Suite counts:** bridge group — 3,192 total, 3,180 passed, 11 skipped, 1
+  failed across 120 files in 56.91 s.
+- **Isolated rerun:** `bun --cwd=bridges/claude-bridge test
+  src/services/json-file-cache.test.ts` -> 12 passed, 0 failed; the target
+  passed in 0.32 ms.
+- **Hypothesis:** the parse counter and cache are module-global test
+  instrumentation, and the failure occurred only while the bridge worker was
+  running the aggregate file set. The evidence establishes interference or
+  scheduling sensitivity around that shared state, but does not identify which
+  other reader or hook caused the second parse. A recurrence should capture the
+  file path and fingerprint for each counted parse before changing the
+  assertion.
+
 ## `SkillsSettings > copies the selected path and reports clipboard failures` (`apps/web/src/components/settings/SkillsSettings.test.tsx:730`)
 
 - **Status:** open

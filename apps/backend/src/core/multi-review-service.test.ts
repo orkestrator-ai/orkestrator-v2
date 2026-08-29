@@ -148,24 +148,37 @@ class Provider implements BuildPipelineProvider {
   consolidationReport: StructuredReviewReport = consolidatedReport;
   messagesCalls = 0;
   readonly messageOptions: Array<{ limit?: number } | undefined> = [];
+  readonly createdSessionKeys: string[] = [];
   disposeCalls = 0;
+  idempotentSessionKeys = false;
   /** Throws from `createSession` once this many sessions already exist. */
   failCreateSessionAfter: number | null = null;
   private statusGate: Promise<void> | null = null;
   private releaseStatusGate: (() => void) | null = null;
   private messagesGate: Promise<void> | null = null;
   private releaseMessagesGate: (() => void) | null = null;
+  private readonly sessionIdsByClientKey = new Map<string, string>();
   constructor(private readonly returnStructured = true) {}
   async createSession(
     _phase: "build" | "review" | "verify" | "fix" | "pr" | "resolve-conflicts",
     _label: string,
-    _options?: ProviderCreateSessionOptions,
+    options?: ProviderCreateSessionOptions,
   ) {
+    const clientSessionKey = options?.clientSessionKey;
+    if (clientSessionKey) {
+      this.createdSessionKeys.push(clientSessionKey);
+      if (this.idempotentSessionKeys) {
+        const existing = this.sessionIdsByClientKey.get(clientSessionKey);
+        if (existing) return existing;
+      }
+    }
     if (this.failCreateSessionAfter !== null && this.sessions >= this.failCreateSessionAfter) {
       throw new Error("claude bridge authentication is unavailable");
     }
     this.sessions += 1;
-    return `session-${this.sessions}`;
+    const sessionId = `session-${this.sessions}`;
+    if (clientSessionKey) this.sessionIdsByClientKey.set(clientSessionKey, sessionId);
+    return sessionId;
   }
   async prepareDispatch(sessionId: string) {
     this.attached.push(sessionId);
@@ -2786,6 +2799,7 @@ test("MultiReviewService bounds a blocked fix model", async () => {
 
 test("MultiReviewService retries a failed reviewer without stranding its provider session", async () => {
   const provider = new Provider(false);
+  provider.idempotentSessionKeys = true;
   await withService("env-retry-reviewer", provider, async ({ service, start, snapshot }) => {
     const started = await start();
     for (let attempt = 0; attempt < 7; attempt++) await service.advanceNow(started.id);
@@ -2833,6 +2847,7 @@ test("MultiReviewService does not abort an interactive fix session on cancel", a
 
 test("MultiReviewService retries a failed consolidation with a fresh fix session", async () => {
   const provider = new Provider();
+  provider.idempotentSessionKeys = true;
   provider.statusOverrides.set("session-2", "error");
   await withService("env-retry-consolidate", provider, async ({ service, start, snapshot }) => {
     const started = await start();
@@ -3297,6 +3312,242 @@ test("MultiReviewService consolidates from the reviewers left after one is stopp
     expect(consolidation.prompt).toContain(ready.reviewers[1]!.id);
     expect(consolidation.prompt).not.toContain(ready.reviewers[0]!.id);
   });
+});
+
+test("MultiReviewService restarts only the selected reviewer in a fresh session", async () => {
+  const provider = new Provider();
+  provider.idempotentSessionKeys = true;
+  provider.statusValue = "running";
+  await withService("env-restart-reviewer", provider, async ({ service, start, snapshot }) => {
+    const started = await start([
+      { agent: "claude", model: "opus" },
+      { agent: "claude", model: "sonnet" },
+    ]);
+    await service.advanceNow(started.id);
+    const running = (await snapshot(started.id))!;
+    const first = running.reviewers[0]!;
+    const second = running.reviewers[1]!;
+    const firstSessionKey = first.sessionKey!;
+
+    const restarted = await service.restartReviewer(started.id, first.id);
+    expect(provider.aborted).toContain(first.providerSessionId!);
+    expect(restarted.reviewers[0]).toMatchObject({ id: first.id, status: "pending" });
+    expect(restarted.reviewers[0]?.providerSessionId).toBeUndefined();
+    expect(restarted.reviewers[0]?.sessionKey).not.toBe(firstSessionKey);
+    expect(restarted.reviewers[0]?.startedAt).toBeUndefined();
+    expect(restarted.reviewers[1]).toMatchObject({
+      id: second.id,
+      status: "running",
+      providerSessionId: second.providerSessionId,
+    });
+
+    await waitUntil(async () => {
+      await service.advanceNow(started.id);
+      const reviewer = (await snapshot(started.id))?.reviewers[0];
+      return (
+        reviewer?.status === "running" && reviewer.providerSessionId !== first.providerSessionId
+      );
+    });
+    const fresh = (await snapshot(started.id))!.reviewers[0]!;
+    expect(fresh.providerSessionId).not.toBe(first.providerSessionId);
+    expect(provider.createdSessionKeys).toContain(firstSessionKey);
+    expect(provider.createdSessionKeys).toContain(fresh.sessionKey!);
+    const latestPrompt = [...provider.sends.values()].at(-1)?.prompt;
+    expect(latestPrompt).toContain("You are independent reviewer 1 of 2");
+    expect(latestPrompt).not.toBe("Please continue");
+  });
+});
+
+test("MultiReviewService rewinds consolidation when a completed reviewer is restarted", async () => {
+  const provider = new Provider();
+  provider.idempotentSessionKeys = true;
+  await withService(
+    "env-restart-ready-reviewer",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const ready = (await snapshot(started.id))!;
+      const reviewerSessionId = ready.reviewers[0]!.providerSessionId!;
+      const fixSessionId = ready.fixSession!.providerSessionId;
+      const reviewerSessionKey = ready.reviewers[0]!.sessionKey!;
+      const fixKey = ready.fixSession!.sessionKey;
+
+      const restarted = await service.restartReviewer(started.id, ready.reviewers[0]!.id);
+      expect(restarted.phase).toBe("reviewing");
+      expect(restarted.reviewers[0]).toMatchObject({ status: "pending" });
+      expect(restarted.reviewers[0]?.report).toBeUndefined();
+      expect(restarted.consolidatedReport).toBeUndefined();
+      expect(restarted.fixSession).toBeUndefined();
+      expect(restarted.activeRequest).toBeUndefined();
+      expect(restarted.reviewers[0]?.sessionKey).not.toBe(reviewerSessionKey);
+      expect(restarted.fixSessionKey).not.toBe(fixKey);
+      expect(provider.aborted).toEqual(expect.arrayContaining([reviewerSessionId, fixSessionId]));
+
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const reconsolidated = (await snapshot(started.id))!;
+      expect(reconsolidated.reviewers[0]?.providerSessionId).not.toBe(reviewerSessionId);
+      expect(reconsolidated.fixSession?.providerSessionId).not.toBe(fixSessionId);
+      expect(reconsolidated.fixSession?.sessionKey).toBe(restarted.fixSessionKey);
+    },
+  );
+});
+
+test("MultiReviewService preserves fix work when an incomplete fix result failed", async () => {
+  const provider = new Provider();
+  provider.fixComplete = false;
+  await withService("env-restart-after-fix", provider, async ({ service, storage, snapshot }) => {
+    const workflowId = await seedLegacyFixingWorkflow(storage, "env-restart-after-fix");
+    await waitUntil(async () => {
+      await service.advanceNow(workflowId);
+      return (await snapshot(workflowId))?.phase === "failed";
+    });
+    const failed = (await snapshot(workflowId))!;
+    const reviewerId = failed.reviewers[0]!.id;
+    const before = {
+      consolidatedReport: failed.consolidatedReport,
+      fixSession: failed.fixSession,
+      fixResult: failed.fixResult,
+    };
+
+    await expect(service.restartReviewer(workflowId, reviewerId)).rejects.toThrow(
+      "after fix work begins",
+    );
+    expect(await snapshot(workflowId)).toMatchObject(before);
+    expect(provider.aborted).toEqual([]);
+
+    const claim = await storage.claimMultiReviewController(workflowId, "other-owner", 15_000);
+    expect(claim.granted).toBe(true);
+  });
+});
+
+test("MultiReviewService unsticks a reviewer in the same session with a continuation prompt", async () => {
+  const provider = new Provider();
+  provider.statusValue = "running";
+  const abort = provider.abort.bind(provider);
+  provider.abort = async (sessionId: string) => {
+    await abort(sessionId);
+    provider.statusOverrides.set(sessionId, "idle");
+  };
+  await withService("env-unstick-reviewer", provider, async ({ service, start, snapshot }) => {
+    const started = await start();
+    await service.advanceNow(started.id);
+    const running = (await snapshot(started.id))!.reviewers[0]!;
+    const oldRequestId = running.requestId!;
+
+    const unstuck = await service.unstickReviewer(started.id, running.id);
+    expect(provider.aborted).toEqual([running.providerSessionId!]);
+    expect(unstuck.reviewers[0]).toMatchObject({
+      status: "running",
+      providerSessionId: running.providerSessionId,
+      dispatchState: "prepared",
+      continuationPrompt: "Please continue",
+    });
+    expect(unstuck.reviewers[0]?.requestId).not.toBe(oldRequestId);
+
+    await waitUntil(() =>
+      [...provider.sends.values()].some((entry) => entry.prompt === "Please continue"),
+    );
+    const continued = [...provider.sends.entries()].find(
+      ([, entry]) => entry.prompt === "Please continue",
+    );
+    expect(continued?.[1].options.schema).toBe(STRUCTURED_REVIEW_REPORT_JSON_SCHEMA);
+    expect((await snapshot(started.id))?.reviewers[0]?.providerSessionId).toBe(
+      running.providerSessionId,
+    );
+  });
+});
+
+test("MultiReviewService refuses to unstick a missing or failed provider session", async () => {
+  for (const providerStatus of ["missing", "error"] as const) {
+    const provider = new Provider();
+    provider.statusValue = "running";
+    await withService(
+      `env-unstick-${providerStatus}`,
+      provider,
+      async ({ service, start, snapshot }) => {
+        const started = await start();
+        await service.advanceNow(started.id);
+        const running = (await snapshot(started.id))!.reviewers[0]!;
+        const requestId = running.requestId;
+        provider.abort = async (sessionId: string) => {
+          provider.aborted.push(sessionId);
+          if (providerStatus === "missing") {
+            provider.statusOverrides.set(sessionId, "missing");
+          } else {
+            provider.sessionFailures.set(sessionId, "the provider turn failed");
+          }
+        };
+
+        await expect(service.unstickReviewer(started.id, running.id)).rejects.toThrow(
+          "restart this reviewer instead",
+        );
+        expect((await snapshot(started.id))?.reviewers[0]).toMatchObject({
+          requestId,
+          dispatchState: "sent",
+        });
+        expect((await snapshot(started.id))?.reviewers[0]?.continuationPrompt).toBeUndefined();
+      },
+    );
+  }
+});
+
+test("MultiReviewService releases a settled workflow claim after Unstick is rejected", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-unstick-settled",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+
+      await expect(service.unstickReviewer(started.id, reviewer.id)).rejects.toThrow(
+        "only be unstuck while review is running",
+      );
+      const claim = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+      expect(claim.granted).toBe(true);
+    },
+  );
+});
+
+test("MultiReviewService releases a settled workflow claim when restart saving fails", async () => {
+  const provider = new Provider();
+  await withService(
+    "env-restart-save-failure",
+    provider,
+    async ({ service, storage, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const reviewer = (await snapshot(started.id))!.reviewers[0]!;
+      const originalSave = storage.saveMultiReviewWorkflow.bind(storage);
+      storage.saveMultiReviewWorkflow = (async () => {
+        throw new Error("Durable write rejected");
+      }) as typeof storage.saveMultiReviewWorkflow;
+      try {
+        await expect(service.restartReviewer(started.id, reviewer.id)).rejects.toThrow(
+          "Durable write rejected",
+        );
+      } finally {
+        storage.saveMultiReviewWorkflow = originalSave;
+      }
+
+      const claim = await storage.claimMultiReviewController(started.id, "other-owner", 15_000);
+      expect(claim.granted).toBe(true);
+    },
+  );
 });
 
 test("MultiReviewService leaves a settled reviewer alone and releases its stop claim", async () => {

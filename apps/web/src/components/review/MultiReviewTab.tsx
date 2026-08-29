@@ -5,7 +5,9 @@ import {
   CheckCircle2,
   Circle,
   Loader2,
+  Play,
   RefreshCw,
+  RotateCcw,
   Square,
   Wrench,
 } from "lucide-react";
@@ -16,6 +18,12 @@ import {
 } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { StructuredReviewReportView } from "./StructuredReviewReportView";
 import { StackedEyes } from "./MultiReviewLaunchDialog";
@@ -33,6 +41,8 @@ interface MultiReviewCommands {
   retry: (workflowId: string) => Promise<MultiReviewWorkflow>;
   cancel: (workflowId: string) => Promise<MultiReviewWorkflow>;
   stopReviewer: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
+  restartReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
+  unstickReviewer?: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
 }
 
 const defaultCommands: MultiReviewCommands = {
@@ -40,6 +50,8 @@ const defaultCommands: MultiReviewCommands = {
   retry: backend.retryMultiReview,
   cancel: backend.cancelMultiReview,
   stopReviewer: backend.stopMultiReviewReviewer,
+  restartReviewer: backend.restartMultiReviewReviewer,
+  unstickReviewer: backend.unstickMultiReviewReviewer,
 };
 
 interface MultiReviewTabProps {
@@ -153,6 +165,10 @@ function MultiReviewOverviewTab({
   const [openAfterDelivery, setOpenAfterDelivery] = useState(false);
   const [pending, setPending] = useState(false);
   const [stoppingReviewerId, setStoppingReviewerId] = useState<string | null>(null);
+  const [reviewerAction, setReviewerAction] = useState<{
+    reviewerId: string;
+    kind: "restart" | "unstick";
+  } | null>(null);
   const [customFixPromptOpen, setCustomFixPromptOpen] = useState(false);
   const [customFixError, setCustomFixError] = useState<string | null>(null);
   const modelCatalog = useReviewModelCatalog(workflow?.projectId ?? "", customFixPromptOpen);
@@ -241,7 +257,7 @@ function MultiReviewOverviewTab({
    * authoritative snapshot that already excludes this one.
    */
   const stopReviewer = async (reviewerId: string) => {
-    if (stoppingReviewerId !== null || !workflow) return;
+    if (stoppingReviewerId !== null || reviewerAction !== null || pending || !workflow) return;
     setStoppingReviewerId(reviewerId);
     setError(null);
     try {
@@ -250,6 +266,24 @@ function MultiReviewOverviewTab({
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setStoppingReviewerId(null);
+    }
+  };
+
+  const runReviewerAction = async (
+    reviewerId: string,
+    kind: "restart" | "unstick",
+    command: MultiReviewCommands["restartReviewer"] | MultiReviewCommands["unstickReviewer"],
+  ) => {
+    if (!workflow || !command || reviewerAction !== null || stoppingReviewerId !== null || pending)
+      return;
+    setReviewerAction({ reviewerId, kind });
+    setError(null);
+    try {
+      replaceWorkflow(await command(workflow.id, reviewerId));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setReviewerAction(null);
     }
   };
 
@@ -405,77 +439,126 @@ function MultiReviewOverviewTab({
               {workflow.reviewers.map((reviewer, index) => {
                 const note = reviewerStatusNote(reviewer);
                 const stoppable = reviewer.status === "pending" || reviewer.status === "running";
+                const canRestart =
+                  (workflow.phase === "reviewing" ||
+                    workflow.phase === "consolidating" ||
+                    workflow.phase === "ready" ||
+                    workflow.phase === "failed") &&
+                  workflow.reviewSnapshotStale !== true &&
+                  workflow.fixResult === undefined &&
+                  !(workflow.phase === "failed" && workflow.consolidatedReport !== undefined);
+                const canUnstick =
+                  workflow.phase === "reviewing" &&
+                  reviewer.status === "running" &&
+                  Boolean(reviewer.providerSessionId) &&
+                  reviewer.dispatchState === "sent";
+                const actionPending = reviewerAction?.reviewerId === reviewer.id;
+                const reviewerActionsBlocked =
+                  reviewerAction !== null || stoppingReviewerId !== null || pending;
                 return (
-                  <div
-                    key={reviewer.id}
-                    className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35"
-                  >
-                    <button
-                      type="button"
-                      disabled={!reviewer.providerSessionId || (!openReviewer && !createTab)}
-                      aria-label={`Open Reviewer ${index + 1} transcript`}
-                      className="flex min-w-0 flex-1 items-center gap-2.5 rounded-l-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
-                      onClick={() => {
-                        if (openReviewer) {
-                          openReviewer(reviewer.id, index);
-                          return;
-                        }
-                        createTab?.("multi-review", {
-                          multiReviewId: workflow.id,
-                          multiReviewReviewerId: reviewer.id,
-                          displayTitle: `Reviewer ${index + 1}`,
-                        });
-                      }}
-                    >
-                      {reviewer.status === "completed" ? (
-                        <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
-                      ) : reviewer.status === "failed" ? (
-                        <AlertCircle className="size-4 shrink-0 text-destructive" />
-                      ) : reviewer.status === "cancelled" ? (
-                        <Square className="size-4 shrink-0 text-muted-foreground" />
-                      ) : reviewer.status === "running" ? (
-                        <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />
-                      ) : (
-                        <Circle className="size-4 shrink-0 text-muted-foreground" />
-                      )}
-                      <div className="min-w-0">
-                        <p className="truncate text-xs font-medium">
-                          Reviewer {index + 1} · {reviewer.agent}
-                        </p>
-                        <p className="truncate text-[11px] text-muted-foreground">
-                          {reviewer.model}
-                          {reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}
-                        </p>
-                        {/* The workflow error generalizes a shared cause; this is
+                  <ContextMenu key={reviewer.id}>
+                    <ContextMenuTrigger asChild>
+                      <div className="flex items-center rounded-lg border border-border/45 bg-background/40 transition-colors has-[button:enabled:hover]:border-cyan-400/35">
+                        <button
+                          type="button"
+                          disabled={!reviewer.providerSessionId || (!openReviewer && !createTab)}
+                          aria-label={`Open Reviewer ${index + 1} transcript`}
+                          className="flex min-w-0 flex-1 items-center gap-2.5 rounded-l-lg px-3 py-2.5 text-left transition-colors enabled:cursor-pointer enabled:hover:bg-cyan-500/5 disabled:cursor-default"
+                          onClick={() => {
+                            if (openReviewer) {
+                              openReviewer(reviewer.id, index);
+                              return;
+                            }
+                            createTab?.("multi-review", {
+                              multiReviewId: workflow.id,
+                              multiReviewReviewerId: reviewer.id,
+                              displayTitle: `Reviewer ${index + 1}`,
+                            });
+                          }}
+                        >
+                          {reviewer.status === "completed" ? (
+                            <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />
+                          ) : reviewer.status === "failed" ? (
+                            <AlertCircle className="size-4 shrink-0 text-destructive" />
+                          ) : reviewer.status === "cancelled" ? (
+                            <Square className="size-4 shrink-0 text-muted-foreground" />
+                          ) : reviewer.status === "running" ? (
+                            <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />
+                          ) : (
+                            <Circle className="size-4 shrink-0 text-muted-foreground" />
+                          )}
+                          <div className="min-w-0">
+                            <p className="truncate text-xs font-medium">
+                              Reviewer {index + 1} · {reviewer.agent}
+                            </p>
+                            <p className="truncate text-[11px] text-muted-foreground">
+                              {reviewer.model}
+                              {reviewer.reasoningEffort ? ` · ${reviewer.reasoningEffort}` : ""}
+                            </p>
+                            {/* The workflow error generalizes a shared cause; this is
                             the only place the reviewer's own outcome is legible. */}
-                        {note ? (
-                          <p
-                            className={`truncate text-[11px] ${NOTE_TONE_CLASS[note.tone]}`}
-                            title={note.text}
+                            {note ? (
+                              <p
+                                className={`truncate text-[11px] ${NOTE_TONE_CLASS[note.tone]}`}
+                                title={note.text}
+                              >
+                                {note.text}
+                              </p>
+                            ) : null}
+                          </div>
+                        </button>
+                        {stoppable && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="mr-1.5 size-7 shrink-0 text-muted-foreground hover:text-destructive"
+                            aria-label={`Stop Reviewer ${index + 1}`}
+                            title="Stop this reviewer; the review continues without it"
+                            disabled={reviewerActionsBlocked}
+                            onClick={() => void stopReviewer(reviewer.id)}
                           >
-                            {note.text}
-                          </p>
-                        ) : null}
-                      </div>
-                    </button>
-                    {stoppable && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="mr-1.5 size-7 shrink-0 text-muted-foreground hover:text-destructive"
-                        aria-label={`Stop Reviewer ${index + 1}`}
-                        title="Stop this reviewer; the review continues without it"
-                        disabled={stoppingReviewerId !== null}
-                        onClick={() => void stopReviewer(reviewer.id)}
-                      >
-                        {stoppingReviewerId === reviewer.id ? (
-                          <Loader2 className="size-3.5 animate-spin" />
-                        ) : (
-                          <Square className="size-3.5" />
+                            {stoppingReviewerId === reviewer.id ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : (
+                              <Square className="size-3.5" />
+                            )}
+                          </Button>
                         )}
-                      </Button>
-                    )}
-                  </div>
+                      </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className="w-44">
+                      <ContextMenuItem
+                        disabled={
+                          !canRestart || reviewerActionsBlocked || !commands.restartReviewer
+                        }
+                        onSelect={() =>
+                          void runReviewerAction(reviewer.id, "restart", commands.restartReviewer)
+                        }
+                      >
+                        {actionPending && reviewerAction.kind === "restart" ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <RotateCcw />
+                        )}
+                        Restart
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        disabled={
+                          !canUnstick || reviewerActionsBlocked || !commands.unstickReviewer
+                        }
+                        onSelect={() =>
+                          void runReviewerAction(reviewer.id, "unstick", commands.unstickReviewer)
+                        }
+                      >
+                        {actionPending && reviewerAction.kind === "unstick" ? (
+                          <Loader2 className="animate-spin" />
+                        ) : (
+                          <Play />
+                        )}
+                        Unstick
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                 );
               })}
             </div>

@@ -83,6 +83,11 @@ const { MultiReviewReviewerTab, toMultiReviewReviewerMessages } =
 
 afterEach(cleanup);
 
+async function openTranscriptRefreshMenu() {
+  fireEvent.contextMenu(screen.getByTestId("multi-review-reviewer-transcript-body"));
+  return screen.findByRole("menuitem", { name: "Refresh transcript" });
+}
+
 /** React logs boundary-caught errors through console.error; keep output clean. */
 async function withSilencedReactErrors<T>(run: () => Promise<T> | T): Promise<T> {
   const originalError = console.error;
@@ -213,7 +218,8 @@ describe("MultiReviewReviewerTab message containment", () => {
       expect(screen.getByText("Inspecting the changed files")).toBeTruthy();
       expect(screen.getByText("Running the validation suite")).toBeTruthy();
 
-      fireEvent.click(screen.getByRole("button", { name: "Refresh reviewer transcript" }));
+      expect(screen.queryByRole("button", { name: /Refresh.*transcript/ }) === null).toBe(true);
+      fireEvent.click(await openTranscriptRefreshMenu());
 
       expect(await screen.findByText("Captured the worktree snapshot")).toBeTruthy();
       expect(screen.queryByText(/One message could not be displayed/) === null).toBe(true);

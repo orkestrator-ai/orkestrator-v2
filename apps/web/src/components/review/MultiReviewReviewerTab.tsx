@@ -1,8 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, CheckCircle2, Loader2, RefreshCw, Square } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Play,
+  RefreshCw,
+  RotateCcw,
+  Square,
+} from "lucide-react";
 import type { MultiReviewReviewerTranscript } from "@orkestrator/protocol/multi-review";
 import type { MultiReviewTabData } from "@/types/paneLayout";
 import { Button } from "@/components/ui/button";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   MessageRenderBoundary,
   messageRenderResetKey,
@@ -60,7 +74,8 @@ interface MultiReviewReviewerTabProps {
   isActive: boolean;
   loadTranscript?: typeof backend.getMultiReviewReviewerTranscript;
   stopReviewer?: typeof backend.stopMultiReviewReviewer;
-  retryReview?: typeof backend.retryMultiReview;
+  restartReviewer?: typeof backend.restartMultiReviewReviewer;
+  unstickReviewer?: typeof backend.unstickMultiReviewReviewer;
 }
 
 export function toMultiReviewReviewerMessages(snapshot: MultiReviewReviewerTranscript) {
@@ -90,13 +105,15 @@ export function MultiReviewReviewerTab({
   isActive,
   loadTranscript = backend.getMultiReviewReviewerTranscript,
   stopReviewer = backend.stopMultiReviewReviewer,
-  retryReview = backend.retryMultiReview,
+  restartReviewer = backend.restartMultiReviewReviewer,
+  unstickReviewer = backend.unstickMultiReviewReviewer,
 }: MultiReviewReviewerTabProps) {
   const [snapshot, setSnapshot] = useState<MultiReviewReviewerTranscript | null>(null);
   const [transcriptError, setTranscriptError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [unsticking, setUnsticking] = useState(false);
   const [manualRefreshPending, setManualRefreshPending] = useState(false);
   const requestGeneration = useRef(0);
   const inFlightRequest = useRef<{ generation: number; promise: Promise<void> } | null>(null);
@@ -139,7 +156,7 @@ export function MultiReviewReviewerTab({
   /**
    * A manual refresh is a request for a snapshot newer than the click. If an
    * automatic poll is already running, wait for it and then read once more;
-   * returning the existing promise made the toolbar control silently do
+   * returning the existing promise made the refresh action silently do
    * nothing whenever a slow transcript poll happened to overlap the click.
    */
   const manualRefresh = useCallback(async () => {
@@ -196,17 +213,12 @@ export function MultiReviewReviewerTab({
     }
   }, [data.reviewerId, data.workflowId, fenceRequests, refresh, stopReviewer]);
 
-  /**
-   * A failed workflow can otherwise only be recovered from its overview tab.
-   * Restart it here as well, then discard the stopped/failed transcript snapshot
-   * and read the newly allocated reviewer state from the backend.
-   */
   const restart = useCallback(async () => {
-    if (restarting) return;
+    if (restarting || unsticking || stopping) return;
     setRestarting(true);
     setActionError(null);
     try {
-      replaceWorkflow(await retryReview(data.workflowId));
+      replaceWorkflow(await restartReviewer(data.workflowId, data.reviewerId));
       fenceRequests();
       await refresh();
     } catch (reason) {
@@ -214,7 +226,42 @@ export function MultiReviewReviewerTab({
     } finally {
       setRestarting(false);
     }
-  }, [data.workflowId, fenceRequests, refresh, replaceWorkflow, restarting, retryReview]);
+  }, [
+    data.reviewerId,
+    data.workflowId,
+    fenceRequests,
+    refresh,
+    replaceWorkflow,
+    restartReviewer,
+    restarting,
+    stopping,
+    unsticking,
+  ]);
+
+  const unstick = useCallback(async () => {
+    if (unsticking || restarting || stopping) return;
+    setUnsticking(true);
+    setActionError(null);
+    try {
+      replaceWorkflow(await unstickReviewer(data.workflowId, data.reviewerId));
+      fenceRequests();
+      await refresh();
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setUnsticking(false);
+    }
+  }, [
+    data.reviewerId,
+    data.workflowId,
+    fenceRequests,
+    refresh,
+    replaceWorkflow,
+    restarting,
+    stopping,
+    unsticking,
+    unstickReviewer,
+  ]);
 
   useEffect(() => {
     setSnapshot(null);
@@ -222,6 +269,7 @@ export function MultiReviewReviewerTab({
     setActionError(null);
     setStopping(false);
     setRestarting(false);
+    setUnsticking(false);
     fenceRequests();
   }, [data.reviewerId, data.workflowId, fenceRequests]);
 
@@ -275,6 +323,14 @@ export function MultiReviewReviewerTab({
       : (actionError ?? transcriptError);
   const label = snapshot ? AGENT_LABELS[snapshot.agent] : "Reviewer";
   const stoppable = snapshot?.status === "running" || snapshot?.status === "pending";
+  const restartable =
+    snapshot?.workflowPhase === "reviewing" ||
+    snapshot?.workflowPhase === "consolidating" ||
+    snapshot?.workflowPhase === "ready" ||
+    snapshot?.workflowPhase === "failed";
+  const unstickable =
+    snapshot?.workflowPhase === "reviewing" && running && snapshot.dispatchState === "sent";
+  const lifecycleActionPending = stopping || restarting || unsticking;
   const statusLine = snapshot
     ? snapshot.status === "cancelled"
       ? "Stopped · excluded from the consolidated report"
@@ -285,7 +341,7 @@ export function MultiReviewReviewerTab({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4 py-3 sm:px-5">
+      <header className="@container flex shrink-0 items-center justify-between gap-3 border-b border-border/60 px-4 py-3 sm:px-5">
         <div className="min-w-0">
           <h1 className="truncate text-sm font-semibold">{label} review</h1>
           <p
@@ -306,118 +362,133 @@ export function MultiReviewReviewerTab({
             <Button
               variant="outline"
               size="sm"
-              disabled={stopping}
+              className="px-2 @xl:px-3"
+              disabled={lifecycleActionPending}
               aria-label="Stop this reviewer"
               title="Stop this reviewer; the Multi Review continues without it"
               onClick={() => void stop()}
             >
               {stopping ? (
-                <Loader2 className="mr-2 size-3.5 animate-spin" />
+                <Loader2 className="size-3.5 animate-spin @xl:mr-2" />
               ) : (
-                <Square className="mr-2 size-3.5" />
+                <Square className="size-3.5 @xl:mr-2" />
               )}
-              Stop
+              <span className="hidden @xl:inline">Stop</span>
             </Button>
           )}
-          {snapshot?.workflowPhase === "failed" && (
+          {restartable && (
             <Button
               variant="outline"
               size="sm"
-              disabled={restarting}
-              aria-label="Restart failed review"
-              title="Restart the failed Multi Review stage"
+              className="px-2 @xl:px-3"
+              disabled={lifecycleActionPending}
+              aria-label="Restart reviewer"
+              title="Restart this reviewer from the beginning in a fresh session"
               onClick={() => void restart()}
             >
               {restarting ? (
-                <Loader2 className="mr-2 size-3.5 animate-spin" />
+                <Loader2 className="size-3.5 animate-spin @xl:mr-2" />
               ) : (
-                <RefreshCw className="mr-2 size-3.5" />
+                <RotateCcw className="size-3.5 @xl:mr-2" />
               )}
-              Restart review
+              <span className="hidden @xl:inline">Restart</span>
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8"
-            aria-label="Refresh reviewer transcript"
-            title="Refresh reviewer transcript"
-            disabled={manualRefreshPending}
-            onClick={() => void manualRefresh()}
-          >
-            {manualRefreshPending ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="size-3.5" />
-            )}
-          </Button>
+          {unstickable && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="px-2 @xl:px-3"
+              disabled={lifecycleActionPending}
+              aria-label="Unstick reviewer"
+              title='Stop the current turn, then send "Please continue"'
+              onClick={() => void unstick()}
+            >
+              {unsticking ? (
+                <Loader2 className="size-3.5 animate-spin @xl:mr-2" />
+              ) : (
+                <Play className="size-3.5 @xl:mr-2" />
+              )}
+              <span className="hidden @xl:inline">Unstick</span>
+            </Button>
+          )}
         </div>
       </header>
 
-      <div
-        className="@container flex min-h-0 flex-1 flex-col"
-        data-testid="multi-review-reviewer-transcript-body"
-      >
-        <VirtualizedMessageList
-          messages={messages}
-          computeItemKey={(_index, message) => message.id}
-          resolvePreviousMessage={findPreviousNativeMessage}
-          renderMessage={(_index, message, previous) => (
-            // This read-only view re-reads the whole provider transcript every
-            // few seconds while the reviewer streams, so a frame can hold a
-            // message shape no renderer has seen before. One such message must
-            // degrade to its own row — not hand the entire tab to the view
-            // error boundary — and retries as soon as a poll reports that this
-            // message changed. Keyed on content, not identity: every poll
-            // rebuilds all message objects, so identity would retry a row that
-            // fails deterministically on every interval for the whole review.
-            <MessageRenderBoundary resetKey={messageRenderResetKey(message)}>
-              <NativeMessage
-                message={message}
-                previousMessage={previous}
-                assistantLabel={label}
-                containerId={containerId}
-                agentExpansionScope={data.environmentId}
-                platform={snapshot?.agent}
-              />
-            </MessageRenderBoundary>
-          )}
-          emptyState={
-            <div className="px-6 py-12 text-center text-sm text-muted-foreground">
-              {error
-                ? error
-                : running
-                  ? "The review is running. Its authoritative transcript will appear here as it is synchronized."
-                  : snapshot
-                    ? "No text transcript was produced for this review."
-                    : "Loading reviewer transcript…"}
-            </div>
-          }
-          footer={
-            snapshot?.report ? (
-              <div className="px-3 py-3 @sm:px-6">
-                <StructuredReviewReportView
-                  className="mx-auto max-w-3xl"
-                  report={snapshot.report}
-                  heading="Reviewer report"
-                  collapsibleSections
-                  showRawJson={false}
-                />
-              </div>
-            ) : error && messages.length > 0 ? (
-              <div className="mx-3 mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive @sm:mx-6">
-                {error}
-              </div>
-            ) : undefined
-          }
-          scrollProps={scrollProps}
-          virtuosoRef={virtuosoRef}
-          find={{
-            isActive,
-            getSearchText: getNativeMessageSearchText,
-          }}
-        />
-      </div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            className="@container flex min-h-0 flex-1 flex-col"
+            data-testid="multi-review-reviewer-transcript-body"
+          >
+            <VirtualizedMessageList
+              messages={messages}
+              computeItemKey={(_index, message) => message.id}
+              resolvePreviousMessage={findPreviousNativeMessage}
+              renderMessage={(_index, message, previous) => (
+                // This read-only view re-reads the whole provider transcript every
+                // few seconds while the reviewer streams, so a frame can hold a
+                // message shape no renderer has seen before. One such message must
+                // degrade to its own row — not hand the entire tab to the view
+                // error boundary — and retries as soon as a poll reports that this
+                // message changed. Keyed on content, not identity: every poll
+                // rebuilds all message objects, so identity would retry a row that
+                // fails deterministically on every interval for the whole review.
+                <MessageRenderBoundary resetKey={messageRenderResetKey(message)}>
+                  <NativeMessage
+                    message={message}
+                    previousMessage={previous}
+                    assistantLabel={label}
+                    containerId={containerId}
+                    agentExpansionScope={data.environmentId}
+                    platform={snapshot?.agent}
+                  />
+                </MessageRenderBoundary>
+              )}
+              emptyState={
+                <div className="px-6 py-12 text-center text-sm text-muted-foreground">
+                  {error
+                    ? error
+                    : running
+                      ? "The review is running. Its authoritative transcript will appear here as it is synchronized."
+                      : snapshot
+                        ? "No text transcript was produced for this review."
+                        : "Loading reviewer transcript…"}
+                </div>
+              }
+              footer={
+                snapshot?.report ? (
+                  <div className="px-3 py-3 @sm:px-6">
+                    <StructuredReviewReportView
+                      className="mx-auto max-w-3xl"
+                      report={snapshot.report}
+                      heading="Reviewer report"
+                      collapsibleSections
+                      showRawJson={false}
+                    />
+                  </div>
+                ) : error && messages.length > 0 ? (
+                  <div className="mx-3 mb-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive @sm:mx-6">
+                    {error}
+                  </div>
+                ) : undefined
+              }
+              scrollProps={scrollProps}
+              virtuosoRef={virtuosoRef}
+              find={{
+                isActive,
+                getSearchText: getNativeMessageSearchText,
+              }}
+            />
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-48">
+          <ContextMenuItem disabled={manualRefreshPending} onSelect={() => void manualRefresh()}>
+            {manualRefreshPending ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            Refresh transcript
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </div>
   );
 }

@@ -228,6 +228,24 @@ export function registerReviewWorkflowCommands(
       )
       .then(stripLoopedReviewSnapshotSecrets);
   });
+  register("restart_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    return context.multiReviews
+      .restartReviewer(
+        asNonBlankString(workflowId, "workflowId"),
+        asNonBlankString(reviewerId, "reviewerId"),
+      )
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("unstick_multi_review_reviewer", ({ workflowId, reviewerId }, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    return context.multiReviews
+      .unstickReviewer(
+        asNonBlankString(workflowId, "workflowId"),
+        asNonBlankString(reviewerId, "reviewerId"),
+      )
+      .then(stripLoopedReviewSnapshotSecrets);
+  });
   register("cancel_multi_review", ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     return context.multiReviews

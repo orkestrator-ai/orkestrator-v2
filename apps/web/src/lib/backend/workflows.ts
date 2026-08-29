@@ -185,6 +185,26 @@ export async function stopMultiReviewReviewer(
   });
 }
 
+export async function restartMultiReviewReviewer(
+  workflowId: string,
+  reviewerId: string,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("restart_multi_review_reviewer", {
+    workflowId,
+    reviewerId,
+  });
+}
+
+export async function unstickMultiReviewReviewer(
+  workflowId: string,
+  reviewerId: string,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("unstick_multi_review_reviewer", {
+    workflowId,
+    reviewerId,
+  });
+}
+
 export async function getMultiReviewWorkflow<T = unknown>(
   workflowId: string,
 ): Promise<PersistedLoopedReviewWorkflow<T> | null> {

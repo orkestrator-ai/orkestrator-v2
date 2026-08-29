@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   MULTI_REVIEW_WORKFLOW_VERSION,
+  MULTI_REVIEW_UNSTICK_PROMPT,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
@@ -27,6 +28,7 @@ import {
   type BridgeConnection,
   type BuildPipelineProvider,
   type ProviderDependencies,
+  type ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA, parseFixResult } from "./looped-review-prompts.js";
@@ -79,6 +81,18 @@ function nowIso(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function reviewerSessionKey(workflowId: string, reviewerId: string): string {
+  return `multi-review:${workflowId}:reviewer:${reviewerId}`;
+}
+
+function fixSessionKey(workflowId: string): string {
+  return `multi-review:${workflowId}:fix`;
+}
+
+function rotatedSessionKey(base: string): string {
+  return `${base}:restart:${randomUUID()}`;
 }
 
 class FixResultValidationError extends Error {
@@ -262,6 +276,7 @@ export class MultiReviewService {
       model: reviewer.model,
       ...(reviewer.reasoningEffort ? { reasoningEffort: reviewer.reasoningEffort } : {}),
       status: reviewer.status,
+      ...(reviewer.dispatchState ? { dispatchState: reviewer.dispatchState } : {}),
       messages,
       ...(reviewer.report ? { report: reviewer.report } : {}),
       ...(reviewer.error ? { error: reviewer.error } : {}),
@@ -376,7 +391,7 @@ export class MultiReviewService {
           delete reviewer.error;
           delete reviewer.report;
           delete reviewer.providerSessionId;
-          delete reviewer.sessionKey;
+          reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
           delete reviewer.requestId;
           delete reviewer.dispatchState;
           delete reviewer.schemaRepairAttempts;
@@ -395,6 +410,7 @@ export class MultiReviewService {
         );
         workflow.reviewWorktreeSnapshot = replacement;
         workflow.phase = "reviewing";
+        workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
         delete workflow.reviewSnapshotStale;
         delete workflow.fixSession;
         delete workflow.activeRequest;
@@ -430,7 +446,7 @@ export class MultiReviewService {
             reviewer.status = "pending";
             delete reviewer.error;
             delete reviewer.providerSessionId;
-            delete reviewer.sessionKey;
+            reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
             delete reviewer.requestId;
             delete reviewer.dispatchState;
             delete reviewer.schemaRepairAttempts;
@@ -455,6 +471,7 @@ export class MultiReviewService {
             workflow.fixSession?.providerSessionId,
           );
           workflow.phase = "consolidating";
+          workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
           delete workflow.fixSession;
           delete workflow.activeRequest;
         }
@@ -519,6 +536,141 @@ export class MultiReviewService {
         // forgets every live progress clock and drops the workflow's provider
         // users — the reviewers still running are using both.
         if (!handedToSupervisor && !isSupervisedPhase(workflow.phase)) {
+          await this.release(workflow, token);
+        }
+      }
+    });
+  }
+
+  /** Discard one reviewer's session and run that reviewer again from its original prompt. */
+  async restartReviewer(workflowId: string, reviewerId: string): Promise<MultiReviewWorkflow> {
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      const phaseAtClaim = workflow.phase;
+      let handedToSupervisor = false;
+      try {
+        const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
+        if (!reviewer) throw new Error(`Multi review reviewer not found: ${reviewerId}`);
+        if (
+          workflow.phase !== "reviewing" &&
+          workflow.phase !== "consolidating" &&
+          workflow.phase !== "ready" &&
+          workflow.phase !== "failed"
+        ) {
+          throw new Error("A reviewer can no longer be restarted after fix work begins");
+        }
+        if (workflow.reviewSnapshotStale === true) {
+          throw new Error("Restart the full Multi Review to review the updated worktree snapshot");
+        }
+        if (
+          workflow.fixResult !== undefined ||
+          (workflow.phase === "failed" && workflow.consolidatedReport !== undefined)
+        ) {
+          throw new Error("A reviewer can no longer be restarted after fix work begins");
+        }
+
+        await this.abandonSession(workflow, reviewer, reviewer.providerSessionId);
+        if (reviewer.providerSessionId) this.progress.forget(reviewer.providerSessionId);
+        // Consolidation is derived from the reviewer reports. Once any input is
+        // restarted, its session/result can no longer remain authoritative.
+        await this.abandonSession(
+          workflow,
+          workflow.fixModel,
+          workflow.fixSession?.providerSessionId,
+        );
+        if (workflow.fixSession) this.progress.forget(workflow.fixSession.providerSessionId);
+        reviewer.status = "pending";
+        delete reviewer.providerSessionId;
+        reviewer.sessionKey = rotatedSessionKey(reviewerSessionKey(workflow.id, reviewer.id));
+        delete reviewer.requestId;
+        delete reviewer.dispatchState;
+        delete reviewer.schemaRepairAttempts;
+        delete reviewer.schemaRepairPrompt;
+        delete reviewer.continuationPrompt;
+        delete reviewer.idleResultPolls;
+        delete reviewer.progressAt;
+        delete reviewer.progressDigest;
+        delete reviewer.stalledSince;
+        delete reviewer.report;
+        delete reviewer.error;
+        delete reviewer.startedAt;
+        delete reviewer.completedAt;
+        workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
+        workflow.phase = "reviewing";
+        delete workflow.fixSession;
+        delete workflow.activeRequest;
+        delete workflow.consolidatedReport;
+        delete workflow.fixResult;
+        delete workflow.addressPromptPending;
+        delete workflow.addressPromptAttempts;
+        delete workflow.error;
+        const saved = await this.save(workflow, token);
+        handedToSupervisor = true;
+        void this.advanceNow(workflowId);
+        return saved;
+      } finally {
+        if (!handedToSupervisor && !isSupervisedPhase(phaseAtClaim)) {
+          await this.release(workflow, token);
+        }
+      }
+    });
+  }
+
+  /** Abort a wedged turn, then continue in the same reviewer session. */
+  async unstickReviewer(workflowId: string, reviewerId: string): Promise<MultiReviewWorkflow> {
+    return this.withLock(workflowId, async () => {
+      const controlled = await this.loadControlled(workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${workflowId}`);
+      const { workflow, token } = controlled;
+      const phaseAtClaim = workflow.phase;
+      let handedToSupervisor = false;
+      try {
+        const reviewer = workflow.reviewers.find((entry) => entry.id === reviewerId);
+        if (!reviewer) throw new Error(`Multi review reviewer not found: ${reviewerId}`);
+        if (workflow.phase !== "reviewing") {
+          throw new Error("A reviewer can only be unstuck while review is running");
+        }
+        if (
+          reviewer.status !== "running" ||
+          !reviewer.providerSessionId ||
+          reviewer.dispatchState !== "sent"
+        ) {
+          throw new Error("This reviewer does not have a running turn to unstick");
+        }
+
+        const stopped = await this.abortSession(
+          workflow,
+          token,
+          reviewer.providerSessionId,
+          reviewer,
+        );
+        if (!stopped.settled) {
+          throw new Error(`The reviewer could not be stopped: ${stopped.error}`);
+        }
+        if (stopped.status !== "idle") {
+          throw new Error(
+            "The reviewer session is no longer reusable; restart this reviewer instead",
+          );
+        }
+        this.progress.forget(reviewer.providerSessionId);
+        reviewer.requestId = randomUUID();
+        reviewer.dispatchState = "prepared";
+        reviewer.continuationPrompt = MULTI_REVIEW_UNSTICK_PROMPT;
+        delete reviewer.schemaRepairPrompt;
+        delete reviewer.idleResultPolls;
+        delete reviewer.progressAt;
+        delete reviewer.progressDigest;
+        delete reviewer.stalledSince;
+        delete reviewer.error;
+        delete reviewer.completedAt;
+        const saved = await this.save(workflow, token);
+        handedToSupervisor = true;
+        void this.advanceNow(workflowId);
+        return saved;
+      } finally {
+        if (!handedToSupervisor && !isSupervisedPhase(phaseAtClaim)) {
           await this.release(workflow, token);
         }
       }
@@ -899,6 +1051,7 @@ export class MultiReviewService {
           if (workflow.fixSession?.providerSessionId) {
             this.progress.forget(workflow.fixSession.providerSessionId);
           }
+          workflow.fixSessionKey = rotatedSessionKey(fixSessionKey(workflow.id));
           delete workflow.fixSession;
         }
         workflow.error = nextError;
@@ -975,7 +1128,7 @@ export class MultiReviewService {
     token: string,
     providerSessionId: string,
     selection: MultiReviewModelSelection,
-  ): Promise<{ settled: boolean; error: string }> {
+  ): Promise<{ settled: boolean; error: string; status?: ProviderStatus }> {
     try {
       const provider = await this.provider(workflow, selection);
       await this.assertFence(workflow.id, token);
@@ -994,11 +1147,12 @@ export class MultiReviewService {
         const { status } = await readProviderStatus(provider, providerSessionId);
         await this.assertFence(workflow.id, token);
         if (status === "idle" || status === "missing" || status === "error") {
-          return { settled: true, error: "" };
+          return { settled: true, error: "", status };
         }
         return {
           settled: false,
           error: abortError ? errorMessage(abortError) : `provider still reports ${status}`,
+          status,
         };
       } catch (statusError) {
         if (statusError instanceof ControllerFenceError) throw statusError;
@@ -1048,7 +1202,8 @@ export class MultiReviewService {
       targetBranch: workflow.targetBranch,
       reviewInstruction: workflow.reviewInstruction,
       label: "Multi Review",
-      sessionKeyFor: (reviewer) => `multi-review:${workflow.id}:reviewer:${reviewer.id}`,
+      sessionKeyFor: (reviewer) =>
+        reviewer.sessionKey ?? reviewerSessionKey(workflow.id, reviewer.id),
       sessionLabelFor: (_reviewer, index) => `Multi Review · Reviewer ${index + 1}`,
       provider: (selection) => this.provider(workflow, selection),
       save: async () => {
@@ -1142,7 +1297,7 @@ export class MultiReviewService {
     const provider = await this.provider(workflow, workflow.fixModel);
     await this.assertFence(workflow.id, token);
     if (!workflow.fixSession) {
-      const sessionKey = `multi-review:${workflow.id}:fix`;
+      const sessionKey = workflow.fixSessionKey ?? fixSessionKey(workflow.id);
       const providerSessionId = await provider.createSession(
         "review",
         "Multi Review · Consolidation",
@@ -1170,6 +1325,7 @@ export class MultiReviewService {
         status: "running",
         startedAt: nowIso(),
       };
+      workflow.fixSessionKey = sessionKey;
       await this.save(workflow, token);
     }
     const session = workflow.fixSession;

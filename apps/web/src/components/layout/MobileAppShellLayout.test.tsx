@@ -81,33 +81,38 @@ describe("MobileAppShellLayout", () => {
     );
   });
 
-  test("places agent information immediately left of the tools spanner", () => {
+  test("places the tools spanner third from the right without overlapping the other actions", () => {
     /*
      * No CSS is compiled under `bun test`, so restating the Tailwind offset
-     * literals proves nothing — the button could be anywhere. What is testable
-     * is the structure: both controls are right-anchored siblings of the title
-     * bar, the info slot sits directly beside the tools trigger with nothing
-     * between them, and its offset from the right edge is the larger of the two.
+     * literals proves nothing — the buttons could be anywhere. What is testable
+     * is the structure: all three controls share one trailing flex row, the
+     * tools trigger precedes the inbox and information controls, and the title
+     * flexes into the space that row leaves available.
      */
-    const { container } = renderLayout();
+    const { container } = renderLayout({
+      agentInfoButton: (
+        <>
+          <button type="button">Agent inbox</button>
+          <button type="button">Agent info</button>
+        </>
+      ),
+    });
 
     const titleBar = container.querySelector<HTMLElement>("div[data-backend-drag-region]")!;
     const tools = screen.getByRole("button", { name: "Open tools" });
     const slot = screen.getByTestId("mobile-agent-info-slot");
+    const actions = screen.getByTestId("mobile-title-actions");
+    const title = screen.getByRole("button", { name: "pgstack1 - feature-auth" });
 
     expect(slot.contains(screen.getByRole("button", { name: "Agent info" }))).toBe(true);
-    expect(tools.parentElement).toBe(titleBar);
-    expect(slot.parentElement).toBe(titleBar);
+    expect(slot.contains(screen.getByRole("button", { name: "Agent inbox" }))).toBe(true);
+    expect(actions.parentElement).toBe(titleBar);
+    expect(tools.parentElement).toBe(actions);
     expect(tools.nextElementSibling).toBe(slot);
-
-    const rightOffset = (element: Element): number => {
-      const match = [...element.classList].find((name) => /^right-\d/.test(name));
-      expect(match).toBeTruthy();
-      // Right-anchored, not left-anchored: a `left-*` control is on the wrong side.
-      expect([...element.classList].some((name) => name.startsWith("left-"))).toBe(false);
-      return Number.parseFloat(match!.slice("right-".length));
-    };
-    expect(rightOffset(slot)).toBeGreaterThan(rightOffset(tools));
+    expect(actions.classList.contains("flex")).toBe(true);
+    expect(actions.classList.contains("shrink-0")).toBe(true);
+    expect(title.classList.contains("flex-1")).toBe(true);
+    expect([...title.classList].some((name) => name.startsWith("right-"))).toBe(false);
   });
 
   test("keeps interactive controls out of the browser title bar's drag handler", () => {
@@ -181,8 +186,9 @@ describe("MobileAppShellLayout", () => {
 
     const titleButton = screen.getByRole("button", { name: title });
     expect(titleButton.classList.contains("truncate")).toBe(true);
-    expect(titleButton.classList.contains("left-12")).toBe(true);
-    expect(titleButton.classList.contains("right-[5.5rem]")).toBe(true);
+    expect(titleButton.classList.contains("ml-12")).toBe(true);
+    expect(titleButton.classList.contains("flex-1")).toBe(true);
+    expect([...titleButton.classList].some((name) => name.startsWith("right-"))).toBe(false);
 
     fireEvent.mouseDown(titleButton);
     expect(props.onTitleBarMouseDown).not.toHaveBeenCalled();

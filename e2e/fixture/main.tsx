@@ -436,7 +436,9 @@ const mobileShellTitle =
 
 function MobileAppShellFixture() {
   const [dragStarts, setDragStarts] = useState(0);
-  const desktop = new URLSearchParams(window.location.search).has("desktop");
+  const searchParams = new URLSearchParams(window.location.search);
+  const desktop = searchParams.has("desktop");
+  const withoutInbox = searchParams.has("withoutInbox");
 
   if (desktop) {
     delete window.orkestrator;
@@ -455,7 +457,12 @@ function MobileAppShellFixture() {
         filesPanelOpen={false}
         centralPanelStyle={{ backgroundColor: "rgb(1, 2, 3)" }}
         actionBar={<button type="button">Action</button>}
-        agentInfoButton={<button type="button">Agent info</button>}
+        agentInfoButton={
+          <>
+            {!withoutInbox && <button type="button" className="h-7 w-7" aria-label="Agent inbox" />}
+            <button type="button" className="h-9 w-9" aria-label="Agent info" />
+          </>
+        }
         sidebar={<div>Projects</div>}
         filesPanel={<div>Files</div>}
         onTitleBarMouseDown={() => setDragStarts((count) => count + 1)}

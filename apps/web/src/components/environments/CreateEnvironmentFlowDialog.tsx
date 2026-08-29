@@ -20,6 +20,7 @@ import {
 } from "@/lib/backend";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import { resolveAgentModeSettings } from "@/lib/build-pipeline-agent";
+import { activateFeatureBuildEnvironment } from "@/lib/feature-build-activation";
 import { useClaudeOptionsStore, useConfigStore, useProjectStore, useUIStore } from "@/stores";
 import type { StartEnvironmentOptions } from "@/hooks/useEnvironments";
 import type { Environment, EnvironmentType, NetworkAccessMode, PortMapping } from "@/types";
@@ -353,14 +354,11 @@ export function CreateEnvironmentFlowDialog({
     setIsCreating(true);
     try {
       const result = await createFeatureBuild(input);
-      setProjectCollapsed(projectId, false);
-      if (result.environmentId) {
-        // Selecting the environment is what mounts its terminal surface. The
-        // backend has already published both the setup and build tabs: setup
-        // keeps focus while it runs, then the pipeline's authoritative layout
-        // hands focus to the build tab when setup completes.
-        selectProjectAndEnvironment(projectId, result.environmentId);
-      }
+      // Selecting the environment is what mounts its terminal surface. An
+      // idempotent retry may return before its concurrent winner has attached
+      // the environment, so the one-shot activation follows the authoritative
+      // pipeline snapshot in that case and survives this dialog closing.
+      activateFeatureBuildEnvironment(projectId, result);
       toast.success("Build started", {
         description: "The ticket was added and its environment is being created.",
       });

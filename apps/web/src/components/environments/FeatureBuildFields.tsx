@@ -217,7 +217,13 @@ export function FeatureBuildFields({
                 disabled={disabled}
                 className="h-auto w-full justify-between rounded-lg border border-input bg-muted/30 p-3 hover:bg-muted/50"
               >
-                <span className="text-sm font-medium">Advanced</span>
+                <span className="flex items-center gap-2">
+                  <span className="text-sm font-medium">Advanced</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {models.reviewers.length}{" "}
+                    {models.reviewers.length === 1 ? "reviewer" : "reviewers"}
+                  </span>
+                </span>
                 <ChevronDown
                   className={cn(
                     "h-4 w-4 transition-transform duration-200",
@@ -302,27 +308,28 @@ function FeatureBuildModelPickers({
   );
 
   const canRemoveReviewer = models.reviewers.length > 1;
+  const stepRows = SINGLE_STEPS.map((step) => (
+    <StepRow
+      key={step.key}
+      title={step.title}
+      description={step.description}
+      icon={step.icon}
+      selection={models[step.key]}
+      onSelectionChange={(selection) => onModelsChange({ ...models, [step.key]: selection })}
+      pickerModels={pickerModels}
+      enabledPlatforms={enabledPlatforms}
+      catalog={catalog}
+      disabled={disabled}
+      favorites={favoriteModels}
+      onToggleFavorite={toggleFavoriteModel}
+      onReorderFavorites={reorderFavorites}
+      idPrefix={`feature-build-${step.key}`}
+    />
+  ));
 
   return (
-    <div className="space-y-3">
-      {SINGLE_STEPS.map((step) => (
-        <StepRow
-          key={step.key}
-          title={step.title}
-          description={step.description}
-          icon={step.icon}
-          selection={models[step.key]}
-          onSelectionChange={(selection) => onModelsChange({ ...models, [step.key]: selection })}
-          pickerModels={pickerModels}
-          enabledPlatforms={enabledPlatforms}
-          catalog={catalog}
-          disabled={disabled}
-          favorites={favoriteModels}
-          onToggleFavorite={toggleFavoriteModel}
-          onReorderFavorites={reorderFavorites}
-          idPrefix={`feature-build-${step.key}`}
-        />
-      ))}
+    <div role="group" aria-label="Feature build model customization" className="space-y-3">
+      {stepRows[0]}
 
       <div className="space-y-2 rounded-lg border border-border/70 bg-zinc-950/20 p-3">
         <div className="flex items-start justify-between gap-3">
@@ -393,6 +400,8 @@ function FeatureBuildModelPickers({
           </Fragment>
         ))}
       </div>
+
+      {stepRows.slice(1)}
     </div>
   );
 }

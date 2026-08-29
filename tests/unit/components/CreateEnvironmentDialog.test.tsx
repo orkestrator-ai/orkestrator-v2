@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, test, expect, mock, spyOn } from "bun:test";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useConfigStore } from "@/stores/configStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useCodexStore } from "@/stores/codexStore";
@@ -3654,6 +3654,29 @@ describe("resolveAgentDefaults", () => {
 });
 
 describe("CreateEnvironmentDialog feature builds", () => {
+  beforeEach(() => {
+    cleanup();
+    useConfigStore.setState({
+      config: structuredClone(defaultConfig),
+      isLoading: false,
+      error: null,
+    });
+    useClaudeStore.setState({ models: defaultClaudeModels });
+    useCodexStore.setState({ models: defaultCodexModels });
+    useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
+    useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
+    invokeMock.mockReset();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === "get_opencode_model_preferences") {
+        return Promise.resolve({ recent: [], favorite: [], variant: {} });
+      }
+      if (command === "get_opencode_model_catalog_cache") {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(undefined);
+    });
+  });
+
   /** Opens the Build section's feature option and fills the ticket. */
   function chooseFeature(fields: {
     name?: string;
@@ -3726,13 +3749,87 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(request.title).toBe("Dark mode toggle");
     expect(request.acceptanceCriteria).toBe("The preference survives a reload.");
     expect(request.environmentType).toBe("containerized");
-    // Closed models panel means no pinned single-step overrides. The stock
-    // review and review2 defaults are identical, so they collapse rather than
-    // paying for duplicate work and a consolidation turn.
-    expect(request.steps).toBeUndefined();
-    expect(request.reviewers).toHaveLength(1);
+    // The panel is closed, but the defaults it would display still define the
+    // pipeline. Opening an editor must not make its values effective.
+    expect(request.steps).toBeDefined();
+    expect(request.reviewers).toHaveLength(2);
     expect(typeof request.requestId).toBe("string");
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("submits the configured panel defaults without opening customization", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      actionDefaults: {
+        newProject: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        review: { platform: "claude", model: "opus[1m]", reasoningEffort: "high" },
+        review2: { platform: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" },
+        fixReviewIssues: { platform: "claude", model: "sonnet", reasoningEffort: "medium" },
+        pr: { platform: "codex", model: "gpt-5.4", reasoningEffort: "low" },
+        resolve: { platform: "claude", model: "haiku" },
+      },
+    };
+    useConfigStore.setState({ config });
+    const onCreateFeatureBuild = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Default model parity" });
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+
+    const request = onCreateFeatureBuild.mock.calls[0]![0];
+    expect(request.reviewers).toEqual([
+      { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
+      { agent: "codex", model: "gpt-5.4", reasoningEffort: "xhigh" },
+    ]);
+    expect(request.steps).toEqual({
+      build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
+      address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
+      pr: { agent: "codex", model: "gpt-5.4", reasoningEffort: "low" },
+      "resolve-conflicts": { agent: "claude", model: "haiku" },
+    });
+  });
+
+  test("uses the visible Default Agent, model and reasoning for a closed feature build", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    useConfigStore.setState({ config });
+    const onCreateFeatureBuild = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Use the visible model" });
+    await selectAgentPlatform("Codex");
+    await selectAgentModel(/GPT-5\.4-Mini/);
+    await selectReasoning("High");
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+
+    const request = onCreateFeatureBuild.mock.calls[0]![0];
+    expect(request.agentType).toBe("codex");
+    expect(request.steps?.build).toEqual({
+      agent: "codex",
+      model: "gpt-5.4-mini",
+      reasoningEffort: "high",
+    });
   });
 
   test("will not submit a feature with no name", () => {
@@ -3822,6 +3919,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
     const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
     expect(second.reviewers).toEqual(first.reviewers);
+    expect(second.steps).toEqual(first.steps);
     expect(second.requestId).toBe(first.requestId);
   });
 
@@ -3912,6 +4010,7 @@ describe("CreateEnvironmentDialog feature builds", () => {
     chooseFeature({ name: "Dark mode toggle" });
     // The panel is folded away until it is asked for.
     expect(screen.queryByRole("switch", { name: "Customize models" }) === null).toBe(true);
+    expect(screen.getByRole("button", { name: "Advanced 2 reviewers" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
 
@@ -3923,17 +4022,44 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(screen.queryByLabelText(/^Verify agent/) === null).toBe(true);
     expect(screen.getByLabelText("Review 1 agent, model and reasoning")).toBeTruthy();
     expect(screen.getByLabelText("Review 2 agent, model and reasoning")).toBeTruthy();
+    const modelCustomization = screen.getByRole("group", {
+      name: "Feature build model customization",
+    });
+    expect(
+      within(modelCustomization)
+        .getAllByRole("combobox")
+        .map((picker) => picker.getAttribute("aria-label")),
+    ).toEqual([
+      "Build agent, model and reasoning",
+      "Review 1 agent, model and reasoning",
+      "Review 2 agent, model and reasoning",
+      "Address issues agent, model and reasoning",
+      "Pull request agent, model and reasoning",
+      "Resolve conflicts agent, model and reasoning",
+    ]);
 
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
     const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    // The panel keeps two editable rows, while equal stock defaults collapse at
-    // the request boundary until the user makes them distinct.
-    expect((request.reviewers as unknown[]).length).toBe(1);
+    expect((request.reviewers as unknown[]).length).toBe(2);
     expect((request.steps as Record<string, unknown>).verify).toBeUndefined();
   });
 
   test("turning customization off discards reviewer edits and uses configured defaults", async () => {
+    const config = structuredClone(defaultConfig);
+    config.global.enabledAgentPlatforms = ["claude", "codex"];
+    config.global.agentSettings = {
+      ...config.global.agentSettings,
+      actionDefaults: {
+        newProject: { platform: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        review: { platform: "claude", model: "opus[1m]", reasoningEffort: "high" },
+        review2: { platform: "claude", model: "sonnet", reasoningEffort: "medium" },
+        fixReviewIssues: { platform: "claude", model: "sonnet", reasoningEffort: "medium" },
+        pr: { platform: "codex", model: "gpt-5.4", reasoningEffort: "low" },
+        resolve: { platform: "claude", model: "haiku" },
+      },
+    };
+    useConfigStore.setState({ config });
     const onCreateFeatureBuild = mock(async () => {});
     render(
       <CreateEnvironmentDialog
@@ -3966,9 +4092,18 @@ describe("CreateEnvironmentDialog feature builds", () => {
     submitFeature();
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
 
-    const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    expect(request.steps).toBeUndefined();
-    expect(request.reviewers).toEqual([expect.objectContaining({ agent: "claude" })]);
+    const request = onCreateFeatureBuild.mock.calls[0]![0];
+    expect(request.reviewers).toEqual([
+      { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
+      { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
+    ]);
+    expect(request.steps).toEqual({
+      build: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      review: { agent: "claude", model: "opus[1m]", reasoningEffort: "high" },
+      address: { agent: "claude", model: "sonnet", reasoningEffort: "medium" },
+      pr: { agent: "codex", model: "gpt-5.4", reasoningEffort: "low" },
+      "resolve-conflicts": { agent: "claude", model: "haiku" },
+    });
   });
 
   test("adds and removes reviewers, and never removes the last one", () => {

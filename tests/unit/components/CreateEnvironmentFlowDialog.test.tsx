@@ -563,6 +563,130 @@ describe("CreateEnvironmentFlowDialog", () => {
     expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
   });
 
+  test("leaves null targeted hydration recoverable by resource synchronization", async () => {
+    getEnvironmentMock.mockResolvedValueOnce(null);
+    const originalWarn = console.warn;
+    const warn = mock(() => undefined);
+    console.warn = warn;
+    try {
+      render(
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={() => {}}
+          projectId="project-1"
+          createEnvironment={mock(async () => ({ id: "unused" }) as Environment)}
+          updateEnvironment={() => {}}
+          startEnvironment={async () => {}}
+        />,
+      );
+
+      startFeatureBuild("Dark mode toggle");
+
+      await waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          "[feature-build-activation] Environment env-feature was not found after creation",
+        ),
+      );
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+
+      act(() => {
+        useEnvironmentStore.getState().addEnvironment({
+          id: "env-feature",
+          projectId: "project-1",
+        } as Environment);
+      });
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeTruthy();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("ignores a targeted environment from another project without blocking recovery", async () => {
+    getEnvironmentMock.mockResolvedValueOnce({
+      id: "env-feature",
+      projectId: "project-other",
+    } as Environment);
+    const originalWarn = console.warn;
+    const warn = mock(() => undefined);
+    console.warn = warn;
+    try {
+      render(
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={() => {}}
+          projectId="project-1"
+          createEnvironment={mock(async () => ({ id: "unused" }) as Environment)}
+          updateEnvironment={() => {}}
+          startEnvironment={async () => {}}
+        />,
+      );
+
+      startFeatureBuild("Dark mode toggle");
+
+      await waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          "[feature-build-activation] Ignoring environment env-feature for an unexpected project",
+        ),
+      );
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+
+      act(() => {
+        useEnvironmentStore.getState().addEnvironment({
+          id: "env-feature",
+          projectId: "project-1",
+        } as Environment);
+      });
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toMatchObject({
+        projectId: "project-1",
+      });
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
+  test("contains a rejected targeted read without blocking resource recovery", async () => {
+    const hydrationError = new Error("environment read unavailable");
+    getEnvironmentMock.mockRejectedValueOnce(hydrationError);
+    const originalWarn = console.warn;
+    const warn = mock(() => undefined);
+    console.warn = warn;
+    try {
+      render(
+        <CreateEnvironmentFlowDialog
+          open
+          onOpenChange={() => {}}
+          projectId="project-1"
+          createEnvironment={mock(async () => ({ id: "unused" }) as Environment)}
+          updateEnvironment={() => {}}
+          startEnvironment={async () => {}}
+        />,
+      );
+
+      startFeatureBuild("Dark mode toggle");
+
+      await waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          "[feature-build-activation] Failed to hydrate environment env-feature:",
+          hydrationError,
+        ),
+      );
+      expect(useUIStore.getState().selectedEnvironmentId).toBe("env-feature");
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeUndefined();
+
+      act(() => {
+        useEnvironmentStore.getState().addEnvironment({
+          id: "env-feature",
+          projectId: "project-1",
+        } as Environment);
+      });
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toBeTruthy();
+    } finally {
+      console.warn = originalWarn;
+    }
+  });
+
   test("activates when an admitted feature pipeline publishes its environment later", async () => {
     createFeatureBuildMock.mockResolvedValueOnce({
       taskId: "task-1",

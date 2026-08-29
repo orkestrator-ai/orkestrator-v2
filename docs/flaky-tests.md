@@ -186,6 +186,13 @@ history rather than two partial ones.
   observation under cross-process contention but does not identify which async
   boundary is late. A recurrence should capture the save and activity write
   ordering before changing the expectation.
+- **Recurrence:** on 2026-08-29, `bun run test` from `apps/backend` ran 18 Bun
+  workers and reported this case failed after 533.29 ms. The aggregate reported
+  2,334 passed and 2 failed across 2,336 tests; the other failure was a new
+  deterministic build-pipeline test corrected in the same working tree. The
+  aggregate capture did not retain this case's assertion detail. An immediate
+  isolated rerun, `bun test src/core/multi-review-service.test.ts`, passed all
+  100 tests; the affected case passed in 44.92 ms.
 
 ## `MultiReviewService resumes a persisted address attempt after restart` (`apps/backend/src/core/multi-review-service.test.ts:732`)
 

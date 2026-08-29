@@ -38,6 +38,10 @@ import type {
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
+import {
+  TEST_REVIEW_PREPARATION,
+  testGeneratedReviewPackage,
+} from "./build-pipeline-test-fixtures.js";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -157,7 +161,9 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : { complete: true, rationale: "All criteria pass." }) as T,
+        : phase === "build" || phase === "fix"
+          ? TEST_REVIEW_PREPARATION
+          : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 
@@ -266,6 +272,9 @@ async function withService(
         head: controls.currentHead,
         paths: [...controls.uncommittedPaths],
       } as T;
+    }
+    if (command === "generate_looped_review_package") {
+      return testGeneratedReviewPackage(args) as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
@@ -1045,7 +1054,16 @@ describe("BuildPipelineService", () => {
         sessionId: string,
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
-        if (provider.phases.get(sessionId) !== "review") {
+        const phase = provider.phases.get(sessionId);
+        if (phase === "build" || phase === "fix") {
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: TEST_REVIEW_PREPARATION as T,
+          };
+        }
+        if (phase !== "review") {
           return {
             ok: true,
             provider: "claude",
@@ -1113,7 +1131,16 @@ describe("BuildPipelineService", () => {
         sessionId: string,
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
-        if (provider.phases.get(sessionId) !== "review") {
+        const phase = provider.phases.get(sessionId);
+        if (phase === "build" || phase === "fix") {
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: TEST_REVIEW_PREPARATION as T,
+          };
+        }
+        if (phase !== "review") {
           return {
             ok: true,
             provider: "claude",
@@ -1176,9 +1203,18 @@ describe("BuildPipelineService", () => {
     await withService(async (service, storage, provider) => {
       let reports = 0;
       provider.structured = async <T>(
-        _sessionId: string,
+        sessionId: string,
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
+        const phase = provider.phases.get(sessionId);
+        if (phase === "build" || phase === "fix") {
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: TEST_REVIEW_PREPARATION as T,
+          };
+        }
         reports += 1;
         return {
           ok: true,
@@ -1213,9 +1249,18 @@ describe("BuildPipelineService", () => {
     await withService(async (service, storage, provider) => {
       let reports = 0;
       provider.structured = async <T>(
-        _sessionId: string,
+        sessionId: string,
         requestId: string,
       ): Promise<StructuredOutputResult<T>> => {
+        const phase = provider.phases.get(sessionId);
+        if (phase === "build" || phase === "fix") {
+          return {
+            ok: true,
+            provider: "claude",
+            requestId,
+            value: TEST_REVIEW_PREPARATION as T,
+          };
+        }
         reports += 1;
         if (reports === 1) {
           // Schema-valid but contract-invalid: the failure count disagrees with

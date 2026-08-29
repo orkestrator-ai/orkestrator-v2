@@ -29,11 +29,13 @@ import {
 } from "./build-pipeline-provider.js";
 import {
   addressPrompt,
+  buildPipelineReviewPackageContext,
+  buildPipelineReviewPackageId,
   buildPrompt,
   fixPrompt,
   prPrompt,
   resolveConflictsPrompt,
-  reviewPrompt,
+  reviewPackagePreparationPrompt,
   verificationPrompt,
   type ObservedWorktreeSnapshot,
   type ReviewWorktreeSnapshot,
@@ -45,6 +47,12 @@ import {
 } from "./build-pipeline-review-fanout.js";
 import { MultiReviewProgressTracker } from "./multi-review-progress.js";
 import { probeReviewWorktreeOnce } from "./review-worktree-probe.js";
+import {
+  REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+  createDiscoveryPrompt,
+  parseReviewPreparationResult,
+} from "./looped-review-prompts.js";
+import { normalizeGeneratedReviewPackage } from "./review-package.js";
 import { BuildPipelineServiceBase } from "./build-pipeline-service-base.js";
 import {
   WORKTREE_PROBE_ATTEMPTS,
@@ -79,7 +87,6 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
   protected reviewFanout(): BuildPipelineReviewFanout {
     if (!this.reviewFanoutRunner) {
       this.reviewFanoutRunner = new BuildPipelineReviewFanout({
-        invoke: (command, args) => this.invoke(command, args),
         provider: (pipeline, agent) => this.provider(pipeline, agent),
         save: async (pipeline) => {
           await this.save(pipeline, pipeline.backendRevision);
@@ -91,6 +98,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
           return repository.prBaseBranch || "main";
         },
+        reviewInstruction: async () => (await this.storage.loadConfig()).global.reviewInstruction,
         progress: this.reviewProgress,
       });
     }
@@ -277,11 +285,19 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         delete pipeline.structuredReview;
         delete pipeline.verificationResult;
         delete pipeline.verificationFeedback;
-        await this.startStage(pipeline, "review", "reviewing");
+        if (pipeline.reviewPackage) {
+          await this.startStage(pipeline, "review", "reviewing");
+        } else {
+          await this.startReviewPackagePreparation(pipeline);
+        }
         return;
       }
       if (!pipeline.reviewFanout) {
-        await this.startStage(pipeline, "review", "reviewing");
+        if (pipeline.reviewPackage) {
+          await this.startStage(pipeline, "review", "reviewing");
+        } else {
+          await this.startReviewPackagePreparation(pipeline);
+        }
         return;
       }
       await this.advanceReviewFanout(pipeline);
@@ -410,7 +426,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       delete pipeline.structuredReview;
       delete pipeline.verificationResult;
       delete pipeline.verificationFeedback;
-      await this.startStage(pipeline, "review", "reviewing");
+      if (pipeline.reviewPackage) {
+        await this.startStage(pipeline, "review", "reviewing");
+      } else {
+        await this.startReviewPackagePreparation(pipeline);
+      }
       return;
     }
 
@@ -422,7 +442,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     switch (pipeline.phase) {
       case "building":
       case "fixing":
-        await this.startStage(pipeline, "review", "reviewing");
+        await this.finishReviewPackagePreparation(pipeline, provider, session);
         return;
       case "reviewing":
         await this.finishReview(pipeline, provider, session);
@@ -562,6 +582,75 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
   }
 
+  /**
+   * Accepts the build model's preparation metadata, then has the backend create
+   * the single immutable package every reviewer will read.
+   *
+   * Legacy in-flight build sessions have no structured key. They receive one
+   * preparation-only follow-up in the same session, preserving the model and
+   * its implementation context across an upgrade.
+   */
+  protected async finishReviewPackagePreparation(
+    pipeline: BuildPipeline,
+    provider: BuildPipelineProvider,
+    session: PipelineSession,
+  ): Promise<void> {
+    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    const targetBranch = repository.prBaseBranch || "main";
+    if (!session.structuredRequestId) {
+      const requestId = randomUUID();
+      const startedAt = new Date().toISOString();
+      const prompt = withUnattendedPolicy(reviewPackagePreparationPrompt(pipeline, targetBranch));
+      session.structuredRequestId = requestId;
+      session.structuredResultStatus = "pending";
+      session.turnStartedAt = startedAt;
+      pipeline.pendingPromptAttempt = {
+        id: randomUUID(),
+        sessionId: session.sdkSessionId,
+        requestId,
+        phase: pipeline.phase as "building" | "fixing",
+        prompt,
+        useTaskImages: false,
+        structuredReview: true,
+        startedAt,
+      };
+      await this.save(pipeline, pipeline.backendRevision);
+      await this.dispatchPending(pipeline, provider);
+      return;
+    }
+    const result = await provider.structured<unknown>(
+      session.sdkSessionId,
+      session.structuredRequestId,
+    );
+    if (!result) {
+      await this.awaitStructuredResult(pipeline, session, "review package preparation");
+      return;
+    }
+    delete session.structuredWaitStartedAt;
+    if (!result.ok) throw new Error(result.error.message);
+    const preparation = parseReviewPreparationResult(result.value);
+    const packageId = buildPipelineReviewPackageId(pipeline);
+    const round = pipeline.iteration + 1;
+    const generated = await this.invoke<unknown>("generate_looped_review_package", {
+      environmentId: pipeline.environmentId,
+      packageId,
+      round,
+      targetBranch,
+      preparation,
+    });
+    const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
+    const boundedContext = buildPipelineReviewPackageContext(pipeline, notes);
+    pipeline.reviewPackage = normalizeGeneratedReviewPackage(generated, {
+      id: packageId,
+      round,
+      targetBranch,
+      context: boundedContext.context,
+      additionalLimitations: boundedContext.limitations,
+    });
+    session.structuredResultStatus = "accepted";
+    await this.startStage(pipeline, "review", "reviewing");
+  }
+
   protected async findLinkedEnvironment(
     pipeline: Pick<BuildPipeline, "id" | "projectId">,
   ): Promise<Environment | undefined> {
@@ -611,6 +700,14 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     if (!next) return;
     const phase = resumablePhase(pipeline.phase);
     if (!phase) return;
+    if (phase === "building" || phase === "fixing") {
+      // Any implementation follow-up can change HEAD, validation artifacts, or
+      // the uncommitted set. The earlier structured preparation result no
+      // longer describes the state that will be packaged after this turn.
+      delete session.structuredRequestId;
+      delete session.structuredResultStatus;
+      delete session.structuredWaitStartedAt;
+    }
     if (rest.length) {
       pipeline.pendingUserMessages = rest;
     } else {
@@ -675,7 +772,27 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
                     ? "resolve-conflicts"
                     : null;
     if (!stage) throw new Error(`Cannot recover pipeline phase ${pipeline.phase}`);
+    if (stage === "review" && !pipeline.reviewPackage) {
+      await this.startReviewPackagePreparation(pipeline);
+      return;
+    }
     await this.startStage(pipeline, stage, pipeline.phase as ResumableBuildPhase);
+  }
+
+  /**
+   * Opens a writable preparation-only turn before a review retry or legacy
+   * package-less review. Reusing the normal fixing completion path keeps
+   * structured-result recovery and package generation in one state machine.
+   */
+  protected async startReviewPackagePreparation(pipeline: BuildPipeline): Promise<void> {
+    const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
+    const targetBranch = repository.prBaseBranch || "main";
+    delete pipeline.reviewPackage;
+    await this.startStage(pipeline, "fix", "fixing", {
+      prompt: reviewPackagePreparationPrompt(pipeline, targetBranch),
+      images: [],
+      schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+    });
   }
 
   /**
@@ -710,6 +827,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       prompt: string;
       images: BuildPipeline["taskSnapshot"]["images"];
       mode?: ProviderExecutionMode;
+      schema?: JsonSchema;
     },
   ): Promise<void> {
     // A multi-reviewer pipeline has no single review session to open, so the
@@ -735,7 +853,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       // fails the stage without leaving a session behind or spending a turn on a
       // review that could never be certified.
       const validationWorktree =
-        !override && (sessionPhase === "review" || sessionPhase === "verify")
+        !override && sessionPhase === "verify"
           ? await this.validationBaseline(pipeline, sessionPhase)
           : undefined;
       const { agent, model, effort } = await this.stepSettings(pipeline, sessionPhase);
@@ -773,8 +891,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         fence: sessionKey,
       });
       const stagePrompt = override
-        ? { prompt: override.prompt, images: override.images }
-        : await this.promptFor(pipeline, sessionPhase, agent, validationWorktree);
+        ? { prompt: override.prompt, images: override.images, schema: override.schema }
+        : await this.promptFor(pipeline, sessionPhase, agent);
       const prompt = withUnattendedPolicy(stagePrompt.prompt);
       const { schema, images } = stagePrompt;
       const requestId = randomUUID();
@@ -871,11 +989,13 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const attempt = pipeline.pendingPromptAttempt;
     if (!attempt) return;
     const schema = attempt.structuredReview
-      ? attempt.phase === "reviewing"
-        ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
-        : attempt.phase === "verifying"
-          ? VERIFICATION_SCHEMA
-          : undefined
+      ? attempt.phase === "building" || attempt.phase === "fixing"
+        ? REVIEW_PREPARATION_RESULT_JSON_SCHEMA
+        : attempt.phase === "reviewing"
+          ? STRUCTURED_REVIEW_REPORT_JSON_SCHEMA
+          : attempt.phase === "verifying"
+            ? VERIFICATION_SCHEMA
+            : undefined
       : undefined;
     // Redispatch has to carry the same step selection the session was opened
     // with: Claude and OpenCode take the model per prompt, so omitting it here
@@ -920,7 +1040,6 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     pipeline: BuildPipeline,
     phase: PipelineSessionPhase,
     agent: BuildPipelineAgent,
-    validationWorktree?: ReviewWorktreeSnapshot,
   ): Promise<{
     prompt: string;
     schema?: JsonSchema;
@@ -931,17 +1050,21 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const repository = await this.storage.getRepositoryConfig(pipeline.projectId);
     const target = repository.prBaseBranch || "main";
     if (phase === "build") {
-      return { prompt: buildPrompt(pipeline, notes), images: pipeline.taskSnapshot.images };
+      return {
+        prompt: buildPrompt(pipeline, notes, target),
+        schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
+        images: pipeline.taskSnapshot.images,
+      };
     }
     if (phase === "review") {
+      if (!pipeline.reviewPackage) {
+        throw new Error("Cannot review without an immutable review package");
+      }
       return {
-        prompt: reviewPrompt(
-          pipeline,
-          notes,
-          target,
-          config.global.reviewInstruction,
-          validationWorktree,
-        ),
+        prompt: createDiscoveryPrompt({
+          reviewPackage: pipeline.reviewPackage,
+          reviewInstruction: config.global.reviewInstruction,
+        }),
         schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };
@@ -980,7 +1103,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           pipeline,
           notes,
           pipeline.verificationFeedback ?? "The verification did not pass.",
+          target,
         ),
+        schema: REVIEW_PREPARATION_RESULT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,
       };
     }
@@ -1002,7 +1127,6 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       await this.awaitStructuredResult(pipeline, session, "review");
       return;
     }
-    await this.assertValidationWorktreeUnchanged(pipeline, session);
     delete session.structuredWaitStartedAt;
     if (!result.ok) throw new Error(result.error.message);
     const parsed = safeParseStructuredReviewReport(result.value, {

@@ -23,6 +23,10 @@ import {
   type ProviderSendOptions,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
+import {
+  TEST_REVIEW_PREPARATION,
+  testGeneratedReviewPackage,
+} from "./build-pipeline-test-fixtures.js";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -160,9 +164,11 @@ class RecordingProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : this.verificationComplete
-          ? { complete: true, rationale: "All criteria pass." }
-          : { complete: false, rationale: "Acceptance checks still fail." }) as T,
+        : phase === "build" || phase === "fix"
+          ? TEST_REVIEW_PREPARATION
+          : this.verificationComplete
+            ? { complete: true, rationale: "All criteria pass." }
+            : { complete: false, rationale: "Acceptance checks still fail." }) as T,
     };
   }
 
@@ -233,7 +239,7 @@ async function withService(
     providers.set(agent, provider);
     return provider;
   };
-  const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
     }
@@ -245,6 +251,9 @@ async function withService(
     }
     if (command === "get_environment_uncommitted_paths") {
       return CLEAN_GIT_STATE as T;
+    }
+    if (command === "generate_looped_review_package") {
+      return testGeneratedReviewPackage(args) as T;
     }
     if (command === "get_kanban_tasks") return [] as T;
     return undefined as T;
@@ -483,7 +492,14 @@ async function withBridgeService(
     if (pathname.endsWith("/message")) return Response.json([]);
     if (url.endsWith("/messages")) return Response.json({ messages: [] });
     if (url.includes("/structured-output")) {
-      return Response.json({ structuredOutput: null });
+      return Response.json({
+        structuredOutput: {
+          ok: true,
+          provider: "claude",
+          requestId: new URL(url).searchParams.get("requestId") ?? "request",
+          value: TEST_REVIEW_PREPARATION,
+        },
+      });
     }
     return Response.json({ status: "idle" });
   }) as unknown as typeof fetch;
@@ -492,7 +508,7 @@ async function withBridgeService(
     ["codex", { port: 3211, authToken: "codex-token" }],
   ]);
   const invocations: string[] = [];
-  const invoke = async <T>(command: string): Promise<T> => {
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push(command);
     if (
       command === "start_environment" ||
@@ -503,6 +519,9 @@ async function withBridgeService(
     }
     if (command === "get_environment_uncommitted_paths") {
       return CLEAN_GIT_STATE as T;
+    }
+    if (command === "generate_looped_review_package") {
+      return testGeneratedReviewPackage(args) as T;
     }
     const local = /^start_local_(claude|codex|opencode)_server_cmd$/.exec(command);
     if (local) {
@@ -1595,26 +1614,28 @@ describe("per-step execution modes", () => {
         ok: true,
         provider: "codex",
         requestId,
-        value: (codex.phases.get(sessionId) === "review"
-          ? {
-              ...cleanReview,
-              issues: [
-                {
-                  severity: "P1" as const,
-                  confidence: 90,
-                  category: "correctness" as const,
-                  title: "Off-by-one",
-                  file: "src/app.ts",
-                  line: 2,
-                  symbol: "run",
-                  description: "Loops once too many.",
-                  evidence: "for (i <= n)",
-                  suggestion: "Use <.",
-                  verification: "Run the suite.",
-                },
-              ],
-            }
-          : { complete: true, rationale: "All criteria pass." }) as T,
+        value: (codex.phases.get(sessionId) === "build" || codex.phases.get(sessionId) === "fix"
+          ? TEST_REVIEW_PREPARATION
+          : codex.phases.get(sessionId) === "review"
+            ? {
+                ...cleanReview,
+                issues: [
+                  {
+                    severity: "P1" as const,
+                    confidence: 90,
+                    category: "correctness" as const,
+                    title: "Off-by-one",
+                    file: "src/app.ts",
+                    line: 2,
+                    symbol: "run",
+                    description: "Loops once too many.",
+                    evidence: "for (i <= n)",
+                    suggestion: "Use <.",
+                    verification: "Run the suite.",
+                  },
+                ],
+              }
+            : { complete: true, rationale: "All criteria pass." }) as T,
       });
 
       const started = await service.start({

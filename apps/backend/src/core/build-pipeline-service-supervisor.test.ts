@@ -23,6 +23,11 @@ import { StorageService } from "./storage.js";
 import { BuildPipelineService } from "./build-pipeline-service.js";
 
 import { ProviderSessionFailedError } from "./build-pipeline-provider.js";
+import {
+  TEST_REVIEW_PREPARATION,
+  testGeneratedReviewPackage,
+} from "./build-pipeline-test-fixtures.js";
+import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
 
 import type {
   BuildPipelineProvider,
@@ -150,7 +155,9 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? this.reviewReport
-        : { complete: true, rationale: "All criteria pass." }) as T,
+        : phase === "build" || phase === "fix"
+          ? TEST_REVIEW_PREPARATION
+          : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 
@@ -259,6 +266,9 @@ async function withService(
         head: controls.currentHead,
         paths: [...controls.uncommittedPaths],
       } as T;
+    }
+    if (command === "generate_looped_review_package") {
+      return testGeneratedReviewPackage(args) as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
@@ -399,12 +409,16 @@ describe("BuildPipelineService", () => {
       expect(
         completed.sessions.map((session) => [session.phase, session.structuredResultStatus]),
       ).toEqual([
-        ["build", undefined],
+        ["build", "accepted"],
         ["review", "accepted"],
         ["verify", "accepted"],
         ["pr", undefined],
       ]);
       expect(provider.sent).toHaveLength(4);
+      const buildDispatch = provider.sent.find(
+        (entry) => provider.phases.get(entry.sessionId) === "build",
+      );
+      expect(buildDispatch?.schema).toBe(REVIEW_PREPARATION_RESULT_JSON_SCHEMA);
       const verificationDispatch = provider.sent.find(
         (entry) => provider.phases.get(entry.sessionId) === "verify",
       );

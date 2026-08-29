@@ -1732,6 +1732,40 @@ describe("build pipeline protocol", () => {
     ).toBe(false);
   });
 
+  test("validates the immutable review package persisted between build and review", () => {
+    const reviewPackage = {
+      id: "review-package-build-abc-r1",
+      round: 1,
+      preparedAt: "2026-08-29T00:00:00.000Z",
+      targetBranch: "main",
+      baseRef: "0".repeat(40),
+      headRef: "1".repeat(40),
+      commit: { sha: "1".repeat(40), subject: "feat: build", committedFiles: ["src/app.ts"] },
+      completeDiff: "diff --git a/src/app.ts b/src/app.ts",
+      changedFiles: [
+        {
+          path: "src/app.ts",
+          status: "M",
+          content: "export const ready = true;",
+          contentSha256: "a".repeat(64),
+          omittedReason: null,
+        },
+      ],
+      validation: [],
+      skippedFiles: [],
+      uncommittedFiles: [],
+      limitations: [],
+    };
+
+    expect(isBuildPipeline({ ...snapshot(), reviewPackage })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        reviewPackage: { ...reviewPackage, changedFiles: [null] },
+      }),
+    ).toBe(false);
+  });
+
   test("accepts the blank environmentId a pipeline holds before provisioning", () => {
     // Deliberate: the record exists before its environment does, and that window
     // is exactly when a crash used to orphan the pipeline.

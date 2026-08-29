@@ -238,7 +238,11 @@ class FakeProvider implements BuildPipelineProvider {
       value = this.structuredValueOverride;
       this.structuredValueOverride = undefined;
     } else if (required.includes("validation")) {
-      value = { validation: [], uncommittedFiles: [], limitations: [] };
+      value = {
+        validation: [],
+        uncommittedFiles: [],
+        limitations: ["No validation is configured in this service harness."],
+      };
     } else if (required.includes("reviewScope")) {
       value = this.reviewReports.shift() ?? this.reviewReport;
     } else if (required.includes("issueOutcomes")) {

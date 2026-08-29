@@ -1398,8 +1398,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
         path.join(artifactDirectory, "validation-01.stderr.txt"),
         "exact warning output\n",
       );
-      await fs.writeFile(path.join(worktreePath, "review.txt"), "later worktree edit\n");
-      await fs.writeFile(path.join(worktreePath, "unrelated.txt"), "leave me alone\n");
       const environment = createEnvironment({
         worktreePath,
         branch: "feature/local",
@@ -1423,16 +1421,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
               limitation: null,
             },
           ],
-          uncommittedFiles: [
-            {
-              path: "review.txt",
-              reason: "Later user edit after the prepared commit.",
-            },
-            {
-              path: "unrelated.txt",
-              reason: "Unrelated user file.",
-            },
-          ],
+          uncommittedFiles: [],
           limitations: [],
         },
       };
@@ -1484,16 +1473,7 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
             reason: "Binary content is represented by the complete binary Git diff.",
           },
         ],
-        uncommittedFiles: [
-          {
-            path: "review.txt",
-            reason: "Later user edit after the prepared commit.",
-          },
-          {
-            path: "unrelated.txt",
-            reason: "Unrelated user file.",
-          },
-        ],
+        uncommittedFiles: [],
         limitations: [],
       });
       // The context key is deliberately absent rather than null. The workflow
@@ -1519,18 +1499,6 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
       expect(first.completeDiff).toContain("GIT binary patch");
       expect(first.completeDiff).toMatch(/index [a-f0-9]{40}\.\.[a-f0-9]{40}/);
 
-      await expect(
-        command(
-          {
-            ...args,
-            preparation: {
-              ...args.preparation,
-              uncommittedFiles: [],
-            },
-          },
-          context,
-        ),
-      ).rejects.toThrow("account for every uncommitted file");
       await expect(
         command(
           {
@@ -1648,6 +1616,31 @@ printf '%s\\n' '{"url":"https://github.com/acme/repo/pull/42","headRefName":"oth
           ),
         ).rejects.toThrow(/Invalid validation\[0\]\.stdoutPath/);
       }
+
+      await fs.writeFile(path.join(worktreePath, "review.txt"), "later worktree edit\n");
+      await fs.writeFile(path.join(worktreePath, "unrelated.txt"), "leave me alone\n");
+      await expect(command(args, context)).rejects.toThrow("account for every uncommitted file");
+      await expect(
+        command(
+          {
+            ...args,
+            preparation: {
+              ...args.preparation,
+              uncommittedFiles: [
+                {
+                  path: "review.txt",
+                  reason: "Later user edit after the prepared commit.",
+                },
+                {
+                  path: "unrelated.txt",
+                  reason: "Unrelated user file.",
+                },
+              ],
+            },
+          },
+          context,
+        ),
+      ).rejects.toThrow("requires a clean worktree");
     },
     ASYNC_TEST_BUDGET_MS,
   );

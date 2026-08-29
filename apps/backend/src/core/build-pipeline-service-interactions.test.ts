@@ -41,6 +41,10 @@ import type {
   ProviderSessionRegistration,
   ProviderStatus,
 } from "./build-pipeline-provider.js";
+import {
+  TEST_REVIEW_PREPARATION,
+  testGeneratedReviewPackage,
+} from "./build-pipeline-test-fixtures.js";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -160,7 +164,9 @@ class FakeProvider implements BuildPipelineProvider {
       requestId,
       value: (phase === "review"
         ? cleanReview
-        : { complete: true, rationale: "All criteria pass." }) as T,
+        : phase === "build" || phase === "fix"
+          ? TEST_REVIEW_PREPARATION
+          : { complete: true, rationale: "All criteria pass." }) as T,
     };
   }
 
@@ -269,6 +275,9 @@ async function withService(
         head: controls.currentHead,
         paths: [...controls.uncommittedPaths],
       } as T;
+    }
+    if (command === "generate_looped_review_package") {
+      return testGeneratedReviewPackage(args) as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;

@@ -379,6 +379,11 @@ export function AgentDefaultsPane({
               entry?.platform && enabledPlatforms.includes(entry.platform)
                 ? entry.platform
                 : undefined;
+            // An unset action follows its inherited action entry, which can use
+            // a different provider from this tier's default agent. Keep the
+            // picker's icon and initial catalogue aligned with the inherited
+            // label instead of falling back to the default agent.
+            const displayedPlatform = inheritedEntry?.platform ?? effectiveAgent;
             const actionModels = modelsForAgent(catalog, platform ?? effectiveAgent);
             const actionSelected =
               platform && entry?.model
@@ -439,7 +444,7 @@ export function AgentDefaultsPane({
                   disabled={disabled}
                   models={pickerModels}
                   enabledPlatforms={enabledPlatforms}
-                  selectedPlatform={platform ?? effectiveAgent}
+                  selectedPlatform={platform ?? displayedPlatform}
                   favorites={favorites.favorites}
                   onToggleFavorite={favorites.toggleFavorite}
                   onReorderFavorites={favorites.reorderFavorites}

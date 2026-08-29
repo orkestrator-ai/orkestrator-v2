@@ -132,36 +132,27 @@ function stepConfig(selection: FeatureBuildStepSelection): BuildStepConfig {
   };
 }
 
-function distinctReviewerConfigs(models: FeatureBuildModelState): BuildStepConfig[] {
+function reviewerConfigs(models: FeatureBuildModelState): BuildStepConfig[] {
   const reviewers = models.reviewers.map(stepConfig);
-  const candidates = reviewers.length > 0 ? reviewers : [stepConfig(models.build)];
-  const seen = new Set<string>();
-  return candidates.filter((reviewer) => {
-    const key = JSON.stringify([
-      reviewer.agent,
-      reviewer.model ?? null,
-      reviewer.reasoningEffort ?? null,
-    ]);
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  return reviewers.length > 0 ? reviewers : [stepConfig(models.build)];
 }
 
 /**
  * The per-step payload and reviewer panel.
  *
- * The individual step selections remain optional at request time, but reviewer
- * selections do not. Exact duplicate rows collapse to one so an unconfigured
- * `review2` default does not pay for two identical reviews and consolidation.
- * An empty panel falls back to the build selection, keeping this pure boundary
- * valid even though the UI also prevents removing the last reviewer.
+ * The feature launcher sends every resolved step and reviewer selection,
+ * whether the editor is open or closed. Each row is an independent review,
+ * even when two rows happen to name the same model: collapsing rows here
+ * silently changes the workflow from fan-out plus consolidation to the classic
+ * single-review path. An empty panel falls back to the build selection, keeping
+ * this pure boundary valid even though the UI also prevents removing the last
+ * reviewer.
  */
 export function featureBuildStepConfigs(models: FeatureBuildModelState): {
   steps: BuildStepConfigs;
   reviewers: BuildStepConfig[];
 } {
-  const reviewers = distinctReviewerConfigs(models);
+  const reviewers = reviewerConfigs(models);
   return {
     steps: {
       build: stepConfig(models.build),
@@ -183,16 +174,12 @@ export interface FeatureBuildRequestInput {
   environmentName: string;
   networkAccessMode: NetworkAccessMode;
   portMappings: PortMapping[];
-  /** The dialog's Default Agent, used when the models panel is closed. */
-  defaultAgent: LaunchAgent;
-  customizeModels: boolean;
   models: FeatureBuildModelState;
   requestId: string;
 }
 
 export function featureBuildRequest(input: FeatureBuildRequestInput): CreateFeatureBuildInput {
   const configured = featureBuildStepConfigs(input.models);
-  const steps = input.customizeModels ? configured.steps : undefined;
   const name = input.environmentName.trim();
   const portMappings = input.environmentType === "containerized" ? input.portMappings : [];
   return {
@@ -208,10 +195,12 @@ export function featureBuildRequest(input: FeatureBuildRequestInput): CreateFeat
       networkAccessMode: input.networkAccessMode,
       ...(portMappings.length > 0 ? { portMappings } : {}),
     },
-    agentType: steps?.build?.agent ?? input.defaultAgent,
-    ...(steps ? { steps } : {}),
-    // Review configuration is always explicit, but exact duplicates collapse
-    // to the backend's single-review path instead of buying no extra signal.
+    // The editor's visibility never changes execution. Its resolved build
+    // selection is also the pipeline harness, so the two cannot drift.
+    agentType: input.models.build.agent,
+    steps: configured.steps,
+    // Review configuration is always explicit so the backend can distinguish
+    // the default fan-out from the legacy single-review pipeline.
     reviewers: configured.reviewers,
     requestId: input.requestId,
   };

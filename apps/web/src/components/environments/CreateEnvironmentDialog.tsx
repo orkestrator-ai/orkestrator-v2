@@ -479,32 +479,6 @@ export function CreateEnvironmentDialog({
       }),
     [configuredAgentDefaults, enabledAgentPlatforms, modelCatalog],
   );
-  /**
-   * The models "Customize models" opens on.
-   *
-   * Every step reads its own Settings entry — the same entries the review,
-   * multi-review, PR and resolve launchers use — so the panel agrees with what
-   * a direct click on those actions would run. The build step follows the
-   * dialog's own Default Agent instead, because that is the decision the user
-   * has already made a few controls above.
-   */
-  const defaultFeatureModels = useMemo(
-    () =>
-      defaultFeatureBuildModels({
-        catalog: modelCatalog,
-        build: {
-          agent: initialAgentDefaults.agent,
-          model: initialAgentDefaults.model,
-          reasoningEffort: initialAgentDefaults.reasoningEffort,
-        },
-        review: resolvedActionDefault(agentTiers, "review", enabledAgentPlatforms),
-        review2: resolvedActionDefault(agentTiers, "review2", enabledAgentPlatforms),
-        address: resolvedActionDefault(agentTiers, "fixReviewIssues", enabledAgentPlatforms),
-        pr: resolvedActionDefault(agentTiers, "pr", enabledAgentPlatforms),
-        resolve: resolvedActionDefault(agentTiers, "resolve", enabledAgentPlatforms),
-      }),
-    [agentTiers, enabledAgentPlatforms, initialAgentDefaults, modelCatalog],
-  );
   const getInitialAgentSelection = useCallback(
     (nextAgent: AgentType) => {
       const defaults = resolveCreateEnvironmentAgentDefaults({
@@ -533,6 +507,31 @@ export function CreateEnvironmentDialog({
   const [piMode, setPiMode] = useState<AgentStyle>(initialAgentDefaults.piMode);
   const [model, setModel] = useState(initialAgentDefaults.model);
   const [reasoningEffort, setReasoningEffort] = useState(initialAgentDefaults.reasoningEffort);
+  /**
+   * The models "Customize models" opens on.
+   *
+   * Every non-build step reads its own Settings entry — the same entries the
+   * review, multi-review, PR and resolve launchers use. Build follows the live
+   * Default Agent picker, including model and reasoning, because that is the
+   * decision the user has already made a few controls above.
+   */
+  const defaultFeatureModels = useMemo(
+    () =>
+      defaultFeatureBuildModels({
+        catalog: modelCatalog,
+        build: {
+          agent: agentType,
+          model,
+          reasoningEffort,
+        },
+        review: resolvedActionDefault(agentTiers, "review", enabledAgentPlatforms),
+        review2: resolvedActionDefault(agentTiers, "review2", enabledAgentPlatforms),
+        address: resolvedActionDefault(agentTiers, "fixReviewIssues", enabledAgentPlatforms),
+        pr: resolvedActionDefault(agentTiers, "pr", enabledAgentPlatforms),
+        resolve: resolvedActionDefault(agentTiers, "resolve", enabledAgentPlatforms),
+      }),
+    [agentTiers, agentType, enabledAgentPlatforms, model, modelCatalog, reasoningEffort],
+  );
   const [buildIntent, setBuildIntent] = useState<BuildIntent>("prompt");
   const [featureName, setFeatureName] = useState("");
   const [featureDescription, setFeatureDescription] = useState("");
@@ -1096,6 +1095,7 @@ export function CreateEnvironmentDialog({
     (nextAgent: AgentType) => {
       if (nextAgent === agentType) return;
       agentSelectionTouchedRef.current = true;
+      featureAttemptModelsRef.current = null;
       setAgentType(nextAgent);
       const nextSelection = getInitialAgentSelection(nextAgent);
       setModel(nextSelection.model);
@@ -1107,6 +1107,7 @@ export function CreateEnvironmentDialog({
   const selectAgentModel = useCallback(
     (nextModel: AgentModel) => {
       agentSelectionTouchedRef.current = true;
+      featureAttemptModelsRef.current = null;
       const targetModels = modelsForAgent(modelCatalog, nextModel.platform);
       const supportedEfforts =
         targetModels.find((candidate) => candidate.id === nextModel.id)?.reasoningEfforts ?? [];
@@ -1138,6 +1139,7 @@ export function CreateEnvironmentDialog({
 
   const selectReasoningEffort = useCallback((nextEffort: string) => {
     agentSelectionTouchedRef.current = true;
+    featureAttemptModelsRef.current = null;
     setReasoningEffort(nextEffort);
   }, []);
 
@@ -1240,8 +1242,6 @@ export function CreateEnvironmentDialog({
               environmentName,
               networkAccessMode,
               portMappings,
-              defaultAgent: agentType,
-              customizeModels,
               models: requestModels,
               requestId,
             });
@@ -1312,7 +1312,6 @@ export function CreateEnvironmentDialog({
       launchAgent,
       agentType,
       buildIntent,
-      customizeModels,
       effectiveFeatureModels,
       featureAcceptanceCriteria,
       featureDescription,

@@ -103,11 +103,12 @@ describe("featureBuildStepConfigs", () => {
     });
   });
 
-  test("collapses exact duplicate reviewers to the single-review path", () => {
+  test("keeps duplicate reviewer rows as independent review sessions", () => {
     const state = models();
     state.reviewers[1] = { ...state.reviewers[0]!, key: "duplicate-reviewer" };
 
     expect(featureBuildStepConfigs(state).reviewers).toEqual([
+      { agent: "claude", model: "sonnet", reasoningEffort: "high" },
       { agent: "claude", model: "sonnet", reasoningEffort: "high" },
     ]);
   });
@@ -139,13 +140,12 @@ describe("featureBuildRequest", () => {
     environmentName: "  feature-dark  ",
     networkAccessMode: "restricted" as const,
     portMappings: [{ containerPort: 5173, hostPort: 5173, protocol: "tcp" as const }],
-    defaultAgent: "claude" as const,
     models: models(),
     requestId: "request-1",
   };
 
   test("trims the ticket and carries the environment shaping", () => {
-    const request = featureBuildRequest({ ...base, customizeModels: false });
+    const request = featureBuildRequest(base);
     expect(request.title).toBe("Dark mode");
     expect(request.description).toBe("A toggle");
     expect(request.acceptanceCriteria).toBe("It persists");
@@ -156,9 +156,9 @@ describe("featureBuildRequest", () => {
     });
   });
 
-  test("keeps two default reviewers when the models panel is closed", () => {
-    const request = featureBuildRequest({ ...base, customizeModels: false });
-    expect(request.steps).toBeUndefined();
+  test("sends every resolved default when the models panel is closed", () => {
+    const request = featureBuildRequest(base);
+    expect(request.steps).toEqual(featureBuildStepConfigs(base.models).steps);
     expect(request.reviewers).toEqual([
       { agent: "claude", model: "sonnet", reasoningEffort: "high" },
       { agent: "codex", model: "gpt-5.6" },
@@ -168,34 +168,36 @@ describe("featureBuildRequest", () => {
     expect(request.agentType).toBe("claude");
   });
 
-  test("does not send two identical default reviewers when the panel is closed", () => {
+  test("keeps two identical configured reviewers so consolidation still runs", () => {
     const duplicateModels = models();
     duplicateModels.reviewers[1] = {
       ...duplicateModels.reviewers[0]!,
       key: "duplicate-reviewer",
     };
 
-    expect(
-      featureBuildRequest({ ...base, models: duplicateModels, customizeModels: false }).reviewers,
-    ).toEqual([{ agent: "claude", model: "sonnet", reasoningEffort: "high" }]);
+    expect(featureBuildRequest({ ...base, models: duplicateModels }).reviewers).toEqual([
+      { agent: "claude", model: "sonnet", reasoningEffort: "high" },
+      { agent: "claude", model: "sonnet", reasoningEffort: "high" },
+    ]);
   });
 
-  test("sends every step when the models panel is open", () => {
-    const request = featureBuildRequest({ ...base, customizeModels: true });
+  test("uses the resolved build selection as the pipeline agent", () => {
+    const codexBuild = models();
+    codexBuild.build = { agent: "codex", model: "gpt-5.6", reasoningEffort: "high" };
+
+    const request = featureBuildRequest({ ...base, models: codexBuild });
+    expect(request.agentType).toBe("codex");
     expect(request.steps?.build).toEqual({
-      agent: "claude",
-      model: "opus",
-      reasoningEffort: "max",
+      agent: "codex",
+      model: "gpt-5.6",
+      reasoningEffort: "high",
     });
-    expect(request.reviewers).toHaveLength(2);
-    expect(request.agentType).toBe("claude");
   });
 
   test("drops port mappings for a local worktree, which has no ports to publish", () => {
     const request = featureBuildRequest({
       ...base,
       environmentType: "local",
-      customizeModels: false,
     });
     expect(request.environmentOptions?.portMappings).toBeUndefined();
   });
@@ -204,7 +206,6 @@ describe("featureBuildRequest", () => {
     const request = featureBuildRequest({
       ...base,
       environmentName: "   ",
-      customizeModels: false,
     });
     expect(request.environmentOptions?.name).toBeUndefined();
   });
@@ -220,8 +221,6 @@ describe("featureBuildIdentity", () => {
     environmentName: "feature-dark",
     networkAccessMode: "restricted" as const,
     portMappings: [],
-    defaultAgent: "claude" as const,
-    customizeModels: false,
     models: models(),
     requestId: "request-1",
   };
@@ -243,7 +242,6 @@ describe("featureBuildIdentity", () => {
       { environmentName: "other-name" },
       { networkAccessMode: "full" as const },
       { environmentType: "local" as const },
-      { customizeModels: true },
       {
         models: {
           ...models(),

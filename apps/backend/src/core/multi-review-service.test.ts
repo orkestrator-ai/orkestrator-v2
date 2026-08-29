@@ -28,7 +28,10 @@ import {
   ProviderSessionFailedError,
 } from "./build-pipeline-provider.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
-import { MissingMultiReviewAddressSessionError } from "./multi-review-address-dispatch.js";
+import {
+  MissingMultiReviewAddressSessionError,
+  MultiReviewAddressDispatchError,
+} from "./multi-review-address-dispatch.js";
 import { StorageService } from "./storage.js";
 import { MultiReviewService, type MultiReviewServiceOptions } from "./multi-review-service.js";
 
@@ -657,6 +660,219 @@ test("MultiReviewService dispatches a durable address intent without a renderer"
           dispatched.push(workflow);
           dispatchStarted();
           await dispatchGate;
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService owns a custom-fix launch after the renderer records intent", async () => {
+  const provider = new Provider();
+  let releaseDispatch!: () => void;
+  const dispatchGate = new Promise<void>((resolve) => {
+    releaseDispatch = resolve;
+  });
+  let dispatchStarted!: () => void;
+  const startedDispatch = new Promise<void>((resolve) => {
+    dispatchStarted = resolve;
+  });
+  await withService(
+    "env-custom-fix-backend",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const previousProviderSessionId = (await snapshot(started.id))!.fixSession!.providerSessionId;
+      const disposalsBeforeCustomFix = provider.disposeCalls;
+
+      const requested = await service.customFix({
+        workflowId: started.id,
+        fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        instruction: "Fix the inactive-environment regression",
+      });
+      expect(requested).toMatchObject({
+        phase: "interactive",
+        addressPromptPending: true,
+        customFixInstruction: "Fix the inactive-environment regression",
+        customFixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      });
+      expect(
+        requested.addressSessionKey?.startsWith(`multi-review:${started.id}:interactive:`),
+      ).toBe(true);
+      expect(requested.addressRequestId?.startsWith(`multi-review-address:${started.id}:`)).toBe(
+        true,
+      );
+      expect(requested.addressTabId?.startsWith(`multi-review-fix:${started.id}:`)).toBe(true);
+
+      await startedDispatch;
+      expect(await snapshot(started.id)).toMatchObject({
+        phase: "interactive",
+        addressPromptPending: true,
+        customFixInstruction: "Fix the inactive-environment regression",
+      });
+
+      releaseDispatch();
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      const delivered = (await snapshot(started.id))!;
+      expect(delivered.customFixInstruction).toBeUndefined();
+      expect(delivered.customFixModel).toBeUndefined();
+      expect(delivered.fixModel).toEqual({
+        agent: "codex",
+        model: "gpt-5.4",
+        reasoningEffort: "high",
+      });
+      expect(delivered.fixSession).toMatchObject({
+        agent: "codex",
+        model: "gpt-5.4",
+        providerSessionId: "provider-custom-fix",
+        sessionKey: requested.addressSessionKey,
+        status: "idle",
+      });
+      expect(delivered.fixTabId).toBe(requested.addressTabId);
+      expect(delivered.presentationError).toBe(
+        "The fix request was delivered, but its tab could not be opened.",
+      );
+      await waitUntil(() => provider.aborted.includes(previousProviderSessionId));
+      expect(provider.disposeCalls).toBeGreaterThan(disposalsBeforeCustomFix);
+    },
+    {
+      serviceOptions: {
+        dispatchAddressPrompt: async (workflow) => {
+          dispatchStarted();
+          await dispatchGate;
+          return {
+            fixSession: {
+              ...(workflow.customFixModel ?? workflow.fixModel),
+              sessionKey: workflow.addressSessionKey!,
+              providerSessionId: "provider-custom-fix",
+              requestIds: [workflow.addressRequestId!],
+              status: "idle",
+              startedAt: "2026-08-29T00:00:00.000Z",
+            },
+            tabId: workflow.addressTabId!,
+            presentationError: "The fix request was delivered, but its tab could not be opened.",
+          };
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService reissues only an identical pending custom fix", async () => {
+  const provider = new Provider();
+  let dispatches = 0;
+  await withService(
+    "env-custom-fix-idempotent",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const input = {
+        workflowId: started.id,
+        fixModel: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
+        instruction: "Fix the inactive-environment regression",
+      };
+      await service.customFix(input);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptAttempts === 1);
+      const pending = (await snapshot(started.id))!;
+
+      await expect(
+        service.customFix({ ...input, instruction: "Use a different implementation" }),
+      ).rejects.toThrow("not ready for a custom fix");
+      const reissued = await service.customFix(input);
+      expect(reissued.addressSessionKey).toBe(pending.addressSessionKey);
+      expect(reissued.addressRequestId).toBe(pending.addressRequestId);
+      expect(reissued.addressTabId).toBe(pending.addressTabId);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+      expect(dispatches).toBe(2);
+    },
+    {
+      serviceOptions: {
+        addressDispatchRetryMs: 60_000,
+        dispatchAddressPrompt: async () => {
+          dispatches += 1;
+          if (dispatches === 1) throw new Error("bridge is restarting");
+        },
+      },
+    },
+  );
+});
+
+test("MultiReviewService cleans up an exhausted custom launch and rotates the next identity", async () => {
+  const provider = new Provider();
+  const invalidated: string[] = [];
+  let fail = true;
+  let failedSessionKey = "";
+  let failedRequestId = "";
+  await withService(
+    "env-custom-fix-failure",
+    provider,
+    async ({ service, start, snapshot }) => {
+      const started = await start();
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "ready";
+      });
+      const originalSessionId = (await snapshot(started.id))!.fixSession!.providerSessionId;
+
+      await service.customFix({
+        workflowId: started.id,
+        fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        instruction: "First custom fix",
+      });
+      await waitUntil(async () => {
+        await service.advanceNow(started.id);
+        return (await snapshot(started.id))?.phase === "failed";
+      });
+      const failed = (await snapshot(started.id))!;
+      expect(failed.addressPromptPending).toBeUndefined();
+      expect(failed.addressSessionKey).toBeUndefined();
+      expect(failed.addressRequestId).toBeUndefined();
+      expect(failed.addressTabId).toBeUndefined();
+      expect(failed.customFixInstruction).toBeUndefined();
+      expect(failed.customFixModel).toBeUndefined();
+      expect(failed.fixModel.agent).toBe("claude");
+      expect(failed.fixSession?.providerSessionId).toBe(originalSessionId);
+      expect(provider.aborted).toContain("provider-failed-custom");
+      expect(invalidated).toEqual(["provider-failed-custom"]);
+
+      const ready = await service.retry(started.id);
+      expect(ready.phase).toBe("ready");
+      fail = false;
+      const second = await service.customFix({
+        workflowId: started.id,
+        fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+        instruction: "Second custom fix",
+      });
+      expect(second.addressSessionKey).not.toBe(failedSessionKey);
+      expect(second.addressRequestId).not.toBe(failedRequestId);
+      await waitUntil(async () => (await snapshot(started.id))?.addressPromptPending !== true);
+    },
+    {
+      serviceOptions: {
+        addressDispatchRetryMs: 0,
+        maxAddressDispatchAttempts: 3,
+        invalidateAddressSession: async (_workflow, session) => {
+          invalidated.push(session.providerSessionId);
+        },
+        dispatchAddressPrompt: async (workflow) => {
+          if (!fail) return;
+          failedSessionKey = workflow.addressSessionKey!;
+          failedRequestId = workflow.addressRequestId!;
+          throw new MultiReviewAddressDispatchError("credentials are invalid", {
+            ...workflow.customFixModel!,
+            sessionKey: workflow.addressSessionKey!,
+            providerSessionId: "provider-failed-custom",
+            requestIds: [workflow.addressRequestId!],
+            status: "idle",
+            startedAt: "2026-08-29T00:00:00.000Z",
+          });
         },
       },
     },

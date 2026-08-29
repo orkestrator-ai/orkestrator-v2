@@ -1632,6 +1632,14 @@ describe("backend native agent and looped review wrappers", () => {
     // level and rejects any key it does not recognise.
     expect(invokeMock).toHaveBeenLastCalledWith("start_multi_review", { ...input });
 
+    const customFix = {
+      workflowId: "multi-1",
+      fixModel: { agent: "codex" as const, model: "gpt-5.4", reasoningEffort: "high" },
+      instruction: "Fix the inactive-tab regression",
+    };
+    await expect(backendWrappers.startMultiReviewCustomFix(customFix)).resolves.toBe(workflow);
+    expect(invokeMock).toHaveBeenLastCalledWith("start_multi_review_custom_fix", customFix);
+
     for (const [method, command] of [
       [backendWrappers.addressMultiReview, "address_multi_review"],
       [backendWrappers.retryMultiReview, "retry_multi_review"],

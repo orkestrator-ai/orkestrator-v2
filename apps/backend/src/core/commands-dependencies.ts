@@ -221,7 +221,9 @@ export {
   MULTI_REVIEW_ADDRESS_PROMPT,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
+  isStartMultiReviewCustomFixInput,
   isStartMultiReviewInput,
+  type StartMultiReviewCustomFixInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 export {

@@ -201,8 +201,11 @@ export abstract class StorageSessions extends StorageConfig {
         const retained = leaf.tabs.filter((tab) => {
           const tabId = typeof tab.id === "string" ? tab.id : "";
           const reviewData = isRecord(tab.multiReviewTabData) ? tab.multiReviewTabData : undefined;
+          const fixTabPrefix = `multi-review-fix:${workflowId}`;
           const owned =
-            reviewData?.workflowId === workflowId || tabId === `multi-review-fix:${workflowId}`;
+            reviewData?.workflowId === workflowId ||
+            tabId === fixTabPrefix ||
+            tabId.startsWith(`${fixTabPrefix}:`);
           if (owned && tabId) removed.push(tabId);
           return !owned;
         });
@@ -489,6 +492,8 @@ export abstract class StorageSessions extends StorageConfig {
     agent: BuildPipelineAgent;
     providerSessionId?: string;
     title?: string;
+    isReviewTab?: boolean;
+    activate?: boolean;
   }): Promise<PersistedPaneLayout> {
     return this.enqueuePaneLayoutMutation(async () => {
       const environment = await this.getEnvironment(input.environmentId);
@@ -548,16 +553,18 @@ export abstract class StorageSessions extends StorageConfig {
         type: "agent-native",
         nativeAgentData,
         ...(input.title?.trim() ? { displayTitle: input.title.trim() } : {}),
+        ...(input.isReviewTab === true ? { isReviewTab: true } : {}),
       };
       if (existingTab) Object.assign(existingTab, tab);
       else target.tabs.push(tab);
-      if (!target.activeTabId) target.activeTabId = input.tabId;
+      const activateNewTab = input.activate === true && !existingTab;
+      if (!target.activeTabId || activateNewTab) target.activeTabId = input.tabId;
 
       const saved: PersistedPaneLayout = {
         version: PANE_LAYOUT_VERSION,
         environmentId: input.environmentId,
         containerId: environment.environmentType === "local" ? null : environment.containerId,
-        activePaneId: previous?.activePaneId ?? target.id,
+        activePaneId: activateNewTab ? target.id : (previous?.activePaneId ?? target.id),
         root,
         updatedAt: nowIso(),
         revision: (previous?.revision ?? 0) + 1,

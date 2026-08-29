@@ -21,6 +21,7 @@ import type {
 import type {
   MultiReviewWorkflow as BackendMultiReviewWorkflow,
   MultiReviewReviewerTranscript,
+  StartMultiReviewCustomFixInput,
   StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import type {
@@ -160,6 +161,12 @@ export async function startMultiReview(
 
 export async function addressMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {
   return invoke<BackendMultiReviewWorkflow>("address_multi_review", { workflowId });
+}
+
+export async function startMultiReviewCustomFix(
+  input: StartMultiReviewCustomFixInput,
+): Promise<BackendMultiReviewWorkflow> {
+  return invoke<BackendMultiReviewWorkflow>("start_multi_review_custom_fix", { ...input });
 }
 
 export async function retryMultiReview(workflowId: string): Promise<BackendMultiReviewWorkflow> {

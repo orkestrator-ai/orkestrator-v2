@@ -5,6 +5,7 @@ import {
   MULTI_REVIEW_WORKFLOW_VERSION,
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
+  isStartMultiReviewCustomFixInput,
   isStartMultiReviewInput,
 } from "./multi-review";
 import type { StructuredReviewReport } from "./structured-review";
@@ -209,6 +210,50 @@ describe("multi review protocol", () => {
         addressPromptAttempts: 1,
       }),
     ).toBe(false);
+    const custom = {
+      ...workflow,
+      customFixInstruction: "Fix the inactive-tab regression",
+      customFixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      addressSessionKey: "interactive-launch-1",
+      addressRequestId: "address-launch-1",
+      addressTabId: "fix-tab-launch-1",
+    };
+    expect(isMultiReviewWorkflow(custom)).toBe(true);
+    expect(isMultiReviewWorkflow({ ...custom, customFixModel: undefined })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...custom, customFixInstruction: undefined })).toBe(false);
+    expect(isMultiReviewWorkflow({ ...custom, consolidatedReport: undefined })).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...custom,
+        addressPromptPending: undefined,
+        addressPromptAttempts: undefined,
+      }),
+    ).toBe(false);
+    expect(
+      isMultiReviewWorkflow({
+        ...custom,
+        addressPromptPending: undefined,
+        addressPromptAttempts: undefined,
+        addressSessionKey: undefined,
+        addressRequestId: undefined,
+        addressTabId: undefined,
+        customFixInstruction: undefined,
+        customFixModel: undefined,
+        fixTabId: "fix-tab-launch-1",
+        presentationError: "The tab could not be opened",
+      }),
+    ).toBe(true);
+  });
+
+  test("validates a bounded custom fix intent", () => {
+    const input = {
+      workflowId: "multi-1",
+      fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+      instruction: "Fix the inactive-tab regression",
+    };
+    expect(isStartMultiReviewCustomFixInput(input)).toBe(true);
+    expect(isStartMultiReviewCustomFixInput({ ...input, instruction: " " })).toBe(false);
+    expect(isStartMultiReviewCustomFixInput({ ...input, rendererOnly: true })).toBe(false);
   });
 
   test("rejects unsafe branches, empty instructions, and duplicate reviewer identities", () => {

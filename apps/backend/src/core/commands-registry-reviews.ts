@@ -3,10 +3,15 @@ import {
   LOOPED_REVIEW_WORKFLOW_VERSION,
   isLoopedReviewTerminalPhase,
   isLoopedReviewWorkflow,
+  isStartMultiReviewCustomFixInput,
   isStartLoopedReviewInput,
   isStartMultiReviewInput,
 } from "./commands-dependencies.js";
-import type { StartLoopedReviewInput, StartMultiReviewInput } from "./commands-dependencies.js";
+import type {
+  StartLoopedReviewInput,
+  StartMultiReviewCustomFixInput,
+  StartMultiReviewInput,
+} from "./commands-dependencies.js";
 import {
   asString,
   asNumber,
@@ -212,6 +217,15 @@ export function registerReviewWorkflowCommands(
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
     const id = asNonBlankString(workflowId, "workflowId");
     return context.multiReviews.address(id).then(stripLoopedReviewSnapshotSecrets);
+  });
+  register("start_multi_review_custom_fix", (args, context) => {
+    if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");
+    if (!isStartMultiReviewCustomFixInput(args)) {
+      throw new Error("Invalid Multi Review custom fix request");
+    }
+    return context.multiReviews
+      .customFix(args as unknown as StartMultiReviewCustomFixInput)
+      .then(stripLoopedReviewSnapshotSecrets);
   });
   register("retry_multi_review", ({ workflowId }, context) => {
     if (!context.multiReviews) throw new Error("Multi review supervisor is unavailable");

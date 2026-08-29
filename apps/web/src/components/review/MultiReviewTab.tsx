@@ -34,10 +34,14 @@ import { MultiReviewReviewerTab } from "./MultiReviewReviewerTab";
 import * as backend from "@/lib/backend";
 import { MultiReviewFixPromptDialog } from "./MultiReviewFixPromptDialog";
 import { useReviewModelCatalog } from "@/hooks/useBuildLaunchOptions";
-import { multiReviewCustomFixPrompt } from "@/lib/review-actions";
 
 interface MultiReviewCommands {
   address: (workflowId: string) => Promise<MultiReviewWorkflow>;
+  customFix?: (
+    workflowId: string,
+    fixModel: MultiReviewWorkflow["fixModel"],
+    instruction: string,
+  ) => Promise<MultiReviewWorkflow>;
   retry: (workflowId: string) => Promise<MultiReviewWorkflow>;
   cancel: (workflowId: string) => Promise<MultiReviewWorkflow>;
   stopReviewer: (workflowId: string, reviewerId: string) => Promise<MultiReviewWorkflow>;
@@ -47,6 +51,8 @@ interface MultiReviewCommands {
 
 const defaultCommands: MultiReviewCommands = {
   address: backend.addressMultiReview,
+  customFix: (workflowId, fixModel, instruction) =>
+    backend.startMultiReviewCustomFix({ workflowId, fixModel, instruction }),
   retry: backend.retryMultiReview,
   cancel: backend.cancelMultiReview,
   stopReviewer: backend.stopMultiReviewReviewer,
@@ -84,7 +90,7 @@ export function multiReviewFixSessionTabOptions(
   const session = workflow.fixSession;
   if (!session?.providerSessionId) return null;
   return {
-    tabId: `multi-review-fix:${workflow.id}`,
+    tabId: workflow.fixTabId ?? `multi-review-fix:${workflow.id}`,
     activateExistingTab: true,
     agentLaunchMode: "native",
     resumeSessionId: session.providerSessionId,
@@ -170,6 +176,7 @@ function MultiReviewOverviewTab({
     kind: "restart" | "unstick";
   } | null>(null);
   const [customFixPromptOpen, setCustomFixPromptOpen] = useState(false);
+  const [customFixPending, setCustomFixPending] = useState(false);
   const [customFixError, setCustomFixError] = useState<string | null>(null);
   const modelCatalog = useReviewModelCatalog(workflow?.projectId ?? "", customFixPromptOpen);
   const mountedRef = useRef(false);
@@ -328,30 +335,29 @@ function MultiReviewOverviewTab({
     }
   };
 
-  const startCustomFix = (selection: MultiReviewWorkflow["fixModel"], prompt: string) => {
+  const startCustomFix = async (selection: MultiReviewWorkflow["fixModel"], prompt: string) => {
+    if (customFixPending) return;
     if (!workflow?.consolidatedReport) {
       setCustomFixError("The consolidated review report is no longer available.");
       return;
     }
-    if (!createTab) {
-      setCustomFixError("The environment is not ready or the maximum tab count was reached.");
-      return;
+    setCustomFixPending(true);
+    setCustomFixError(null);
+    try {
+      const customFix = commands.customFix ?? defaultCommands.customFix!;
+      replaceWorkflow(await customFix(workflow.id, selection, prompt));
+      if (mountedRef.current) {
+        setCustomFixError(null);
+        setCustomFixPromptOpen(false);
+        if (isActiveRef.current) setOpenAfterDelivery(true);
+      }
+    } catch (reason) {
+      if (mountedRef.current) {
+        setCustomFixError(reason instanceof Error ? reason.message : String(reason));
+      }
+    } finally {
+      if (mountedRef.current) setCustomFixPending(false);
     }
-    const opened = createTab(selection.agent, {
-      agentLaunchMode: "native",
-      displayTitle: MULTI_REVIEW_FIX_TAB_TITLE,
-      isReviewTab: true,
-      initialAgentModel: selection.model === "default" ? undefined : selection.model,
-      initialReasoningEffort: selection.reasoningEffort,
-      initialConversationMode: "build",
-      initialPrompt: multiReviewCustomFixPrompt(workflow.consolidatedReport, prompt),
-    });
-    if (opened) {
-      setCustomFixError(null);
-      setCustomFixPromptOpen(false);
-      return;
-    }
-    setCustomFixError("The environment is not ready or the maximum tab count was reached.");
   };
 
   if (!workflow) {
@@ -586,16 +592,17 @@ function MultiReviewOverviewTab({
             </div>
           )}
 
-          {presentationNotice && (
+          {(presentationNotice || workflow.presentationError) && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 p-3 text-sm text-amber-500">
-              {presentationNotice}
+              {presentationNotice ?? workflow.presentationError}
             </div>
           )}
 
           {workflow.phase === "interactive" &&
             workflow.addressPromptPending !== true &&
             workflow.fixSession?.providerSessionId &&
-            !presentationNotice && (
+            !presentationNotice &&
+            !workflow.presentationError && (
               <div className="rounded-lg border border-border/60 bg-muted/30 p-3 text-sm text-muted-foreground">
                 The fix request was delivered. The fix session is ready to open.
               </div>
@@ -672,6 +679,7 @@ function MultiReviewOverviewTab({
         catalog={modelCatalog}
         defaultSelection={workflow.fixModel}
         error={customFixError}
+        busy={customFixPending}
         onSubmit={startCustomFix}
       />
     </div>

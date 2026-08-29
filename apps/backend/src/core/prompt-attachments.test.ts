@@ -65,6 +65,26 @@ describe("mimeTypeForImageData", () => {
   test("falls back to the filename for an unrecognized payload", () => {
     expect(mimeTypeForImageData("pasted.jpeg", "AAAA")).toBe("image/jpeg");
   });
+
+  test.each([
+    ["an empty payload", "fallback.jpeg", Buffer.alloc(0), "image/jpeg"],
+    [
+      "a truncated PNG signature",
+      "fallback.gif",
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      "image/gif",
+    ],
+    ["a truncated JPEG signature", "fallback.webp", Buffer.from([0xff, 0xd8]), "image/webp"],
+    ["a truncated GIF signature", "fallback.jpg", Buffer.from("GIF89", "latin1"), "image/jpeg"],
+    [
+      "a truncated WebP signature",
+      "fallback.png",
+      Buffer.from("RIFF0000WEB", "latin1"),
+      "image/png",
+    ],
+  ])("falls back for %s", (_label, filename, bytes, expected) => {
+    expect(mimeTypeForImageData(filename, bytes.toString("base64"))).toBe(expected);
+  });
 });
 
 describe("assertValidPromptImages", () => {
@@ -281,7 +301,10 @@ describe("stagePromptImages", () => {
   });
 
   test("declares normalized WebP bytes as WebP even when the original name is PNG", async () => {
-    const invoke = mock(async () => "written" as never);
+    const invoke = mock(
+      async (_command: string, args?: Record<string, unknown>) =>
+        (args as { filePath: string }).filePath as never,
+    );
     const webp = Buffer.from("RIFF0000WEBP", "latin1").toString("base64");
 
     const [staged] = await stagePromptImages(invoke, environment(), [
@@ -289,9 +312,14 @@ describe("stagePromptImages", () => {
     ]);
 
     expect(staged).toMatchObject({
-      filename: "clipboard.png",
+      filename: "clipboard.webp",
+      path: `${DEFAULT_STAGING_DIRECTORY}/clipboard.webp`,
       dataUrl: `data:image/webp;base64,${webp}`,
     });
+    expect(invoke).toHaveBeenCalledWith(
+      "write_local_file",
+      expect.objectContaining({ filePath: `${DEFAULT_STAGING_DIRECTORY}/clipboard.webp` }),
+    );
   });
 
   test.each([

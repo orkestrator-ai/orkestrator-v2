@@ -857,28 +857,23 @@ export function CreateEnvironmentDialog({
   );
 
   const appendInitialPromptAttachments = useCallback(
-    (attachments: InitialPromptImageAttachment[], intent: BuildIntent): boolean => {
+    (attachments: InitialPromptImageAttachment[]): boolean => {
       if (attachments.length === 0) return false;
       const current = initialPromptAttachmentsRef.current;
-      const attachmentsForIntent =
-        intent === "feature" ? current.filter((attachment) => attachment.type !== "file") : current;
-      if (attachmentsForIntent.length + attachments.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
+      const next = [...current, ...attachments];
+      if (next.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
         toast.error("Too many attachments", {
           description: `Up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} attachments can be included.`,
         });
         return false;
       }
-      const durableBytes = serializedInitialPromptAttachmentBytes([
-        ...attachmentsForIntent,
-        ...attachments,
-      ]);
+      const durableBytes = serializedInitialPromptAttachmentBytes(next);
       if (durableBytes > MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES) {
         toast.error("Attachments too large", {
           description: "Attachments can use up to 32MB of stored data.",
         });
         return false;
       }
-      const next = [...current, ...attachments];
       initialPromptAttachmentsRef.current = next;
       setInitialPromptAttachments(next);
       return true;
@@ -926,7 +921,7 @@ export function CreateEnvironmentDialog({
           event.stopImmediatePropagation();
         }
 
-        if (appendInitialPromptAttachments([attachment], pasteIntent)) {
+        if (appendInitialPromptAttachments([attachment])) {
           toast.success("Image attached");
         }
       } catch {
@@ -971,10 +966,7 @@ export function CreateEnvironmentDialog({
           return;
         }
       }
-      const currentAttachments =
-        dropIntent === "feature"
-          ? initialPromptAttachmentsRef.current.filter((attachment) => attachment.type !== "file")
-          : initialPromptAttachmentsRef.current;
+      const currentAttachments = initialPromptAttachmentsRef.current;
       if (currentAttachments.length + files.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
         toast.error("Too many attachments", {
           description: `Up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} attachments can be included.`,
@@ -1030,7 +1022,7 @@ export function CreateEnvironmentDialog({
           }
         }
         if (!isCurrentOperation()) return;
-        if (appendInitialPromptAttachments(attachments, dropIntent)) {
+        if (appendInitialPromptAttachments(attachments)) {
           toast.success(
             `${attachments.length} file${attachments.length === 1 ? "" : "s"} attached`,
           );

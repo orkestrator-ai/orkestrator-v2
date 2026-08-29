@@ -216,18 +216,62 @@ describe("createFeatureBuild", () => {
     });
   });
 
+  test("a retry completes only the missing writes after partial image persistence", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      const persistImage = storage.addNormalizedKanbanImageForRequest.bind(storage);
+      let attempts = 0;
+      storage.addNormalizedKanbanImageForRequest = async (...args) => {
+        attempts += 1;
+        if (attempts === 2) throw new Error("injected second image write failure");
+        return persistImage(...args);
+      };
+      const request = {
+        ...input,
+        requestId: "request-partial-images",
+        images: [
+          { filename: "first.png", data: validImageBase64 },
+          { filename: "second.png", data: validImageBase64 },
+        ],
+      };
+
+      await expect(
+        createFeatureBuild(request, { storage, buildPipelines: supervisor.service }),
+      ).rejects.toThrow("injected second image write failure");
+      expect(
+        (await storage.getKanbanTasks("project-1"))[0]!.images.map(({ filename }) => filename),
+      ).toEqual(["first.png"]);
+      expect(supervisor.started).toHaveLength(0);
+
+      await createFeatureBuild(request, { storage, buildPipelines: supervisor.service });
+      const task = (await storage.getKanbanTasks("project-1"))[0]!;
+      expect(task.images.map(({ filename }) => filename)).toEqual(["first.png", "second.png"]);
+      expect(new Set(task.images.map(({ id }) => id)).size).toBe(2);
+      expect(supervisor.started[0]!.taskSnapshot.images.map(({ filename }) => filename)).toEqual([
+        "first.png",
+        "second.png",
+      ]);
+    });
+  });
+
   test("rejects decodable base64 that is not an image before creating a ticket", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();
-      await expect(
-        createFeatureBuild(
+      let rejection: unknown;
+      try {
+        await createFeatureBuild(
           {
             ...input,
             images: [{ filename: "reference.png", data: "QUJD" }],
           },
           { storage, buildPipelines: supervisor.service },
-        ),
-      ).rejects.toThrow("not a supported image");
+        );
+      } catch (error) {
+        rejection = error;
+      }
+      expect(rejection).toBeInstanceOf(Error);
+      expect((rejection as Error).message).toContain("not a supported image");
+      expect((rejection as Error).cause).toBeInstanceOf(Error);
       expect(await storage.getKanbanTasks("project-1")).toHaveLength(0);
       expect(supervisor.started).toHaveLength(0);
     });

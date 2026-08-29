@@ -43,8 +43,10 @@ export function mimeTypeForFilename(filename: string): string {
  * filename. Trusting that filename would label those WebP bytes as (usually)
  * PNG when they are handed to an image-aware agent.
  */
-export function mimeTypeForImageData(filename: string, data: string): string {
-  const bytes = Buffer.from(data, "base64");
+function detectedMimeTypeForImageData(data: string): string | undefined {
+  // Eighteen decoded bytes cover the longest signature below (12 bytes)
+  // without materializing a potentially multi-megabyte image payload.
+  const bytes = Buffer.from(data.slice(0, 24), "base64");
   if (
     bytes.length >= 8 &&
     bytes[0] === 0x89 &&
@@ -68,7 +70,26 @@ export function mimeTypeForImageData(filename: string, data: string): string {
   ) {
     return "image/webp";
   }
-  return mimeTypeForFilename(filename);
+  return undefined;
+}
+
+export function mimeTypeForImageData(filename: string, data: string): string {
+  return detectedMimeTypeForImageData(data) ?? mimeTypeForFilename(filename);
+}
+
+function filenameForDetectedMimeType(filename: string, mediaType: string | undefined): string {
+  if (!mediaType) return filename;
+  const extension =
+    mediaType === "image/jpeg"
+      ? ".jpg"
+      : mediaType === "image/gif"
+        ? ".gif"
+        : mediaType === "image/webp"
+          ? ".webp"
+          : ".png";
+  const dot = filename.lastIndexOf(".");
+  const stem = dot > 0 ? filename.slice(0, dot) : filename;
+  return `${stem.slice(0, 128 - extension.length)}${extension}`;
 }
 
 /**
@@ -232,7 +253,11 @@ export async function stagePromptImages(
   const used = new Set<string>();
   const staged: PromptAttachment[] = [];
   for (const [index, image] of validated.entries()) {
-    const filename = allocateUniqueFilename(sanitizeFilename(image.filename, index), used);
+    const detectedMediaType = detectedMimeTypeForImageData(image.data);
+    const filename = allocateUniqueFilename(
+      filenameForDetectedMimeType(sanitizeFilename(image.filename, index), detectedMediaType),
+      used,
+    );
     const relativePath = `${stagingDirectory}/${filename}`;
     const path = isLocal
       ? await invoke<string>("write_local_file", {
@@ -252,7 +277,7 @@ export async function stagePromptImages(
       type: "image",
       path,
       filename,
-      dataUrl: `data:${mimeTypeForImageData(filename, image.data)};base64,${image.data}`,
+      dataUrl: `data:${detectedMediaType ?? mimeTypeForFilename(filename)};base64,${image.data}`,
     });
   }
   return staged;

@@ -3877,6 +3877,112 @@ describe("CreateEnvironmentDialog feature builds", () => {
     ]);
   });
 
+  test("counts retained prompt files when feature mode adds an image", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    const onCreate = mock(async () => true);
+    render(<CreateEnvironmentDialog open onOpenChange={() => {}} onCreate={onCreate} />);
+    const promptFiles = Array.from(
+      { length: 20 },
+      (_, index) => new File(["notes"], `prompt-${index}.txt`, { type: "text/plain" }),
+    );
+
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer(promptFiles),
+    });
+    expect(await screen.findByText("prompt-19.txt")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /A feature/ }));
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([
+        new File(["image"], "feature.png", { type: "image/png" }),
+      ]),
+    });
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      "Too many attachments",
+      expect.objectContaining({ description: expect.stringContaining("20") }),
+    );
+    expect(mockReadImage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /With a prompt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+    expect(onCreate.mock.calls[0]![0].initialPromptAttachments).toHaveLength(20);
+  });
+
+  test("counts retained prompt-file bytes when feature mode adds an image", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={mock(async () => {})}
+      />,
+    );
+    const sevenMegabytes = new Uint8Array(7 * 1024 * 1024);
+    const promptFiles = Array.from(
+      { length: 3 },
+      (_, index) => new File([sevenMegabytes], `prompt-${index}.bin`),
+    );
+
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer(promptFiles),
+    });
+    expect(await screen.findByText("prompt-2.bin")).toBeTruthy();
+
+    chooseFeature({ name: "Bound shared bytes" });
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      `data:image/png;base64,${"A".repeat(4_500_000)}`) as typeof HTMLCanvasElement.prototype.toDataURL;
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([
+        new File(["image"], "feature.png", { type: "image/png" }),
+      ]),
+    });
+
+    await waitFor(
+      () =>
+        expect(toastErrorMock).toHaveBeenCalledWith(
+          "Attachments too large",
+          expect.objectContaining({ description: expect.stringContaining("32MB") }),
+        ),
+      { timeout: 10_000 },
+    );
+    expect(screen.queryByAltText("feature.png") === null).toBe(true);
+  });
+
+  test("omits retained prompt-only files when submitting a feature build", async () => {
+    const onCreateFeatureBuild = mock(async () => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+    fireEvent.drop(screen.getByRole("dialog"), {
+      dataTransfer: attachmentDataTransfer([
+        new File(["notes"], "prompt-only.txt", { type: "text/plain" }),
+      ]),
+    });
+    expect(await screen.findByText("prompt-only.txt")).toBeTruthy();
+
+    chooseFeature({ name: "Ignore prompt files" });
+    expect(screen.queryByText("prompt-only.txt") === null).toBe(true);
+    submitFeature();
+
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    expect(onCreateFeatureBuild.mock.calls[0]![0].images).toBeUndefined();
+  });
+
   test("accepts valid feature images from mixed and extensionless drops", async () => {
     mockReadImage.mockImplementation(async () => ({
       rgba: async () => new Uint8Array([255, 0, 0, 255]),

@@ -128,8 +128,10 @@ async function normalizeFeatureImages(
     try {
       const webp = await resizeKanbanImage(Buffer.from(image.data, "base64"));
       normalized.push({ filename: image.filename, data: webp.toString("base64") });
-    } catch {
-      throw new Error(`Feature image is not a supported image: ${image.filename}`);
+    } catch (error) {
+      throw new Error(`Feature image is not a supported image: ${image.filename}`, {
+        cause: error,
+      });
     }
   }
   return normalized;

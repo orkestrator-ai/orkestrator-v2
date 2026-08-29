@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import type { BuildPipeline } from "@orkestrator/protocol/build-pipeline";
+import {
+  LOOPED_REVIEW_MAX_CONTEXT_BYTES,
+  LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
+  LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH,
+} from "@orkestrator/protocol/review-workflow";
 import type {
   ReviewContractValidationCode,
   ReviewContractValidationIssue,
@@ -7,6 +12,7 @@ import type {
 } from "@orkestrator/protocol/structured-review";
 import {
   addressPrompt,
+  buildPipelineReviewPackageContext,
   buildPrompt,
   fixPrompt,
   MAX_REPORTED_CONTRACT_ISSUES,
@@ -60,6 +66,41 @@ function pipeline(): BuildPipeline {
 }
 
 describe("build pipeline prompts", () => {
+  test("bounds persisted ticket context and records every reduction", () => {
+    const value = pipeline();
+    value.taskSnapshot.title = "t".repeat(LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH + 1);
+    value.taskSnapshot.description = "😀".repeat(LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH);
+    value.taskSnapshot.comments = Array.from(
+      { length: LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES + 172 },
+      (_, index) => ({ text: `comment-${index}-${"x".repeat(8_000)}` }),
+    );
+    value.taskSnapshot.images = Array.from(
+      { length: LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES + 1 },
+      (_, index) => ({ filename: `image-${index}.png`, data: "redacted" }),
+    );
+
+    const bounded = buildPipelineReviewPackageContext(
+      value,
+      "n".repeat(LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH + 1),
+    );
+
+    expect(bounded.context.ticketTitle?.length).toBeLessThanOrEqual(
+      LOOPED_REVIEW_MAX_CONTEXT_TEXT_LENGTH,
+    );
+    expect(bounded.context.comments?.length).toBeLessThanOrEqual(
+      LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
+    );
+    expect(bounded.context.imageNames?.length).toBeLessThanOrEqual(
+      LOOPED_REVIEW_MAX_CONTEXT_LIST_ENTRIES,
+    );
+    expect(Buffer.byteLength(JSON.stringify(bounded.context), "utf8")).toBeLessThanOrEqual(
+      LOOPED_REVIEW_MAX_CONTEXT_BYTES,
+    );
+    expect(bounded.limitations.join("\n")).toContain("Ticket title was truncated");
+    expect(bounded.limitations.join("\n")).toContain("Ticket comments was truncated");
+    expect(bounded.limitations.join("\n")).toContain("Ticket context was reduced");
+  });
+
   test("buildPrompt includes the complete ticket and optional project notes", () => {
     const prompt = buildPrompt(pipeline(), "Use the existing state store.");
 
@@ -69,7 +110,9 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Cover the reconnect error path.");
     expect(prompt).toContain("expected-state.png");
     expect(prompt).toContain("Use the existing state store.");
-    expect(prompt).toContain("Commit all relevant implementation and test changes");
+    expect(prompt).toContain("Commit every relevant implementation and test change");
+    expect(prompt).toContain("Prepare the immutable review package");
+    expect(prompt).toContain("backend—not you—will deterministically generate it from Git");
   });
 
   test("buildPrompt omits empty optional context", () => {
@@ -504,8 +547,8 @@ describe("build pipeline prompts", () => {
     const prompt = fixPrompt(pipeline(), "", "The inactive-tab case still fails.");
 
     expect(prompt).toContain("The inactive-tab case still fails.");
-    expect(prompt).toContain("run validation");
-    expect(prompt).toContain("commit every relevant change");
+    expect(prompt).toContain("Run the relevant full tests, typechecking, and build validation");
+    expect(prompt).toContain("Commit every relevant implementation and test change");
   });
 
   test("fixPrompt preserves multiline feedback and its contract when feedback is empty", () => {
@@ -520,9 +563,8 @@ describe("build pipeline prompts", () => {
 
     const empty = fixPrompt(pipeline(), "", "");
     expect(empty).toContain("**Verification feedback**:\n");
-    expect(empty).toContain(
-      "Make the required changes, run validation, and commit every relevant change.",
-    );
+    expect(empty).toContain("Make the required changes. Do not ask questions.");
+    expect(empty).toContain("Prepare the immutable review package");
   });
 
   test("prPrompt uses safe staging and the requested target branch", () => {

@@ -625,6 +625,11 @@ export async function generateLoopedReviewPackage(
   ) {
     throw new Error("Preparation result does not account for every uncommitted file");
   }
+  if (actualUncommittedPaths.length > 0) {
+    throw new Error(
+      `Review package preparation requires a clean worktree; ${actualUncommittedPaths.length} non-ignored ${actualUncommittedPaths.length === 1 ? "path remains" : "paths remain"} uncommitted`,
+    );
+  }
 
   const changedFiles = await Promise.all(
     changes.map(async (file) => {

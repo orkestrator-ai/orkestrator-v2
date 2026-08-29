@@ -30,7 +30,6 @@ import {
   type LoopedReviewSessionPhase,
   type LoopedReviewWorkflow,
   type PendingLoopedReviewInteractionResolution,
-  type ReviewPackage,
   type StartLoopedReviewInput,
 } from "@orkestrator/protocol/review-workflow";
 import {
@@ -68,6 +67,7 @@ import {
   parsePrResult,
   parseReviewPreparationResult,
 } from "./looped-review-prompts.js";
+import { normalizeGeneratedReviewPackage } from "./review-package.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -168,44 +168,6 @@ function quarantineLegacyTurn(adopted: Record<string, unknown>): void {
     preserveDispatch: false,
     occurredAt: nowIso(),
   };
-}
-
-function reviewPackage(
-  value: unknown,
-  expected: {
-    id: string;
-    round: number;
-    targetBranch: string;
-    context?: LoopedReviewWorkflow["context"];
-  },
-): ReviewPackage {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Review package failed runtime validation");
-  }
-  const candidate = value as Partial<ReviewPackage>;
-  if (
-    candidate.id !== expected.id ||
-    candidate.round !== expected.round ||
-    candidate.targetBranch !== expected.targetBranch ||
-    typeof candidate.preparedAt !== "string" ||
-    typeof candidate.baseRef !== "string" ||
-    typeof candidate.headRef !== "string" ||
-    typeof candidate.completeDiff !== "string" ||
-    !Array.isArray(candidate.changedFiles) ||
-    !Array.isArray(candidate.validation) ||
-    !Array.isArray(candidate.skippedFiles) ||
-    !Array.isArray(candidate.uncommittedFiles) ||
-    !Array.isArray(candidate.limitations)
-  ) {
-    throw new Error("Prepared package does not match the active review round");
-  }
-  // The package generator returns `context: null` for a review with no ticket
-  // or project notes. Merging the expected context conditionally would leave
-  // that null in place, and a null context is not a `ReviewPackageContext` — the
-  // persisted snapshot would fail validation on the very next read and the
-  // workflow would be abandoned mid-flight. Drop the key instead of carrying it.
-  const { context: _generated, ...rest } = candidate;
-  return { ...rest, ...(expected.context ? { context: expected.context } : {}) } as ReviewPackage;
 }
 
 function parseReconciliation(value: unknown): LoopedReviewReconciliation {
@@ -1118,7 +1080,7 @@ export class LoopedReviewService {
         preparation,
       });
       await this.assertFence(workflow.id, token);
-      const prepared = reviewPackage(generated, {
+      const prepared = normalizeGeneratedReviewPackage(generated, {
         id: packageId,
         round: workflow.currentRound,
         targetBranch: workflow.targetBranch,

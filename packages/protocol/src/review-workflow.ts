@@ -552,10 +552,11 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-function isReviewPackage(value: unknown, round: number): value is ReviewPackage {
+export function isReviewPackage(value: unknown, round?: number): value is ReviewPackage {
   if (
     !isRecord(value) ||
-    value.round !== round ||
+    !isPositiveInteger(value.round) ||
+    (round !== undefined && value.round !== round) ||
     !isBoundedNonEmptyString(value.id, LOOPED_REVIEW_MAX_ID_LENGTH) ||
     typeof value.preparedAt !== "string" ||
     !isSafeLoopedReviewTargetBranch(value.targetBranch) ||

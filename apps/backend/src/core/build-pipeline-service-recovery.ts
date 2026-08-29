@@ -135,6 +135,7 @@ export abstract class BuildPipelineServiceRecovery extends BuildPipelineServiceS
         `Verification failed after ${pipeline.maxIterations} iterations: ${rationale}`,
       );
     }
+    delete pipeline.reviewPackage;
     pipeline.iteration += 1;
     await this.startStage(pipeline, "fix", "fixing");
   }

@@ -3,8 +3,8 @@
  *
  * When a pipeline is configured with more than one reviewer, its review phase
  * stops being one agent answering the structured-review contract and becomes
- * the same fan-out Multi Review runs: N reviewers against one pinned worktree
- * state, then a consolidation turn that merges their reports into the single
+ * the same fan-out Multi Review runs: N reviewers against one immutable review
+ * package, then a consolidation turn that merges their reports into the single
  * {@link BuildPipeline.structuredReview} the address stage already consumes.
  * Nothing downstream of the review stage learns there was more than one
  * reviewer — that is the whole point of consolidating here rather than
@@ -48,19 +48,17 @@ import {
   type BuildPipelineProvider,
 } from "./build-pipeline-provider.js";
 import { structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
+import { createDiscoveryPrompt } from "./looped-review-prompts.js";
 import {
   MAX_REVIEW_IDLE_RESULT_POLLS,
   MAX_REVIEW_SCHEMA_REPAIR_ATTEMPTS,
   ReviewFanoutRunner,
-  assertReviewSnapshotCurrent,
   attachAgentBeforeDispatch,
-  captureReviewWorktreeSnapshot,
   commitProgressObservation,
   consolidationReports,
   createReviewConsolidationPrompt,
   deriveConsolidatedProvenance,
   parseStructuredReportResult,
-  promptWorktreeSnapshot,
   resolveUnattendedReviewerInteractions,
   reviewFanoutErrorMessage,
   reviewFanoutNowIso,
@@ -78,11 +76,8 @@ import {
 /** Names the pipeline in reviewer-facing and user-facing failure text. */
 const FANOUT_LABEL = "Multi-model review";
 
-type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
-
 /** What the fan-out needs from the supervisor that owns the pipeline. */
 export interface BuildPipelineReviewFanoutDeps {
-  invoke: CommandInvoker;
   provider(pipeline: BuildPipeline, agent: BuildPipelineAgent): Promise<BuildPipelineProvider>;
   save(pipeline: BuildPipeline): Promise<void>;
   stepSettings(
@@ -93,6 +88,7 @@ export interface BuildPipelineReviewFanoutDeps {
   shouldPersistTranscript(session: PipelineSession): boolean;
   /** The branch the diff is reviewed against, as the review prompt states it. */
   targetBranch(pipeline: BuildPipeline): Promise<string>;
+  reviewInstruction(): Promise<string | undefined>;
   progress: MultiReviewProgressTracker;
   stallWarningMs?: number;
   stallAbandonMs?: number;
@@ -111,22 +107,18 @@ export class BuildPipelineReviewFanout {
   constructor(private readonly deps: BuildPipelineReviewFanoutDeps) {}
 
   /**
-   * Pins the worktree and opens the fan-out.
+   * Opens the fan-out over the package prepared by the implementing model.
    *
-   * The snapshot is captured before any session exists, for the same reason the
-   * single-reviewer stage probes before dispatch: a stage that could never be
-   * certified is not worth an agent turn, and failing afterwards would discard
-   * completed reviews and report them as a Git error.
+   * No live-worktree snapshot is captured here. Every reviewer receives the
+   * same committed evidence, so later commits and generated artifacts cannot
+   * change or invalidate the subject of the review.
    */
   async start(pipeline: BuildPipeline): Promise<void> {
-    const snapshot = await captureReviewWorktreeSnapshot(
-      this.deps.invoke,
-      pipeline.environmentId,
-      FANOUT_LABEL,
-    );
+    if (!pipeline.reviewPackage) {
+      throw new Error(`${FANOUT_LABEL} cannot start because no immutable review package exists`);
+    }
     pipeline.reviewFanout = {
       reviewers: pipelineReviewerConfigs(pipeline).map((config) => reviewerFromConfig(config)),
-      snapshot,
     };
     pipeline.phase = "reviewing";
     delete pipeline.structuredReview;
@@ -148,7 +140,7 @@ export class BuildPipelineReviewFanout {
     const targetBranch = await this.deps.targetBranch(pipeline);
 
     if (!state.consolidation) {
-      const runner = new ReviewFanoutRunner(this.reviewHost(pipeline, state, targetBranch));
+      const runner = new ReviewFanoutRunner(this.reviewHost(pipeline, targetBranch));
       const outcome = await runner.advanceReviewers(state.reviewers);
       // Settled *after* the pass, not inside it: a reviewer's last transcript
       // mirror happens while its provider status is still being read, so the
@@ -165,11 +157,7 @@ export class BuildPipelineReviewFanout {
   // Reviewers
   // -------------------------------------------------------------------------
 
-  private reviewHost(
-    pipeline: BuildPipeline,
-    state: ReviewFanoutState,
-    targetBranch: string,
-  ): ReviewFanoutHost {
+  private reviewHost(pipeline: BuildPipeline, targetBranch: string): ReviewFanoutHost {
     return {
       workflowId: pipeline.id,
       targetBranch,
@@ -182,25 +170,18 @@ export class BuildPipelineReviewFanout {
       // the pipeline lock for the whole pass, so there is no fence to lose
       // part-way through one.
       assertFence: async () => {},
-      reviewSnapshot: async () => {
-        const baseline = state.snapshot;
-        if (!baseline) {
-          const adopted = await captureReviewWorktreeSnapshot(
-            this.deps.invoke,
-            pipeline.environmentId,
-            FANOUT_LABEL,
-          );
-          state.snapshot = adopted;
-          await this.deps.save(pipeline);
-          return promptWorktreeSnapshot(adopted);
+      reviewerPrompt: async (index, count) => {
+        const reviewPackage = pipeline.reviewPackage;
+        if (!reviewPackage) {
+          throw new Error(`${FANOUT_LABEL} lost its immutable review package`);
         }
-        await assertReviewSnapshotCurrent(
-          this.deps.invoke,
-          pipeline.environmentId,
-          baseline,
-          FANOUT_LABEL,
-        );
-        return promptWorktreeSnapshot(baseline);
+        return [
+          `You are independent reviewer ${index + 1} of ${count}. Your analysis will be combined with other reviewers by a separate consolidation model. Do not coordinate with, defer to, or speculate about the other reviewers.`,
+          createDiscoveryPrompt({
+            reviewPackage,
+            reviewInstruction: await this.deps.reviewInstruction(),
+          }),
+        ].join("\n\n");
       },
       resolveUnattendedInteractions: (provider, providerSessionId) =>
         resolveUnattendedReviewerInteractions(provider, providerSessionId, async () => {}),
@@ -382,23 +363,12 @@ export class BuildPipelineReviewFanout {
     });
 
     if (consolidation.state === "prepared") {
-      // Built while the dispatch is still unjournaled, for the same reason a
-      // reviewer prompt is: the worktree probe must not widen the window in
-      // which a crash leaves the turn ambiguous. A schema repair re-sends an
-      // already-answered prompt and is not re-gated.
+      // Build the prompt while dispatch is still unjournaled. A schema repair
+      // re-sends an already-answered prompt with the same reviewer evidence.
       let prompt = consolidation.schemaRepairPrompt;
       if (!prompt) {
-        if (state.snapshot) {
-          await assertReviewSnapshotCurrent(
-            this.deps.invoke,
-            pipeline.environmentId,
-            state.snapshot,
-            FANOUT_LABEL,
-          );
-        }
         prompt = createReviewConsolidationPrompt({
           targetBranch,
-          worktree: state.snapshot ? promptWorktreeSnapshot(state.snapshot) : undefined,
           reports: consolidationReports(state.reviewers),
         });
       }

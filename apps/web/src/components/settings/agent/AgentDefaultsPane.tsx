@@ -379,6 +379,15 @@ export function AgentDefaultsPane({
               entry?.platform && enabledPlatforms.includes(entry.platform)
                 ? entry.platform
                 : undefined;
+            // An unset action follows its inherited action entry, which can use
+            // a different provider from this tier's default agent. A disabled
+            // inherited provider is ignored whole by the runtime resolver, so
+            // constrain the icon, label and initial catalogue the same way.
+            const inheritedPlatform =
+              inheritedEntry?.platform && enabledPlatforms.includes(inheritedEntry.platform)
+                ? inheritedEntry.platform
+                : undefined;
+            const displayedPlatform = inheritedPlatform ?? effectiveAgent;
             const actionModels = modelsForAgent(catalog, platform ?? effectiveAgent);
             const actionSelected =
               platform && entry?.model
@@ -439,7 +448,7 @@ export function AgentDefaultsPane({
                   disabled={disabled}
                   models={pickerModels}
                   enabledPlatforms={enabledPlatforms}
-                  selectedPlatform={platform ?? effectiveAgent}
+                  selectedPlatform={platform ?? displayedPlatform}
                   favorites={favorites.favorites}
                   onToggleFavorite={favorites.toggleFavorite}
                   onReorderFavorites={favorites.reorderFavorites}
@@ -450,8 +459,8 @@ export function AgentDefaultsPane({
                       ? `${AGENT_PLATFORM_LABELS[platform]} · ${
                           entry?.model ? (actionSelected?.name ?? entry.model) : "Default model"
                         }`
-                      : inheritedEntry?.platform
-                        ? `Inherit — ${AGENT_PLATFORM_LABELS[inheritedEntry.platform]}`
+                      : inheritedPlatform
+                        ? `Inherit — ${AGENT_PLATFORM_LABELS[inheritedPlatform]}`
                         : canInherit
                           ? "Inherit"
                           : "App default"

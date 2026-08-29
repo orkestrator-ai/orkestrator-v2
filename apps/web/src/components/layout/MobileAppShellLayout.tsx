@@ -163,7 +163,7 @@ export function MobileAppShellLayout({
           <TooltipTrigger asChild>
             <button
               type="button"
-              className="absolute left-12 right-[5.5rem] min-w-0 truncate px-1 text-center text-sm font-medium text-foreground"
+              className="ml-12 min-w-0 flex-1 truncate px-1 text-center text-sm font-medium text-foreground"
               data-backend-drag-region={titleUsesNativeDragRegion ? "" : undefined}
               style={
                 {
@@ -210,28 +210,33 @@ export function MobileAppShellLayout({
             {title}
           </TooltipContent>
         </Tooltip>
-        <Button
-          ref={toolsTriggerRef}
-          variant={toolsOpen ? "secondary" : "ghost"}
-          size="icon"
-          className="absolute right-1.5 h-9 w-9"
-          style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={() => setToolsOpen((open) => !open)}
-          aria-label={toolsOpen ? "Close tools" : MOBILE_TOOLS_TRIGGER_LABEL}
-          aria-expanded={toolsOpen}
-          aria-haspopup="dialog"
-          aria-controls="mobile-tools-popover"
-        >
-          <Wrench className="h-4.5 w-4.5" />
-        </Button>
         <div
-          className="absolute right-11.5 h-9 w-9"
-          data-testid="mobile-agent-info-slot"
+          className="mr-1.5 flex h-9 shrink-0 items-center gap-1"
+          data-testid="mobile-title-actions"
           style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
           onMouseDown={(event) => event.stopPropagation()}
         >
-          {agentInfoButton}
+          <Button
+            ref={toolsTriggerRef}
+            variant={toolsOpen ? "secondary" : "ghost"}
+            size="icon"
+            className="h-9 w-9"
+            style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
+            onClick={() => setToolsOpen((open) => !open)}
+            aria-label={toolsOpen ? "Close tools" : MOBILE_TOOLS_TRIGGER_LABEL}
+            aria-expanded={toolsOpen}
+            aria-haspopup="dialog"
+            aria-controls="mobile-tools-popover"
+          >
+            <Wrench className="h-4.5 w-4.5" />
+          </Button>
+          <div
+            className="flex h-9 items-center gap-1"
+            data-testid="mobile-agent-info-slot"
+            style={{ WebkitAppRegion: "no-drag" } as CSSProperties}
+          >
+            {agentInfoButton}
+          </div>
         </div>
 
         {toolsOpen && (

@@ -31,23 +31,33 @@ test("long mobile titles stay between controls and support touch and keyboard di
   const title = page.getByRole("button", { name: mobileShellTitle });
   const agentInfo = page.getByTestId("mobile-agent-info-slot");
   const tools = page.getByRole("button", { name: "Open tools" });
+  const actions = page.getByTestId("mobile-title-actions");
   const titleBar = page.locator("div[data-backend-drag-region]").first();
 
   const geometry = await Promise.all(
-    [titleBar, menu, title, agentInfo, tools].map(async (locator) => {
+    [titleBar, menu, title, tools, agentInfo, actions].map(async (locator) => {
       const box = await locator.boundingBox();
       if (!box) throw new Error("Expected a rendered title-bar control");
       return box;
     }),
   );
-  const [titleBarBox, menuBox, titleBox, agentInfoBox, toolsBox] = geometry;
+  const [titleBarBox, menuBox, titleBox, toolsBox, agentInfoBox, actionsBox] = geometry;
   expect(menuBox.x).toBeGreaterThanOrEqual(titleBarBox.x);
   expect(titleBox.x).toBeGreaterThanOrEqual(menuBox.x + menuBox.width);
-  expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(agentInfoBox.x);
-  expect(agentInfoBox.x + agentInfoBox.width).toBeLessThanOrEqual(toolsBox.x);
-  expect(toolsBox.x + toolsBox.width).toBeLessThanOrEqual(titleBarBox.x + titleBarBox.width);
+  expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(toolsBox.x);
+  expect(toolsBox.x + toolsBox.width).toBeLessThanOrEqual(agentInfoBox.x);
+  expect(agentInfoBox.x + agentInfoBox.width).toBeLessThanOrEqual(
+    titleBarBox.x + titleBarBox.width,
+  );
+  expect(actionsBox.x).toBeLessThanOrEqual(toolsBox.x);
+  expect(actionsBox.x + actionsBox.width).toBeGreaterThanOrEqual(
+    agentInfoBox.x + agentInfoBox.width,
+  );
 
   await expect(title).toHaveCSS("-webkit-app-region", "no-drag");
+  await expect(actions).toHaveCSS("-webkit-app-region", "no-drag");
+  await expect(agentInfo).toHaveCSS("-webkit-app-region", "no-drag");
+  await expect(tools).toHaveCSS("-webkit-app-region", "no-drag");
   const titleMetrics = await title.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
@@ -87,6 +97,39 @@ test("long mobile titles stay between controls and support touch and keyboard di
   await expect(page.getByRole("tooltip")).toBeVisible();
   await title.press("Escape");
   await expect(page.getByRole("tooltip")).toHaveCount(0);
+});
+
+test("the title uses space released when the optional inbox is hidden", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "mobile-chromium", "mobile layout only");
+
+  const measure = async () => {
+    await page.keyboard.press("Escape");
+    const title = page.getByRole("button", { name: mobileShellTitle });
+    const tools = page.getByRole("button", { name: "Open tools" });
+    const actions = page.getByTestId("mobile-title-actions");
+    const [titleBox, toolsBox, actionsBox] = await Promise.all(
+      [title, tools, actions].map(async (locator) => {
+        const box = await locator.boundingBox();
+        if (!box) throw new Error("Expected a rendered title-bar control");
+        return box;
+      }),
+    );
+    expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(toolsBox.x);
+    return { actionsBox, titleBox };
+  };
+
+  await page.goto("/mobile-shell");
+  const withInbox = await measure();
+  await expect(page.getByRole("button", { name: "Agent inbox" })).toBeVisible();
+
+  await page.goto("/mobile-shell?withoutInbox");
+  const withoutInbox = await measure();
+  await expect(page.getByRole("button", { name: "Agent inbox" })).toHaveCount(0);
+
+  expect(withoutInbox.actionsBox.width).toBeLessThan(withInbox.actionsBox.width);
+  expect(withoutInbox.titleBox.width).toBeGreaterThan(withInbox.titleBox.width);
 });
 
 test("a narrow Electron title remains a native drag region", async ({ page }, testInfo) => {

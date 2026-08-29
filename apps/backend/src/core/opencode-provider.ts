@@ -30,7 +30,11 @@ import {
   parseLeadingSlashCommand,
   type ParsedSlashCommand,
 } from "@orkestrator/protocol/agent-slash-commands";
-import { mimeTypeForFilename, promptAttachmentUrl } from "./prompt-attachments.js";
+import {
+  mimeTypeForFilename,
+  mimeTypeForImageData,
+  promptAttachmentUrl,
+} from "./prompt-attachments.js";
 import {
   AmbiguousPromptDispatchError,
   type AgentInteractionProviderCapability,
@@ -584,11 +588,12 @@ export class OpenCodeProvider implements NativeAgentRuntimeProvider {
     // OpenCode accepts inline data, so its images need no staging. Attachments
     // that arrive already staged are referenced by path instead.
     for (const image of options.images ?? []) {
+      const mimeType = mimeTypeForImageData(image.filename, image.data);
       parts.push({
         type: "file",
-        mime: mimeTypeForFilename(image.filename),
+        mime: mimeType,
         filename: image.filename,
-        url: `data:${mimeTypeForFilename(image.filename)};base64,${image.data}`,
+        url: `data:${mimeType};base64,${image.data}`,
       });
     }
     for (const attachment of options.attachments ?? []) {

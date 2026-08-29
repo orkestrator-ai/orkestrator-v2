@@ -6,6 +6,7 @@ import type { StartBuildPipelineInput } from "@orkestrator/protocol/build-pipeli
 import { StorageService } from "./storage.js";
 import { createFeatureBuild } from "./feature-build.js";
 import type { Project } from "./models.js";
+import { mimeTypeForImageData } from "./prompt-attachments.js";
 
 interface StartedPipeline {
   id: string;
@@ -192,6 +193,16 @@ describe("createFeatureBuild", () => {
         })),
       );
       expect(storedImages.every((image) => image.data.length > 0)).toBe(true);
+      expect(
+        storedImages.every((image) => {
+          const bytes = Buffer.from(image.data, "base64");
+          return (
+            bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
+            bytes.subarray(8, 12).toString("latin1") === "WEBP" &&
+            mimeTypeForImageData(image.filename, image.data) === "image/webp"
+          );
+        }),
+      ).toBe(true);
       expect(supervisor.started[0]!.taskSnapshot.images).toEqual(storedImages);
 
       const second = await createFeatureBuild(request, {

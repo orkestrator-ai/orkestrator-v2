@@ -36,6 +36,42 @@ export function mimeTypeForFilename(filename: string): string {
 }
 
 /**
+ * Resolve an inline image's media type from its bytes, using its name only
+ * when the payload has no recognizable raster signature.
+ *
+ * Kanban images are normalized to WebP while retaining their user-facing
+ * filename. Trusting that filename would label those WebP bytes as (usually)
+ * PNG when they are handed to an image-aware agent.
+ */
+export function mimeTypeForImageData(filename: string, data: string): string {
+  const bytes = Buffer.from(data, "base64");
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes.subarray(1, 4).toString("latin1") === "PNG" &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  const header = bytes.subarray(0, 6).toString("latin1");
+  if (header === "GIF87a" || header === "GIF89a") return "image/gif";
+  if (
+    bytes.length >= 12 &&
+    bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
+    bytes.subarray(8, 12).toString("latin1") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return mimeTypeForFilename(filename);
+}
+
+/**
  * Resolve the URL an OpenCode file part should carry.
  *
  * Mirrors the renderer's client: inline data when it is available, otherwise a
@@ -216,7 +252,7 @@ export async function stagePromptImages(
       type: "image",
       path,
       filename,
-      dataUrl: `data:${mimeTypeForFilename(filename)};base64,${image.data}`,
+      dataUrl: `data:${mimeTypeForImageData(filename, image.data)};base64,${image.data}`,
     });
   }
   return staged;

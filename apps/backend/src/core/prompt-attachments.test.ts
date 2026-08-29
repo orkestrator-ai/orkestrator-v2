@@ -6,6 +6,7 @@ import {
   assertValidPromptAttachments,
   assertValidPromptImages,
   mimeTypeForFilename,
+  mimeTypeForImageData,
   promptAttachmentUrl,
   stagePromptImages,
 } from "./prompt-attachments.js";
@@ -48,6 +49,21 @@ describe("mimeTypeForFilename", () => {
     ["noextension", "image/png"],
   ])("maps %s to %s", (filename, expected) => {
     expect(mimeTypeForFilename(filename)).toBe(expected);
+  });
+});
+
+describe("mimeTypeForImageData", () => {
+  test.each([
+    ["image/png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+    ["image/jpeg", Buffer.from([0xff, 0xd8, 0xff])],
+    ["image/gif", Buffer.from("GIF89a", "latin1")],
+    ["image/webp", Buffer.from("RIFF0000WEBP", "latin1")],
+  ])("detects %s from bytes even when the filename says PNG", (expected, bytes) => {
+    expect(mimeTypeForImageData("pasted.png", bytes.toString("base64"))).toBe(expected);
+  });
+
+  test("falls back to the filename for an unrecognized payload", () => {
+    expect(mimeTypeForImageData("pasted.jpeg", "AAAA")).toBe("image/jpeg");
   });
 });
 
@@ -261,6 +277,20 @@ describe("stagePromptImages", () => {
       containerId: "container-1",
       filePath: `${INITIAL_PROMPT_STAGING_DIRECTORY}/shot.png`,
       base64Data: "cG5n",
+    });
+  });
+
+  test("declares normalized WebP bytes as WebP even when the original name is PNG", async () => {
+    const invoke = mock(async () => "written" as never);
+    const webp = Buffer.from("RIFF0000WEBP", "latin1").toString("base64");
+
+    const [staged] = await stagePromptImages(invoke, environment(), [
+      { filename: "clipboard.png", data: webp },
+    ]);
+
+    expect(staged).toMatchObject({
+      filename: "clipboard.png",
+      dataUrl: `data:image/webp;base64,${webp}`,
     });
   });
 

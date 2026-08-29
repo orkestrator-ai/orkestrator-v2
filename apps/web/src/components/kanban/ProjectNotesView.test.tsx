@@ -86,7 +86,7 @@ describe("ProjectNotesView", () => {
       expect(saveProjectNotesMock).toHaveBeenCalledWith("project-1", "replacement"),
     );
     await waitFor(() => expect(deleteComposeDraftMock).toHaveBeenCalled());
-    await waitFor(() => expect(screen.queryByText("Unsaved changes")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("Unsaved changes") === null).toBe(true));
     expect(screen.getByRole("button", { name: "Save" }).hasAttribute("disabled")).toBe(true);
   });
 

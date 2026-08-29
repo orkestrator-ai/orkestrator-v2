@@ -7,6 +7,9 @@ import { useClaudeOptionsStore } from "@/stores/claudeOptionsStore";
 import { useClaudeStore } from "@/stores/claudeStore";
 import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
+import { useUIStore } from "@/stores/uiStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { mockToastError } from "../../mocks/sonner";
 
@@ -25,13 +28,16 @@ const getContainerGitHubCredentialStatusMock = mock(async () => ({
 const createFeatureBuildMock = mock(async (..._args: unknown[]) => ({
   taskId: "task-1",
   pipelineId: "pipeline-1",
+  environmentId: "env-feature",
 }));
+const getBuildPipelineConditionalMock = mock(async (..._args: unknown[]) => null);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
   getContainerGitHubCredentialStatus: getContainerGitHubCredentialStatusMock,
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
   createFeatureBuild: createFeatureBuildMock,
+  getBuildPipelineConditional: getBuildPipelineConditionalMock,
 }));
 
 afterAll(() => {
@@ -98,7 +104,11 @@ describe("CreateEnvironmentFlowDialog", () => {
   beforeEach(() => {
     updateEnvironmentAgentSettingsMock.mockClear();
     createFeatureBuildMock.mockClear();
-    createFeatureBuildMock.mockResolvedValue({ taskId: "task-1", pipelineId: "pipeline-1" });
+    createFeatureBuildMock.mockResolvedValue({
+      taskId: "task-1",
+      pipelineId: "pipeline-1",
+      environmentId: "env-feature",
+    });
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
       source: "host-cli",
@@ -106,6 +116,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     });
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
     useClaudeStore.setState({ models: [] });
+    useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
     useConfigStore.setState({
       config: structuredClone(useConfigStore.getInitialState().config),
       isLoading: false,
@@ -122,6 +133,11 @@ describe("CreateEnvironmentFlowDialog", () => {
           order: 0,
         },
       ],
+    });
+    useUIStore.setState({
+      selectedProjectId: "project-previous",
+      selectedEnvironmentId: "env-previous",
+      collapsedProjects: ["project-1"],
     });
   });
 
@@ -498,6 +514,71 @@ describe("CreateEnvironmentFlowDialog", () => {
     const request = createFeatureBuildMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(request.title).toBe("Dark mode toggle");
     expect(request.environmentType).toBe("containerized");
+  });
+
+  test("activates the feature environment so its setup surface mounts", async () => {
+    render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={() => {}}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "unused" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    startFeatureBuild("Dark mode toggle");
+
+    await waitFor(() => {
+      expect(useUIStore.getState()).toMatchObject({
+        selectedProjectId: "project-1",
+        selectedEnvironmentId: "env-feature",
+      });
+    });
+    expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
+  });
+
+  test("activates when an admitted feature pipeline publishes its environment later", async () => {
+    createFeatureBuildMock.mockResolvedValueOnce({
+      taskId: "task-1",
+      pipelineId: "pipeline-pending",
+    });
+    const onOpenChange = mock(() => {});
+    const { unmount } = render(
+      <CreateEnvironmentFlowDialog
+        open
+        onOpenChange={onOpenChange}
+        projectId="project-1"
+        createEnvironment={mock(async () => ({ id: "unused" }) as Environment)}
+        updateEnvironment={() => {}}
+        startEnvironment={async () => {}}
+      />,
+    );
+
+    startFeatureBuild("Dark mode toggle");
+    await waitFor(() => expect(createFeatureBuildMock).toHaveBeenCalledTimes(1));
+    expect(useUIStore.getState().selectedEnvironmentId).toBe("env-previous");
+
+    // The create dialog normally closes and unmounts after returning true. The
+    // activation intent must remain alive in the app-level resource cache.
+    unmount();
+    act(() => {
+      useBuildPipelineStore.getState().replacePipeline(
+        buildPipelineFixture({
+          id: "pipeline-pending",
+          projectId: "project-1",
+          environmentId: "env-eventual",
+          phase: "starting-environment",
+        }),
+      );
+    });
+
+    expect(useUIStore.getState()).toMatchObject({
+      selectedProjectId: "project-1",
+      selectedEnvironmentId: "env-eventual",
+    });
+    expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
   });
 
   test("abandons a feature build when the credential warning is dismissed", async () => {

@@ -132,27 +132,45 @@ function stepConfig(selection: FeatureBuildStepSelection): BuildStepConfig {
   };
 }
 
+function distinctReviewerConfigs(models: FeatureBuildModelState): BuildStepConfig[] {
+  const reviewers = models.reviewers.map(stepConfig);
+  const candidates = reviewers.length > 0 ? reviewers : [stepConfig(models.build)];
+  const seen = new Set<string>();
+  return candidates.filter((reviewer) => {
+    const key = JSON.stringify([
+      reviewer.agent,
+      reviewer.model ?? null,
+      reviewer.reasoningEffort ?? null,
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /**
- * The per-step payload, or nothing at all.
+ * The per-step payload and reviewer panel.
  *
- * When the user has not opened "Customize models" the request carries no steps,
- * so the backend applies the repository and global defaults it would have used
- * anyway. Sending the panel's resolved values regardless would freeze whatever
- * the catalogue happened to hold when the dialog opened into the pipeline.
+ * The individual step selections remain optional at request time, but reviewer
+ * selections do not. Exact duplicate rows collapse to one so an unconfigured
+ * `review2` default does not pay for two identical reviews and consolidation.
+ * An empty panel falls back to the build selection, keeping this pure boundary
+ * valid even though the UI also prevents removing the last reviewer.
  */
 export function featureBuildStepConfigs(models: FeatureBuildModelState): {
   steps: BuildStepConfigs;
   reviewers: BuildStepConfig[];
 } {
+  const reviewers = distinctReviewerConfigs(models);
   return {
     steps: {
       build: stepConfig(models.build),
-      review: stepConfig(models.reviewers[0] ?? models.build),
+      review: reviewers[0],
       address: stepConfig(models.address),
       pr: stepConfig(models.pr),
       "resolve-conflicts": stepConfig(models.resolve),
     },
-    reviewers: models.reviewers.map(stepConfig),
+    reviewers,
   };
 }
 
@@ -173,7 +191,8 @@ export interface FeatureBuildRequestInput {
 }
 
 export function featureBuildRequest(input: FeatureBuildRequestInput): CreateFeatureBuildInput {
-  const configured = input.customizeModels ? featureBuildStepConfigs(input.models) : null;
+  const configured = featureBuildStepConfigs(input.models);
+  const steps = input.customizeModels ? configured.steps : undefined;
   const name = input.environmentName.trim();
   const portMappings = input.environmentType === "containerized" ? input.portMappings : [];
   return {
@@ -189,8 +208,11 @@ export function featureBuildRequest(input: FeatureBuildRequestInput): CreateFeat
       networkAccessMode: input.networkAccessMode,
       ...(portMappings.length > 0 ? { portMappings } : {}),
     },
-    agentType: configured?.steps.build?.agent ?? input.defaultAgent,
-    ...(configured ? { steps: configured.steps, reviewers: configured.reviewers } : {}),
+    agentType: steps?.build?.agent ?? input.defaultAgent,
+    ...(steps ? { steps } : {}),
+    // Review configuration is always explicit, but exact duplicates collapse
+    // to the backend's single-review path instead of buying no extra signal.
+    reviewers: configured.reviewers,
     requestId: input.requestId,
   };
 }

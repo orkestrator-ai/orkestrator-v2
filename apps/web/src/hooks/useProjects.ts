@@ -211,7 +211,14 @@ export function useProjects() {
         setProjects(await backend.arrangeProjects(projectIds, folders));
       } catch (err) {
         const message = err instanceof Error ? err.message : "Failed to arrange projects";
-        toast.error("Failed to update project folders");
+        // A folder-free arrangement is a plain reorder — the most common drag
+        // in the sidebar — so naming folders there reports a feature the user
+        // never touched.
+        toast.error(
+          Object.keys(folders).length === 0
+            ? "Failed to reorder projects"
+            : "Failed to update project folders",
+        );
         await loadProjects();
         // loadProjects clears stale errors before recovery; retain the mutation
         // failure so callers can still surface why the arrangement was rolled back.

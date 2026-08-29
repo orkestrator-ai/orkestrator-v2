@@ -217,14 +217,17 @@ export function resolveProjectArrangement(
     // Land at the head of the folder. Dropping on the header is the gesture
     // for "into this folder" and must work while it is collapsed, when there
     // is no member row to aim at.
-    const withoutActive = ordered.filter((project) => project.id !== activeId);
     const firstMember = folder.projects.find((project) => project.id !== activeId);
-    const insertAt = firstMember
-      ? withoutActive.findIndex((project) => project.id === firstMember.id)
-      : withoutActive.length;
+    const folders = sameFolder(folderOf(active), folder.name) ? {} : { [activeId]: folder.name };
+    // No other member means the dragged project is the folder's only one, so it
+    // already sits at the head and there is nowhere to move it to. Computing an
+    // insertion point here would append it to the end of the whole list and
+    // drag the folder — whose position is its first member's — down with it.
+    if (!firstMember) return arrangementOrNull(ordered, ordered, folders);
+    const withoutActive = ordered.filter((project) => project.id !== activeId);
+    const insertAt = withoutActive.findIndex((project) => project.id === firstMember.id);
     const next = [...withoutActive];
     next.splice(insertAt === -1 ? next.length : insertAt, 0, active);
-    const folders = sameFolder(folderOf(active), folder.name) ? {} : { [activeId]: folder.name };
     return arrangementOrNull(ordered, next, folders);
   }
 

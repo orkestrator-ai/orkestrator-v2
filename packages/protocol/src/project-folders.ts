@@ -35,9 +35,16 @@ export function normalizeProjectFolderName(value: unknown): string | null {
   return collapsed.slice(0, MAX_PROJECT_FOLDER_NAME_LENGTH).trim() || null;
 }
 
-/** Case- and width-insensitive key used to decide whether two names are one folder. */
+/**
+ * Case- and width-insensitive key used to decide whether two names are one folder.
+ *
+ * Folding is deliberately locale-independent: this is an identity key, not a
+ * display transform, and `toLocaleLowerCase` would fold `"I"` to `"\u0131"`
+ * under a Turkish or Azeri host locale — splitting one folder into two on
+ * those machines only.
+ */
 export function projectFolderKey(name: string): string {
-  return name.normalize("NFKC").toLocaleLowerCase();
+  return name.normalize("NFKC").toLowerCase();
 }
 
 /** The minimum a record needs for folder grouping; both `Project` shapes satisfy it. */

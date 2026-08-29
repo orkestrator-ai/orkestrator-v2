@@ -80,6 +80,7 @@ import {
   buildProjectTree,
   isProjectFolderCollapsed,
   listProjectFolderNames,
+  normalizeProjectFolderName,
   parseProjectFolderDragId,
   projectSortableIds,
   resolveAddProjectToFolder,
@@ -616,11 +617,16 @@ export function HierarchicalSidebar() {
   };
 
   const handleRenameFolder = (folderName: string, nextName: string): void => {
+    // Collapse state is carried against the name that was actually stored, not
+    // the typed one: normalization collapses whitespace and control-character
+    // runs, and a key that no longer matches leaves the renamed folder expanded
+    // while stranding the old entry in the persisted list forever.
+    const storedName = normalizeProjectFolderName(nextName);
     void applyArrangement(resolveRenameProjectFolder(projects, folderName, nextName))
       .then(() => {
-        if (isProjectFolderCollapsed(collapsedProjectFolders, folderName)) {
+        if (storedName && isProjectFolderCollapsed(collapsedProjectFolders, folderName)) {
           setProjectFolderCollapsed(folderName, false);
-          setProjectFolderCollapsed(nextName, true);
+          setProjectFolderCollapsed(storedName, true);
         }
       })
       .catch((err) => {

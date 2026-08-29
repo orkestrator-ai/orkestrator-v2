@@ -2231,6 +2231,34 @@ describe("HierarchicalSidebar", () => {
       );
     });
 
+    test("renaming a collapsed folder keeps it collapsed under the name that was stored", async () => {
+      projectsValue = [
+        { ...project, folder: "Work" },
+        { ...secondProject, folder: "Work" },
+      ];
+      useUIStore.setState({ collapsedProjectFolders: ["Work"] });
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(await screen.findByTitle("Expand folder Work"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
+
+      const input = await screen.findByLabelText("Rename folder Work");
+      // The stored name is the normalized one, so the collapse entry has to be
+      // recorded against "Team Work" rather than the typed double space.
+      fireEvent.change(input, { target: { value: "Team  Work" } });
+      fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
+          "project-1": "Team Work",
+          "project-2": "Team Work",
+        }),
+      );
+      await waitFor(() =>
+        expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Team Work"]),
+      );
+    });
+
     test("shift-range selection skips environments hidden inside a collapsed folder", async () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
       environmentsValue = [

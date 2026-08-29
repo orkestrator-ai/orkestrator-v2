@@ -38,6 +38,14 @@ describe("projectFolderKey", () => {
     expect(projectFolderKey("Work")).toBe(projectFolderKey("wORK"));
     expect(projectFolderKey("Work")).not.toBe(projectFolderKey("Play"));
   });
+
+  test("folds dotted I the same way on every host locale", () => {
+    // `toLocaleLowerCase` folds "I" to a dotless "\u0131" under tr/az, which would
+    // split one folder into two on those machines only. This is an identity
+    // key, so the folding has to be locale-independent.
+    expect(projectFolderKey("IT")).toBe(projectFolderKey("it"));
+    expect(projectFolderKey("I")).toBe("i");
+  });
 });
 
 describe("listProjectFolderNames", () => {

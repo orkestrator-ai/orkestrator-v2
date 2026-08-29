@@ -155,6 +155,15 @@ describe("resolveProjectArrangement", () => {
     });
   });
 
+  test("dropping a folder's only member on its own header leaves the sidebar alone", () => {
+    // The fallback insertion point used to be the end of the whole list, which
+    // sent the project — and with it the folder, positioned at its first
+    // member — to the bottom of the sidebar. A one-project folder is exactly
+    // what "Add to Folder" produces, so this is the likeliest such drag.
+    const projects = [alpha, makeProject("beta", 1, "Work"), gamma];
+    expect(resolveProjectArrangement("beta", projectFolderDragId("Work"), projects)).toBeNull();
+  });
+
   test("dropping onto a member of a folder joins that folder", () => {
     const projects = [makeProject("alpha", 0, "Work"), beta];
     expect(resolveProjectArrangement("beta", "alpha", projects)).toEqual({

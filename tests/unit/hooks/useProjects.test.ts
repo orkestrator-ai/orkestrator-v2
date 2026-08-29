@@ -523,6 +523,29 @@ describe("useProjects", () => {
     expect(result.current.error).toBe("Arrange failed");
   });
 
+  test("arrangeProjects names folders in its failure toast only when folders changed", async () => {
+    const first = createMockProject({ id: "first", name: "first", order: 0 });
+    const second = createMockProject({ id: "second", name: "second", order: 1 });
+    useProjectStore.setState({ projects: [first, second] });
+    mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
+    mockArrangeProjects.mockImplementation(() => Promise.reject(new Error("Arrange failed")));
+
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // A folder-free arrangement is a plain reorder — the most common sidebar
+    // drag — so it must not report a feature the user never touched.
+    await act(async () => {
+      await result.current.arrangeProjects(["second", "first"]).catch(() => {});
+    });
+    expect(mockToastError.mock.calls.at(-1)?.[0]).toBe("Failed to reorder projects");
+
+    await act(async () => {
+      await result.current.arrangeProjects(["second", "first"], { second: "Work" }).catch(() => {});
+    });
+    expect(mockToastError.mock.calls.at(-1)?.[0]).toBe("Failed to update project folders");
+  });
+
   test("validateGitUrl returns true for valid URL", async () => {
     const { result } = renderHook(() => useProjects());
 

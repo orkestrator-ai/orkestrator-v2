@@ -42,6 +42,8 @@ const { SortableEnvironmentItem } =
   await import("../../../apps/web/src/components/sidebar/SortableEnvironmentItem");
 const { SortableProjectGroup } =
   await import("../../../apps/web/src/components/sidebar/SortableProjectGroup");
+const { SortableProjectFolder } =
+  await import("../../../apps/web/src/components/sidebar/SortableProjectFolder");
 
 const project: Project = {
   id: "project-1",
@@ -409,5 +411,103 @@ describe("sortable sidebar items", () => {
     expect(onCreateEnvironment).toHaveBeenCalledTimes(1);
     // The add button stops propagation so it must not select the project too.
     expect(onSelectProject).not.toHaveBeenCalled();
+  });
+
+  function renderFolder(
+    overrides: Partial<Parameters<typeof SortableProjectFolder>[0]> = {},
+  ): ReturnType<typeof render> {
+    return render(
+      <SortableProjectFolder
+        name="Work"
+        projectCount={2}
+        isCollapsed={false}
+        onToggleCollapse={() => {}}
+        onRename={() => {}}
+        onUngroup={() => {}}
+        {...overrides}
+      >
+        <div>Members</div>
+      </SortableProjectFolder>,
+    );
+  }
+
+  async function openRenameDialog(): Promise<HTMLElement> {
+    fireEvent.contextMenu(screen.getByTitle("Collapse folder Work"));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
+    return await screen.findByLabelText("Rename folder Work");
+  }
+
+  test("SortableProjectFolder ignores a rename submitted with a blank draft", async () => {
+    const onRename = mock(() => {});
+    renderFolder({ onRename });
+
+    const input = await openRenameDialog();
+    fireEvent.change(input, { target: { value: "   " } });
+    // The submit button is disabled for a blank draft, so the reachable path is
+    // the form's own submit — pressing Enter in the field.
+    fireEvent.submit(input.closest("form")!);
+
+    expect(onRename).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByLabelText("Rename folder Work") === null).toBe(true));
+  });
+
+  test("SortableProjectFolder ignores a rename to the name the folder already has", async () => {
+    const onRename = mock(() => {});
+    renderFolder({ onRename });
+
+    const input = await openRenameDialog();
+    // Surrounding whitespace is trimmed before the comparison, so this is the
+    // same name rather than a new one.
+    fireEvent.change(input, { target: { value: "  Work  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    expect(onRename).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByLabelText("Rename folder Work") === null).toBe(true));
+  });
+
+  test("SortableProjectFolder resets an abandoned rename draft when the dialog reopens", async () => {
+    renderFolder();
+
+    const input = await openRenameDialog();
+    fireEvent.change(input, { target: { value: "Personal" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByLabelText("Rename folder Work") === null).toBe(true));
+
+    // Without the resync the abandoned draft would still be there, so the next
+    // rename would submit a name the user typed for a gesture they cancelled.
+    const reopened = await openRenameDialog();
+    expect((reopened as HTMLInputElement).value).toBe("Work");
+  });
+
+  test("SortableProjectFolder collapse controls report and toggle the folder state", () => {
+    const onToggleCollapse = mock(() => {});
+    const { rerender } = renderFolder({ isCollapsed: true, onToggleCollapse });
+
+    const header = screen.getByTitle("Expand folder Work");
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    // Members are unmounted rather than hidden: a registered sortable node the
+    // user cannot see would still resolve drops.
+    expect(document.querySelector('[data-project-folder-content="Work"]') === null).toBe(true);
+
+    fireEvent.click(header);
+    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand folder Work" }));
+    expect(onToggleCollapse).toHaveBeenCalledTimes(2);
+
+    rerender(
+      <SortableProjectFolder
+        name="Work"
+        projectCount={2}
+        isCollapsed={false}
+        onToggleCollapse={onToggleCollapse}
+        onRename={() => {}}
+        onUngroup={() => {}}
+      >
+        <div>Members</div>
+      </SortableProjectFolder>,
+    );
+    expect(screen.getByTitle("Collapse folder Work").getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector('[data-project-folder-content="Work"]')).not.toBeNull();
   });
 });

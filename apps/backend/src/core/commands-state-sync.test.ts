@@ -4426,6 +4426,10 @@ describe("multi review commands", () => {
     });
     const start = mock(async (_input: unknown) => workflow("start"));
     const address = mock(async (id: string) => ({ ...workflow("address"), id }));
+    const customFix = mock(async (input: { workflowId: string }) => ({
+      ...workflow("customFix"),
+      id: input.workflowId,
+    }));
     const retry = mock(async (id: string) => ({ ...workflow("retry"), id }));
     const cancel = mock(async (id: string) => ({ ...workflow("cancel"), id }));
     const stopReviewer = mock(async (id: string, _reviewerId: string) => ({
@@ -4443,6 +4447,7 @@ describe("multi review commands", () => {
     const supervisor = {
       start,
       address,
+      customFix,
       retry,
       cancel,
       stopReviewer,
@@ -4455,6 +4460,14 @@ describe("multi review commands", () => {
         const calls: Array<[string, Record<string, unknown>]> = [
           ["start_multi_review", startInput as unknown as Record<string, unknown>],
           ["address_multi_review", { workflowId: "multi-1" }],
+          [
+            "start_multi_review_custom_fix",
+            {
+              workflowId: "multi-1",
+              fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+              instruction: "Fix the inactive-tab regression",
+            },
+          ],
           ["retry_multi_review", { workflowId: "multi-1" }],
           ["cancel_multi_review", { workflowId: "multi-1" }],
           ["stop_multi_review_reviewer", { workflowId: "multi-1", reviewerId: "reviewer-1" }],
@@ -4468,6 +4481,11 @@ describe("multi review commands", () => {
         }
         expect(start).toHaveBeenCalledWith(startInput);
         expect(address).toHaveBeenCalledWith("multi-1");
+        expect(customFix).toHaveBeenCalledWith({
+          workflowId: "multi-1",
+          fixModel: { agent: "codex", model: "gpt-5.4", reasoningEffort: "high" },
+          instruction: "Fix the inactive-tab regression",
+        });
         expect(retry).toHaveBeenCalledWith("multi-1");
         expect(cancel).toHaveBeenCalledWith("multi-1");
         expect(stopReviewer).toHaveBeenCalledWith("multi-1", "reviewer-1");
@@ -4524,6 +4542,7 @@ describe("multi review commands", () => {
     const lifecycle = mock(async () => undefined);
     const supervisor = {
       start,
+      customFix: lifecycle,
       address: lifecycle,
       retry: lifecycle,
       cancel: lifecycle,
@@ -4539,6 +4558,13 @@ describe("multi review commands", () => {
         await expect(invoke("address_multi_review", { workflowId: " " })).rejects.toThrow(
           "non-blank string",
         );
+        await expect(
+          invoke("start_multi_review_custom_fix", {
+            workflowId: "multi-1",
+            fixModel: startInput.fixModel,
+            instruction: " ",
+          }),
+        ).rejects.toThrow("Invalid Multi Review custom fix request");
         expect(start).not.toHaveBeenCalled();
         expect(lifecycle).not.toHaveBeenCalled();
       },

@@ -33,7 +33,8 @@ interface MultiReviewFixPromptDialogProps {
   catalog: AgentModelCatalog;
   defaultSelection: MultiReviewModelSelection;
   error?: string | null;
-  onSubmit: (selection: MultiReviewModelSelection, prompt: string) => void;
+  busy?: boolean;
+  onSubmit: (selection: MultiReviewModelSelection, prompt: string) => void | Promise<void>;
 }
 
 function catalogSelection(
@@ -59,6 +60,7 @@ export function MultiReviewFixPromptDialog({
   catalog,
   defaultSelection,
   error,
+  busy = false,
   onSubmit,
 }: MultiReviewFixPromptDialogProps) {
   const { favorites, toggleFavorite, reorderFavorites } = useAgentModelFavorites();
@@ -122,7 +124,7 @@ export function MultiReviewFixPromptDialog({
             event.preventDefault();
             const trimmedPrompt = prompt.trim();
             if (!trimmedPrompt) return;
-            onSubmit(selection, trimmedPrompt);
+            void onSubmit(selection, trimmedPrompt);
           }}
         >
           <div className="space-y-2">
@@ -175,11 +177,16 @@ export function MultiReviewFixPromptDialog({
             </p>
           ) : null}
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onOpenChange(false)}
+            >
               Cancel
             </Button>
-            <Button type="submit" disabled={!prompt.trim()}>
-              Start fix
+            <Button type="submit" disabled={busy || !prompt.trim()}>
+              {busy ? "Starting…" : "Start fix"}
             </Button>
           </DialogFooter>
         </form>

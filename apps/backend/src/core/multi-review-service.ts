@@ -5,11 +5,13 @@ import {
   isMultiReviewTerminalPhase,
   isMultiReviewWorkflow,
   isStartMultiReviewInput,
+  type MultiReviewFixSession,
   type MultiReviewPhase,
   type MultiReviewModelSelection,
   type MultiReviewReviewerTranscript,
   type MultiReviewWorkflow,
   type MultiReviewWorktreeSnapshot,
+  type StartMultiReviewCustomFixInput,
   type StartMultiReviewInput,
 } from "@orkestrator/protocol/multi-review";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
@@ -33,7 +35,12 @@ import {
 import { addressPrompt, structuredReportRepairPrompt } from "./build-pipeline-prompts.js";
 import { REVIEW_FIX_RESULT_JSON_SCHEMA, parseFixResult } from "./looped-review-prompts.js";
 import { createMultiReviewConsolidationPrompt } from "./multi-review-prompts.js";
-import { MissingMultiReviewAddressSessionError } from "./multi-review-address-dispatch.js";
+import {
+  InvalidMultiReviewAddressStateError,
+  MissingMultiReviewAddressSessionError,
+  MultiReviewAddressDispatchError,
+  type MultiReviewAddressDispatchResult,
+} from "./multi-review-address-dispatch.js";
 import {
   DEFAULT_PROGRESS_PROBE_INTERVAL_MS,
   DEFAULT_STALL_ABANDON_MS,
@@ -95,6 +102,12 @@ function rotatedSessionKey(base: string): string {
   return `${base}:restart:${randomUUID()}`;
 }
 
+function clearPendingAddressIdentity(workflow: MultiReviewWorkflow): void {
+  delete workflow.addressSessionKey;
+  delete workflow.addressRequestId;
+  delete workflow.addressTabId;
+}
+
 class FixResultValidationError extends Error {
   readonly issues: readonly ReviewContractValidationIssue[];
 
@@ -145,7 +158,14 @@ export interface MultiReviewServiceOptions {
    * The supervisor, not a mounted renderer, retries this callback until it
    * succeeds and acknowledges the persisted intent.
    */
-  dispatchAddressPrompt?: (workflow: MultiReviewWorkflow) => Promise<void>;
+  dispatchAddressPrompt?: (
+    workflow: MultiReviewWorkflow,
+  ) => Promise<MultiReviewAddressDispatchResult | MultiReviewFixSession | void>;
+  /** Removes a failed custom launch from the native-agent identity store. */
+  invalidateAddressSession?: (
+    workflow: MultiReviewWorkflow,
+    session: MultiReviewFixSession,
+  ) => Promise<void>;
 }
 
 /** Durable backend owner for reviewer fan-out, consolidation, and fixes. */
@@ -361,6 +381,12 @@ export class MultiReviewService {
         workflow.fixSession.status = "idle";
         workflow.addressPromptPending = true;
         workflow.addressPromptAttempts = 0;
+        workflow.addressSessionKey = `multi-review:${workflow.id}:interactive`;
+        workflow.addressRequestId = `multi-review-address:${workflow.id}`;
+        workflow.addressTabId = workflow.fixTabId ?? `multi-review-fix:${workflow.id}`;
+        delete workflow.customFixInstruction;
+        delete workflow.customFixModel;
+        delete workflow.presentationError;
         delete workflow.activeRequest;
         delete workflow.error;
         const saved = await this.save(workflow, token);
@@ -371,6 +397,54 @@ export class MultiReviewService {
         // This method owns a short-lived transition/dispatch claim. Every exit
         // path must release it, including validation and already-complete errors,
         // or a rejected retry fences out subsequent controllers until expiry.
+        await this.release(workflow, token);
+      }
+    });
+  }
+
+  async customFix(input: StartMultiReviewCustomFixInput): Promise<MultiReviewWorkflow> {
+    return this.withLock(input.workflowId, async () => {
+      const controlled = await this.loadControlled(input.workflowId);
+      if (!controlled) throw new Error(`Multi review workflow not found: ${input.workflowId}`);
+      const { workflow, token } = controlled;
+      try {
+        const instruction = input.instruction.trim();
+        if (
+          workflow.phase === "interactive" &&
+          workflow.addressPromptPending === true &&
+          workflow.customFixInstruction === instruction &&
+          workflow.customFixModel?.agent === input.fixModel.agent &&
+          workflow.customFixModel.model === input.fixModel.model &&
+          workflow.customFixModel.reasoningEffort === input.fixModel.reasoningEffort
+        ) {
+          this.addressDispatchRetryAt.delete(workflow.id);
+          void this.advanceNow(workflow.id);
+          return workflow;
+        }
+        if (workflow.phase !== "ready" || !workflow.consolidatedReport || !workflow.fixSession) {
+          throw new Error("The consolidated review is not ready for a custom fix");
+        }
+        // Persist the complete launch intent before creating a provider session
+        // or publishing its tab. The supervisor can resume every later step
+        // after a renderer unmount or a backend restart.
+        workflow.phase = "interactive";
+        workflow.fixSession.status = "idle";
+        const launchId = randomUUID();
+        workflow.addressSessionKey = `multi-review:${workflow.id}:interactive:${launchId}`;
+        workflow.addressRequestId = `multi-review-address:${workflow.id}:${launchId}`;
+        workflow.addressTabId = `multi-review-fix:${workflow.id}:${launchId}`;
+        workflow.customFixInstruction = instruction;
+        workflow.customFixModel = { ...input.fixModel };
+        workflow.addressPromptPending = true;
+        workflow.addressPromptAttempts = 0;
+        delete workflow.presentationError;
+        delete workflow.activeRequest;
+        delete workflow.error;
+        const saved = await this.save(workflow, token);
+        this.addressDispatchRetryAt.delete(workflow.id);
+        void this.advanceNow(workflow.id);
+        return saved;
+      } finally {
         await this.release(workflow, token);
       }
     });
@@ -418,6 +492,8 @@ export class MultiReviewService {
         delete workflow.fixResult;
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
+        clearPendingAddressIdentity(workflow);
+        delete workflow.presentationError;
       } else {
         // Reviewer failures are independent, so a single pass can fail several of
         // them at once. Restoring only the first would consolidate from fewer
@@ -463,6 +539,8 @@ export class MultiReviewService {
           workflow.fixSession.status = "idle";
           delete workflow.addressPromptPending;
           delete workflow.addressPromptAttempts;
+          clearPendingAddressIdentity(workflow);
+          delete workflow.presentationError;
           delete workflow.activeRequest;
         } else {
           await this.abandonSession(
@@ -605,6 +683,8 @@ export class MultiReviewService {
         delete workflow.fixResult;
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
+        clearPendingAddressIdentity(workflow);
+        delete workflow.presentationError;
         delete workflow.error;
         const saved = await this.save(workflow, token);
         handedToSupervisor = true;
@@ -1027,25 +1107,78 @@ export class MultiReviewService {
   /** Complete an interactive handoff without relying on a mounted review tab. */
   private async advanceAddressPrompt(workflow: MultiReviewWorkflow, token: string): Promise<void> {
     try {
-      await this.options.dispatchAddressPrompt!(workflow);
+      const previousFixSession = workflow.fixSession;
+      const dispatched = await this.options.dispatchAddressPrompt!(workflow);
+      const result: MultiReviewAddressDispatchResult | undefined =
+        dispatched && "fixSession" in dispatched
+          ? dispatched
+          : dispatched
+            ? {
+                fixSession: dispatched,
+                tabId: workflow.addressTabId ?? `multi-review-fix:${workflow.id}`,
+              }
+            : undefined;
+      const fixSession = result?.fixSession;
       await this.assertFence(workflow.id, token);
+      if (fixSession) {
+        workflow.fixSession = fixSession;
+        if (workflow.customFixModel) {
+          workflow.fixModel = workflow.customFixModel;
+          workflow.fixSessionKey = fixSession.sessionKey;
+        }
+      }
+      workflow.fixTabId = result?.tabId ?? workflow.addressTabId ?? workflow.fixTabId;
+      if (result?.presentationError) workflow.presentationError = result.presentationError;
+      else delete workflow.presentationError;
       delete workflow.addressPromptPending;
       delete workflow.addressPromptAttempts;
+      clearPendingAddressIdentity(workflow);
+      delete workflow.customFixInstruction;
+      delete workflow.customFixModel;
       delete workflow.error;
       this.addressDispatchRetryAt.delete(workflow.id);
       await this.save(workflow, token);
+      if (
+        fixSession &&
+        previousFixSession &&
+        previousFixSession.providerSessionId !== fixSession.providerSessionId
+      ) {
+        await this.abandonSession(
+          workflow,
+          previousFixSession,
+          previousFixSession.providerSessionId,
+        );
+        this.progress.forget(previousFixSession.providerSessionId);
+      }
     } catch (error) {
       if (error instanceof ControllerFenceError) throw error;
       const nextError = errorMessage(error).slice(0, 4_096);
       const attempts = (workflow.addressPromptAttempts ?? 0) + 1;
       const missingSession = error instanceof MissingMultiReviewAddressSessionError;
-      if (missingSession || attempts >= this.maxAddressDispatchAttempts()) {
+      const invalidState = error instanceof InvalidMultiReviewAddressStateError;
+      if (missingSession || invalidState || attempts >= this.maxAddressDispatchAttempts()) {
         // A definitive miss cannot recover under the old provider id. Other
         // persistent failures stop after a bounded budget so activity and user
         // controls cannot remain wedged forever.
+        const failedCustomSession =
+          error instanceof MultiReviewAddressDispatchError ? error.preparedSession : undefined;
+        if (failedCustomSession && workflow.customFixModel) {
+          await this.abandonSession(
+            workflow,
+            workflow.customFixModel,
+            failedCustomSession.providerSessionId,
+          );
+          this.progress.forget(failedCustomSession.providerSessionId);
+          await this.options
+            .invalidateAddressSession?.(workflow, failedCustomSession)
+            .catch(() => undefined);
+        }
         workflow.phase = "failed";
         delete workflow.addressPromptPending;
         delete workflow.addressPromptAttempts;
+        clearPendingAddressIdentity(workflow);
+        delete workflow.customFixInstruction;
+        delete workflow.customFixModel;
         delete workflow.activeRequest;
         if (missingSession) {
           if (workflow.fixSession?.providerSessionId) {
@@ -1180,11 +1313,16 @@ export class MultiReviewService {
     providerSessionId: string | undefined,
   ): Promise<void> {
     if (!providerSessionId) return;
+    const key = this.providerKey(workflow, selection);
     try {
-      const provider = await this.provider(workflow, selection);
+      // One-shot cleanup must not register the workflow as a long-lived user of
+      // a provider it is about to stop tracking.
+      const provider = await this.providerInstance(workflow, selection);
       await provider.abort(providerSessionId);
     } catch {
       // Intentionally ignored; the caller is discarding this session either way.
+    } finally {
+      await this.disposeProviderIfUnused(key);
     }
   }
 

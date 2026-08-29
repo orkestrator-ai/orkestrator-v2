@@ -19,7 +19,11 @@ import {
 import { RESOURCE_CHANGED_EVENT } from "@orkestrator/protocol/resource-events";
 import { FRONTEND_AGENT_ACTIVITY_LEASE_MS } from "@orkestrator/protocol/agent-activity";
 import { BuildPipelineService } from "./build-pipeline-service.js";
-import { isAgentTurnEndTransition, NativeAgentService } from "./native-agent-service.js";
+import {
+  isAgentTurnEndTransition,
+  nativeAgentSessionStorageKey,
+  NativeAgentService,
+} from "./native-agent-service.js";
 import { LoopedReviewService } from "./looped-review-service.js";
 import { dispatchMultiReviewAddressPrompt } from "./multi-review-address-dispatch.js";
 import { MultiReviewService } from "./multi-review-service.js";
@@ -203,7 +207,13 @@ export class OrkestratorBackend {
       },
       {
         dispatchAddressPrompt: (workflow) =>
-          dispatchMultiReviewAddressPrompt(this.nativeAgents, workflow),
+          dispatchMultiReviewAddressPrompt(this.nativeAgents, workflow, storage),
+        invalidateAddressSession: async (workflow, session) => {
+          await storage.invalidateNativeAgentSession(
+            nativeAgentSessionStorageKey(workflow.environmentId, session.agent, session.sessionKey),
+            session.providerSessionId,
+          );
+        },
       },
     );
     context.multiReviews = this.multiReviews;

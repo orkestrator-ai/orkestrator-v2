@@ -8,7 +8,11 @@
  * creates the ticket, the environment and the pipeline from this one object.
  */
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
-import type { BuildStepConfig, BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
+import type {
+  BuildStepConfig,
+  BuildStepConfigs,
+  TaskSnapshotImage,
+} from "@orkestrator/protocol/build-pipeline";
 import type { CreateFeatureBuildInput } from "@orkestrator/protocol/feature-build";
 import {
   defaultEffortFor,
@@ -174,6 +178,7 @@ export interface FeatureBuildRequestInput {
   environmentName: string;
   networkAccessMode: NetworkAccessMode;
   portMappings: PortMapping[];
+  images?: TaskSnapshotImage[];
   models: FeatureBuildModelState;
   requestId: string;
 }
@@ -202,6 +207,7 @@ export function featureBuildRequest(input: FeatureBuildRequestInput): CreateFeat
     // Review configuration is always explicit so the backend can distinguish
     // the default fan-out from the legacy single-review pipeline.
     reviewers: configured.reviewers,
+    ...(input.images && input.images.length > 0 ? { images: input.images } : {}),
     requestId: input.requestId,
   };
 }

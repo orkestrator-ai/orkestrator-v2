@@ -3665,6 +3665,14 @@ describe("CreateEnvironmentDialog feature builds", () => {
     useCodexStore.setState({ models: defaultCodexModels });
     useOpenCodeStore.setState({ models: new Map(defaultOpenCodeModels) });
     useAgentModelCatalogStore.setState({ cursorModels: [], grokModels: [], piModels: [] });
+    mockReadImage.mockReset();
+    mockReadImage.mockImplementation(() => Promise.reject(new Error("no image")));
+    putImageData.mockReset();
+    HTMLCanvasElement.prototype.getContext = (() => ({
+      putImageData,
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.toDataURL = (() =>
+      "data:image/png;base64,QUJD") as typeof HTMLCanvasElement.prototype.toDataURL;
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === "get_opencode_model_preferences") {
@@ -3675,6 +3683,12 @@ describe("CreateEnvironmentDialog feature builds", () => {
       }
       return Promise.resolve(undefined);
     });
+  });
+
+  afterEach(() => {
+    cleanup();
+    HTMLCanvasElement.prototype.getContext = originalGetContext;
+    HTMLCanvasElement.prototype.toDataURL = originalToDataURL;
   });
 
   /** Opens the Build section's feature option and fills the ticket. */
@@ -3755,6 +3769,45 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(request.reviewers).toHaveLength(2);
     expect(typeof request.requestId).toBe("string");
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("shows a pasted feature image and includes it in the build request", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    const onCreateFeatureBuild = mock(async () => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Match the reference" });
+    const description = screen.getByLabelText(/^Description$/i) as HTMLTextAreaElement;
+    description.focus();
+    expect(document.activeElement).toBe(description);
+    expect(description.closest("form")).toBeTruthy();
+    const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+    document.dispatchEvent(pasteEvent);
+
+    await waitFor(() => expect(mockReadImage).toHaveBeenCalledTimes(1));
+    const thumbnail = await screen.findByAltText(/initial-prompt-/);
+    expect(thumbnail.getAttribute("src")).toBe("data:image/png;base64,QUJD");
+    expect(pasteEvent.defaultPrevented).toBe(true);
+
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    expect(onCreateFeatureBuild.mock.calls[0]![0].images).toEqual([
+      {
+        filename: expect.stringMatching(/^initial-prompt-.*\.png$/),
+        data: "QUJD",
+      },
+    ]);
   });
 
   test("submits the configured panel defaults without opening customization", async () => {

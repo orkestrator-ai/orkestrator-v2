@@ -24,6 +24,7 @@ import type { BuildStepConfigs } from "@orkestrator/protocol/build-pipeline";
 import type { BuildPipelineService } from "./build-pipeline-service.js";
 import type { StorageService } from "./storage.js";
 import type { KanbanTask } from "./storage-shared.js";
+import { assertValidPromptImages } from "./prompt-attachments.js";
 
 export interface FeatureBuildContext {
   storage: StorageService;
@@ -50,6 +51,7 @@ export async function createFeatureBuild(
   const title = input.title.trim();
   const description = input.description?.trim() ?? "";
   const acceptanceCriteria = input.acceptanceCriteria?.trim() ?? "";
+  const images = assertValidPromptImages(input.images ?? []);
   const requestId = input.requestId?.trim();
   const requestHash = requestId
     ? featureBuildRequestHash({
@@ -88,7 +90,7 @@ export async function createFeatureBuild(
       description: task.description,
       acceptanceCriteria: task.acceptanceCriteria,
       comments: [],
-      images: [],
+      images,
     },
     // Linking the source is what makes the pipeline move this ticket through
     // its lifecycle and attach the environment to it.

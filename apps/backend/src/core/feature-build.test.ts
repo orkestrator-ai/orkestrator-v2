@@ -161,6 +161,41 @@ describe("createFeatureBuild", () => {
     });
   });
 
+  test("includes attached feature images in the durable pipeline snapshot", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      await createFeatureBuild(
+        {
+          ...input,
+          images: [
+            { filename: "reference.png", data: "QUJD" },
+            { filename: "expected-state.png", data: "REVG" },
+          ],
+        },
+        { storage, buildPipelines: supervisor.service },
+      );
+
+      expect(supervisor.started[0]!.taskSnapshot.images).toEqual([
+        { filename: "reference.png", data: "QUJD" },
+        { filename: "expected-state.png", data: "REVG" },
+      ]);
+    });
+  });
+
+  test("rejects malformed feature image data before creating a ticket", async () => {
+    await withStorage(async (storage) => {
+      const supervisor = fakeSupervisor();
+      await expect(
+        createFeatureBuild(
+          { ...input, images: [{ filename: "reference.png", data: "not base64" }] },
+          { storage, buildPipelines: supervisor.service },
+        ),
+      ).rejects.toThrow("valid base64");
+      expect(await storage.getKanbanTasks("project-1")).toHaveLength(0);
+      expect(supervisor.started).toHaveLength(0);
+    });
+  });
+
   test("a retry under the same request id reuses the ticket rather than adding one", async () => {
     await withStorage(async (storage) => {
       const supervisor = fakeSupervisor();

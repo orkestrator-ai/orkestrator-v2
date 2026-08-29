@@ -22,7 +22,16 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { FolderGit2, Trash2, ChevronRight, Plus, Settings2, LayoutGrid } from "lucide-react";
+import {
+  FolderGit2,
+  FolderInput,
+  FolderMinus,
+  Trash2,
+  ChevronRight,
+  Plus,
+  Settings2,
+  LayoutGrid,
+} from "lucide-react";
 import type { Project, Environment } from "@/types";
 import { cn } from "@/lib/utils";
 import { SortableEnvironmentItem } from "./SortableEnvironmentItem";
@@ -49,6 +58,10 @@ interface SortableProjectGroupProps {
   onRestartEnvironment: (environmentId: string) => void;
   onUpdateEnvironment?: (environment: Environment) => void;
   onCreateEnvironment: () => void;
+  /** Opens the folder composer for this project. */
+  onAddToFolder?: () => void;
+  /** Lifts this project back out to the root level; omitted when it has no folder. */
+  onRemoveFromFolder?: () => void;
   isMultiSelectMode?: boolean;
   selectedEnvironmentIds?: string[];
 }
@@ -70,6 +83,8 @@ export function SortableProjectGroup({
   onRestartEnvironment,
   onUpdateEnvironment,
   onCreateEnvironment,
+  onAddToFolder,
+  onRemoveFromFolder,
   isMultiSelectMode = false,
   selectedEnvironmentIds = [],
 }: SortableProjectGroupProps) {
@@ -206,6 +221,21 @@ export function SortableProjectGroup({
                   <Plus className="h-4 w-4 mr-2" />
                   New Environment
                 </ContextMenuItem>
+                {onAddToFolder && (
+                  <>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onClick={onAddToFolder}>
+                      <FolderInput className="h-4 w-4 mr-2" />
+                      Add to Folder
+                    </ContextMenuItem>
+                    {onRemoveFromFolder && (
+                      <ContextMenuItem onClick={onRemoveFromFolder}>
+                        <FolderMinus className="h-4 w-4 mr-2" />
+                        Remove from Folder
+                      </ContextMenuItem>
+                    )}
+                  </>
+                )}
                 <ContextMenuSeparator />
                 <ContextMenuItem variant="destructive" onClick={() => setShowDeleteDialog(true)}>
                   <Trash2 className="h-4 w-4 mr-2" />

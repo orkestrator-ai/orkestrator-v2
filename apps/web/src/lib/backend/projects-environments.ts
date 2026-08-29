@@ -69,9 +69,20 @@ export async function reorderProjects(projectIds: string[]): Promise<Project[]> 
 
 export async function updateProject(
   projectId: string,
-  updates: Partial<Pick<Project, "name" | "localPath">>,
+  updates: Partial<Pick<Project, "name" | "localPath" | "folder">>,
 ): Promise<Project> {
   return invoke<Project>("update_project", { projectId, updates });
+}
+
+/**
+ * Persists a sidebar arrangement: the full project order plus any folder
+ * memberships that changed, applied as one backend mutation.
+ */
+export async function arrangeProjects(
+  projectIds: string[],
+  folders: Record<string, string | null> = {},
+): Promise<Project[]> {
+  return invoke<Project[]>("arrange_projects", { projectIds, folders });
 }
 
 // --- Environment Commands ---

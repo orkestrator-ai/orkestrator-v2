@@ -26,6 +26,8 @@ interface ProjectState {
   updateProject: (projectId: string, updates: Partial<Project>) => void;
   /** Reorder projects based on the new order of IDs */
   reorderProjects: (projectIds: string[]) => void;
+  /** Apply a new order together with the folder memberships that changed. */
+  arrangeProjects: (projectIds: string[], folders: Record<string, string | null>) => void;
   setLoading: (isLoading: boolean) => void;
   setError: (error: string | null) => void;
 
@@ -69,12 +71,25 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
   },
 
   reorderProjects: (projectIds) => {
+    get().arrangeProjects(projectIds, {});
+  },
+
+  arrangeProjects: (projectIds, folders) => {
     advanceProjectMutationVersion();
     set((state) => ({
       projects: projectIds
-        .map((id, index) => {
+        .map((id, index): Project | null => {
           const project = state.projects.find((p) => p.id === id);
-          return project ? { ...project, order: index } : null;
+          if (!project) return null;
+          // Mirrors the backend: an unmentioned project keeps its membership,
+          // and clearing one removes the key rather than storing an explicit
+          // null, so the optimistic record matches the snapshot that follows.
+          if (!(id in folders)) return { ...project, order: index };
+          const folder = folders[id] ?? null;
+          const next = { ...project, order: index };
+          if (folder) next.folder = folder;
+          else delete next.folder;
+          return next;
         })
         .filter((p): p is Project => p !== null),
     }));

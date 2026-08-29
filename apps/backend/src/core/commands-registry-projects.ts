@@ -135,6 +135,22 @@ export function registerProjectCommands(
   register("reorder_projects", ({ projectIds }, { storage }) =>
     storage.reorderProjects(asStringArray(projectIds)),
   );
+  // One command rather than a reorder plus N updates: the sidebar derives a
+  // folder's position from its first member, so a half-applied arrangement is
+  // a visibly wrong tree rather than a slightly stale one.
+  register("arrange_projects", (args, { storage }) => {
+    assertOnlyKeys(args, ["projectIds", "folders"], "arguments");
+    const folders: Record<string, string | null> = {};
+    if (args.folders !== undefined) {
+      for (const [projectId, folder] of Object.entries(asRecord(args.folders, "folders"))) {
+        if (folder !== null && typeof folder !== "string") {
+          throw new Error(`folders.${projectId} must be a string or null`);
+        }
+        folders[projectId] = folder;
+      }
+    }
+    return storage.arrangeProjects(asStringArray(args.projectIds), folders);
+  });
   register("validate_git_url", ({ url }) =>
     /^(https?:\/\/|git@|ssh:\/\/).+/.test(asString(url, "url").trim()),
   );

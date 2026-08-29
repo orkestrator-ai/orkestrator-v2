@@ -101,6 +101,21 @@ type PersistedOpenCodeModelCatalogStore = shared.PersistedOpenCodeModelCatalogSt
 type ResourceChangeListener = shared.ResourceChangeListener;
 
 import { StorageBase } from "./storage-base.ts";
+import { normalizeProjectFolderName } from "@orkestrator/protocol/project-folders";
+
+/**
+ * Writes a folder assignment onto a project record.
+ *
+ * The key is deleted rather than set to null when membership is cleared, so a
+ * project that has never been foldered and one that was dragged back out
+ * serialize identically. That keeps projects.json from accumulating a null
+ * folder on every record the first time anyone uses the feature.
+ */
+function applyProjectFolder(project: Project, folder: unknown): void {
+  const normalized = normalizeProjectFolderName(folder);
+  if (normalized) project.folder = normalized;
+  else delete project.folder;
+}
 
 export type StorageLayerTypes = [
   AgentInteractionOrigin,
@@ -216,7 +231,7 @@ export abstract class StorageProjects extends StorageBase {
 
   async updateProject(
     projectId: string,
-    updates: Partial<Pick<Project, "name" | "localPath">>,
+    updates: Partial<Pick<Project, "name" | "localPath" | "folder">>,
   ): Promise<Project> {
     const project = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
@@ -224,6 +239,7 @@ export abstract class StorageProjects extends StorageBase {
       if (!project) throw new Error(`Project not found: ${projectId}`);
       if (typeof updates.name === "string") project.name = updates.name;
       if ("localPath" in updates) project.localPath = updates.localPath ?? null;
+      if ("folder" in updates) applyProjectFolder(project, updates.folder);
       await this.saveJson(this.projectsFile(), projects);
       return project;
     });
@@ -232,11 +248,36 @@ export abstract class StorageProjects extends StorageBase {
   }
 
   async reorderProjects(projectIds: string[]): Promise<Project[]> {
+    return this.arrangeProjects(projectIds);
+  }
+
+  /**
+   * Reorders the sidebar and moves projects between folders in one write.
+   *
+   * A folder drag changes both at once — a project lands in a new folder *and*
+   * at a new position — and the sidebar derives a folder's position from its
+   * first member. Persisting the two halves as separate mutations would let a
+   * client observe the intermediate state, in which the folder has jumped to
+   * wherever the moved project used to be.
+   */
+  async arrangeProjects(
+    projectIds: string[],
+    folders: Readonly<Record<string, string | null>> = {},
+  ): Promise<Project[]> {
     const projects = await this.enqueueProjectMutation(async () => {
       const projects = await this.loadProjects();
+      const byId = new Map(projects.map((project) => [project.id, project]));
+      for (const [projectId, folder] of Object.entries(folders)) {
+        const project = byId.get(projectId);
+        // A project deleted by another client is not an error here: the caller
+        // computed this arrangement against a snapshot that still had it, and
+        // failing the whole write would discard every other move it made.
+        if (project) applyProjectFolder(project, folder);
+      }
+
       const provided = new Set(projectIds);
       for (const [index, id] of projectIds.entries()) {
-        const project = projects.find((candidate) => candidate.id === id);
+        const project = byId.get(id);
         if (project) project.order = index;
       }
 

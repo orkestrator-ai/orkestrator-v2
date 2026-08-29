@@ -63,6 +63,7 @@ export function useProjects() {
   const removeProjectFromStore = useProjectStore((state) => state.removeProject);
   const updateProjectInStore = useProjectStore((state) => state.updateProject);
   const reorderProjectsInStore = useProjectStore((state) => state.reorderProjects);
+  const arrangeProjectsInStore = useProjectStore((state) => state.arrangeProjects);
   const setLoading = useProjectStore((state) => state.setLoading);
   const setError = useProjectStore((state) => state.setError);
   const getProjectById = useProjectStore((state) => state.getProjectById);
@@ -196,6 +197,31 @@ export function useProjects() {
     [reorderProjectsInStore, setProjects, setError, loadProjects],
   );
 
+  /**
+   * Persists a sidebar arrangement — order plus folder membership — as one
+   * mutation. Folder-only moves still send the full order because a folder's
+   * position is derived from its first member, so membership and order are not
+   * independently meaningful.
+   */
+  const arrangeProjects = useCallback(
+    async (projectIds: string[], folders: Record<string, string | null> = {}) => {
+      invalidateProjectSnapshots();
+      arrangeProjectsInStore(projectIds, folders);
+      try {
+        setProjects(await backend.arrangeProjects(projectIds, folders));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Failed to arrange projects";
+        toast.error("Failed to update project folders");
+        await loadProjects();
+        // loadProjects clears stale errors before recovery; retain the mutation
+        // failure so callers can still surface why the arrangement was rolled back.
+        setError(message);
+        throw new Error(message);
+      }
+    },
+    [arrangeProjectsInStore, setProjects, setError, loadProjects],
+  );
+
   const updateProject = useCallback(
     async (project: { id: string; name: string; localPath: string | null }) => {
       invalidateProjectSnapshots();
@@ -225,6 +251,7 @@ export function useProjects() {
     removeProject,
     updateProject,
     reorderProjects,
+    arrangeProjects,
     validateGitUrl,
     getProjectById,
   };

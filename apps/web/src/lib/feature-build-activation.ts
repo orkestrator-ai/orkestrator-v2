@@ -1,6 +1,8 @@
 import type { CreateFeatureBuildResult } from "@orkestrator/protocol/feature-build";
+import { getEnvironment } from "@/lib/backend";
 import { hydrateBuildPipeline } from "@/lib/build-pipeline-persistence";
 import { isActiveBuildPhase, useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { useUIStore } from "@/stores/uiStore";
 
 interface PendingFeatureBuildActivation {
@@ -21,6 +23,40 @@ function activate(projectId: string, environmentId: string): void {
   const ui = useUIStore.getState();
   ui.setProjectCollapsed(projectId, false);
   ui.selectProjectAndEnvironment(projectId, environmentId);
+
+  // Feature environments are created by the backend pipeline rather than by
+  // useEnvironments.createEnvironment(), so they do not pass through the
+  // renderer's optimistic add path. Selecting only the ID leaves App on the
+  // project board until a separate environment-list announcement happens to
+  // arrive. Hydrate the targeted record directly so activation also works
+  // while the sidebar is unmounted or after its live event was missed.
+  if (useEnvironmentStore.getState().getEnvironmentById(environmentId)) return;
+  void getEnvironment(environmentId)
+    .then((environment) => {
+      if (!environment) {
+        console.warn(
+          `[feature-build-activation] Environment ${environmentId} was not found after creation`,
+        );
+        return;
+      }
+      if (environment.projectId !== projectId) {
+        console.warn(
+          `[feature-build-activation] Ignoring environment ${environmentId} for an unexpected project`,
+        );
+        return;
+      }
+      const store = useEnvironmentStore.getState();
+      if (!store.getEnvironmentById(environmentId)) store.addEnvironment(environment);
+    })
+    .catch((error) => {
+      // The selection remains useful: manifest or live resource recovery can
+      // still populate the environment store after a transient targeted-read
+      // failure.
+      console.warn(
+        `[feature-build-activation] Failed to hydrate environment ${environmentId}:`,
+        error,
+      );
+    });
 }
 
 function reconcilePendingActivation(pipelineId: string): void {

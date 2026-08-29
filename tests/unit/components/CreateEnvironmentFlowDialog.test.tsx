@@ -9,6 +9,7 @@ import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
 import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
 import { buildPipelineFixture } from "@/test/build-pipeline-fixture";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { mockToastError } from "../../mocks/sonner";
@@ -31,6 +32,19 @@ const createFeatureBuildMock = mock(async (..._args: unknown[]) => ({
   environmentId: "env-feature",
 }));
 const getBuildPipelineConditionalMock = mock(async (..._args: unknown[]) => null);
+const getEnvironmentMock = mock(
+  async (environmentId: string) =>
+    ({
+      id: environmentId,
+      projectId: "project-1",
+      name: "feature-environment",
+      branch: "feature-environment",
+      status: "creating",
+      createdAt: "2026-08-29T00:00:00.000Z",
+      order: 0,
+      environmentType: "containerized",
+    }) as Environment,
+);
 
 mock.module("@/lib/backend", () => ({
   ...realBackendSnapshot,
@@ -38,6 +52,7 @@ mock.module("@/lib/backend", () => ({
   updateEnvironmentAgentSettings: updateEnvironmentAgentSettingsMock,
   createFeatureBuild: createFeatureBuildMock,
   getBuildPipelineConditional: getBuildPipelineConditionalMock,
+  getEnvironment: getEnvironmentMock,
 }));
 
 afterAll(() => {
@@ -109,6 +124,7 @@ describe("CreateEnvironmentFlowDialog", () => {
       pipelineId: "pipeline-1",
       environmentId: "env-feature",
     });
+    getEnvironmentMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockClear();
     getContainerGitHubCredentialStatusMock.mockResolvedValue({
       source: "host-cli",
@@ -117,6 +133,7 @@ describe("CreateEnvironmentFlowDialog", () => {
     useClaudeOptionsStore.setState({ options: {}, pendingNativeLaunches: {} });
     useClaudeStore.setState({ models: [] });
     useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
+    useEnvironmentStore.setState({ environments: [] });
     useConfigStore.setState({
       config: structuredClone(useConfigStore.getInitialState().config),
       isLoading: false,
@@ -536,6 +553,13 @@ describe("CreateEnvironmentFlowDialog", () => {
         selectedEnvironmentId: "env-feature",
       });
     });
+    await waitFor(() =>
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-feature")).toMatchObject({
+        id: "env-feature",
+        projectId: "project-1",
+      }),
+    );
+    expect(getEnvironmentMock).toHaveBeenCalledWith("env-feature");
     expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
   });
 
@@ -578,6 +602,12 @@ describe("CreateEnvironmentFlowDialog", () => {
       selectedProjectId: "project-1",
       selectedEnvironmentId: "env-eventual",
     });
+    await waitFor(() =>
+      expect(useEnvironmentStore.getState().getEnvironmentById("env-eventual")).toMatchObject({
+        id: "env-eventual",
+        projectId: "project-1",
+      }),
+    );
     expect(useUIStore.getState().collapsedProjects).not.toContain("project-1");
   });
 

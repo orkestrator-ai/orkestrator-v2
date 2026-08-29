@@ -7,6 +7,12 @@ export interface Project {
   addedAt: string;
   /** Display order in the sidebar (lower values appear first) */
   order: number;
+  /**
+   * Sidebar folder this project is grouped under, or null/absent for the root
+   * level. The name is the folder's whole identity — see
+   * `@orkestrator/protocol/project-folders`.
+   */
+  folder?: string | null;
 }
 
 // Environment types

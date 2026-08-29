@@ -13,6 +13,7 @@ import {
   closestCenter,
   KeyboardSensor,
   PointerSensor,
+  useDroppable,
   useSensor,
   useSensors,
   type DragEndEvent,
@@ -29,6 +30,7 @@ import {
   ArrowUpDown,
   Bell,
   Boxes,
+  Folder,
   Plus,
   FolderGit2,
   Square,
@@ -37,7 +39,9 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { SortableProjectGroup } from "./SortableProjectGroup";
+import { SortableProjectFolder } from "./SortableProjectFolder";
 import { AddProjectDialog } from "@/components/projects/AddProjectDialog";
+import { AddToFolderDialog } from "@/components/projects/AddToFolderDialog";
 import { CreateEnvironmentFlowDialog } from "@/components/environments/CreateEnvironmentFlowDialog";
 import {
   AlertDialog,
@@ -71,15 +75,36 @@ import { EnvironmentItem } from "@/components/environments/EnvironmentItem";
 import { cn } from "@/lib/utils";
 import { LazyDialogLoadingFallback, LazyLoadBoundary } from "@/components/LazyLoadBoundary";
 import { useDockerAvailability } from "@/contexts/DockerAvailabilityContext";
+import {
+  PROJECT_ROOT_DROP_ID,
+  buildProjectTree,
+  isProjectFolderCollapsed,
+  listProjectFolderNames,
+  normalizeProjectFolderName,
+  parseProjectFolderDragId,
+  projectSortableIds,
+  resolveAddProjectToFolder,
+  resolveProjectArrangement,
+  resolveRemoveProjectFromFolder,
+  resolveRenameProjectFolder,
+  resolveUngroupProjectFolder,
+  type ProjectArrangement,
+  type ProjectFolderEntry,
+} from "@/lib/project-folders";
 
 const NO_ENVIRONMENTS: Environment[] = [];
 const LazyRepositorySettings = lazy(async () => ({
   default: (await import("@/components/settings/RepositorySettings")).RepositorySettings,
 }));
 
-export type SidebarReorderResult =
-  | { type: "project"; ids: string[] }
-  | { type: "environment"; projectId: string; ids: string[] };
+/**
+ * What kind of row a drag started on. Projects and folders both resolve
+ * through the folder-aware arrangement resolver; environments do not, because
+ * they never move between projects.
+ */
+export type SidebarDragType = "project" | "folder" | "environment";
+
+export type SidebarReorderResult = { type: "environment"; projectId: string; ids: string[] };
 
 export type SidebarSelectionResult =
   | { type: "toggle"; environmentId: string }
@@ -205,6 +230,37 @@ function AnimatedActivityRow({
   );
 }
 
+/**
+ * Drop target for the root level.
+ *
+ * Only rendered while a project is being dragged, and only then does it take
+ * up space: a permanent target at the bottom of the list would compete with
+ * the last folder's own rows for every drop near the end.
+ *
+ * It is deliberately tall and offset from the last row. Collision detection is
+ * `closestCenter`, so a short strip tucked directly under the final project
+ * puts the two centres close enough together that a drop meant for the root
+ * resolves against that project instead.
+ */
+function SidebarRootDropZone({ active }: { active: boolean }) {
+  const { setNodeRef, isOver } = useDroppable({ id: PROJECT_ROOT_DROP_ID });
+  if (!active) return null;
+  return (
+    <div
+      ref={setNodeRef}
+      data-testid="sidebar-root-drop-zone"
+      className={cn(
+        "mx-3 mt-3 mb-2 flex min-h-16 items-center justify-center rounded-lg border border-dashed px-3 py-4 text-center text-xs transition-colors",
+        isOver
+          ? "border-primary/70 bg-primary/10 text-foreground"
+          : "border-zinc-800 text-zinc-500",
+      )}
+    >
+      Drop here to remove from folder
+    </div>
+  );
+}
+
 export function resolveSidebarSelection(
   environmentId: string,
   modifiers: { shiftKey?: boolean; metaKey?: boolean },
@@ -240,24 +296,21 @@ export function resolveSidebarSelection(
   return { type: "single", environmentId };
 }
 
+/**
+ * Resolves an environment drag within its project.
+ *
+ * Project and folder drags are resolved by `resolveProjectArrangement`, which
+ * has to reason about folder membership as well as order; this stays the
+ * environment-only path.
+ */
 export function resolveSidebarReorder(
   activeId: string,
   overId: string,
-  activeType: "project" | "environment" | null,
-  projects: Project[],
+  activeType: SidebarDragType | null,
+  _projects: Project[],
   environments: Environment[],
 ): SidebarReorderResult | null {
   if (activeId === overId) return null;
-  if (activeType === "project") {
-    const oldIndex = projects.findIndex((project) => project.id === activeId);
-    const newIndex = projects.findIndex((project) => project.id === overId);
-    if (oldIndex === -1 || newIndex === -1) return null;
-    const reordered = [...projects];
-    const [removed] = reordered.splice(oldIndex, 1);
-    if (!removed) return null;
-    reordered.splice(newIndex, 0, removed);
-    return { type: "project", ids: reordered.map((project) => project.id) };
-  }
   if (activeType === "environment") {
     const activeEnvironment = environments.find((environment) => environment.id === activeId);
     const overEnvironment = environments.find((environment) => environment.id === overId);
@@ -329,7 +382,8 @@ export function HierarchicalSidebar() {
   const [showCreateEnvDialog, setShowCreateEnvDialog] = useState(false);
   const [createEnvProjectId, setCreateEnvProjectId] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [activeType, setActiveType] = useState<"project" | "environment" | null>(null);
+  const [activeType, setActiveType] = useState<SidebarDragType | null>(null);
+  const [folderDialogProjectId, setFolderDialogProjectId] = useState<string | null>(null);
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
   const [showSettingsDialog, setShowSettingsDialog] = useState(false);
   const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
@@ -341,7 +395,7 @@ export function HierarchicalSidebar() {
     createProjectFromScratch,
     removeProject,
     updateProject,
-    reorderProjects,
+    arrangeProjects,
     validateGitUrl,
     isLoading: projectsLoading,
   } = useProjects();
@@ -366,11 +420,14 @@ export function HierarchicalSidebar() {
   const selectedProjectId = useUIStore((state) => state.selectedProjectId);
   const selectedEnvironmentId = useUIStore((state) => state.selectedEnvironmentId);
   const collapsedProjects = useUIStore((state) => state.collapsedProjects);
+  const collapsedProjectFolders = useUIStore((state) => state.collapsedProjectFolders);
   const selectedEnvironmentIds = useUIStore((state) => state.selectedEnvironmentIds);
   const environmentSortMode = useUIStore((state) => state.environmentSortMode);
   const selectProject = useUIStore((state) => state.selectProject);
   const selectProjectAndEnvironment = useUIStore((state) => state.selectProjectAndEnvironment);
   const toggleProjectCollapse = useUIStore((state) => state.toggleProjectCollapse);
+  const toggleProjectFolderCollapse = useUIStore((state) => state.toggleProjectFolderCollapse);
+  const setProjectFolderCollapsed = useUIStore((state) => state.setProjectFolderCollapsed);
   const toggleEnvironmentSelection = useUIStore((state) => state.toggleEnvironmentSelection);
   const setMultiSelection = useUIStore((state) => state.setMultiSelection);
   const clearMultiSelection = useUIStore((state) => state.clearMultiSelection);
@@ -384,6 +441,15 @@ export function HierarchicalSidebar() {
   const projectsById = useMemo(
     () => new Map(projects.map((project) => [project.id, project])),
     [projects],
+  );
+  const projectTree = useMemo(() => buildProjectTree(projects), [projects]);
+  const projectFolderNames = useMemo(() => listProjectFolderNames(projects), [projects]);
+  // Sortable ids and the rendered rows must be built from the same tree and the
+  // same collapse state: a registered id with no visible row still resolves
+  // drops, and would drop a project into a folder the user cannot see.
+  const projectSortableItems = useMemo(
+    () => projectSortableIds(projectTree, collapsedProjectFolders),
+    [projectTree, collapsedProjectFolders],
   );
   const totalEnvironmentCount = activityEnvironments.length;
   const waitingEnvironmentCount = useMemo(
@@ -495,11 +561,20 @@ export function HierarchicalSidebar() {
 
   const handleDragStart = (event: DragStartEvent) => {
     const { active } = event;
-    setActiveId(active.id as string);
+    const draggedId = String(active.id);
+    setActiveId(draggedId);
 
-    // Determine if we're dragging a project or environment
-    const isProject = projects.some((p) => p.id === active.id);
-    setActiveType(isProject ? "project" : "environment");
+    if (parseProjectFolderDragId(draggedId) !== null) {
+      setActiveType("folder");
+      return;
+    }
+    setActiveType(projects.some((p) => p.id === draggedId) ? "project" : "environment");
+  };
+
+  /** Persists one arrangement, or nothing when the gesture was a no-op. */
+  const applyArrangement = async (arrangement: ProjectArrangement | null): Promise<void> => {
+    if (!arrangement) return;
+    await arrangeProjects(arrangement.projectIds, arrangement.folders);
   };
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -508,20 +583,63 @@ export function HierarchicalSidebar() {
     setActiveType(null);
 
     if (!over) return;
-    const reorder = resolveSidebarReorder(
-      String(active.id),
-      String(over.id),
-      activeType,
-      projects,
-      allEnvironments,
-    );
+    const draggedId = String(active.id);
+    const droppedOnId = String(over.id);
     try {
-      if (reorder?.type === "project") await reorderProjects(reorder.ids);
-      if (reorder?.type === "environment")
-        await reorderEnvironments(reorder.projectId, reorder.ids);
+      if (activeType === "project" || activeType === "folder") {
+        await applyArrangement(resolveProjectArrangement(draggedId, droppedOnId, projects));
+        return;
+      }
+      const reorder = resolveSidebarReorder(
+        draggedId,
+        droppedOnId,
+        activeType,
+        projects,
+        allEnvironments,
+      );
+      if (reorder) await reorderEnvironments(reorder.projectId, reorder.ids);
     } catch (err) {
       console.error("Failed to persist sidebar reorder:", err);
     }
+  };
+
+  const handleAddToFolder = async (projectId: string, folderName: string): Promise<void> => {
+    await applyArrangement(resolveAddProjectToFolder(projects, projectId, folderName));
+    // A folder the user just filed something into has to be visible, otherwise
+    // the project appears to have vanished from the sidebar.
+    setProjectFolderCollapsed(folderName, false);
+  };
+
+  const handleRemoveFromFolder = (projectId: string): void => {
+    void applyArrangement(resolveRemoveProjectFromFolder(projects, projectId)).catch((err) => {
+      console.error("Failed to remove project from folder:", err);
+    });
+  };
+
+  const handleRenameFolder = (folderName: string, nextName: string): void => {
+    // Collapse state is carried against the name that was actually stored, not
+    // the typed one: normalization collapses whitespace and control-character
+    // runs, and a key that no longer matches leaves the renamed folder expanded
+    // while stranding the old entry in the persisted list forever.
+    const storedName = normalizeProjectFolderName(nextName);
+    void applyArrangement(resolveRenameProjectFolder(projects, folderName, nextName))
+      .then(() => {
+        if (storedName && isProjectFolderCollapsed(collapsedProjectFolders, folderName)) {
+          setProjectFolderCollapsed(folderName, false);
+          setProjectFolderCollapsed(storedName, true);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to rename project folder:", err);
+      });
+  };
+
+  const handleUngroupFolder = (folderName: string): void => {
+    void applyArrangement(resolveUngroupProjectFolder(projects, folderName))
+      .then(() => setProjectFolderCollapsed(folderName, false))
+      .catch((err) => {
+        console.error("Failed to remove project folder:", err);
+      });
   };
 
   const handleAddProject = async (gitUrl: string, localPath?: string) => {
@@ -567,21 +685,27 @@ export function HierarchicalSidebar() {
     }
 
     const orderedIds: string[] = [];
-    for (const project of projects) {
+    const collectFrom = (project: Project): void => {
       // Skip collapsed projects - their environments aren't visible
-      if (collapsedProjects.includes(project.id)) {
+      if (collapsedProjects.includes(project.id)) return;
+      for (const env of getProjectEnvironments(project.id)) orderedIds.push(env.id);
+    };
+    for (const entry of projectTree) {
+      if (entry.kind === "project") {
+        collectFrom(entry.project);
         continue;
       }
-      const projectEnvs = getProjectEnvironments(project.id);
-      for (const env of projectEnvs) {
-        orderedIds.push(env.id);
-      }
+      // A collapsed folder hides every project inside it, so shift-range
+      // selection must not run through environments that are not on screen.
+      if (isProjectFolderCollapsed(collapsedProjectFolders, entry.name)) continue;
+      for (const project of entry.projects) collectFrom(project);
     }
     return orderedIds;
   }, [
     activityEnvironments,
     environmentSortMode,
-    projects,
+    projectTree,
+    collapsedProjectFolders,
     getProjectEnvironments,
     collapsedProjects,
   ]);
@@ -723,13 +847,52 @@ export function HierarchicalSidebar() {
 
   const handleUpdateProject = createProjectUpdateHandler(updateProject);
 
+  const folderDialogProject = folderDialogProjectId
+    ? (projectsById.get(folderDialogProjectId) ?? null)
+    : null;
+
   // Get the project for the settings dialog
   const settingsProject = settingsProjectId
     ? projects.find((p) => p.id === settingsProjectId)
     : null;
 
+  const renderProjectGroup = (project: Project) => (
+    <SortableProjectGroup
+      key={project.id}
+      project={project}
+      environments={getProjectEnvironments(project.id)}
+      isCollapsed={collapsedProjects.includes(project.id)}
+      isSelected={selectedProjectId === project.id && !selectedEnvironmentId}
+      onToggleCollapse={() => toggleProjectCollapse(project.id)}
+      selectedEnvironmentId={selectedEnvironmentId}
+      onSelectProject={() => selectProject(project.id)}
+      onSelectEnvironment={handleSelectEnvironment}
+      onDeleteProject={handleDeleteProject}
+      onOpenSettings={() => handleOpenSettings(project.id)}
+      onDeleteEnvironment={deleteEnvironment}
+      onStartEnvironment={startEnvironment}
+      onStopEnvironment={stopEnvironment}
+      onRestartEnvironment={restartEnvironment}
+      onUpdateEnvironment={handleUpdateEnvironment}
+      onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
+      onAddToFolder={() => setFolderDialogProjectId(project.id)}
+      onRemoveFromFolder={project.folder ? () => handleRemoveFromFolder(project.id) : undefined}
+      isMultiSelectMode={isMultiSelectMode}
+      selectedEnvironmentIds={selectedEnvironmentIds}
+    />
+  );
+
   // Get the active item for drag overlay
   const activeProject = activeType === "project" ? projects.find((p) => p.id === activeId) : null;
+  const activeFolderKey =
+    activeType === "folder" && activeId ? parseProjectFolderDragId(activeId) : null;
+  const activeFolder =
+    activeFolderKey === null
+      ? null
+      : (projectTree.find(
+          (entry): entry is ProjectFolderEntry =>
+            entry.kind === "folder" && entry.key === activeFolderKey,
+        ) ?? null);
   const activeEnvironment =
     activeType === "environment" ? allEnvironments.find((e) => e.id === activeId) : null;
 
@@ -983,33 +1146,25 @@ export function HierarchicalSidebar() {
               onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
             >
-              <SortableContext
-                items={projects.map((p) => p.id)}
-                strategy={verticalListSortingStrategy}
-              >
-                {projects.map((project) => (
-                  <SortableProjectGroup
-                    key={project.id}
-                    project={project}
-                    environments={getProjectEnvironments(project.id)}
-                    isCollapsed={collapsedProjects.includes(project.id)}
-                    isSelected={selectedProjectId === project.id && !selectedEnvironmentId}
-                    onToggleCollapse={() => toggleProjectCollapse(project.id)}
-                    selectedEnvironmentId={selectedEnvironmentId}
-                    onSelectProject={() => selectProject(project.id)}
-                    onSelectEnvironment={handleSelectEnvironment}
-                    onDeleteProject={handleDeleteProject}
-                    onOpenSettings={() => handleOpenSettings(project.id)}
-                    onDeleteEnvironment={deleteEnvironment}
-                    onStartEnvironment={startEnvironment}
-                    onStopEnvironment={stopEnvironment}
-                    onRestartEnvironment={restartEnvironment}
-                    onUpdateEnvironment={handleUpdateEnvironment}
-                    onCreateEnvironment={() => handleOpenCreateEnvDialog(project.id)}
-                    isMultiSelectMode={isMultiSelectMode}
-                    selectedEnvironmentIds={selectedEnvironmentIds}
-                  />
-                ))}
+              <SortableContext items={projectSortableItems} strategy={verticalListSortingStrategy}>
+                {projectTree.map((entry) =>
+                  entry.kind === "project" ? (
+                    renderProjectGroup(entry.project)
+                  ) : (
+                    <SortableProjectFolder
+                      key={`folder:${entry.key}`}
+                      name={entry.name}
+                      projectCount={entry.projects.length}
+                      isCollapsed={isProjectFolderCollapsed(collapsedProjectFolders, entry.name)}
+                      onToggleCollapse={() => toggleProjectFolderCollapse(entry.name)}
+                      onRename={(nextName) => handleRenameFolder(entry.name, nextName)}
+                      onUngroup={() => handleUngroupFolder(entry.name)}
+                    >
+                      {entry.projects.map(renderProjectGroup)}
+                    </SortableProjectFolder>
+                  ),
+                )}
+                <SidebarRootDropZone active={activeType === "project"} />
               </SortableContext>
 
               {/* Drag overlay for visual feedback */}
@@ -1019,6 +1174,14 @@ export function HierarchicalSidebar() {
                     <div className="flex items-center gap-2">
                       <FolderGit2 className="h-4 w-4" />
                       <span className="text-sm font-medium">{activeProject.name}</span>
+                    </div>
+                  </div>
+                )}
+                {activeFolder && (
+                  <div className="rounded-md bg-card border border-border px-3 py-2 shadow-lg">
+                    <div className="flex items-center gap-2">
+                      <Folder className="h-4 w-4 text-amber-400/80" aria-hidden="true" />
+                      <span className="text-sm font-medium">{activeFolder.name}</span>
                     </div>
                   </div>
                 )}
@@ -1040,6 +1203,21 @@ export function HierarchicalSidebar() {
         onAdd={handleAddProject}
         onCreate={handleCreateProject}
         validateGitUrl={validateGitUrl}
+      />
+
+      {/* Add to Folder Dialog */}
+      <AddToFolderDialog
+        open={folderDialogProject !== null}
+        onOpenChange={(open) => {
+          if (!open) setFolderDialogProjectId(null);
+        }}
+        projectName={folderDialogProject?.name ?? ""}
+        currentFolder={folderDialogProject?.folder ?? null}
+        existingFolders={projectFolderNames}
+        onSubmit={async (folderName) => {
+          if (!folderDialogProject) return;
+          await handleAddToFolder(folderDialogProject.id, folderName);
+        }}
       />
 
       {/* Create Environment Dialog */}

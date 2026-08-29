@@ -207,4 +207,44 @@ describe("projectStore", () => {
       "later",
     ]);
   });
+
+  test("arrangeProjects applies order and folder membership together", () => {
+    const base = {
+      name: "p",
+      gitUrl: "git@github.com:test/p.git",
+      localPath: null,
+      addedAt: new Date().toISOString(),
+    };
+    useProjectStore.getState().setProjects([
+      { ...base, id: "alpha", order: 0 },
+      { ...base, id: "beta", order: 1, folder: "Work" },
+      { ...base, id: "gamma", order: 2 },
+    ]);
+
+    useProjectStore.getState().arrangeProjects(["gamma", "alpha", "beta"], { gamma: "Work" });
+
+    expect(
+      useProjectStore.getState().projects.map(({ id, order, folder }) => ({ id, order, folder })),
+    ).toEqual([
+      { id: "gamma", order: 0, folder: "Work" },
+      { id: "alpha", order: 1, folder: undefined },
+      // Membership this arrangement did not mention is carried through.
+      { id: "beta", order: 2, folder: "Work" },
+    ]);
+    // Clearing membership removes the key rather than storing an explicit null.
+    useProjectStore.getState().arrangeProjects(["gamma", "alpha", "beta"], { gamma: null });
+    expect("folder" in useProjectStore.getState().projects[0]!).toBe(false);
+  });
+
+  test("arrangeProjects drops ids the store no longer knows about", () => {
+    const base = {
+      name: "p",
+      gitUrl: "git@github.com:test/p.git",
+      localPath: null,
+      addedAt: new Date().toISOString(),
+    };
+    useProjectStore.getState().setProjects([{ ...base, id: "alpha", order: 0 }]);
+    useProjectStore.getState().arrangeProjects(["alpha", "missing"], { missing: "Work" });
+    expect(useProjectStore.getState().projects.map(({ id }) => id)).toEqual(["alpha"]);
+  });
 });

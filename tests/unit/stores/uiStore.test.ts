@@ -277,4 +277,51 @@ describe("uiStore", () => {
     expect(useUIStore.getState().selectedProjectId).toBeNull();
     expect(useUIStore.getState().environmentSortMode).toBe("activity");
   });
+
+  test("toggles and sets folder collapse independently of project collapse", () => {
+    useUIStore.setState({ collapsedProjectFolders: [], collapsedProjects: [] });
+
+    useUIStore.getState().toggleProjectFolderCollapse("Work");
+    expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+    expect(useUIStore.getState().collapsedProjects).toEqual([]);
+
+    useUIStore.getState().toggleProjectFolderCollapse("Work");
+    expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+
+    useUIStore.getState().setProjectFolderCollapsed("Work", true);
+    useUIStore.getState().setProjectFolderCollapsed("Work", true);
+    expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+
+    useUIStore.getState().setProjectFolderCollapsed("Work", false);
+    expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+  });
+
+  test("matches a collapsed folder by identity, not by how the name is spelled", () => {
+    useUIStore.setState({ collapsedProjectFolders: ["Work"] });
+
+    useUIStore.getState().setProjectFolderCollapsed("work", true);
+    expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+
+    useUIStore.getState().setProjectFolderCollapsed("WORK", false);
+    expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+
+    useUIStore.setState({ collapsedProjectFolders: ["Work"] });
+    useUIStore.getState().toggleProjectFolderCollapse("work");
+    expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+  });
+
+  test("persists collapsed folders so a reload reopens the same tree", async () => {
+    useUIStore.getState().setProjectFolderCollapsed("Work", true);
+
+    const persistedRaw = localStorage.getItem("ui-storage") ?? "{}";
+    expect((JSON.parse(persistedRaw) as { state?: Record<string, unknown> }).state).toMatchObject({
+      collapsedProjectFolders: ["Work"],
+    });
+
+    useUIStore.setState({ collapsedProjectFolders: [] });
+    localStorage.setItem("ui-storage", persistedRaw);
+    await useUIStore.persist.rehydrate();
+
+    expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+  });
 });

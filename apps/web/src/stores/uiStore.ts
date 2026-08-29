@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { projectFolderKey } from "@orkestrator/protocol/project-folders";
 
 /** Zoom level constraints */
 const ZOOM_MIN = 50;
@@ -7,6 +8,12 @@ const ZOOM_MAX = 200;
 const ZOOM_STEP = 10;
 const ZOOM_DEFAULT = 100;
 const RECENT_PROJECT_LIMIT = 5;
+
+const isFolderCollapsed = (collapsed: string[], folder: string): boolean =>
+  collapsed.some((name) => projectFolderKey(name) === projectFolderKey(folder));
+
+const withoutFolder = (collapsed: string[], folder: string): string[] =>
+  collapsed.filter((name) => projectFolderKey(name) !== projectFolderKey(folder));
 
 const addRecentProject = (recentProjectIds: string[], projectId: string): string[] =>
   [projectId, ...recentProjectIds.filter((id) => id !== projectId)].slice(0, RECENT_PROJECT_LIMIT);
@@ -25,6 +32,11 @@ interface UIState {
   sidebarWidth: number;
   /** Project IDs that are collapsed in the hierarchical sidebar */
   collapsedProjects: string[];
+  /**
+   * Sidebar folder names that are collapsed. Keyed by name because a folder
+   * has no record of its own — see `@orkestrator/protocol/project-folders`.
+   */
+  collapsedProjectFolders: string[];
   /** Environment IDs selected in multi-select mode */
   selectedEnvironmentIds: string[];
   /** Environment IDs that have their sessions section expanded (collapsed by default) */
@@ -46,6 +58,10 @@ interface UIState {
   toggleProjectCollapse: (projectId: string) => void;
   /** Set the collapsed state of a project */
   setProjectCollapsed: (projectId: string, collapsed: boolean) => void;
+  /** Toggle the collapsed state of a sidebar project folder */
+  toggleProjectFolderCollapse: (folder: string) => void;
+  /** Set the collapsed state of a sidebar project folder */
+  setProjectFolderCollapsed: (folder: string, collapsed: boolean) => void;
   /** Toggle an environment in multi-select mode */
   toggleEnvironmentSelection: (environmentId: string) => void;
   /** Set multiple environment IDs as selected (for range selection) */
@@ -80,6 +96,7 @@ export const useUIStore = create<UIState>()(
       projectBoardNotesOpen: false,
       sidebarWidth: 280,
       collapsedProjects: [],
+      collapsedProjectFolders: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
@@ -125,6 +142,26 @@ export const useUIStore = create<UIState>()(
               ? state.collapsedProjects
               : [...state.collapsedProjects, projectId]
             : state.collapsedProjects.filter((id) => id !== projectId),
+        })),
+
+      // Folder identity is the case-folded name, matching how the sidebar tree
+      // groups projects. Comparing these entries literally would leave a
+      // folder stuck collapsed after it was reached by a differently-cased
+      // spelling of its own name.
+      toggleProjectFolderCollapse: (folder) =>
+        set((state) => ({
+          collapsedProjectFolders: isFolderCollapsed(state.collapsedProjectFolders, folder)
+            ? withoutFolder(state.collapsedProjectFolders, folder)
+            : [...state.collapsedProjectFolders, folder],
+        })),
+
+      setProjectFolderCollapsed: (folder, collapsed) =>
+        set((state) => ({
+          collapsedProjectFolders: collapsed
+            ? isFolderCollapsed(state.collapsedProjectFolders, folder)
+              ? state.collapsedProjectFolders
+              : [...state.collapsedProjectFolders, folder]
+            : withoutFolder(state.collapsedProjectFolders, folder),
         })),
 
       toggleEnvironmentSelection: (environmentId) =>
@@ -183,6 +220,7 @@ export const useUIStore = create<UIState>()(
       partialize: (state) => ({
         sidebarWidth: state.sidebarWidth,
         collapsedProjects: state.collapsedProjects,
+        collapsedProjectFolders: state.collapsedProjectFolders,
         recentProjectIds: state.recentProjectIds,
         environmentSortMode: state.environmentSortMode,
         zoomLevel: state.zoomLevel,

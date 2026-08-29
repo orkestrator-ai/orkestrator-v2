@@ -31,6 +31,12 @@ export interface Project {
   localPath: string | null;
   addedAt: string;
   order: number;
+  /**
+   * Sidebar folder this project is grouped under, or null/absent for the root
+   * level. The name is the folder's whole identity — see
+   * `@orkestrator/protocol/project-folders`.
+   */
+  folder?: string | null;
 }
 
 export type EnvironmentStatus = "running" | "stopped" | "error" | "creating" | "stopping";

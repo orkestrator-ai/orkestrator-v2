@@ -30,6 +30,9 @@ const mockValidateGitUrl = mock<(url: string) => Promise<boolean>>(() => Promise
 const mockReorderProjects = mock<(projectIds: string[]) => Promise<Project[]>>(() =>
   Promise.resolve([]),
 );
+const mockArrangeProjects = mock<
+  (projectIds: string[], folders: Record<string, string | null>) => Promise<Project[]>
+>(() => Promise.resolve([]));
 const mockUpdateProject = mock<
   (projectId: string, updates: Partial<Pick<Project, "name" | "localPath">>) => Promise<Project>
 >((projectId, updates) => Promise.resolve(createMockProject({ id: projectId, ...updates })));
@@ -41,6 +44,7 @@ mock.module("@/lib/backend", () => ({
   removeProject: mockRemoveProject,
   validateGitUrl: mockValidateGitUrl,
   reorderProjects: mockReorderProjects,
+  arrangeProjects: mockArrangeProjects,
   updateProject: mockUpdateProject,
 }));
 
@@ -86,6 +90,7 @@ describe("useProjects", () => {
     mockRemoveProject.mockClear();
     mockValidateGitUrl.mockClear();
     mockReorderProjects.mockClear();
+    mockArrangeProjects.mockClear();
     mockUpdateProject.mockClear();
 
     // Reset to default implementations
@@ -106,6 +111,7 @@ describe("useProjects", () => {
     mockRemoveProject.mockImplementation(() => Promise.resolve());
     mockValidateGitUrl.mockImplementation(() => Promise.resolve(true));
     mockReorderProjects.mockImplementation(() => Promise.resolve([]));
+    mockArrangeProjects.mockImplementation(() => Promise.resolve([]));
     mockUpdateProject.mockImplementation((projectId, updates) =>
       Promise.resolve(createMockProject({ id: projectId, ...updates })),
     );
@@ -458,6 +464,86 @@ describe("useProjects", () => {
     expect(mockGetProjects).toHaveBeenCalledTimes(1);
     expect(result.current.projects).toEqual([first, second]);
     expect(result.current.error).toBe("Reorder failed");
+  });
+
+  test("arrangeProjects applies order and folders optimistically, then the confirmed snapshot", async () => {
+    const first = createMockProject({ id: "first", name: "first", order: 0 });
+    const second = createMockProject({ id: "second", name: "second", order: 1 });
+    const confirmed = [
+      { ...second, order: 0, folder: "Work" },
+      { ...first, order: 1 },
+    ];
+    useProjectStore.setState({ projects: [first, second] });
+    mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
+    let observedDuringRequest: Project[] = [];
+    mockArrangeProjects.mockImplementation(() => {
+      observedDuringRequest = useProjectStore.getState().projects;
+      return Promise.resolve(confirmed);
+    });
+
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    await act(async () => {
+      await result.current.arrangeProjects(["second", "first"], { second: "Work" });
+    });
+
+    expect(mockArrangeProjects).toHaveBeenCalledWith(["second", "first"], { second: "Work" });
+    // The sidebar must not wait for the round trip to show the new tree.
+    expect(observedDuringRequest.map(({ id, folder }) => ({ id, folder }))).toEqual([
+      { id: "second", folder: "Work" },
+      { id: "first", folder: undefined },
+    ]);
+    expect(result.current.projects).toEqual(confirmed);
+  });
+
+  test("arrangeProjects rolls back to the authoritative tree after a failure", async () => {
+    const first = createMockProject({ id: "first", name: "first", order: 0 });
+    const second = createMockProject({ id: "second", name: "second", order: 1 });
+    useProjectStore.setState({ projects: [first, second] });
+    mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
+    mockArrangeProjects.mockImplementation(() => Promise.reject(new Error("Arrange failed")));
+
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    mockGetProjects.mockClear();
+
+    let thrownError: Error | undefined;
+    try {
+      await act(async () => {
+        await result.current.arrangeProjects(["second", "first"], { second: "Work" });
+      });
+    } catch (error) {
+      thrownError = error as Error;
+    }
+
+    expect(thrownError?.message).toBe("Arrange failed");
+    expect(mockGetProjects).toHaveBeenCalledTimes(1);
+    expect(result.current.projects).toEqual([first, second]);
+    expect(result.current.error).toBe("Arrange failed");
+  });
+
+  test("arrangeProjects names folders in its failure toast only when folders changed", async () => {
+    const first = createMockProject({ id: "first", name: "first", order: 0 });
+    const second = createMockProject({ id: "second", name: "second", order: 1 });
+    useProjectStore.setState({ projects: [first, second] });
+    mockGetProjects.mockImplementation(() => Promise.resolve([first, second]));
+    mockArrangeProjects.mockImplementation(() => Promise.reject(new Error("Arrange failed")));
+
+    const { result } = renderHook(() => useProjects());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+
+    // A folder-free arrangement is a plain reorder — the most common sidebar
+    // drag — so it must not report a feature the user never touched.
+    await act(async () => {
+      await result.current.arrangeProjects(["second", "first"]).catch(() => {});
+    });
+    expect(mockToastError.mock.calls.at(-1)?.[0]).toBe("Failed to reorder projects");
+
+    await act(async () => {
+      await result.current.arrangeProjects(["second", "first"], { second: "Work" }).catch(() => {});
+    });
+    expect(mockToastError.mock.calls.at(-1)?.[0]).toBe("Failed to update project folders");
   });
 
   test("validateGitUrl returns true for valid URL", async () => {

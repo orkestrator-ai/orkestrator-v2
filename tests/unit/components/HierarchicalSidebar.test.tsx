@@ -71,6 +71,7 @@ const createProjectFromScratchMock = mock(async () => {});
 const removeProjectMock = mock(async () => {});
 const updateProjectMock = mock(async () => {});
 const reorderProjectsMock = mock(async () => {});
+const arrangeProjectsMock = mock(async () => {});
 let projectsValue: Project[] = [project];
 let environmentsValue: Environment[] = [];
 let projectsLoadingValue = false;
@@ -93,6 +94,7 @@ mock.module("@/hooks/useProjects", () => ({
     removeProject: removeProjectMock,
     updateProject: updateProjectMock,
     reorderProjects: reorderProjectsMock,
+    arrangeProjects: arrangeProjectsMock,
     validateGitUrl: mock(async () => true),
     isLoading: projectsLoadingValue,
   }),
@@ -236,6 +238,8 @@ describe("HierarchicalSidebar", () => {
     removeProjectMock.mockClear();
     updateProjectMock.mockClear();
     reorderProjectsMock.mockClear();
+    arrangeProjectsMock.mockClear();
+    arrangeProjectsMock.mockImplementation(async () => {});
     projectsValue = [project];
     environmentsValue = [];
     projectsLoadingValue = false;
@@ -260,6 +264,7 @@ describe("HierarchicalSidebar", () => {
       selectedEnvironmentId: null,
       recentProjectIds: [],
       collapsedProjects: [],
+      collapsedProjectFolders: [],
       selectedEnvironmentIds: [],
       expandedSessionsEnvironments: [],
       environmentSortMode: "project",
@@ -1831,7 +1836,7 @@ describe("HierarchicalSidebar", () => {
       } as DragEndEvent);
       await Promise.resolve();
     });
-    expect(reorderProjectsMock).toHaveBeenCalledWith(["project-2", "project-1"]);
+    expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-2", "project-1"], {});
 
     act(() => {
       currentDndContextProps().onDragStart?.({ active: { id: "env-1" } } as DragStartEvent);
@@ -1845,7 +1850,7 @@ describe("HierarchicalSidebar", () => {
     });
     expect(reorderEnvironmentsMock).toHaveBeenCalledWith("project-1", ["env-2", "env-1"]);
 
-    reorderProjectsMock.mockClear();
+    arrangeProjectsMock.mockClear();
     reorderEnvironmentsMock.mockClear();
     act(() => {
       currentDndContextProps().onDragStart?.({ active: { id: "env-1" } } as DragStartEvent);
@@ -1853,13 +1858,13 @@ describe("HierarchicalSidebar", () => {
     act(() => {
       currentDndContextProps().onDragEnd?.({ active: { id: "env-1" }, over: null } as DragEndEvent);
     });
-    expect(reorderProjectsMock).not.toHaveBeenCalled();
+    expect(arrangeProjectsMock).not.toHaveBeenCalled();
     expect(reorderEnvironmentsMock).not.toHaveBeenCalled();
   });
 
   test("reports reorder persistence failures without leaking a rejected event promise", async () => {
     projectsValue = [project, { ...project, id: "project-2", name: "Project Two", order: 1 }];
-    reorderProjectsMock.mockImplementationOnce(async () => {
+    arrangeProjectsMock.mockImplementationOnce(async () => {
       throw new Error("reorder failed");
     });
     const originalConsoleError = console.error;
@@ -1931,13 +1936,7 @@ describe("HierarchicalSidebar", () => {
   });
 
   test("resolves project and same-project environment reorder operations", () => {
-    const secondProject = { ...project, id: "project-2", name: "Project Two", order: 1 };
-    expect(
-      resolveSidebarReorder("project-1", "project-2", "project", [project, secondProject], []),
-    ).toEqual({
-      type: "project",
-      ids: ["project-2", "project-1"],
-    });
+    expect(resolveSidebarReorder("project-1", "project-2", "project", [project], [])).toBeNull();
 
     const first = { ...createdEnvironment, id: "env-1", order: 0 };
     const second = { ...createdEnvironment, id: "env-2", order: 1 };
@@ -1958,8 +1957,6 @@ describe("HierarchicalSidebar", () => {
     expect(
       resolveSidebarReorder("env-1", "missing", "environment", [project], [first, second]),
     ).toBeNull();
-    expect(resolveSidebarReorder("missing", "project-1", "project", [project], [])).toBeNull();
-    expect(resolveSidebarReorder("project-1", "missing", "project", [project], [])).toBeNull();
     expect(resolveSidebarReorder("project-1", "project-1", "project", [project], [])).toBeNull();
     expect(resolveSidebarReorder("project-1", "project-2", null, [project], [])).toBeNull();
   });
@@ -2037,6 +2034,259 @@ describe("HierarchicalSidebar", () => {
     } finally {
       console.error = originalConsoleError;
     }
+  });
+
+  describe("project folders", () => {
+    const secondProject: Project = {
+      ...project,
+      id: "project-2",
+      name: "Project Two",
+      gitUrl: "https://github.com/acme/project-two.git",
+      order: 1,
+    };
+
+    test("files a project into a newly named folder from its context menu", async () => {
+      projectsValue = [project, secondProject];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Add to Folder" }));
+
+      const input = await screen.findByLabelText("Folder name");
+      fireEvent.change(input, { target: { value: "  Work  " } });
+      fireEvent.click(screen.getByRole("button", { name: "Add to Folder" }));
+
+      // The folder takes the project's own slot, so nothing is reordered.
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
+          "project-1": "Work",
+        }),
+      );
+    });
+
+    test("offers an existing folder and adds the project to it rather than making a second one", async () => {
+      projectsValue = [{ ...project, folder: "Work" }, secondProject];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /Project Two/i }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Add to Folder" }));
+
+      // The suggestion carries the existing spelling, which is what makes a
+      // differently-cased entry join rather than create.
+      fireEvent.click(await screen.findByRole("button", { name: "Work" }));
+      fireEvent.click(screen.getByRole("button", { name: "Add to Folder" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
+          "project-2": "Work",
+        }),
+      );
+    });
+
+    test("renders a folder around its members and nothing around the rest", async () => {
+      projectsValue = [{ ...project, folder: "Work" }, secondProject];
+      render(<HierarchicalSidebar />);
+
+      const folderHeader = await screen.findByTitle("Collapse folder Work");
+      expect(folderHeader.getAttribute("aria-expanded")).toBe("true");
+      const folderContent = document.querySelector('[data-project-folder-content="Work"]');
+      expect(folderContent?.textContent).toContain("Project One");
+      expect(folderContent?.textContent).not.toContain("Project Two");
+      expect(screen.getByRole("button", { name: /Project Two/i })).toBeTruthy();
+    });
+
+    test("clicking the folder name contracts it, hiding its contents, and expands it again", async () => {
+      projectsValue = [{ ...project, folder: "Work" }, secondProject];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.click(await screen.findByTitle("Collapse folder Work"));
+
+      const collapsed = await screen.findByTitle("Expand folder Work");
+      expect(collapsed.getAttribute("aria-expanded")).toBe("false");
+      expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+      expect(document.querySelector('[data-project-folder-content="Work"]') === null).toBe(true);
+      expect(screen.queryByRole("button", { name: /Project One/i }) === null).toBe(true);
+      // The folder outside it is unaffected.
+      expect(screen.getByRole("button", { name: /Project Two/i })).toBeTruthy();
+
+      fireEvent.click(collapsed);
+      expect(await screen.findByTitle("Collapse folder Work")).toBeTruthy();
+      expect(screen.getByRole("button", { name: /Project One/i })).toBeTruthy();
+      expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+    });
+
+    test("the folder chevron toggles collapse without the drag handle intercepting the key", async () => {
+      projectsValue = [{ ...project, folder: "Work" }, secondProject];
+      render(<HierarchicalSidebar />);
+
+      // The name is also the drag handle: dnd-kit's keyboard sensor owns Enter
+      // and Space there, so the chevron is the only control a keyboard user can
+      // collapse the folder with.
+      const chevron = await screen.findByRole("button", { name: "Collapse folder Work" });
+      fireEvent.click(chevron);
+      expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Expand folder Work" }));
+      expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
+    });
+
+    test("dropping a project on a folder header moves it into that folder", async () => {
+      projectsValue = [{ ...project, folder: "Work" }, secondProject];
+      render(<HierarchicalSidebar />);
+
+      act(() => {
+        currentDndContextProps().onDragStart?.({
+          active: { id: "project-2" },
+        } as DragStartEvent);
+      });
+      await act(async () => {
+        currentDndContextProps().onDragEnd?.({
+          active: { id: "project-2" },
+          over: { id: "project-folder:work" },
+        } as DragEndEvent);
+        await Promise.resolve();
+      });
+
+      expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-2", "project-1"], {
+        "project-2": "Work",
+      });
+    });
+
+    test("dragging the folder itself moves the whole group without changing membership", async () => {
+      projectsValue = [{ ...project, folder: "Work" }, secondProject];
+      render(<HierarchicalSidebar />);
+
+      act(() => {
+        currentDndContextProps().onDragStart?.({
+          active: { id: "project-folder:work" },
+        } as DragStartEvent);
+      });
+      await act(async () => {
+        currentDndContextProps().onDragEnd?.({
+          active: { id: "project-folder:work" },
+          over: { id: "project-2" },
+        } as DragEndEvent);
+        await Promise.resolve();
+      });
+
+      expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-2", "project-1"], {});
+    });
+
+    test("only a foldered project offers to leave its folder", async () => {
+      projectsValue = [{ ...project, folder: "Work" }, secondProject];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /Project Two/i }));
+      expect(await screen.findByRole("menuitem", { name: "Add to Folder" })).toBeTruthy();
+      expect(screen.queryByRole("menuitem", { name: "Remove from Folder" }) === null).toBe(true);
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from Folder" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
+          "project-1": null,
+        }),
+      );
+    });
+
+    test("removing the folder returns every member to the root", async () => {
+      projectsValue = [
+        { ...project, folder: "Work" },
+        { ...secondProject, folder: "Work" },
+      ];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Remove Folder" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
+          "project-1": null,
+          "project-2": null,
+        }),
+      );
+    });
+
+    test("renaming a folder rewrites every member", async () => {
+      projectsValue = [
+        { ...project, folder: "Work" },
+        { ...secondProject, folder: "Work" },
+      ];
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(await screen.findByTitle("Collapse folder Work"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
+
+      const input = await screen.findByLabelText("Rename folder Work");
+      fireEvent.change(input, { target: { value: "Personal" } });
+      fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
+          "project-1": "Personal",
+          "project-2": "Personal",
+        }),
+      );
+    });
+
+    test("renaming a collapsed folder keeps it collapsed under the name that was stored", async () => {
+      projectsValue = [
+        { ...project, folder: "Work" },
+        { ...secondProject, folder: "Work" },
+      ];
+      useUIStore.setState({ collapsedProjectFolders: ["Work"] });
+      render(<HierarchicalSidebar />);
+
+      fireEvent.contextMenu(await screen.findByTitle("Expand folder Work"));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Rename Folder" }));
+
+      const input = await screen.findByLabelText("Rename folder Work");
+      // The stored name is the normalized one, so the collapse entry has to be
+      // recorded against "Team Work" rather than the typed double space.
+      fireEvent.change(input, { target: { value: "Team  Work" } });
+      fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+      await waitFor(() =>
+        expect(arrangeProjectsMock).toHaveBeenCalledWith(["project-1", "project-2"], {
+          "project-1": "Team Work",
+          "project-2": "Team Work",
+        }),
+      );
+      await waitFor(() =>
+        expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Team Work"]),
+      );
+    });
+
+    test("shift-range selection skips environments hidden inside a collapsed folder", async () => {
+      projectsValue = [{ ...project, folder: "Work" }, secondProject];
+      environmentsValue = [
+        {
+          ...createdEnvironment,
+          id: "env-1",
+          projectId: "project-1",
+          name: "Environment One",
+          order: 0,
+        },
+        {
+          ...createdEnvironment,
+          id: "env-2",
+          projectId: "project-2",
+          name: "Environment Two",
+          order: 0,
+        },
+      ];
+      useUIStore.setState({ collapsedProjectFolders: ["Work"], selectedEnvironmentId: "env-1" });
+      render(<HierarchicalSidebar />);
+
+      // "Environment One" lives inside the collapsed folder and is not on
+      // screen, so the range anchored on it cannot run through it.
+      expect(screen.queryByRole("button", { name: "Environment One" }) === null).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Environment Two" }), { shiftKey: true });
+
+      expect(useUIStore.getState().selectedEnvironmentIds).toEqual(["env-2"]);
+    });
   });
 });
 

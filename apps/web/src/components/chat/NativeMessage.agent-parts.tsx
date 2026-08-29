@@ -531,7 +531,8 @@ export function BackgroundTaskCard({
       <div className="flex items-start gap-2 px-3 py-2.5">
         <CollapsibleTrigger
           className={cn(
-            "flex min-w-0 flex-1 items-start gap-3 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            "flex min-w-0 flex-1 gap-3 rounded-md text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+            preview ? "items-start" : "items-center",
             hasBody ? "cursor-pointer hover:bg-white/[0.025]" : "cursor-default",
           )}
           disabled={!hasBody}
@@ -562,7 +563,8 @@ export function BackgroundTaskCard({
           </div>
           <ChevronRight
             className={cn(
-              "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              preview && "mt-1",
               open && hasBody && "rotate-90",
               !hasBody && "opacity-0",
             )}
@@ -651,7 +653,7 @@ export function SubagentPart({
       className={cn(!embedded && agentCardClassName)}
     >
       <CollapsibleTrigger className="w-full px-3 py-2.5 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
-        <div className="flex items-start gap-3">
+        <div className={cn("flex gap-3", preview.text ? "items-start" : "items-center")}>
           <AgentActivityIcon status={status} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-xs">
@@ -689,7 +691,8 @@ export function SubagentPart({
           />
           <ChevronRight
             className={cn(
-              "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              preview.text && "mt-1",
               isOpen && "rotate-90",
             )}
           />
@@ -913,7 +916,7 @@ export function TaskGroupPart({
     >
       <div className="flex items-start gap-2 px-3 py-2.5">
         <CollapsibleTrigger className="min-w-0 flex-1 text-left transition-colors hover:bg-white/[0.025] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 cursor-pointer">
-          <div className="flex items-start gap-3">
+          <div className={cn("flex gap-3", preview ? "items-start" : "items-center")}>
             <AgentActivityIcon status={status} spinning={backgroundPresentation?.spinning} />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-xs">
@@ -958,7 +961,8 @@ export function TaskGroupPart({
             )}
             <ChevronRight
               className={cn(
-                "mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                preview && "mt-1",
                 isOpen && "rotate-90",
               )}
             />

@@ -345,6 +345,9 @@ ${STRUCTURED_REVIEW_FINDINGS_PROMPT_CONTINUATION}
 ${ADDRESS_REVIEW_FINDINGS_TAIL}`;
 }
 
+export const VERIFICATION_OUTPUT_CONTRACT =
+  'Send interim progress only through the provider\'s commentary or update channel, using ordinary prose sentences. Do not use the final-response channel for an update. Never emit a partial or provisional verification verdict. After every validation command and tool call has finished, make the final assistant response the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}';
+
 export function verificationPrompt(
   pipeline: BuildPipeline,
   notes: string,
@@ -355,7 +358,7 @@ export function verificationPrompt(
     ticketContext(pipeline.taskSnapshot),
     notes ? `**Project Notes**:\n${notes}` : "",
     `Compare against origin/${targetBranch}. Run the relevant validation; it may write generated artifacts and tool caches. Do not edit source files or create commits. If relevant work is uncommitted or any acceptance criterion is unmet, report failure.`,
-    'Use ordinary prose for interim progress updates. Never emit a partial or provisional verification verdict. After every validation command and tool call has finished, make the final assistant message the only JSON object, matching the provider-enforced schema: {"complete":true,"rationale":"..."}',
+    VERIFICATION_OUTPUT_CONTRACT,
   ]
     .filter(Boolean)
     .join("\n\n");

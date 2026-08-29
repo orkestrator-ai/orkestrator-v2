@@ -354,7 +354,10 @@ export function BuildChatTab({
       );
     }
     if (selectedSession?.phase === "verify") {
-      return showOnlyFinalVerificationMessage(transcript, structuredResultAccepted);
+      return hideMachineOutputText(
+        showOnlyFinalVerificationMessage(transcript, structuredResultAccepted),
+        { retainPayloadKind: "verification" },
+      );
     }
     return transcript;
   }, [

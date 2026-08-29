@@ -352,8 +352,15 @@ export function CreateEnvironmentFlowDialog({
     if (!projectId) return false;
     setIsCreating(true);
     try {
-      await createFeatureBuild(input);
+      const result = await createFeatureBuild(input);
       setProjectCollapsed(projectId, false);
+      if (result.environmentId) {
+        // Selecting the environment is what mounts its terminal surface. The
+        // backend has already published both the setup and build tabs: setup
+        // keeps focus while it runs, then the pipeline's authoritative layout
+        // hands focus to the build tab when setup completes.
+        selectProjectAndEnvironment(projectId, result.environmentId);
+      }
       toast.success("Build started", {
         description: "The ticket was added and its environment is being created.",
       });

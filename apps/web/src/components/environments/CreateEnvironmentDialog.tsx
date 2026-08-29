@@ -560,6 +560,14 @@ export function CreateEnvironmentDialog({
    * case the key exists for.
    */
   const featureAttemptIdentityRef = useRef<string | null>(null);
+  /**
+   * Concrete model defaults used by the current attempt.
+   *
+   * Live catalogues may arrive after a request whose response was lost. A retry
+   * must reuse the exact reviewer payload bound to its idempotency key, while an
+   * explicit picker edit or toggle is allowed to replace this snapshot.
+   */
+  const featureAttemptModelsRef = useRef<FeatureBuildModelState | null>(null);
   // Held as null until the panel is first shown so that reopening the dialog,
   // or a catalogue arriving late, re-resolves the defaults instead of pinning
   // whatever was known on first render.
@@ -696,7 +704,24 @@ export function CreateEnvironmentDialog({
     // request again" a reuse would stand for.
     featureRequestIdRef.current = createUuid();
     featureAttemptIdentityRef.current = null;
+    featureAttemptModelsRef.current = null;
   }, [defaultPortMappings, effectiveDefaultEnvironmentType, initialAgentDefaults]);
+
+  const handleCustomizeModelsChange = useCallback(
+    (enabled: boolean) => {
+      setCustomizeModels(enabled);
+      // Enabling pins what the user sees. Disabling discards every panel edit,
+      // matching the switch's promise to return to configured defaults.
+      setFeatureModels(enabled ? defaultFeatureModels : null);
+      featureAttemptModelsRef.current = null;
+    },
+    [defaultFeatureModels],
+  );
+
+  const handleFeatureModelsChange = useCallback((models: FeatureBuildModelState) => {
+    setFeatureModels(models);
+    featureAttemptModelsRef.current = null;
+  }, []);
 
   const beginAttachmentOperation = useCallback(() => {
     const operation = {
@@ -1204,6 +1229,7 @@ export function CreateEnvironmentDialog({
       try {
         if (buildIntent === "feature") {
           if (!projectId || !onCreateFeatureBuild || !featureName.trim()) return;
+          const requestModels = featureAttemptModelsRef.current ?? effectiveFeatureModels;
           const buildRequest = (requestId: string) =>
             featureBuildRequest({
               projectId,
@@ -1216,7 +1242,7 @@ export function CreateEnvironmentDialog({
               portMappings,
               defaultAgent: agentType,
               customizeModels,
-              models: effectiveFeatureModels,
+              models: requestModels,
               requestId,
             });
           let request = buildRequest(featureRequestIdRef.current);
@@ -1232,12 +1258,14 @@ export function CreateEnvironmentDialog({
             request = buildRequest(featureRequestIdRef.current);
           }
           featureAttemptIdentityRef.current = identity;
+          featureAttemptModelsRef.current = requestModels;
           const started = await onCreateFeatureBuild(request);
           if (started === false) return;
           // A new key only after the request succeeded: a retry of a create
           // whose response was lost has to reuse this one.
           featureRequestIdRef.current = createUuid();
           featureAttemptIdentityRef.current = null;
+          featureAttemptModelsRef.current = null;
           resetForm();
           onOpenChange(false);
           return;
@@ -1744,9 +1772,9 @@ export function CreateEnvironmentDialog({
                 advancedOpen={advancedOpen}
                 onAdvancedOpenChange={setAdvancedOpen}
                 customizeModels={customizeModels}
-                onCustomizeModelsChange={setCustomizeModels}
+                onCustomizeModelsChange={handleCustomizeModelsChange}
                 models={effectiveFeatureModels}
-                onModelsChange={setFeatureModels}
+                onModelsChange={handleFeatureModelsChange}
                 catalog={modelCatalog}
                 enabledPlatforms={enabledAgentPlatforms}
                 disabled={isLoading}

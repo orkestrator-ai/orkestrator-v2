@@ -3726,9 +3726,11 @@ describe("CreateEnvironmentDialog feature builds", () => {
     expect(request.title).toBe("Dark mode toggle");
     expect(request.acceptanceCriteria).toBe("The preference survives a reload.");
     expect(request.environmentType).toBe("containerized");
-    // Closed models panel means no pinned steps: the backend applies the same
-    // defaults it would have used anyway.
+    // Closed models panel means no pinned single-step overrides. The stock
+    // review and review2 defaults are identical, so they collapse rather than
+    // paying for duplicate work and a consolidation turn.
     expect(request.steps).toBeUndefined();
+    expect(request.reviewers).toHaveLength(1);
     expect(typeof request.requestId).toBe("string");
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
@@ -3784,6 +3786,42 @@ describe("CreateEnvironmentDialog feature builds", () => {
     const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
     // A response that never arrived is indistinguishable from one that was
     // lost, so the identical retry has to land on the same ticket.
+    expect(second.requestId).toBe(first.requestId);
+  });
+
+  test("pins implicit reviewers and the request id across a late catalog refresh", async () => {
+    const onCreateFeatureBuild = mock(async () => false);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Dark mode toggle" });
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      useClaudeStore.setState({
+        models: [
+          {
+            id: "late-catalog-model",
+            name: "Late catalog model",
+            supportedEffortLevels: ["high"],
+          },
+        ],
+      });
+    });
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(2));
+
+    const first = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    const second = onCreateFeatureBuild.mock.calls[1]![0] as Record<string, unknown>;
+    expect(second.reviewers).toEqual(first.reviewers);
     expect(second.requestId).toBe(first.requestId);
   });
 
@@ -3889,8 +3927,48 @@ describe("CreateEnvironmentDialog feature builds", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create Environment" }));
     await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalled());
     const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
-    expect((request.reviewers as unknown[]).length).toBe(2);
+    // The panel keeps two editable rows, while equal stock defaults collapse at
+    // the request boundary until the user makes them distinct.
+    expect((request.reviewers as unknown[]).length).toBe(1);
     expect((request.steps as Record<string, unknown>).verify).toBeUndefined();
+  });
+
+  test("turning customization off discards reviewer edits and uses configured defaults", async () => {
+    const onCreateFeatureBuild = mock(async () => {});
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    chooseFeature({ name: "Dark mode toggle" });
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    const customize = screen.getByRole("switch", { name: "Customize models" });
+    fireEvent.click(customize);
+
+    const review2 = screen.getByLabelText("Review 2 agent, model and reasoning");
+    fireEvent.pointerDown(review2, { button: 0, ctrlKey: false });
+    fireEvent.click(await screen.findByRole("button", { name: "codex models" }));
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() =>
+      expect(
+        review2
+          .querySelector("[data-native-model-platform]")
+          ?.getAttribute("data-native-model-platform"),
+      ).toBe("codex"),
+    );
+
+    fireEvent.click(customize);
+    submitFeature();
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+
+    const request = onCreateFeatureBuild.mock.calls[0]![0] as Record<string, unknown>;
+    expect(request.steps).toBeUndefined();
+    expect(request.reviewers).toEqual([expect.objectContaining({ agent: "claude" })]);
   });
 
   test("adds and removes reviewers, and never removes the last one", () => {

@@ -13,6 +13,7 @@ import {
 } from "../../../../../tests/mocks/sonner";
 
 import { NativeMessage } from "./NativeMessage";
+import { BackgroundTaskCard } from "./NativeMessage.agent-parts";
 
 function makeMessage(
   parts: Array<NativeMessagePart>,
@@ -2644,6 +2645,53 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByText("Finished")).toBeTruthy();
     expect(screen.getByText("Task ·")).toBeTruthy();
     expect(screen.getByText("Review the transcript ordering change.")).toBeTruthy();
+  });
+
+  test("centers single-line agent and task headers while keeping preview rows top-aligned", () => {
+    const { rerender } = render(
+      <BackgroundTaskCard
+        task={{ id: "task-1", description: "Install dependencies", status: "completed" }}
+        command="Install dependencies"
+        open={false}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    const singleLineTask = screen.getByRole("button", { name: /Task Install dependencies/ });
+    expect(getClassTokens(singleLineTask)).toContain("items-center");
+    expect(getClassTokens(singleLineTask)).not.toContain("items-start");
+
+    rerender(
+      <BackgroundTaskCard
+        task={{ id: "task-1", description: "Install dependencies", status: "completed" }}
+        command="bun install"
+        open={false}
+        onOpenChange={() => {}}
+      />,
+    );
+
+    const twoLineTask = screen.getByRole("button", { name: /Task Install dependencies/ });
+    expect(getClassTokens(twoLineTask)).toContain("items-start");
+    expect(getClassTokens(twoLineTask)).not.toContain("items-center");
+
+    rerender(
+      <NativeMessage
+        platform="cursor"
+        message={makeMessage([
+          {
+            type: "subagent",
+            content: "Reviewer",
+            subagentName: "Reviewer",
+            toolState: "success",
+            subagentActions: [],
+          },
+        ])}
+      />,
+    );
+
+    const singleLineAgent = screen.getByRole("button", { name: /Agent Reviewer Finished/ });
+    expect(getClassTokens(singleLineAgent.firstElementChild)).toContain("items-center");
+    expect(getClassTokens(singleLineAgent.firstElementChild)).not.toContain("items-start");
   });
 
   test("collapses a Codex agent label whose role only restates its name", () => {

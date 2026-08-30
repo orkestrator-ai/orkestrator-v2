@@ -1243,3 +1243,61 @@ describe("DraggableTab tooltip and context menu structure", () => {
     expect(screen.getByText("Close").getAttribute("aria-disabled")).toBe("true");
   });
 });
+
+describe("DraggableTab active state", () => {
+  beforeEach(() => {
+    cleanup();
+    resetSortableMock();
+    useSessionStore.setState({ sessions: new Map() });
+    useFileDirtyStore.setState({ dirtyFiles: new Map() });
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderPlainTab(isActive: boolean, isFocused?: boolean) {
+    const { container } = render(
+      <DraggableTab
+        tab={{ id: "tab-a", type: "plain" }}
+        paneId="pane-1"
+        index={0}
+        isActive={isActive}
+        isFocused={isFocused}
+        canClose
+        onSelect={() => {}}
+      />,
+    );
+    return container.querySelector<HTMLElement>('[class*="cursor-grab"]')!;
+  }
+
+  // The active tab shares `bg-background` with the strip and the pane below it,
+  // so the accent is the only thing marking it. It sits at the bottom edge,
+  // against the strip's own rule, rather than at the top where it read as a
+  // border belonging to the action bar above. The accent's opacity is covered
+  // by the focused/unfocused pair in "DraggableTab icons"; this pins where it
+  // is drawn.
+  test("draws the active accent along the bottom edge of the tab", () => {
+    const active = renderPlainTab(true, true);
+    const indicator = active.querySelector<HTMLElement>('[aria-hidden="true"].bg-primary')!;
+
+    expect(indicator).toBeTruthy();
+    expect(indicator.className).toContain("bottom-0");
+    expect(indicator.className).not.toContain("top-0");
+  });
+
+  // The strip lives inside AppShell's central panel, where `--color-background`
+  // is rebound to the user's terminal colour. An inactive tab therefore has to
+  // paint a wash that composites over whatever is behind it; a flat token stops
+  // tracking the setting and can end up darker than the strip it sits in.
+  test("raises inactive tabs with a compositing wash rather than a fixed surface", () => {
+    const inactive = renderPlainTab(false);
+    expect(inactive.className).toContain("bg-white/[0.06]");
+    expect(inactive.className).toContain("hover:bg-white/[0.12]");
+    expect(inactive.className).not.toContain("bg-sidebar");
+    expect(inactive.querySelector('[aria-hidden="true"].bg-primary') === null).toBe(true);
+
+    cleanup();
+    expect(renderPlainTab(true).className).toContain("bg-background");
+  });
+});

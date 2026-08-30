@@ -316,7 +316,7 @@ export function MobileAppShellLayout({
                 <Menu className="h-5 w-5" />
               </Button>
             </DialogPrimitive.Close>
-            <aside className="mobile-sidebar absolute bottom-0 left-0 top-11 w-full border-r border-border bg-[#18191c] shadow-2xl">
+            <aside className="mobile-sidebar absolute bottom-0 left-0 top-11 w-full border-r border-border bg-sidebar shadow-2xl">
               <DialogPrimitive.Close asChild>
                 <Button
                   ref={sidebarCloseRef}

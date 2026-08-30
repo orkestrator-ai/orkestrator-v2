@@ -58,6 +58,11 @@ describe("DraggableTabBar", () => {
     expect(tabBar?.className).toContain("min-h-[40px]");
     expect(tabBar?.className).toContain("md:min-h-[32px]");
     expect(tabBar?.className).toContain("bg-background");
+    // The rule below the strip is the same declaration the action bar uses
+    // above it, so the row is bounded by one hairline on each side rather than
+    // two that only look alike.
+    expect(tabBar?.className).toContain("border-b");
+    expect(tabBar?.className).toContain("border-border/80");
     fireEvent.click(screen.getByText("Terminal 1"));
     expect(onTabSelect).toHaveBeenCalledWith("terminal");
   });

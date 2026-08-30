@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { cleanup, render } from "@testing-library/react";
 
-import { InlineMessageMarkdown } from "./MessageMarkdown";
+import { InlineMessageMarkdown, MessageMarkdown } from "./MessageMarkdown";
 
 function renderInline(content: string) {
   return render(<InlineMessageMarkdown content={content} />).container;
@@ -111,5 +111,47 @@ describe("InlineMessageMarkdown", () => {
 
     expect(wrapper?.className).toContain("truncate");
     expect(wrapper?.className).toContain("[&_strong]:font-semibold");
+  });
+});
+
+describe("MessageMarkdown code styling", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  // Inline code is tinted so paths, filenames and flags do not disappear into
+  // the prose around them. The `prose-code:` variant matches *every* `code`,
+  // including the one inside a fenced block, so the class list carries a
+  // `pre code` reset; without it a code block is painted chip-by-chip on top of
+  // its own surface. The reset only wins because `[&_pre_code]` outranks the
+  // zero-specificity `:where()` selector the typography plugin generates, which
+  // is why both halves are pinned rather than the string as a whole.
+  test("tints inline code and resets the code inside a fenced block", () => {
+    const { container } = render(
+      <MessageMarkdown content={"Run `bun test` first.\n\n```ts\nconst x = 1;\n```"} />,
+    );
+    const wrapper = container.firstElementChild as HTMLElement;
+
+    expect(wrapper.className).toContain("prose-code:bg-primary/12");
+    expect(wrapper.className).toContain("prose-code:text-blue-300");
+    // Typography's generated content would otherwise re-add the backticks the
+    // chip replaces.
+    expect(wrapper.className).toContain("prose-code:before:content-none");
+    expect(wrapper.className).toContain("prose-code:after:content-none");
+
+    expect(wrapper.className).toContain("[&_pre_code]:bg-transparent");
+    expect(wrapper.className).toContain("[&_pre_code]:px-0");
+    expect(wrapper.className).toContain("[&_pre_code]:py-0");
+    expect(wrapper.className).toContain("[&_pre_code]:text-foreground");
+
+    // The reset is only load-bearing because a fenced block really does render
+    // `pre > code`, which is what `prose-code:` also matches.
+    const fenced = container.querySelector("pre code");
+    expect(fenced?.textContent).toContain("const x = 1;");
+
+    const inline = Array.from(container.querySelectorAll("code")).find(
+      (node) => node.closest("pre") === null,
+    );
+    expect(inline?.textContent).toBe("bun test");
   });
 });

@@ -353,7 +353,7 @@ export function MultiReviewLaunchDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="flex max-h-[min(46rem,calc(100vh-2rem))] w-[min(calc(100%-1rem),42rem)] flex-col gap-0 overflow-hidden border-zinc-700/80 bg-[#111113] p-0 sm:max-w-[42rem]">
+      <DialogContent className="flex max-h-[min(46rem,calc(100vh-2rem))] w-[min(calc(100%-1rem),42rem)] flex-col gap-0 overflow-hidden border-border bg-popover p-0 sm:max-w-[42rem]">
         <DialogHeader className="shrink-0 border-b border-zinc-800 bg-[radial-gradient(circle_at_15%_0%,rgba(34,211,238,0.12),transparent_48%)] px-5 pb-4 pt-5 sm:px-6">
           <DialogTitle className="flex items-center gap-3 text-base">
             <span className="grid size-9 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">

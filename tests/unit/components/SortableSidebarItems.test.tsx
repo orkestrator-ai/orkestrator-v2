@@ -354,6 +354,49 @@ describe("sortable sidebar items", () => {
     expect(onToggleCollapse).toHaveBeenCalled();
   });
 
+  // The project name is also the drag handle, and dnd-kit's keyboard sensor
+  // owns Enter and Space there, so the chevron is the only control a keyboard
+  // user can expand a project with. Nothing inside it is text, so without its
+  // own label it is announced as an unnamed button and the row becomes
+  // keyboard-inoperable in practice. Querying by role and name pins the label
+  // and the behaviour together.
+  test("SortableProjectGroup names the chevron for the collapse state it applies", () => {
+    const onToggleCollapse = mock(() => {});
+    const { rerender } = renderProjectGroup({ isCollapsed: true, onToggleCollapse });
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand project Project One" }));
+    expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Collapse project Project One" }) === null).toBe(
+      true,
+    );
+
+    rerender(
+      <SortableProjectGroup
+        project={project}
+        environments={[environment]}
+        isCollapsed={false}
+        isSelected={false}
+        onToggleCollapse={onToggleCollapse}
+        selectedEnvironmentId={null}
+        onSelectProject={() => {}}
+        onSelectEnvironment={() => {}}
+        onDeleteProject={() => {}}
+        onOpenSettings={() => {}}
+        onDeleteEnvironment={() => {}}
+        onStartEnvironment={() => {}}
+        onStopEnvironment={() => {}}
+        onRestartEnvironment={() => {}}
+        onCreateEnvironment={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse project Project One" }));
+    expect(onToggleCollapse).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: "Expand project Project One" }) === null).toBe(
+      true,
+    );
+  });
+
   test("SortableProjectGroup applies the dragging treatment to the project wrapper", () => {
     sortableState.isDragging = true;
     const { container } = renderProjectGroup();

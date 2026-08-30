@@ -1061,13 +1061,15 @@ describe("ActionBar grid presentation", () => {
     expect(toggleFilesPanelMock).toHaveBeenCalledTimes(1);
   });
 
-  test("uses an accent state when the file panel is selected", () => {
+  test("uses a neutral elevated state when the file panel is selected", () => {
     currentFilesPanelOpen = true;
     render(<ActionBar presentation="grid" />);
 
     const hideFiles = screen.getByRole("button", { name: "Hide file panel" });
     expect(hideFiles.getAttribute("aria-pressed")).toBe("true");
-    expect(hideFiles.className).toContain("bg-primary/15");
+    expect(hideFiles.className).toContain("bg-elevated");
+    expect(hideFiles.className).toContain("text-foreground");
+    expect(hideFiles.className).not.toContain("text-blue");
   });
 });
 

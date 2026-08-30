@@ -60,6 +60,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     const name = screen.getByLabelText("Environment Name (optional)");
     const agent = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
     const launch = screen.getByRole("checkbox", { name: "Launch Agent" });
+    const prompt = screen.getByLabelText("Initial Prompt (optional)");
     expect(name.className).toContain("h-9");
     expect(name.className).toContain("px-3");
     expect(name.className).toContain("bg-input-surface");
@@ -75,6 +76,15 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(agent.closest("div.border-b")?.className).toContain(
       "sm:grid-cols-[7.5rem_minmax(0,1fr)]",
     );
+    const promptField = document.querySelector<HTMLElement>('[data-slot="initial-prompt-field"]');
+    const promptLabel = document.querySelector<HTMLLabelElement>('label[for="initial-prompt"]');
+    expect(promptField?.contains(prompt)).toBe(true);
+    expect(promptField?.className).toContain("sm:grid-cols-[7.5rem_minmax(0,1fr)]");
+    expect(promptLabel?.htmlFor).toBe(prompt.id);
+    expect(promptLabel?.textContent).toContain("Initial Prompt");
+    expect(promptLabel?.querySelector(".sr-only")?.textContent).toBe("(optional)");
+    expect(promptLabel?.className).toContain("text-muted-foreground");
+    expect(prompt.getAttribute("aria-label")).toBeNull();
 
     const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
     const header = document.querySelector<HTMLElement>('[data-slot="dialog-header"]');

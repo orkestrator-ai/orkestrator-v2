@@ -1959,37 +1959,45 @@ export function CreateEnvironmentDialog({
                 }
                 promptFields={
                   launchAgent ? (
-                    <div className="space-y-2">
-                      <Label htmlFor="initial-prompt">
-                        Initial Prompt <span className="text-muted-foreground">(optional)</span>
+                    <div
+                      data-slot="initial-prompt-field"
+                      className="sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-start sm:gap-4"
+                    >
+                      <Label
+                        htmlFor="initial-prompt"
+                        className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0 sm:pt-2"
+                      >
+                        Initial Prompt <span className="sr-only">(optional)</span>
                       </Label>
-                      <Textarea
-                        ref={promptRef}
-                        id="initial-prompt"
-                        placeholder={
-                          agentType === "claude"
-                            ? "Enter a task for Claude to work on..."
-                            : agentType === "codex"
-                              ? "Enter a task for Codex to work on..."
-                              : "Enter a task for OpenCode to work on..."
-                        }
-                        value={initialPrompt}
-                        onChange={(e) => setInitialPrompt(e.target.value)}
-                        onKeyDown={handlePromptKeyDown}
-                        disabled={isLoading}
-                        rows={3}
-                        className="min-h-36 max-h-[calc(15*theme(lineHeight.normal)*1em)] resize-y overflow-y-auto rounded-xl border border-border/70 bg-input-surface px-3 py-2 shadow-none"
-                      />
-                      {isDraggingAttachments && (
-                        <p className="rounded-md border border-dashed border-primary/70 bg-primary/10 px-3 py-2 text-center text-sm text-primary">
-                          Drop files to attach them to the initial prompt
-                        </p>
-                      )}
-                      <AttachmentPreviews
-                        attachments={initialPromptAttachments}
-                        disabled={isLoading}
-                        onRemove={removeInitialPromptAttachment}
-                      />
+                      <div className="space-y-2">
+                        <Textarea
+                          ref={promptRef}
+                          id="initial-prompt"
+                          placeholder={
+                            agentType === "claude"
+                              ? "Enter a task for Claude to work on..."
+                              : agentType === "codex"
+                                ? "Enter a task for Codex to work on..."
+                                : "Enter a task for OpenCode to work on..."
+                          }
+                          value={initialPrompt}
+                          onChange={(e) => setInitialPrompt(e.target.value)}
+                          onKeyDown={handlePromptKeyDown}
+                          disabled={isLoading}
+                          rows={3}
+                          className="min-h-36 max-h-[calc(15*theme(lineHeight.normal)*1em)] resize-y overflow-y-auto rounded-xl border border-border/70 bg-input-surface px-3 py-2 shadow-none"
+                        />
+                        {isDraggingAttachments && (
+                          <p className="rounded-md border border-dashed border-primary/70 bg-primary/10 px-3 py-2 text-center text-sm text-primary">
+                            Drop files to attach them to the initial prompt
+                          </p>
+                        )}
+                        <AttachmentPreviews
+                          attachments={initialPromptAttachments}
+                          disabled={isLoading}
+                          onRemove={removeInitialPromptAttachment}
+                        />
+                      </div>
                     </div>
                   ) : null
                 }

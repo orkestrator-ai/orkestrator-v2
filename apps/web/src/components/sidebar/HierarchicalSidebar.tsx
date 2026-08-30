@@ -1114,7 +1114,7 @@ export function HierarchicalSidebar() {
                         "mx-1 flex items-center rounded-lg border border-transparent transition-colors will-change-transform",
                         selectedEnvironmentId === environment.id && !isMultiSelectMode
                           ? "relative overflow-hidden bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary"
-                          : "hover:bg-hover",
+                          : "hover:bg-environment-hover",
                       )}
                     >
                       <div className="min-w-0 flex-1 pl-2">

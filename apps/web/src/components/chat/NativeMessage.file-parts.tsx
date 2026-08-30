@@ -7,6 +7,7 @@ import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 import { JsonPayloadPart } from "@/components/chat/JsonPayloadPart";
 import { userPromptPresentation } from "@/lib/chat/user-prompt-display";
 import { MessageCopyButton } from "@/components/chat/MessageCopyButton";
+import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { parseJsonPayload } from "@/lib/chat/json-payload";
 import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
 import {
@@ -39,7 +40,10 @@ function ImagePreviewOverlay({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-8"
+      className={cn(
+        "fixed inset-0 z-50 flex items-center justify-center p-8",
+        MODAL_OVERLAY_CLASS_NAME,
+      )}
       onClick={onClose}
       role="dialog"
       aria-modal="true"

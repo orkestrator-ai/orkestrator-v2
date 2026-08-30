@@ -342,7 +342,7 @@ export function TmuxPlanCard({
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
             placeholder="What should Claude change?"
-            className="mt-3 w-full min-h-20 resize-none rounded border border-border bg-background px-2 py-1.5 text-sm focus:outline-none"
+            className="mt-3 min-h-20 w-full resize-none rounded border border-border/70 bg-input-surface px-2 py-1.5 text-sm focus:border-ring focus:outline-none"
           />
         )}
         <div className="flex justify-end gap-2 mt-3">
@@ -508,7 +508,7 @@ export function TmuxElicitationCard({
                     const setter = field.sensitive ? setSecretValues : setValues;
                     setter((prev) => ({ ...prev, [field.key]: e.target.value }));
                   }}
-                  className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm focus:outline-none"
+                  className="w-full rounded border border-border/70 bg-input-surface px-2 py-1.5 text-sm focus:border-ring focus:outline-none"
                   type={field.sensitive ? "password" : "text"}
                 />
                 {field.sensitive && (
@@ -1171,7 +1171,7 @@ export function TmuxComposeBar({
   return (
     <div
       className={cn(
-        "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
+        "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
         layout === "bottom" ? "mb-4 mt-2" : "my-0",
       )}
     >

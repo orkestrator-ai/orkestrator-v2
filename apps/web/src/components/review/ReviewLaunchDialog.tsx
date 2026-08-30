@@ -285,8 +285,8 @@ export function ReviewLaunchDialog({
         if (!busy) onOpenChange(nextOpen);
       }}
     >
-      <DialogContent className="flex w-[min(calc(100%-1rem),38rem)] flex-col gap-0 overflow-hidden border-border bg-popover p-0 sm:max-w-[38rem]">
-        <DialogHeader className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-cyan-500/[0.08] via-transparent to-transparent px-5 pb-4 pt-5 sm:px-6">
+      <DialogContent className="flex w-[min(calc(100%-1rem),38rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[38rem] sm:p-0">
+        <DialogHeader className="m-0 shrink-0 border-b border-divider bg-background px-5 pb-4 pt-5 sm:m-0 sm:px-6">
           <DialogTitle className="flex items-center gap-2 text-base">
             <span className="grid size-8 shrink-0 place-items-center rounded-full border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
               {kind === "looped" ? (
@@ -384,7 +384,7 @@ export function ReviewLaunchDialog({
                   <Select value={passAllowance} onValueChange={setPassAllowance}>
                     <SelectTrigger
                       id="review-pass-allowance"
-                      className="h-11 w-full border-zinc-700/80 bg-zinc-900"
+                      className="h-11 w-full border-zinc-700/80 bg-input-surface"
                     >
                       <SelectValue />
                     </SelectTrigger>
@@ -409,7 +409,7 @@ export function ReviewLaunchDialog({
               </div>
             </div>
 
-            <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
+            <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-divider px-5 py-4 sm:m-0 sm:px-6">
               <Button
                 type="button"
                 variant="outline"

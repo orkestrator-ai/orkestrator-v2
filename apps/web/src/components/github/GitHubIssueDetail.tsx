@@ -530,7 +530,7 @@ export function GitHubIssueDetailContent({
                     <SelectTrigger
                       size="sm"
                       aria-label="Issue status"
-                      className="w-36 bg-background/60"
+                      className="w-36 bg-input-surface"
                     >
                       <SelectValue />
                     </SelectTrigger>

@@ -393,7 +393,7 @@ export function RepositorySettings({
                 <Input
                   value={project.gitUrl}
                   readOnly
-                  className="bg-zinc-800 cursor-default flex-1"
+                  className="flex-1 cursor-default bg-input-surface"
                 />
                 <Button
                   type="button"

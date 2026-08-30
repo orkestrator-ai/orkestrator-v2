@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, KeyboardEvent } from "react";
 import { X, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { MODAL_OVERLAY_CLASS_NAME } from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
 import { readImage } from "@/lib/native/clipboard";
 import { writeContainerFile, writeLocalFile } from "@/lib/backend";
@@ -495,7 +496,7 @@ export function ComposeBar({
         arbitrary terminal contents, which is why this one is deliberately a
         step lighter.
       */}
-      <div className="flex items-end gap-2 rounded-lg border border-zinc-600 bg-elevated/60 px-3 py-2 backdrop-blur-md">
+      <div className="flex items-end gap-2 rounded-lg border border-zinc-600 bg-input-surface px-3 py-2 backdrop-blur-md">
         <textarea
           ref={textareaRef}
           value={text}
@@ -540,7 +541,10 @@ export function ComposeBar({
       {/* Image preview modal */}
       {previewImage && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          className={cn(
+            "fixed inset-0 z-[100] flex items-center justify-center",
+            MODAL_OVERLAY_CLASS_NAME,
+          )}
           onClick={() => setPreviewImage(null)}
         >
           <div className="relative max-w-[90vw] max-h-[90vh]">

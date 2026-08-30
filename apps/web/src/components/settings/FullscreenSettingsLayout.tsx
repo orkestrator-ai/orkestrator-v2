@@ -73,7 +73,7 @@ export function FullscreenSettingsLayout({
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "fixed inset-0 flex flex-col bg-black md:top-[var(--desktop-title-bar-height)] md:flex-row [&_input]:bg-zinc-900 [&_textarea]:bg-zinc-900 [&_[data-slot=select-trigger]]:bg-zinc-900",
+          "fixed inset-0 flex flex-col bg-background md:top-[var(--desktop-title-bar-height)] md:flex-row [&_input]:bg-input-surface [&_textarea]:bg-input-surface [&_[data-slot=select-trigger]]:bg-input-surface",
           Z_FULLSCREEN_SURFACE,
         )}
       >

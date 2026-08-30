@@ -32,7 +32,8 @@ describe("mobile responsive layout contracts", () => {
     ["apps/web/src/components/docker/DockerStatsDialog.tsx", "grid-cols-1 gap-3 sm:grid-cols-3"],
     [
       "apps/web/src/components/environments/CreateEnvironmentDialog.tsx",
-      "grid-cols-1 gap-2 sm:grid-cols-2",
+      "grid min-w-0 items-center gap-2",
+      "sm:grid-cols-[minmax(0,1fr)_7rem]",
       'aria-label="Environment configuration sections"',
       "data-[state=inactive]:hidden",
       "create-environment-mobile-tab-panel",

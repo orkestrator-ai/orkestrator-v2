@@ -109,6 +109,8 @@
   --color-popover-foreground: #e7e9ee;
   --color-border: #262a32;
   --color-input: #262a32;
+  /* Shared raised surface for text fields, selects, and agent compose bars. */
+  --color-input-surface: color-mix(in srgb, var(--color-zinc-900) 90%, transparent);
   --color-primary: #3b82f6;
   --color-primary-foreground: #ffffff;
   --color-secondary: #23262e;
@@ -158,8 +160,8 @@
    * selected while the pointer is somewhere else in the list.
    */
   --color-selected: #1d2941;
-  /* The far end of the selected row's gradient: `--color-selected` at 80%. */
-  --color-selected-edge: #172134;
+  /* The far end of the selected row's gradient: `--color-selected` at 70%. */
+  --color-selected-edge: #141d2e;
   --color-selected-foreground: #e8eefb;
   /*
    * Hover is a weaker shade of `--color-selected`, not a neutral wash: a grey

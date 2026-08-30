@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { AgentModelPicker } from "@/components/chat/AgentModelPicker";
 import { Z_FULLSCREEN_POPOVER } from "@/constants/z-index";
+import { useConfigStore } from "@/stores/configStore";
 
 afterEach(cleanup);
 
@@ -25,6 +26,41 @@ const menuItems = [
 ];
 
 describe("FullscreenSettingsLayout", () => {
+  test("keeps the application surface independent of a light terminal background", () => {
+    const originalConfig = useConfigStore.getState().config;
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          terminalAppearance: {
+            ...state.config.global.terminalAppearance,
+            backgroundColor: "#ffffff",
+          },
+        },
+      },
+    }));
+
+    try {
+      render(
+        <FullscreenSettingsLayout
+          open
+          onOpenChange={() => undefined}
+          title="Settings"
+          menuItems={menuItems}
+        >
+          {(section) => section}
+        </FullscreenSettingsLayout>,
+      );
+
+      const dialog = screen.getByRole("dialog", { name: "Settings" });
+      expect(dialog.className).toContain("bg-background");
+      expect(dialog.style.getPropertyValue("--color-background")).toBe("");
+    } finally {
+      useConfigStore.setState({ config: originalConfig });
+    }
+  });
+
   test("renders nothing while closed", () => {
     const { container } = render(
       <FullscreenSettingsLayout

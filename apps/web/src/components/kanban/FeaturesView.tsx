@@ -926,7 +926,7 @@ export function NativeStyleChatPanel({
           ) : null
         }
       >
-        <div className="mx-auto mb-4 mt-2 w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20">
+        <div className="mx-auto mb-4 mt-2 w-[min(calc(100%_-_2rem),56rem)] shrink-0 rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
           <Textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

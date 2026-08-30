@@ -162,8 +162,8 @@ export function OpenFileDialog() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0" showCloseButton={false}>
-        <DialogHeader className="border-b border-border px-5 py-4">
+      <DialogContent className="max-w-2xl gap-0 overflow-hidden p-0 sm:p-0" showCloseButton={false}>
+        <DialogHeader className="m-0 border-b border-divider bg-background px-5 py-4 sm:m-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Search className="h-4 w-4 text-muted-foreground" />
             Open File

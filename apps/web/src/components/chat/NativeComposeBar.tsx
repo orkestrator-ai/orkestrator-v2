@@ -91,7 +91,7 @@ export function NativeComposeBar({
       <div
         data-testid={testId}
         className={cn(
-          "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
+          "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
           layout === "bottom" ? "mb-4 mt-2" : "my-0",
         )}
       >

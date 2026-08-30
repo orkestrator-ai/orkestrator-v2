@@ -441,7 +441,7 @@ export function BuildLaunchDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent
-        className="flex max-h-[min(46rem,calc(100vh-2rem))] w-[min(calc(100%-1rem),42rem)] flex-col gap-0 overflow-hidden border-border bg-popover p-0 sm:max-w-[42rem]"
+        className="flex max-h-[min(46rem,calc(100vh-2rem))] w-[min(calc(100%-1rem),42rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[42rem] sm:p-0"
         onCloseAutoFocus={(event) => {
           const focusTarget = returnFocusRef?.current;
           if (!focusTarget?.isConnected) return;
@@ -449,7 +449,7 @@ export function BuildLaunchDialog({
           focusTarget.focus();
         }}
       >
-        <DialogHeader className="shrink-0 border-b border-zinc-800 bg-[radial-gradient(circle_at_15%_0%,rgba(34,211,238,0.12),transparent_48%)] px-5 pb-4 pt-5 sm:px-6">
+        <DialogHeader className="m-0 shrink-0 border-b border-divider bg-background px-5 pb-4 pt-5 sm:m-0 sm:px-6">
           <DialogTitle className="flex items-center gap-3 text-base">
             <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
               <Hammer className="size-5" />
@@ -612,7 +612,7 @@ export function BuildLaunchDialog({
             </fieldset>
           </div>
 
-          <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
+          <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-divider px-5 py-4 sm:m-0 sm:px-6">
             <Button
               type="button"
               variant="outline"

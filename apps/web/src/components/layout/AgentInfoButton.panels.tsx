@@ -214,7 +214,7 @@ function RuntimeNoticeCard({
           <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform group-hover:translate-x-0.5 group-hover:opacity-90" />
         </button>
       </DialogTrigger>
-      <DialogContent className="max-w-xl border-amber-500/20 bg-zinc-950 sm:max-w-xl">
+      <DialogContent className="max-w-xl border-amber-500/20 sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Codex runtime notice</DialogTitle>
           <DialogDescription>

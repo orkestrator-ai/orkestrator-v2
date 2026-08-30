@@ -4,6 +4,7 @@ import path from "node:path";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { Z_FULLSCREEN_DIALOG, Z_FULLSCREEN_DIALOG_POPOVER } from "@/constants/z-index";
+import { useConfigStore } from "@/stores/configStore";
 
 import {
   AlertDialog,
@@ -50,13 +51,16 @@ describe("AlertDialog primitives", () => {
     expect(dialog.getAttribute("aria-label")).toBe("Confirmation");
     expect(dialog.dataset.slot).toBe("alert-dialog-content");
     expect(dialog.className).toContain("z-50");
+    expect(dialog.className).toContain("rounded-2xl");
+    expect(dialog.className).toContain("bg-background");
+    expect(dialog.className).toContain("border-zinc-700/70");
+    expect(dialog.style.getPropertyValue("--color-background")).toBe("");
     expect(dialog.className).toContain("custom-content");
-    expect(document.querySelector('[data-slot="alert-dialog-overlay"]')?.className).toContain(
-      "custom-overlay",
-    );
-    expect(document.querySelector('[data-slot="alert-dialog-overlay"]')?.className).toContain(
-      "z-50",
-    );
+    const overlay = document.querySelector<HTMLElement>('[data-slot="alert-dialog-overlay"]');
+    expect(overlay?.className).toContain("custom-overlay");
+    expect(overlay?.className).toContain("z-50");
+    expect(overlay?.className).toContain("bg-black/75");
+    expect(overlay?.className).toContain("backdrop-blur-md");
     expect(screen.getByText("Confirm action").dataset.slot).toBe("alert-dialog-title");
     expect(screen.getByText("This cannot be undone.").dataset.slot).toBe(
       "alert-dialog-description",
@@ -64,8 +68,20 @@ describe("AlertDialog primitives", () => {
     expect(dialog.querySelector('[data-slot="alert-dialog-header"]')?.className).toContain(
       "custom-header",
     );
+    expect(dialog.querySelector('[data-slot="alert-dialog-header"]')?.className).toContain(
+      "border-divider",
+    );
+    expect(dialog.querySelector('[data-slot="alert-dialog-header"]')?.className).not.toContain(
+      "pr-12",
+    );
     expect(dialog.querySelector('[data-slot="alert-dialog-footer"]')?.className).toContain(
       "custom-footer",
+    );
+    expect(dialog.querySelector('[data-slot="alert-dialog-footer"]')?.className).toContain(
+      "border-divider",
+    );
+    expect(dialog.querySelector('[data-slot="alert-dialog-footer"]')?.className).not.toContain(
+      "bg-background/30",
     );
     expect(screen.getByRole("button", { name: "Cancel" }).dataset.slot).toBe("alert-dialog-cancel");
     expect(screen.getByRole("button", { name: "Continue" }).dataset.slot).toBe(
@@ -95,6 +111,39 @@ describe("AlertDialog primitives", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
     await waitFor(() => expect(screen.queryByRole("alertdialog") === null).toBe(true));
+  });
+
+  test("keeps alert contrast independent of a light terminal background", () => {
+    const originalConfig = useConfigStore.getState().config;
+    useConfigStore.setState((state) => ({
+      config: {
+        ...state.config,
+        global: {
+          ...state.config.global,
+          terminalAppearance: {
+            ...state.config.global.terminalAppearance,
+            backgroundColor: "#ffffff",
+          },
+        },
+      },
+    }));
+
+    try {
+      render(
+        <AlertDialog defaultOpen>
+          <AlertDialogContent>
+            <AlertDialogTitle>Readable alert</AlertDialogTitle>
+            <AlertDialogDescription>Confirm this action.</AlertDialogDescription>
+          </AlertDialogContent>
+        </AlertDialog>,
+      );
+
+      const dialog = screen.getByRole("alertdialog", { name: "Readable alert" });
+      expect(dialog.className).toContain("bg-background");
+      expect(dialog.style.getPropertyValue("--color-background")).toBe("");
+    } finally {
+      useConfigStore.setState({ config: originalConfig });
+    }
   });
 
   test("keeps a nested portaled select above a default dialog by source order at the same layer", async () => {

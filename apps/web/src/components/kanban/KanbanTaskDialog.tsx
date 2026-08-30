@@ -150,7 +150,7 @@ interface KanbanTaskDialogProps {
 }
 
 const TASK_DIALOG_CONTENT_CLASS =
-  "sm:max-w-[560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0";
+  "sm:max-w-[560px] max-h-[85vh] overflow-hidden flex flex-col gap-0 p-0 sm:p-0";
 const TASK_DIALOG_BODY_CLASS = "min-h-0 flex-1";
 const TASK_DIALOG_BODY_INNER_CLASS = "space-y-4 p-6";
 const TASK_DIALOG_FOOTER_CLASS = "border-t border-border p-4 sm:p-6";
@@ -840,7 +840,7 @@ export function KanbanTaskDialog({
           >
             <ScrollArea className={TASK_DIALOG_BODY_CLASS}>
               <div className={TASK_DIALOG_BODY_INNER_CLASS}>
-                <DialogHeader>
+                <DialogHeader className="-mx-6 -mt-6 border-b border-divider bg-background px-6 py-4 pr-14 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pr-14">
                   <DialogDescription className="sr-only">
                     Create a Kanban task with optional acceptance criteria and images.
                   </DialogDescription>
@@ -958,7 +958,7 @@ export function KanbanTaskDialog({
         >
           <ScrollArea className={TASK_DIALOG_BODY_CLASS}>
             <div className={TASK_DIALOG_BODY_INNER_CLASS}>
-              <DialogHeader>
+              <DialogHeader className="-mx-6 -mt-6 border-b border-divider bg-background px-6 py-4 pr-14 sm:-mx-6 sm:-mt-6 sm:px-6 sm:pr-14">
                 <DialogDescription className="sr-only">
                   View and edit task details, build actions, images, and comments.
                 </DialogDescription>

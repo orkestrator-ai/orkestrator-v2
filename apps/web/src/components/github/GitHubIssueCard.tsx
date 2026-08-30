@@ -147,7 +147,7 @@ export function GitHubIssueCard({
           <SelectTrigger
             size="sm"
             aria-label={`Status for issue #${issue.number}`}
-            className="h-7 min-w-0 flex-1 border-border/60 bg-background/50 px-2 text-xs shadow-none"
+            className="h-7 min-w-0 flex-1 border-border/70 bg-input-surface px-2 text-xs shadow-none"
           >
             <SelectValue />
           </SelectTrigger>

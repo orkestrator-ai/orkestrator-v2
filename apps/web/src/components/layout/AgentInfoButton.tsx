@@ -1062,7 +1062,7 @@ export function AgentInfoButton({ activeTab, mobile = false }: AgentInfoButtonPr
                           .setSelectedAgent(activeSession.sessionKey, value);
                       }
                     }}
-                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    className="h-9 w-full rounded-md border border-border/70 bg-input-surface px-3 text-sm"
                     aria-label="Execution profile"
                   >
                     <option value="">Provider default</option>

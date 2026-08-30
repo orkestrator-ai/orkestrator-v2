@@ -98,6 +98,38 @@ describe("MultiReviewLaunchDialog", () => {
     expect(scrollRegion.getAttribute("tabindex")).toBeNull();
   });
 
+  test("lays reviewers out in two columns without dark wrapper cards", () => {
+    render(
+      <MultiReviewLaunchDialog
+        open
+        onOpenChange={() => undefined}
+        defaultAgent="claude"
+        catalog={catalog}
+        onConfirm={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add model" }));
+
+    const grid = screen.getByRole("group", { name: "Reviewer models" });
+    expect(grid.className).toContain("sm:grid-cols-2");
+
+    const rows = Array.from(grid.querySelectorAll<HTMLElement>("[data-reviewer-model-row]"));
+    expect(rows).toHaveLength(3);
+    expect(rows[0]?.contains(screen.getByLabelText("Reviewer 1 model"))).toBe(true);
+    expect(rows[1]?.contains(screen.getByLabelText("Reviewer 2 model"))).toBe(true);
+    expect(rows[2]?.contains(screen.getByLabelText("Reviewer 3 model"))).toBe(true);
+    for (const row of rows) {
+      expect(row.className).not.toContain("bg-zinc-950");
+      expect(row.className).not.toContain("rounded-xl");
+      expect(row.className).not.toContain("border-zinc-800");
+    }
+
+    const reviewerPicker = screen.getByLabelText("Reviewer 1 model");
+    expect(reviewerPicker.className).toContain("md:max-w-none");
+    expect(reviewerPicker.className).toContain("w-full");
+  });
+
   test("disables every model control and guards dismissal and submission while busy", () => {
     const onOpenChange = mock((_open: boolean) => undefined);
     const onConfirm = mock((_selection: MultiReviewLaunchSelection) => undefined);

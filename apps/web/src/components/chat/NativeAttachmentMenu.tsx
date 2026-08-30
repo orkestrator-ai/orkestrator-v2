@@ -189,7 +189,7 @@ function WorkspaceFilePickerDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-w-2xl gap-0 overflow-hidden p-0"
+        className="max-w-2xl gap-0 overflow-hidden p-0 sm:p-0"
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           inputRef.current?.focus();
@@ -200,7 +200,7 @@ function WorkspaceFilePickerDialog({
           onCloseAutoFocus();
         }}
       >
-        <DialogHeader className="border-b border-border px-5 py-4">
+        <DialogHeader className="m-0 border-b border-divider bg-background px-5 py-4 sm:m-0">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Search className="h-4 w-4 text-muted-foreground" />
             {title}
@@ -220,7 +220,7 @@ function WorkspaceFilePickerDialog({
             autoCapitalize="off"
             spellCheck={false}
             disabled={!isAvailable}
-            className="h-11 rounded-lg border-border/80 bg-background text-sm"
+            className="h-11 rounded-lg border-border/70 bg-input-surface text-sm"
           />
         </div>
 

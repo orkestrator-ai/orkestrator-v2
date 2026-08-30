@@ -246,8 +246,8 @@ function ModelRow({
     });
   };
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-950/55 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
+    <div className="min-w-0" data-reviewer-model-row>
+      <div className="mb-2 flex min-h-7 items-center justify-between gap-2">
         <Label className="text-[11px] font-semibold uppercase tracking-[0.14em] text-zinc-400">
           {label}
         </Label>
@@ -288,7 +288,7 @@ function ModelRow({
           })
         }
         title={label}
-        className="min-h-11 w-full border border-zinc-700/80 bg-zinc-900 py-2.5"
+        className="min-h-11 w-full border border-border/70 bg-input-surface py-2.5 md:max-w-none md:flex-1"
       />
     </div>
   );
@@ -353,8 +353,8 @@ export function MultiReviewLaunchDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="flex max-h-[min(46rem,calc(100vh-2rem))] w-[min(calc(100%-1rem),42rem)] flex-col gap-0 overflow-hidden border-border bg-popover p-0 sm:max-w-[42rem]">
-        <DialogHeader className="shrink-0 border-b border-zinc-800 bg-[radial-gradient(circle_at_15%_0%,rgba(34,211,238,0.12),transparent_48%)] px-5 pb-4 pt-5 sm:px-6">
+      <DialogContent className="flex max-h-[min(46rem,calc(100vh-2rem))] w-[min(calc(100%-1rem),52rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[52rem] sm:p-0">
+        <DialogHeader className="m-0 shrink-0 border-b border-divider bg-background px-5 pb-4 pt-5 sm:m-0 sm:px-6">
           <DialogTitle className="flex items-center gap-3 text-base">
             <span className="grid size-9 place-items-center rounded-lg border border-cyan-400/25 bg-cyan-500/10 text-cyan-300">
               <StackedEyes className="size-5" />
@@ -404,7 +404,11 @@ export function MultiReviewLaunchDialog({
                   <Plus className="size-3.5" /> Add model
                 </Button>
               </div>
-              <div className="space-y-2.5">
+              <div
+                role="group"
+                aria-label="Reviewer models"
+                className="grid grid-cols-1 gap-x-4 gap-y-4 sm:grid-cols-2"
+              >
                 {reviewers.map((row, index) => (
                   <ModelRow
                     key={row.key}
@@ -451,7 +455,7 @@ export function MultiReviewLaunchDialog({
             </fieldset>
           </div>
 
-          <DialogFooter className="shrink-0 flex-row justify-end border-t border-zinc-800 bg-zinc-950/40 px-5 py-4 sm:px-6">
+          <DialogFooter className="m-0 shrink-0 flex-row justify-end border-t border-divider px-5 py-4 sm:m-0 sm:px-6">
             <Button
               type="button"
               variant="outline"

@@ -367,7 +367,7 @@ function MultiReviewOverviewTab({
           {error ? (
             <AlertCircle className="mx-auto mb-3 size-6 text-destructive" />
           ) : (
-            <Loader2 className="mx-auto mb-3 size-6 animate-spin text-cyan-400" />
+            <Loader2 className="mx-auto mb-3 size-6 animate-spin text-primary" />
           )}
           <p className="text-sm text-muted-foreground">{error ?? "Restoring Multi Review…"}</p>
           {error && (
@@ -411,7 +411,7 @@ function MultiReviewOverviewTab({
             </p>
           </div>
         </div>
-        {busy && <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />}
+        {busy && <Loader2 className="size-4 shrink-0 animate-spin text-primary" />}
       </header>
 
       <ScrollArea className="min-h-0 flex-1">
@@ -489,7 +489,7 @@ function MultiReviewOverviewTab({
                           ) : reviewer.status === "cancelled" ? (
                             <Square className="size-4 shrink-0 text-muted-foreground" />
                           ) : reviewer.status === "running" ? (
-                            <Loader2 className="size-4 shrink-0 animate-spin text-cyan-400" />
+                            <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
                           ) : (
                             <Circle className="size-4 shrink-0 text-muted-foreground" />
                           )}

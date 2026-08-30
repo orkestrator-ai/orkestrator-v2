@@ -352,7 +352,7 @@ export function MultiReviewReviewerTab({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {running ? (
-            <Loader2 className="size-4 animate-spin text-cyan-400" />
+            <Loader2 className="size-4 animate-spin text-primary" />
           ) : snapshot?.status === "completed" ? (
             <CheckCircle2 className="size-4 text-emerald-500" />
           ) : snapshot?.status === "failed" ? (

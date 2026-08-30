@@ -73,9 +73,9 @@ export const NativeMessage = memo(function NativeMessage({
 
   const hasTextParts = message.parts.some((part) => part.type === "text");
   const hasContent = messageHasVisibleContent(message);
-  // Empty assistant messages (an info-only `message.updated` before any part
-  // streams) carry no footer. Every assistant block that does render a footer
-  // includes its model attribution before the timestamp.
+  // An empty assistant message with no attributable content or actions carries
+  // no footer. Every assistant block that does render a footer includes its
+  // model attribution before the timestamp.
   const showAssistantFooter = !isUser && !isSystem && !isError && hasContent;
   const userCopyContent = isUser
     ? message.parts
@@ -91,10 +91,9 @@ export const NativeMessage = memo(function NativeMessage({
         .join("\n\n")
         .trim() || message.content
     : "";
-  // Whether the assistant footer still has a reason to exist once attribution
-  // is suppressed. Fork actions sit on every completed transcript section,
-  // including a content-empty trailing row that is the only host of that
-  // affordance — hiding the row there would strand the exchange.
+  // Fork actions sit on every completed transcript section, including a
+  // content-empty trailing row that is the only host of that affordance —
+  // hiding the row there would strand the exchange.
   const hasAssistantFooterContent =
     !isUser && (Boolean(messageActions) || Boolean(assistantCopyContent));
   const handleUserLongPress = useCallback(async () => {

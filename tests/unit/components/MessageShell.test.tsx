@@ -692,12 +692,29 @@ describe("MessageShell", () => {
 
     const author = screen.getByText("Claude");
     const metadata = screen.getByText("1:00 PM · 45s");
-    const footerText = author.parentElement?.textContent ?? "";
-
-    expect(footerText.indexOf(author.textContent ?? "")).toBeLessThan(
-      footerText.indexOf(metadata.textContent ?? ""),
+    const footerFields = Array.from(author.parentElement?.children ?? []).map(
+      (element) => element.textContent,
     );
-    expect(screen.getByText("1:00 PM · 45s")).toBeTruthy();
+
+    expect(footerFields).toEqual(["Claude", "·", "1:00 PM · 45s"]);
+    expect(screen.getAllByText("Claude")).toHaveLength(1);
+    expect(metadata).toBeTruthy();
+  });
+
+  test("renders the assistant author label before duration-only metadata", () => {
+    render(
+      <MessageShell isUser={false} authorLabel="Claude" timestampLabel="" durationLabel="45s">
+        <p>Content</p>
+      </MessageShell>,
+    );
+
+    const author = screen.getByText("Claude");
+    const footerFields = Array.from(author.parentElement?.children ?? []).map(
+      (element) => element.textContent,
+    );
+
+    expect(footerFields).toEqual(["Claude", "·", "45s"]);
+    expect(screen.getAllByText("Claude")).toHaveLength(1);
   });
 
   test("keeps the author label and metadata by default", () => {

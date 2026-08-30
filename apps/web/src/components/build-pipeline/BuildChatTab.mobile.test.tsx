@@ -385,17 +385,17 @@ describe("BuildChatTab on a phone", () => {
 describe("BuildChatTab across the breakpoint", () => {
   beforeEach(() => setMobileViewport(true));
 
-  test("draws the pipeline controls as icons so the header stays one row", () => {
+  test("draws the pipeline controls as accessible tooltip icon buttons", () => {
     renderTab();
 
     // Three labelled buttons beside the title do not fit a ~390px screen: they
     // pushed the phase line underneath themselves and clipped the last control
-    // off the edge. The label survives as the accessible name, which is the
-    // only name a screen reader ever read.
+    // off the edge. The label survives as the accessible name and is displayed
+    // by the shared tooltip rather than duplicated inside the button.
     for (const name of ["Retry Review", "Pause", "Cancel"]) {
       const control = screen.getByRole("button", { name });
       expect(control.getAttribute("aria-label")).toBe(name);
-      expect(control.getAttribute("title")).toBe(name);
+      expect(control.getAttribute("title")).toBeNull();
       expect(control.textContent?.trim()).toBe("");
     }
   });
@@ -411,7 +411,7 @@ describe("BuildChatTab across the breakpoint", () => {
     for (const name of ["Resume", "Cancel"]) {
       const control = screen.getByRole("button", { name });
       expect(control.getAttribute("aria-label")).toBe(name);
-      expect(control.getAttribute("title")).toBe(name);
+      expect(control.getAttribute("title")).toBeNull();
       expect(control.textContent?.trim()).toBe("");
     }
 
@@ -430,7 +430,7 @@ describe("BuildChatTab across the breakpoint", () => {
 
     const retry = screen.getByRole("button", { name: "Retry Verification Stage" });
     expect(retry.getAttribute("aria-label")).toBe("Retry Verification Stage");
-    expect(retry.getAttribute("title")).toBe("Retry Verification Stage");
+    expect(retry.getAttribute("title")).toBeNull();
     expect(retry.textContent?.trim()).toBe("");
   });
 
@@ -492,12 +492,17 @@ describe("BuildChatTab on a desktop", () => {
     expect(lastScrollState().isActive).toBe(true);
   });
 
-  test("keeps the pipeline controls labelled where there is room for them", () => {
+  test("keeps the pipeline controls icon-only and reveals their labels in tooltips", async () => {
     renderTab();
 
     for (const name of ["Retry Review", "Pause", "Cancel"]) {
-      expect(screen.getByRole("button", { name }).textContent).toContain(name);
+      const control = screen.getByRole("button", { name });
+      expect(control.getAttribute("aria-label")).toBe(name);
+      expect(control.textContent?.trim()).toBe("");
     }
+
+    fireEvent.focus(screen.getByRole("button", { name: "Retry Review" }));
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Retry Review");
   });
 
   test("choosing a stage neither hides anything nor moves focus", () => {

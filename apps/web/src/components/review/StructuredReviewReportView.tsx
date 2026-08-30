@@ -341,9 +341,7 @@ function ReportArticle({
                   <>
                     <code className="text-xs">{command.command}</code>
                     {" — "}
-                    <span
-                      className={command.result === "passed" ? "text-emerald-400" : "text-red-400"}
-                    >
+                    <span className={command.result === "passed" ? "text-success" : "text-failure"}>
                       {command.result}
                     </span>
                     {command.summary ? ` (${command.summary})` : ""}
@@ -471,9 +469,9 @@ function ReportArticle({
       <Section title="Test Results" icon={<TestTube2 className="size-4 text-violet-400" />}>
         <div className="mb-3 flex flex-wrap gap-4 text-sm">
           <span>{report.testResults.total} total</span>
-          <span className="text-emerald-400">{report.testResults.passed} passed</span>
+          <span className="text-success">{report.testResults.passed} passed</span>
           <span
-            className={report.testResults.failed > 0 ? "text-red-400" : "text-muted-foreground"}
+            className={report.testResults.failed > 0 ? "text-failure" : "text-muted-foreground"}
           >
             {report.testResults.failed} failed
           </span>

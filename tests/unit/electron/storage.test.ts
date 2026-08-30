@@ -349,7 +349,7 @@ describe("Electron StorageService", () => {
   });
 
   test("default config uses the shared dark terminal background", () => {
-    expect(defaultConfig().global.terminalAppearance.backgroundColor).toBe("#141414");
+    expect(defaultConfig().global.terminalAppearance.backgroundColor).toBe("#0e1014");
   });
 
   test("formats default environment names from UTC timestamps", () => {

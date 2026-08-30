@@ -809,7 +809,7 @@ export function AgentModelPicker({
           disabled={disabled}
           title={effectiveTitle}
           className={cn(
-            "flex min-w-0 flex-1 items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[320px] md:flex-none",
+            "flex h-7 min-w-0 flex-1 items-center gap-1 rounded-lg bg-elevated px-2 text-xs text-foreground transition-colors hover:bg-elevated-hover disabled:cursor-not-allowed disabled:opacity-50 md:max-w-[320px] md:flex-none",
             className,
           )}
           aria-label={ariaLabel ?? displayLabel}

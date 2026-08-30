@@ -18,8 +18,17 @@ import type { PluggableList, Processor } from "unified";
 import { openInBrowser } from "@/lib/backend";
 import { cn } from "@/lib/utils";
 
+/*
+ * Inline code is tinted rather than grey. Almost every inline span in a
+ * transcript is a path, a filename or a flag, and a grey chip on a grey surface
+ * made those disappear into the prose around them.
+ *
+ * The trailing `pre code` reset is load-bearing: the `prose-code:` variant
+ * matches *every* `code`, including the one inside a fenced block, so without
+ * it a code block would be painted blue chip-by-chip on top of its own surface.
+ */
 const DEFAULT_MARKDOWN_CLASSNAME =
-  "text-sm text-foreground leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-code:text-xs prose-code:bg-muted prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-pre:bg-muted prose-pre:p-3 prose-pre:rounded-md prose-table:text-xs prose-table:my-2";
+  "text-sm text-foreground leading-relaxed prose prose-sm dark:prose-invert max-w-none prose-p:my-2 prose-headings:my-3 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5 prose-pre:my-2 prose-code:text-xs prose-code:font-normal prose-code:text-blue-300 prose-code:bg-primary/12 prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:before:content-none prose-code:after:content-none prose-pre:bg-muted prose-pre:p-3 prose-pre:rounded-md prose-table:text-xs prose-table:my-2 [&_pre_code]:bg-transparent [&_pre_code]:px-0 [&_pre_code]:py-0 [&_pre_code]:text-foreground";
 
 const PLUGINS_WITH_BREAKS: PluggableList = [remarkGfm, remarkBreaks];
 const PLUGINS_WITHOUT_BREAKS: PluggableList = [remarkGfm];
@@ -216,7 +225,8 @@ export const InlineMessageMarkdown = memo(function InlineMessageMarkdown({
   return (
     <span
       className={cn(
-        "[&_strong]:font-semibold [&_em]:italic [&_del]:line-through [&_code]:font-mono",
+        "[&_strong]:font-semibold [&_em]:italic [&_del]:line-through",
+        "[&_code]:font-mono [&_code]:rounded-md [&_code]:bg-primary/12 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:text-blue-300",
         className,
       )}
     >

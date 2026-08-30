@@ -349,6 +349,60 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
   const prLaunchDefaults = launchDialogDefaultsFor("pr");
   const resolveLaunchDefaults = launchDialogDefaultsFor("resolve");
 
+  /*
+   * Declared once and placed twice. The desktop toolbar renders it on the
+   * right, beside the file-panel toggle; the grid (mobile) toolbar is a single
+   * column of labelled rows with no right-hand group, so it keeps the button in
+   * sequence where the other launch actions are.
+   */
+  const createPrControl = (
+    <ToolbarTooltipTrigger
+      tooltip={
+        !isRunning ? (
+          "Container must be running"
+        ) : !canCreateTab ? (
+          "Maximum tabs reached"
+        ) : (
+          <>
+            <p>Launch agent to create a pull request</p>
+            <p className="text-xs text-muted-foreground">
+              Right-click or long-press to choose agent, model, and reasoning
+            </p>
+          </>
+        )
+      }
+    >
+      <Button
+        ref={createPrButtonRef}
+        variant={isGrid ? "ghost" : "default"}
+        size="sm"
+        className="gap-2 touch-manipulation"
+        onClick={(event) => {
+          if (prLongPress.shouldSuppressClick()) {
+            event.preventDefault();
+            return;
+          }
+          handleCreatePR();
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          prLongPress.cancel();
+          openPrDialog();
+        }}
+        {...prLongPress.handlers}
+        data-toolbar-custom-context-menu="true"
+        disabled={!isRunning || !canCreateTab}
+        // The visible label is shortened to fit the toolbar, but "PR" on its own
+        // names a noun rather than the action, so the accessible name keeps the
+        // verb it is announced with.
+        aria-label="Create PR"
+      >
+        <GitPullRequest className="h-4 w-4" />
+        <span className={cn(isGrid && "truncate text-xs")}>PR</span>
+      </Button>
+    </ToolbarTooltipTrigger>
+  );
+
   return (
     <>
       <ToolbarTooltipsEnabledContext.Provider value={!isGrid}>
@@ -356,7 +410,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
           data-mobile-toolbar
           data-presentation={presentation}
           className={cn(
-            "bg-[#212124]",
+            "bg-chrome",
             isGrid
               ? "max-h-[calc(100dvh-4rem)] overflow-y-auto rounded-xl border border-border/80 shadow-2xl shadow-black/50 [&_button]:h-11 [&_button]:w-full [&_button]:justify-start [&_button]:gap-2 [&_button]:rounded-lg [&_button]:px-3"
               : "flex h-14 shrink-0 items-center border-b border-border/80 md:h-12",
@@ -853,49 +907,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                 </>
               )}
 
-              {(isGrid || selectedEnvironment) && !hasPR && (
-                <ToolbarTooltipTrigger
-                  tooltip={
-                    !isRunning ? (
-                      "Container must be running"
-                    ) : !canCreateTab ? (
-                      "Maximum tabs reached"
-                    ) : (
-                      <>
-                        <p>Launch agent to create a pull request</p>
-                        <p className="text-xs text-muted-foreground">
-                          Right-click or long-press to choose agent, model, and reasoning
-                        </p>
-                      </>
-                    )
-                  }
-                >
-                  <Button
-                    ref={createPrButtonRef}
-                    variant={isGrid ? "ghost" : "default"}
-                    size="sm"
-                    className="gap-2 touch-manipulation"
-                    onClick={(event) => {
-                      if (prLongPress.shouldSuppressClick()) {
-                        event.preventDefault();
-                        return;
-                      }
-                      handleCreatePR();
-                    }}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      prLongPress.cancel();
-                      openPrDialog();
-                    }}
-                    {...prLongPress.handlers}
-                    data-toolbar-custom-context-menu="true"
-                    disabled={!isRunning || !canCreateTab}
-                  >
-                    <GitPullRequest className="h-4 w-4" />
-                    <span className={cn(isGrid && "truncate text-xs")}>Create PR</span>
-                  </Button>
-                </ToolbarTooltipTrigger>
-              )}
+              {isGrid && !hasPR && createPrControl}
 
               {selectedEnvironment && hasPR && (
                 <>
@@ -1244,6 +1256,8 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                   Select an environment to get started
                 </span>
               ) : null}
+
+              {!isGrid && selectedEnvironment && !hasPR && createPrControl}
 
               {(isGrid || selectedEnvironment) && (
                 <ToolbarTooltipTrigger

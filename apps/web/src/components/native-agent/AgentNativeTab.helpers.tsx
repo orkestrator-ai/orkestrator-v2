@@ -807,7 +807,7 @@ export function UnassignedNativeAgentComposer({
                       size="sm"
                       disabled={disabled}
                       aria-label="Conversation mode"
-                      className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                      className="h-7 gap-1 bg-elevated px-2 text-xs font-normal text-foreground hover:bg-elevated-hover hover:text-foreground"
                     >
                       {draft.mode === "plan" ? "Plan" : "Build"}
                       <ChevronDown className="size-3" />
@@ -834,7 +834,7 @@ export function UnassignedNativeAgentComposer({
                       size="sm"
                       disabled={disabled}
                       aria-label="Execution profile"
-                      className="h-8 gap-1 px-2 text-xs font-normal text-muted-foreground hover:text-foreground"
+                      className="h-7 gap-1 bg-elevated px-2 text-xs font-normal text-foreground hover:bg-elevated-hover hover:text-foreground"
                     >
                       {selectedLaunchExecutionProfile.label}
                       <ChevronDown className="size-3" />

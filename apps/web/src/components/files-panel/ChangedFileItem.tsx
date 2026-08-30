@@ -46,8 +46,8 @@ export function ChangedFileItem({
       />
 
       <div className="ml-2 flex shrink-0 items-center justify-end gap-1.5 font-mono text-xs tabular-nums">
-        {change.additions > 0 && <span className="text-green-500">+{change.additions}</span>}
-        {change.deletions > 0 && <span className="text-red-400">-{change.deletions}</span>}
+        {change.additions > 0 && <span className="text-success">+{change.additions}</span>}
+        {change.deletions > 0 && <span className="text-failure">-{change.deletions}</span>}
       </div>
     </button>
   );

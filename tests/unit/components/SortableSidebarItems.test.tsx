@@ -99,9 +99,9 @@ describe("sortable sidebar items", () => {
 
     expect(container.firstElementChild?.className).toContain("opacity-50");
     const selectedRow = Array.from(container.querySelectorAll("div")).find((element) =>
-      element.className.includes("bg-zinc-800/85"),
+      element.className.includes("from-selected"),
     ) as HTMLElement;
-    expect(selectedRow.className).toContain("border-zinc-700/70");
+    expect(selectedRow.className).toContain("before:bg-primary");
     expect(screen.getByRole("button", { name: "Feature Env" })).toBeTruthy();
   });
 
@@ -154,10 +154,10 @@ describe("sortable sidebar items", () => {
       />,
     );
 
-    const projectButton = screen.getByRole("button", { name: /Project One/i });
+    const projectButton = screen.getByRole("button", { name: /^Project One/i });
     const projectHeader = getProjectHeader(projectButton);
-    expect(projectHeader.className).toContain("hover:bg-zinc-800/55");
-    expect(screen.getByText("1").className).toContain("bg-zinc-800");
+    expect(projectHeader.className).toContain("hover:bg-hover");
+    expect(screen.getByText("1").className).toContain("bg-white/[0.07]");
     expect(screen.getByTestId("sortable-context")).toBeTruthy();
 
     const addEnvironmentButton = screen.getByTitle("Create environment");
@@ -201,10 +201,11 @@ describe("sortable sidebar items", () => {
       />,
     );
 
-    let projectHeader = getProjectHeader(screen.getByRole("button", { name: /Project One/i }));
-    expect(projectHeader.className).toContain("bg-zinc-800/85");
-    expect(projectHeader.className).toContain("border-zinc-700/70");
-    expect(projectHeader.className).not.toContain("border-transparent");
+    let projectHeader = getProjectHeader(screen.getByRole("button", { name: /^Project One/i }));
+    expect(projectHeader.className).toContain("from-selected");
+    // The blue accent bar marks a selected environment, not a selected project.
+    expect(projectHeader.className).not.toContain("before:bg-primary");
+    expect(projectHeader.className).not.toContain("hover:bg-hover");
 
     rerender(
       <SortableProjectGroup
@@ -226,10 +227,10 @@ describe("sortable sidebar items", () => {
       />,
     );
 
-    projectHeader = getProjectHeader(screen.getByRole("button", { name: /Project One/i }));
+    projectHeader = getProjectHeader(screen.getByRole("button", { name: /^Project One/i }));
     expect(projectHeader.className).toContain("border-transparent");
-    expect(projectHeader.className).toContain("hover:bg-zinc-800/55");
-    expect(projectHeader.className).not.toContain("bg-zinc-800/85");
+    expect(projectHeader.className).toContain("hover:bg-hover");
+    expect(projectHeader.className).not.toContain("from-selected");
   });
 
   // The selectable project header is the nearest ancestor div carrying the
@@ -273,7 +274,7 @@ describe("sortable sidebar items", () => {
   test("SortableProjectGroup shows the git url and local path in a hover tooltip", async () => {
     renderProjectGroup();
 
-    const projectButton = screen.getByRole("button", { name: /Project One/i });
+    const projectButton = screen.getByRole("button", { name: /^Project One/i });
     fireEvent.mouseEnter(projectButton);
 
     // HoverTooltip opens after a delay and portals its content into document.body.
@@ -291,7 +292,7 @@ describe("sortable sidebar items", () => {
       selectedEnvironmentId: null,
     });
 
-    fireEvent.mouseEnter(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /^Project One/i }));
 
     expect(await screen.findByText("0 environments")).toBeTruthy();
     expect(screen.queryByText("/workspace/project-one") === null).toBe(true);
@@ -308,7 +309,7 @@ describe("sortable sidebar items", () => {
     };
     renderProjectGroup({ environments: [environment, stoppedEnvironment] });
 
-    fireEvent.mouseEnter(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /^Project One/i }));
 
     expect(await screen.findByText("2 environments (1 running)")).toBeTruthy();
   });
@@ -320,7 +321,7 @@ describe("sortable sidebar items", () => {
     ];
     renderProjectGroup({ environments: stoppedEnvironments });
 
-    fireEvent.mouseEnter(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.mouseEnter(screen.getByRole("button", { name: /^Project One/i }));
 
     expect(await screen.findByText("2 environments")).toBeTruthy();
     expect(screen.queryByText(/running/) === null).toBe(true);
@@ -365,7 +366,7 @@ describe("sortable sidebar items", () => {
     const onDeleteProject = mock(() => {});
     renderProjectGroup({ onDeleteProject });
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
 
     const dialog = await screen.findByRole("alertdialog");
@@ -393,7 +394,7 @@ describe("sortable sidebar items", () => {
     });
     renderProjectGroup({ onDeleteProject });
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
 

@@ -901,7 +901,7 @@ export function HierarchicalSidebar() {
       {/* Header - switches between normal and multi-select mode */}
       <div
         data-sidebar-header
-        className="flex h-12 items-center justify-between border-b border-border/80 bg-[#212124] pl-3 pr-2"
+        className="flex h-12 items-center justify-between border-b border-border/80 bg-chrome pl-3 pr-2"
       >
         {isMultiSelectMode ? (
           <>
@@ -1023,7 +1023,7 @@ export function HierarchicalSidebar() {
             <div data-testid="activity-environment-list">
               <div
                 data-testid="activity-controls-bar"
-                className="sticky top-0 z-10 flex h-10 items-center border-b border-border/60 bg-[#1d1d20]/95 px-2 backdrop-blur-sm md:h-8"
+                className="sticky top-0 z-10 flex h-10 items-center border-b border-border/60 bg-sidebar/95 px-2 backdrop-blur-sm md:h-8"
               >
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -1111,10 +1111,10 @@ export function HierarchicalSidebar() {
                       environmentId={environment.id}
                       position={position}
                       className={cn(
-                        "mx-1 flex items-center rounded-lg border transition-colors will-change-transform",
+                        "mx-1 flex items-center rounded-lg border border-transparent transition-colors will-change-transform",
                         selectedEnvironmentId === environment.id && !isMultiSelectMode
-                          ? "border-zinc-700/70 bg-zinc-800/85"
-                          : "border-transparent hover:bg-zinc-800/55",
+                          ? "relative overflow-hidden bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary"
+                          : "hover:bg-hover",
                       )}
                     >
                       <div className="min-w-0 flex-1 pl-2">

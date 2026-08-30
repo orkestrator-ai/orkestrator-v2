@@ -42,9 +42,9 @@ function getSubagentStatusLabel(status: NativeAgentStatus): string {
 function getSubagentStatusClasses(status: NativeAgentStatus): string {
   switch (status) {
     case "finished":
-      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+      return "border-success/30 bg-success/10 text-success";
     case "failed":
-      return "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300";
+      return "border-failure/30 bg-failure/10 text-failure";
     default:
       return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
   }
@@ -305,8 +305,8 @@ function AgentActivityIcon({
       className={cn(
         "flex size-7 shrink-0 items-center justify-center rounded-full",
         status === "active" && "bg-cyan-400/10 text-cyan-300",
-        status === "finished" && "bg-emerald-400/10 text-emerald-300",
-        status === "failed" && "bg-red-400/10 text-red-300",
+        status === "finished" && "bg-success/10 text-success",
+        status === "failed" && "bg-failure/10 text-failure",
       )}
       aria-hidden="true"
     >
@@ -803,14 +803,23 @@ export function ToolGroupPart({
   }
 
   return (
-    <div className="my-0 rounded-lg border border-zinc-700/70 bg-zinc-800/35 p-2">
+    /*
+      Padding lives on the rows, not the card, so the separators run the full
+      width of the block rather than stopping short of its outline.
+
+      Only the horizontal padding is the wrapper's to give: each row's own
+      trigger already carries `py-1.5`, so anything more than a hairline here
+      is added to that rather than replacing it.
+    */
+    <div className="my-0 divide-y divide-divider overflow-hidden rounded-lg border border-divider bg-sidebar">
       {part.parts.map((child, index) => (
-        <NativeMessagePartRenderer
-          key={`tool-group-part-${index}-${child.type}`}
-          part={child}
-          containerId={containerId}
-          partKey={`${partKey}/tool-${index}`}
-        />
+        <div key={`tool-group-part-${index}-${child.type}`} className="px-2 py-0.5">
+          <NativeMessagePartRenderer
+            part={child}
+            containerId={containerId}
+            partKey={`${partKey}/tool-${index}`}
+          />
+        </div>
       ))}
     </div>
   );

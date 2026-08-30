@@ -43,10 +43,15 @@ export function SortableEnvironmentItem({
     <div ref={setNodeRef} style={style} className={cn(isDragging && "opacity-50 z-50")}>
       <div
         className={cn(
-          "group/sortable mx-1 flex items-center rounded-lg transition-colors",
+          "group/sortable mx-1 flex items-center rounded-lg border border-transparent transition-colors",
           isSelected && !isMultiSelectMode
-            ? "border border-zinc-700/70 bg-zinc-800/85"
-            : "border border-transparent hover:bg-zinc-800/55",
+            ? // The accent bar and the drag grip occupy the same few pixels, so
+              // they take turns: the bar fades out exactly as the grip fades in.
+              // `hover:` rather than `group-hover/sortable:` because the group
+              // and the pseudo-element are the same element, and `group-*`
+              // only reaches descendants.
+              "relative overflow-hidden border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary before:transition-opacity hover:before:opacity-0"
+            : "hover:bg-hover",
         )}
       >
         {/* Drag handle - far left */}

@@ -306,7 +306,7 @@ export function DraggableTab({
         "group relative flex shrink-0 items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
         isActive
           ? "bg-background text-foreground"
-          : "bg-zinc-800/85 text-muted-foreground hover:bg-zinc-800 hover:text-foreground",
+          : "bg-sidebar text-muted-foreground hover:bg-hover hover:text-foreground",
         isDragging && "opacity-50 z-50",
       )}
       onClick={onSelect}
@@ -319,7 +319,7 @@ export function DraggableTab({
       {isActive && (
         <div
           aria-hidden="true"
-          className={cn("absolute inset-x-0 top-0 h-0.5 bg-primary", !isFocused && "opacity-60")}
+          className={cn("absolute inset-x-0 bottom-0 h-0.5 bg-primary", !isFocused && "opacity-60")}
         />
       )}
       {icon}

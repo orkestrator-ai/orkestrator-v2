@@ -570,7 +570,7 @@ function ModelPicker({
         })
       }
       disabled={disabled}
-      className="min-h-9 w-full max-w-none justify-start md:max-w-none md:flex-1"
+      className="h-9 w-full max-w-none justify-start rounded-lg border border-border/70 bg-input-surface px-3 text-sm shadow-none hover:bg-elevated md:max-w-none md:flex-1"
     />
   );
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 
@@ -95,6 +95,37 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(local.getAttribute("aria-describedby")).toBe("local-unavailable");
     expect(screen.getByText("Unavailable while Docker is stopped")).toBeTruthy();
     expect(screen.getByText("Unavailable without a local project checkout")).toBeTruthy();
+  });
+
+  test("themes customized build model selectors like the dialog agent selector", () => {
+    render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={mock(() => undefined)}
+          onCreate={mock(async () => true)}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
+
+    const customization = screen.getByRole("group", {
+      name: "Feature build model customization",
+    });
+    const customizedPickers = within(customization).getAllByRole("combobox");
+
+    expect(customizedPickers.length).toBeGreaterThan(0);
+    for (const picker of customizedPickers) {
+      expect(picker.className).toContain("h-9");
+      expect(picker.className).toContain("border-border/70");
+      expect(picker.className).toContain("bg-input-surface");
+      expect(picker.className).toContain("px-3");
+      expect(picker.className).toContain("text-sm");
+    }
   });
 
   test("attaches a dropped markdown file and includes it in the create request", async () => {

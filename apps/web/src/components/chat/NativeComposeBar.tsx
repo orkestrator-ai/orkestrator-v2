@@ -145,7 +145,7 @@ export function NativeComposeBar({
 
         <div
           data-native-compose-toolbar
-          className="flex min-w-0 items-center gap-1 overflow-x-auto pt-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="flex min-w-0 items-center gap-1 overflow-x-auto pt-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           <div
             data-native-compose-controls="primary"

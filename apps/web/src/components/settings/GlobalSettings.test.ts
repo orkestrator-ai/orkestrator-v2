@@ -7,7 +7,7 @@ function globalConfig(): GlobalConfig {
     containerResources: { cpuCores: 4, memoryGb: 8 },
     envFilePatterns: [],
     allowedDomains: [],
-    terminalAppearance: { fontFamily: "Fira Code", fontSize: 14, backgroundColor: "#141414" },
+    terminalAppearance: { fontFamily: "Fira Code", fontSize: 14, backgroundColor: "#0e1014" },
     terminalScrollback: 1_000,
   };
 }

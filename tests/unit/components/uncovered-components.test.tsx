@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { ContextUsageWheel } from "../../../apps/web/src/components/chat/ContextUsageWheel";
 import { MessageMarkdown } from "../../../apps/web/src/components/chat/MessageMarkdown";
 import { CodexPlanModeCard } from "../../../apps/web/src/components/codex/CodexPlanModeCard";
 import { ErrorDetailsDialog } from "../../../apps/web/src/components/errors/ErrorDetailsDialog";
@@ -13,21 +12,6 @@ afterEach(() => {
 });
 
 describe("previously indirect component contracts", () => {
-  test("ContextUsageWheel clamps usage and labels missing snapshots unavailable", () => {
-    const { rerender } = render(<ContextUsageWheel usage={null} />);
-    expect(
-      screen.getByRole("button", {
-        name: "Context window usage unavailable",
-      }),
-    ).toBeTruthy();
-    rerender(
-      <ContextUsageWheel
-        usage={{ percentUsed: 150, usedTokens: 2000, totalTokens: 1000, modelId: "model" }}
-      />,
-    );
-    expect(screen.getByRole("button", { name: "Context window 100% used" })).toBeTruthy();
-  });
-
   test("MessageMarkdown renders GFM content and permits component overrides", () => {
     const { rerender } = render(<MessageMarkdown content={"- [x] done\n\n**bold**"} />);
     expect(screen.getByText("done")).toBeTruthy();

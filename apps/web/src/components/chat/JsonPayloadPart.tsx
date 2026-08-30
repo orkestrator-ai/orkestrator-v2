@@ -21,9 +21,9 @@ function PayloadIcon({ payload }: { payload: JsonPayload }) {
       return <ClipboardCheck className="size-3.5 shrink-0 text-cyan-300/90" />;
     case "verification":
       return payload.verdict.complete ? (
-        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-400" />
+        <CheckCircle2 className="size-3.5 shrink-0 text-success" />
       ) : (
-        <CircleAlert className="size-3.5 shrink-0 text-red-400" />
+        <CircleAlert className="size-3.5 shrink-0 text-failure" />
       );
     default:
       return <Braces className="size-3.5 shrink-0 text-muted-foreground" />;

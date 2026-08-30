@@ -92,12 +92,6 @@ describe("mobile responsive layout contracts", () => {
     expect(css).toContain("min-height: 2.75rem");
   });
 
-  test("the native compose bar keeps context usage visible at mobile widths", () => {
-    const source = read("apps/web/src/components/chat/NativeComposeBar.tsx");
-    expect(source).toContain("<ContextUsageWheel usage={contextUsage}");
-    expect(source).not.toContain("!isMobile && <ContextUsageWheel");
-  });
-
   test("message actions only opt into hidden hover controls for precise pointers", () => {
     const css = read("apps/web/src/index.css");
     const messageShell = read("apps/web/src/components/chat/MessageShell.tsx");

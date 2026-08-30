@@ -1322,9 +1322,10 @@ describe("HierarchicalSidebar", () => {
 
     render(<HierarchicalSidebar />);
 
-    const header = getProjectHeader(screen.getByRole("button", { name: /Project One/i }));
-    expect(header.className).toContain("bg-zinc-800/85");
-    expect(header.className).toContain("border-zinc-700/70");
+    const header = getProjectHeader(screen.getByRole("button", { name: /^Project One/i }));
+    expect(header.className).toContain("from-selected");
+    // The blue accent bar marks a selected environment, not a selected project.
+    expect(header.className).not.toContain("before:bg-primary");
   });
 
   test("does not highlight the project header when an environment is selected", () => {
@@ -1332,8 +1333,8 @@ describe("HierarchicalSidebar", () => {
 
     render(<HierarchicalSidebar />);
 
-    const header = getProjectHeader(screen.getByRole("button", { name: /Project One/i }));
-    expect(header.className).not.toContain("bg-zinc-800/85");
+    const header = getProjectHeader(screen.getByRole("button", { name: /^Project One/i }));
+    expect(header.className).not.toContain("from-selected");
     expect(header.className).toContain("border-transparent");
   });
 
@@ -1739,7 +1740,7 @@ describe("HierarchicalSidebar", () => {
 
   test("opens repository settings from the project context menu", async () => {
     render(<HierarchicalSidebar />);
-    const projectButton = screen.getByRole("button", { name: /Project One/i });
+    const projectButton = screen.getByRole("button", { name: /^Project One/i });
 
     fireEvent.contextMenu(projectButton);
     fireEvent.click(await screen.findByRole("menuitem", { name: "Repository Settings" }));
@@ -1779,7 +1780,7 @@ describe("HierarchicalSidebar", () => {
     environmentsValue = [{ ...createdEnvironment, id: "env-1", name: "Environment One" }];
     render(<HierarchicalSidebar />);
 
-    fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
@@ -1800,7 +1801,7 @@ describe("HierarchicalSidebar", () => {
 
     try {
       render(<HierarchicalSidebar />);
-      fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Delete Project" }));
       fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
@@ -2049,7 +2050,7 @@ describe("HierarchicalSidebar", () => {
       projectsValue = [project, secondProject];
       render(<HierarchicalSidebar />);
 
-      fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Add to Folder" }));
 
       const input = await screen.findByLabelText("Folder name");
@@ -2068,7 +2069,7 @@ describe("HierarchicalSidebar", () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
       render(<HierarchicalSidebar />);
 
-      fireEvent.contextMenu(screen.getByRole("button", { name: /Project Two/i }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^Project Two/i }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Add to Folder" }));
 
       // The suggestion carries the existing spelling, which is what makes a
@@ -2092,7 +2093,7 @@ describe("HierarchicalSidebar", () => {
       const folderContent = document.querySelector('[data-project-folder-content="Work"]');
       expect(folderContent?.textContent).toContain("Project One");
       expect(folderContent?.textContent).not.toContain("Project Two");
-      expect(screen.getByRole("button", { name: /Project Two/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Project Two/i })).toBeTruthy();
     });
 
     test("clicking the folder name contracts it, hiding its contents, and expands it again", async () => {
@@ -2105,13 +2106,13 @@ describe("HierarchicalSidebar", () => {
       expect(collapsed.getAttribute("aria-expanded")).toBe("false");
       expect(useUIStore.getState().collapsedProjectFolders).toEqual(["Work"]);
       expect(document.querySelector('[data-project-folder-content="Work"]') === null).toBe(true);
-      expect(screen.queryByRole("button", { name: /Project One/i }) === null).toBe(true);
+      expect(screen.queryByRole("button", { name: /^Project One/i }) === null).toBe(true);
       // The folder outside it is unaffected.
-      expect(screen.getByRole("button", { name: /Project Two/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Project Two/i })).toBeTruthy();
 
       fireEvent.click(collapsed);
       expect(await screen.findByTitle("Collapse folder Work")).toBeTruthy();
-      expect(screen.getByRole("button", { name: /Project One/i })).toBeTruthy();
+      expect(screen.getByRole("button", { name: /^Project One/i })).toBeTruthy();
       expect(useUIStore.getState().collapsedProjectFolders).toEqual([]);
     });
 
@@ -2176,12 +2177,12 @@ describe("HierarchicalSidebar", () => {
       projectsValue = [{ ...project, folder: "Work" }, secondProject];
       render(<HierarchicalSidebar />);
 
-      fireEvent.contextMenu(screen.getByRole("button", { name: /Project Two/i }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^Project Two/i }));
       expect(await screen.findByRole("menuitem", { name: "Add to Folder" })).toBeTruthy();
       expect(screen.queryByRole("menuitem", { name: "Remove from Folder" }) === null).toBe(true);
       fireEvent.keyDown(document.body, { key: "Escape" });
 
-      fireEvent.contextMenu(screen.getByRole("button", { name: /Project One/i }));
+      fireEvent.contextMenu(screen.getByRole("button", { name: /^Project One/i }));
       fireEvent.click(await screen.findByRole("menuitem", { name: "Remove from Folder" }));
 
       await waitFor(() =>

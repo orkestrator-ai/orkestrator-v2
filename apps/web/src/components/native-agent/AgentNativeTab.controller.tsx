@@ -1250,21 +1250,6 @@ export function SharedNativeAgentController({
       : runtimeError || hasCompletedRead
         ? ("error" as const)
         : ("connecting" as const));
-  const contextUsage = projection?.contextUsage;
-  const maximumTokens = contextUsage?.maximumTokens;
-  const composeContextUsage =
-    contextUsage === undefined
-      ? undefined
-      : maximumTokens !== undefined && Number.isFinite(maximumTokens) && maximumTokens > 0
-        ? {
-            usedTokens: contextUsage.usedTokens,
-            totalTokens: maximumTokens,
-            percentUsed:
-              contextUsage.percentage ??
-              Math.min(100, (contextUsage.usedTokens / maximumTokens) * 100),
-          }
-        : null;
-
   if (setupPending) {
     return (
       <SetupPendingOverlay
@@ -1686,7 +1671,7 @@ export function SharedNativeAgentController({
                       <button
                         type="button"
                         disabled={settingsLocked}
-                        className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex h-7 items-center gap-1 rounded-lg bg-elevated px-2 text-xs text-foreground transition-colors hover:bg-elevated-hover disabled:cursor-not-allowed disabled:opacity-50"
                         title="Choose mode"
                       >
                         <ChevronDown className="h-3 w-3" />
@@ -1714,7 +1699,7 @@ export function SharedNativeAgentController({
                       <button
                         type="button"
                         disabled={settingsLocked}
-                        className="flex items-center gap-1 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex h-7 items-center gap-1 rounded-lg bg-elevated px-2 text-xs text-foreground transition-colors hover:bg-elevated-hover disabled:cursor-not-allowed disabled:opacity-50"
                         title="Choose mode"
                       >
                         <ChevronDown className="h-3 w-3" />
@@ -1754,8 +1739,6 @@ export function SharedNativeAgentController({
           onAddressAll={async () => {
             await submit(ADDRESS_ALL_REVIEW_PROMPT);
           }}
-          contextUsage={composeContextUsage}
-          showContextUsage={contextUsage === undefined || composeContextUsage !== null}
           queue={
             projection?.queue
               ? {

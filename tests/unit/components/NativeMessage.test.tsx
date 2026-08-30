@@ -2381,8 +2381,8 @@ describe("NativeMessage", () => {
     expect(running.className).toContain("text-yellow-600");
     expect(screen.queryByText("pending") === null).toBe(true);
 
-    expect(screen.getByText("success").className).toContain("text-green-600");
-    expect(screen.getByText("failure").className).toContain("text-red-400");
+    expect(screen.getByText("success").className).toContain("text-success");
+    expect(screen.getByText("failure").className).toContain("text-failure");
   });
 
   test("disables generic tool rows with nothing to expand and hides the chevron", () => {
@@ -2534,11 +2534,11 @@ describe("NativeMessage", () => {
 
     const contextLine = screen.getByText("unchanged line");
     expect(contextLine.className).toContain("text-foreground/60");
-    expect(contextLine.className).not.toContain("bg-green-500/20");
-    expect(contextLine.className).not.toContain("bg-red-500/20");
+    expect(contextLine.className).not.toContain("bg-success/20");
+    expect(contextLine.className).not.toContain("bg-failure/20");
 
-    expect(screen.getByText("+new line").className).toContain("bg-green-500/20");
-    expect(screen.getByText("-old line").className).toContain("bg-red-500/20");
+    expect(screen.getByText("+new line").className).toContain("bg-success/20");
+    expect(screen.getByText("-old line").className).toContain("bg-failure/20");
     expect(screen.getByText("@@ -1,3 +1,3 @@").className).toContain("text-blue-400");
   });
 
@@ -2583,15 +2583,18 @@ describe("NativeMessage", () => {
     const additionsOnly = screen.getByRole("button", {
       name: /write added\.ts \+3 success/i,
     });
-    expect(additionsOnly.querySelector(".text-green-500")?.textContent).toBe("+3");
-    expect(additionsOnly.querySelector(".text-red-400") === null).toBe(true);
+    // `.font-mono` narrows these to the stat spans. The success/failure colours
+    // are shared with the tool-state marker in the same row, so the colour
+    // class alone no longer identifies a line count.
+    expect(additionsOnly.querySelector(".text-success.font-mono")?.textContent).toBe("+3");
+    expect(additionsOnly.querySelector(".text-failure.font-mono") === null).toBe(true);
     expect(additionsOnly.textContent).not.toContain("-0");
 
     const deletionsOnly = screen.getByRole("button", {
       name: /edit removed\.ts -4 success/i,
     });
-    expect(deletionsOnly.querySelector(".text-red-400")?.textContent).toBe("-4");
-    expect(deletionsOnly.querySelector(".text-green-500") === null).toBe(true);
+    expect(deletionsOnly.querySelector(".text-failure.font-mono")?.textContent).toBe("-4");
+    expect(deletionsOnly.querySelector(".text-success.font-mono") === null).toBe(true);
     expect(deletionsOnly.textContent).not.toContain("+0");
   });
 

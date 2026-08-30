@@ -1796,7 +1796,9 @@ describe("NativeMessage task list rendering", () => {
     expect(screen.getByRole("button", { name: /lovelace/i }).parentElement?.className).toContain(
       "my-0",
     );
-    expect(container.innerHTML).toContain("my-0 rounded-lg border border-zinc-700/70");
+    expect(container.innerHTML).toContain(
+      "my-0 divide-y divide-divider overflow-hidden rounded-lg border border-divider bg-sidebar",
+    );
     expect(
       screen.getByRole("button", { name: /task wrapper/i }).parentElement?.parentElement?.className,
     ).toContain("my-0");
@@ -4305,14 +4307,14 @@ describe("NativeMessage thinking parts", () => {
 
     const { container } = render(<NativeMessage message={message} />);
 
-    const group = container.querySelector(".rounded-lg.border.border-zinc-700\\/70");
+    const group = container.querySelector(".rounded-lg.border.border-divider");
     expect(group).toBeTruthy();
-    // Both activity parts render as children of the one grouped block.
+    // Both activity parts render as children of the one grouped block: the
+    // group wraps each part in its own padded row, so two rows means two parts
+    // in one block rather than two blocks.
     expect(group?.textContent).toContain("Deciding what to run");
     expect(group?.textContent).toContain("ls -la");
-    expect(group?.querySelectorAll(":scope > * > button, :scope > button").length).toBeGreaterThan(
-      1,
-    );
+    expect(group?.children.length).toBe(2);
   });
 
   test("renders a thinking part supplied as a subagent child action", () => {
@@ -4449,8 +4451,8 @@ describe("NativeMessage agent status and grouping details", () => {
     );
 
     expect(screen.getByText("Active").className).toContain("border-amber-500/30");
-    expect(screen.getByText("Finished").className).toContain("border-emerald-500/30");
-    expect(screen.getByText("Failed").className).toContain("border-red-500/30");
+    expect(screen.getByText("Finished").className).toContain("border-success/30");
+    expect(screen.getByText("Failed").className).toContain("border-failure/30");
   });
 
   test("keeps successful terminal agents finished despite stale pending descendants", () => {

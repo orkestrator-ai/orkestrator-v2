@@ -652,46 +652,6 @@ describe("AgentNativeTab", () => {
     );
   });
 
-  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
-    "does not render a context-window control in the %s compose bar before usage arrives",
-    async (platform) => {
-      render(
-        <AgentNativeTab tabId={`tab-context-${platform}`} data={identity(platform)} isActive />,
-      );
-
-      await screen.findByTestId("shared-native-compose-bar");
-      const sendButton = screen.getByTitle("Send");
-
-      expect(screen.queryByRole("button", { name: /Context window/ }) === null).toBe(true);
-      expect(sendButton).toBeTruthy();
-    },
-  );
-
-  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
-    "renders the context-window control in the %s compose bar once usage arrives",
-    async (platform) => {
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-        ...(await defaultProjection(input)),
-        contextUsage: { usedTokens: 4_000, maximumTokens: 16_000, percentage: 25 },
-      }));
-
-      render(
-        <AgentNativeTab
-          tabId={`tab-context-present-${platform}`}
-          data={identity(platform)}
-          isActive
-        />,
-      );
-
-      // The control is conditional, so absence before usage arrives must not be
-      // allowed to become permanent absence after it does.
-      const contextButton = await screen.findByRole("button", {
-        name: "Context window 25% used",
-      });
-      expect(contextButton.nextElementSibling).toBe(screen.getByTitle("Send"));
-    },
-  );
-
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {
     const { container } = render(
       <AgentNativeTab tabId="tab-unassigned" data={{ environmentId: "env-1" }} isActive />,
@@ -705,7 +665,7 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText("Ready to build!")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
-    expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-2xl");
+    expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
   });
 
   test("unassigned composer adopts the environment default agent and model", async () => {
@@ -4397,75 +4357,6 @@ describe("AgentNativeTab", () => {
       const notice = await screen.findByText("Recovered provider notice");
       expect(screen.getByTestId("compose-dock").contains(notice)).toBe(true);
       expect(screen.getByTestId("transcript-bottom-spacer").className).not.toContain("h-32");
-    });
-
-    test("renders an unavailable context wheel when the provider reports no maximum", async () => {
-      seedProjection({
-        contextUsage: {
-          usedTokens: 222,
-          inputTokens: 200,
-          outputTokens: 22,
-          source: "provider",
-        },
-      });
-      render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
-
-      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      await waitFor(() => {
-        expect(screen.queryByRole("button", { name: /Context window/ }) === null).toBe(true);
-      });
-    });
-
-    test("renders the context wheel from the percentage the provider reported", async () => {
-      seedProjection({
-        contextUsage: {
-          usedTokens: 15_675,
-          maximumTokens: 500_000,
-          // Deliberately not 3%: the provider's own figure must win over the
-          // ratio this component could derive from the two token counts.
-          percentage: 42,
-          source: "provider",
-        },
-      });
-      render(<AgentNativeTab tabId="tab-bounded-usage" data={identity("grok")} isActive />);
-
-      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Context window 42% used" })).toBeTruthy();
-    });
-
-    test("renders the context wheel before the stop button during a running turn", async () => {
-      seedProjection({
-        phase: "running",
-        contextUsage: {
-          usedTokens: 210_000,
-          maximumTokens: 500_000,
-          percentage: 42,
-          source: "provider",
-        },
-      });
-      render(<AgentNativeTab tabId="tab-running-usage" data={identity("grok")} isActive />);
-
-      const contextWheel = await screen.findByRole("button", {
-        name: "Context window 42% used",
-      });
-      const stopButton = screen.getByTitle("Stop current query");
-      expect(
-        contextWheel.compareDocumentPosition(stopButton) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    });
-
-    test("derives the context wheel percentage when the provider reports only a maximum", async () => {
-      seedProjection({
-        contextUsage: {
-          usedTokens: 15_675,
-          maximumTokens: 500_000,
-          source: "provider",
-        },
-      });
-      render(<AgentNativeTab tabId="tab-derived-usage" data={identity("grok")} isActive />);
-
-      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Context window 3% used" })).toBeTruthy();
     });
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {

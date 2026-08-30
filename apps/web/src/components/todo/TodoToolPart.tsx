@@ -8,8 +8,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
 export const TOOL_STATE_COLORS = {
-  success: "text-green-600",
-  failure: "text-red-400",
+  success: "text-success",
+  failure: "text-failure",
   pending: "text-yellow-600 animate-pulse",
 } as const;
 

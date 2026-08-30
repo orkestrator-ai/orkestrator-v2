@@ -643,6 +643,20 @@ history rather than two partial ones.
   stretched unrelated timer cases into multi-minute durations. The isolated
   rerun `bun test src/components/layout/ActionBar.test.tsx` from `apps/web`
   exited 0 against the same tree.
+- **Recurrence (colour-scheme adoption, 2026-08-30):** `bun run test` failed
+  the same `dispatches tab, workflow, editor, and panel shortcuts` case at
+  `ActionBar.test.tsx:5467` after 19.56 ms. The expected `createTabMock("plain",
+  { initialCommands: ["bun test"] })` call was absent while the mock again
+  contained exactly the preceding plain, native-agent, and Codex review-tab
+  calls (`Number of calls: 3`). The web workspace group was the only failing
+  group besides two palette assertions fixed in the same change; the bridge and
+  protocol-lockfile groups passed. The immediate isolated rerun, `bun
+  --cwd=apps/web test src/components/layout/ActionBar.test.tsx`, passed all 198
+  tests with 773 assertions in 14.12 s. The reviewed change restyles the
+  toolbar's Create PR placement and the shared button variants but does not
+  touch the shortcut handler or run-command loading. Evidence:
+  `workspace-web-backend-desktop-web-public-cli-protocol.log.gz` under
+  `/var/folders/.../orkestrator-test-run.pHJVhH`.
 - **Hypothesis:** The case dispatches a keyboard shortcut and asserts the resulting command mock synchronously. Under renderer contention the React commit that installs the shortcut handler can land after the key event is dispatched, so the handler never runs. A recurrence should wait for the control the shortcut targets to be mounted before dispatching, rather than relaxing the call assertion.
 
 ## `ACP bridge > drops malformed persisted tool parts on load` (`bridges/acp-bridge/src/acp-persistence.test.ts:419`)

@@ -306,7 +306,15 @@ export function DraggableTab({
         "group relative flex shrink-0 items-center gap-1.5 px-3 text-xs cursor-grab active:cursor-grabbing select-none self-stretch",
         isActive
           ? "bg-background text-foreground"
-          : "bg-zinc-800/85 text-muted-foreground hover:bg-zinc-800 hover:text-foreground",
+          : // The strip sits inside `AppShell`'s central panel, where
+            // `--color-background` is rebound to the user's terminal colour.
+            // A fixed surface here stops tracking that: against the default
+            // background a flat `--color-sidebar` resolved to 1.02:1, and a
+            // lighter terminal colour inverted the hierarchy outright by
+            // making the inactive tabs the darker layer. A white wash
+            // composites over whatever is actually behind it, so an inactive
+            // tab is raised off the strip at every setting.
+            "bg-white/[0.06] text-muted-foreground hover:bg-white/[0.12] hover:text-foreground",
         isDragging && "opacity-50 z-50",
       )}
       onClick={onSelect}
@@ -319,7 +327,7 @@ export function DraggableTab({
       {isActive && (
         <div
           aria-hidden="true"
-          className={cn("absolute inset-x-0 top-0 h-0.5 bg-primary", !isFocused && "opacity-60")}
+          className={cn("absolute inset-x-0 bottom-0 h-0.5 bg-primary", !isFocused && "opacity-60")}
         />
       )}
       {icon}

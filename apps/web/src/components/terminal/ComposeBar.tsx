@@ -466,7 +466,7 @@ export function ComposeBar({
           {images.map((img) => (
             <div
               key={img.id}
-              className="relative group w-14 h-14 rounded-md overflow-hidden bg-card border border-[#52525b] shadow-lg cursor-pointer"
+              className="relative group w-14 h-14 rounded-md overflow-hidden bg-card border border-zinc-600 shadow-lg cursor-pointer"
               onClick={() => setPreviewImage(img)}
             >
               <img
@@ -488,11 +488,14 @@ export function ComposeBar({
         </div>
       )}
 
-      {/* Text input bar - matches sidebar color with lighter border, 60% opacity + blur */}
-      <div
-        className="flex items-end gap-2 rounded-lg px-3 py-2 border border-[#52525b] backdrop-blur-md"
-        style={{ backgroundColor: "rgba(39, 39, 42, 0.6)" }}
-      >
+      {/*
+        Text input bar - a translucent control surface with a lighter border,
+        floating over terminal output. `border-zinc-600` rather than
+        `border-border` on purpose: the panel hairline disappears against
+        arbitrary terminal contents, which is why this one is deliberately a
+        step lighter.
+      */}
+      <div className="flex items-end gap-2 rounded-lg border border-zinc-600 bg-elevated/60 px-3 py-2 backdrop-blur-md">
         <textarea
           ref={textareaRef}
           value={text}
@@ -549,7 +552,7 @@ export function ComposeBar({
             />
             <button
               onClick={() => setPreviewImage(null)}
-              className="absolute -top-3 -right-3 w-8 h-8 bg-card border border-[#52525b] rounded-full flex items-center justify-center hover:bg-muted transition-colors"
+              className="absolute -top-3 -right-3 w-8 h-8 bg-card border border-zinc-600 rounded-full flex items-center justify-center hover:bg-muted transition-colors"
             >
               <X className="w-4 h-4 text-foreground" />
             </button>

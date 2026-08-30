@@ -615,7 +615,7 @@ describe("EnvironmentItem activity icon", () => {
     );
 
     const icon = container.querySelector('div[role="button"] svg');
-    expect(icon?.getAttribute("class")).toContain("text-green-500");
+    expect(icon?.getAttribute("class")).toContain("text-success");
     expect(icon?.getAttribute("class")).not.toContain("animate-pulse");
   });
 

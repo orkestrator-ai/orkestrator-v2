@@ -93,7 +93,7 @@ export function SortableProjectFolder({
           // header is highlighted rather than an insertion line being drawn.
           isOver && !isDragging
             ? "border-primary/70 bg-primary/10"
-            : "border-transparent hover:bg-zinc-800/55",
+            : "border-transparent hover:bg-hover",
         )}
       >
         <ContextMenu>
@@ -112,7 +112,7 @@ export function SortableProjectFolder({
             >
               <FolderIcon className="h-4 w-4 shrink-0 text-amber-400/80" aria-hidden="true" />
               <span className="truncate font-medium">{name}</span>
-              <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-zinc-800 px-1 text-[10px] text-zinc-300">
+              <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                 {projectCount}
               </span>
             </button>
@@ -141,7 +141,7 @@ export function SortableProjectFolder({
           type="button"
           aria-expanded={!isCollapsed}
           aria-label={isCollapsed ? `Expand folder ${name}` : `Collapse folder ${name}`}
-          className="shrink-0 rounded p-1 transition-colors hover:bg-zinc-800/80"
+          className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
           onClick={(event) => {
             event.stopPropagation();
             onToggleCollapse();

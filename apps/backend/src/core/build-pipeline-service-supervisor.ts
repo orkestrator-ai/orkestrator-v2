@@ -71,6 +71,7 @@ import {
   attachBeforeDispatch,
   elapsedSince,
   elapsedSinceLatest,
+  discardSessionReviewReports,
 } from "./build-pipeline-service-helpers.js";
 
 export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServiceBase {
@@ -281,8 +282,10 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       if (pipeline.reviewRetryRequested) {
         await this.abandonReviewFanout(pipeline, "idle");
         delete pipeline.reviewRetryRequested;
+        discardSessionReviewReports(pipeline);
         delete pipeline.reviewFanout;
         delete pipeline.structuredReview;
+        delete pipeline.structuredReviewRequestId;
         delete pipeline.verificationResult;
         delete pipeline.verificationFeedback;
         if (pipeline.reviewPackage) {
@@ -423,7 +426,9 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
 
     if (pipeline.reviewRetryRequested) {
       delete pipeline.reviewRetryRequested;
+      discardSessionReviewReports(pipeline);
       delete pipeline.structuredReview;
+      delete pipeline.structuredReviewRequestId;
       delete pipeline.verificationResult;
       delete pipeline.verificationFeedback;
       if (pipeline.reviewPackage) {
@@ -830,6 +835,13 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       schema?: JsonSchema;
     },
   ): Promise<void> {
+    // A pipeline retains reports only for its newest review attempt. This is
+    // both the retry boundary and the iteration boundary, and prevents up to a
+    // full reviewer panel of duplicate structured reports accumulating on
+    // every pass through the fix loop.
+    if (sessionPhase === "review" && !override) {
+      discardSessionReviewReports(pipeline);
+    }
     // A multi-reviewer pipeline has no single review session to open, so the
     // review stage is delegated whole. An `override` is a hand-written prompt
     // for one session — a retry or a user message — and is never a fan-out.
@@ -1138,6 +1150,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     }
     const report = stripStructuredReviewProvenance(parsed.data);
     session.structuredResultStatus = "accepted";
+    session.reviewReport = report;
     pipeline.structuredReview = report;
     if (report.issues.length || report.testCoverageGaps.length) {
       await this.startStage(pipeline, "address", "addressing");

@@ -1313,6 +1313,9 @@ describe("BuildPipelineService", () => {
         "review",
         "verify",
       ]);
+      const retainedReports = failed.sessions.filter((session) => session.reviewReport);
+      expect(retainedReports).toHaveLength(1);
+      expect(retainedReports[0]?.iteration).toBe(failed.iteration);
     });
   });
 

@@ -141,7 +141,11 @@ function reviewReportSession(pipeline: BuildPipeline): PipelineSession | undefin
   const linked = requestId
     ? pipeline.sessions.find((session) => session.structuredRequestId === requestId)
     : undefined;
-  return linked ?? [...pipeline.sessions].reverse().find((session) => session.phase === "review");
+  return (
+    linked ??
+    [...pipeline.sessions].reverse().find((session) => session.reviewReport !== undefined) ??
+    [...pipeline.sessions].reverse().find((session) => session.phase === "review")
+  );
 }
 
 /**
@@ -313,6 +317,18 @@ export function BuildChatTab({
     reportSession &&
     selectedSession.sessionKey === reportSession.sessionKey,
   );
+  // Session copies are current while the fan-out is live or while its accepted
+  // consolidated report still belongs to the pipeline. A retry clears both;
+  // older snapshots may still carry the new session field, so do not present
+  // those discarded copies as current reports.
+  const sessionReviewReportsAreCurrent = Boolean(
+    !pipeline?.reviewRetryRequested && (pipeline?.reviewFanout || pipeline?.structuredReview),
+  );
+  // New snapshots pin every accepted report to the session that produced it.
+  // The pipeline-owned fallback keeps older single-review snapshots readable.
+  const selectedReviewReport =
+    (sessionReviewReportsAreCurrent ? selectedSession?.reviewReport : undefined) ??
+    (ownsCurrentReviewReport ? pipeline?.structuredReview : undefined);
   // New snapshots state this authority explicitly. For old persisted builds,
   // an idle stage the pipeline has advanced past is the closest evidence, and
   // only when the pipeline's own accepted-result bookkeeping confirms it — a
@@ -350,7 +366,7 @@ export function BuildChatTab({
       return hideMachineOutputText(
         showOnlyFinalStructuredReviewMessage(
           transcript,
-          structuredResultAccepted && !ownsCurrentReviewReport,
+          structuredResultAccepted && !selectedReviewReport,
         ),
         // A report the first pass retained as authoritative must survive the
         // second, which cannot tell an accepted result from a draft by shape.
@@ -366,7 +382,7 @@ export function BuildChatTab({
     return transcript;
   }, [
     agentType,
-    ownsCurrentReviewReport,
+    selectedReviewReport,
     selectedSession?.messages,
     selectedSession?.phase,
     selectedSession?.startedAt,
@@ -494,12 +510,12 @@ export function BuildChatTab({
   const stalledSession = showStallWarning
     ? pipeline.sessions.find((session) => session.sdkSessionId === pipeline.stallWarning?.sessionId)
     : undefined;
-  const showReviewReport = ownsCurrentReviewReport;
+  const showReviewReport = selectedReviewReport !== undefined;
   // The report lives on the stage that produced it, but the tab follows the
   // pipeline past review, so by the time a build finishes nothing on screen
   // would say a review had happened at all.
   const reviewReportHint =
-    pipeline.structuredReview && reportSession && !showReviewReport
+    pipeline.structuredReview && reportSession && !ownsCurrentReviewReport
       ? {
           session: reportSession,
           label: issueCountLabel(pipeline.structuredReview.issues.length),
@@ -791,6 +807,9 @@ export function BuildChatTab({
                 const ownsReport = Boolean(
                   reportSession && session.sessionKey === reportSession.sessionKey,
                 );
+                const stageReport =
+                  (sessionReviewReportsAreCurrent ? session.reviewReport : undefined) ??
+                  (ownsReport ? pipeline.structuredReview : undefined);
                 return (
                   <button
                     key={session.sessionKey}
@@ -831,10 +850,10 @@ export function BuildChatTab({
                           {session.autoDeclineCount === 1 ? "" : "s"} auto-declined
                         </span>
                       )}
-                      {ownsReport && pipeline.structuredReview && (
+                      {stageReport && (
                         <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200/90">
                           <ClipboardCheck className="h-2.5 w-2.5" />
-                          Report · {issueCountLabel(pipeline.structuredReview.issues.length)}
+                          Report · {issueCountLabel(stageReport.issues.length)}
                         </span>
                       )}
                     </span>
@@ -889,12 +908,20 @@ export function BuildChatTab({
               </div>
             }
             footer={
-              showReviewReport && pipeline.structuredReview ? (
+              showReviewReport && selectedReviewReport ? (
                 <div className="px-3 py-3 @sm:px-6">
                   <StructuredReviewReportView
                     className="mx-auto max-w-3xl"
-                    report={pipeline.structuredReview}
+                    report={selectedReviewReport}
+                    heading={
+                      (pipeline.reviewers?.length ?? 0) > 1
+                        ? ownsCurrentReviewReport
+                          ? "Consolidated Multi Review"
+                          : "Reviewer report"
+                        : undefined
+                    }
                     collapsibleSections
+                    sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
                     showRawJson={false}
                   />
                 </div>

@@ -128,6 +128,21 @@ export function sessionForCurrentPhase(pipeline: BuildPipeline): PipelineSession
   return pipeline.sessions[pipeline.currentSessionIndex];
 }
 
+/**
+ * Drops the duplicated report payloads from every superseded review attempt.
+ *
+ * The authoritative current report still lives on `pipeline.structuredReview`.
+ * Session copies exist so the active fan-out's independent reports remain
+ * readable after its transient record is retired, but retaining those copies
+ * across retries and later iterations would grow the hot pipeline snapshot by
+ * one full reviewer panel per attempt.
+ */
+export function discardSessionReviewReports(pipeline: BuildPipeline): void {
+  for (const session of pipeline.sessions) {
+    if (session.phase === "review") delete session.reviewReport;
+  }
+}
+
 export function resumablePhase(phase: BuildPhase): ResumableBuildPhase | null {
   return isActiveBuildPhase(phase) ? (phase as ResumableBuildPhase) : null;
 }

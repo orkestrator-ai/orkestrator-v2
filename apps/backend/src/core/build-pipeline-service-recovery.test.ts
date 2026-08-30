@@ -1161,6 +1161,9 @@ describe("BuildPipelineService retry review", () => {
       const verifying = await snapshot(storage, built.id);
       expect(verifying.phase).toBe("verifying");
       expect(verifying.structuredReview).toBeTruthy();
+      expect(
+        verifying.sessions.find((session) => session.phase === "review")?.reviewReport,
+      ).toBeTruthy();
       const sessionCount = verifying.sessions.length;
       const originalHead = verifying.reviewPackage?.headRef;
 
@@ -1170,7 +1173,13 @@ describe("BuildPipelineService retry review", () => {
       const retried = await snapshot(storage, built.id);
       expect(retried.phase).toBe("reviewing");
       expect(retried.structuredReview).toBeUndefined();
+      expect(retried.structuredReviewRequestId).toBeTruthy();
       expect(retried.reviewRetryRequested).toBeUndefined();
+      expect(
+        retried.sessions
+          .filter((session) => session.phase === "review" && session.iteration === 0)
+          .every((session) => session.reviewReport === undefined),
+      ).toBe(true);
       expect(retried.sessions).toHaveLength(sessionCount + 2);
       expect(retried.sessions.at(-2)?.phase).toBe("fix");
       expect(retried.sessions.at(-1)?.phase).toBe("review");

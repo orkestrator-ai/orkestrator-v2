@@ -303,6 +303,16 @@ export interface PipelineSession {
   /** Stable structured-output key for review and verification turns. */
   structuredRequestId?: string;
   /**
+   * Accepted report produced by this review session.
+   *
+   * Kept on the session so a multi-model build can render every independent
+   * reviewer and its consolidation after the live fan-out record is retired.
+   * The backend discards these copies when the next review attempt starts, so
+   * report payloads do not accumulate across retries and fix-loop iterations.
+   * Optional for snapshots written before per-session reports existed.
+   */
+  reviewReport?: StructuredReviewReport;
+  /**
    * Whether the backend is still waiting for this request's schema result or
    * has validated and accepted it.
    *
@@ -815,6 +825,8 @@ function isPipelineSession(value: unknown): value is PipelineSession {
     (value.messagesPersistedAt === undefined || isIsoDate(value.messagesPersistedAt)) &&
     (value.turnStartedAt === undefined || isIsoDate(value.turnStartedAt)) &&
     isOptionalNonBlankString(value.structuredRequestId) &&
+    (value.reviewReport === undefined ||
+      (value.phase === "review" && isStructuredReviewReport(value.reviewReport))) &&
     (value.structuredResultStatus === undefined ||
       value.structuredResultStatus === "pending" ||
       value.structuredResultStatus === "accepted") &&

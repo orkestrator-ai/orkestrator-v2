@@ -739,6 +739,139 @@ describe("BuildChatTab presentation", () => {
     await waitFor(() => expect(screen.queryByLabelText(reportLabel) === null).toBe(true));
   });
 
+  test("shows every multi-model reviewer report and the consolidated report in its transcript", async () => {
+    const reviewerOneReport = {
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      reviewSummary: "Reviewer one found the dispatch race.",
+    };
+    const reviewerTwoReport = {
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      reviewSummary: "Reviewer two found the recovery gap.",
+    };
+    const consolidationReport = {
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      reviewSummary: "The consolidation retained both findings.",
+    };
+    const reviewerOnePayload = JSON.stringify(reviewerOneReport);
+    const reviewSessions: BuildPipeline["sessions"] = [
+      {
+        ...reviewSession,
+        sessionKey: "review-1-key",
+        sdkSessionId: "review-1-session",
+        label: "Review 1",
+        reviewReport: reviewerOneReport,
+        messages: [
+          {
+            id: "review-1-answer",
+            role: "assistant",
+            content: reviewerOnePayload,
+            parts: [
+              { type: "text", content: reviewerOnePayload },
+              {
+                type: "tool-invocation",
+                content: "git diff --stat",
+                toolName: "shell",
+                toolState: "success",
+              },
+            ],
+          },
+        ],
+      },
+      {
+        ...reviewSession,
+        sessionKey: "review-2-key",
+        sdkSessionId: "review-2-session",
+        label: "Review 2",
+        reviewReport: reviewerTwoReport,
+      },
+      {
+        ...reviewSession,
+        sessionKey: "consolidation-key",
+        sdkSessionId: "consolidation-session",
+        label: "Consolidation",
+        structuredRequestId: "consolidation-request",
+        reviewReport: consolidationReport,
+      },
+    ];
+    renderTab({
+      ...reviewed,
+      reviewers: [{ agent: "codex" }, { agent: "claude" }],
+      sessions: [pipeline.sessions[0]!, ...reviewSessions, pipeline.sessions[1]!],
+      currentSessionIndex: 4,
+      structuredReview: consolidationReport,
+      structuredReviewRequestId: "consolidation-request",
+    });
+
+    fireEvent.click(screen.getByText("Review 1"));
+    expect(await screen.findByLabelText("Reviewer report")).toBeTruthy();
+    expect(visibleTextContents()).not.toContain(reviewerOnePayload);
+    expect(visibleToolInvocations()).toEqual(["git diff --stat"]);
+    fireEvent.click(screen.getByRole("button", { name: "Review summary" }));
+    expect(screen.getByText("Reviewer one found the dispatch race.")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Review 2"));
+    expect(await screen.findByLabelText("Reviewer report")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review summary" }));
+    expect(screen.getByText("Reviewer two found the recovery gap.")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Consolidation"));
+    expect(await screen.findByLabelText("Consolidated Multi Review")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Review summary" }));
+    expect(screen.getByText("The consolidation retained both findings.")).toBeTruthy();
+  });
+
+  test("shows live fan-out reports but hides discarded session reports after a retry", async () => {
+    const reviewerReport = {
+      ...TEST_STRUCTURED_REVIEW_REPORT,
+      reviewSummary: "This report belongs to the abandoned panel.",
+    };
+    const reviewer = {
+      ...reviewSession,
+      sessionKey: "retained-review-key",
+      sdkSessionId: "retained-review-session",
+      label: "Retained Review",
+      reviewReport: reviewerReport,
+    };
+    const base = {
+      ...reviewed,
+      reviewers: [{ agent: "codex" as const }, { agent: "claude" as const }],
+      sessions: [pipeline.sessions[0]!, reviewer, pipeline.sessions[1]!],
+      currentSessionIndex: 2,
+      structuredReview: undefined,
+      structuredReviewRequestId: undefined,
+    };
+
+    renderTab({
+      ...base,
+      reviewFanout: {
+        reviewers: [
+          {
+            id: "reviewer-1",
+            agent: "codex",
+            model: "gpt-5",
+            status: "completed",
+          },
+          {
+            id: "reviewer-2",
+            agent: "claude",
+            model: "opus",
+            status: "running",
+          },
+        ],
+      },
+    });
+    fireEvent.click(screen.getByText("Retained Review"));
+    expect(await screen.findByLabelText("Reviewer report")).toBeTruthy();
+    expect(screen.getByText(/Report ·/)).toBeTruthy();
+
+    cleanup();
+    renderTab(base);
+    fireEvent.click(screen.getByText("Retained Review"));
+    expect(screen.queryByLabelText("Reviewer report") === null).toBe(true);
+    expect(screen.queryByLabelText("Consolidated Multi Review") === null).toBe(true);
+    expect(screen.queryByText(/Report ·/) === null).toBe(true);
+  });
+
   test("hides provisional transcript reports and shows the authoritative report once", async () => {
     const provisional = JSON.stringify({
       ...TEST_STRUCTURED_REVIEW_REPORT,

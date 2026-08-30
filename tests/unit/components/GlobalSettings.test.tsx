@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { useConfigStore } from "@/stores/configStore";
 import { useProjectStore } from "@/stores/projectStore";
 import { useUIStore } from "@/stores/uiStore";
+import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { mockWriteText } from "../../mocks/clipboard";
 import {
   REVIEW_INSTRUCTION_MAX_LENGTH,
@@ -1382,6 +1384,51 @@ describe("GlobalSettings", () => {
         }),
       ),
     );
+  });
+
+  test("draws each platform toggle in its shared accent colour, enabled or not", () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, enabledAgentPlatforms: ["claude"] },
+      },
+    }));
+    render(<GlobalSettings activeSection="platforms" />);
+
+    for (const platform of AGENT_PLATFORMS) {
+      const label = document.querySelector(`label[for="platform-${platform}"]`);
+      expect(label).not.toBeNull();
+      const icon = label!.querySelector("svg");
+
+      // Every row shows its brand accent whether or not the platform is on,
+      // matching the tab strip and the model picker. Only Claude is enabled
+      // here, so a colour that tracked the switch would differ across rows.
+      expect(icon).not.toBeNull();
+      expect(icon!.getAttribute("class")).toContain(PLATFORM_ICON_CLASS[platform]);
+    }
+  });
+
+  test("signals a disabled platform on the tile rather than on the mark inside it", () => {
+    useConfigStore.setState((state) => ({
+      ...state,
+      config: {
+        ...state.config,
+        global: { ...state.config.global, enabledAgentPlatforms: ["claude"] },
+      },
+    }));
+    render(<GlobalSettings activeSection="platforms" />);
+
+    const tileFor = (platform: string) =>
+      document.querySelector(`label[for="platform-${platform}"] > span`)!;
+
+    // The tile's border and background carry the state. A text colour here
+    // would be dead styling, because the mark paints its own accent.
+    expect(tileFor("claude").getAttribute("class")).toContain("border-cyan-400/30");
+    expect(tileFor("codex").getAttribute("class")).toContain("border-zinc-800");
+    for (const platform of AGENT_PLATFORMS) {
+      expect(tileFor(platform).getAttribute("class")).not.toContain("text-");
+    }
   });
 
   test("saves container CPU and memory slider changes", async () => {

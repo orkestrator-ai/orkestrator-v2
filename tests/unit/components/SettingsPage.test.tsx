@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { useState } from "react";
 import { invoke } from "@/lib/native/backend";
 import { useConfigStore } from "@/stores/configStore";
+import { PLATFORM_ICON_CLASS } from "@/components/icons/AgentIcons";
+import { AGENT_PLATFORMS } from "@orkestrator/protocol/agent-platforms";
 import { defaultConfig } from "../../../apps/backend/src/core/storage";
 
 import * as realGlobalSettings from "../../../apps/web/src/components/settings/GlobalSettings";
@@ -36,7 +38,9 @@ mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout"
     children,
   }: {
     open: boolean;
-    menuItems: Array<{ id: string; label: string }>;
+    // The real layout renders `icon` beside `label`, so the stub has to as
+    // well or nothing here can see what glyph a menu entry chose.
+    menuItems: Array<{ id: string; label: string; icon: React.ReactNode }>;
     children: (activeSection: string) => React.ReactNode;
   }) => {
     const [activeSection, setActiveSection] = useState(menuItems[0]?.id ?? "");
@@ -44,7 +48,12 @@ mock.module("../../../apps/web/src/components/settings/FullscreenSettingsLayout"
     return (
       <div>
         {menuItems.map((item) => (
-          <button key={item.id} onClick={() => setActiveSection(item.id)}>
+          <button
+            key={item.id}
+            data-testid={`menu-item-${item.id}`}
+            onClick={() => setActiveSection(item.id)}
+          >
+            {item.icon}
             {item.label}
           </button>
         ))}
@@ -105,6 +114,41 @@ describe("SettingsPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Web client" }));
     expect(screen.getByTestId("active-settings-section").textContent).toBe("web-client");
+  });
+
+  test("draws every platform menu entry in its shared accent colour", async () => {
+    render(<SettingsPage open onOpenChange={() => undefined} />);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
+
+    // The accent map is what makes each platform distinguishable at a glance,
+    // so assert the colour rather than merely that some icon rendered. Reading
+    // it from AgentIcons is deliberate: a menu entry that goes back to a bare
+    // brand component, or grows a private colour override, fails here.
+    for (const platform of AGENT_PLATFORMS) {
+      const entry = screen.getByTestId(`menu-item-${platform}`);
+      const icon = entry.querySelector("svg");
+
+      expect(icon).not.toBeNull();
+      expect(icon!.getAttribute("class")).toContain(PLATFORM_ICON_CLASS[platform]);
+    }
+  });
+
+  test("gives every platform a menu entry, in the order the protocol lists them", async () => {
+    render(<SettingsPage open onOpenChange={() => undefined} />);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("get_config"));
+
+    // MENU_ITEMS spells the six platforms out by hand, so a seventh platform
+    // added to the protocol would otherwise silently have no settings pane.
+    const menuOrder = screen
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("data-testid"))
+      .filter((id): id is string => id !== null)
+      .map((id) => id.replace("menu-item-", ""))
+      .filter((id) => (AGENT_PLATFORMS as readonly string[]).includes(id));
+
+    expect(menuOrder).toEqual([...AGENT_PLATFORMS]);
   });
 
   test("shows the loading state until the first config request completes", async () => {

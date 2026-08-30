@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { DockerAvailabilityProvider } from "@/contexts/DockerAvailabilityContext";
 import { CreateEnvironmentDialog, type ClaudeOptions } from "./CreateEnvironmentDialog";
 
 afterEach(cleanup);
+
+/**
+ * Every class the shared picker theme promises must survive `cn`'s tailwind-merge
+ * against `AgentModelPicker`'s own base classes, so asserting the constant token by
+ * token is what stops one call site drifting from the other.
+ */
+function expectModelPickerTheme(picker: HTMLElement): void {
+  const applied = picker.className.split(/\s+/);
+  for (const token of MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME.split(/\s+/)) {
+    expect(applied).toContain(token);
+  }
+}
 
 describe("CreateEnvironmentDialog initial prompt attachments", () => {
   test("uses the compact themed layout with equally sized name and agent controls", () => {
@@ -50,9 +63,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(name.className).toContain("h-9");
     expect(name.className).toContain("px-3");
     expect(name.className).toContain("bg-input-surface");
-    expect(agent.className).toContain("h-9");
-    expect(agent.className).toContain("w-full");
-    expect(agent.className).toContain("bg-input-surface");
+    expectModelPickerTheme(agent);
     expect(agent.parentElement).toBe(launch.parentElement?.parentElement ?? null);
     expect(agent.parentElement?.className).toContain("sm:grid-cols-[minmax(0,1fr)_7rem]");
     expect(name.parentElement?.className).toContain("sm:grid-cols-[minmax(0,1fr)_7rem]");
@@ -96,6 +107,47 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(local.getAttribute("aria-describedby")).toBe("local-unavailable");
     expect(screen.getByText("Unavailable while Docker is stopped")).toBeTruthy();
     expect(screen.getByText("Unavailable without a local project checkout")).toBeTruthy();
+  });
+
+  test("themes customized build model selectors like the dialog agent selector", () => {
+    render(
+      <DockerAvailabilityProvider available>
+        <CreateEnvironmentDialog
+          open
+          onOpenChange={mock(() => undefined)}
+          onCreate={mock(async () => true)}
+          projectId="project-1"
+        />
+      </DockerAvailabilityProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "A feature" }));
+    fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
+    fireEvent.click(screen.getByRole("switch", { name: "Customize models" }));
+
+    const customization = screen.getByRole("group", {
+      name: "Feature build model customization",
+    });
+    // Match on the label rather than the combobox role: the picker only takes
+    // that role when it is given an id, so a picker added without one would
+    // silently drop out of a role-based query instead of failing the theme
+    // assertions below.
+    const customizedPickers = within(customization).getAllByLabelText(
+      /agent, model and reasoning$/,
+    );
+    const labels = customizedPickers.map((picker) => picker.getAttribute("aria-label"));
+
+    // The first step row, the reviewer rows, and the step rows rendered after
+    // the reviewer block are three separate render paths in FeatureBuildFields.
+    expect(labels).toContain("Build agent, model and reasoning");
+    expect(labels).toContain("Review 1 agent, model and reasoning");
+    expect(labels).toContain("Review 2 agent, model and reasoning");
+    expect(labels).toContain("Resolve conflicts agent, model and reasoning");
+    expect(within(customization).getAllByRole("combobox").length).toBe(customizedPickers.length);
+
+    for (const picker of customizedPickers) {
+      expectModelPickerTheme(picker);
+    }
   });
 
   test("attaches a dropped markdown file and includes it in the create request", async () => {

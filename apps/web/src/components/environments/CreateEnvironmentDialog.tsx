@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -1758,7 +1759,7 @@ export function CreateEnvironmentDialog({
                     onReasoningChange={selectReasoningEffort}
                     disabled={isLoading || (!launchAgent && buildIntent === "prompt")}
                     title="Choose agent, model, and reasoning"
-                    className="h-9 w-full max-w-none justify-start rounded-lg border border-border/70 bg-input-surface px-3 text-sm shadow-none hover:bg-elevated md:max-w-none md:flex-1"
+                    className={MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME}
                   />
                   <div className="flex items-center gap-2 sm:px-1">
                     <Checkbox

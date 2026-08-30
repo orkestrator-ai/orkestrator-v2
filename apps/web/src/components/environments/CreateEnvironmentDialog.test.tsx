@@ -46,6 +46,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     const name = screen.getByLabelText("Environment Name (optional)");
     const agent = screen.getByRole("combobox", { name: "Agent, model and reasoning" });
     const launch = screen.getByRole("checkbox", { name: "Launch Agent" });
+    const prompt = screen.getByLabelText("Initial Prompt (optional)");
     expect(name.className).toContain("h-9");
     expect(name.className).toContain("px-3");
     expect(name.className).toContain("bg-input-surface");
@@ -62,6 +63,15 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(name.closest("div.border-b")?.className).toContain("py-3");
     expect(agent.closest("div.border-b")?.className).toContain(
       "sm:grid-cols-[7.5rem_minmax(0,1fr)]",
+    );
+    expect(prompt.parentElement?.parentElement?.className).toContain(
+      "sm:grid-cols-[7.5rem_minmax(0,1fr)]",
+    );
+    expect(prompt.parentElement?.previousElementSibling?.textContent).toBe(
+      "Initial Prompt(optional)",
+    );
+    expect(prompt.parentElement?.previousElementSibling?.className).toContain(
+      "text-muted-foreground",
     );
 
     const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');

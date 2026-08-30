@@ -17,14 +17,7 @@ import {
   Cable,
   MessagesSquare,
 } from "lucide-react";
-import {
-  ClaudeIcon,
-  CodexIcon,
-  CursorAgentIcon,
-  GrokBuildIcon,
-  PiIcon,
-  OpenCodeIcon,
-} from "@/components/icons/AgentIcons";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { GlobalSettings } from "./GlobalSettings";
 import { SkillsSettings } from "./SkillsSettings";
 import { McpSettings } from "./McpSettings";
@@ -36,12 +29,36 @@ const MENU_ITEMS: SettingsMenuItem[] = [
   { id: "defaults", label: "Defaults", icon: <SlidersHorizontal className="h-4 w-4" /> },
   { id: "platforms", label: "Platforms", icon: <Boxes className="h-4 w-4" /> },
   { id: "review", label: "Review", icon: <Eye className="h-4 w-4" /> },
-  { id: "claude", label: "Claude", icon: <ClaudeIcon className="h-4 w-4" /> },
-  { id: "codex", label: "Codex", icon: <CodexIcon className="h-4 w-4 text-emerald-400" /> },
-  { id: "cursor", label: "Cursor", icon: <CursorAgentIcon className="h-4 w-4" /> },
-  { id: "grok", label: "Grok", icon: <GrokBuildIcon className="h-4 w-4" /> },
-  { id: "opencode", label: "OpenCode", icon: <OpenCodeIcon className="h-4 w-4" /> },
-  { id: "pi", label: "Pi", icon: <PiIcon className="h-4 w-4 text-amber-400" /> },
+  {
+    id: "claude",
+    label: "Claude",
+    icon: <AgentPlatformIcon platform="claude" accent className="h-4 w-4" />,
+  },
+  {
+    id: "codex",
+    label: "Codex",
+    icon: <AgentPlatformIcon platform="codex" accent className="h-4 w-4" />,
+  },
+  {
+    id: "cursor",
+    label: "Cursor",
+    icon: <AgentPlatformIcon platform="cursor" accent className="h-4 w-4" />,
+  },
+  {
+    id: "grok",
+    label: "Grok",
+    icon: <AgentPlatformIcon platform="grok" accent className="h-4 w-4" />,
+  },
+  {
+    id: "opencode",
+    label: "OpenCode",
+    icon: <AgentPlatformIcon platform="opencode" accent className="h-4 w-4" />,
+  },
+  {
+    id: "pi",
+    label: "Pi",
+    icon: <AgentPlatformIcon platform="pi" accent className="h-4 w-4" />,
+  },
   { id: "skills", label: "Skills", icon: <Sparkles className="h-4 w-4" /> },
   { id: "terminal", label: "Terminal", icon: <Terminal className="h-4 w-4" /> },
   { id: "network", label: "Network", icon: <Shield className="h-4 w-4" /> },

@@ -49,7 +49,7 @@ import {
   X,
   Trash2,
 } from "lucide-react";
-import { AgentIcon } from "@/components/agents/AgentRadioGroup";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { CursorSdkSignIn } from "./agent/CursorSdkSignIn";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -702,7 +702,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                       : "border-zinc-800 bg-zinc-900 text-zinc-500",
                   )}
                 >
-                  <AgentIcon agent={platform} className="size-4" />
+                  <AgentPlatformIcon platform={platform} accent className="size-4" />
                 </span>
                 <span>{AGENT_PLATFORM_LABELS[platform]}</span>
               </Label>

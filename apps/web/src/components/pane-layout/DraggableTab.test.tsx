@@ -1286,15 +1286,13 @@ describe("DraggableTab active state", () => {
     expect(indicator.className).not.toContain("top-0");
   });
 
-  // The strip lives inside AppShell's central panel, where `--color-background`
-  // is rebound to the user's terminal colour. An inactive tab therefore has to
-  // paint a wash that composites over whatever is behind it; a flat token stops
-  // tracking the setting and can end up darker than the strip it sits in.
-  test("raises inactive tabs with a compositing wash rather than a fixed surface", () => {
+  // Every tab shares the strip's background. Selection belongs exclusively to
+  // the blue bottom accent, so a row of open tabs reads as one continuous bar.
+  test("keeps active and inactive tabs flush with the tab strip", () => {
     const inactive = renderPlainTab(false);
-    expect(inactive.className).toContain("bg-white/[0.06]");
-    expect(inactive.className).toContain("hover:bg-white/[0.12]");
-    expect(inactive.className).not.toContain("bg-sidebar");
+    expect(inactive.className).toContain("bg-background");
+    expect(inactive.className).not.toContain("bg-white/[0.06]");
+    expect(inactive.className).not.toContain("hover:bg-white/[0.12]");
     expect(inactive.querySelector('[aria-hidden="true"].bg-primary') === null).toBe(true);
 
     cleanup();

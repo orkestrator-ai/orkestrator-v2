@@ -295,7 +295,7 @@ export function NativeAgentInteractionCard({
                   ) : options.length ? (
                     <select
                       aria-label={typeof definition.title === "string" ? definition.title : key}
-                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                      className="h-9 w-full rounded-md border border-border/70 bg-input-surface px-3 text-sm"
                       value={String(value ?? "")}
                       disabled={submitting || expired}
                       onChange={(event) => setValue(event.target.value)}
@@ -390,7 +390,7 @@ export function NativeAgentInteractionCard({
                       disabled={submitting || expired}
                       aria-label={`${question.prompt} response`}
                       rows={3}
-                      className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-xs"
+                      className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-xs outline-none focus:border-ring"
                       onChange={(event) =>
                         setQuestionAnswer(question.id, false, (current) => ({
                           ...current,
@@ -414,7 +414,7 @@ export function NativeAgentInteractionCard({
               disabled={submitting || expired}
               aria-label="Plan revision feedback"
               rows={3}
-              className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 text-xs"
+              className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-xs outline-none focus:border-ring"
               onChange={(event) => setFeedback(event.target.value)}
             />
           </label>

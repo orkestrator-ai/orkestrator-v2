@@ -254,7 +254,7 @@ export function AgentMailButton({
               aria-label="Message destination"
               value={destination}
               onChange={(event) => setDestination(event.target.value)}
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs"
+              className="h-9 w-full rounded-md border border-border/70 bg-input-surface px-3 text-xs"
             >
               <option value="">Choose a destination…</option>
               {directory
@@ -295,7 +295,7 @@ export function AgentMailButton({
               aria-label="Filter by project"
               value={projectFilter}
               onChange={(event) => setProjectFilter(event.target.value)}
-              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              className="h-8 rounded-md border border-border/70 bg-input-surface px-2 text-xs"
             >
               <option value="">All projects</option>
               {projects.map(([id, name]) => (
@@ -308,7 +308,7 @@ export function AgentMailButton({
               aria-label="Filter by message status"
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}
-              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              className="h-8 rounded-md border border-border/70 bg-input-surface px-2 text-xs"
             >
               <option value="all">All messages</option>
               <option value="unread">Unread</option>
@@ -390,7 +390,7 @@ export function AgentMailButton({
                               })
                               .then(hydrate)
                           }
-                          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+                          className="h-8 rounded-md border border-border/70 bg-input-surface px-2 text-xs"
                         >
                           <option value="off">Pull only</option>
                           {mailbox.capabilities.canInject && (

@@ -147,7 +147,6 @@ export function resolveAgentDefaults(
   } as const;
 }
 
-const UNSELECTED_CARD_CLASSES = "border-transparent bg-zinc-900 hover:border-zinc-600";
 const MOBILE_TAB_TRIGGER_CLASSES =
   "h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-1 py-1 text-[10px] leading-none data-[state=active]:border-primary/40 data-[state=active]:bg-primary/10 data-[state=active]:text-primary data-[state=active]:shadow-none";
 const MOBILE_TAB_CONTENT_CLASSES =
@@ -1474,7 +1473,7 @@ export function CreateEnvironmentDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
         className={cn(
-          "flex max-h-[calc(100dvh-1rem)] flex-col sm:max-h-[85vh] sm:max-w-[700px]",
+          "flex max-h-[calc(100dvh-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[90vh] sm:max-w-[896px] sm:p-0",
           isDraggingAttachments && "ring-2 ring-primary ring-offset-2 ring-offset-background",
         )}
         onDragEnter={handleAttachmentDragEnter}
@@ -1484,11 +1483,40 @@ export function CreateEnvironmentDialog({
         onOpenAutoFocus={(e) => e.preventDefault()}
         onInteractOutside={(e) => e.preventDefault()}
       >
-        <DialogHeader>
-          <DialogTitle>
-            Create Ork (Environment){projectName ? ` - ${projectName}` : ""}
-          </DialogTitle>
-          <DialogDescription>
+        <DialogHeader className="m-0 shrink-0 gap-0 border-b border-divider bg-background px-4 py-3.5 pr-14 sm:m-0 sm:px-6 sm:py-4 sm:pr-14">
+          <div className="flex min-w-0 items-start gap-3">
+            <span
+              role="img"
+              aria-label={
+                environmentType === "containerized"
+                  ? "Containerized environment"
+                  : "Local environment"
+              }
+              className="mt-0.5 shrink-0 text-primary"
+            >
+              {environmentType === "containerized" ? (
+                <Container className="size-5" aria-hidden="true" />
+              ) : (
+                <Laptop className="size-5" aria-hidden="true" />
+              )}
+            </span>
+            <DialogTitle
+              aria-label={
+                projectName
+                  ? `Create Ork (Environment) - ${projectName}`
+                  : "Create Ork (Environment)"
+              }
+              className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-xl leading-tight"
+            >
+              <span className="shrink-0">Create Ork (Environment)</span>
+              {projectName && (
+                <span className="max-w-full truncate font-mono text-sm text-muted-foreground">
+                  {projectName}
+                </span>
+              )}
+            </DialogTitle>
+          </div>
+          <DialogDescription className="sr-only">
             Configure a new Ork environment with an optional initial prompt.
           </DialogDescription>
         </DialogHeader>
@@ -1496,16 +1524,16 @@ export function CreateEnvironmentDialog({
         <form
           ref={formRef}
           onSubmit={handleSubmit}
-          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pr-1"
+          className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto"
         >
           <Tabs
             value={mobileSection}
             onValueChange={(value) => selectMobileSection(value as MobileSection)}
-            className="min-h-0 gap-4 sm:grid sm:grid-cols-2 sm:items-start"
+            className="min-h-0 gap-0"
           >
             <TabsList
               aria-label="Environment configuration sections"
-              className="sticky top-0 z-10 flex h-auto w-full shrink-0 rounded-xl border border-border/80 bg-zinc-950/95 p-1 shadow-lg shadow-black/15 backdrop-blur sm:hidden"
+              className="sticky top-0 z-10 m-2 flex h-auto w-[calc(100%-1rem)] shrink-0 rounded-xl border border-border/80 bg-zinc-950/95 p-1 shadow-lg shadow-black/15 backdrop-blur sm:hidden"
             >
               <TabsTrigger
                 value="prompt"
@@ -1541,85 +1569,96 @@ export function CreateEnvironmentDialog({
               value="environment"
               forceMount
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
-              className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
+              className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:!contents")}
             >
               {/* Environment Type Selector */}
-              <div className="space-y-2 sm:col-span-2">
-                <Label>Environment Type</Label>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setEnvironmentType("containerized")}
-                    disabled={isLoading || !dockerAvailable}
-                    title={
-                      !dockerAvailable ? "Start Docker to use container environments" : undefined
-                    }
-                    className={cn(
-                      "p-3 rounded-lg border-2 text-left transition-colors",
-                      environmentType === "containerized"
-                        ? "border-primary bg-primary/5"
-                        : UNSELECTED_CARD_CLASSES,
-                      (isLoading || !dockerAvailable) && "opacity-50 cursor-not-allowed",
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Container className="h-4 w-4" />
-                      <div>
-                        <div className="font-medium text-sm">Containerized</div>
-                        <div className="text-xs text-muted-foreground">
-                          {dockerAvailable
-                            ? "Isolated Docker environment"
-                            : "Unavailable while Docker is stopped"}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
+              <div className="border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6">
+                <Label className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0">
+                  Type
+                </Label>
+                <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+                  <div className="inline-grid grid-cols-2 rounded-lg border border-divider bg-input-surface p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setEnvironmentType("containerized")}
+                      disabled={isLoading || !dockerAvailable}
+                      aria-describedby={!dockerAvailable ? "containerized-unavailable" : undefined}
+                      title={
+                        !dockerAvailable ? "Start Docker to use container environments" : undefined
+                      }
+                      className={cn(
+                        "h-8 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                        environmentType === "containerized"
+                          ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                          : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
+                        (isLoading || !dockerAvailable) && "cursor-not-allowed opacity-50",
+                      )}
+                    >
+                      Containerized
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setEnvironmentType("local")}
-                    disabled={isLoading || !localEnvironmentAvailable}
-                    title={
-                      !localEnvironmentAvailable
-                        ? "Add a local project checkout to use worktree environments"
-                        : undefined
-                    }
-                    className={cn(
-                      "p-3 rounded-lg border-2 text-left transition-colors",
-                      environmentType === "local"
-                        ? "border-primary bg-primary/5"
-                        : UNSELECTED_CARD_CLASSES,
-                      (isLoading || !localEnvironmentAvailable) && "opacity-50 cursor-not-allowed",
-                    )}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Laptop className="h-4 w-4" />
-                      <div>
-                        <div className="font-medium text-sm">Local</div>
-                        <div className="text-xs text-muted-foreground">
-                          {localEnvironmentAvailable
-                            ? "Git worktree on your machine"
-                            : "Unavailable without a local project checkout"}
-                        </div>
-                      </div>
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setEnvironmentType("local")}
+                      disabled={isLoading || !localEnvironmentAvailable}
+                      aria-describedby={
+                        !localEnvironmentAvailable ? "local-unavailable" : undefined
+                      }
+                      title={
+                        !localEnvironmentAvailable
+                          ? "Add a local project checkout to use worktree environments"
+                          : undefined
+                      }
+                      className={cn(
+                        "h-8 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                        environmentType === "local"
+                          ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                          : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
+                        (isLoading || !localEnvironmentAvailable) &&
+                          "cursor-not-allowed opacity-50",
+                      )}
+                    >
+                      Local
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {environmentType === "local"
+                      ? "Git worktree on your machine"
+                      : "Isolated Docker environment"}
+                  </p>
+                  {!dockerAvailable && (
+                    <p id="containerized-unavailable" className="text-xs text-amber-400">
+                      Unavailable while Docker is stopped
+                    </p>
+                  )}
+                  {!localEnvironmentAvailable && (
+                    <p id="local-unavailable" className="text-xs text-amber-400">
+                      Unavailable without a local project checkout
+                    </p>
+                  )}
                 </div>
               </div>
 
               {/* Environment Name */}
-              <div className="space-y-2">
-                <Label htmlFor="environment-name">
-                  Environment Name <span className="text-muted-foreground">(optional)</span>
+              <div className="border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6">
+                <Label
+                  htmlFor="environment-name"
+                  className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0"
+                >
+                  Name <span className="sr-only">(optional)</span>
                 </Label>
-                <Input
-                  id="environment-name"
-                  placeholder="e.g., feature-dark-mode"
-                  value={environmentName}
-                  onChange={(e) => setEnvironmentName(e.target.value)}
-                  disabled={isLoading}
-                />
-                <p className="text-xs text-muted-foreground">Also used as the git branch name.</p>
+                <div className="grid min-w-0 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem] sm:gap-4">
+                  <Input
+                    id="environment-name"
+                    aria-label="Environment Name (optional)"
+                    placeholder="e.g., feature-dark-mode"
+                    value={environmentName}
+                    onChange={(e) => setEnvironmentName(e.target.value)}
+                    disabled={isLoading}
+                    className="h-9 rounded-lg border border-border/70 bg-input-surface px-3 py-1 shadow-none"
+                  />
+                  <p className="font-mono text-[11px] text-muted-foreground sm:px-1">= branch</p>
+                </div>
               </div>
             </TabsContent>
 
@@ -1629,53 +1668,53 @@ export function CreateEnvironmentDialog({
                 value="access"
                 forceMount
                 data-mobile-transition={mobileTabTransitionDirection ?? undefined}
-                className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
+                className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:!contents")}
               >
                 {/* Network Access Mode - only for containerized environments */}
-                <div className="space-y-2">
-                  <Label>Network Access</Label>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => setNetworkAccessMode("restricted")}
-                      disabled={isLoading}
-                      className={cn(
-                        "p-2 rounded-lg border-2 text-left transition-colors",
-                        networkAccessMode === "restricted"
-                          ? "border-primary bg-primary/5"
-                          : UNSELECTED_CARD_CLASSES,
-                        isLoading && "opacity-50 cursor-not-allowed",
-                      )}
-                    >
-                      <div className="flex items-center gap-1.5 font-medium text-sm">
+                <div className="border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6">
+                  <Label className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0">
+                    Access
+                  </Label>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+                    <div className="inline-grid grid-cols-2 rounded-lg border border-divider bg-input-surface p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setNetworkAccessMode("restricted")}
+                        disabled={isLoading}
+                        className={cn(
+                          "flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                          networkAccessMode === "restricted"
+                            ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                            : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
+                          isLoading && "cursor-not-allowed opacity-50",
+                        )}
+                      >
                         <Shield className="h-3.5 w-3.5" />
                         Restricted
-                      </div>
-                    </button>
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setNetworkAccessMode("full")}
-                      disabled={isLoading}
-                      className={cn(
-                        "p-2 rounded-lg border-2 text-left transition-colors",
-                        networkAccessMode === "full"
-                          ? "border-primary bg-primary/5"
-                          : UNSELECTED_CARD_CLASSES,
-                        isLoading && "opacity-50 cursor-not-allowed",
-                      )}
-                    >
-                      <div className="flex items-center gap-1.5 font-medium text-sm">
+                      <button
+                        type="button"
+                        onClick={() => setNetworkAccessMode("full")}
+                        disabled={isLoading}
+                        className={cn(
+                          "flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                          networkAccessMode === "full"
+                            ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                            : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
+                          isLoading && "cursor-not-allowed opacity-50",
+                        )}
+                      >
                         <Globe className="h-3.5 w-3.5" />
-                        Full Access
-                      </div>
-                    </button>
+                        Full access
+                      </button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {networkAccessMode === "restricted"
+                        ? "Only GitHub, npm, and agent APIs"
+                        : "Unrestricted internet access"}
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    {networkAccessMode === "restricted"
-                      ? "Only GitHub, npm, Anthropic API allowed."
-                      : "Unrestricted internet access."}
-                  </p>
                 </div>
               </TabsContent>
             )}
@@ -1684,30 +1723,19 @@ export function CreateEnvironmentDialog({
               value="agent"
               forceMount
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
-              className={cn(MOBILE_TAB_CONTENT_CLASSES, "space-y-4 sm:!contents")}
+              className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:!contents")}
             >
               {/* Compact agent launch configuration */}
               <div
                 className={cn(
-                  "space-y-3 sm:col-span-2",
+                  "border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6",
                   !launchAgent && buildIntent === "prompt" && "opacity-50",
                 )}
               >
-                <div className="flex min-h-5 items-center justify-between gap-4">
-                  <Label className="text-sm">Default Agent</Label>
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="launch-agent"
-                      checked={launchAgent}
-                      onCheckedChange={(checked) => setLaunchAgent(checked === true)}
-                      disabled={isLoading}
-                    />
-                    <Label htmlFor="launch-agent" className="cursor-pointer text-sm font-normal">
-                      Launch Agent
-                    </Label>
-                  </div>
-                </div>
-                <div className="rounded-xl border border-border/70 bg-zinc-950/45 p-2">
+                <Label className="mb-2 text-sm font-medium text-muted-foreground sm:mb-0">
+                  Agent
+                </Label>
+                <div className="grid min-w-0 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_7rem] sm:gap-4">
                   <AgentModelPicker
                     id="agent-model"
                     ariaLabel="Agent, model and reasoning"
@@ -1730,8 +1758,23 @@ export function CreateEnvironmentDialog({
                     onReasoningChange={selectReasoningEffort}
                     disabled={isLoading || (!launchAgent && buildIntent === "prompt")}
                     title="Choose agent, model, and reasoning"
-                    className="min-h-9 w-full max-w-none justify-start md:max-w-none md:flex-1"
+                    className="h-9 w-full max-w-none justify-start rounded-lg border border-border/70 bg-input-surface px-3 text-sm shadow-none hover:bg-elevated md:max-w-none md:flex-1"
                   />
+                  <div className="flex items-center gap-2 sm:px-1">
+                    <Checkbox
+                      id="launch-agent"
+                      aria-label="Launch Agent"
+                      checked={launchAgent}
+                      onCheckedChange={(checked) => setLaunchAgent(checked === true)}
+                      disabled={isLoading}
+                    />
+                    <Label
+                      htmlFor="launch-agent"
+                      className="cursor-pointer text-sm font-normal text-foreground"
+                    >
+                      Launch
+                    </Label>
+                  </div>
                 </div>
               </div>
             </TabsContent>
@@ -1742,125 +1785,130 @@ export function CreateEnvironmentDialog({
                 value="ports"
                 forceMount
                 data-mobile-transition={mobileTabTransitionDirection ?? undefined}
-                className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
+                className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:!contents")}
               >
-                <Collapsible open={showPortConfig} onOpenChange={setShowPortConfig}>
-                  <CollapsibleTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="w-full justify-between p-3 h-auto rounded-lg border border-input bg-muted/30 hover:bg-muted/50"
-                      disabled={isLoading}
-                    >
-                      <div className="flex items-center gap-2">
-                        <Network className="h-4 w-4" />
-                        <span className="text-sm font-medium">Port Configuration</span>
-                        {portMappings.length > 0 && (
-                          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                            {portMappings.length} port{portMappings.length !== 1 ? "s" : ""}
-                          </span>
-                        )}
-                      </div>
-                      <ChevronDown
-                        className={cn(
-                          "h-4 w-4 transition-transform duration-200",
-                          showPortConfig && "rotate-180",
-                        )}
-                      />
-                    </Button>
-                  </CollapsibleTrigger>
-                  <CollapsibleContent className="pt-3 space-y-3">
-                    <p className="text-xs text-muted-foreground">
-                      Expose container ports to the host machine. These are set at container
-                      creation.
-                    </p>
-                    {portMappings.length > 0 && (
-                      <div className="-mb-1 hidden items-center gap-2 sm:flex">
-                        <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
-                          <span className="text-xs text-muted-foreground">Container</span>
-                          <span></span>
-                          <span className="text-xs text-muted-foreground">Host</span>
-                          <span className="w-20"></span>
-                          <span className="h-8 w-8"></span>
+                <div className="border-b border-divider px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-start sm:gap-4 sm:px-6">
+                  <Label className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0 sm:pt-2.5">
+                    Ports
+                  </Label>
+                  <Collapsible open={showPortConfig} onOpenChange={setShowPortConfig}>
+                    <CollapsibleTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="h-9 w-full justify-between rounded-lg border border-border/70 bg-input-surface px-3 hover:bg-elevated"
+                        disabled={isLoading}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Network className="h-4 w-4" />
+                          <span className="text-sm font-medium">Port Configuration</span>
+                          {portMappings.length > 0 && (
+                            <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                              {portMappings.length} port{portMappings.length !== 1 ? "s" : ""}
+                            </span>
+                          )}
                         </div>
-                      </div>
-                    )}
-                    {portMappings.map((mapping, index) => (
-                      <div key={index} className="flex items-center gap-2">
-                        <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
-                          <Input
-                            type="number"
-                            placeholder="Container"
-                            value={mapping.containerPort}
-                            onChange={(e) =>
-                              updatePortMapping(index, {
-                                containerPort: parseInt(e.target.value) || 0,
-                              })
-                            }
-                            className="text-sm"
-                            min={1}
-                            max={65535}
-                            disabled={isLoading}
-                          />
-                          <span className="text-muted-foreground">:</span>
-                          <Input
-                            type="number"
-                            placeholder="Host"
-                            value={mapping.hostPort}
-                            onChange={(e) =>
-                              updatePortMapping(index, {
-                                hostPort: parseInt(e.target.value) || 0,
-                              })
-                            }
-                            className="text-sm"
-                            min={1}
-                            max={65535}
-                            disabled={isLoading}
-                          />
-                          <Select
-                            value={mapping.protocol}
-                            onValueChange={(value: PortProtocol) =>
-                              updatePortMapping(index, { protocol: value })
-                            }
-                            disabled={isLoading}
-                          >
-                            <SelectTrigger
-                              aria-label="Protocol"
-                              className="col-span-3 col-start-1 w-full sm:col-span-1 sm:col-start-auto sm:w-20"
+                        <ChevronDown
+                          className={cn(
+                            "h-4 w-4 transition-transform duration-200",
+                            showPortConfig && "rotate-180",
+                          )}
+                        />
+                      </Button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="space-y-3 pt-3">
+                      <p className="text-xs text-muted-foreground">
+                        Expose container ports to the host machine. These are set at container
+                        creation.
+                      </p>
+                      {portMappings.length > 0 && (
+                        <div className="-mb-1 hidden items-center gap-2 sm:flex">
+                          <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
+                            <span className="text-xs text-muted-foreground">Container</span>
+                            <span></span>
+                            <span className="text-xs text-muted-foreground">Host</span>
+                            <span className="w-20"></span>
+                            <span className="h-8 w-8"></span>
+                          </div>
+                        </div>
+                      )}
+                      {portMappings.map((mapping, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <div className="grid flex-1 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[1fr_auto_1fr_auto_auto]">
+                            <Input
+                              type="number"
+                              placeholder="Container"
+                              value={mapping.containerPort}
+                              onChange={(e) =>
+                                updatePortMapping(index, {
+                                  containerPort: parseInt(e.target.value) || 0,
+                                })
+                              }
+                              className="text-sm"
+                              min={1}
+                              max={65535}
+                              disabled={isLoading}
+                            />
+                            <span className="text-muted-foreground">:</span>
+                            <Input
+                              type="number"
+                              placeholder="Host"
+                              value={mapping.hostPort}
+                              onChange={(e) =>
+                                updatePortMapping(index, {
+                                  hostPort: parseInt(e.target.value) || 0,
+                                })
+                              }
+                              className="text-sm"
+                              min={1}
+                              max={65535}
+                              disabled={isLoading}
+                            />
+                            <Select
+                              value={mapping.protocol}
+                              onValueChange={(value: PortProtocol) =>
+                                updatePortMapping(index, { protocol: value })
+                              }
+                              disabled={isLoading}
                             >
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="tcp">TCP</SelectItem>
-                              <SelectItem value="udp">UDP</SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removePortMapping(index)}
-                            disabled={isLoading}
-                            className="col-start-4 row-start-2 h-8 w-8 sm:col-start-auto sm:row-start-auto"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                              <SelectTrigger
+                                aria-label="Protocol"
+                                className="col-span-3 col-start-1 w-full sm:col-span-1 sm:col-start-auto sm:w-20"
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="tcp">TCP</SelectItem>
+                                <SelectItem value="udp">UDP</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removePortMapping(index)}
+                              disabled={isLoading}
+                              className="col-start-4 row-start-2 h-8 w-8 sm:col-start-auto sm:row-start-auto"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={addPortMapping}
-                      disabled={isLoading}
-                      className="w-full"
-                    >
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add Port Mapping
-                    </Button>
-                  </CollapsibleContent>
-                </Collapsible>
+                      ))}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={addPortMapping}
+                        disabled={isLoading}
+                        className="w-full"
+                      >
+                        <Plus className="h-4 w-4 mr-2" />
+                        Add Port Mapping
+                      </Button>
+                    </CollapsibleContent>
+                  </Collapsible>
+                </div>
               </TabsContent>
             )}
 
@@ -1868,7 +1916,7 @@ export function CreateEnvironmentDialog({
               value="prompt"
               forceMount
               data-mobile-transition={mobileTabTransitionDirection ?? undefined}
-              className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:col-span-2 sm:!block")}
+              className={cn(MOBILE_TAB_CONTENT_CLASSES, "sm:!block")}
             >
               <FeatureBuildFields
                 intent={buildIntent}
@@ -1929,7 +1977,7 @@ export function CreateEnvironmentDialog({
                         onKeyDown={handlePromptKeyDown}
                         disabled={isLoading}
                         rows={3}
-                        className="resize-y max-h-[calc(15*theme(lineHeight.normal)*1em)] overflow-y-auto"
+                        className="min-h-36 max-h-[calc(15*theme(lineHeight.normal)*1em)] resize-y overflow-y-auto rounded-xl border border-border/70 bg-input-surface px-3 py-2 shadow-none"
                       />
                       {isDraggingAttachments && (
                         <p className="rounded-md border border-dashed border-primary/70 bg-primary/10 px-3 py-2 text-center text-sm text-primary">
@@ -1949,12 +1997,13 @@ export function CreateEnvironmentDialog({
           </Tabs>
         </form>
 
-        <DialogFooter className="grid grid-cols-2 sm:flex sm:flex-row">
+        <DialogFooter className="m-0 grid shrink-0 grid-cols-2 border-t border-divider px-4 py-2.5 sm:m-0 sm:flex sm:flex-row sm:px-6">
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             onClick={() => handleOpenChange(false)}
             disabled={isLoading}
+            className="h-9 px-4"
           >
             Cancel
           </Button>
@@ -1971,6 +2020,7 @@ export function CreateEnvironmentDialog({
               // it. Everything else about the feature form is optional.
               (buildIntent === "feature" && (!onCreateFeatureBuild || !featureName.trim()))
             }
+            className="h-9 px-5 font-bold shadow-[0_8px_24px_rgba(59,130,246,0.22)]"
           >
             {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Create Environment

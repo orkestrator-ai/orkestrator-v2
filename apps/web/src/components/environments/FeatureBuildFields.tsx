@@ -37,9 +37,6 @@ import {
 } from "@/lib/feature-build-launch";
 import { cn } from "@/lib/utils";
 
-const UNSELECTED_CARD_CLASSES =
-  "border-input bg-muted/20 hover:bg-muted/40 hover:border-muted-foreground/40";
-
 const BUILD_INTENTS: Array<{
   value: BuildIntent;
   label: string;
@@ -143,34 +140,41 @@ export function FeatureBuildFields({
   promptFields,
   featureAttachments,
 }: FeatureBuildFieldsProps) {
+  const selectedIntent = BUILD_INTENTS.find((option) => option.value === intent)!;
+
   return (
-    <div className="space-y-3 sm:col-span-2">
-      <Label className="text-sm">Build</Label>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {BUILD_INTENTS.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onIntentChange(option.value)}
-            disabled={disabled}
-            aria-pressed={intent === option.value}
-            className={cn(
-              "rounded-lg border-2 p-2 text-left transition-colors",
-              intent === option.value ? "border-primary bg-primary/5" : UNSELECTED_CARD_CLASSES,
-              disabled && "cursor-not-allowed opacity-50",
-            )}
-          >
-            <div className="flex items-center gap-1.5 text-sm font-medium">
-              {option.icon}
-              {option.label}
-            </div>
-            <div className="text-xs text-muted-foreground">{option.description}</div>
-          </button>
-        ))}
+    <div className="border-b border-divider">
+      <div className="px-4 py-3 sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-center sm:gap-4 sm:px-6">
+        <Label className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0">
+          Build
+        </Label>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="inline-grid grid-cols-2 rounded-lg border border-divider bg-input-surface p-0.5">
+            {BUILD_INTENTS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => onIntentChange(option.value)}
+                disabled={disabled}
+                aria-pressed={intent === option.value}
+                className={cn(
+                  "flex h-8 items-center justify-center gap-1.5 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:cursor-not-allowed disabled:opacity-50",
+                  intent === option.value
+                    ? "bg-primary font-bold text-primary-foreground shadow-sm"
+                    : "font-normal text-muted-foreground hover:bg-elevated hover:text-foreground",
+                )}
+              >
+                {option.icon}
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">{selectedIntent.description}</p>
+        </div>
       </div>
 
       {intent === "feature" ? (
-        <div className="space-y-3">
+        <div className="space-y-3 border-t border-divider px-4 py-3 sm:px-6">
           <div className="space-y-1.5">
             <Label htmlFor="feature-name" className="text-sm">
               Feature name
@@ -220,7 +224,7 @@ export function FeatureBuildFields({
                 type="button"
                 variant="ghost"
                 disabled={disabled}
-                className="h-auto w-full justify-between rounded-lg border border-input bg-muted/30 p-3 hover:bg-muted/50"
+                className="h-9 w-full justify-between rounded-lg border border-input bg-muted/30 px-3 hover:bg-muted/50"
               >
                 <span className="flex items-center gap-2">
                   <span className="text-sm font-medium">Advanced</span>
@@ -267,7 +271,7 @@ export function FeatureBuildFields({
           </Collapsible>
         </div>
       ) : (
-        promptFields
+        <div className="border-t border-divider px-4 py-3 sm:px-6">{promptFields}</div>
       )}
     </div>
   );

@@ -111,7 +111,7 @@ export function MessagingSettings() {
                 defaultInjectPolicy: event.target.value as "off" | "idle",
               })
             }
-            className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            className="h-9 rounded-md border border-border/70 bg-input-surface px-3 text-sm"
           >
             <option value="off">Off</option>
             <option value="idle">When idle</option>

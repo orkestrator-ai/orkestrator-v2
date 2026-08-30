@@ -1072,6 +1072,9 @@ describe("GlobalSettings", () => {
 
     const instruction = screen.getByLabelText("Review instruction") as HTMLTextAreaElement;
     expect(instruction.value).toContain("{{targetBranch}}");
+    expect(instruction.className).toContain("focus-visible:ring-ring/50");
+    expect(instruction.className).toContain("focus-visible:ring-[3px]");
+    expect(instruction.className).not.toContain("focus-visible:outline-1");
     expect(
       screen.getByText(/Applied to normal, build-pipeline, and looped native reviews/),
     ).toBeTruthy();

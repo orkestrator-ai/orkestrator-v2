@@ -2,7 +2,16 @@ import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
 
+import {
+  MODAL_CONTENT_CLASS_NAME,
+  MODAL_FOOTER_CLASS_NAME,
+  MODAL_HEADER_CLOSE_BUTTON_CLASS_NAME,
+  MODAL_HEADER_CLASS_NAME,
+  MODAL_OVERLAY_CLASS_NAME,
+} from "@/components/ui/modal-theme";
 import { cn } from "@/lib/utils";
+
+const DialogHeaderCloseButtonContext = React.createContext(true);
 
 function Dialog({ ...props }: React.ComponentProps<typeof DialogPrimitive.Root>) {
   return <DialogPrimitive.Root data-slot="dialog" {...props} />;
@@ -28,7 +37,8 @@ function DialogOverlay({
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
       className={cn(
-        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50 backdrop-blur-sm",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50",
+        MODAL_OVERLAY_CLASS_NAME,
         className,
       )}
       {...props}
@@ -40,26 +50,33 @@ function DialogContent({
   className,
   children,
   showCloseButton = true,
+  overlayClassName,
+  style,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
+  overlayClassName?: string;
 }) {
   return (
     <DialogPortal data-slot="dialog-portal">
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "bg-black data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid max-h-[calc(100dvh-1rem)] w-full max-w-[calc(100%-1rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto rounded-lg border border-muted p-4 shadow-lg duration-200 outline-none sm:max-w-[calc(100%-2rem)] sm:p-6 [&_input]:bg-zinc-900 [&_textarea]:bg-zinc-900 [&_[data-slot=select-trigger]]:bg-zinc-900",
+          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-[50%] left-[50%] z-50 grid max-h-[calc(100dvh-1rem)] w-full max-w-[calc(100%-1rem)] translate-x-[-50%] translate-y-[-50%] gap-4 overflow-y-auto border p-4 duration-200 outline-none sm:max-w-[calc(100%-2rem)] sm:p-6",
+          MODAL_CONTENT_CLASS_NAME,
           className,
         )}
+        style={style}
         {...props}
       >
-        {children}
+        <DialogHeaderCloseButtonContext.Provider value={showCloseButton}>
+          {children}
+        </DialogHeaderCloseButtonContext.Provider>
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            className="ring-offset-background focus:ring-ring data-[state=open]:bg-accent data-[state=open]:text-muted-foreground absolute right-5 top-5 rounded-xs text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-5 [&_svg]:shrink-0"
           >
             <XIcon />
             <span className="sr-only">Close</span>
@@ -71,10 +88,17 @@ function DialogContent({
 }
 
 function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
+  const hasCloseButton = React.useContext(DialogHeaderCloseButtonContext);
+
   return (
     <div
       data-slot="dialog-header"
-      className={cn("flex flex-col gap-2 text-center sm:text-left", className)}
+      className={cn(
+        "flex flex-col gap-2",
+        MODAL_HEADER_CLASS_NAME,
+        hasCloseButton && MODAL_HEADER_CLOSE_BUTTON_CLASS_NAME,
+        className,
+      )}
       {...props}
     />
   );
@@ -82,11 +106,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
 
 function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <div
-      data-slot="dialog-footer"
-      className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)}
-      {...props}
-    />
+    <div data-slot="dialog-footer" className={cn(MODAL_FOOTER_CLASS_NAME, className)} {...props} />
   );
 }
 

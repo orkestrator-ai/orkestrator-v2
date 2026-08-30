@@ -384,7 +384,7 @@ export function NativeAgentQuestionCard({
                 value={answer.freeText}
                 disabled={disabled}
                 placeholder="Type your answer"
-                className="w-full resize-y rounded-md border border-border/60 bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                className="w-full resize-y rounded-md border border-border/70 bg-input-surface px-3 py-2 text-sm focus-visible:border-ring focus-visible:outline-none"
                 onChange={(event) =>
                   updateAnswer(question, (current) => ({
                     ...current,

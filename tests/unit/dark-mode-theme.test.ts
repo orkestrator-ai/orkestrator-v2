@@ -32,6 +32,7 @@ describe("forced dark mode theming", () => {
       "--color-popover-foreground": "#e7e9ee",
       "--color-border": "#262a32",
       "--color-input": "#262a32",
+      "--color-input-surface": "color-mix(in srgb, var(--color-zinc-900) 90%, transparent)",
       "--color-primary": "#3b82f6",
       "--color-primary-foreground": "#ffffff",
       "--color-secondary": "#23262e",
@@ -50,7 +51,7 @@ describe("forced dark mode theming", () => {
       "--color-elevated-hover": "#2c303a",
       "--color-divider": "#22262d",
       "--color-selected": "#1d2941",
-      "--color-selected-edge": "#172134",
+      "--color-selected-edge": "#141d2e",
       "--color-selected-foreground": "#e8eefb",
       "--color-hover": "#1a2438",
       // One green and one red for added/removed lines and every pass/fail
@@ -103,6 +104,36 @@ describe("forced dark mode theming", () => {
     const css = read("apps/web/src/index.css");
 
     expect(css).toMatch(/color-scheme:\s*dark/);
+  });
+
+  test("shared form controls use the same raised surface as agent compose bars", () => {
+    const formControlSources = [
+      "apps/web/src/components/ui/input.tsx",
+      "apps/web/src/components/ui/textarea.tsx",
+      "apps/web/src/components/ui/select.tsx",
+    ];
+
+    for (const source of formControlSources) {
+      expect(read(source)).toContain("bg-input-surface");
+    }
+
+    expect(read("apps/web/src/components/chat/NativeComposeBar.tsx")).toContain("bg-input-surface");
+  });
+
+  test("form controls use the same visible focus ring even when borders are overridden", () => {
+    for (const source of [
+      "apps/web/src/components/ui/input.tsx",
+      "apps/web/src/components/ui/textarea.tsx",
+      "apps/web/src/components/ui/select.tsx",
+    ]) {
+      const contents = read(source);
+      expect(contents).toContain("focus-visible:border-ring");
+      expect(contents).toContain("focus-visible:ring-ring/50");
+      expect(contents).toContain("focus-visible:ring-[3px]");
+    }
+
+    const settings = read("apps/web/src/components/settings/GlobalSettings.sections.tsx");
+    expect(settings).not.toContain("focus-visible:outline-1 focus-visible:outline-ring");
   });
 
   test("native scrollbar tracks inherit the panel surface", () => {

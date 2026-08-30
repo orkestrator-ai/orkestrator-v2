@@ -303,7 +303,7 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
           maxLength={REVIEW_INSTRUCTION_MAX_LENGTH}
           disabled={isSaving}
           spellCheck={false}
-          className="h-[50vh] min-h-80 resize-y rounded-none border-0 bg-zinc-950 px-4 py-4 font-mono text-xs leading-5 shadow-none [field-sizing:fixed] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-blue-500 sm:h-[min(60vh,40rem)] sm:min-h-[28rem]"
+          className="h-[50vh] min-h-80 resize-y rounded-none border-0 bg-zinc-950 px-4 py-4 font-mono text-xs leading-5 shadow-none [field-sizing:fixed] sm:h-[min(60vh,40rem)] sm:min-h-[28rem]"
         />
 
         <div

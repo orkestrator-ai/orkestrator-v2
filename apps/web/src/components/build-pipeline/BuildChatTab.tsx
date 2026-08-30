@@ -958,7 +958,7 @@ export function BuildChatTab({
               </div>
             )}
             {canSendMessage && (
-              <div className="mx-auto w-full max-w-[56rem] rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20">
+              <div className="mx-auto w-full max-w-[56rem] rounded-2xl border border-border/70 bg-input-surface p-3 shadow-xl shadow-black/20">
                 {queuedMessages > 0 && (
                   <div className="mb-1.5 text-[11px] text-muted-foreground">
                     {queuedMessages === 1

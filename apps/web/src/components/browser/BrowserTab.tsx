@@ -595,7 +595,7 @@ export function BrowserTab({
         >
           <div
             className={cn(
-              "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-background shadow-sm transition-colors focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15",
+              "flex h-8 min-w-0 flex-1 items-center rounded-md border bg-input-surface shadow-sm transition-colors focus-within:border-primary/60",
               visibleError ? "border-destructive/70" : "border-border",
             )}
           >

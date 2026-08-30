@@ -857,7 +857,7 @@ export function AgentModelPicker({
               onKeyDown={(event) => {
                 if (event.key !== "Escape") event.stopPropagation();
               }}
-              className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring"
+              className="h-8 min-w-0 flex-1 rounded-lg border border-border/70 bg-input-surface px-2 text-xs placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none"
             />
             {onRefreshModels ? (
               <button

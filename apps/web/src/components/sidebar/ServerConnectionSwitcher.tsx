@@ -171,9 +171,9 @@ export function ServerConnectionSwitcher() {
       </DropdownMenu>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => !connecting && setDialogOpen(open)}>
-        <DialogContent className="max-w-md border-border bg-popover p-0 sm:max-w-md [&_input]:bg-background">
+        <DialogContent className="max-w-md p-0 sm:max-w-md sm:p-0">
           <form onSubmit={handleConnect}>
-            <DialogHeader className="border-b border-zinc-800/90 px-6 py-5">
+            <DialogHeader className="m-0 border-b border-divider bg-background px-6 py-5 sm:m-0">
               <div className="mb-1 flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/10 ring-1 ring-orange-400/20">
                 <RadioTower className="h-4 w-4 text-orange-400" aria-hidden="true" />
               </div>
@@ -242,7 +242,7 @@ export function ServerConnectionSwitcher() {
               )}
             </div>
 
-            <DialogFooter className="border-t border-zinc-800/90 px-6 py-4 sm:justify-between">
+            <DialogFooter className="m-0 border-t border-divider px-6 py-4 sm:m-0 sm:justify-between">
               <Button
                 type="button"
                 variant="ghost"

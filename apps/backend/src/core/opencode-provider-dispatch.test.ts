@@ -664,6 +664,30 @@ describe("OpenCode provider dispatch", () => {
     }
   });
 
+  test("uses image bytes rather than a stale filename extension for inline media", async () => {
+    const fake = openCodeFake();
+    const provider = openCodeProvider(fake);
+    const webp = Buffer.from("RIFF0000WEBP", "latin1").toString("base64");
+    try {
+      await provider.send("owned-session", "Build it", {
+        requestId: "request-normalized-image",
+        images: [{ filename: "clipboard.png", data: webp }],
+      });
+
+      expect(fake.promptCalls[0]!.parts).toEqual([
+        { type: "text", text: "Build it" },
+        {
+          type: "file",
+          mime: "image/webp",
+          filename: "clipboard.png",
+          url: `data:image/webp;base64,${webp}`,
+        },
+      ]);
+    } finally {
+      await provider.dispose?.();
+    }
+  });
+
   test("puts a structured schema in the prompt without poisoning OpenCode transcripts", async () => {
     const fake = openCodeFake();
     const provider = openCodeProvider(fake);

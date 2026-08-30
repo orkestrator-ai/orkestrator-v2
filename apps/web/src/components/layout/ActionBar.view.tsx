@@ -1274,7 +1274,7 @@ export function ActionBar({ presentation = "bar" }: ActionBarProps) {
                     className={cn(
                       "relative h-8 w-8",
                       filesPanelOpen &&
-                        "bg-primary/15 text-blue-300 ring-1 ring-inset ring-primary/50 hover:bg-primary/20 hover:text-blue-200",
+                        "bg-elevated text-foreground hover:bg-elevated-hover hover:text-foreground",
                     )}
                     onClick={toggleFilesPanel}
                     aria-label={`${filesPanelOpen ? "Hide" : "Show"} file panel`}

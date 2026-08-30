@@ -97,7 +97,7 @@ export function InitializationLogs({
     <div className={cn("flex flex-col h-full bg-background", className)}>
       {/* Header */}
       <div className="flex items-center gap-2 px-4 py-3 border-b bg-muted/30">
-        <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+        <Loader2 className="h-4 w-4 animate-spin text-primary" />
         <span className="text-sm font-medium">Initializing Container</span>
       </div>
 

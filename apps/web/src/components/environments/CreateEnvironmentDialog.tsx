@@ -2000,7 +2000,7 @@ export function CreateEnvironmentDialog({
         <DialogFooter className="m-0 grid shrink-0 grid-cols-2 border-t border-divider px-4 py-2.5 sm:m-0 sm:flex sm:flex-row sm:px-6">
           <Button
             type="button"
-            variant="ghost"
+            variant="outline"
             onClick={() => handleOpenChange(false)}
             disabled={isLoading}
             className="h-9 px-4"

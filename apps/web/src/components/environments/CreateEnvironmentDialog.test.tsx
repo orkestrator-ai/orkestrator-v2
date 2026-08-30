@@ -42,6 +42,7 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(screen.getByRole("button", { name: "Create Environment" }).className).toContain(
       "font-bold",
     );
+    expect(screen.getByRole("button", { name: "Cancel" }).dataset.variant).toBe("outline");
 
     const name = screen.getByLabelText("Environment Name (optional)");
     const agent = screen.getByRole("combobox", { name: "Agent, model and reasoning" });

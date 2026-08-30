@@ -21,12 +21,6 @@ interface MessageShellProps {
    * dangling model label.
    */
   showFooter?: boolean;
-  /**
-   * Whether the author label (e.g. the confirmed model name) appears in the
-   * footer. A transcript block may span several messages; attribution is shown
-   * once, on the first content-bearing message, so continuations omit it.
-   */
-  showAuthorLabel?: boolean;
   className?: string;
   contentClassName?: string;
   actions?: ReactNode;
@@ -44,7 +38,6 @@ export function MessageShell({
   durationLabel,
   showHeader = true,
   showFooter = true,
-  showAuthorLabel = true,
   className,
   contentClassName,
   actions,
@@ -182,17 +175,13 @@ export function MessageShell({
               <div className="mt-1 flex min-h-6 items-center justify-between gap-3 text-[10px] leading-none text-muted-foreground/55">
                 {metadata ? (
                   <div className="flex min-w-0 items-center text-left">
-                    {showAuthorLabel ? (
-                      <>
-                        <span
-                          className="min-w-0 truncate font-medium text-muted-foreground/70"
-                          title={authorLabel}
-                        >
-                          {authorLabel}
-                        </span>
-                        <span className="mx-1.5 shrink-0">·</span>
-                      </>
-                    ) : null}
+                    <span
+                      className="min-w-0 truncate font-medium text-muted-foreground/70"
+                      title={authorLabel}
+                    >
+                      {authorLabel}
+                    </span>
+                    <span className="mx-1.5 shrink-0">·</span>
                     <span className="shrink-0 whitespace-nowrap">{metadata}</span>
                   </div>
                 ) : (

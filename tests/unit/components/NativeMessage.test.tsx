@@ -278,7 +278,7 @@ describe("NativeMessage", () => {
       </>,
     );
 
-    expect(screen.getAllByText("Claude", { exact: true })).toHaveLength(2);
+    expect(screen.getAllByText("Claude", { exact: true })).toHaveLength(3);
     const copyButtons = screen.getAllByRole("button", { name: "Copy text" });
     expect(copyButtons).toHaveLength(2);
 
@@ -521,9 +521,9 @@ describe("NativeMessage", () => {
     );
 
     expect(screen.getByText("Continuation response")).toBeTruthy();
-    // A same-minute continuation repeats no attribution; the model label is
-    // shown once, on the first content-bearing message of the block.
-    expect(screen.queryByText("Worker") === null).toBe(true);
+    // A same-minute continuation still attributes its separately timestamped
+    // block, so transcript metadata never presents the time by itself.
+    expect(screen.getByText("Worker")).toBeTruthy();
   });
 
   test("opens local image previews and closes the overlay with Escape", async () => {

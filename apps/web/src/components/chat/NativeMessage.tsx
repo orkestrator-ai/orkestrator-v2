@@ -73,24 +73,10 @@ export const NativeMessage = memo(function NativeMessage({
 
   const hasTextParts = message.parts.some((part) => part.type === "text");
   const hasContent = messageHasVisibleContent(message);
-  // Transcript owners resolve `previousMessage` to the nearest content-bearing
-  // predecessor (see findPreviousNativeMessage), so a `user → empty → content`
-  // block still anchors duration on the user and a `content → empty → content`
-  // block does not repeat attribution. The `previousHasContent` guard below
-  // remains a safety net for direct callers passing the raw predecessor.
-  const previousHasContent = previousMessage ? messageHasVisibleContent(previousMessage) : false;
-  // Attribution belongs on the first content-bearing message of a transcript
-  // block. Empty assistant messages (an info-only `message.updated` before any
-  // part streams) carry no attribution, and same-block continuations drop the
-  // model label so it is not repeated for every streamed chunk.
+  // An empty assistant message with no attributable content or actions carries
+  // no footer. Every assistant block that does render a footer includes its
+  // model attribution before the timestamp.
   const showAssistantFooter = !isUser && !isSystem && !isError && hasContent;
-  // A continuation that switched model is the one case where repeating the
-  // label carries information: providers stamp `modelId` per message (Claude
-  // records one per tool round-trip), so a mid-block fallback would otherwise
-  // leave the new model rendering under the previous row's label.
-  const showAssistantAuthorLabel =
-    showAssistantFooter &&
-    (!isContinuation || !previousHasContent || previousMessage?.modelId !== message.modelId);
   const userCopyContent = isUser
     ? message.parts
         .filter((part) => part.type === "text")
@@ -105,10 +91,9 @@ export const NativeMessage = memo(function NativeMessage({
         .join("\n\n")
         .trim() || message.content
     : "";
-  // Whether the assistant footer still has a reason to exist once attribution
-  // is suppressed. Fork actions sit on every completed transcript section,
-  // including a content-empty trailing row that is the only host of that
-  // affordance — hiding the row there would strand the exchange.
+  // Fork actions sit on every completed transcript section, including a
+  // content-empty trailing row that is the only host of that affordance —
+  // hiding the row there would strand the exchange.
   const hasAssistantFooterContent =
     !isUser && (Boolean(messageActions) || Boolean(assistantCopyContent));
   const handleUserLongPress = useCallback(async () => {
@@ -197,7 +182,6 @@ export const NativeMessage = memo(function NativeMessage({
                 durationLabel={durationLabel}
                 showHeader={!isContinuation}
                 showFooter={isUser || showAssistantFooter || hasAssistantFooterContent}
-                showAuthorLabel={isUser || showAssistantAuthorLabel}
                 className={cn(!isUser && (isContinuation ? "pt-0 pb-3" : "py-3"))}
                 onUserLongPress={isUser && userCopyContent ? handleUserLongPress : undefined}
                 actions={

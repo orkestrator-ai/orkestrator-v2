@@ -244,6 +244,12 @@ export class BuildPipelineReviewFanout {
         session.status = status;
         changed = true;
       }
+      if (reviewer.report && !session.reviewReport) {
+        session.reviewReport = reviewer.report;
+        session.structuredRequestId = reviewer.requestId;
+        session.structuredResultStatus = "accepted";
+        changed = true;
+      }
     }
     if (changed) await this.deps.save(pipeline);
   }
@@ -470,7 +476,11 @@ export class BuildPipelineReviewFanout {
     }
     state.report = provenance.report;
     session.status = "idle";
+    session.reviewReport = provenance.report;
+    session.structuredRequestId = consolidation.requestId;
+    session.structuredResultStatus = "accepted";
     pipeline.structuredReview = provenance.report;
+    pipeline.structuredReviewRequestId = consolidation.requestId;
     await this.deps.save(pipeline);
     return { kind: "consolidated" };
   }

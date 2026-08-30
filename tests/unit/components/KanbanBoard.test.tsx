@@ -5,8 +5,11 @@ import { useProjectStore } from "@/stores/projectStore";
 import { useKanbanStore } from "@/stores/kanbanStore";
 import { useGitHubIssuesStore } from "@/stores/githubIssuesStore";
 import { useUIStore } from "@/stores/uiStore";
+import { useEnvironmentStore } from "@/stores/environmentStore";
+import { useBuildPipelineStore } from "@/stores/buildPipelineStore";
 import type { KanbanTask } from "@/stores/kanbanStore";
-import type { BuildPhase } from "@/stores/buildPipelineStore";
+import type { BuildPhase, BuildPipeline } from "@/stores/buildPipelineStore";
+import type { Environment } from "@/types";
 
 const loadTasksMock = mock(async () => undefined);
 const loadNotesMock = mock(async () => undefined);
@@ -44,6 +47,8 @@ beforeEach(() => {
     projectBoardTab: "kanban",
     projectBoardNotesOpen: false,
   });
+  useEnvironmentStore.setState({ environments: [] });
+  useBuildPipelineStore.setState({ pipelines: new Map(), buildEnvironmentIds: new Set() });
   useGitHubIssuesStore.setState({
     snapshots: new Map([
       [
@@ -80,6 +85,54 @@ function makeTask(overrides: Partial<KanbanTask> = {}): KanbanTask {
     images: [],
     createdAt: "2026-01-01T00:00:00.000Z",
     order: 0,
+    ...overrides,
+  };
+}
+
+function makeEnvironment(overrides: Partial<Environment> = {}): Environment {
+  return {
+    id: "env-1",
+    projectId: "project-1",
+    name: "attach-images-to",
+    branch: "main",
+    containerId: "container-1",
+    status: "running",
+    prUrl: null,
+    prState: null,
+    hasMergeConflicts: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    networkAccessMode: "restricted",
+    order: 0,
+    environmentType: "containerized",
+    ...overrides,
+  };
+}
+
+function makePipeline(overrides: Partial<BuildPipeline> = {}): BuildPipeline {
+  return {
+    id: "pipeline-1",
+    taskId: "task-1",
+    projectId: "project-1",
+    environmentId: "env-1",
+    environmentType: "local",
+    agentType: "codex",
+    phase: "building",
+    sessions: [],
+    currentSessionIndex: -1,
+    iteration: 0,
+    maxIterations: 3,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    taskTitle: "Task",
+    taskSnapshot: {
+      title: "Task",
+      description: "",
+      acceptanceCriteria: "",
+      comments: [],
+      images: [],
+    },
+    source: { type: "kanban", taskId: "task-1" },
+    backendRevision: 1,
+    controller: "backend",
     ...overrides,
   };
 }
@@ -156,5 +209,76 @@ describe("KanbanBoard ticket sources", () => {
     await waitFor(() => {
       expect(loadGitHubIssuesMock).toHaveBeenCalledWith("project-1");
     });
+  });
+});
+
+describe("KanbanBoard environment labels", () => {
+  test("labels a card with the name of the environment its task links to", () => {
+    useKanbanStore.setState({ tasks: [makeTask({ environmentId: "env-1" })] });
+    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(screen.getByText("attach-images-to")).toBeTruthy();
+  });
+
+  test("falls back to the pipeline's environment before the task link is written", () => {
+    // A build creates its environment before the task row records the link, so
+    // the pipeline is the only place the id lives during that window.
+    useKanbanStore.setState({ tasks: [makeTask()] });
+    useEnvironmentStore.setState({
+      environments: [makeEnvironment({ id: "env-2", name: "fix-provider-icons" })],
+    });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([["pipeline-1", makePipeline({ environmentId: "env-2" })]]),
+      buildEnvironmentIds: new Set(["env-2"]),
+    });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(screen.getByText("fix-provider-icons")).toBeTruthy();
+  });
+
+  test("prefers the task's environment when its pipeline points somewhere else", () => {
+    useKanbanStore.setState({ tasks: [makeTask({ environmentId: "env-1" })] });
+    useEnvironmentStore.setState({
+      environments: [
+        makeEnvironment(),
+        makeEnvironment({ id: "env-2", name: "pipeline-environment" }),
+      ],
+    });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([["pipeline-1", makePipeline({ environmentId: "env-2" })]]),
+      buildEnvironmentIds: new Set(["env-2"]),
+    });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(screen.getByText("attach-images-to")).toBeTruthy();
+    expect(screen.queryByText("pipeline-environment") === null).toBe(true);
+  });
+
+  test("ignores pipeline environment links from another project", () => {
+    useKanbanStore.setState({ tasks: [makeTask()] });
+    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
+    useBuildPipelineStore.setState({
+      pipelines: new Map([
+        ["pipeline-1", makePipeline({ projectId: "project-2", environmentId: "env-1" })],
+      ]),
+      buildEnvironmentIds: new Set(["env-1"]),
+    });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(screen.queryByText("attach-images-to") === null).toBe(true);
+  });
+
+  test("shows no environment label when the linked environment is gone", () => {
+    useKanbanStore.setState({ tasks: [makeTask({ environmentId: "env-deleted" })] });
+    useEnvironmentStore.setState({ environments: [makeEnvironment()] });
+
+    render(<KanbanBoard projectId="project-1" />);
+
+    expect(screen.queryByText("attach-images-to") === null).toBe(true);
   });
 });

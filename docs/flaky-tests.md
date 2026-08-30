@@ -76,6 +76,30 @@ history rather than two partial ones.
   than six minutes and also timed out unrelated focus and bridge tests. This
   supports runner/host starvation rather than a launch-state regression.
 
+## `TerminalContainer > replaces a completed setup tab that has neither a PTY nor replayable output` (`apps/web/src/components/terminal/TerminalContainer.view.test.tsx:1732`)
+
+- **Status:** open
+- **Date observed:** 2026-08-30
+- **Original command:** `bun run test`
+- **Worker configuration:** `scripts/test-all.ts` ran four groups concurrently;
+  the web workspace used two Bun workers while the root and bridge groups were
+  also active.
+- **Failure:** after `setupTabIds()` temporarily reached `[]`, the immediately
+  following store snapshot still contained the default plain tab with
+  `isSetupTab: true` and normalized optional fields, instead of the expected
+  plain tab without setup metadata (duration: 3.25 ms).
+- **Suite counts:** web workspace — 5,613 total, 5,611 passed, 1 skipped, 1
+  failed across 247 files in 65.02 s.
+- **Isolated rerun:** `bun test --preload ../../tests/setup-node.ts
+  ./src/components/terminal/TerminalContainer.view.test.tsx --only-failures
+  --parallel=2` from `apps/web` -> 126 passed, 0 failed in 10.14 s.
+- **Hypothesis:** the test waits for a derived setup-tab ID list and then reads
+  the full store in a separate assertion. The aggregate-only result shows that
+  the full tab metadata can change across that observation boundary; the
+  isolated owner consistently completes the replacement. A recurrence should
+  trace pane-layout restore and setup-tab retirement writes before changing the
+  production behavior or loosening the assertion.
+
 ## `at-most-once dispatch > a delayed retry succeeds and settles the phase after the wait` (`bridges/codex-bridge/src/app-server-runtime-prompt.test.ts:469`)
 
 - **Status:** open

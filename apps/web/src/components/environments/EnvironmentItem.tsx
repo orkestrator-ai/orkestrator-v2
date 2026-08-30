@@ -460,7 +460,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                     !isRunning && "text-muted-foreground",
                     isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
                     isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                    isRunning && agentActivityState === "idle" && "text-green-500",
+                    isRunning && agentActivityState === "idle" && "text-success",
                   )}
                 />
               ) : (
@@ -470,7 +470,7 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                     !isRunning && "text-muted-foreground",
                     isRunning && agentActivityState === "waiting" && "text-amber-500 animate-pulse",
                     isRunning && agentActivityState === "working" && "text-blue-500 animate-pulse",
-                    isRunning && agentActivityState === "idle" && "text-green-500",
+                    isRunning && agentActivityState === "idle" && "text-success",
                   )}
                 />
               )}
@@ -521,10 +521,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                       </span>
                     )}
                     {diffStats.additions > 0 && (
-                      <span className="text-green-500">+{diffStats.additions}</span>
+                      <span className="text-success">+{diffStats.additions}</span>
                     )}
                     {diffStats.deletions > 0 && (
-                      <span className="text-red-400">-{diffStats.deletions}</span>
+                      <span className="text-failure">-{diffStats.deletions}</span>
                     )}
                     {diffStats.additions === 0 &&
                       diffStats.deletions === 0 &&
@@ -634,10 +634,10 @@ export const EnvironmentItem = memo(function EnvironmentItem({
                   )}
                   <div className="flex items-center gap-2 font-mono text-xs tabular-nums">
                     {diffStats.additions > 0 && (
-                      <span className="text-green-500">+{diffStats.additions} added</span>
+                      <span className="text-success">+{diffStats.additions} added</span>
                     )}
                     {diffStats.deletions > 0 && (
-                      <span className="text-red-400">-{diffStats.deletions} removed</span>
+                      <span className="text-failure">-{diffStats.deletions} removed</span>
                     )}
                   </div>
                 </div>

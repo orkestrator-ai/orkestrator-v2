@@ -541,6 +541,8 @@ export interface ClaudePlanApprovalRequest {
   id: string;
   sessionId: string;
   toolUseId?: string;
+  plan?: string;
+  planTruncated?: boolean;
   /** Absolute time when the bridge will deny the unanswered request. */
   expiresAt?: number;
 }
@@ -550,6 +552,8 @@ export interface PlanApprovalRequestedEventData {
   id: string;
   sessionId?: string;
   toolUseId?: string;
+  plan?: string;
+  planTruncated?: boolean;
   expiresAt?: number;
 }
 

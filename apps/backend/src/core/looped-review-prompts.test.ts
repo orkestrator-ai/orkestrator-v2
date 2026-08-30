@@ -254,6 +254,23 @@ describe("parseReviewPreparationResult", () => {
         "Review preparation result failed runtime validation",
       );
   });
+
+  test("requires validation evidence or an explicit limitation", () => {
+    expect(() =>
+      parseReviewPreparationResult({
+        validation: [],
+        uncommittedFiles: [],
+        limitations: [],
+      }),
+    ).toThrow("Review preparation result failed runtime validation");
+    expect(
+      parseReviewPreparationResult({
+        validation: [],
+        uncommittedFiles: [],
+        limitations: ["The repository has no validation commands."],
+      }).limitations,
+    ).toEqual(["The repository has no validation commands."]);
+  });
 });
 
 describe("parseFixResult", () => {

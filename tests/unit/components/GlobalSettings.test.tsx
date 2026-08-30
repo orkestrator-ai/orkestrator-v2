@@ -1942,7 +1942,7 @@ describe("GlobalSettings", () => {
     ).toBe(true);
 
     rerender(<GlobalSettings activeSection="terminal" />);
-    fireEvent.change(screen.getByPlaceholderText("#141414"), { target: { value: "invalid" } });
+    fireEvent.change(screen.getByPlaceholderText("#0e1014"), { target: { value: "invalid" } });
     expect(screen.getByText("Invalid hex color format. Use #RGB or #RRGGBB.")).toBeTruthy();
     expect(
       (within(container).getByRole("button", { name: "Save Changes" }) as HTMLButtonElement)

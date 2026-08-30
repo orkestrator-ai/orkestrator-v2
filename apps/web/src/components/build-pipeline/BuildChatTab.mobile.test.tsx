@@ -385,6 +385,69 @@ describe("BuildChatTab on a phone", () => {
 describe("BuildChatTab across the breakpoint", () => {
   beforeEach(() => setMobileViewport(true));
 
+  test("draws the pipeline controls as icons so the header stays one row", () => {
+    renderTab();
+
+    // Three labelled buttons beside the title do not fit a ~390px screen: they
+    // pushed the phase line underneath themselves and clipped the last control
+    // off the edge. The label survives as the accessible name, which is the
+    // only name a screen reader ever read.
+    for (const name of ["Retry Review", "Pause", "Cancel"]) {
+      const control = screen.getByRole("button", { name });
+      expect(control.getAttribute("aria-label")).toBe(name);
+      expect(control.getAttribute("title")).toBe(name);
+      expect(control.textContent?.trim()).toBe("");
+    }
+  });
+
+  test("names the paused and failed-stage icon controls", () => {
+    renderPipeline({
+      ...pipeline,
+      phase: "paused",
+      pausedFromPhase: "building",
+      backendRevision: 9,
+    });
+
+    for (const name of ["Resume", "Cancel"]) {
+      const control = screen.getByRole("button", { name });
+      expect(control.getAttribute("aria-label")).toBe(name);
+      expect(control.getAttribute("title")).toBe(name);
+      expect(control.textContent?.trim()).toBe("");
+    }
+
+    cleanup();
+    renderPipeline({
+      ...pipeline,
+      phase: "failed",
+      error: "Verification did not complete",
+      failureContext: {
+        phase: "verifying",
+        kind: "stage-transition",
+        sessionId: "verify-session",
+      },
+      backendRevision: 10,
+    });
+
+    const retry = screen.getByRole("button", { name: "Retry Verification Stage" });
+    expect(retry.getAttribute("aria-label")).toBe("Retry Verification Stage");
+    expect(retry.getAttribute("title")).toBe("Retry Verification Stage");
+    expect(retry.textContent?.trim()).toBe("");
+  });
+
+  test("omits the controls region when the pipeline has no available action", () => {
+    renderPipeline({
+      ...pipeline,
+      phase: "complete",
+      backendRevision: 9,
+    });
+
+    expect(screen.getByTestId("build-pipeline-header")).toBeTruthy();
+    expect(screen.queryByTestId("build-pipeline-header-controls") === null).toBe(true);
+    for (const name of ["Retry Review", "Pause", "Resume", "Cancel"]) {
+      expect(screen.queryByRole("button", { name }) === null).toBe(true);
+    }
+  });
+
   test("widening past the breakpoint puts both halves back on screen", () => {
     renderTab();
     fireEvent.click(viewTabs().getByRole("tab", { name: "Stages" }));
@@ -427,6 +490,14 @@ describe("BuildChatTab on a desktop", () => {
     expect(screen.getByText("All criteria pass")).toBeTruthy();
     expect(screen.getByRole("textbox")).toBeTruthy();
     expect(lastScrollState().isActive).toBe(true);
+  });
+
+  test("keeps the pipeline controls labelled where there is room for them", () => {
+    renderTab();
+
+    for (const name of ["Retry Review", "Pause", "Cancel"]) {
+      expect(screen.getByRole("button", { name }).textContent).toContain(name);
+    }
   });
 
   test("choosing a stage neither hides anything nor moves focus", () => {

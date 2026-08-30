@@ -20,19 +20,30 @@ export function FilesPanelHeader({ onRefresh }: FilesPanelHeaderProps) {
   const isLoading = activeTab === "changes" ? isLoadingChanges : isLoadingTree;
 
   return (
-    <div className="flex h-12 items-center justify-between border-b border-border/80 bg-[#212124] px-3">
+    <div className="flex h-12 items-center justify-between border-b border-border/80 bg-chrome px-3">
       {/* Tab switcher */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as FilesPanelTab)}>
-        <TabsList className="h-8 bg-zinc-900/80">
-          <TabsTrigger value="changes" className="px-2 text-xs data-[state=active]:!bg-zinc-800">
+        {/*
+          The list itself is unpainted: only the selected tab carries a surface,
+          so the pair reads as one label plus one alternative rather than as a
+          segmented control competing with the header band behind it.
+        */}
+        <TabsList className="h-8 gap-1 bg-transparent p-0">
+          <TabsTrigger
+            value="changes"
+            className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
+          >
             Changes
             {changesCount > 0 && (
-              <span className="ml-1.5 rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">
+              <span className="ml-1.5 rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-foreground">
                 {changesCount}
               </span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="all-files" className="px-2 text-xs data-[state=active]:!bg-zinc-800">
+          <TabsTrigger
+            value="all-files"
+            className="rounded-lg px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground data-[state=active]:!bg-elevated data-[state=active]:!text-foreground data-[state=active]:shadow-none dark:data-[state=active]:border-transparent"
+          >
             All files
           </TabsTrigger>
         </TabsList>

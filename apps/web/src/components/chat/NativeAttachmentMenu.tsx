@@ -310,7 +310,7 @@ export function NativeAttachmentMenu({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            className="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-7 w-7 items-center justify-center rounded-lg bg-elevated text-muted-foreground transition-colors hover:bg-elevated-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             disabled={disabled}
             aria-label="Add attachment"
             title="Add attachment"

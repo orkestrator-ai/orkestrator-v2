@@ -23,7 +23,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
-  FolderGit2,
   FolderInput,
   FolderMinus,
   Trash2,
@@ -148,12 +147,34 @@ export function SortableProjectGroup({
             className={cn(
               "relative mx-1 flex items-center group/project rounded-lg border transition-colors",
               isSelected
-                ? "border-zinc-700/70 bg-zinc-800/85"
-                : "border-transparent hover:bg-zinc-800/55",
+                ? "border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground"
+                : "border-transparent hover:bg-hover",
             )}
             onMouseEnter={() => setIsHovered(true)}
             onMouseLeave={() => setIsHovered(false)}
           >
+            {/*
+              The name is also the drag handle, and dnd-kit's keyboard sensor
+              owns Enter and Space there. This chevron carries no drag
+              listeners, so it is the control a keyboard user can actually
+              expand the project with — and it needs its own label, because
+              nothing inside it is text. Folder rows are built the same way.
+            */}
+            <CollapsibleTrigger
+              className="shrink-0 rounded-md p-1 transition-colors hover:bg-white/[0.07]"
+              aria-label={
+                isCollapsed ? `Expand project ${project.name}` : `Collapse project ${project.name}`
+              }
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ChevronRight
+                aria-hidden="true"
+                className={cn(
+                  "h-4 w-4 text-muted-foreground transition-transform duration-200",
+                  !isCollapsed && "rotate-90",
+                )}
+              />
+            </CollapsibleTrigger>
             <ContextMenu>
               <ContextMenuTrigger className="contents">
                 <button
@@ -171,10 +192,9 @@ export function SortableProjectGroup({
                   onFocus={projectTooltip.show}
                   onBlur={projectTooltip.hide}
                 >
-                  <FolderGit2 className="h-4 w-4 shrink-0 text-zinc-500" />
                   <span className="truncate font-medium">{project.name}</span>
                   {environments.length > 0 && (
-                    <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-full bg-zinc-800 px-1 text-[10px] text-zinc-300">
+                    <span className="flex h-4 min-w-[16px] shrink-0 items-center justify-center rounded-md bg-white/[0.07] px-1 text-[10px] text-zinc-300">
                       {environments.length}
                     </span>
                   )}
@@ -258,19 +278,6 @@ export function SortableProjectGroup({
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
-
-            {/* Chevron arrow - far right */}
-            <CollapsibleTrigger
-              className="shrink-0 rounded p-1 transition-colors hover:bg-zinc-800/80"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <ChevronRight
-                className={cn(
-                  "h-4 w-4 text-muted-foreground transition-transform duration-200",
-                  !isCollapsed && "rotate-90",
-                )}
-              />
-            </CollapsibleTrigger>
           </div>
 
           {/* Environments List */}

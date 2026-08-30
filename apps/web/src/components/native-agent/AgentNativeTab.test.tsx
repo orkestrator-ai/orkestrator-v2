@@ -29,6 +29,7 @@ import { getNativeAgentData, type TabInfo } from "@/types/paneLayout";
 import { createSessionKey } from "@/lib/utils";
 import { ADDRESS_ALL_REVIEW_PROMPT } from "@/lib/review-actions";
 import { dispatchResourceChange } from "@/lib/resource-sync";
+import { TerminalProvider } from "@/contexts";
 import * as realVirtualizedMessageList from "@/components/chat/VirtualizedMessageList";
 
 // Snapshot before installing the stubs so the real modules are restored for
@@ -356,6 +357,7 @@ function pendingInteraction(
   id: string,
 ): AgentInteractionRequest {
   const question = kind === "question";
+  const planApproval = kind === "plan-approval";
   return {
     version: AGENT_INTERACTION_CONTRACT_VERSION,
     id,
@@ -382,13 +384,22 @@ function pendingInteraction(
             },
           ],
         }
-      : {
-          title: "Approve command",
-          body: "Command: bun test",
-          questions: [],
-          confirmLabel: "Approve",
-          declineLabel: "Deny",
-        },
+      : planApproval
+        ? {
+            title: "Approve Claude's plan",
+            body: "# Implementation plan\n\n1. Show the plan in the transcript.",
+            planAvailable: true,
+            questions: [],
+            confirmLabel: "Approve",
+            declineLabel: "Deny",
+          }
+        : {
+            title: "Approve command",
+            body: "Command: bun test",
+            questions: [],
+            confirmLabel: "Approve",
+            declineLabel: "Deny",
+          },
   };
 }
 
@@ -550,12 +561,13 @@ function seedAssignedPane(
 }
 
 describe("AgentNativeTab", () => {
-  test("routes questions into the transcript while approvals stay pinned and docks the empty-session composer", async () => {
+  test("routes questions and plan reviews into the transcript while action approvals stay pinned", async () => {
     renderVirtualizedMessages = true;
     getNativeAgentProjectionMock.mockImplementation(async (input) => ({
       ...(await defaultProjection(input as never)),
       interactions: [
         pendingInteraction("question", "question-1"),
+        pendingInteraction("plan-approval", "plan-1"),
         pendingInteraction("command-approval", "approval-1"),
       ],
     }));
@@ -567,9 +579,19 @@ describe("AgentNativeTab", () => {
     const composeDock = screen.getByTestId("compose-dock");
     const composer = screen.getByTestId("shared-native-compose-bar");
     const approval = screen.getByText("Approve command");
+    const plan = screen.getByText("Show the plan in the transcript.");
+    const planCard = screen
+      .getByText("Approve Claude's plan")
+      .closest<HTMLElement>('[role="group"]');
 
     expect(transcript.contains(question)).toBe(true);
+    expect(transcript.contains(plan)).toBe(true);
+    expect(planCard).toBeTruthy();
+    expect(
+      (within(planCard!).getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
     expect(composeDock.contains(question)).toBe(false);
+    expect(composeDock.contains(plan)).toBe(false);
     expect(composeDock.contains(approval)).toBe(true);
     expect(composeDock.className).not.toContain("top-1/2");
     expect(composer.className).toContain("mb-4");
@@ -577,45 +599,58 @@ describe("AgentNativeTab", () => {
     expect(composer.className).not.toContain("my-0");
   });
 
-  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
-    "does not render a context-window control in the %s compose bar before usage arrives",
-    async (platform) => {
-      render(
-        <AgentNativeTab tabId={`tab-context-${platform}`} data={identity(platform)} isActive />,
-      );
+  test("uses transcript plan content when the provider plan body is unavailable", async () => {
+    renderVirtualizedMessages = true;
+    const unavailable = pendingInteraction("plan-approval", "plan-unavailable");
+    unavailable.presentation = {
+      title: "Claude's plan is unavailable for approval",
+      body: "Claude asked to leave plan mode without providing a readable plan. Approval is disabled.",
+      planAvailable: false,
+      questions: [],
+      confirmLabel: "Approve",
+      declineLabel: "Deny",
+      confirmDisabled: true,
+    };
+    getNativeAgentProjectionMock.mockImplementation(async (input) => ({
+      ...(await defaultProjection(input as never)),
+      messages: [
+        {
+          id: "assistant-plan-write",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-08-29T12:00:00.000Z",
+          parts: [
+            {
+              type: "tool-invocation",
+              content: "Write",
+              toolName: "Write",
+              toolArgs: {
+                file_path: "/home/node/.claude/plans/fallback-plan.md",
+                content: "# Transcript plan\n\n1. Recover this plan for display.",
+              },
+            },
+          ],
+        },
+      ],
+      interactions: [unavailable],
+    }));
 
-      await screen.findByTestId("shared-native-compose-bar");
-      const sendButton = screen.getByTitle("Send");
+    render(
+      <TerminalProvider>
+        <AgentNativeTab tabId="tab-plan-fallback" data={identity("claude")} isActive />
+      </TerminalProvider>,
+    );
 
-      expect(screen.queryByRole("button", { name: /Context window/ }) === null).toBe(true);
-      expect(sendButton).toBeTruthy();
-    },
-  );
-
-  test.each(AGENT_PLATFORMS.map((platform) => [platform] as const))(
-    "renders the context-window control in the %s compose bar once usage arrives",
-    async (platform) => {
-      getNativeAgentProjectionMock.mockImplementation(async (input) => ({
-        ...(await defaultProjection(input)),
-        contextUsage: { usedTokens: 4_000, maximumTokens: 16_000, percentage: 25 },
-      }));
-
-      render(
-        <AgentNativeTab
-          tabId={`tab-context-present-${platform}`}
-          data={identity(platform)}
-          isActive
-        />,
-      );
-
-      // The control is conditional, so absence before usage arrives must not be
-      // allowed to become permanent absence after it does.
-      const contextButton = await screen.findByRole("button", {
-        name: "Context window 25% used",
-      });
-      expect(contextButton.nextElementSibling).toBe(screen.getByTitle("Send"));
-    },
-  );
+    expect(await screen.findByText("Recover this plan for display.")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Claude asked to leave plan mode without providing a readable plan. Approval is disabled.",
+      ),
+    ).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
 
   test("keeps an unassigned tab composer-only without loading a bridge controller", () => {
     const { container } = render(
@@ -630,7 +665,7 @@ describe("AgentNativeTab", () => {
     expect(screen.getByText("Ready to build!")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Resume Session" })).toBeTruthy();
     expect(screen.getByTestId("compose-dock").className).toContain("top-1/2");
-    expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-2xl");
+    expect(screen.getByTestId("unassigned-native-compose-bar").className).toContain("rounded-xl");
   });
 
   test("unassigned composer adopts the environment default agent and model", async () => {
@@ -4322,75 +4357,6 @@ describe("AgentNativeTab", () => {
       const notice = await screen.findByText("Recovered provider notice");
       expect(screen.getByTestId("compose-dock").contains(notice)).toBe(true);
       expect(screen.getByTestId("transcript-bottom-spacer").className).not.toContain("h-32");
-    });
-
-    test("renders an unavailable context wheel when the provider reports no maximum", async () => {
-      seedProjection({
-        contextUsage: {
-          usedTokens: 222,
-          inputTokens: 200,
-          outputTokens: 22,
-          source: "provider",
-        },
-      });
-      render(<AgentNativeTab tabId="tab-unbounded-usage" data={identity("grok")} isActive />);
-
-      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      await waitFor(() => {
-        expect(screen.queryByRole("button", { name: /Context window/ }) === null).toBe(true);
-      });
-    });
-
-    test("renders the context wheel from the percentage the provider reported", async () => {
-      seedProjection({
-        contextUsage: {
-          usedTokens: 15_675,
-          maximumTokens: 500_000,
-          // Deliberately not 3%: the provider's own figure must win over the
-          // ratio this component could derive from the two token counts.
-          percentage: 42,
-          source: "provider",
-        },
-      });
-      render(<AgentNativeTab tabId="tab-bounded-usage" data={identity("grok")} isActive />);
-
-      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Context window 42% used" })).toBeTruthy();
-    });
-
-    test("renders the context wheel before the stop button during a running turn", async () => {
-      seedProjection({
-        phase: "running",
-        contextUsage: {
-          usedTokens: 210_000,
-          maximumTokens: 500_000,
-          percentage: 42,
-          source: "provider",
-        },
-      });
-      render(<AgentNativeTab tabId="tab-running-usage" data={identity("grok")} isActive />);
-
-      const contextWheel = await screen.findByRole("button", {
-        name: "Context window 42% used",
-      });
-      const stopButton = screen.getByTitle("Stop current query");
-      expect(
-        contextWheel.compareDocumentPosition(stopButton) & Node.DOCUMENT_POSITION_FOLLOWING,
-      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    });
-
-    test("derives the context wheel percentage when the provider reports only a maximum", async () => {
-      seedProjection({
-        contextUsage: {
-          usedTokens: 15_675,
-          maximumTokens: 500_000,
-          source: "provider",
-        },
-      });
-      render(<AgentNativeTab tabId="tab-derived-usage" data={identity("grok")} isActive />);
-
-      expect(await screen.findByTestId("shared-native-compose-bar")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Context window 3% used" })).toBeTruthy();
     });
 
     test("routes a running-turn /steer to the session action instead of the queue", async () => {

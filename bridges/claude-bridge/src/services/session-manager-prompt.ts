@@ -1,7 +1,11 @@
 // Session Manager Service
 // Handles session state and interacts with Claude Agent SDK
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  HookCallback,
+  PreToolUseHookInput,
+  SDKUserMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import type {
   ImageBlockParam,
   TextBlockParam,
@@ -33,7 +37,11 @@ import type {
 } from "../types/index.js";
 import { isSdkCompactBoundaryMessage, isSdkResultMessage } from "../types/index.js";
 import { TaskRegistry, isTaskListTool } from "@orkestrator/protocol/task-list";
-import { AGENT_INTERACTION_DEFAULT_TIMEOUT_MS } from "@orkestrator/protocol/agent-interactions";
+import {
+  AGENT_INTERACTION_DEFAULT_TIMEOUT_MS,
+  AGENT_INTERACTION_LIMITS,
+  isPlanMarkdownPath,
+} from "@orkestrator/protocol/agent-interactions";
 import { isRootAssistantRecord, normalizeBackendModelId } from "@orkestrator/protocol/model-id";
 import {
   structuredOutputFailure,
@@ -152,6 +160,62 @@ export const RETAINED_CONTINUATION_TIMEOUT_MS = 5 * 60 * 1000;
  * keeps iteration proportional to the number of blocks actually received.
  */
 export const MAX_STREAM_CONTENT_BLOCK_INDEX = 4_095;
+
+function boundedPlan(content: unknown): Pick<PlanApprovalRequest, "plan" | "planTruncated"> {
+  if (typeof content !== "string" || content.trim().length === 0) return {};
+  const maximumLength = AGENT_INTERACTION_LIMITS.maxTextLength;
+  if (content.length <= maximumLength) return { plan: content };
+  return {
+    plan: `${content.slice(0, Math.max(0, maximumLength - 1))}…`,
+    planTruncated: true,
+  };
+}
+
+function updateObservedPlan(session: SessionState, input: PreToolUseHookInput): void {
+  if (input.tool_name !== "Write" && input.tool_name !== "Edit") return;
+  const toolInput =
+    input.tool_input && typeof input.tool_input === "object" && !Array.isArray(input.tool_input)
+      ? (input.tool_input as Record<string, unknown>)
+      : undefined;
+  const filePath = toolInput?.file_path;
+  if (typeof filePath !== "string" || !isPlanMarkdownPath(filePath)) return;
+
+  if (input.tool_name === "Write") {
+    const next = boundedPlan(toolInput?.content);
+    if (!next.plan) return;
+    session.observedPlan = {
+      path: filePath,
+      content: next.plan,
+      truncated: next.planTruncated === true,
+    };
+    return;
+  }
+
+  const observed = session.observedPlan;
+  if (!observed) return;
+  if (observed.path !== filePath || observed.content === undefined || observed.truncated) return;
+  const oldString = toolInput?.old_string;
+  const newString = toolInput?.new_string;
+  if (
+    typeof oldString !== "string" ||
+    oldString.length === 0 ||
+    typeof newString !== "string" ||
+    !observed.content.includes(oldString)
+  ) {
+    return;
+  }
+  const nextContent =
+    toolInput?.replace_all === true
+      ? observed.content.split(oldString).join(newString)
+      : observed.content.replace(oldString, newString);
+  const next = boundedPlan(nextContent);
+  if (!next.plan) {
+    session.observedPlan = undefined;
+    return;
+  }
+  observed.content = next.plan;
+  observed.truncated = next.planTruncated === true;
+}
 /**
  * Send a prompt to a session and process the response
  */
@@ -645,6 +709,22 @@ Plan mode is read-only: do not write or edit files until the user approves your 
     session.finishTurnInputIfSettled = finishTurnInputIfSettled;
 
     const queryEnvironment = await runtimeEnvironmentForAgentQuery();
+    /*
+     * Claude Code writes its plan file before asking to run ExitPlanMode, but
+     * the SDK does not necessarily yield that assistant message until the
+     * permission callback returns. Observe the write off-loop so the pending
+     * approval snapshot already contains the plan while the callback is parked.
+     */
+    const observePlanWrite: HookCallback = async (hookInput) => {
+      if (
+        hookInput.hook_event_name === "PreToolUse" &&
+        session.planMode &&
+        session.latestTurnGeneration === turnGeneration
+      ) {
+        updateObservedPlan(session, hookInput);
+      }
+      return {};
+    };
     const queryIterator = query({
       prompt: heldSdkPrompt.prompt,
       options: {
@@ -721,6 +801,9 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         mcpServers: mcpServerCount > 0 ? mcpServers : undefined,
         // Load plugins from user config
         plugins: pluginCount > 0 ? plugins : undefined,
+        hooks: {
+          PreToolUse: [{ matcher: "Write|Edit", hooks: [observePlanWrite] }],
+        },
         // Pinned against @anthropic-ai/claude-agent-sdk 0.3.245: although the
         // SDK warns that bypassPermissions shadows canUseTool for ordinary
         // tool permission checks, AskUserQuestion is a special case. A live
@@ -731,7 +814,11 @@ Plan mode is read-only: do not write or edit files until the user approves your 
         // equivalent provider-authoritative policy path.
         // Handle AskUserQuestion tool to get user input.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        canUseTool: async (toolName: string, input: any) => {
+        canUseTool: async (
+          toolName: string,
+          input: any,
+          permissionContext?: { toolUseID?: string },
+        ) => {
           if (toolName === "AskUserQuestion") {
             const questions: QuestionInfo[] = Array.isArray(input.questions) ? input.questions : [];
             const questionTexts = questions.map((question) => question.question);
@@ -851,10 +938,18 @@ Plan mode is read-only: do not write or edit files until the user approves your 
 
             // Create a plan approval request and wait for user decision
             const approvalId = generateMessageId();
+            const directPlan = boundedPlan(input?.plan);
+            const capturedPlan = session.observedPlan?.content
+              ? {
+                  plan: session.observedPlan.content,
+                  ...(session.observedPlan.truncated ? { planTruncated: true } : {}),
+                }
+              : {};
             const approvalRequest: PlanApprovalRequest = {
               id: approvalId,
               sessionId,
-              toolUseId: approvalId,
+              toolUseId: permissionContext?.toolUseID ?? approvalId,
+              ...(directPlan.plan ? directPlan : capturedPlan),
               expiresAt: Date.now() + PLAN_APPROVAL_TIMEOUT_MS,
             };
 

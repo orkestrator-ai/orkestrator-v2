@@ -35,6 +35,7 @@ import {
   normalizeSteps,
   sessionPhaseFor,
   resumePromptFor,
+  discardSessionReviewReports,
   DEFAULT_RECONNECT_DEADLINE_MS,
   DEFAULT_STRUCTURED_RESULT_DEADLINE_MS,
   DEFAULT_TRANSCRIPT_PERSIST_INTERVAL_MS,
@@ -475,6 +476,11 @@ export abstract class BuildPipelineServiceBase {
       // reviewer session a generic resume prompt could safely target.
       if (phase === "reviewing" && usesReviewFanout(candidate)) {
         candidate.reviewRetryRequested = true;
+        if (!candidate.reviewPackage) {
+          discardSessionReviewReports(candidate);
+          delete candidate.structuredReview;
+          delete candidate.structuredReviewRequestId;
+        }
         return;
       }
       const session = sessionForCurrentPhase(candidate);
@@ -584,6 +590,12 @@ export abstract class BuildPipelineServiceBase {
         return;
       }
       candidate.reviewRetryRequested = true;
+      discardSessionReviewReports(candidate);
+      delete candidate.reviewPackage;
+      delete candidate.structuredReview;
+      delete candidate.structuredReviewRequestId;
+      delete candidate.verificationResult;
+      delete candidate.verificationFeedback;
       if (candidate.phase === "failed" || candidate.phase === "paused") {
         // A retry is an explicit instruction to keep going, so revive the
         // pipeline; the requested review starts on the next supervisor pass.

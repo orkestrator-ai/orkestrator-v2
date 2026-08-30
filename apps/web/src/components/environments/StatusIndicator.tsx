@@ -66,9 +66,9 @@ export function StatusIndicator({ status, showLabel = false, className }: Status
             <span
               className={cn(
                 "text-xs",
-                status === "running" && "text-green-500",
+                status === "running" && "text-status-running",
                 status === "stopped" && "text-muted-foreground",
-                status === "error" && "text-red-500",
+                status === "error" && "text-status-error",
                 status === "creating" && "text-blue-500",
                 status === "stopping" && "text-orange-500",
               )}

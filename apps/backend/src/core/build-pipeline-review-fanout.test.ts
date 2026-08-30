@@ -7,6 +7,7 @@ import type {
   BuildPipelineAgent,
   PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
+import { MAX_BUILD_PIPELINE_REVIEWERS } from "@orkestrator/protocol/build-pipeline";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { StorageService } from "./storage.js";
@@ -18,6 +19,10 @@ import type {
   ProviderStatus,
 } from "./build-pipeline-provider.js";
 import { AmbiguousPromptDispatchError } from "./build-pipeline-provider.js";
+import {
+  TEST_REVIEW_PREPARATION,
+  testGeneratedReviewPackage,
+} from "./build-pipeline-test-fixtures.js";
 
 const HEAD = "1".repeat(40);
 const FINGERPRINT = "a".repeat(64);
@@ -114,6 +119,7 @@ class FanoutProvider implements BuildPipelineProvider {
   private messageVersion = 0;
   private readonly ambiguityRaised = new Set<string>();
   private readonly sessionModels = new Map<string, string | undefined>();
+  private readonly sessionPhases = new Map<string, PipelineSessionPhase>();
   private counter = 0;
 
   registerSession(): void {}
@@ -126,6 +132,7 @@ class FanoutProvider implements BuildPipelineProvider {
     this.created.push({ phase, label, options });
     const id = `${label.replace(/\s+/g, "-").toLowerCase()}-${++this.counter}`;
     this.sessionModels.set(id, options?.model);
+    this.sessionPhases.set(id, phase);
     return id;
   }
 
@@ -186,6 +193,10 @@ class FanoutProvider implements BuildPipelineProvider {
     if (sessionId.includes("review")) {
       return { ...base, value: reportFor(`Report from ${sessionId}`, "Reviewer finding") as T };
     }
+    const phase = this.sessionPhases.get(sessionId);
+    if (phase === "build" || phase === "fix") {
+      return { ...base, value: TEST_REVIEW_PREPARATION as T };
+    }
     // Address, verify, PR and resolve all answer their own contracts; none of
     // them matter to the fan-out, which ends at the consolidated report.
     return { ...base, value: { complete: true, rationale: "Done." } as T };
@@ -204,6 +215,7 @@ async function withPipeline(
     providers: Map<BuildPipelineAgent, FanoutProvider>;
     read: (id: string) => Promise<BuildPipeline>;
     worktree: { head: string; fingerprint: string; fail: boolean };
+    packageGeneration: { count: number };
   }) => Promise<void>,
   options: { transcriptPersistIntervalMs?: number } = {},
 ): Promise<void> {
@@ -236,10 +248,19 @@ async function withPipeline(
     ["pi", new FanoutProvider("pi")],
   ]);
   const worktree = { head: HEAD, fingerprint: FINGERPRINT, fail: false };
+  const packageGeneration = { count: 0 };
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     if (command === "get_environment_uncommitted_paths") {
       if (worktree.fail) throw new Error("probe failed");
       return { head: worktree.head, paths: [], fingerprint: worktree.fingerprint } as T;
+    }
+    if (command === "generate_looped_review_package") {
+      packageGeneration.count += 1;
+      const generated = testGeneratedReviewPackage(_args);
+      const head = String(packageGeneration.count).repeat(40);
+      generated.headRef = head;
+      generated.commit = { sha: head, subject: "feat: build", committedFiles: [] };
+      return generated as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
@@ -265,7 +286,7 @@ async function withPipeline(
     return record.snapshot as BuildPipeline;
   };
   try {
-    await run({ service, storage, provider, providers, read, worktree });
+    await run({ service, storage, provider, providers, read, worktree, packageGeneration });
   } finally {
     await service.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -349,7 +370,8 @@ describe("build pipeline multi-model review", () => {
       const reviewing = await advanceUntil(service, read, started.id, "reviewing");
       expect(reviewing.phase).toBe("reviewing");
       expect(reviewing.reviewFanout?.reviewers).toHaveLength(2);
-      expect(reviewing.reviewFanout?.snapshot?.head).toBe(HEAD);
+      expect(reviewing.reviewFanout?.snapshot).toBeUndefined();
+      expect(reviewing.reviewPackage?.headRef).toBe(HEAD);
 
       const addressing = await advanceUntil(service, read, started.id, "addressing");
       expect(addressing.error ?? addressing.phase).toBe("addressing");
@@ -361,6 +383,17 @@ describe("build pipeline multi-model review", () => {
       expect(reviewLabels).toContain("Review 1");
       expect(reviewLabels).toContain("Review 2");
       expect(reviewLabels).toContain("Review · Consolidation");
+      const reviewerPrompts = provider.sent.filter(
+        (entry) =>
+          entry.sessionId.includes("review-") && !entry.sessionId.includes("consolidation"),
+      );
+      expect(reviewerPrompts).toHaveLength(2);
+      expect(reviewerPrompts.every((entry) => entry.prompt.includes('"headRef"'))).toBe(true);
+      expect(
+        reviewerPrompts.every((entry) =>
+          entry.prompt.includes("Do not modify files, run git, rerun validation"),
+        ),
+      ).toBe(true);
       expect(
         addressing.sessions.filter((session) => session.label.startsWith("Review")).length,
       ).toBeGreaterThanOrEqual(2);
@@ -370,6 +403,16 @@ describe("build pipeline multi-model review", () => {
       );
       expect(reviewSessions).toHaveLength(2);
       expect(reviewSessions.every((session) => session.status === "idle")).toBe(true);
+      expect(reviewSessions.every((session) => session.reviewReport !== undefined)).toBe(true);
+      expect(reviewSessions.every((session) => session.structuredResultStatus === "accepted")).toBe(
+        true,
+      );
+      const consolidationSession = addressing.sessions.find(
+        (session) => session.label === "Consolidation",
+      );
+      expect(consolidationSession?.reviewReport?.reviewSummary).toBe("Merged review.");
+      expect(consolidationSession?.structuredResultStatus).toBe("accepted");
+      expect(addressing.structuredReviewRequestId).toBe(consolidationSession?.structuredRequestId);
       // Everything downstream reads one report, and the fan-out record is gone.
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
       expect(addressing.reviewFanout).toBeUndefined();
@@ -394,6 +437,58 @@ describe("build pipeline multi-model review", () => {
       expect(addressing.error ?? addressing.phase).toBe("addressing");
       // The surviving reviewer's report is what got consolidated.
       expect(addressing.structuredReview?.reviewSummary).toBe("Merged review.");
+    });
+  });
+
+  test("settlement tolerates a missing mirror and does not overwrite an accepted session report", async () => {
+    await withPipeline(async ({ service, storage, read, provider }) => {
+      provider.runningModels.add("opus");
+      provider.runningModels.add("sonnet");
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      await advanceUntil(service, read, started.id, "reviewing");
+      await service.advanceNow(started.id);
+
+      let missingSessionKey = "";
+      let retainedSessionKey = "";
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        const [missing, retained] = pipeline.reviewFanout!.reviewers;
+        if (!missing?.sessionKey || !retained?.sessionKey) {
+          throw new Error("Reviewer mirrors were not created");
+        }
+        missingSessionKey = missing.sessionKey;
+        retainedSessionKey = retained.sessionKey;
+        missing.status = "completed";
+        missing.report = reportFor("The missing mirror still contributed evidence.");
+        missing.completedAt = new Date().toISOString();
+        retained.status = "completed";
+        retained.report = reportFor("A later settlement result that must not replace the session.");
+        retained.completedAt = new Date().toISOString();
+        pipeline.sessions = pipeline.sessions.filter(
+          (session) => session.sessionKey !== missingSessionKey,
+        );
+        const retainedSession = pipeline.sessions.find(
+          (session) => session.sessionKey === retainedSessionKey,
+        );
+        if (!retainedSession) throw new Error("Retained reviewer mirror disappeared");
+        retainedSession.reviewReport = reportFor("Already accepted on the session.");
+        retainedSession.structuredResultStatus = "accepted";
+      });
+
+      await service.advanceNow(started.id);
+      const settled = await read(started.id);
+
+      expect(settled.sessions.some((session) => session.sessionKey === missingSessionKey)).toBe(
+        false,
+      );
+      expect(
+        settled.sessions.find((session) => session.sessionKey === retainedSessionKey)?.reviewReport
+          ?.reviewSummary,
+      ).toBe("Already accepted on the session.");
     });
   });
 
@@ -473,8 +568,38 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
+  test("resume rebuilds a missing package before reopening fan-out", async () => {
+    await withPipeline(async ({ service, storage, read, packageGeneration }) => {
+      const started = await service.start(
+        startInput([
+          { agent: "claude", model: "opus" },
+          { agent: "claude", model: "sonnet" },
+        ]),
+      );
+      await advanceUntil(service, read, started.id, "reviewing");
+      await service.pause(started.id);
+      await rewritePipeline(storage, started.id, (pipeline) => {
+        delete pipeline.reviewPackage;
+      });
+
+      await service.resume(started.id);
+      for (let pass = 0; pass < 4 && packageGeneration.count < 2; pass += 1) {
+        await service.advanceNow(started.id);
+      }
+
+      const resumed = await read(started.id);
+      expect({
+        count: packageGeneration.count,
+        phase: resumed.phase,
+        error: resumed.error,
+      }).toEqual({ count: 2, phase: "reviewing", error: undefined });
+      expect(resumed.reviewPackage?.headRef).toBe("2".repeat(40));
+      expect(resumed.reviewFanout).toBeDefined();
+    });
+  });
+
   test("review retry abandons the old panel before opening a new one", async () => {
-    await withPipeline(async ({ service, storage, read, provider }) => {
+    await withPipeline(async ({ service, storage, read, provider, packageGeneration }) => {
       provider.runningModels.add("opus");
       provider.runningModels.add("sonnet");
       const started = await service.start(
@@ -488,20 +613,47 @@ describe("build pipeline multi-model review", () => {
       const firstPanel = (await read(started.id)).reviewFanout!.reviewers.map(
         (reviewer) => reviewer.providerSessionId!,
       );
+      let retainedSnapshotBytes = 0;
       await rewritePipeline(storage, started.id, (pipeline) => {
         pipeline.structuredReview = reportFor("Previous review");
+        pipeline.structuredReviewRequestId = "previous-review-request";
         pipeline.verificationResult = "fail";
         pipeline.verificationFeedback = "Previous verification";
+        const largeReport = reportFor("x".repeat(16 * 1024));
+        for (let iteration = 0; iteration < 2; iteration += 1) {
+          for (let reviewer = 0; reviewer < MAX_BUILD_PIPELINE_REVIEWERS; reviewer += 1) {
+            pipeline.sessions.push({
+              phase: "review",
+              iteration,
+              sessionKey: `historical-review-${iteration}-${reviewer}`,
+              sdkSessionId: `historical-session-${iteration}-${reviewer}`,
+              status: "idle",
+              startedAt: new Date().toISOString(),
+              label: `Historical Review ${iteration + 1}.${reviewer + 1}`,
+              reviewReport: largeReport,
+            });
+          }
+        }
+        retainedSnapshotBytes = Buffer.byteLength(JSON.stringify(pipeline), "utf8");
       });
 
       await service.retryReview(started.id);
+      await service.advanceNow(started.id);
       const retried = await read(started.id);
 
       expect(provider.aborted).toEqual(expect.arrayContaining(firstPanel));
       expect(retried.reviewRetryRequested).toBeUndefined();
       expect(retried.structuredReview).toBeUndefined();
+      expect(retried.structuredReviewRequestId).toBeUndefined();
+      expect(retried.sessions.filter((session) => session.reviewReport).length).toBe(0);
+      expect(Buffer.byteLength(JSON.stringify(retried), "utf8")).toBeLessThan(
+        retainedSnapshotBytes,
+      );
+      expect(Buffer.byteLength(JSON.stringify(retried), "utf8")).toBeLessThan(32 * 1024 * 1024);
       expect(retried.verificationResult).toBeUndefined();
       expect(retried.verificationFeedback).toBeUndefined();
+      expect(packageGeneration.count).toBe(2);
+      expect(retried.reviewPackage?.headRef).toBe("2".repeat(40));
       expect(
         retried.reviewFanout?.reviewers.map((reviewer) => reviewer.providerSessionId),
       ).not.toEqual(firstPanel);
@@ -703,7 +855,7 @@ describe("build pipeline multi-model review", () => {
     });
   });
 
-  test("fails closed and abandons live reviewers when the worktree snapshot drifts", async () => {
+  test("continues from the immutable package when the live worktree HEAD moves", async () => {
     await withPipeline(async ({ service, read, provider, worktree }) => {
       provider.ambiguousModels.add("opus");
       const started = await service.start(
@@ -717,16 +869,15 @@ describe("build pipeline multi-model review", () => {
       worktree.head = "2".repeat(40);
 
       await service.advanceNow(started.id);
-      const failed = await read(started.id);
+      const advanced = await read(started.id);
 
-      expect(failed.phase).toBe("failed");
-      expect(failed.error).toContain("worktree changed");
-      expect(failed.sessions.every((session) => session.status !== "running")).toBe(true);
-      expect(provider.aborted.length).toBeGreaterThan(0);
+      expect(advanced.phase).toBe("addressing");
+      expect(advanced.error).toBeUndefined();
+      expect(provider.aborted).toHaveLength(0);
     });
   });
 
-  test("fails closed when the pinned snapshot can no longer be verified", async () => {
+  test("does not probe the live worktree after the package is prepared", async () => {
     await withPipeline(async ({ service, read, provider, worktree }) => {
       provider.ambiguousModels.add("opus");
       const started = await service.start(
@@ -740,11 +891,10 @@ describe("build pipeline multi-model review", () => {
       worktree.fail = true;
 
       await service.advanceNow(started.id);
-      const failed = await read(started.id);
+      const advanced = await read(started.id);
 
-      expect(failed.phase).toBe("failed");
-      expect(failed.error).toContain("cannot verify its worktree snapshot");
-      expect(failed.sessions.every((session) => session.status !== "running")).toBe(true);
+      expect(advanced.phase).toBe("addressing");
+      expect(advanced.error).toBeUndefined();
     });
   });
 

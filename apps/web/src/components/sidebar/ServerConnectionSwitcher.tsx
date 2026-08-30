@@ -171,7 +171,7 @@ export function ServerConnectionSwitcher() {
       </DropdownMenu>
 
       <Dialog open={dialogOpen} onOpenChange={(open) => !connecting && setDialogOpen(open)}>
-        <DialogContent className="max-w-md border-zinc-800 bg-[#171719] p-0 sm:max-w-md [&_input]:bg-[#101012]">
+        <DialogContent className="max-w-md border-border bg-popover p-0 sm:max-w-md [&_input]:bg-background">
           <form onSubmit={handleConnect}>
             <DialogHeader className="border-b border-zinc-800/90 px-6 py-5">
               <div className="mb-1 flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/10 ring-1 ring-orange-400/20">

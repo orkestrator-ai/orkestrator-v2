@@ -40,32 +40,147 @@
 }
 
 @theme {
+  /*
+   * Cool near-black ramp, overriding Tailwind's own neutral `zinc`.
+   *
+   * The renderer names `zinc-*` in roughly two hundred places, and those class
+   * names encode a hierarchy (panel behind control behind hover) that is still
+   * correct — only the hue and the darkest steps changed. Retinting the scale
+   * here moves every one of those surfaces together; rewriting the call sites
+   * would move them apart.
+   */
+  --color-zinc-50: oklch(98.4% 0.002 264);
+  --color-zinc-100: oklch(96.5% 0.004 264);
+  --color-zinc-200: oklch(92.2% 0.006 264);
+  --color-zinc-300: oklch(86.8% 0.01 264);
+  --color-zinc-400: oklch(70.2% 0.018 264);
+  --color-zinc-500: oklch(55% 0.022 264);
+  --color-zinc-600: oklch(44% 0.022 264);
+  --color-zinc-700: oklch(36.5% 0.02 264);
+  --color-zinc-800: oklch(26.5% 0.016 264);
+  --color-zinc-900: oklch(19.5% 0.013 264);
+  --color-zinc-950: oklch(13.5% 0.011 264);
+
+  /*
+   * One green and one red for the whole app, anchored at step 400 on
+   * `--color-success` / `--color-failure` below. Diff `+`/`-` counts and
+   * tool-call success/failure previously drew from four different steps
+   * (`green-500`, `green-600`, `red-400`, `red-500`), so the same two meanings
+   * were painted in four colours. Retinting the ramps means the incidental
+   * `text-green-*` / `text-red-*` sites elsewhere land in the same family
+   * without being rewritten.
+   *
+   * `emerald` is deliberately left alone: it is an accent hue that
+   * distinguishes agent platforms in the model picker, not a success signal.
+   */
+  --color-green-50: oklch(98.2% 0.013 156.6);
+  --color-green-100: oklch(96.2% 0.033 156.6);
+  --color-green-200: oklch(92.5% 0.063 156.6);
+  --color-green-300: oklch(87.1% 0.112 156.6);
+  --color-green-400: oklch(82.37% 0.1561 156.6);
+  --color-green-500: oklch(72.3% 0.164 156.6);
+  --color-green-600: oklch(62.7% 0.145 156.6);
+  --color-green-700: oklch(52.7% 0.115 156.6);
+  --color-green-800: oklch(44.8% 0.089 156.6);
+  --color-green-900: oklch(39.3% 0.071 156.6);
+  --color-green-950: oklch(26.6% 0.049 156.6);
+
+  --color-red-50: oklch(97.1% 0.011 25.78);
+  --color-red-100: oklch(93.6% 0.024 25.78);
+  --color-red-200: oklch(88.5% 0.053 25.78);
+  --color-red-300: oklch(80.8% 0.097 25.78);
+  --color-red-400: oklch(73.45% 0.1626 25.78);
+  --color-red-500: oklch(63.7% 0.202 25.78);
+  --color-red-600: oklch(57.7% 0.209 25.78);
+  --color-red-700: oklch(50.5% 0.189 25.78);
+  --color-red-800: oklch(44.4% 0.165 25.78);
+  --color-red-900: oklch(39.6% 0.14 25.78);
+  --color-red-950: oklch(25.8% 0.096 25.78);
+
   /* Dark theme colors */
-  --color-background: #000000;
-  --color-foreground: #e4e4e7;
-  --color-muted: #27272a;
-  --color-muted-foreground: #a1a1aa;
-  --color-card: #18181b;
-  --color-card-foreground: #e4e4e7;
-  --color-panel-surface: #27272a;
-  --color-popover: #27272a;
-  --color-popover-foreground: #e4e4e7;
-  --color-border: #3f3f46;
-  --color-input: #3f3f46;
+  --color-background: #0e1014;
+  --color-foreground: #e7e9ee;
+  --color-muted: #1c1f26;
+  --color-muted-foreground: #8d929e;
+  --color-card: #14161b;
+  --color-card-foreground: #e7e9ee;
+  --color-panel-surface: #1c1f26;
+  --color-popover: #16181e;
+  --color-popover-foreground: #e7e9ee;
+  --color-border: #262a32;
+  --color-input: #262a32;
   --color-primary: #3b82f6;
   --color-primary-foreground: #ffffff;
-  --color-secondary: #3f3f46;
-  --color-secondary-foreground: #e4e4e7;
-  --color-accent: #3f3f46;
-  --color-accent-foreground: #e4e4e7;
-  --color-destructive: #ef4444;
+  --color-secondary: #23262e;
+  --color-secondary-foreground: #e7e9ee;
+  --color-accent: #23262e;
+  --color-accent-foreground: #f2f4f8;
+  /*
+   * A fill, not a foreground, so it is deliberately not `--color-failure`.
+   * `failure` is tuned to be read as text on a dark surface; using it here
+   * would put white glyphs on a pale coral button at roughly 2.5:1.
+   */
+  --color-destructive: #e5534b;
   --color-destructive-foreground: #ffffff;
   --color-ring: #3b82f6;
 
+  /*
+   * Named surfaces, so the shell's three background layers are one decision
+   * each rather than a hex literal repeated at every header.
+   *
+   * `chrome` is the toolbar/header band, `sidebar` the project panel, and
+   * `elevated` the resting surface of a control that sits on either of them.
+   *
+   * Controls use `elevated` rather than `accent`/`secondary` on purpose. The
+   * shell rebinds those two — along with `muted`, `card` and `popover` — to the
+   * terminal background inside the central panel (`AppShell`'s
+   * `centralPanelThemeVars`), so a button painted with them disappears into the
+   * surface it is sitting on. `elevated` is deliberately outside that set.
+   */
+  --color-chrome: #17191f;
+  --color-sidebar: #101319;
+  --color-elevated: #23262e;
+  --color-elevated-hover: #2c303a;
+
+  /*
+   * The hairline that separates the shell's panels, and now also the tool-call
+   * card's outline and its row separators. It is a flat colour rather than
+   * `border/80` so that every one of those renders identically regardless of
+   * what it happens to be composited over — the resize handle sits on
+   * `zinc-900`, the tool card on `sidebar`. This is exactly what the handle
+   * used to resolve to.
+   */
+  --color-divider: #22262d;
+
+  /*
+   * Selection is blue-tinted rather than a lighter grey: the sidebar's hover
+   * state is already a lighter grey, and a selected row has to stay legible as
+   * selected while the pointer is somewhere else in the list.
+   */
+  --color-selected: #1d2941;
+  /* The far end of the selected row's gradient: `--color-selected` at 80%. */
+  --color-selected-edge: #172134;
+  --color-selected-foreground: #e8eefb;
+  /*
+   * Hover is a weaker shade of `--color-selected`, not a neutral wash: a grey
+   * highlight beside a blue selection reads as a different colour rather than
+   * a different state. It sits between the panel background and the selected
+   * row so a hovered row cannot outshine the selected one.
+   */
+  --color-hover: #1a2438;
+
+  /*
+   * The single success/failure pair. Added and removed diff lines, tool-call
+   * outcomes, and run/error status all resolve here, so the meaning is one
+   * colour wherever it appears.
+   */
+  --color-success: #5ee39b;
+  --color-failure: #ff7b72;
+
   /* Status colors */
-  --color-status-running: #22c55e;
+  --color-status-running: #5ee39b;
   --color-status-stopped: #71717a;
-  --color-status-error: #ef4444;
+  --color-status-error: #ff7b72;
   --color-status-creating: #3b82f6;
 
   /* Sidebar */
@@ -139,11 +254,11 @@ body[data-orkestrator-dev-profile]::before {
 }
 
 .sidebar-glass {
-  background-color: #18191c;
+  background-color: var(--color-sidebar);
 }
 
 .panel-surface {
-  background-color: rgb(24 24 27 / 0.8);
+  background-color: color-mix(in srgb, var(--color-card) 80%, transparent);
 }
 
 /* Prevent text selection during resize operations */

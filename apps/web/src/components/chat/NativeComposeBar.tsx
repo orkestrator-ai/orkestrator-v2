@@ -1,14 +1,12 @@
 import type { KeyboardEvent, ReactNode, RefObject } from "react";
 import { AlertCircle, ArrowUp, FileText, Square, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ContextUsageWheel } from "@/components/chat/ContextUsageWheel";
 import {
   COMPOSE_MAX_INPUT_HEIGHT,
   COMPOSE_MIN_INPUT_HEIGHT,
 } from "@/components/chat/compose-metrics";
 import { MentionableInput, type MentionableInputRef } from "@/components/chat/MentionableInput";
 import { cn } from "@/lib/utils";
-import type { ContextUsageSnapshot } from "@/lib/context-usage";
 import type { FileMention } from "@/types";
 
 export interface NativeComposeAttachment {
@@ -43,8 +41,6 @@ export interface NativeComposeBarProps {
   isLoading?: boolean;
   menus?: ReactNode;
   primaryControls: ReactNode;
-  contextUsage?: ContextUsageSnapshot | null;
-  showContextUsage?: boolean;
   queue?: NativeComposeQueueState;
   onStop?: () => void | Promise<void>;
   showAddressAll?: boolean;
@@ -80,8 +76,6 @@ export function NativeComposeBar({
   isLoading = false,
   menus,
   primaryControls,
-  contextUsage,
-  showContextUsage = true,
   queue,
   onStop,
   showAddressAll = false,
@@ -97,7 +91,7 @@ export function NativeComposeBar({
       <div
         data-testid={testId}
         className={cn(
-          "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-2xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
+          "mx-auto w-[calc(100%_-_0.75rem)] shrink-0 rounded-xl border border-border/70 bg-zinc-900/90 p-3 shadow-xl shadow-black/20 sm:w-[min(calc(100%_-_2rem),56rem)]",
           layout === "bottom" ? "mb-4 mt-2" : "my-0",
         )}
       >
@@ -169,10 +163,10 @@ export function NativeComposeBar({
                 type="button"
                 onClick={queue.onOpen}
                 className={cn(
-                  "flex items-center gap-1 rounded px-2 py-1 text-xs transition-colors",
+                  "flex h-7 items-center gap-1 rounded-lg px-2 text-xs transition-colors",
                   queue.error
-                    ? "bg-destructive/10 text-destructive hover:bg-destructive/20"
-                    : "bg-muted/50 text-muted-foreground hover:bg-muted",
+                    ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
+                    : "bg-elevated text-muted-foreground hover:bg-elevated-hover hover:text-foreground",
                 )}
                 aria-label={
                   queue.error
@@ -192,19 +186,15 @@ export function NativeComposeBar({
               </button>
             ) : null}
 
-            {showContextUsage && contextUsage != null ? (
-              <ContextUsageWheel usage={contextUsage} className="ml-1" />
-            ) : null}
-
             {isLoading ? (
               <button
                 type="button"
                 onClick={() => void onStop?.()}
                 disabled={disabled || !onStop}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-destructive/10 text-destructive transition-colors hover:bg-destructive/20 disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-destructive text-white transition-colors hover:bg-destructive/85 disabled:cursor-not-allowed disabled:opacity-50"
                 title="Stop current query"
               >
-                <Square className="h-4 w-4 fill-current" />
+                <Square className="h-3.5 w-3.5 fill-current" />
               </button>
             ) : null}
 
@@ -215,7 +205,7 @@ export function NativeComposeBar({
                 variant="secondary"
                 onClick={() => void onAddressAll?.()}
                 disabled={disabled || isSending || !onAddressAll}
-                className="h-8 rounded-full px-3 text-xs"
+                className="h-7 rounded-lg px-3 text-xs"
                 title="Send the review follow-up prompt"
               >
                 Address all
@@ -227,10 +217,15 @@ export function NativeComposeBar({
                 type="button"
                 size="icon"
                 className={cn(
-                  "h-8 w-8 rounded-full text-foreground transition-colors",
+                  "h-7 w-7 rounded-lg transition-colors",
+                  /*
+                    Queueing is still a send, so it keeps the send button's
+                    shape and colour and only steps back in weight — a
+                    different-coloured control here reads as a different action.
+                  */
                   isLoading
-                    ? "bg-primary/20 text-primary hover:bg-primary/30"
-                    : "bg-muted hover:bg-muted/80",
+                    ? "bg-primary/25 text-blue-200 hover:bg-primary/40"
+                    : "bg-primary text-primary-foreground hover:bg-primary/85",
                 )}
                 disabled={sendDisabled}
                 onClick={() => void onSend()}

@@ -189,6 +189,55 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function AttachmentPreviews({
+  attachments,
+  disabled,
+  onRemove,
+}: {
+  attachments: InitialPromptImageAttachment[];
+  disabled: boolean;
+  onRemove: (id: string) => void;
+}) {
+  if (attachments.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {attachments.map((attachment) => (
+        <div
+          key={attachment.id}
+          className={cn(
+            "group relative h-16 overflow-hidden rounded-md border border-border bg-muted",
+            attachment.type === "file" ? "flex w-40 items-center gap-2 px-2" : "w-16",
+          )}
+        >
+          {attachment.type === "file" ? (
+            <>
+              <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate pr-4 text-xs" title={attachment.name}>
+                {attachment.name}
+              </span>
+            </>
+          ) : (
+            <img
+              src={attachment.previewUrl}
+              alt={attachment.name}
+              className="h-full w-full object-cover"
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => onRemove(attachment.id)}
+            disabled={disabled}
+            className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
+            aria-label={`Remove ${attachment.name}`}
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export interface ClaudeOptions {
   environmentType: EnvironmentType;
   environmentName: string;
@@ -585,6 +634,7 @@ export function CreateEnvironmentDialog({
     useState<MobileTabTransitionDirection | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const promptRef = useRef<HTMLTextAreaElement>(null);
+  const buildIntentRef = useRef<BuildIntent>("prompt");
   const promptPasteRequestIdRef = useRef(0);
   const initialPromptAttachmentsRef = useRef<InitialPromptImageAttachment[]>([]);
   const attachmentDragDepthRef = useRef(0);
@@ -690,6 +740,7 @@ export function CreateEnvironmentDialog({
     setShowPortConfig(defaultPortMappings.length > 0);
     setMobileSection("prompt");
     setMobileTabTransitionDirection(null);
+    buildIntentRef.current = "prompt";
     setBuildIntent("prompt");
     setFeatureName("");
     setFeatureDescription("");
@@ -722,6 +773,19 @@ export function CreateEnvironmentDialog({
     featureAttemptModelsRef.current = null;
   }, []);
 
+  const handleBuildIntentChange = useCallback((intent: BuildIntent) => {
+    if (intent === buildIntentRef.current) return;
+    promptPasteRequestIdRef.current += 1;
+    attachmentProcessingGenerationRef.current += 1;
+    activeAttachmentOperationIdsRef.current.clear();
+    promptPasteOperationRef.current = null;
+    setPendingAttachmentOperations(0);
+    attachmentDragDepthRef.current = 0;
+    setIsDraggingAttachments(false);
+    buildIntentRef.current = intent;
+    setBuildIntent(intent);
+  }, []);
+
   const beginAttachmentOperation = useCallback(() => {
     const operation = {
       id: ++nextAttachmentOperationIdRef.current,
@@ -744,7 +808,7 @@ export function CreateEnvironmentDialog({
       filename?: string,
       isCurrent: () => boolean = () => true,
     ): Promise<InitialPromptImageAttachment | null> => {
-      const image = await readImage(blob ?? undefined);
+      const image = await readImage(blob);
       if (!isCurrent()) return null;
       const rgba = await image.rgba();
       if (!isCurrent()) return null;
@@ -796,20 +860,20 @@ export function CreateEnvironmentDialog({
     (attachments: InitialPromptImageAttachment[]): boolean => {
       if (attachments.length === 0) return false;
       const current = initialPromptAttachmentsRef.current;
-      if (current.length + attachments.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
+      const next = [...current, ...attachments];
+      if (next.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
         toast.error("Too many attachments", {
-          description: `An initial prompt can include up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} files.`,
+          description: `Up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} attachments can be included.`,
         });
         return false;
       }
-      const durableBytes = serializedInitialPromptAttachmentBytes([...current, ...attachments]);
+      const durableBytes = serializedInitialPromptAttachmentBytes(next);
       if (durableBytes > MAX_INITIAL_PROMPT_ATTACHMENT_STORAGE_BYTES) {
         toast.error("Attachments too large", {
-          description: "Initial prompt attachments can use up to 32MB of stored data.",
+          description: "Attachments can use up to 32MB of stored data.",
         });
         return false;
       }
-      const next = [...current, ...attachments];
       initialPromptAttachmentsRef.current = next;
       setInitialPromptAttachments(next);
       return true;
@@ -819,7 +883,17 @@ export function CreateEnvironmentDialog({
 
   const handlePromptPaste = useCallback(
     async (event: ClipboardEvent) => {
-      if (!open || !launchAgent || document.activeElement !== promptRef.current) return;
+      const isPasteTarget = () =>
+        buildIntentRef.current === "feature" ||
+        (launchAgent && document.activeElement === promptRef.current);
+      if (!open || !isPasteTarget()) return;
+
+      const pasteIntent = buildIntentRef.current;
+      const pastedBlob = getPastedImageBlob(event);
+      // A native paste event already exposes its complete readable payload.
+      // If that payload contains no image, leave text paste alone without
+      // starting an operation or asking the browser to read the clipboard.
+      if (event.clipboardData && !pastedBlob) return;
 
       const requestId = ++promptPasteRequestIdRef.current;
       const previousOperation = promptPasteOperationRef.current;
@@ -829,10 +903,10 @@ export function CreateEnvironmentDialog({
       const isCurrentRequest = () =>
         requestId === promptPasteRequestIdRef.current &&
         operation.generation === attachmentProcessingGenerationRef.current &&
-        document.activeElement === promptRef.current;
+        pasteIntent === buildIntentRef.current &&
+        isPasteTarget();
 
       try {
-        const pastedBlob = getPastedImageBlob(event);
         if (pastedBlob) {
           event.preventDefault();
           event.stopImmediatePropagation();
@@ -847,7 +921,9 @@ export function CreateEnvironmentDialog({
           event.stopImmediatePropagation();
         }
 
-        if (appendInitialPromptAttachments([attachment])) toast.success("Image attached");
+        if (appendInitialPromptAttachments([attachment])) {
+          toast.success("Image attached");
+        }
       } catch {
         // No image in the clipboard; let normal text paste continue.
       } finally {
@@ -874,13 +950,26 @@ export function CreateEnvironmentDialog({
       if (event.dataTransfer.files.length === 0) return;
       event.preventDefault();
       event.stopPropagation();
-      if (!open || !launchAgent || isLoading) return;
+      if (!open || (buildIntent !== "feature" && !launchAgent) || isLoading) return;
 
-      const files = Array.from(event.dataTransfer.files);
+      const dropIntent = buildIntentRef.current;
+      let files = Array.from(event.dataTransfer.files);
+      let skippedFeatureFiles = 0;
+      if (dropIntent === "feature") {
+        const imageCandidates = files.filter(
+          (file) => file.type.startsWith("image/") || file.type === "",
+        );
+        skippedFeatureFiles = files.length - imageCandidates.length;
+        files = imageCandidates;
+        if (files.length === 0) {
+          toast.error("Only images can be attached to a feature build");
+          return;
+        }
+      }
       const currentAttachments = initialPromptAttachmentsRef.current;
       if (currentAttachments.length + files.length > MAX_INITIAL_PROMPT_ATTACHMENTS) {
         toast.error("Too many attachments", {
-          description: `An initial prompt can include up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} files.`,
+          description: `Up to ${MAX_INITIAL_PROMPT_ATTACHMENTS} attachments can be included.`,
         });
         return;
       }
@@ -898,15 +987,20 @@ export function CreateEnvironmentDialog({
       }
       const operation = beginAttachmentOperation();
       const isCurrentOperation = () =>
-        operation.generation === attachmentProcessingGenerationRef.current;
+        operation.generation === attachmentProcessingGenerationRef.current &&
+        dropIntent === buildIntentRef.current;
       try {
         const attachments: InitialPromptImageAttachment[] = [];
         for (const file of files) {
           try {
-            if (file.type.startsWith("image/")) {
+            if (dropIntent === "feature" || file.type.startsWith("image/")) {
               const attachment = await encodeImageAttachment(file, file.name, isCurrentOperation);
               if (!isCurrentOperation()) return;
-              if (attachment) attachments.push(attachment);
+              if (attachment) {
+                attachments.push(attachment);
+              } else if (dropIntent === "feature") {
+                skippedFeatureFiles += 1;
+              }
             } else {
               const buffer = await file.arrayBuffer();
               if (!isCurrentOperation()) return;
@@ -920,7 +1014,11 @@ export function CreateEnvironmentDialog({
           } catch (error) {
             if (!isCurrentOperation()) return;
             console.warn("[CreateEnvironmentDialog] Failed to read dropped attachment:", error);
-            toast.error("Could not attach file", { description: file.name });
+            if (dropIntent === "feature") {
+              skippedFeatureFiles += 1;
+            } else {
+              toast.error("Could not attach file", { description: file.name });
+            }
           }
         }
         if (!isCurrentOperation()) return;
@@ -928,6 +1026,11 @@ export function CreateEnvironmentDialog({
           toast.success(
             `${attachments.length} file${attachments.length === 1 ? "" : "s"} attached`,
           );
+        }
+        if (skippedFeatureFiles > 0) {
+          toast.error("Some files were skipped", {
+            description: `${skippedFeatureFiles} unsupported file${skippedFeatureFiles === 1 ? " was" : "s were"} not attached.`,
+          });
         }
       } finally {
         finishAttachmentOperation(operation);
@@ -938,6 +1041,7 @@ export function CreateEnvironmentDialog({
       beginAttachmentOperation,
       encodeImageAttachment,
       finishAttachmentOperation,
+      buildIntent,
       isLoading,
       launchAgent,
       open,
@@ -953,20 +1057,21 @@ export function CreateEnvironmentDialog({
     (event: React.DragEvent<HTMLElement>) => {
       if (!hasDraggedFiles(event)) return;
       event.preventDefault();
-      if (!open || !launchAgent || isLoading) return;
+      if (!open || (buildIntent !== "feature" && !launchAgent) || isLoading) return;
       attachmentDragDepthRef.current += 1;
       setIsDraggingAttachments(true);
     },
-    [hasDraggedFiles, isLoading, launchAgent, open],
+    [buildIntent, hasDraggedFiles, isLoading, launchAgent, open],
   );
 
   const handleAttachmentDragOver = useCallback(
     (event: React.DragEvent<HTMLElement>) => {
       if (!hasDraggedFiles(event)) return;
       event.preventDefault();
-      event.dataTransfer.dropEffect = open && launchAgent && !isLoading ? "copy" : "none";
+      event.dataTransfer.dropEffect =
+        open && (buildIntent === "feature" || launchAgent) && !isLoading ? "copy" : "none";
     },
-    [hasDraggedFiles, isLoading, launchAgent, open],
+    [buildIntent, hasDraggedFiles, isLoading, launchAgent, open],
   );
 
   const handleAttachmentDragLeave = useCallback(() => {
@@ -989,13 +1094,13 @@ export function CreateEnvironmentDialog({
   }, [open, handlePromptPaste]);
 
   useEffect(() => {
-    if (open && launchAgent) return;
+    if (open && (launchAgent || buildIntent === "feature")) return;
     promptPasteRequestIdRef.current += 1;
     attachmentProcessingGenerationRef.current += 1;
     activeAttachmentOperationIdsRef.current.clear();
     promptPasteOperationRef.current = null;
     setPendingAttachmentOperations(0);
-  }, [launchAgent, open]);
+  }, [buildIntent, launchAgent, open]);
 
   useEffect(
     () => () => {
@@ -1242,6 +1347,12 @@ export function CreateEnvironmentDialog({
               environmentName,
               networkAccessMode,
               portMappings,
+              images: initialPromptAttachments
+                .filter((attachment) => attachment.type !== "file")
+                .map((attachment) => ({
+                  filename: attachment.name,
+                  data: attachment.base64Data,
+                })),
               models: requestModels,
               requestId,
             });
@@ -1761,7 +1872,7 @@ export function CreateEnvironmentDialog({
             >
               <FeatureBuildFields
                 intent={buildIntent}
-                onIntentChange={setBuildIntent}
+                onIntentChange={handleBuildIntentChange}
                 name={featureName}
                 onNameChange={setFeatureName}
                 description={featureDescription}
@@ -1777,6 +1888,26 @@ export function CreateEnvironmentDialog({
                 catalog={modelCatalog}
                 enabledPlatforms={enabledAgentPlatforms}
                 disabled={isLoading}
+                featureAttachments={
+                  <div className="space-y-1.5">
+                    <Label className="text-sm">Reference images</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Paste or drop images to include them in the feature build.
+                    </p>
+                    {isDraggingAttachments && (
+                      <p className="rounded-md border border-dashed border-primary/70 bg-primary/10 px-3 py-2 text-center text-sm text-primary">
+                        Drop images to attach them to the feature
+                      </p>
+                    )}
+                    <AttachmentPreviews
+                      attachments={initialPromptAttachments.filter(
+                        (attachment) => attachment.type !== "file",
+                      )}
+                      disabled={isLoading}
+                      onRemove={removeInitialPromptAttachment}
+                    />
+                  </div>
+                }
                 promptFields={
                   launchAgent ? (
                     <div className="space-y-2">
@@ -1805,48 +1936,11 @@ export function CreateEnvironmentDialog({
                           Drop files to attach them to the initial prompt
                         </p>
                       )}
-                      {initialPromptAttachments.length > 0 && (
-                        <div className="flex flex-wrap gap-2">
-                          {initialPromptAttachments.map((attachment) => (
-                            <div
-                              key={attachment.id}
-                              className={cn(
-                                "group relative h-16 overflow-hidden rounded-md border border-border bg-muted",
-                                attachment.type === "file"
-                                  ? "flex w-40 items-center gap-2 px-2"
-                                  : "w-16",
-                              )}
-                            >
-                              {attachment.type === "file" ? (
-                                <>
-                                  <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-                                  <span
-                                    className="min-w-0 truncate pr-4 text-xs"
-                                    title={attachment.name}
-                                  >
-                                    {attachment.name}
-                                  </span>
-                                </>
-                              ) : (
-                                <img
-                                  src={attachment.previewUrl}
-                                  alt={attachment.name}
-                                  className="h-full w-full object-cover"
-                                />
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => removeInitialPromptAttachment(attachment.id)}
-                                disabled={isLoading}
-                                className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-background/90 opacity-0 shadow-sm transition-opacity group-hover:opacity-100"
-                                aria-label={`Remove ${attachment.name}`}
-                              >
-                                <X className="h-3 w-3" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      <AttachmentPreviews
+                        attachments={initialPromptAttachments}
+                        disabled={isLoading}
+                        onRemove={removeInitialPromptAttachment}
+                      />
                     </div>
                   ) : null
                 }

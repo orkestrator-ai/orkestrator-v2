@@ -91,6 +91,27 @@ describe("create feature build input", () => {
     expect(isCreateFeatureBuildInput({ ...input, reviewers: [] })).toBe(false);
   });
 
+  test("accepts feature images and rejects malformed image entries", () => {
+    expect(
+      isCreateFeatureBuildInput({
+        ...input,
+        images: [{ filename: "reference.png", data: "QUJD" }],
+      }),
+    ).toBe(true);
+    expect(
+      isCreateFeatureBuildInput({
+        ...input,
+        images: [{ filename: "reference.png", data: "" }],
+      }),
+    ).toBe(false);
+    expect(
+      isCreateFeatureBuildInput({
+        ...input,
+        images: [{ filename: "", data: "QUJD" }],
+      }),
+    ).toBe(false);
+  });
+
   test("accepts a bounded idempotency key and rejects a blank one", () => {
     expect(isCreateFeatureBuildInput({ ...input, requestId: "req-1" })).toBe(true);
     expect(isCreateFeatureBuildInput({ ...input, requestId: "  " })).toBe(false);

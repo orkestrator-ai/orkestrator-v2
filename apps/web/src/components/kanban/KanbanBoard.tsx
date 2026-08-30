@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { Plus } from "lucide-react";
 import { useKanbanStore, type KanbanStatus, type KanbanTask } from "@/stores/kanbanStore";
-import { useUIStore, type ProjectBoardTab } from "@/stores";
+import { useEnvironmentStore, useUIStore, type ProjectBoardTab } from "@/stores";
 import {
   useBuildPipelineStore,
   isActiveBuildPhase,
@@ -60,6 +60,7 @@ function DroppableColumn({
   onAddTask,
   onClearTaskStatus,
   buildPhaseByTaskId,
+  environmentNameByTaskId,
 }: {
   column: (typeof COLUMNS)[number];
   tasks: KanbanTask[];
@@ -67,6 +68,7 @@ function DroppableColumn({
   onAddTask?: () => void;
   onClearTaskStatus: (task: KanbanTask) => void;
   buildPhaseByTaskId: Map<string, BuildPhase>;
+  environmentNameByTaskId: Map<string, string>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: column.id });
 
@@ -76,15 +78,18 @@ function DroppableColumn({
       className="flex h-full w-[calc(100vw-2rem)] min-w-[260px] shrink-0 flex-col sm:w-[320px] sm:min-w-[280px]"
     >
       {/* Column Header */}
-      <div className="flex items-center gap-2 px-3 py-2 mb-2">
-        <div className={`h-2.5 w-2.5 rounded-full ${column.color}`} />
+      <div className="mb-2 flex h-9 items-center gap-2 border-b border-border/60 px-1 pb-2">
+        <div className={`h-2 w-2 rounded-full ${column.color}`} />
         <h3 className="text-sm font-semibold text-foreground">{column.label}</h3>
-        <span className="text-xs text-muted-foreground ml-auto">{tasks.length}</span>
+        <span className="rounded-md bg-muted px-1.5 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
+          {tasks.length}
+        </span>
         {onAddTask && (
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 text-muted-foreground hover:text-foreground"
+            aria-label={`Add task to ${column.label}`}
+            className="ml-auto h-6 w-6 text-muted-foreground hover:text-foreground"
             onClick={onAddTask}
           >
             <Plus className="h-3.5 w-3.5" />
@@ -94,8 +99,8 @@ function DroppableColumn({
 
       {/* Column Body */}
       <div
-        className={`flex-1 rounded-lg border border-border/50 p-2 transition-colors min-h-[200px] overflow-y-auto ${
-          isOver ? "bg-accent/30 border-primary/30" : "bg-muted/20"
+        className={`min-h-[200px] flex-1 overflow-y-auto rounded-lg p-1 transition-colors ${
+          isOver ? "bg-accent/20" : "bg-transparent"
         }`}
       >
         <div className="space-y-2">
@@ -107,6 +112,7 @@ function DroppableColumn({
                 task={task}
                 onClick={() => onClickTask(task)}
                 buildPhase={buildPhase}
+                environmentName={environmentNameByTaskId.get(task.id)}
                 canClearStatus={canClearTaskBuildStatus(task, buildPhase)}
                 onClearStatus={onClearTaskStatus}
               />
@@ -114,7 +120,13 @@ function DroppableColumn({
           })}
         </div>
         {tasks.length === 0 && (
-          <div className="flex items-center justify-center h-20 text-xs text-muted-foreground">
+          <div
+            className={`flex h-20 items-center justify-center rounded-lg border border-dashed text-xs transition-colors ${
+              isOver
+                ? "border-primary/60 bg-primary/5 text-primary"
+                : "border-border/60 text-muted-foreground"
+            }`}
+          >
             Drop tasks here
           </div>
         )}
@@ -139,6 +151,32 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
       for (const pipeline of s.pipelines.values()) {
         if (pipeline.projectId === projectId) {
           record[pipeline.taskId] = pipeline.phase;
+        }
+      }
+      return record;
+    }),
+  );
+
+  // A task links to its environment directly once the build has created one;
+  // before that the pipeline is the only place the id exists.
+  const pipelineEnvironmentRecord = useBuildPipelineStore(
+    useShallow((s) => {
+      const record: Record<string, string> = {};
+      for (const pipeline of s.pipelines.values()) {
+        if (pipeline.projectId === projectId && pipeline.environmentId) {
+          record[pipeline.taskId] = pipeline.environmentId;
+        }
+      }
+      return record;
+    }),
+  );
+
+  const environmentNameRecord = useEnvironmentStore(
+    useShallow((s) => {
+      const record: Record<string, string> = {};
+      for (const environment of s.environments) {
+        if (environment.projectId === projectId) {
+          record[environment.id] = environment.name;
         }
       }
       return record;
@@ -181,6 +219,16 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
     }
     return grouped;
   }, [projectTasks]);
+
+  const environmentNameByTaskId = useMemo(() => {
+    const byTaskId = new Map<string, string>();
+    for (const task of projectTasks) {
+      const environmentId = task.environmentId ?? pipelineEnvironmentRecord[task.id];
+      const name = environmentId ? environmentNameRecord[environmentId] : undefined;
+      if (name) byTaskId.set(task.id, name);
+    }
+    return byTaskId;
+  }, [projectTasks, pipelineEnvironmentRecord, environmentNameRecord]);
 
   const activeTask = useMemo(
     () => (activeTaskId ? (projectTasks.find((t) => t.id === activeTaskId) ?? null) : null),
@@ -266,6 +314,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                     }
                     onClearTaskStatus={handleClearTaskStatus}
                     buildPhaseByTaskId={buildPhaseByTaskId}
+                    environmentNameByTaskId={environmentNameByTaskId}
                   />
                 ))}
               </div>
@@ -277,6 +326,7 @@ export function KanbanBoard({ projectId }: KanbanBoardProps) {
                     onClick={() => {}}
                     isDragOverlay
                     buildPhase={buildPhaseByTaskId.get(activeTask.id)}
+                    environmentName={environmentNameByTaskId.get(activeTask.id)}
                   />
                 )}
               </DragOverlay>

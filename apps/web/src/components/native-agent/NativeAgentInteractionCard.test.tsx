@@ -251,6 +251,7 @@ describe("NativeAgentInteractionCard", () => {
       kind: "plan-approval",
       presentation: {
         title: "Approve Claude's plan",
+        planAvailable: true,
         questions: [],
         confirmLabel: "Approve",
         declineLabel: "Deny",
@@ -283,5 +284,42 @@ describe("NativeAgentInteractionCard", () => {
       action: "decline",
       feedback: "Add rollback steps",
     });
+  });
+
+  test("shows unavailable plan copy as description without a plan disclosure", () => {
+    render(
+      <NativeAgentInteractionCard
+        interaction={{
+          ...interaction(false),
+          provider: "claude",
+          kind: "plan-approval",
+          presentation: {
+            title: "Claude's plan is unavailable for approval",
+            body: "Claude asked to leave plan mode without providing a readable plan. Approval is disabled.",
+            planAvailable: false,
+            questions: [],
+            confirmLabel: "Approve",
+            declineLabel: "Deny",
+            confirmDisabled: true,
+          },
+        }}
+        onResolve={async () => ({
+          result: "rejected",
+          interactionId: "interaction-1",
+          sessionId: "session-1",
+          revision: 2,
+        })}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        "Claude asked to leave plan mode without providing a readable plan. Approval is disabled.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Implementation plan") === null).toBe(true);
+    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 });

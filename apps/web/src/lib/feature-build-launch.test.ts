@@ -209,6 +209,16 @@ describe("featureBuildRequest", () => {
     });
     expect(request.environmentOptions?.name).toBeUndefined();
   });
+
+  test("carries feature images without emitting an empty image list", () => {
+    expect(featureBuildRequest(base).images).toBeUndefined();
+    expect(
+      featureBuildRequest({
+        ...base,
+        images: [{ filename: "reference.png", data: "QUJD" }],
+      }).images,
+    ).toEqual([{ filename: "reference.png", data: "QUJD" }]);
+  });
 });
 
 describe("featureBuildIdentity", () => {
@@ -242,6 +252,7 @@ describe("featureBuildIdentity", () => {
       { environmentName: "other-name" },
       { networkAccessMode: "full" as const },
       { environmentType: "local" as const },
+      { images: [{ filename: "reference.png", data: "QUJD" }] },
       {
         models: {
           ...models(),

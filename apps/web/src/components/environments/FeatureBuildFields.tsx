@@ -118,6 +118,8 @@ export interface FeatureBuildFieldsProps {
   disabled?: boolean;
   /** Rendered under the intent selector when "with a prompt" is chosen. */
   promptFields: React.ReactNode;
+  /** Image attachments rendered with the feature ticket fields. */
+  featureAttachments?: React.ReactNode;
 }
 
 export function FeatureBuildFields({
@@ -139,6 +141,7 @@ export function FeatureBuildFields({
   enabledPlatforms,
   disabled = false,
   promptFields,
+  featureAttachments,
 }: FeatureBuildFieldsProps) {
   return (
     <div className="space-y-3 sm:col-span-2">
@@ -208,6 +211,8 @@ export function FeatureBuildFields({
               className="max-h-[calc(8lh+1rem)] resize-none overflow-y-auto"
             />
           </div>
+
+          {featureAttachments}
 
           <Collapsible open={advancedOpen} onOpenChange={onAdvancedOpenChange}>
             <CollapsibleTrigger asChild>

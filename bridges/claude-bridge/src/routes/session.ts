@@ -950,6 +950,17 @@ session.post("/:id/plan-approvals/:approvalId/respond", async (c) => {
     if (!pendingApproval) {
       return c.json(stalePrompt("Plan approval is no longer pending"), STALE_PROMPT_STATUS);
     }
+    if (
+      approved &&
+      (typeof pendingApproval.plan !== "string" ||
+        pendingApproval.plan.trim().length === 0 ||
+        pendingApproval.planTruncated === true)
+    ) {
+      return c.json(
+        { error: "A complete plan is required before approval", status: "rejected" },
+        409,
+      );
+    }
 
     console.log("[session] Plan approval response received", {
       sessionId,

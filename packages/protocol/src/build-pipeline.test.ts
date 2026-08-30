@@ -1688,7 +1688,7 @@ describe("build pipeline protocol", () => {
     expect(isBuildPipeline({ ...snapshot(), maxIterations: 0 })).toBe(false);
   });
 
-  test("delegates structuredReview validation to the review report guard", () => {
+  test("validates structured reports at both pipeline and review-session boundaries", () => {
     const report = {
       reviewScope: {
         targetBranch: "main",
@@ -1728,6 +1728,72 @@ describe("build pipeline protocol", () => {
       isBuildPipeline({
         ...snapshot(),
         structuredReview: { ...report, issues: "not-an-array" },
+      }),
+    ).toBe(false);
+
+    const reviewSession = {
+      phase: "review" as const,
+      iteration: 0,
+      sessionKey: "review-0",
+      sdkSessionId: "review-session-1",
+      status: "idle" as const,
+      startedAt: "2026-07-29T00:00:00.000Z",
+      label: "Review Session",
+      reviewReport: report,
+    };
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        sessions: [reviewSession],
+        currentSessionIndex: 0,
+      }),
+    ).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        sessions: [{ ...reviewSession, reviewReport: {} }],
+        currentSessionIndex: 0,
+      }),
+    ).toBe(false);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        sessions: [{ ...reviewSession, phase: "verify" }],
+        currentSessionIndex: 0,
+      }),
+    ).toBe(false);
+  });
+
+  test("validates the immutable review package persisted between build and review", () => {
+    const reviewPackage = {
+      id: "review-package-build-abc-r1",
+      round: 1,
+      preparedAt: "2026-08-29T00:00:00.000Z",
+      targetBranch: "main",
+      baseRef: "0".repeat(40),
+      headRef: "1".repeat(40),
+      commit: { sha: "1".repeat(40), subject: "feat: build", committedFiles: ["src/app.ts"] },
+      completeDiff: "diff --git a/src/app.ts b/src/app.ts",
+      changedFiles: [
+        {
+          path: "src/app.ts",
+          status: "M",
+          content: "export const ready = true;",
+          contentSha256: "a".repeat(64),
+          omittedReason: null,
+        },
+      ],
+      validation: [],
+      skippedFiles: [],
+      uncommittedFiles: [],
+      limitations: [],
+    };
+
+    expect(isBuildPipeline({ ...snapshot(), reviewPackage })).toBe(true);
+    expect(
+      isBuildPipeline({
+        ...snapshot(),
+        reviewPackage: { ...reviewPackage, changedFiles: [null] },
       }),
     ).toBe(false);
   });

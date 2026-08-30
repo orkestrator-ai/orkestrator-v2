@@ -11,9 +11,13 @@ import {
   RefreshCw,
   Send,
   Square,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { MAX_PIPELINE_USER_MESSAGE_LENGTH } from "@orkestrator/protocol/build-pipeline";
+import {
+  MAX_PIPELINE_USER_MESSAGE_LENGTH,
+  type ResumableBuildPhase,
+} from "@orkestrator/protocol/build-pipeline";
 import { isAgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { BuildTabData } from "@/types/paneLayout";
 import {
@@ -77,7 +81,7 @@ const AGENT_LABELS: Record<string, string> = {
   opencode: "OpenCode",
 };
 
-const RETRY_STAGE_LABELS: Record<string, string> = {
+const RETRY_STAGE_LABELS: Record<ResumableBuildPhase, string> = {
   "creating-environment": "Retry Environment Creation",
   "starting-environment": "Retry Environment Start",
   "waiting-for-setup": "Retry Setup",
@@ -137,7 +141,11 @@ function reviewReportSession(pipeline: BuildPipeline): PipelineSession | undefin
   const linked = requestId
     ? pipeline.sessions.find((session) => session.structuredRequestId === requestId)
     : undefined;
-  return linked ?? [...pipeline.sessions].reverse().find((session) => session.phase === "review");
+  return (
+    linked ??
+    [...pipeline.sessions].reverse().find((session) => session.reviewReport !== undefined) ??
+    [...pipeline.sessions].reverse().find((session) => session.phase === "review")
+  );
 }
 
 /**
@@ -177,7 +185,7 @@ function SessionStateIcon({ session }: { session: PipelineSession }) {
   if (session.status === "error") {
     return <AlertCircle className="h-3.5 w-3.5 text-destructive" />;
   }
-  return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />;
+  return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
 }
 
 export function BuildChatTab({
@@ -309,6 +317,18 @@ export function BuildChatTab({
     reportSession &&
     selectedSession.sessionKey === reportSession.sessionKey,
   );
+  // Session copies are current while the fan-out is live or while its accepted
+  // consolidated report still belongs to the pipeline. A retry clears both;
+  // older snapshots may still carry the new session field, so do not present
+  // those discarded copies as current reports.
+  const sessionReviewReportsAreCurrent = Boolean(
+    !pipeline?.reviewRetryRequested && (pipeline?.reviewFanout || pipeline?.structuredReview),
+  );
+  // New snapshots pin every accepted report to the session that produced it.
+  // The pipeline-owned fallback keeps older single-review snapshots readable.
+  const selectedReviewReport =
+    (sessionReviewReportsAreCurrent ? selectedSession?.reviewReport : undefined) ??
+    (ownsCurrentReviewReport ? pipeline?.structuredReview : undefined);
   // New snapshots state this authority explicitly. For old persisted builds,
   // an idle stage the pipeline has advanced past is the closest evidence, and
   // only when the pipeline's own accepted-result bookkeeping confirms it — a
@@ -346,7 +366,7 @@ export function BuildChatTab({
       return hideMachineOutputText(
         showOnlyFinalStructuredReviewMessage(
           transcript,
-          structuredResultAccepted && !ownsCurrentReviewReport,
+          structuredResultAccepted && !selectedReviewReport,
         ),
         // A report the first pass retained as authoritative must survive the
         // second, which cannot tell an accepted result from a draft by shape.
@@ -362,7 +382,7 @@ export function BuildChatTab({
     return transcript;
   }, [
     agentType,
-    ownsCurrentReviewReport,
+    selectedReviewReport,
     selectedSession?.messages,
     selectedSession?.phase,
     selectedSession?.startedAt,
@@ -490,12 +510,12 @@ export function BuildChatTab({
   const stalledSession = showStallWarning
     ? pipeline.sessions.find((session) => session.sdkSessionId === pipeline.stallWarning?.sessionId)
     : undefined;
-  const showReviewReport = ownsCurrentReviewReport;
+  const showReviewReport = selectedReviewReport !== undefined;
   // The report lives on the stage that produced it, but the tab follows the
   // pipeline past review, so by the time a build finishes nothing on screen
   // would say a review had happened at all.
   const reviewReportHint =
-    pipeline.structuredReview && reportSession && !showReviewReport
+    pipeline.structuredReview && reportSession && !ownsCurrentReviewReport
       ? {
           session: reportSession,
           label: issueCountLabel(pipeline.structuredReview.issues.length),
@@ -507,6 +527,66 @@ export function BuildChatTab({
     // is behind it — the header shows the pipeline's phase, not the selection.
     transcript: selectedSession?.label ?? "Transcript",
   };
+
+  /**
+   * The pipeline controls, as data rather than markup.
+   *
+   * Desktop draws them as labelled buttons and a phone draws the same list as
+   * icons, so the label has to be one string both branches read — a second copy
+   * would let the accessible name drift from the visible one.
+   */
+  const headerControls: Array<{
+    key: string;
+    label: string;
+    icon: LucideIcon;
+    variant: "outline" | "ghost";
+    onClick: () => void;
+  }> = [];
+  if (canRetryStage) {
+    headerControls.push({
+      key: "retry-stage",
+      label: RETRY_STAGE_LABELS[pipeline.failureContext!.phase],
+      icon: RefreshCw,
+      variant: "outline",
+      onClick: () => void retryStage(),
+    });
+  }
+  if (canRetryReview) {
+    headerControls.push({
+      key: "retry-review",
+      label: "Retry Review",
+      icon: RefreshCw,
+      variant: "outline",
+      onClick: () => void retryReview(),
+    });
+  }
+  if (active) {
+    headerControls.push({
+      key: "pause",
+      label: "Pause",
+      icon: Pause,
+      variant: "outline",
+      onClick: () => void runControl("pause"),
+    });
+  }
+  if (pipeline.phase === "paused") {
+    headerControls.push({
+      key: "resume",
+      label: "Resume",
+      icon: Play,
+      variant: "outline",
+      onClick: () => void runControl("resume"),
+    });
+  }
+  if (active || pipeline.phase === "paused") {
+    headerControls.push({
+      key: "cancel",
+      label: "Cancel",
+      icon: Square,
+      variant: "ghost",
+      onClick: () => void runControl("cancel"),
+    });
+  }
 
   /**
    * Move the selection to another stage from the keyboard.
@@ -567,81 +647,67 @@ export function BuildChatTab({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex items-center justify-between gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3">
-        <div className="min-w-0">
+      <div
+        data-testid="build-pipeline-header"
+        className={cn(
+          "flex items-center gap-3 border-b border-border/40 bg-zinc-900/40 px-4 py-3",
+          isMobile && "gap-2 px-3 py-2",
+        )}
+      >
+        <div data-testid="build-pipeline-header-summary" className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{pipeline.taskTitle}</div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             {active ? (
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin" />
             ) : pipeline.phase === "complete" ? (
-              <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+              <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
             ) : pipeline.phase === "failed" ? (
-              <AlertCircle className="h-3 w-3 text-destructive" />
+              <AlertCircle className="h-3 w-3 shrink-0 text-destructive" />
             ) : (
-              <Circle className="h-3 w-3" />
+              <Circle className="h-3 w-3 shrink-0" />
             )}
-            <span>{phaseLabel}</span>
-            <span>·</span>
-            <span className="capitalize">{displayedAgent}</span>
+            <span className="truncate">{phaseLabel}</span>
+            <span aria-hidden="true">·</span>
+            <span className="truncate capitalize">{displayedAgent}</span>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {canRetryStage && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={controlPending}
-              onClick={() => void retryStage()}
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              {RETRY_STAGE_LABELS[pipeline.failureContext!.phase] ?? "Retry Failed Stage"}
-            </Button>
-          )}
-          {canRetryReview && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={controlPending}
-              onClick={() => void retryReview()}
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              Retry Review
-            </Button>
-          )}
-          {active && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={controlPending}
-              onClick={() => void runControl("pause")}
-            >
-              <Pause className="mr-1.5 h-3.5 w-3.5" />
-              Pause
-            </Button>
-          )}
-          {pipeline.phase === "paused" && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={controlPending}
-              onClick={() => void runControl("resume")}
-            >
-              <Play className="mr-1.5 h-3.5 w-3.5" />
-              Resume
-            </Button>
-          )}
-          {(active || pipeline.phase === "paused") && (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={controlPending}
-              onClick={() => void runControl("cancel")}
-            >
-              <Square className="mr-1.5 h-3.5 w-3.5" />
-              Cancel
-            </Button>
-          )}
-        </div>
+        {headerControls.length > 0 && (
+          <div
+            data-testid="build-pipeline-header-controls"
+            className="flex shrink-0 items-center gap-1.5"
+          >
+            {headerControls.map(({ key, label, icon: Icon, variant, onClick }) =>
+              // A phone has no room for three labelled buttons beside a title:
+              // they used to push the status line under them and clip the last
+              // control off the screen. The label moves to the accessible name,
+              // which is what the tests and a screen reader read either way.
+              isMobile ? (
+                <Button
+                  key={key}
+                  size="icon"
+                  variant={variant}
+                  aria-label={label}
+                  title={label}
+                  disabled={controlPending}
+                  onClick={onClick}
+                >
+                  <Icon className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  key={key}
+                  size="sm"
+                  variant={variant}
+                  disabled={controlPending}
+                  onClick={onClick}
+                >
+                  <Icon className="mr-1.5 h-3.5 w-3.5" />
+                  {label}
+                </Button>
+              ),
+            )}
+          </div>
+        )}
       </div>
 
       {pipeline.error && !interactionFailure && (
@@ -741,6 +807,9 @@ export function BuildChatTab({
                 const ownsReport = Boolean(
                   reportSession && session.sessionKey === reportSession.sessionKey,
                 );
+                const stageReport =
+                  (sessionReviewReportsAreCurrent ? session.reviewReport : undefined) ??
+                  (ownsReport ? pipeline.structuredReview : undefined);
                 return (
                   <button
                     key={session.sessionKey}
@@ -781,10 +850,10 @@ export function BuildChatTab({
                           {session.autoDeclineCount === 1 ? "" : "s"} auto-declined
                         </span>
                       )}
-                      {ownsReport && pipeline.structuredReview && (
+                      {stageReport && (
                         <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200/90">
                           <ClipboardCheck className="h-2.5 w-2.5" />
-                          Report · {issueCountLabel(pipeline.structuredReview.issues.length)}
+                          Report · {issueCountLabel(stageReport.issues.length)}
                         </span>
                       )}
                     </span>
@@ -839,12 +908,20 @@ export function BuildChatTab({
               </div>
             }
             footer={
-              showReviewReport && pipeline.structuredReview ? (
+              showReviewReport && selectedReviewReport ? (
                 <div className="px-3 py-3 @sm:px-6">
                   <StructuredReviewReportView
                     className="mx-auto max-w-3xl"
-                    report={pipeline.structuredReview}
+                    report={selectedReviewReport}
+                    heading={
+                      (pipeline.reviewers?.length ?? 0) > 1
+                        ? ownsCurrentReviewReport
+                          ? "Consolidated Multi Review"
+                          : "Reviewer report"
+                        : undefined
+                    }
                     collapsibleSections
+                    sectionExpansionKey={`build-pipeline/${pipeline.id}/${selectedSession?.sessionKey ?? "review"}/report-section`}
                     showRawJson={false}
                   />
                 </div>

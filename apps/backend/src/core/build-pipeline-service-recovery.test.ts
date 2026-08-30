@@ -33,6 +33,10 @@ import {
   type ProviderExecutionMode,
   type ProviderStatus,
 } from "./build-pipeline-provider.js";
+import {
+  TEST_REVIEW_PREPARATION,
+  testGeneratedReviewPackage,
+} from "./build-pipeline-test-fixtures.js";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -204,7 +208,9 @@ class ScriptedProvider implements BuildPipelineProvider {
         requestId,
         value: (phase === "review"
           ? cleanReview
-          : { complete: true, rationale: "All criteria pass." }) as T,
+          : phase === "build" || phase === "fix"
+            ? TEST_REVIEW_PREPARATION
+            : { complete: true, rationale: "All criteria pass." }) as T,
       };
     }
     return this.structuredResult as StructuredOutputResult<T> | null;
@@ -225,6 +231,7 @@ async function withService(
     storage: StorageService;
     provider: ScriptedProvider;
     invocations: Array<{ command: string; args: Record<string, unknown> }>;
+    packageGeneration: { count: number; error: Error | null };
   }) => Promise<void>,
   options: ServiceOptions = {},
 ): Promise<void> {
@@ -263,6 +270,7 @@ async function withService(
     command: string;
     args: Record<string, unknown>;
   }> = [];
+  const packageGeneration = { count: 0, error: null as Error | null };
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push({ command, args });
     if (command === "detect_pr_local") {
@@ -274,6 +282,15 @@ async function withService(
     }
     if (command === "get_environment_uncommitted_paths") {
       return CLEAN_GIT_STATE as T;
+    }
+    if (command === "generate_looped_review_package") {
+      packageGeneration.count += 1;
+      if (packageGeneration.error) throw packageGeneration.error;
+      const generated = testGeneratedReviewPackage(args);
+      const head = String(packageGeneration.count).repeat(40);
+      generated.headRef = head;
+      generated.commit = { sha: head, subject: "feat: build", committedFiles: [] };
+      return generated as T;
     }
     if (command === "get_kanban_tasks") {
       return [...kanbanTasks.values()] as T;
@@ -291,7 +308,7 @@ async function withService(
     ...options,
   });
   try {
-    await run({ service, storage, provider, invocations });
+    await run({ service, storage, provider, invocations, packageGeneration });
   } finally {
     await service.shutdown();
     await fs.rm(dataDir, { recursive: true, force: true });
@@ -624,6 +641,72 @@ describe("BuildPipelineService prompt dispatch", () => {
 });
 
 describe("BuildPipelineService structured results", () => {
+  test("sends one preparation-only follow-up for an in-flight legacy build session", async () => {
+    await withService(async ({ service, storage, provider, packageGeneration }) => {
+      const built = await startBuilding(service, storage);
+      const record = (await storage.getBuildPipeline(built.id))!;
+      const legacy = record.snapshot as BuildPipeline;
+      const session = legacy.sessions[legacy.currentSessionIndex]!;
+      delete session.structuredRequestId;
+      delete session.structuredResultStatus;
+      await storage.saveBuildPipeline(
+        record.id,
+        record.projectId,
+        record.environmentId,
+        record.version,
+        legacy,
+        record.revision,
+      );
+      const sessionCount = legacy.sessions.length;
+
+      await service.advanceNow(built.id);
+      const preparing = await snapshot(storage, built.id);
+      expect(preparing.phase).toBe("building");
+      expect(preparing.sessions).toHaveLength(sessionCount);
+      expect(preparing.sessions.at(-1)?.structuredResultStatus).toBe("pending");
+      expect(provider.sent.at(-1)?.schema).toBeDefined();
+      expect(provider.sent.at(-1)?.prompt).toContain("Prepare the immutable review package");
+      expect(packageGeneration.count).toBe(0);
+
+      await service.advanceNow(built.id);
+      expect(packageGeneration.count).toBe(1);
+      expect((await snapshot(storage, built.id)).phase).toBe("reviewing");
+    });
+  });
+
+  test("fails preparation metadata that violates cross-field rules", async () => {
+    await withService(async ({ service, storage, provider }) => {
+      const built = await startBuilding(service, storage);
+      provider.structuredResult = {
+        ok: true,
+        provider: "claude",
+        requestId: built.sessions.at(-1)!.structuredRequestId!,
+        value: {
+          validation: [
+            {
+              command: "bun test",
+              status: "passed",
+              exitCode: 1,
+              stdoutPath: ".orkestrator/review-artifacts/p/out.txt",
+              stderrPath: ".orkestrator/review-artifacts/p/err.txt",
+              durationMs: 1,
+              limitation: null,
+            },
+          ],
+          uncommittedFiles: [],
+          limitations: [],
+        },
+      };
+
+      await service.advanceNow(built.id);
+
+      const failed = await snapshot(storage, built.id);
+      expect(failed.phase).toBe("failed");
+      expect(failed.error).toContain("Review preparation result failed runtime validation");
+      expect(failed.reviewPackage).toBeUndefined();
+    });
+  });
+
   test("waits for a structured result that has not arrived yet", async () => {
     await withService(async ({ service, storage, provider }) => {
       const built = await startBuilding(service, storage);
@@ -1047,28 +1130,63 @@ describe("BuildPipelineService user messages", () => {
       expect((await snapshot(storage, built.id)).pendingUserMessages).toBeUndefined();
     });
   });
+
+  test("re-prepares after a build follow-up before generating review evidence", async () => {
+    await withService(async ({ service, storage, provider, packageGeneration }) => {
+      const built = await startBuilding(service, storage);
+      await service.sendMessage(built.id, "also cover the resumed-session path");
+      await service.advanceNow(built.id);
+      expect(provider.sent.at(-1)?.prompt).toBe("also cover the resumed-session path");
+
+      await service.advanceNow(built.id);
+      const preparing = await snapshot(storage, built.id);
+      expect(preparing.phase).toBe("building");
+      expect(provider.sent.at(-1)?.schema).toBeDefined();
+      expect(provider.sent.at(-1)?.prompt).toContain("Prepare the immutable review package");
+      expect(packageGeneration.count).toBe(0);
+
+      await service.advanceNow(built.id);
+      expect(packageGeneration.count).toBe(1);
+      expect((await snapshot(storage, built.id)).phase).toBe("reviewing");
+    });
+  });
 });
 
 describe("BuildPipelineService retry review", () => {
   test("starts a fresh review session and discards the previous report", async () => {
-    await withService(async ({ service, storage, provider }) => {
+    await withService(async ({ service, storage, provider, packageGeneration }) => {
       const built = await startBuilding(service, storage);
       await service.advanceNow(built.id);
       await service.advanceNow(built.id);
       const verifying = await snapshot(storage, built.id);
       expect(verifying.phase).toBe("verifying");
       expect(verifying.structuredReview).toBeTruthy();
+      expect(
+        verifying.sessions.find((session) => session.phase === "review")?.reviewReport,
+      ).toBeTruthy();
       const sessionCount = verifying.sessions.length;
+      const originalHead = verifying.reviewPackage?.headRef;
 
       await service.retryReview(built.id);
+      await service.advanceNow(built.id);
 
       const retried = await snapshot(storage, built.id);
       expect(retried.phase).toBe("reviewing");
       expect(retried.structuredReview).toBeUndefined();
+      expect(retried.structuredReviewRequestId).toBeTruthy();
       expect(retried.reviewRetryRequested).toBeUndefined();
-      expect(retried.sessions).toHaveLength(sessionCount + 1);
+      expect(
+        retried.sessions
+          .filter((session) => session.phase === "review" && session.iteration === 0)
+          .every((session) => session.reviewReport === undefined),
+      ).toBe(true);
+      expect(retried.sessions).toHaveLength(sessionCount + 2);
+      expect(retried.sessions.at(-2)?.phase).toBe("fix");
       expect(retried.sessions.at(-1)?.phase).toBe("review");
-      expect(provider.sent.at(-1)?.prompt).toContain("code review");
+      expect(provider.sent.at(-1)?.prompt).toContain("immutable evidence package");
+      expect(packageGeneration.count).toBe(2);
+      expect(retried.reviewPackage?.headRef).not.toBe(originalHead);
+      expect(provider.sent.at(-1)?.prompt).toContain("2".repeat(40));
     });
   });
 
@@ -1087,6 +1205,7 @@ describe("BuildPipelineService retry review", () => {
       expect(cancelled.completionCommentStatus).toBe("posted");
 
       await service.retryReview(built.id);
+      await service.advanceNow(built.id);
 
       const revived = await snapshot(storage, built.id);
       expect(revived.phase).toBe("reviewing");
@@ -1110,6 +1229,52 @@ describe("BuildPipelineService retry review", () => {
       expect((await snapshot(storage, built.id)).phase).toBe("complete");
 
       await expect(service.retryReview(built.id)).rejects.toThrow("already completed");
+    });
+  });
+
+  test("recovers a package-less reviewing pipeline through preparation", async () => {
+    await withService(async ({ service, storage, packageGeneration }) => {
+      const built = await startBuilding(service, storage);
+      await service.advanceNow(built.id);
+      const reviewing = await snapshot(storage, built.id);
+      const record = (await storage.getBuildPipeline(built.id))!;
+      reviewing.sessions = [];
+      reviewing.currentSessionIndex = -1;
+      delete reviewing.reviewPackage;
+      await storage.saveBuildPipeline(
+        record.id,
+        record.projectId,
+        record.environmentId,
+        record.version,
+        reviewing,
+        record.revision,
+      );
+
+      await service.advanceNow(built.id);
+      const preparing = await snapshot(storage, built.id);
+      expect(preparing.phase).toBe("fixing");
+      expect(preparing.sessions.at(-1)?.phase).toBe("fix");
+
+      await service.advanceNow(built.id);
+      const recovered = await snapshot(storage, built.id);
+      expect(packageGeneration.count).toBe(2);
+      expect(recovered.phase).toBe("reviewing");
+      expect(recovered.reviewPackage).toBeDefined();
+    });
+  });
+
+  test("surfaces package-generation failures before opening review", async () => {
+    await withService(async ({ service, storage, packageGeneration }) => {
+      const built = await startBuilding(service, storage);
+      packageGeneration.error = new Error("package artifacts are unavailable");
+
+      await service.advanceNow(built.id);
+
+      const failed = await snapshot(storage, built.id);
+      expect(failed.phase).toBe("failed");
+      expect(failed.error).toContain("package artifacts are unavailable");
+      expect(failed.reviewPackage).toBeUndefined();
+      expect(failed.failureContext?.phase).toBe("building");
     });
   });
 });

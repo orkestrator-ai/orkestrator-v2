@@ -127,10 +127,10 @@ function backgroundTaskState(
     case "completed":
       return {
         label: "completed",
-        className: "text-emerald-600 dark:text-emerald-300",
+        className: "text-success",
       };
     case "failed":
-      return { label: "failed", className: "text-red-400" };
+      return { label: "failed", className: "text-failure" };
     case "killed":
       return { label: "stopped", className: "text-muted-foreground/80" };
     default:
@@ -173,8 +173,8 @@ export function ToolPart({
     (isBackgroundLaunch ? stringToolArg(toolArgs, "description") : undefined);
 
   const stateColors = {
-    success: "text-green-600",
-    failure: "text-red-400",
+    success: "text-success",
+    failure: "text-failure",
     pending: "text-yellow-600 animate-pulse",
   };
 
@@ -612,8 +612,8 @@ export function EditToolPart({
   const displayToolTitle = getToolTitleDisplayName(toolTitle, toolName);
 
   const stateColors = {
-    success: "text-green-600",
-    failure: "text-red-400",
+    success: "text-success",
+    failure: "text-failure",
     pending: "text-yellow-600 animate-pulse",
   };
 
@@ -724,8 +724,8 @@ export function EditToolPart({
         {/* Line count stats - shown after filename */}
         {(additions > 0 || deletions > 0) && (
           <span className="flex items-center gap-1 shrink-0">
-            {additions > 0 && <span className="text-green-500 font-mono">+{additions}</span>}
-            {deletions > 0 && <span className="text-red-400 font-mono">-{deletions}</span>}
+            {additions > 0 && <span className="text-success font-mono">+{additions}</span>}
+            {deletions > 0 && <span className="text-failure font-mono">-{deletions}</span>}
           </span>
         )}
         {toolState && (
@@ -765,8 +765,8 @@ export function EditToolPart({
                       key={i}
                       className={cn(
                         "px-3 py-0.5",
-                        line.type === "add" && "bg-green-500/20 text-green-400",
-                        line.type === "remove" && "bg-red-500/20 text-red-400",
+                        line.type === "add" && "bg-success/20 text-success",
+                        line.type === "remove" && "bg-failure/20 text-failure",
                         line.type === "header" && "bg-blue-500/10 text-blue-400",
                         line.type === "context" && "text-foreground/60",
                       )}

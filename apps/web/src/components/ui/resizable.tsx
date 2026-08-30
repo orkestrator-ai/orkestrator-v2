@@ -40,7 +40,7 @@ function ResizableHandle({ className, orientation, style, ...props }: ResizableH
       style={handleStyle}
       className={cn(
         // Base styles - always applied
-        "focus-visible:ring-ring relative z-30 flex items-center justify-center bg-zinc-900 transition-colors after:absolute after:bg-border/80 hover:after:bg-primary/50",
+        "focus-visible:ring-ring relative z-30 flex items-center justify-center bg-zinc-900 transition-colors after:absolute after:bg-divider hover:after:bg-primary/50",
         // Prevent flex from collapsing the handle
         "shrink-0",
         // Focus styles

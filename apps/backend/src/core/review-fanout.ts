@@ -553,10 +553,15 @@ export interface ReviewFanoutHost {
   /** Throws if this process no longer owns the workflow. */
   assertFence(): Promise<void>;
   /**
+   * Optional owner-built prompt. The build pipeline uses this to hand every
+   * reviewer the same immutable package instead of exposing the live worktree.
+   */
+  reviewerPrompt?(reviewerIndex: number, reviewerCount: number): Promise<string>;
+  /**
    * Re-verifies the pinned worktree and returns the prompt projection of it.
    * Throws {@link ReviewSnapshotChangedError} on drift.
    */
-  reviewSnapshot(): Promise<ReviewWorktreeSnapshot>;
+  reviewSnapshot?(): Promise<ReviewWorktreeSnapshot>;
   resolveUnattendedInteractions(
     provider: BuildPipelineProvider,
     providerSessionId: string,
@@ -736,14 +741,21 @@ export class ReviewFanoutRunner {
       // authorised validation writes caused.
       let prompt = reviewer.schemaRepairPrompt ?? reviewer.continuationPrompt;
       if (!prompt) {
-        const worktree = await host.reviewSnapshot();
-        prompt = createMultiReviewerPrompt({
-          targetBranch: host.targetBranch,
-          reviewInstruction: host.reviewInstruction,
-          reviewerNumber: index + 1,
-          reviewerCount,
-          worktree,
-        });
+        if (host.reviewerPrompt) {
+          prompt = await host.reviewerPrompt(index, reviewerCount);
+        } else {
+          if (!host.reviewSnapshot) {
+            throw new Error(`${host.label} has no reviewer evidence source`);
+          }
+          const worktree = await host.reviewSnapshot();
+          prompt = createMultiReviewerPrompt({
+            targetBranch: host.targetBranch,
+            reviewInstruction: host.reviewInstruction,
+            reviewerNumber: index + 1,
+            reviewerCount,
+            worktree,
+          });
+        }
       }
       // Attach the agent process before the at-most-once window opens: a cold
       // spawn is the slowest thing a dispatch can wait on, and time spent on it

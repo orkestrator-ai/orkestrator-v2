@@ -179,9 +179,24 @@ export class HttpBridgeInteractionAdapter {
     const request = asRecord(raw);
     const providerRequestId = nonEmptyString(request?.id);
     const expiresAt = request?.expiresAt;
-    if (!providerRequestId || (expiresAt !== undefined && !Number.isSafeInteger(expiresAt))) {
+    const rawPlan = request?.plan;
+    const planTruncated = request?.planTruncated;
+    if (
+      !providerRequestId ||
+      (expiresAt !== undefined && !Number.isSafeInteger(expiresAt)) ||
+      (rawPlan !== undefined && typeof rawPlan !== "string") ||
+      (planTruncated !== undefined && typeof planTruncated !== "boolean")
+    ) {
       throw new ProviderUnavailableError("Claude returned a malformed plan approval");
     }
+    const plan =
+      typeof rawPlan === "string" && rawPlan.trim().length > 0
+        ? truncatedText(rawPlan, rawPlan)
+        : null;
+    const planWasTruncated =
+      planTruncated === true ||
+      (typeof rawPlan === "string" && rawPlan.length > AGENT_INTERACTION_LIMITS.maxTextLength);
+    const actionable = plan !== null && !planWasTruncated;
     const id = this.normalizedId(sessionId, providerRequestId, "plan");
     const createdAt = Number.isSafeInteger(expiresAt)
       ? requestCreatedAt(expiresAt as number, Date.now())
@@ -189,18 +204,30 @@ export class HttpBridgeInteractionAdapter {
     const expiry = Number.isSafeInteger(expiresAt)
       ? (expiresAt as number)
       : createdAt + AGENT_INTERACTION_DEFAULT_TIMEOUT_MS;
-    return this.interactionRequest(sessionId, providerRequestId, "plan", {
+    const mapped = this.interactionRequest(sessionId, providerRequestId, "plan", {
       kind: "plan-approval",
       presentation: {
-        title: "Approve Claude's plan",
+        title: actionable
+          ? "Approve Claude's plan"
+          : plan
+            ? "Claude's plan is too large to approve"
+            : "Claude's plan is unavailable for approval",
+        body:
+          plan ??
+          "Claude asked to leave plan mode without providing a readable plan. Approval is disabled.",
         questions: [],
         confirmLabel: "Approve",
         declineLabel: "Deny",
+        confirmDisabled: !actionable,
+        planAvailable: plan !== null,
       },
       createdAt,
       updatedAt: createdAt,
       expiresAt: expiry,
     });
+    const identity = this.providerInteractionIds.get(mapped.id);
+    if (identity) identity.actionable = actionable;
+    return mapped;
   }
 
   private mapCodexApproval(sessionId: string, raw: unknown): AgentInteractionRequest {

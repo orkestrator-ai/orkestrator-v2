@@ -36,6 +36,63 @@ export function mimeTypeForFilename(filename: string): string {
 }
 
 /**
+ * Resolve an inline image's media type from its bytes, using its name only
+ * when the payload has no recognizable raster signature.
+ *
+ * Kanban images are normalized to WebP while retaining their user-facing
+ * filename. Trusting that filename would label those WebP bytes as (usually)
+ * PNG when they are handed to an image-aware agent.
+ */
+function detectedMimeTypeForImageData(data: string): string | undefined {
+  // Eighteen decoded bytes cover the longest signature below (12 bytes)
+  // without materializing a potentially multi-megabyte image payload.
+  const bytes = Buffer.from(data.slice(0, 24), "base64");
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes.subarray(1, 4).toString("latin1") === "PNG" &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return "image/jpeg";
+  }
+  const header = bytes.subarray(0, 6).toString("latin1");
+  if (header === "GIF87a" || header === "GIF89a") return "image/gif";
+  if (
+    bytes.length >= 12 &&
+    bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
+    bytes.subarray(8, 12).toString("latin1") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return undefined;
+}
+
+export function mimeTypeForImageData(filename: string, data: string): string {
+  return detectedMimeTypeForImageData(data) ?? mimeTypeForFilename(filename);
+}
+
+function filenameForDetectedMimeType(filename: string, mediaType: string | undefined): string {
+  if (!mediaType) return filename;
+  const extension =
+    mediaType === "image/jpeg"
+      ? ".jpg"
+      : mediaType === "image/gif"
+        ? ".gif"
+        : mediaType === "image/webp"
+          ? ".webp"
+          : ".png";
+  const dot = filename.lastIndexOf(".");
+  const stem = dot > 0 ? filename.slice(0, dot) : filename;
+  return `${stem.slice(0, 128 - extension.length)}${extension}`;
+}
+
+/**
  * Resolve the URL an OpenCode file part should carry.
  *
  * Mirrors the renderer's client: inline data when it is available, otherwise a
@@ -196,7 +253,11 @@ export async function stagePromptImages(
   const used = new Set<string>();
   const staged: PromptAttachment[] = [];
   for (const [index, image] of validated.entries()) {
-    const filename = allocateUniqueFilename(sanitizeFilename(image.filename, index), used);
+    const detectedMediaType = detectedMimeTypeForImageData(image.data);
+    const filename = allocateUniqueFilename(
+      filenameForDetectedMimeType(sanitizeFilename(image.filename, index), detectedMediaType),
+      used,
+    );
     const relativePath = `${stagingDirectory}/${filename}`;
     const path = isLocal
       ? await invoke<string>("write_local_file", {
@@ -216,7 +277,7 @@ export async function stagePromptImages(
       type: "image",
       path,
       filename,
-      dataUrl: `data:${mimeTypeForFilename(filename)};base64,${image.data}`,
+      dataUrl: `data:${detectedMediaType ?? mimeTypeForFilename(filename)};base64,${image.data}`,
     });
   }
   return staged;

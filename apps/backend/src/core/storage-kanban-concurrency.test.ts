@@ -111,6 +111,24 @@ describe("StorageService Kanban mutation serialization", () => {
     });
   });
 
+  test("rejects a deterministic image id reused with a different filename", async () => {
+    await withStoragePair(async (storage) => {
+      const task = await storage.addKanbanTask("project-1", "Image request", "");
+      const webp = Buffer.from("RIFF0000WEBP", "latin1").toString("base64");
+      const first = await storage.addNormalizedKanbanImageForRequest(
+        task.id,
+        "before.png",
+        webp,
+        "image-request-1",
+      );
+
+      await expect(
+        storage.addNormalizedKanbanImageForRequest(task.id, "after.png", webp, "image-request-1"),
+      ).rejects.toThrow("requestId was already used with a different filename");
+      expect((await storage.getKanbanTasks("project-1"))[0]!.images).toEqual([first.image]);
+    });
+  });
+
   test("preserves concurrent updates and comments on the same task", async () => {
     await withStoragePair(async (first, second) => {
       const task = await first.addKanbanTask("project-1", "Initial", "Initial");

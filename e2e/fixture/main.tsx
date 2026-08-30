@@ -1,5 +1,5 @@
 import type { VirtuosoHandle } from "react-virtuoso";
-import { StrictMode, createRef, useRef, useState } from "react";
+import { StrictMode, createRef, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "../../apps/web/src/index.css";
 import {
@@ -28,6 +28,11 @@ import {
   type ReviewModelCatalog,
 } from "../../apps/web/src/components/review/ReviewLaunchDialog";
 import { MultiReviewLaunchDialog } from "../../apps/web/src/components/review/MultiReviewLaunchDialog";
+import { BuildChatTab } from "../../apps/web/src/components/build-pipeline/BuildChatTab";
+import {
+  useBuildPipelineStore,
+  type BuildPipeline,
+} from "../../apps/web/src/stores/buildPipelineStore";
 import type { GitFileChange } from "../../apps/web/src/lib/backend";
 
 declare global {
@@ -436,7 +441,9 @@ const mobileShellTitle =
 
 function MobileAppShellFixture() {
   const [dragStarts, setDragStarts] = useState(0);
-  const desktop = new URLSearchParams(window.location.search).has("desktop");
+  const searchParams = new URLSearchParams(window.location.search);
+  const desktop = searchParams.has("desktop");
+  const withoutInbox = searchParams.has("withoutInbox");
 
   if (desktop) {
     delete window.orkestrator;
@@ -455,7 +462,12 @@ function MobileAppShellFixture() {
         filesPanelOpen={false}
         centralPanelStyle={{ backgroundColor: "rgb(1, 2, 3)" }}
         actionBar={<button type="button">Action</button>}
-        agentInfoButton={<button type="button">Agent info</button>}
+        agentInfoButton={
+          <>
+            {!withoutInbox && <button type="button" className="h-7 w-7" aria-label="Agent inbox" />}
+            <button type="button" className="h-9 w-9" aria-label="Agent info" />
+          </>
+        }
         sidebar={<div>Projects</div>}
         filesPanel={<div>Files</div>}
         onTitleBarMouseDown={() => setDragStarts((count) => count + 1)}
@@ -540,6 +552,72 @@ function PathTruncationFixture() {
           />
         </section>
       ))}
+    </main>
+  );
+}
+
+const buildPipelineHeaderFixture: BuildPipeline = {
+  id: "header-pipeline",
+  taskId: "header-task",
+  projectId: "header-project",
+  environmentId: "header-environment",
+  environmentType: "local",
+  agentType: "codex",
+  phase: "building",
+  sessions: [
+    {
+      phase: "build",
+      iteration: 0,
+      sessionKey: "header-build-key",
+      sdkSessionId: "header-build-session",
+      status: "running",
+      startedAt: "2026-08-29T00:00:00.000Z",
+      label: "Build Session",
+      messages: [],
+    },
+  ],
+  currentSessionIndex: 0,
+  iteration: 0,
+  maxIterations: 3,
+  createdAt: "2026-08-29T00:00:00.000Z",
+  taskTitle: "A deliberately long build pipeline title that must yield space to every control",
+  taskSnapshot: {
+    title: "A deliberately long build pipeline title that must yield space to every control",
+    description: "",
+    acceptanceCriteria: "",
+    comments: [],
+    images: [],
+  },
+  backendRevision: 1,
+  controller: "backend",
+};
+
+/** A real-layout fixture for the header's narrowest three-control state. */
+function BuildPipelineHeaderFixture() {
+  useEffect(() => {
+    useBuildPipelineStore.setState({
+      pipelines: new Map([[buildPipelineHeaderFixture.id, buildPipelineHeaderFixture]]),
+      buildEnvironmentIds: new Set([buildPipelineHeaderFixture.environmentId]),
+    });
+    return () => {
+      useBuildPipelineStore.setState({
+        pipelines: new Map(),
+        buildEnvironmentIds: new Set(),
+      });
+    };
+  }, []);
+
+  return (
+    <main className="h-screen w-full bg-background text-foreground">
+      <BuildChatTab
+        data={{
+          pipelineId: buildPipelineHeaderFixture.id,
+          environmentId: buildPipelineHeaderFixture.environmentId,
+          taskId: buildPipelineHeaderFixture.taskId,
+          isLocal: true,
+        }}
+        isActive
+      />
     </main>
   );
 }
@@ -642,6 +720,9 @@ function DiffViewerFixture() {
 
 function fixtureForPath() {
   if (window.location.pathname === "/browser") return <BrowserFixture />;
+  if (window.location.pathname === "/build-pipeline-header") {
+    return <BuildPipelineHeaderFixture />;
+  }
   if (window.location.pathname === "/diff-viewer") return <DiffViewerFixture />;
   if (window.location.pathname === "/native-compose") return <NativeComposeFixture />;
   if (window.location.pathname === "/agent-model-picker") return <AgentModelPickerFixture />;

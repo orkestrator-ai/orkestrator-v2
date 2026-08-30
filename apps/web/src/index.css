@@ -170,6 +170,8 @@
    * row so a hovered row cannot outshine the selected one.
    */
   --color-hover: #1a2438;
+  /* Environment rows need more lift to separate hover from their selected gradient. */
+  --color-environment-hover: #263650;
 
   /*
    * The single success/failure pair. Added and removed diff lines, tool-call

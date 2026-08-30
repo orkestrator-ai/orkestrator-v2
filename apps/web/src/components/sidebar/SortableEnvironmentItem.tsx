@@ -51,7 +51,7 @@ export function SortableEnvironmentItem({
               // and the pseudo-element are the same element, and `group-*`
               // only reaches descendants.
               "relative overflow-hidden border-transparent bg-linear-to-r from-selected to-selected-edge text-selected-foreground before:absolute before:inset-y-1 before:left-1 before:w-0.5 before:rounded-full before:bg-primary before:transition-opacity hover:before:opacity-0"
-            : "hover:bg-hover",
+            : "hover:bg-environment-hover",
         )}
       >
         {/* Drag handle - far left */}

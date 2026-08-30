@@ -10,6 +10,54 @@ the same incidents in a second format; its entries were merged here on
 2026-08-07 and that file was removed, so a recurrence is compared against one
 history rather than two partial ones.
 
+## `ActionBar keyboard shortcuts and tab guards > dispatches tab, workflow, editor, and panel shortcuts` (`apps/web/src/components/layout/ActionBar.test.tsx:5467`)
+
+- **Status:** open — third recorded occurrence of the same assertion, after
+  `ActionBar toolbar interactions > runs commands and opens the editor from keyboard shortcuts`
+  (`ActionBar.test.tsx:1704`, observed 2026-08-17, resolved in the 2026-08-27
+  sweep and already reopened once as "recurred after the 2026-08-27 resolution
+  sweep"). The test has since been renamed and moved; the failing assertion is
+  the same line of code, so this continues that history rather than starting a
+  new one.
+- **Date observed:** 2026-08-31
+- **Original command:**
+  `bun run test:logged -- --name web-package-tests -- bun --cwd=apps/web test --parallel=4 --only-failures`,
+  on `model-selector-theme` (working tree: the shared model-picker theme constant
+  and its test).
+- **Worker configuration:** four Bun workers on the web package alone, not under
+  `scripts/test-all.ts`. No `dev:test` profile was running; the same host had
+  just completed a passing run of the identical command.
+- **Failure:** `expect(createTabMock).toHaveBeenCalledWith("plain", { initialCommands: ["bun test"] })`
+  at `ActionBar.test.tsx:5467`, after 19.93 ms. `createTabMock` had received
+  three calls — `("plain")`, `("agent-native")`, and the `("codex", …)` Review
+  tab — so the `Cmd+R` run-commands tab was the only expected call missing.
+- **Suite counts:** `5612 pass, 1 skip, 1 fail, 17717 expect() calls. Ran 5614
+  tests across 247 files. [40.95s]`
+- **Isolated rerun:** `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx`
+  -> 198 passed, 0 failed, 773 assertions in 14.86 s.
+- **Frequency:** 1 failure in 3 consecutive runs of the identical aggregate
+  command on the same host — the run immediately before (at the parent commit)
+  and the run immediately after (at the same working tree) both passed the whole
+  web package.
+- **Hypothesis:** The 2026-08-27 fix added a readiness wait for the accessible
+  "Run commands" control before dispatching key events, and that wait is still
+  present and did pass here — the earlier mechanism (handler not yet
+  subscribed) does not explain this failure, because two other shortcuts in the
+  same synchronous block *did* reach `createTabMock`. What distinguishes `Cmd+R`
+  is that it is the only one of them fed by `readContainerFileMock`, which the
+  test primes with `mockResolvedValueOnce({ content: '{"run":["bun test"]}' })`.
+  A single-use mock value is consumed by whichever read arrives first, so any
+  additional or reordered `readContainerFile` call under load would leave the
+  run-commands state populated from the default mock instead. The evidence
+  establishes only that this one asynchronously-fed shortcut was missing while
+  its synchronous siblings were not; a recurrence should log every
+  `readContainerFileMock` invocation with its arguments before changing the
+  assertion, and prefer priming a stable `mockResolvedValue` over a `…Once`
+  value if more than one read is observed.
+- **Unrelated to the change under test:** neither `ActionBar.tsx` nor
+  `ActionBar.test.tsx` references `CreateEnvironmentDialog`, `FeatureBuildFields`
+  or `modal-theme`, the only modules that branch touched.
+
 ## `json file cache > slices > shares a single parse between concurrent cold readers` (`bridges/claude-bridge/src/services/json-file-cache.test.ts:132`)
 
 - **Status:** open

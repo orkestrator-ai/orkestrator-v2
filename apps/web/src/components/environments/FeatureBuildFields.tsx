@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME } from "@/components/ui/modal-theme";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useAgentModelFavorites } from "@/hooks/useAgentModelFavorites";
@@ -570,7 +571,7 @@ function ModelPicker({
         })
       }
       disabled={disabled}
-      className="h-9 w-full max-w-none justify-start rounded-lg border border-border/70 bg-input-surface px-3 text-sm shadow-none hover:bg-elevated md:max-w-none md:flex-1"
+      className={MODAL_MODEL_PICKER_TRIGGER_CLASS_NAME}
     />
   );
 }

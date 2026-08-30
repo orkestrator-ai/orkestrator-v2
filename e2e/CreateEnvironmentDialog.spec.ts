@@ -12,6 +12,38 @@ async function expectNoHorizontalOverflow(page: Page) {
   );
 }
 
+async function expectPromptFieldLayout(page: Page, layout: "stacked" | "grid") {
+  const field = page.locator('[data-slot="initial-prompt-field"]');
+  const label = page.locator('label[for="initial-prompt"]');
+  const prompt = page.getByLabel("Initial Prompt (optional)");
+  const optional = label.locator(".sr-only");
+
+  await expect(field).toBeVisible();
+  await expect(label).toHaveText(/Initial Prompt/);
+  await expect(optional).toHaveText("(optional)");
+  await expect(optional).toHaveCSS("position", "absolute");
+  await expect(optional).toHaveCSS("width", "1px");
+  await expect(optional).toHaveCSS("height", "1px");
+  await expect(optional).toHaveCSS("overflow", "hidden");
+  await expect(prompt).not.toHaveAttribute("aria-label");
+
+  const [labelBox, promptBox] = await Promise.all([label.boundingBox(), prompt.boundingBox()]);
+  expect(labelBox).not.toBeNull();
+  expect(promptBox).not.toBeNull();
+
+  if (layout === "stacked") {
+    await expect(field).toHaveCSS("display", "block");
+    expect(labelBox!.y + labelBox!.height).toBeLessThanOrEqual(promptBox!.y);
+    expect(Math.abs(labelBox!.x - promptBox!.x)).toBeLessThanOrEqual(1);
+    return;
+  }
+
+  await expect(field).toHaveCSS("display", "grid");
+  expect(labelBox!.x + labelBox!.width).toBeLessThanOrEqual(promptBox!.x);
+  expect(labelBox!.y).toBeGreaterThanOrEqual(promptBox!.y);
+  expect(labelBox!.y).toBeLessThan(promptBox!.y + promptBox!.height);
+}
+
 /**
  * The agent, model and reasoning choices are one `AgentModelPicker` trigger, so
  * the row can no longer overlap itself. What is still worth pinning is that the
@@ -75,6 +107,7 @@ test("mobile sections have one visible panel, preserve values, and stay within t
   await expect(promptPanel).toBeVisible();
   await expect(setupPanel).toBeHidden();
   await expect(accessPanel).toBeHidden();
+  await expectPromptFieldLayout(page, "stacked");
 
   await page.getByRole("tab", { name: "Setup" }).click();
   await expect(setupPanel).toBeVisible();
@@ -142,7 +175,7 @@ test("desktop hides the mobile tablist while exposing every configuration sectio
   });
   const environmentName = page.getByLabel("Environment Name (optional)");
   const restrictedAccess = page.getByRole("button", { name: "Restricted" });
-  const launchAgent = page.getByRole("switch", { name: "Launch Agent" });
+  const launchAgent = page.getByRole("checkbox", { name: "Launch Agent" });
   const prompt = page.getByLabel("Initial Prompt (optional)");
   const containerPort = page.getByPlaceholder("Container");
 
@@ -152,6 +185,7 @@ test("desktop hides the mobile tablist while exposing every configuration sectio
   await expect(launchAgent).toBeVisible();
   await expect(prompt).toBeVisible();
   await expect(containerPort).toBeVisible();
+  await expectPromptFieldLayout(page, "grid");
 
   const setupPanel = panelContaining(page, environmentName);
   const accessPanel = panelContaining(page, restrictedAccess);

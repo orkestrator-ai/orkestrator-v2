@@ -1958,19 +1958,20 @@ export function CreateEnvironmentDialog({
                 }
                 promptFields={
                   launchAgent ? (
-                    <div className="sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-start sm:gap-4">
+                    <div
+                      data-slot="initial-prompt-field"
+                      className="sm:grid sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-start sm:gap-4"
+                    >
                       <Label
                         htmlFor="initial-prompt"
                         className="mb-2 block text-sm font-medium text-muted-foreground sm:mb-0 sm:pt-2"
                       >
-                        <span className="block">Initial Prompt</span>
-                        <span className="block font-normal">(optional)</span>
+                        Initial Prompt <span className="sr-only">(optional)</span>
                       </Label>
                       <div className="space-y-2">
                         <Textarea
                           ref={promptRef}
                           id="initial-prompt"
-                          aria-label="Initial Prompt (optional)"
                           placeholder={
                             agentType === "claude"
                               ? "Enter a task for Claude to work on..."

@@ -64,15 +64,15 @@ describe("CreateEnvironmentDialog initial prompt attachments", () => {
     expect(agent.closest("div.border-b")?.className).toContain(
       "sm:grid-cols-[7.5rem_minmax(0,1fr)]",
     );
-    expect(prompt.parentElement?.parentElement?.className).toContain(
-      "sm:grid-cols-[7.5rem_minmax(0,1fr)]",
-    );
-    expect(prompt.parentElement?.previousElementSibling?.textContent).toBe(
-      "Initial Prompt(optional)",
-    );
-    expect(prompt.parentElement?.previousElementSibling?.className).toContain(
-      "text-muted-foreground",
-    );
+    const promptField = document.querySelector<HTMLElement>('[data-slot="initial-prompt-field"]');
+    const promptLabel = document.querySelector<HTMLLabelElement>('label[for="initial-prompt"]');
+    expect(promptField?.contains(prompt)).toBe(true);
+    expect(promptField?.className).toContain("sm:grid-cols-[7.5rem_minmax(0,1fr)]");
+    expect(promptLabel?.htmlFor).toBe(prompt.id);
+    expect(promptLabel?.textContent).toContain("Initial Prompt");
+    expect(promptLabel?.querySelector(".sr-only")?.textContent).toBe("(optional)");
+    expect(promptLabel?.className).toContain("text-muted-foreground");
+    expect(prompt.getAttribute("aria-label")).toBeNull();
 
     const overlay = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
     const header = document.querySelector<HTMLElement>('[data-slot="dialog-header"]');

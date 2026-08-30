@@ -199,7 +199,7 @@ describe("NativeMessage assistant attribution", () => {
     expect(container.textContent).toBe("");
   });
 
-  test("hides the timestamp too, not only the model label, on an empty assistant message", () => {
+  test("pairs the model label with the timestamp on a content-empty assistant action row", () => {
     render(
       <NativeMessage
         message={makeMessage([{ type: "tool-result", content: "exit 0" }], {
@@ -212,9 +212,11 @@ describe("NativeMessage assistant attribution", () => {
       />,
     );
 
-    // The action keeps the row alive, but nothing attributes it.
+    // The action keeps the row alive, so its timestamp must not appear without
+    // the model attribution required by every rendered assistant footer.
     expect(screen.getByRole("button", { name: "Fork" })).toBeTruthy();
-    expect(screen.queryByText("GPT 5.6 Sol") === null).toBe(true);
+    expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
+    expect(screen.getByText(expectedTimeLabel("2026-03-21T13:00:00.000Z"))).toBeTruthy();
   });
 
   test("keeps a caller-supplied action reachable on a content-empty assistant message", () => {
@@ -232,7 +234,7 @@ describe("NativeMessage assistant attribution", () => {
     );
 
     expect(screen.getByRole("button", { name: "Fork response" })).toBeTruthy();
-    expect(screen.queryByText("GPT 5.6 Sol") === null).toBe(true);
+    expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
   });
 
   test("shows attribution on a thinking-only assistant message", () => {
@@ -296,7 +298,7 @@ describe("NativeMessage assistant attribution", () => {
     expect(screen.getAllByText("GPT 5.6 Sol")).toHaveLength(1);
   });
 
-  test("drops the model label on same-minute assistant continuations", () => {
+  test("shows the model label on same-minute assistant continuations", () => {
     const previousContent = makeMessage([{ type: "text", content: "First chunk" }], {
       id: "assistant-content-start",
       modelId: "gpt-5.6-sol",
@@ -314,8 +316,8 @@ describe("NativeMessage assistant attribution", () => {
       />,
     );
 
-    // The continuation keeps its timestamp row but must not repeat the model.
-    expect(screen.queryByText("GPT 5.6 Sol") === null).toBe(true);
+    // Every separately timestamped block carries its own model attribution.
+    expect(screen.getByText("GPT 5.6 Sol")).toBeTruthy();
     expect(screen.getByText(expectedTimeLabel("2026-03-21T10:00:40.000Z"))).toBeTruthy();
     expect(screen.getByRole("button", { name: "Copy text" })).toBeTruthy();
   });

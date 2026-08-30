@@ -49,7 +49,7 @@ import {
   X,
   Trash2,
 } from "lucide-react";
-import { AgentIcon } from "@/components/agents/AgentRadioGroup";
+import { AgentPlatformIcon } from "@/components/icons/AgentIcons";
 import { CursorSdkSignIn } from "./agent/CursorSdkSignIn";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
@@ -694,15 +694,18 @@ export function GlobalSettingsSections({ activeSection, settings }: GlobalSettin
                 htmlFor={`platform-${platform}`}
                 className="flex min-w-0 items-center gap-3 text-sm font-medium"
               >
+                {/*
+                  The tile carries the enabled state; the mark inside it always
+                  paints its own platform accent, so a text colour here would
+                  never reach anything.
+                */}
                 <span
                   className={cn(
                     "grid size-8 shrink-0 place-items-center rounded-lg border",
-                    checked
-                      ? "border-cyan-400/30 bg-cyan-500/10 text-cyan-300"
-                      : "border-zinc-800 bg-zinc-900 text-zinc-500",
+                    checked ? "border-cyan-400/30 bg-cyan-500/10" : "border-zinc-800 bg-zinc-900",
                   )}
                 >
-                  <AgentIcon agent={platform} className="size-4" />
+                  <AgentPlatformIcon platform={platform} accent className="size-4" />
                 </span>
                 <span>{AGENT_PLATFORM_LABELS[platform]}</span>
               </Label>

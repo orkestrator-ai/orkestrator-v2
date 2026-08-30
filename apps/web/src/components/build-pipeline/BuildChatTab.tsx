@@ -37,6 +37,7 @@ import { useMediaQuery, useVirtuosoScrollState } from "@/hooks";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { NativeMessage } from "@/components/chat/NativeMessage";
 import { VirtualizedMessageList } from "@/components/chat/VirtualizedMessageList";
@@ -531,9 +532,8 @@ export function BuildChatTab({
   /**
    * The pipeline controls, as data rather than markup.
    *
-   * Desktop draws them as labelled buttons and a phone draws the same list as
-   * icons, so the label has to be one string both branches read — a second copy
-   * would let the accessible name drift from the visible one.
+   * The label is shared by the tooltip and accessible name so those descriptions
+   * cannot drift apart.
    */
   const headerControls: Array<{
     key: string;
@@ -676,36 +676,24 @@ export function BuildChatTab({
             data-testid="build-pipeline-header-controls"
             className="flex shrink-0 items-center gap-1.5"
           >
-            {headerControls.map(({ key, label, icon: Icon, variant, onClick }) =>
-              // A phone has no room for three labelled buttons beside a title:
-              // they used to push the status line under them and clip the last
-              // control off the screen. The label moves to the accessible name,
-              // which is what the tests and a screen reader read either way.
-              isMobile ? (
-                <Button
-                  key={key}
-                  size="icon"
-                  variant={variant}
-                  aria-label={label}
-                  title={label}
-                  disabled={controlPending}
-                  onClick={onClick}
-                >
-                  <Icon className="h-4 w-4" />
-                </Button>
-              ) : (
-                <Button
-                  key={key}
-                  size="sm"
-                  variant={variant}
-                  disabled={controlPending}
-                  onClick={onClick}
-                >
-                  <Icon className="mr-1.5 h-3.5 w-3.5" />
+            {headerControls.map(({ key, label, icon: Icon, variant, onClick }) => (
+              <Tooltip key={key}>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant={variant}
+                    aria-label={label}
+                    disabled={controlPending}
+                    onClick={onClick}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={5}>
                   {label}
-                </Button>
-              ),
-            )}
+                </TooltipContent>
+              </Tooltip>
+            ))}
           </div>
         )}
       </div>

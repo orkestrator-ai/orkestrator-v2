@@ -683,19 +683,20 @@ describe("MessageShell", () => {
     expect(screen.queryByRole("button", { name: "Fork" }) === null).toBe(true);
   });
 
-  test("hides only the author label when showAuthorLabel is false", () => {
+  test("always renders the assistant author label before its metadata", () => {
     render(
-      <MessageShell
-        isUser={false}
-        authorLabel="Claude"
-        timestampLabel="1:00 PM · 45s"
-        showAuthorLabel={false}
-      >
+      <MessageShell isUser={false} authorLabel="Claude" timestampLabel="1:00 PM · 45s">
         <p>Content</p>
       </MessageShell>,
     );
 
-    expect(screen.queryByText("Claude") === null).toBe(true);
+    const author = screen.getByText("Claude");
+    const metadata = screen.getByText("1:00 PM · 45s");
+    const footerText = author.parentElement?.textContent ?? "";
+
+    expect(footerText.indexOf(author.textContent ?? "")).toBeLessThan(
+      footerText.indexOf(metadata.textContent ?? ""),
+    );
     expect(screen.getByText("1:00 PM · 45s")).toBeTruthy();
   });
 

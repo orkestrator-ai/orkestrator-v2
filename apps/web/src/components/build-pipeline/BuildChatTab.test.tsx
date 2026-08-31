@@ -298,6 +298,13 @@ describe("BuildChatTab backend projection", () => {
     };
     render(<BuildChatTab data={data} />);
 
+    expect(screen.getByRole("button", { name: "Pause" }).getAttribute("data-variant")).toBe(
+      "outline",
+    );
+    expect(screen.getByRole("button", { name: "Cancel" }).getAttribute("data-variant")).toBe(
+      "outline",
+    );
+
     fireEvent.click(screen.getByRole("button", { name: "Pause" }));
     await waitFor(() => expect(pauseBuildPipelineMock).toHaveBeenCalledWith(pipeline.id));
     await waitFor(() => expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy());
@@ -2400,6 +2407,17 @@ describe("BuildChatTab agent messaging", () => {
     await waitFor(() => expect(screen.getByText(/1 message queued/)).toBeTruthy());
   });
 
+  test("renders a compact ArrowUp send control", () => {
+    renderTab();
+    const button = screen.getByRole("button", { name: "Send message" });
+
+    expect(button.getAttribute("data-size")).toBe("icon");
+    expect(button.className).toContain("h-7");
+    expect(button.className).toContain("w-7");
+    expect(button.className).toContain("rounded-lg");
+    expect(button.querySelector(".lucide-arrow-up")).toBeTruthy();
+  });
+
   test("submits on Enter and inserts a newline on Shift+Enter", async () => {
     renderTab();
     const box = screen.getByLabelText("Send a message to the agent");
@@ -2602,13 +2620,19 @@ describe("BuildChatTab agent messaging", () => {
 
     // A second click would queue the same text twice.
     expect(button.disabled).toBe(true);
-    expect(button.querySelector(".animate-spin")).toBeTruthy();
+    const spinner = button.querySelector(".lucide-loader-circle");
+    expect(spinner).toBeTruthy();
+    expect(spinner?.classList.contains("h-3.5")).toBe(true);
+    expect(spinner?.classList.contains("w-3.5")).toBe(true);
+    expect(spinner?.classList.contains("animate-spin")).toBe(true);
+    expect(button.querySelector(".lucide-arrow-up") === null).toBe(true);
 
     await act(async () => {
       release?.();
       await Promise.resolve();
     });
     expect(button.querySelector(".animate-spin") === null).toBe(true);
+    expect(button.querySelector(".lucide-arrow-up")).toBeTruthy();
   });
 
   test("re-enables the retry control when the backend refuses a review restart", async () => {

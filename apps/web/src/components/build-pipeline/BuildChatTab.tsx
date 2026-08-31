@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import {
   AlertCircle,
   ArrowDown,
+  ArrowUp,
   CheckCircle2,
   Circle,
   ClipboardCheck,
@@ -9,7 +10,6 @@ import {
   Pause,
   Play,
   RefreshCw,
-  Send,
   Square,
   type LucideIcon,
 } from "lucide-react";
@@ -583,7 +583,7 @@ export function BuildChatTab({
       key: "cancel",
       label: "Cancel",
       icon: Square,
-      variant: "ghost",
+      variant: "outline",
       onClick: () => void runControl("cancel"),
     });
   }
@@ -971,8 +971,8 @@ export function BuildChatTab({
                   />
                   <Button
                     type="button"
-                    size="sm"
-                    className="rounded-full"
+                    size="icon"
+                    className="h-7 w-7 rounded-lg transition-colors"
                     title="Send message"
                     aria-label="Send message"
                     disabled={sendPending || draft.trim().length === 0}
@@ -981,7 +981,7 @@ export function BuildChatTab({
                     {sendPending ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     ) : (
-                      <Send className="h-3.5 w-3.5" />
+                      <ArrowUp className="h-4 w-4" />
                     )}
                   </Button>
                 </div>

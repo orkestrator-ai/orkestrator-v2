@@ -4,12 +4,15 @@ import {
   createHash,
   reviewArtifactDirectory,
   reviewValidationArtifactPaths,
+  spawnCommand,
+  writeConfinedFile,
   DOCKER_LABEL_OWNER,
   runCommand,
   workspaceFilePath,
   resolveGitHubRepository,
 } from "./commands-dependencies.js";
-import type { Environment, PrState, JsonRecord } from "./commands-dependencies.js";
+import type { Environment, PrState } from "./commands-dependencies.js";
+import type { ReviewPackage, ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import {
   deletingLocalServerEnvironments,
   mergingEnvironments,
@@ -18,8 +21,19 @@ import {
 import { asString, asRecord, assertOnlyKeys } from "./commands-validation.js";
 import { quoteShell, validateGitRefName } from "./commands-agent-support.js";
 import { dockerExec } from "./commands-container-exec.js";
-import { validateWorkspaceMutationPath } from "./commands-files.js";
+import {
+  addLocalWorkspaceArtifactsToGitExclude,
+  CONTAINER_PINNED_ATTACHMENT_WRITE,
+  validateWorkspaceMutationPath,
+} from "./commands-files.js";
 import type { CommandContext } from "./commands-context.js";
+import { gitExcludeSetupScript } from "./tmux-hooks.js";
+import {
+  MAX_PERSISTED_REVIEW_PACKAGE_BYTES,
+  normalizeGeneratedReviewPackage,
+  reviewPackageFileContents,
+  reviewPackageReference,
+} from "./review-package.js";
 
 export type PrDetectionResult = {
   url: string;
@@ -456,6 +470,148 @@ export function decodeValidationOutput(bytes: Buffer, artifactPath: string): str
   return text;
 }
 
+async function ensureReviewPackageIsGitExcluded(
+  environment: Environment,
+  runner: EnvironmentCommandRunner,
+  filePath: string,
+): Promise<void> {
+  if (environment.environmentType === "local") {
+    await addLocalWorkspaceArtifactsToGitExclude(environment.worktreePath!);
+  } else {
+    await runner("bash", ["-lc", gitExcludeSetupScript(".orkestrator")], 10_000);
+  }
+  try {
+    await runner("git", ["check-ignore", "--quiet", "--no-index", "--", filePath], 10_000);
+  } catch (error) {
+    throw new Error(`Review package path is not Git-excluded: ${filePath}`, { cause: error });
+  }
+}
+
+export async function writeEnvironmentReviewPackage(
+  environment: Environment,
+  runner: EnvironmentCommandRunner,
+  reviewPackage: ReviewPackage,
+  dependencies: {
+    spawn?: typeof spawnCommand;
+    timeoutMs?: number;
+  } = {},
+): Promise<ReviewPackageReference> {
+  const contents = reviewPackageFileContents(reviewPackage);
+  const reference = reviewPackageReference(reviewPackage, contents);
+  await ensureReviewPackageIsGitExcluded(environment, runner, reference.filePath);
+
+  if (environment.environmentType === "local") {
+    await writeConfinedFile(environment.worktreePath!, reference.filePath, contents, {
+      exclusive: false,
+      label: "review package path",
+      maxBytes: MAX_PERSISTED_REVIEW_PACKAGE_BYTES,
+      fileMode: 0o444,
+    });
+    return reference;
+  }
+
+  const relativeDirectory = path.posix.dirname(reference.filePath);
+  const filename = path.posix.basename(reference.filePath);
+  const child = (dependencies.spawn ?? spawnCommand)("docker", [
+    "exec",
+    "-i",
+    environment.containerId!,
+    "node",
+    "-e",
+    CONTAINER_PINNED_ATTACHMENT_WRITE,
+    "/workspace",
+    relativeDirectory,
+    filename,
+    String(contents.byteLength),
+    "",
+    "overwrite",
+    String(0o444),
+  ]);
+  await waitForContainerReviewPackageWrite(child, contents, dependencies.timeoutMs);
+  return reference;
+}
+
+const CONTAINER_REVIEW_PACKAGE_WRITE_TIMEOUT_MS = 60_000;
+const MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES = 4_096;
+
+/** Waits for the helper's complete diagnostic stream and bounds a wedged docker exec. */
+export function waitForContainerReviewPackageWrite(
+  child: ReturnType<typeof spawnCommand>,
+  contents: Buffer,
+  timeoutMs = CONTAINER_REVIEW_PACKAGE_WRITE_TIMEOUT_MS,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let stderr = Buffer.alloc(0);
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      finish(new Error(`Container review package write timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stderr.on("data", (chunk: Buffer | string) => {
+      if (stderr.byteLength >= MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES) return;
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      stderr = Buffer.concat([
+        stderr,
+        bytes.subarray(0, MAX_CONTAINER_REVIEW_PACKAGE_STDERR_BYTES - stderr.byteLength),
+      ]);
+    });
+    child.once("close", (code) => {
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const diagnostic = stderr.toString("utf8").trim();
+      finish(
+        new Error(
+          `Container review package write exited with ${code}${diagnostic ? `: ${diagnostic}` : ""}`,
+        ),
+      );
+    });
+    child.once("error", (error) => finish(error));
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (error.code !== "EPIPE") finish(error);
+    });
+    child.stdin.end(contents.toString("base64"));
+  });
+}
+
+export async function verifyEnvironmentReviewPackage(
+  environmentId: string,
+  reference: ReviewPackageReference,
+  context: CommandContext,
+): Promise<{ valid: boolean; reason?: string }> {
+  const environment = await context.storage.getEnvironment(environmentId);
+  if (!environment) throw new Error(`Environment not found: ${environmentId}`);
+  const runner = createEnvironmentCommandRunner(environment);
+  try {
+    await ensureReviewPackageIsGitExcluded(environment, runner, reference.filePath);
+    const contents = await readEnvironmentWorkspaceFile(environment, runner, reference.filePath);
+    if (contents.byteLength !== reference.bytes) {
+      return {
+        valid: false,
+        reason: `Review package byte count changed: expected ${reference.bytes}, received ${contents.byteLength}`,
+      };
+    }
+    const sha256 = createHash("sha256").update(contents).digest("hex");
+    if (sha256 !== reference.sha256) {
+      return { valid: false, reason: "Review package SHA-256 changed" };
+    }
+    return { valid: true };
+  } catch (error) {
+    return {
+      valid: false,
+      reason: error instanceof Error ? error.message : "Review package verification failed",
+    };
+  }
+}
+
 export async function verifyEnvironmentPullRequest(
   environmentId: string,
   prUrl: string,
@@ -552,7 +708,10 @@ export async function generateLoopedReviewPackage(
   uncommittedFiles: ReviewPreparationFileNote[],
   limitations: string[],
   context: CommandContext,
-): Promise<JsonRecord> {
+  options: {
+    additionalLimitations?: string[];
+  } = {},
+): Promise<ReviewPackageReference> {
   const environment = await context.storage.getEnvironment(environmentId);
   if (!environment) throw new Error(`Environment not found: ${environmentId}`);
   const branch = validateGitRefName(targetBranch, "target branch");
@@ -727,7 +886,7 @@ export async function generateLoopedReviewPackage(
     throw new Error("Environment worktree changed while generating the review package");
   }
 
-  return {
+  const generated = {
     id: packageId,
     round,
     preparedAt: preparedAtOutput.trim(),
@@ -752,6 +911,13 @@ export async function generateLoopedReviewPackage(
     // `ReviewPackageContext` — persisting it would make the snapshot fail
     // validation on its next read.
   };
+  const normalized = normalizeGeneratedReviewPackage(generated, {
+    id: packageId,
+    round,
+    targetBranch: branch,
+    additionalLimitations: options.additionalLimitations,
+  });
+  return writeEnvironmentReviewPackage(environment, runner, normalized);
 }
 
 export async function markPullRequestReadyIfDraft(

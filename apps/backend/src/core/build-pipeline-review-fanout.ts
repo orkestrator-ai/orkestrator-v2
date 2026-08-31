@@ -37,6 +37,10 @@ import {
   type PipelineSessionPhase,
 } from "@orkestrator/protocol/build-pipeline";
 import type { ReviewerRecord, ReviewFanoutState } from "@orkestrator/protocol/review-fanout";
+import type {
+  ReviewPackageContext,
+  ReviewPackageReference,
+} from "@orkestrator/protocol/review-workflow";
 import {
   ReviewContractValidationError,
   STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
@@ -89,6 +93,11 @@ export interface BuildPipelineReviewFanoutDeps {
   /** The branch the diff is reviewed against, as the review prompt states it. */
   targetBranch(pipeline: BuildPipeline): Promise<string>;
   reviewInstruction(): Promise<string | undefined>;
+  reviewContext(pipeline: BuildPipeline): Promise<ReviewPackageContext>;
+  verifyReviewPackage(
+    pipeline: BuildPipeline,
+    reviewPackage: ReviewPackageReference,
+  ): Promise<void>;
   progress: MultiReviewProgressTracker;
   stallWarningMs?: number;
   stallAbandonMs?: number;
@@ -175,11 +184,15 @@ export class BuildPipelineReviewFanout {
         if (!reviewPackage) {
           throw new Error(`${FANOUT_LABEL} lost its immutable review package`);
         }
+        if ("kind" in reviewPackage) {
+          await this.deps.verifyReviewPackage(pipeline, reviewPackage);
+        }
         return [
           `You are independent reviewer ${index + 1} of ${count}. Your analysis will be combined with other reviewers by a separate consolidation model. Do not coordinate with, defer to, or speculate about the other reviewers.`,
           createDiscoveryPrompt({
             reviewPackage,
             reviewInstruction: await this.deps.reviewInstruction(),
+            context: await this.deps.reviewContext(pipeline),
           }),
         ].join("\n\n");
       },

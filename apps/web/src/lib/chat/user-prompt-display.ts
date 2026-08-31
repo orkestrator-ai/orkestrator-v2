@@ -18,6 +18,20 @@ export interface UserPromptPresentation {
   evidencePayload: JsonPayload | null;
 }
 
+/** Keep legacy inline evidence from monopolising the renderer's Markdown pass. */
+export const USER_PROMPT_RENDER_CHARACTER_LIMIT = 24_000;
+
+function boundedPromptDisplay(source: string): UserPromptPresentation {
+  if (source.length <= USER_PROMPT_RENDER_CHARACTER_LIMIT) {
+    return { displayText: source, evidencePayload: null };
+  }
+  const omitted = source.length - USER_PROMPT_RENDER_CHARACTER_LIMIT;
+  return {
+    displayText: `${source.slice(0, USER_PROMPT_RENDER_CHARACTER_LIMIT)}\n\n[${omitted} additional characters omitted from the transcript view to keep it responsive. Copy the message to access the complete prompt.]`,
+    evidencePayload: null,
+  };
+}
+
 /** Decode the prompt-only escaping before exposing the evidence as readable JSON. */
 function readableEvidencePayload(payload: JsonPayload): JsonPayload {
   return {
@@ -70,7 +84,7 @@ export function userPromptPresentation(source: string): UserPromptPresentation {
     const presentation = presentationForContract(source, contract);
     if (presentation !== null) return presentation;
   }
-  return { displayText: source, evidencePayload: null };
+  return boundedPromptDisplay(source);
 }
 
 /** Hide the reviewer-report JSON that already has a structured presentation. */

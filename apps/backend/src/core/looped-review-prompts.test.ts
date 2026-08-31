@@ -5,7 +5,7 @@ import {
   type StructuredReviewReport,
 } from "@orkestrator/protocol/structured-review";
 import { reviewValidationArtifactPaths } from "@orkestrator/protocol/review-artifacts";
-import type { ReviewPackage } from "@orkestrator/protocol/review-workflow";
+import type { ReviewPackage, ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import {
   createDiscoveryPrompt,
   createFixPoolPrompt,
@@ -425,6 +425,36 @@ describe("prompt contract edge cases", () => {
 
     const supplied = createDiscoveryPrompt({ reviewPackage, reviewInstruction: "Focus on races." });
     expect(supplied).toContain(JSON.stringify("Focus on races."));
+  });
+
+  test("points reviewers at a file-backed package without embedding its evidence", () => {
+    const reference: ReviewPackageReference = {
+      kind: "file",
+      id: "package-1",
+      round: 1,
+      preparedAt: "2026-08-31T00:00:00.000Z",
+      targetBranch: "main",
+      baseRef: "a".repeat(40),
+      headRef: "b".repeat(40),
+      sha256: "c".repeat(64),
+      filePath: `.orkestrator/review-artifacts/package-1/review-package-${"c".repeat(64)}.json`,
+      bytes: 850_000,
+      changedFileCount: 4,
+      diffCharacters: 10_000,
+      limitations: [],
+    };
+
+    const prompt = createDiscoveryPrompt({
+      reviewPackage: reference,
+      context: { ticketTitle: "Private ticket context" },
+    });
+    expect(prompt).toContain(reference.filePath);
+    expect(prompt).toContain(reference.sha256);
+    expect(prompt).toContain("Read the complete review package");
+    expect(prompt.length).toBeLessThan(10_000);
+    expect(prompt).not.toContain("completeDiff");
+    expect(prompt).toContain("Private ticket context");
+    expect(prompt).toContain("immediately before dispatch");
   });
 
   test("trims blank notes and limitations before applying the completeness rule", () => {

@@ -37,6 +37,27 @@ const PLUGINS_WITH_BREAKS: PluggableList = [remarkGfm, remarkBreaks];
 const PLUGINS_WITHOUT_BREAKS: PluggableList = [remarkGfm];
 
 /**
+ * Hard parser-boundary budgets. Transcript-specific presentation helpers may
+ * apply smaller limits, but no caller can make react-markdown parse beyond
+ * these caps accidentally.
+ */
+export const MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS = 32_000;
+export const MAX_INLINE_MARKDOWN_RENDER_CHARACTERS = 8_000;
+
+export interface MarkdownRenderSource {
+  source: string;
+  omittedCharacters: number;
+}
+
+export function markdownRenderSource(content: string, limit: number): MarkdownRenderSource {
+  if (content.length <= limit) return { source: content, omittedCharacters: 0 };
+  return {
+    source: content.slice(0, limit),
+    omittedCharacters: content.length - limit,
+  };
+}
+
+/**
  * Block constructs that must not fire on a single-line inline render.
  *
  * An inline caller has already flattened its text onto one line, so none of
@@ -269,6 +290,10 @@ export const InlineMessageMarkdown = memo(function InlineMessageMarkdown({
   content,
   className,
 }: Pick<MessageMarkdownProps, "content" | "className">) {
+  const renderSource = useMemo(
+    () => markdownRenderSource(content, MAX_INLINE_MARKDOWN_RENDER_CHARACTERS),
+    [content],
+  );
   return (
     <span
       className={cn(
@@ -284,8 +309,14 @@ export const InlineMessageMarkdown = memo(function InlineMessageMarkdown({
         components={INLINE_MARKDOWN_COMPONENTS}
         urlTransform={markdownUrlTransform}
       >
-        {content}
+        {renderSource.source}
       </Markdown>
+      {renderSource.omittedCharacters > 0 ? (
+        <span data-markdown-truncated="true" className="text-muted-foreground">
+          {" "}
+          … [{renderSource.omittedCharacters} additional characters omitted]
+        </span>
+      ) : null}
     </span>
   );
 });
@@ -308,6 +339,10 @@ export const MessageMarkdown = memo(function MessageMarkdown({
   className,
   enableBreaks = true,
 }: MessageMarkdownProps) {
+  const renderSource = useMemo(
+    () => markdownRenderSource(content, MAX_BLOCK_MARKDOWN_RENDER_CHARACTERS),
+    [content],
+  );
   const plugins = useMemo(
     () => (enableBreaks ? PLUGINS_WITH_BREAKS : PLUGINS_WITHOUT_BREAKS),
     [enableBreaks],
@@ -324,8 +359,14 @@ export const MessageMarkdown = memo(function MessageMarkdown({
         components={mergedComponents}
         urlTransform={markdownUrlTransform}
       >
-        {content}
+        {renderSource.source}
       </Markdown>
+      {renderSource.omittedCharacters > 0 ? (
+        <p data-markdown-truncated="true" className="mt-2 text-xs italic text-muted-foreground">
+          {renderSource.omittedCharacters} additional characters omitted from this rendered view to
+          keep it responsive.
+        </p>
+      ) : null}
     </div>
   );
 });

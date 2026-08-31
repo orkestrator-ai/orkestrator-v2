@@ -115,6 +115,10 @@ type ConfinedWriteOptions = {
   exclusive?: boolean;
   /** Label used in path validation errors. */
   label?: string;
+  /** Dedicated command-owned artifacts may have a larger audited budget. */
+  maxBytes?: number;
+  /** Final mode applied to the still-open temporary inode before publication. */
+  fileMode?: number;
 };
 
 // The helper's cwd is resolved by the kernel during spawn and remains pinned to
@@ -123,7 +127,7 @@ type ConfinedWriteOptions = {
 // pathname lookup can reach a replacement directory outside the worktree.
 const PINNED_CWD_WRITE_HELPER = String.raw`
 const fs = require("node:fs");
-const [targetPath, mode, expectedDev, expectedIno, expectedBytes] = process.argv.slice(1);
+const [targetPath, mode, expectedDev, expectedIno, expectedBytes, fileMode] = process.argv.slice(1);
 const invalidAncestor = () => { process.stderr.write("symlink or non-directory ancestor"); process.exit(73); };
 const cwd = fs.statSync(".");
 if (String(cwd.dev) !== expectedDev || String(cwd.ino) !== expectedIno) invalidAncestor();
@@ -159,6 +163,7 @@ process.stdin.on("end", () => {
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
     identity = fs.fstatSync(fd);
     fs.writeFileSync(fd, Buffer.concat(chunks));
+    fs.fchmodSync(fd, Number(fileMode));
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = undefined;
@@ -209,6 +214,7 @@ async function writeFromPinnedRoot(
   target: string,
   content: Buffer,
   exclusive: boolean,
+  fileMode: number,
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(
@@ -221,6 +227,7 @@ async function writeFromPinnedRoot(
         String(rootStats.dev),
         String(rootStats.ino),
         String(content.byteLength),
+        String(fileMode),
       ],
       {
         cwd: rootPath,
@@ -302,8 +309,13 @@ export async function writeConfinedFile(
     typeof payload === "string"
       ? Buffer.from(assertBase64PayloadWithinLimit(payload), "base64")
       : payload;
-  if (content.byteLength > MAX_WRITE_FILE_BYTES) {
-    throw new Error(`File payload exceeds ${MAX_WRITE_FILE_BYTES} bytes`);
+  const maxBytes = options.maxBytes ?? MAX_WRITE_FILE_BYTES;
+  if (content.byteLength > maxBytes) {
+    throw new Error(`File payload exceeds ${maxBytes} bytes`);
+  }
+  const fileMode = options.fileMode ?? 0o600;
+  if (!Number.isInteger(fileMode) || fileMode < 0 || fileMode > 0o777) {
+    throw new Error("Invalid confined file mode");
   }
   const canonicalRoot = await fs.realpath(rootPath);
   const fullPath = path.join(canonicalRoot, target);
@@ -311,7 +323,14 @@ export async function writeConfinedFile(
   if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
     throw new Error(`Invalid ${label}: worktree root is not a directory`);
   }
-  await writeFromPinnedRoot(canonicalRoot, rootStats, target, content, options.exclusive !== false);
+  await writeFromPinnedRoot(
+    canonicalRoot,
+    rootStats,
+    target,
+    content,
+    options.exclusive !== false,
+    fileMode,
+  );
   let current = canonicalRoot;
   for (const segment of target.split("/").slice(0, -1)) {
     current = path.join(current, segment);

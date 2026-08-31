@@ -3,6 +3,9 @@ import { isReviewPackage } from "@orkestrator/protocol/review-workflow";
 import {
   MAX_PERSISTED_REVIEW_PACKAGE_BYTES,
   normalizeGeneratedReviewPackage,
+  parseReviewPackageReference,
+  reviewPackageFileContents,
+  reviewPackageReference,
 } from "./review-package.js";
 
 function generatedPackage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -43,19 +46,18 @@ function generatedPackage(overrides: Record<string, unknown> = {}): Record<strin
 }
 
 describe("normalizeGeneratedReviewPackage", () => {
-  test("replaces generated context with trusted context and appends trusted limitations", () => {
+  test("drops generated workspace context and appends trusted limitations", () => {
     const normalized = normalizeGeneratedReviewPackage(
       generatedPackage({ context: { ticketTitle: "untrusted" } }),
       {
         id: "package-1",
         round: 1,
         targetBranch: "main",
-        context: { ticketTitle: "trusted" },
         additionalLimitations: ["Ticket comments were truncated."],
       },
     );
 
-    expect(normalized.context).toEqual({ ticketTitle: "trusted" });
+    expect(normalized.context).toBeUndefined();
     expect(normalized.limitations).toEqual(["Ticket comments were truncated."]);
     expect(isReviewPackage(normalized, 1)).toBe(true);
   });
@@ -87,5 +89,60 @@ describe("normalizeGeneratedReviewPackage", () => {
         { id: "package-1", round: 1, targetBranch: "main" },
       ),
     ).toThrow("exceeds");
+  });
+
+  test("projects file contents to a small, identity-bound durable reference", () => {
+    const normalized = normalizeGeneratedReviewPackage(generatedPackage(), {
+      id: "package-1",
+      round: 1,
+      targetBranch: "main",
+    });
+    const contents = reviewPackageFileContents(normalized);
+    const reference = reviewPackageReference(normalized, contents);
+
+    expect(reference).toMatchObject({
+      kind: "file",
+      id: "package-1",
+      bytes: contents.byteLength,
+      changedFileCount: 1,
+      diffCharacters: 4,
+    });
+    expect(reference.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(contents.toString("utf8")).toBe(`${JSON.stringify(normalized)}\n`);
+    expect(reference.filePath).toBe(
+      `.orkestrator/review-artifacts/package-1/review-package-${reference.sha256}.json`,
+    );
+    expect(JSON.stringify(reference).length).toBeLessThan(1_000);
+    expect(
+      parseReviewPackageReference(reference, {
+        id: "package-1",
+        round: 1,
+        targetBranch: "main",
+      }),
+    ).toEqual(reference);
+  });
+
+  test("rejects references whose identity, branch, round, or content-addressed path differs", () => {
+    const normalized = normalizeGeneratedReviewPackage(generatedPackage(), {
+      id: "package-1",
+      round: 1,
+      targetBranch: "main",
+    });
+    const reference = reviewPackageReference(normalized, reviewPackageFileContents(normalized));
+    for (const candidate of [
+      { ...reference, id: "package-2" },
+      { ...reference, round: 2 },
+      { ...reference, targetBranch: "release" },
+      { ...reference, filePath: ".orkestrator/review-artifacts/package-1/review-package.json" },
+      normalized,
+    ]) {
+      expect(() =>
+        parseReviewPackageReference(candidate, {
+          id: "package-1",
+          round: 1,
+          targetBranch: "main",
+        }),
+      ).toThrow("does not match");
+    }
   });
 });

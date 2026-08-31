@@ -1,5 +1,5 @@
 import { isStructuredReviewReport, type StructuredReviewReport } from "./structured-review.js";
-import { isReviewPackage, type ReviewPackage } from "./review-workflow.js";
+import { isPersistedReviewPackage, type PersistedReviewPackage } from "./review-workflow.js";
 import {
   REVIEW_FANOUT_MAX_REVIEWERS,
   REVIEW_FANOUT_MIN_REVIEWERS,
@@ -503,7 +503,7 @@ export interface BuildPipeline {
   verificationFeedback?: string;
   structuredReview?: StructuredReviewReport;
   /** Immutable Git evidence prepared by the build model for this iteration's reviewers. */
-  reviewPackage?: ReviewPackage;
+  reviewPackage?: PersistedReviewPackage;
   structuredReviewRequestId?: string;
   pausedFromPhase?: ResumableBuildPhase;
   error?: string;
@@ -1074,7 +1074,7 @@ export function isBuildPipeline(value: unknown): value is BuildPipeline {
       value.verificationResult !== "fail") ||
     !isOptionalString(value.verificationFeedback) ||
     (value.structuredReview !== undefined && !isStructuredReviewReport(value.structuredReview)) ||
-    (value.reviewPackage !== undefined && !isReviewPackage(value.reviewPackage)) ||
+    (value.reviewPackage !== undefined && !isPersistedReviewPackage(value.reviewPackage)) ||
     !isOptionalNonBlankString(value.structuredReviewRequestId) ||
     (value.pausedFromPhase !== undefined &&
       !RESUMABLE_PHASES.has(value.pausedFromPhase as ResumableBuildPhase)) ||

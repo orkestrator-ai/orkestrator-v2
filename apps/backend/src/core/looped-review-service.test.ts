@@ -13,6 +13,7 @@ import {
   type LoopedReviewWorkflow,
   type LoopedReviewAgent,
 } from "@orkestrator/protocol/review-workflow";
+import { reviewPackageArtifactPath } from "@orkestrator/protocol/review-artifacts";
 import type { StructuredReviewReport } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema, StructuredOutputResult } from "@orkestrator/protocol/structured-output";
 import { StorageService } from "./storage.js";
@@ -288,6 +289,7 @@ async function harness(
     cancellationDeadlineMs?: number;
     useProductionProvider?: boolean;
     bridgeAuthToken?: string;
+    reviewPackageVerificationFailures?: number;
   } = {},
 ): Promise<void> {
   const dataDir = await fs.mkdtemp(path.join(tmpdir(), "ork-looped-review-"));
@@ -315,6 +317,7 @@ async function harness(
   }
   const provider = new FakeProvider(agent);
   const bridgeCalls: string[] = [];
+  let reviewPackageVerificationFailures = serviceOptions.reviewPackageVerificationFailures ?? 0;
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     if (
       command.startsWith("start_local_") ||
@@ -331,20 +334,30 @@ async function harness(
       } as T;
     }
     if (command === "generate_looped_review_package") {
+      const id = String(args.packageId);
+      const sha256 = "a".repeat(64);
       return {
-        id: args.packageId,
+        kind: "file",
+        id,
         round: args.round,
         preparedAt: new Date().toISOString(),
         targetBranch: args.targetBranch,
         baseRef: "aaaaaaa",
         headRef: "bbbbbbb",
-        commit: null,
-        completeDiff: "",
-        changedFiles: [],
-        validation: [],
-        skippedFiles: [],
-        uncommittedFiles: [],
+        filePath: reviewPackageArtifactPath(id, sha256),
+        sha256,
+        bytes: 1_024,
+        changedFileCount: 0,
+        diffCharacters: 0,
         limitations: [],
+      } as T;
+    }
+    if (command === "verify_looped_review_package") {
+      const valid = reviewPackageVerificationFailures === 0;
+      if (!valid) reviewPackageVerificationFailures -= 1;
+      return {
+        valid,
+        ...(valid ? {} : { reason: "digest mismatch" }),
       } as T;
     }
     if (command === "verify_environment_pr") {
@@ -355,6 +368,7 @@ async function harness(
   const {
     useProductionProvider,
     bridgeAuthToken: _bridgeAuthToken,
+    reviewPackageVerificationFailures: _reviewPackageVerificationFailures,
     ...controllerOptions
   } = serviceOptions;
   const service = new LoopedReviewService(storage, invoke, {
@@ -579,6 +593,37 @@ describe("LoopedReviewService", () => {
         expect(typeof registration.interaction?.fence).toBe("string");
       }
     });
+  });
+
+  test("regenerates before discovery dispatch when the package bytes no longer match", async () => {
+    await harness(
+      async (service, storage, provider) => {
+        const started = await service.start({
+          environmentId: "env-1",
+          projectId: "project-1",
+          agent: "claude",
+          model: "model",
+          targetBranch: "main",
+          allowance: 1,
+        });
+        await pump(service, started.id);
+        const finished = await snapshot(storage, started.id);
+        expect(finished.phase).toBe("completed");
+        // The first discovery dispatch was stopped, then preparation ran again
+        // and produced a fresh reference for the eventual reviewer.
+        expect(provider.sent).toHaveLength(5);
+        const preparationSession = finished.sessions.find(
+          (session) => session.phase === "preparation",
+        );
+        expect(
+          provider.sent.filter(
+            (dispatch) => dispatch.sessionId === preparationSession?.providerSessionId,
+          ),
+        ).toHaveLength(2);
+      },
+      "claude",
+      { reviewPackageVerificationFailures: 1 },
+    );
   });
 
   test("strips provider-invented provenance from discovery reports", async () => {

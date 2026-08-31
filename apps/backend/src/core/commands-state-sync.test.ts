@@ -1947,6 +1947,40 @@ describe("container attachment confinement helpers", () => {
     }
   });
 
+  test("atomically replaces a command-owned container artifact without following a symlink", async () => {
+    const root = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-overwrite-"));
+    const external = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-external-"));
+    try {
+      await fs.mkdir(path.join(root, "stage/batch"), { recursive: true });
+      const target = path.join(root, "stage/batch/review-package.json");
+      await fs.writeFile(target, "old");
+      const replaced = await runHelper(
+        commandTesting.CONTAINER_PINNED_ATTACHMENT_WRITE,
+        [root, "stage/batch", "review-package.json", "3", "", "overwrite", String(0o444)],
+        "bmV3",
+      );
+      expect(replaced.code).toBe(0);
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("new");
+      expect((await fs.stat(target)).mode & 0o777).toBe(0o444);
+
+      const sentinel = path.join(external, "sentinel");
+      await fs.writeFile(sentinel, "outside");
+      await fs.rm(target);
+      await fs.symlink(sentinel, target);
+      const symlinkReplacement = await runHelper(
+        commandTesting.CONTAINER_PINNED_ATTACHMENT_WRITE,
+        [root, "stage/batch", "review-package.json", "4", "", "overwrite"],
+        "c2FmZQ==",
+      );
+      expect(symlinkReplacement.code).toBe(0);
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("safe");
+      await expect(fs.readFile(sentinel, "utf8")).resolves.toBe("outside");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+      await fs.rm(external, { recursive: true, force: true });
+    }
+  });
+
   test("keeps a write inside its pinned directory during ancestor replacement", async () => {
     const root = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-race-"));
     const external = await fs.mkdtemp(path.join(tmpdir(), "ork-container-helper-race-external-"));

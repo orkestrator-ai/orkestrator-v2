@@ -18,6 +18,7 @@ import {
   stripStructuredReviewProvenance,
 } from "@orkestrator/protocol/structured-review";
 import type { JsonSchema } from "@orkestrator/protocol/structured-output";
+import type { ReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import { UNATTENDED_AGENT_INTERACTION_POLICY } from "@orkestrator/protocol/agent-interactions";
 import type { Environment } from "./models.js";
 import {
@@ -52,7 +53,7 @@ import {
   createDiscoveryPrompt,
   parseReviewPreparationResult,
 } from "./looped-review-prompts.js";
-import { normalizeGeneratedReviewPackage } from "./review-package.js";
+import { parseReviewPackageReference } from "./review-package.js";
 import { BuildPipelineServiceBase } from "./build-pipeline-service-base.js";
 import {
   WORKTREE_PROBE_ATTEMPTS,
@@ -100,6 +101,12 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
           return repository.prBaseBranch || "main";
         },
         reviewInstruction: async () => (await this.storage.loadConfig()).global.reviewInstruction,
+        reviewContext: async (pipeline) => {
+          const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
+          return buildPipelineReviewPackageContext(pipeline, notes).context;
+        },
+        verifyReviewPackage: (pipeline, reviewPackage) =>
+          this.assertReviewPackageIntegrity(pipeline.environmentId, reviewPackage),
         progress: this.reviewProgress,
       });
     }
@@ -288,19 +295,11 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
         delete pipeline.structuredReviewRequestId;
         delete pipeline.verificationResult;
         delete pipeline.verificationFeedback;
-        if (pipeline.reviewPackage) {
-          await this.startStage(pipeline, "review", "reviewing");
-        } else {
-          await this.startReviewPackagePreparation(pipeline);
-        }
+        await this.startVerifiedReviewOrPrepare(pipeline);
         return;
       }
       if (!pipeline.reviewFanout) {
-        if (pipeline.reviewPackage) {
-          await this.startStage(pipeline, "review", "reviewing");
-        } else {
-          await this.startReviewPackagePreparation(pipeline);
-        }
+        await this.startVerifiedReviewOrPrepare(pipeline);
         return;
       }
       await this.advanceReviewFanout(pipeline);
@@ -431,11 +430,7 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       delete pipeline.structuredReviewRequestId;
       delete pipeline.verificationResult;
       delete pipeline.verificationFeedback;
-      if (pipeline.reviewPackage) {
-        await this.startStage(pipeline, "review", "reviewing");
-      } else {
-        await this.startReviewPackagePreparation(pipeline);
-      }
+      await this.startVerifiedReviewOrPrepare(pipeline);
       return;
     }
 
@@ -636,21 +631,20 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
     const preparation = parseReviewPreparationResult(result.value);
     const packageId = buildPipelineReviewPackageId(pipeline);
     const round = pipeline.iteration + 1;
+    const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
+    const boundedContext = buildPipelineReviewPackageContext(pipeline, notes);
     const generated = await this.invoke<unknown>("generate_looped_review_package", {
       environmentId: pipeline.environmentId,
       packageId,
       round,
       targetBranch,
       preparation,
+      additionalLimitations: boundedContext.limitations,
     });
-    const notes = (await this.storage.getProjectNotes(pipeline.projectId)).content;
-    const boundedContext = buildPipelineReviewPackageContext(pipeline, notes);
-    pipeline.reviewPackage = normalizeGeneratedReviewPackage(generated, {
+    pipeline.reviewPackage = parseReviewPackageReference(generated, {
       id: packageId,
       round,
       targetBranch,
-      context: boundedContext.context,
-      additionalLimitations: boundedContext.limitations,
     });
     session.structuredResultStatus = "accepted";
     await this.startStage(pipeline, "review", "reviewing");
@@ -663,6 +657,37 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       (environment) =>
         environment.buildPipelineId === pipeline.id && !environment.deletionRequestedAt,
     );
+  }
+
+  protected async assertReviewPackageIntegrity(
+    environmentId: string,
+    reviewPackage: ReviewPackageReference,
+  ): Promise<void> {
+    const verification = await this.invoke<{ valid: boolean; reason?: string }>(
+      "verify_looped_review_package",
+      { environmentId, reviewPackage },
+    );
+    if (!verification.valid) {
+      throw new Error(
+        `Review package integrity verification failed: ${verification.reason ?? "unknown reason"}`,
+      );
+    }
+  }
+
+  private async startVerifiedReviewOrPrepare(pipeline: BuildPipeline): Promise<void> {
+    const reviewPackage = pipeline.reviewPackage;
+    if (reviewPackage && "kind" in reviewPackage) {
+      const verification = await this.invoke<{ valid: boolean; reason?: string }>(
+        "verify_looped_review_package",
+        { environmentId: pipeline.environmentId, reviewPackage },
+      );
+      if (!verification.valid) delete pipeline.reviewPackage;
+    }
+    if (pipeline.reviewPackage) {
+      await this.startStage(pipeline, "review", "reviewing");
+    } else {
+      await this.startReviewPackagePreparation(pipeline);
+    }
   }
 
   protected async refreshTranscript(
@@ -777,8 +802,8 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
                     ? "resolve-conflicts"
                     : null;
     if (!stage) throw new Error(`Cannot recover pipeline phase ${pipeline.phase}`);
-    if (stage === "review" && !pipeline.reviewPackage) {
-      await this.startReviewPackagePreparation(pipeline);
+    if (stage === "review") {
+      await this.startVerifiedReviewOrPrepare(pipeline);
       return;
     }
     await this.startStage(pipeline, stage, pipeline.phase as ResumableBuildPhase);
@@ -1072,10 +1097,14 @@ export abstract class BuildPipelineServiceSupervisor extends BuildPipelineServic
       if (!pipeline.reviewPackage) {
         throw new Error("Cannot review without an immutable review package");
       }
+      if ("kind" in pipeline.reviewPackage) {
+        await this.assertReviewPackageIntegrity(pipeline.environmentId, pipeline.reviewPackage);
+      }
       return {
         prompt: createDiscoveryPrompt({
           reviewPackage: pipeline.reviewPackage,
           reviewInstruction: config.global.reviewInstruction,
+          context: buildPipelineReviewPackageContext(pipeline, notes).context,
         }),
         schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA,
         images: pipeline.taskSnapshot.images,

@@ -1,7 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { cleanup, render } from "@testing-library/react";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useEffect } from "react";
+import { TerminalProvider, useTerminalContext } from "@/contexts";
+import { invoke } from "@/lib/native/backend";
+import { mockToastInfo } from "../../../../../tests/mocks/sonner";
 
 import { InlineMessageMarkdown, MessageMarkdown } from "./MessageMarkdown";
+
+const invokeMock = invoke as unknown as ReturnType<typeof mock>;
 
 function renderInline(content: string) {
   return render(<InlineMessageMarkdown content={content} />).container;
@@ -153,5 +159,96 @@ describe("MessageMarkdown code styling", () => {
       (node) => node.closest("pre") === null,
     );
     expect(inline?.textContent).toBe("bun test");
+  });
+});
+
+describe("MessageMarkdown links", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function RegisterFileTab({ openFile }: { openFile: (path: string) => void }) {
+    const { setCreateFileTab } = useTerminalContext();
+
+    useEffect(() => {
+      setCreateFileTab(openFile);
+      return () => setCreateFileTab(null);
+    }, [openFile, setCreateFileTab]);
+
+    return null;
+  }
+
+  test("uses the inline-code blue without its chip or monospace styling", () => {
+    render(<MessageMarkdown content="Open [the file](src/App.tsx)." />);
+
+    const link = screen.getByRole("link", { name: "the file" });
+    expect(link.className).toContain("text-blue-300");
+    expect(link.className).not.toContain("text-primary");
+    expect(link.className).not.toContain("font-mono");
+    expect(link.className).not.toContain("bg-primary");
+  });
+
+  test("retains the default URL safety filter for unsafe protocols", () => {
+    const { container } = render(
+      <MessageMarkdown content="Do not open [this](javascript:alert(1))." />,
+    );
+
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("");
+  });
+
+  test.each([
+    ["a relative path", "src/App.tsx", "src/App.tsx"],
+    ["an absolute path", "/workspace/src/App.tsx", "/workspace/src/App.tsx"],
+    ["an encoded file URL", "file:///workspace/My%20File.tsx", "/workspace/My File.tsx"],
+    ["a Windows path", "C:/workspace/src/App.tsx", "C:/workspace/src/App.tsx"],
+    ["a UNC file URL", "file://server/share/App.tsx", "//server/share/App.tsx"],
+  ])("opens %s through the files-panel tab action", (_label, href, expectedPath) => {
+    const openFile = mock((_path: string) => undefined);
+    render(
+      <TerminalProvider>
+        <RegisterFileTab openFile={openFile} />
+        <MessageMarkdown content={`[Open file](${href})`} />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Open file" }));
+
+    expect(openFile).toHaveBeenCalledTimes(1);
+    expect(openFile).toHaveBeenCalledWith(expectedPath);
+  });
+
+  test("shows feedback instead of sending a file path to the browser without a tab action", () => {
+    invokeMock.mockClear();
+    render(
+      <TerminalProvider>
+        <MessageMarkdown content="[Open file](src/App.tsx)" />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Open file" }));
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(mockToastInfo).toHaveBeenCalledWith("Start or open the environment to view this file", {
+      description:
+        "Workspace file links are available while the environment is active and running.",
+    });
+  });
+
+  test("keeps HTTP links on the browser action when a file-tab action is registered", () => {
+    invokeMock.mockClear();
+    const openFile = mock((_path: string) => undefined);
+    render(
+      <TerminalProvider>
+        <RegisterFileTab openFile={openFile} />
+        <MessageMarkdown content="[Open docs](https://example.com/docs)" />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Open docs" }));
+
+    expect(openFile).not.toHaveBeenCalled();
+    expect(invokeMock).toHaveBeenCalledWith("open_in_browser", {
+      url: "https://example.com/docs",
+    });
   });
 });

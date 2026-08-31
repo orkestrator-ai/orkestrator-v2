@@ -342,7 +342,7 @@ describe("NativeMessage", () => {
 
       await waitFor(() => {
         expect(mockConsoleError).toHaveBeenCalledWith(
-          "[NativeMessage] Failed to open link:",
+          "[MessageMarkdown] Failed to open link:",
           expect.any(Error),
         );
       });

@@ -489,7 +489,11 @@ export abstract class BuildPipelineServiceBase {
       if (prompt && session?.status === "idle" && session.phase === sessionPhaseFor(phase)) {
         const requestId = randomUUID();
         const startedAt = new Date().toISOString();
-        const structuredReview = phase === "reviewing" || phase === "verifying";
+        const structuredReview =
+          phase === "building" ||
+          phase === "fixing" ||
+          phase === "reviewing" ||
+          phase === "verifying";
         candidate.pendingPromptAttempt = {
           id: randomUUID(),
           sessionId: session.sdkSessionId,

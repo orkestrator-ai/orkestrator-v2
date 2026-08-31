@@ -45,6 +45,8 @@ import {
   TEST_REVIEW_PREPARATION,
   testGeneratedReviewPackage,
 } from "./build-pipeline-test-fixtures.js";
+import { REVIEW_PREPARATION_RESULT_JSON_SCHEMA } from "./looped-review-prompts.js";
+import { REVIEW_PREPARATION_OUTPUT_CONTRACT } from "./build-pipeline-prompts.js";
 
 const cleanReview: StructuredReviewReport = {
   reviewScope: {
@@ -3100,10 +3102,67 @@ describe("BuildPipelineService", () => {
       const resumed = provider.sent.at(-1)!;
       expect(provider.sent).toHaveLength(2);
       expect(resumed.prompt).toContain("Resume the build pipeline from where you left off.");
+      expect(resumed.prompt).toContain(REVIEW_PREPARATION_OUTPUT_CONTRACT);
       expect(resumed.prompt).toContain(
         "This is a non-interactive build session: no user can answer a provider input request.",
       );
-      expect((await pipeline(storage, started.id)).phase).toBe("building");
+      expect(resumed.schema).toBe(REVIEW_PREPARATION_RESULT_JSON_SCHEMA);
+
+      const resuming = await pipeline(storage, started.id);
+      expect(resuming.phase).toBe("building");
+      expect(resuming.sessions[resuming.currentSessionIndex]).toMatchObject({
+        structuredRequestId: resumed.requestId,
+        structuredResultStatus: "pending",
+      });
+
+      await service.advanceNow(started.id);
+
+      const reviewing = await pipeline(storage, started.id);
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.reviewPackage).toBeDefined();
+      expect(
+        provider.sent.filter((dispatch) => dispatch.sessionId === resumed.sessionId),
+      ).toHaveLength(2);
+    });
+  });
+
+  test("resumes fixing with the shared structured preparation contract", async () => {
+    await withService(async (service, storage, provider) => {
+      const { started, session } = await startBuilding(service, storage);
+      await mutateStored(storage, started.id, (snapshot) => {
+        snapshot.phase = "fixing";
+        const current = snapshot.sessions[snapshot.currentSessionIndex]!;
+        current.phase = "fix";
+        current.label = "Fix Session";
+      });
+      provider.phases.set(session.sdkSessionId, "fix");
+
+      await service.pause(started.id);
+      await service.resume(started.id);
+      await service.advanceNow(started.id);
+
+      const resumed = provider.sent.at(-1)!;
+      expect(provider.sent).toHaveLength(2);
+      expect(resumed.prompt).toContain("Resume fixing the verification failures");
+      expect(resumed.prompt).toContain(REVIEW_PREPARATION_OUTPUT_CONTRACT);
+      expect(resumed.schema).toBe(REVIEW_PREPARATION_RESULT_JSON_SCHEMA);
+
+      const resuming = await pipeline(storage, started.id);
+      expect(resuming.phase).toBe("fixing");
+      expect(resuming.sessions[resuming.currentSessionIndex]).toMatchObject({
+        phase: "fix",
+        structuredRequestId: resumed.requestId,
+        structuredResultStatus: "pending",
+      });
+
+      await service.advanceNow(started.id);
+
+      const reviewing = await pipeline(storage, started.id);
+      expect(reviewing.phase).toBe("reviewing");
+      expect(reviewing.reviewPackage).toBeDefined();
+      expect(
+        provider.sent.filter((dispatch) => dispatch.sessionId === resumed.sessionId),
+      ).toHaveLength(2);
     });
   });
 });

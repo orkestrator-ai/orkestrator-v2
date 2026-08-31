@@ -286,6 +286,13 @@ history rather than two partial ones.
   immediate isolated rerun, `cd apps/backend && bun test --preload
   ../../tests/setup-node.ts src/core/multi-review-service.test.ts`, passed all
   100 tests; the affected case passed in 50.84 ms.
+- **Recurrence:** on 2026-08-31, `bun run --cwd apps/backend test` ran the
+  backend suite with 18 Bun workers. The case failed after 583.72 ms; the
+  aggregate capture retained the test name but not its assertion detail. The
+  package reported 2,358 passed and 1 failed across 2,359 tests. The immediate
+  isolated rerun, `bun --cwd=apps/backend test --preload
+  ../../tests/setup-node.ts src/core/multi-review-service.test.ts`, passed all
+  100 tests and 446 assertions in 4.92 s; the affected case passed in 37.45 ms.
 
 ## `MultiReviewService resumes a persisted address attempt after restart` (`apps/backend/src/core/multi-review-service.test.ts:732`)
 

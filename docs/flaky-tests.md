@@ -265,6 +265,13 @@ history rather than two partial ones.
   aggregate capture did not retain this case's assertion detail. An immediate
   isolated rerun, `bun test src/core/multi-review-service.test.ts`, passed all
   100 tests; the affected case passed in 44.92 ms.
+- **Recurrence:** on 2026-08-31, `bun run test` ran the four groups concurrently
+  and the backend workspace used two Bun workers. The case failed after 105.70
+  ms with the same expected `idle` / received `working` activity mismatch. The
+  backend package reported 2,357 passed and 1 failed across 2,358 tests. An
+  immediate isolated rerun, `cd apps/backend && bun test --preload
+  ../../tests/setup-node.ts src/core/multi-review-service.test.ts`, passed all
+  100 tests; the affected case passed in 50.84 ms.
 
 ## `MultiReviewService resumes a persisted address attempt after restart` (`apps/backend/src/core/multi-review-service.test.ts:732`)
 

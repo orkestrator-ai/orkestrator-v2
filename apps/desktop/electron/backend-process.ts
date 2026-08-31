@@ -147,8 +147,6 @@ export function getBrowserGatewayStatus(info: GatewayStartInfo | null) {
 
 export function createBackendProcessEnvironment(
   parentEnv: NodeJS.ProcessEnv,
-  isDev: boolean,
-  resourceRoot: string,
   appVersion?: string,
   runtime?: {
     flavor: "production" | "development" | "agent-test";
@@ -168,11 +166,6 @@ export function createBackendProcessEnvironment(
     // instead of falling back to their own default, and it would still shadow
     // whatever the shell had set.
     delete env.ORKESTRATOR_VERSION;
-  }
-  if (!isDev) {
-    env.NODE_PATH = [path.join(resourceRoot, "backend", "vendor"), env.NODE_PATH]
-      .filter(Boolean)
-      .join(path.delimiter);
   }
   delete env.ORKESTRATOR_GATEWAY_HOST;
   delete env.ORKESTRATOR_GATEWAY_PORT;
@@ -516,8 +509,6 @@ export class BackendProcess {
     const isolatedCredentialRoot = path.join(options.dataDir, "agent-credentials");
     const env = createBackendProcessEnvironment(
       process.env,
-      options.isDev,
-      options.resourceRoot,
       options.appVersion,
       options.runtimeFlavor
         ? {

@@ -12,6 +12,11 @@ const result = await Bun.build({
   outdir: output,
   target: "bun",
   sourcemap: "external",
+  // Sharp resolves its platform-native @img package at runtime. Keeping the
+  // package external preserves its own module location, so it resolves the
+  // matching vendored binary instead of whichever version happens to be in
+  // Bun's global install cache.
+  external: ["sharp"],
 });
 if (!result.success) {
   for (const log of result.logs) console.error(log);
@@ -22,10 +27,19 @@ async function copyResolvedPackage(source: string, destination: string): Promise
   await cp(await realpath(source), destination, { recursive: true, dereference: true });
 }
 
-// Sharp is bundled, but selects its platform-native @img packages dynamically.
+// Sharp and its runtime dependency closure travel beside the standalone bundle.
+// Electron preserves this `backend/node_modules` layout explicitly; that local
+// package boundary must win before Bun considers anything in its global cache.
 const sharpRoot = await realpath(path.join(packageRoot, "node_modules/sharp"));
+const sharpDependenciesRoot = path.dirname(sharpRoot);
+for (const packageName of ["sharp", "detect-libc", "semver"]) {
+  await copyResolvedPackage(
+    path.join(sharpDependenciesRoot, packageName),
+    path.join(output, "node_modules", packageName),
+  );
+}
 await copyResolvedPackage(
-  path.join(path.dirname(sharpRoot), "@img"),
+  path.join(sharpDependenciesRoot, "@img"),
   path.join(output, "node_modules/@img"),
 );
 

@@ -6,11 +6,31 @@ const root = path.resolve(import.meta.dir, "../..");
 const read = (relativePath: string) => readFileSync(path.join(root, relativePath), "utf8");
 
 describe("monorepo orchestration scripts", () => {
-  test("backend build bundles the entrypoint and vendors Sharp's dynamic native dependencies", () => {
+  test("backend build externalizes Sharp and vendors its complete runtime closure", () => {
     const source = read("apps/backend/scripts/build.ts");
+    const runtimeWorkflow = read(".github/workflows/validate-bun-runtime.yml");
+    const rootPackage = JSON.parse(read("package.json")) as {
+      build?: { extraResources?: Array<{ from?: string; to?: string }> };
+      scripts?: Record<string, string>;
+    };
     expect(source).toContain('entrypoints: [path.join(packageRoot, "src/main.ts")]');
+    expect(source).toContain('external: ["sharp"]');
+    expect(source).toContain('["sharp", "detect-libc", "semver"]');
     expect(source).toContain('path.join(output, "node_modules/@img")');
     expect(source).toContain("if (!result.success)");
+    expect(rootPackage.build?.extraResources).toContainEqual(
+      expect.objectContaining({
+        from: "apps/backend/dist/node_modules",
+        to: "backend/node_modules",
+      }),
+    );
+    expect(rootPackage.scripts?.["verify:packaged-backend"]).toBe(
+      "bun scripts/verify-packaged-backend.ts",
+    );
+    expect(runtimeWorkflow).toContain("bun run build:all");
+    expect(runtimeWorkflow).toContain("bunx electron-builder --dir");
+    expect(runtimeWorkflow).toContain("bun run verify:packaged-backend");
+    expect(runtimeWorkflow).toContain("tests/standalone.test.ts");
   });
 
   test("desktop build and development scripts propagate failures and clean children", () => {

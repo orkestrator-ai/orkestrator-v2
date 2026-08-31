@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, jest, test } from "bun:test";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { semver } from "bun";
+import { chmod, cp, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { waitForStandaloneBackendReady } from "./standalone-ready";
 
 const root = path.resolve(import.meta.dir, "../../..");
@@ -24,6 +26,7 @@ async function startBackend(
   extraArgs: string[] = [],
   extraEnv: Record<string, string> = {},
   prepare?: (paths: { dataDir: string; rendererRoot: string }) => Promise<void>,
+  launch?: { bunArgs?: string[]; entry?: string; cwd?: string },
 ): Promise<{
   url: string;
   token: string;
@@ -43,7 +46,8 @@ async function startBackend(
   const child = Bun.spawn(
     [
       process.execPath,
-      path.join(root, "apps/backend/dist/main.js"),
+      ...(launch?.bunArgs ?? []),
+      launch?.entry ?? path.join(root, "apps/backend/dist/main.js"),
       "--host",
       "127.0.0.1",
       "--port",
@@ -63,6 +67,7 @@ async function startBackend(
       stdout: "pipe",
       stderr: "pipe",
       env: { ...process.env, ...extraEnv },
+      ...(launch?.cwd ? { cwd: launch.cwd } : {}),
     },
   );
   processes.push(child);
@@ -107,7 +112,95 @@ async function waitForProcessExit(pid: number): Promise<void> {
   if (isProcessRunning(pid)) throw new Error(`Process did not exit: ${pid}`);
 }
 
+async function probeSharpResolution(packagedBackend: string): Promise<{
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}> {
+  const probe = path.join(packagedBackend, "resolve-sharp.mjs");
+  await writeFile(probe, 'console.log(import.meta.resolve("sharp"));\n');
+  const env = { ...process.env };
+  delete env.NODE_PATH;
+  const child = Bun.spawn([process.execPath, "--no-install", probe], {
+    cwd: packagedBackend,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
 describe("standalone backend service", () => {
+  test("loads Sharp from the packaged runtime closure", async () => {
+    const packageRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-packaged-backend-"));
+    temporaryDirectories.push(packageRoot);
+    const packagedBackend = path.join(packageRoot, "backend");
+    const packagedNodeModules = path.join(packagedBackend, "node_modules");
+    await mkdir(packagedBackend, { recursive: true });
+    await cp(path.join(root, "apps/backend/dist/main.js"), path.join(packagedBackend, "main.js"));
+    await cp(path.join(root, "apps/backend/dist/node_modules"), packagedNodeModules, {
+      recursive: true,
+      dereference: true,
+    });
+
+    const resolution = await probeSharpResolution(packagedBackend);
+    expect(resolution.exitCode, resolution.stderr).toBe(0);
+    const resolvedSharp = fileURLToPath(resolution.stdout.trim());
+    const relativeSharpPath = path.relative(
+      await realpath(path.join(packagedNodeModules, "sharp")),
+      resolvedSharp,
+    );
+    expect(relativeSharpPath === ".." || relativeSharpPath.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeSharpPath)).toBe(false);
+    const packagedSharp = JSON.parse(
+      await readFile(path.join(packagedNodeModules, "sharp/package.json"), "utf8"),
+    ) as { version: string };
+    const backendManifest = JSON.parse(
+      await readFile(path.join(root, "apps/backend/package.json"), "utf8"),
+    ) as { dependencies: { sharp: string } };
+    expect(semver.satisfies(packagedSharp.version, backendManifest.dependencies.sharp)).toBe(true);
+
+    const { url, token } = await startBackend([], { NODE_PATH: "" }, undefined, {
+      bunArgs: ["--no-install"],
+      entry: path.join(packagedBackend, "main.js"),
+      cwd: packageRoot,
+    });
+    const project = (await invokeBackend(url, token, "add_project", {
+      gitUrl: "https://example.invalid/image-runtime.git",
+    })) as { id: string };
+    const task = (await invokeBackend(url, token, "add_kanban_task", {
+      projectId: project.id,
+      title: "Packaged image runtime",
+      description: "",
+    })) as { id: string };
+    const onePixelPng =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADklEQVR4AWL6////fwAAAAD//w7I1cwAAAAGSURBVAMACgUD/9k79a8AAAAASUVORK5CYII=";
+
+    const updated = (await invokeBackend(url, token, "add_kanban_image", {
+      taskId: task.id,
+      filename: "reference.png",
+      data: onePixelPng,
+    })) as { images: Array<{ filename: string }> };
+    expect(updated.images).toEqual([expect.objectContaining({ filename: "reference.png" })]);
+  });
+
+  test("fails closed when the packaged Sharp closure is missing", async () => {
+    const packageRoot = await mkdtemp(path.join(os.tmpdir(), "orkestrator-missing-sharp-"));
+    temporaryDirectories.push(packageRoot);
+    const packagedBackend = path.join(packageRoot, "backend");
+    await mkdir(packagedBackend, { recursive: true });
+
+    const resolution = await probeSharpResolution(packagedBackend);
+    expect(resolution.exitCode).not.toBe(0);
+    expect(resolution.stdout).toBe("");
+    expect(resolution.stderr.toLowerCase()).toContain("sharp");
+  });
+
   test("serves the web app and invokes backend commands without Electron", async () => {
     const { url, token, readyMessage } = await startBackend();
     expect(readyMessage).not.toHaveProperty("token");

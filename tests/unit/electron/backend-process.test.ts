@@ -121,7 +121,7 @@ describe("Electron backend process supervisor", () => {
       ORKESTRATOR_VERSION: "untrusted-shell-version",
     };
 
-    const development = createBackendProcessEnvironment(parent, true, "/resources");
+    const development = createBackendProcessEnvironment(parent);
     expect(development).toEqual({
       PATH: "/bin",
       NODE_PATH: "/existing",
@@ -130,10 +130,8 @@ describe("Electron backend process supervisor", () => {
     expect(parent.ORKESTRATOR_GATEWAY_TOKEN).toBe("not-forwarded");
     expect(development.ORKESTRATOR_VERSION).toBeUndefined();
 
-    const production = createBackendProcessEnvironment(parent, false, "/resources", "2.4.9");
-    expect(production.NODE_PATH).toBe(
-      [path.join("/resources", "backend", "vendor"), "/existing"].join(path.delimiter),
-    );
+    const production = createBackendProcessEnvironment(parent, "2.4.9");
+    expect(production.NODE_PATH).toBe("/existing");
     expect(production.ORKESTRATOR_VERSION).toBe("2.4.9");
   });
 
@@ -143,24 +141,17 @@ describe("Electron backend process supervisor", () => {
     // do not replace with their own fallback.
     const parent = { ORKESTRATOR_VERSION: "untrusted-shell-version" };
     for (const blank of ["", "   ", "\t"]) {
-      expect(createBackendProcessEnvironment(parent, true, "/resources", blank)).not.toHaveProperty(
+      expect(createBackendProcessEnvironment(parent, blank)).not.toHaveProperty(
         "ORKESTRATOR_VERSION",
       );
     }
-    expect(createBackendProcessEnvironment(parent, true, "/resources", " 2.5.0 ")).toMatchObject({
+    expect(createBackendProcessEnvironment(parent, " 2.5.0 ")).toMatchObject({
       ORKESTRATOR_VERSION: "2.5.0",
     });
   });
 
-  test("development mode still receives Electron's application version", () => {
-    // The combination main.ts actually ships: isDev with a real app version.
-    // NODE_PATH stays untouched in development, but the version must not.
-    const development = createBackendProcessEnvironment(
-      { NODE_PATH: "/existing" },
-      true,
-      "/resources",
-      "2.4.9",
-    );
+  test("preserves NODE_PATH while applying Electron's application version", () => {
+    const development = createBackendProcessEnvironment({ NODE_PATH: "/existing" }, "2.4.9");
 
     expect(development).toEqual({
       NODE_PATH: "/existing",
@@ -184,8 +175,6 @@ describe("Electron backend process supervisor", () => {
         SSH_AUTH_SOCK: "/tmp/private-agent.sock",
         CUSTOM_SERVICE_LOGIN: "unexpected-credential-name",
       },
-      true,
-      "/resources",
       "2.8.2",
       {
         flavor: "agent-test",
@@ -220,8 +209,6 @@ describe("Electron backend process supervisor", () => {
         ANTHROPIC_API_KEY: "blocked-anthropic",
         NPM_TOKEN: "blocked-npm",
       },
-      true,
-      "/resources",
       "2.8.2",
       {
         flavor: "agent-test",
@@ -243,8 +230,6 @@ describe("Electron backend process supervisor", () => {
       {
         HOME: "/Users/tester",
       },
-      true,
-      "/resources",
       "2.8.2",
       {
         flavor: "agent-test",
@@ -265,8 +250,6 @@ describe("Electron backend process supervisor", () => {
         CLAUDE_SECURESTORAGE_CONFIG_DIR: "",
         ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR: "/tmp/injected-host-config",
       },
-      true,
-      "/resources",
       "2.8.2",
       {
         flavor: "agent-test",
@@ -293,8 +276,6 @@ describe("Electron backend process supervisor", () => {
         DOCKER_CERT_PATH: "/Users/tester/.docker/certs",
         DOCKER_AUTH_CONFIG: '{"auths":{}}',
       },
-      true,
-      "/resources",
       "2.8.2",
       {
         flavor: "agent-test",

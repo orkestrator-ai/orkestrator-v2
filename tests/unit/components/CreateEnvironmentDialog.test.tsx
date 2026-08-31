@@ -3814,6 +3814,42 @@ describe("CreateEnvironmentDialog feature builds", () => {
     ]);
   });
 
+  test("includes an image attached before switching from prompt to feature", async () => {
+    mockReadImage.mockImplementation(async () => ({
+      rgba: async () => new Uint8Array([255, 0, 0, 255]),
+      size: async () => ({ width: 1, height: 1 }),
+    }));
+    const onCreateFeatureBuild = mock(async () => true);
+    render(
+      <CreateEnvironmentDialog
+        open
+        projectId="project-1"
+        onOpenChange={() => {}}
+        onCreate={mock(async () => {})}
+        onCreateFeatureBuild={onCreateFeatureBuild}
+      />,
+    );
+
+    screen.getByLabelText(/Initial Prompt/i).focus();
+    await act(async () => {
+      document.dispatchEvent(new Event("paste", { bubbles: true, cancelable: true }));
+      await Promise.resolve();
+    });
+    const thumbnail = await screen.findByAltText(/initial-prompt-/);
+
+    chooseFeature({ name: "Use the prompt reference" });
+    expect(screen.getByAltText(thumbnail.getAttribute("alt")!)).toBeTruthy();
+    submitFeature();
+
+    await waitFor(() => expect(onCreateFeatureBuild).toHaveBeenCalledTimes(1));
+    expect(onCreateFeatureBuild.mock.calls[0]![0].images).toEqual([
+      {
+        filename: thumbnail.getAttribute("alt"),
+        data: "QUJD",
+      },
+    ]);
+  });
+
   test("leaves a text-only feature paste untouched without reading the clipboard", async () => {
     render(
       <CreateEnvironmentDialog

@@ -113,6 +113,12 @@ describe("build pipeline prompts", () => {
     expect(prompt).toContain("Commit every relevant implementation and test change");
     expect(prompt).toContain("Prepare the immutable review package");
     expect(prompt).toContain("backend—not you—will deterministically generate it from Git");
+    expect(prompt).toContain("commentary or update channel");
+    expect(prompt).toContain("using ordinary prose sentences");
+    expect(prompt).toContain("Never send a JSON object or array as an interim update");
+    expect(prompt).toContain("do not use the final-response channel for progress");
+    expect(prompt).toContain("make the final assistant response the only JSON object");
+    expect(prompt).toContain("provider-enforced preparation metadata");
   });
 
   test("buildPrompt omits empty optional context", () => {

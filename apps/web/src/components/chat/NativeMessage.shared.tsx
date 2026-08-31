@@ -1,13 +1,5 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-  type AnchorHTMLAttributes,
-  type ReactNode,
-} from "react";
-import { openInBrowser } from "@/lib/backend";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { MarkdownLink } from "@/components/chat/MessageMarkdown";
 import { type Components } from "react-markdown";
 import {
   type NativeAgentActivityPart,
@@ -18,34 +10,9 @@ import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import type { NativeAgentToolDetails } from "@orkestrator/protocol/native-agent";
 import { useMessagePartExpansion } from "@/lib/chat/message-part-expansion";
 
-function ExternalLink({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
-  const handleClick = useCallback(
-    (e: React.MouseEvent<HTMLAnchorElement>) => {
-      e.preventDefault();
-      if (href) {
-        openInBrowser(href).catch((err) => {
-          console.error("[NativeMessage] Failed to open link:", err);
-        });
-      }
-    },
-    [href],
-  );
-
-  return (
-    <a
-      href={href}
-      onClick={handleClick}
-      className="text-primary hover:underline cursor-pointer"
-      {...props}
-    >
-      {children}
-    </a>
-  );
-}
-
-/** Markdown components config with external link handling */
+/** Markdown components config shared by every native transcript part. */
 export const markdownComponents: Components = {
-  a: ExternalLink,
+  a: MarkdownLink,
 };
 
 export const TASK_LIST_SYNTAX_PATTERN = /(^|\n)\s*(?:[-*+]|\d+\.)\s+\[(?: |x|X)\]\s+/m;

@@ -11,11 +11,14 @@ import {
   type ReactNode,
 } from "react";
 import { CheckSquare, Square } from "lucide-react";
-import Markdown, { type Components } from "react-markdown";
+import Markdown, { defaultUrlTransform, type Components, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { toast } from "sonner";
 import type { PluggableList, Processor } from "unified";
+import { useOptionalTerminalContext } from "@/contexts";
 import { openInBrowser } from "@/lib/backend";
+import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
 import { cn } from "@/lib/utils";
 
 /*
@@ -99,6 +102,17 @@ function remarkInlineOnly(this: Processor): undefined {
 
 const INLINE_PLUGINS: PluggableList = [remarkGfm, remarkInlineOnly];
 const INLINE_MARKDOWN_ELEMENTS = ["p", "strong", "em", "del", "code", "a"];
+const markdownUrlTransform: UrlTransform = (url, key, node) => {
+  if (
+    key === "href" &&
+    node.tagName === "a" &&
+    (/^file:/i.test(url) || /^[A-Za-z]:[\\/]/.test(url))
+  ) {
+    return url;
+  }
+
+  return defaultUrlTransform(url);
+};
 const INLINE_MARKDOWN_COMPONENTS: Components = {
   // The preview sits inside a button, whose content must remain phrasing
   // content. Keep Markdown's paragraph parsing without emitting a block-level
@@ -189,13 +203,33 @@ function MarkdownListItem({ className, children, ...props }: HTMLAttributes<HTML
   );
 }
 
-function SafeMarkdownLink({
+function filePathFromMarkdownHref(href: string): string | null {
+  const destination = href.trim();
+  if (!destination || destination.startsWith("#") || destination.startsWith("//")) return null;
+
+  if (/^file:/i.test(destination)) {
+    return parseLocalFilePathFromUrl(destination);
+  }
+
+  // A Windows drive prefix is a path, not a URI scheme.
+  if (/^[A-Za-z]:[\\/]/.test(destination)) return destination;
+  if (/^[A-Za-z][A-Za-z\d+.-]*:/.test(destination)) return null;
+
+  try {
+    return decodeURIComponent(destination);
+  } catch {
+    return destination;
+  }
+}
+
+export function MarkdownLink({
   href,
   children,
   className,
   onClick,
   ...props
 }: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  const createFileTab = useOptionalTerminalContext()?.createFileTab;
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLAnchorElement>) => {
       onClick?.(event);
@@ -204,18 +238,31 @@ function SafeMarkdownLink({
       event.preventDefault();
       if (!href) return;
 
+      const filePath = filePathFromMarkdownHref(href);
+      if (filePath) {
+        if (createFileTab) {
+          createFileTab(filePath);
+        } else {
+          toast.info("Start or open the environment to view this file", {
+            description:
+              "Workspace file links are available while the environment is active and running.",
+          });
+        }
+        return;
+      }
+
       void openInBrowser(href).catch((error) => {
         console.error("[MessageMarkdown] Failed to open link:", error);
       });
     },
-    [href, onClick],
+    [createFileTab, href, onClick],
   );
 
   return (
     <a
       {...props}
       href={href}
-      className={cn("cursor-pointer text-primary hover:underline", className)}
+      className={cn("cursor-pointer text-blue-300 hover:underline", className)}
       onClick={handleClick}
     >
       {children}
@@ -224,7 +271,7 @@ function SafeMarkdownLink({
 }
 
 const DEFAULT_COMPONENTS: Components = {
-  a: SafeMarkdownLink,
+  a: MarkdownLink,
   input: TaskListCheckbox,
   li: MarkdownListItem,
   ul: MarkdownList,
@@ -260,6 +307,7 @@ export const InlineMessageMarkdown = memo(function InlineMessageMarkdown({
         allowedElements={INLINE_MARKDOWN_ELEMENTS}
         unwrapDisallowed
         components={INLINE_MARKDOWN_COMPONENTS}
+        urlTransform={markdownUrlTransform}
       >
         {renderSource.source}
       </Markdown>
@@ -306,7 +354,11 @@ export const MessageMarkdown = memo(function MessageMarkdown({
 
   return (
     <div className={cn(DEFAULT_MARKDOWN_CLASSNAME, className)}>
-      <Markdown remarkPlugins={plugins} components={mergedComponents}>
+      <Markdown
+        remarkPlugins={plugins}
+        components={mergedComponents}
+        urlTransform={markdownUrlTransform}
+      >
         {renderSource.source}
       </Markdown>
       {renderSource.omittedCharacters > 0 ? (

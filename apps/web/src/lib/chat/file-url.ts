@@ -8,7 +8,7 @@
  * can fall back to the raw reference.
  */
 export function parseLocalFilePathFromUrl(fileUrl: string): string | null {
-  if (!fileUrl.startsWith("file://")) return null;
+  if (!/^file:\/\//i.test(fileUrl)) return null;
 
   try {
     const parsed = new URL(fileUrl);

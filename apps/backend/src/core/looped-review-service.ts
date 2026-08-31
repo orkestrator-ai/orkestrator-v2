@@ -67,7 +67,7 @@ import {
   parsePrResult,
   parseReviewPreparationResult,
 } from "./looped-review-prompts.js";
-import { normalizeGeneratedReviewPackage } from "./review-package.js";
+import { parseReviewPackageReference } from "./review-package.js";
 
 type CommandInvoker = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -724,6 +724,9 @@ export class LoopedReviewService {
     )
       return;
     if (dispatch.state === "prepared") {
+      if (!(await this.ensureReviewPackageForDispatch(workflow, dispatch, session, lease.token))) {
+        return;
+      }
       dispatch.state = "dispatching";
       await this.save(workflow, lease.token);
       await this.assertFence(workflow.id, lease.token);
@@ -1029,6 +1032,7 @@ export class LoopedReviewService {
         prompt: createDiscoveryPrompt({
           reviewPackage: round.package,
           reviewInstruction: workflow.reviewInstruction,
+          context: workflow.context,
         }),
         schema: STRUCTURED_REVIEW_REPORT_JSON_SCHEMA as JsonSchema,
       };
@@ -1057,6 +1061,41 @@ export class LoopedReviewService {
     };
   }
 
+  private async ensureReviewPackageForDispatch(
+    workflow: LoopedReviewWorkflow,
+    dispatch: LoopedReviewDispatch,
+    session: LoopedReviewSession,
+    token: string,
+  ): Promise<boolean> {
+    if (dispatch.kind !== "discover") return true;
+    const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound);
+    const reviewPackage = round?.package;
+    if (!reviewPackage) throw new Error("Current round has no review package");
+    if (!("kind" in reviewPackage)) return true;
+    const verification = await this.invoke<{ valid: boolean; reason?: string }>(
+      "verify_looped_review_package",
+      { environmentId: workflow.environmentId, reviewPackage },
+    );
+    if (verification.valid) return true;
+
+    // Nothing was dispatched, so returning to preparation is unambiguous. The
+    // content-addressed old file may remain as non-sensitive Git evidence, but
+    // its reference is discarded and cannot reach a reviewer.
+    delete round.package;
+    round.status = "preparing";
+    round.passes = round.passes.filter((entry) => entry.sessionId !== session.id);
+    session.status = "cancelled";
+    session.error = `Review package integrity verification failed: ${verification.reason ?? "unknown reason"}`;
+    session.completedAt = nowIso();
+    workflow.phase = "preparing";
+    workflow.currentPass = 0;
+    delete workflow.activeSessionId;
+    delete workflow.dispatch;
+    delete workflow.structuredWait;
+    await this.save(workflow, token);
+    return false;
+  }
+
   private async applyResult(
     workflow: LoopedReviewWorkflow,
     session: LoopedReviewSession,
@@ -1080,11 +1119,10 @@ export class LoopedReviewService {
         preparation,
       });
       await this.assertFence(workflow.id, token);
-      const prepared = normalizeGeneratedReviewPackage(generated, {
+      const prepared = parseReviewPackageReference(generated, {
         id: packageId,
         round: workflow.currentRound,
         targetBranch: workflow.targetBranch,
-        context: workflow.context,
       });
       const round = workflow.rounds.find((entry) => entry.round === workflow.currentRound)!;
       round.package = prepared;

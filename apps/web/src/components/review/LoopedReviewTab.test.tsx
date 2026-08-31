@@ -658,6 +658,44 @@ describe("LoopedReviewTab content rendering", () => {
     expect(screen.getByLabelText("Review round 1")).toBeTruthy();
   });
 
+  test("renders counts from a file-backed package reference", () => {
+    const sha256 = "a".repeat(64);
+    const workflow = loopedReviewFixture({
+      id: data.workflowId,
+      phase: "discovering",
+      rounds: [
+        {
+          round: 1,
+          allowance: 6,
+          status: "reviewing",
+          startedAt: "2026-08-03T00:00:00.000Z",
+          passes: [],
+          package: {
+            kind: "file",
+            id: "package-1",
+            round: 1,
+            preparedAt: "2026-08-03T00:00:00.000Z",
+            targetBranch: "main",
+            baseRef: "a".repeat(40),
+            headRef: "b".repeat(40),
+            filePath: `.orkestrator/review-artifacts/package-1/review-package-${sha256}.json`,
+            sha256,
+            bytes: 2_048,
+            changedFileCount: 7,
+            diffCharacters: 1_234,
+            limitations: [],
+          },
+        },
+      ],
+    });
+    useLoopedReviewStore.getState().replaceWorkflow(workflow);
+    render(<LoopedReviewTab data={data} isActive hydrateWorkflow={mock(async () => workflow)} />);
+    fireEvent.click(screen.getByRole("tab", { name: /Round 1/ }));
+
+    expect(screen.getByText("7 changed files")).toBeTruthy();
+    expect(screen.getByText(/1,234 diff characters/)).toBeTruthy();
+  });
+
   test("renders archived pools with duplicate fix notes and their fix session", () => {
     const workflow = loopedReviewFixture({
       id: data.workflowId,

@@ -126,6 +126,32 @@ describe("writeConfinedFile", () => {
     ).rejects.toThrow("File payload exceeds");
   });
 
+  test("honors a caller-supplied byte budget above the default cap", async () => {
+    const root = await createWorktree();
+    const customLimit = MAX_WRITE_FILE_BYTES + 2;
+    const payload = Buffer.alloc(MAX_WRITE_FILE_BYTES + 1, 7);
+    const written = await writeConfinedFile(root, "notes/large.bin", payload, {
+      maxBytes: customLimit,
+    });
+    expect((await fs.stat(written)).size).toBe(payload.byteLength);
+    await expect(
+      writeConfinedFile(root, "notes/too-large.bin", Buffer.alloc(customLimit + 1), {
+        maxBytes: customLimit,
+      }),
+    ).rejects.toThrow(`exceeds ${customLimit} bytes`);
+  });
+
+  test("applies a final mode before publishing the confined inode", async () => {
+    const root = await createWorktree();
+    const written = await writeConfinedFile(root, "notes/read-only.txt", Buffer.from("safe"), {
+      fileMode: 0o444,
+    });
+    expect((await fs.stat(written)).mode & 0o777).toBe(0o444);
+    await expect(
+      writeConfinedFile(root, "notes/invalid-mode.txt", Buffer.from("x"), { fileMode: 0o1000 }),
+    ).rejects.toThrow("Invalid confined file mode");
+  });
+
   test("refuses to adopt an existing file unless the caller asked to overwrite", async () => {
     const root = await createWorktree();
     await fs.mkdir(path.join(root, "notes"), { recursive: true });

@@ -231,7 +231,7 @@ async function withService(
     storage: StorageService;
     provider: ScriptedProvider;
     invocations: Array<{ command: string; args: Record<string, unknown> }>;
-    packageGeneration: { count: number; error: Error | null };
+    packageGeneration: { count: number; error: Error | null; verificationValid: boolean };
   }) => Promise<void>,
   options: ServiceOptions = {},
 ): Promise<void> {
@@ -270,7 +270,11 @@ async function withService(
     command: string;
     args: Record<string, unknown>;
   }> = [];
-  const packageGeneration = { count: 0, error: null as Error | null };
+  const packageGeneration = {
+    count: 0,
+    error: null as Error | null,
+    verificationValid: true,
+  };
   const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
     invocations.push({ command, args });
     if (command === "detect_pr_local") {
@@ -289,8 +293,13 @@ async function withService(
       const generated = testGeneratedReviewPackage(args);
       const head = String(packageGeneration.count).repeat(40);
       generated.headRef = head;
-      generated.commit = { sha: head, subject: "feat: build", committedFiles: [] };
       return generated as T;
+    }
+    if (command === "verify_looped_review_package") {
+      return {
+        valid: packageGeneration.verificationValid,
+        ...(packageGeneration.verificationValid ? {} : { reason: "artifact is missing" }),
+      } as T;
     }
     if (command === "get_kanban_tasks") {
       return [...kanbanTasks.values()] as T;
@@ -1186,7 +1195,9 @@ describe("BuildPipelineService retry review", () => {
       expect(provider.sent.at(-1)?.prompt).toContain("immutable evidence package");
       expect(packageGeneration.count).toBe(2);
       expect(retried.reviewPackage?.headRef).not.toBe(originalHead);
-      expect(provider.sent.at(-1)?.prompt).toContain("2".repeat(40));
+      expect(provider.sent.at(-1)?.prompt).toContain(
+        ".orkestrator/review-artifacts/review-package-build-",
+      );
     });
   });
 
@@ -1255,6 +1266,42 @@ describe("BuildPipelineService retry review", () => {
       expect(preparing.phase).toBe("fixing");
       expect(preparing.sessions.at(-1)?.phase).toBe("fix");
 
+      await service.advanceNow(built.id);
+      const recovered = await snapshot(storage, built.id);
+      expect(packageGeneration.count).toBe(2);
+      expect(recovered.phase).toBe("reviewing");
+      expect(recovered.reviewPackage).toBeDefined();
+    });
+  });
+
+  test("regenerates a missing or altered file-backed package before reopening review", async () => {
+    await withService(async ({ service, storage, packageGeneration, invocations }) => {
+      const built = await startBuilding(service, storage);
+      await service.advanceNow(built.id);
+      const reviewing = await snapshot(storage, built.id);
+      expect(reviewing.reviewPackage).toBeDefined();
+      const record = (await storage.getBuildPipeline(built.id))!;
+      reviewing.sessions = [];
+      reviewing.currentSessionIndex = -1;
+      packageGeneration.verificationValid = false;
+      await storage.saveBuildPipeline(
+        record.id,
+        record.projectId,
+        record.environmentId,
+        record.version,
+        reviewing,
+        record.revision,
+      );
+
+      await service.advanceNow(built.id);
+      const preparing = await snapshot(storage, built.id);
+      expect(preparing.phase).toBe("fixing");
+      expect(preparing.reviewPackage).toBeUndefined();
+      expect(invocations.some((entry) => entry.command === "verify_looped_review_package")).toBe(
+        true,
+      );
+
+      packageGeneration.verificationValid = true;
       await service.advanceNow(built.id);
       const recovered = await snapshot(storage, built.id);
       expect(packageGeneration.count).toBe(2);

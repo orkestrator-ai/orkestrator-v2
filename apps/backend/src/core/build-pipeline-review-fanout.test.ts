@@ -215,7 +215,7 @@ async function withPipeline(
     providers: Map<BuildPipelineAgent, FanoutProvider>;
     read: (id: string) => Promise<BuildPipeline>;
     worktree: { head: string; fingerprint: string; fail: boolean };
-    packageGeneration: { count: number };
+    packageGeneration: { count: number; verificationCount: number };
   }) => Promise<void>,
   options: { transcriptPersistIntervalMs?: number } = {},
 ): Promise<void> {
@@ -248,7 +248,7 @@ async function withPipeline(
     ["pi", new FanoutProvider("pi")],
   ]);
   const worktree = { head: HEAD, fingerprint: FINGERPRINT, fail: false };
-  const packageGeneration = { count: 0 };
+  const packageGeneration = { count: 0, verificationCount: 0 };
   const invoke = async <T>(command: string, _args: Record<string, unknown> = {}): Promise<T> => {
     if (command === "get_environment_uncommitted_paths") {
       if (worktree.fail) throw new Error("probe failed");
@@ -259,8 +259,11 @@ async function withPipeline(
       const generated = testGeneratedReviewPackage(_args);
       const head = String(packageGeneration.count).repeat(40);
       generated.headRef = head;
-      generated.commit = { sha: head, subject: "feat: build", committedFiles: [] };
       return generated as T;
+    }
+    if (command === "verify_looped_review_package") {
+      packageGeneration.verificationCount += 1;
+      return { valid: true } as T;
     }
     if (command === "start_environment" || command === "run_environment_setup") {
       return (await storage.getEnvironment("env-1")) as T;
@@ -360,7 +363,7 @@ describe("build pipeline multi-model review", () => {
   });
 
   test("fans out to every reviewer, consolidates, then addresses the merged report", async () => {
-    await withPipeline(async ({ service, read, provider }) => {
+    await withPipeline(async ({ service, read, provider, packageGeneration }) => {
       const started = await service.start(
         startInput([
           { agent: "claude", model: "opus" },
@@ -388,7 +391,8 @@ describe("build pipeline multi-model review", () => {
           entry.sessionId.includes("review-") && !entry.sessionId.includes("consolidation"),
       );
       expect(reviewerPrompts).toHaveLength(2);
-      expect(reviewerPrompts.every((entry) => entry.prompt.includes('"headRef"'))).toBe(true);
+      expect(reviewerPrompts.every((entry) => entry.prompt.includes("review-package-"))).toBe(true);
+      expect(packageGeneration.verificationCount).toBeGreaterThanOrEqual(2);
       expect(
         reviewerPrompts.every((entry) =>
           entry.prompt.includes("Do not modify files, run git, rerun validation"),

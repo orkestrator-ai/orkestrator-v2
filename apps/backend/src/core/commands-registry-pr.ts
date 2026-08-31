@@ -1,4 +1,5 @@
 import type { CommandRegistrar, RegistryDependencies } from "./commands-registry-types.js";
+import { isReviewPackageReference } from "@orkestrator/protocol/review-workflow";
 import {
   isAgentBridgeKind,
   isStructuredCommandError,
@@ -25,6 +26,7 @@ import {
   parseReviewPreparationValidation,
   parseReviewPreparationFileNotes,
   verifyEnvironmentPullRequest,
+  verifyEnvironmentReviewPackage,
   generateLoopedReviewPackage,
   mergePullRequestInContainer,
   runStoredEnvironmentMerge,
@@ -57,32 +59,67 @@ export function registerPullRequestCommands(
       context,
     ),
   );
-  register(
-    "generate_looped_review_package",
-    async ({ environmentId, packageId, round, targetBranch, preparation }, context) => {
-      const parsedPackageId = parseReviewPackageId(packageId);
-      const prepared = asRecord(preparation, "preparation");
-      assertOnlyKeys(prepared, ["validation", "uncommittedFiles", "limitations"], "preparation");
-      const limitations = asStringArray(prepared.limitations);
-      if (
-        !Array.isArray(prepared.limitations) ||
-        limitations.length !== prepared.limitations.length ||
-        limitations.some((limitation) => limitation.trim().length === 0)
-      ) {
-        throw new Error("Expected preparation.limitations to contain only non-empty strings");
-      }
-      return generateLoopedReviewPackage(
-        asString(environmentId, "environmentId"),
-        parsedPackageId,
-        parseReviewRound(round),
-        asString(targetBranch, "targetBranch"),
-        parseReviewPreparationValidation(prepared.validation, parsedPackageId),
-        parseReviewPreparationFileNotes(prepared.uncommittedFiles, "uncommittedFiles"),
-        limitations,
-        context,
-      );
-    },
-  );
+  register("generate_looped_review_package", async (args, context) => {
+    assertOnlyKeys(
+      args,
+      [
+        "environmentId",
+        "packageId",
+        "round",
+        "targetBranch",
+        "preparation",
+        "additionalLimitations",
+      ],
+      "generate_looped_review_package",
+    );
+    const { environmentId, packageId, round, targetBranch, preparation, additionalLimitations } =
+      args;
+    const parsedPackageId = parseReviewPackageId(packageId);
+    const prepared = asRecord(preparation, "preparation");
+    assertOnlyKeys(prepared, ["validation", "uncommittedFiles", "limitations"], "preparation");
+    const limitations = asStringArray(prepared.limitations);
+    if (
+      !Array.isArray(prepared.limitations) ||
+      limitations.length !== prepared.limitations.length ||
+      limitations.some((limitation) => limitation.trim().length === 0)
+    ) {
+      throw new Error("Expected preparation.limitations to contain only non-empty strings");
+    }
+    const trustedAdditionalLimitations = asStringArray(additionalLimitations);
+    if (
+      additionalLimitations !== undefined &&
+      (!Array.isArray(additionalLimitations) ||
+        trustedAdditionalLimitations.length !== additionalLimitations.length ||
+        trustedAdditionalLimitations.some((limitation) => limitation.trim().length === 0))
+    ) {
+      throw new Error("Expected additionalLimitations to contain only non-empty strings");
+    }
+    return generateLoopedReviewPackage(
+      asString(environmentId, "environmentId"),
+      parsedPackageId,
+      parseReviewRound(round),
+      asString(targetBranch, "targetBranch"),
+      parseReviewPreparationValidation(prepared.validation, parsedPackageId),
+      parseReviewPreparationFileNotes(prepared.uncommittedFiles, "uncommittedFiles"),
+      limitations,
+      context,
+      {
+        additionalLimitations: trustedAdditionalLimitations,
+      },
+    );
+  });
+  register("verify_looped_review_package", async (args, context) => {
+    assertOnlyKeys(args, ["environmentId", "reviewPackage"], "verify_looped_review_package");
+    const { environmentId, reviewPackage } = args;
+    if (!isReviewPackageReference(reviewPackage)) {
+      throw new Error("Expected reviewPackage to be a valid review package reference");
+    }
+    return verifyEnvironmentReviewPackage(
+      asString(environmentId, "environmentId"),
+      reviewPackage,
+      context,
+    );
+  });
 
   register("detect_pr_local", async ({ environmentId, branch }, { storage }) => {
     const env = await storage.getEnvironment(asString(environmentId, "environmentId"));

@@ -754,7 +754,7 @@ ${INITIAL_PROMPT_PRUNE_BODY}`;
 
 export const CONTAINER_PINNED_ATTACHMENT_WRITE = String.raw`
 const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken] = process.argv.slice(1);
+const [workspaceRoot, relativeDirectory, filename, expectedBytes, readyToken, writeMode, fileMode] = process.argv.slice(1);
 let current = workspaceRoot;
 const root = fs.lstatSync(current);
 if (root.isSymbolicLink() || !root.isDirectory()) process.exit(73);
@@ -786,8 +786,9 @@ process.stdin.on("end", () => {
   try {
     fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | (fs.constants.O_NOFOLLOW || 0), 0o600);
     const identity = fs.fstatSync(fd);
-    fs.writeFileSync(fd, content); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
-    fs.linkSync(temp, filename); fs.unlinkSync(temp);
+    fs.writeFileSync(fd, content); if (fileMode) fs.fchmodSync(fd, Number(fileMode)); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
+    if (writeMode === "overwrite") fs.renameSync(temp, filename);
+    else { fs.linkSync(temp, filename); fs.unlinkSync(temp); }
     const published = fs.lstatSync(filename);
     if (!published.isFile() || published.isSymbolicLink() || published.dev !== identity.dev || published.ino !== identity.ino) process.exit(75);
   } catch (error) {

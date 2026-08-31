@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
   REVIEW_ARTIFACT_ROOT,
+  REVIEW_PACKAGE_FILENAME,
   reviewArtifactDirectory,
+  reviewPackageArtifactPath,
   reviewValidationArtifactOrdinal,
   reviewValidationArtifactPaths,
 } from "./review-artifacts";
@@ -10,9 +12,16 @@ import {
 describe("review artifact paths", () => {
   test("anchors every package directory under the Git-excluded root", () => {
     expect(REVIEW_ARTIFACT_ROOT).toBe(".orkestrator/review-artifacts");
+    expect(REVIEW_PACKAGE_FILENAME).toBe("review-package.json");
     expect(reviewArtifactDirectory("package-1")).toBe(".orkestrator/review-artifacts/package-1");
     expect(reviewArtifactDirectory("review-package-abc-r2")).toBe(
       ".orkestrator/review-artifacts/review-package-abc-r2",
+    );
+    expect(reviewPackageArtifactPath("review-package-abc-r2")).toBe(
+      ".orkestrator/review-artifacts/review-package-abc-r2/review-package.json",
+    );
+    expect(reviewPackageArtifactPath("review-package-abc-r2", "a".repeat(64))).toBe(
+      `.orkestrator/review-artifacts/review-package-abc-r2/review-package-${"a".repeat(64)}.json`,
     );
   });
 

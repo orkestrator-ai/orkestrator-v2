@@ -14,9 +14,11 @@ import { CheckSquare, Square } from "lucide-react";
 import Markdown, { defaultUrlTransform, type Components, type UrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import { toast } from "sonner";
 import type { PluggableList, Processor } from "unified";
 import { useOptionalTerminalContext } from "@/contexts";
 import { openInBrowser } from "@/lib/backend";
+import { parseLocalFilePathFromUrl } from "@/lib/chat/file-url";
 import { cn } from "@/lib/utils";
 
 /*
@@ -185,13 +187,7 @@ function filePathFromMarkdownHref(href: string): string | null {
   if (!destination || destination.startsWith("#") || destination.startsWith("//")) return null;
 
   if (/^file:/i.test(destination)) {
-    try {
-      const url = new URL(destination);
-      const decodedPath = decodeURIComponent(url.pathname);
-      return /^\/[A-Za-z]:\//.test(decodedPath) ? decodedPath.slice(1) : decodedPath;
-    } catch {
-      return null;
-    }
+    return parseLocalFilePathFromUrl(destination);
   }
 
   // A Windows drive prefix is a path, not a URI scheme.
@@ -222,8 +218,15 @@ export function MarkdownLink({
       if (!href) return;
 
       const filePath = filePathFromMarkdownHref(href);
-      if (filePath && createFileTab) {
-        createFileTab(filePath);
+      if (filePath) {
+        if (createFileTab) {
+          createFileTab(filePath);
+        } else {
+          toast.info("Start or open the environment to view this file", {
+            description:
+              "Workspace file links are available while the environment is active and running.",
+          });
+        }
         return;
       }
 

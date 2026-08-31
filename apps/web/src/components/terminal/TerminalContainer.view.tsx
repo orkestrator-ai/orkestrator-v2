@@ -75,6 +75,7 @@ import {
 } from "@/types/paneLayout";
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
 import { rendererDebugLog } from "@/lib/debug-log";
+import { resolveWorkspaceRelativeFilePath } from "@/lib/workspace-file-path";
 
 import {
   MAX_SETUP_SESSION_BIND_ATTEMPTS,
@@ -1913,6 +1914,17 @@ export function TerminalContainer({
       const canCreateForLocal = isLocalEnvironment && worktreePath;
       if (!canCreateForContainer && !canCreateForLocal) return;
 
+      const workspaceRoot = isLocalEnvironment ? worktreePath : "/workspace";
+      const relativeFilePath = workspaceRoot
+        ? resolveWorkspaceRelativeFilePath(filePath, workspaceRoot)
+        : null;
+      if (!relativeFilePath) {
+        toast.error("Could not open file", {
+          description: "The link does not point to a file inside this workspace.",
+        });
+        return;
+      }
+
       const allTabs = getAllTabs(environmentId);
       // Check if file is already open - need to match both path AND diff mode
       // Note: This intentionally allows the same file to be open twice if one is in
@@ -1920,7 +1932,7 @@ export function TerminalContainer({
       const existingTab = allTabs.find(
         (t) =>
           t.type === "file" &&
-          t.fileData?.filePath === filePath &&
+          t.fileData?.filePath === relativeFilePath &&
           t.fileData?.isDiff === (options?.isDiff ?? false),
       );
       if (existingTab) {
@@ -1953,7 +1965,7 @@ export function TerminalContainer({
         id: newTabId,
         type: "file",
         fileData: {
-          filePath,
+          filePath: relativeFilePath,
           containerId: isLocalEnvironment ? undefined : (containerId ?? undefined),
           worktreePath: isLocalEnvironment ? worktreePath : undefined,
           isLocalEnvironment,
@@ -1967,7 +1979,7 @@ export function TerminalContainer({
         "[TerminalContainer] Creating file tab:",
         newTabId,
         "path:",
-        filePath,
+        relativeFilePath,
         "isDiff:",
         options?.isDiff,
         "isLocal:",

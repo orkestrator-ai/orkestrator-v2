@@ -57,6 +57,13 @@ history rather than two partial ones.
 - **Unrelated to the change under test:** neither `ActionBar.tsx` nor
   `ActionBar.test.tsx` references `CreateEnvironmentDialog`, `FeatureBuildFields`
   or `modal-theme`, the only modules that branch touched.
+- **Recurrence (file-link fixes, 2026-08-31):** `bun run test` failed the same
+  `createTabMock` assertion after 19.50 ms while the workspace group ran with
+  two Bun workers (5,637 passed, 1 skipped, 1 failed, 17,769 assertions across
+  248 files in 66.40 s); the other three repository groups passed. The immediate
+  isolated rerun, `bun --cwd=apps/web test src/components/layout/ActionBar.test.tsx`,
+  passed all 198 tests and 774 assertions in 14.05 s, including the affected
+  case in 14.65 ms.
 
 ## `json file cache > slices > shares a single parse between concurrent cold readers` (`bridges/claude-bridge/src/services/json-file-cache.test.ts:132`)
 
@@ -147,6 +154,13 @@ history rather than two partial ones.
   isolated owner consistently completes the replacement. A recurrence should
   trace pane-layout restore and setup-tab retirement writes before changing the
   production behavior or loosening the assertion.
+- **Recurrence (2026-08-31):** `bun --cwd=apps/web test
+  src/lib/workspace-file-path.test.ts src/components/chat/MessageMarkdown.test.tsx
+  src/components/terminal/TerminalContainer.view.test.tsx` failed the same
+  assertion after 4.53 ms (171 passed, 1 failed, 760 assertions across three
+  files in 10.27 s). The immediate isolated rerun, `bun --cwd=apps/web test
+  src/components/terminal/TerminalContainer.view.test.tsx`, passed all 129
+  tests and 661 assertions in 10.12 s, including the affected case in 1.55 ms.
 
 ## `at-most-once dispatch > a delayed retry succeeds and settles the phase after the wait` (`bridges/codex-bridge/src/app-server-runtime-prompt.test.ts:469`)
 

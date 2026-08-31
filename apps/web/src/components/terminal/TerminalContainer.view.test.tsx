@@ -2,7 +2,7 @@ import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test";
 
 import { useEffect, useRef, type ReactNode } from "react";
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import { MAX_TABS, TerminalProvider, useTerminalContext } from "@/contexts";
 
@@ -51,6 +51,8 @@ import { mockToastError } from "../../../../../tests/mocks/sonner";
 import * as realNativeEvents from "@/lib/native/events";
 
 import { listen, NATIVE_EVENT_STREAM_CONNECTED_EVENT } from "@/lib/native/events";
+
+import { MessageMarkdown } from "@/components/chat/MessageMarkdown";
 
 const LEGACY_SELECTION_STORAGE_KEY = "orkestrator.pane-selection.v1";
 
@@ -6765,6 +6767,106 @@ describe("TerminalContainer", () => {
     await waitFor(() => expect(screen.getByTestId("shared-tab-count").textContent).toBe("1"));
     act(() => screen.getByRole("button", { name: "Add tab through context" }).click());
     await waitFor(() => expect(screen.getByTestId("shared-tab-count").textContent).toBe("2"));
+  });
+
+  test("normalizes an absolute container path before creating a file tab", async () => {
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <MessageMarkdown content="[Open file](/workspace/src/App.tsx)" />
+      </TerminalProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Open file" }));
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect.objectContaining({
+          type: "file",
+          fileData: expect.objectContaining({
+            filePath: "src/App.tsx",
+            containerId: "container-visible",
+          }),
+        }),
+      );
+    });
+  });
+
+  test("normalizes an absolute local worktree path before creating a file tab", async () => {
+    useEnvironmentStore.getState().updateEnvironment("env-visible", {
+      containerId: null,
+      environmentType: "local",
+      worktreePath: "/tmp/env-visible-worktree",
+    });
+
+    function OpenFileHarness() {
+      const { createFileTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createFileTab || didRunRef.current) return;
+        didRunRef.current = true;
+        createFileTab("/tmp/env-visible-worktree/src/App.tsx");
+      }, [createFileTab]);
+      return null;
+    }
+
+    render(
+      <TerminalProvider>
+        <TerminalContainer environmentId="env-visible" containerId={null} isActive />
+        <OpenFileHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toContainEqual(
+        expect.objectContaining({
+          type: "file",
+          fileData: expect.objectContaining({
+            filePath: "src/App.tsx",
+            worktreePath: "/tmp/env-visible-worktree",
+            isLocalEnvironment: true,
+          }),
+        }),
+      );
+    });
+  });
+
+  test("rejects a file tab path outside the active workspace", async () => {
+    function OpenFileHarness() {
+      const { createFileTab } = useTerminalContext();
+      const didRunRef = useRef(false);
+      useEffect(() => {
+        if (!createFileTab || didRunRef.current) return;
+        didRunRef.current = true;
+        createFileTab("/etc/passwd");
+      }, [createFileTab]);
+      return null;
+    }
+
+    mockToastError.mockClear();
+    render(
+      <TerminalProvider>
+        <TerminalContainer
+          environmentId="env-visible"
+          containerId="container-visible"
+          isContainerRunning
+          isActive
+        />
+        <OpenFileHarness />
+      </TerminalProvider>,
+    );
+
+    await waitFor(() => {
+      expect(mockToastError).toHaveBeenCalledWith("Could not open file", {
+        description: "The link does not point to a file inside this workspace.",
+      });
+    });
+    expect(usePaneLayoutStore.getState().getAllTabs("env-visible")).toHaveLength(1);
   });
 
   /**

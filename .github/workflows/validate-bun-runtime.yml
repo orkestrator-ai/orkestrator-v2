@@ -7,20 +7,26 @@ on:
     paths:
       - ".github/workflows/validate-bun-runtime.yml"
       - "bridges/**"
+      - "apps/backend/**"
+      - "apps/desktop/**"
       - "docker/**"
       - "packages/protocol/**"
       - "bun.lock"
       - "package.json"
       - "scripts/download-bun.sh"
+      - "scripts/verify-packaged-backend.ts"
   pull_request:
     paths:
       - ".github/workflows/validate-bun-runtime.yml"
       - "bridges/**"
+      - "apps/backend/**"
+      - "apps/desktop/**"
       - "docker/**"
       - "packages/protocol/**"
       - "bun.lock"
       - "package.json"
       - "scripts/download-bun.sh"
+      - "scripts/verify-packaged-backend.ts"
   workflow_dispatch:
 
 concurrency:
@@ -31,7 +37,7 @@ jobs:
   bundled-bun:
     name: Bundled Bun (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -51,8 +57,28 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
       - name: Download and verify bundled Bun
         run: ./scripts/download-bun.sh
+
+      - name: Build the desktop application
+        run: bun run build:all
+
+      - name: Exercise the standalone packaged-backend layout
+        run: cd apps/backend && bun test --preload ../../tests/setup-node.ts tests/standalone.test.ts
+
+      - name: Build an unpacked Electron application
+        run: bunx electron-builder --dir
+
+      - name: Verify the packaged backend and native Sharp runtime
+        run: bun run verify:packaged-backend
 
   container:
     name: Container (linux/amd64 + linux/arm64)

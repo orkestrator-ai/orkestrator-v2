@@ -67,6 +67,7 @@
     "test:unit": "bun test tests/unit",
     "verify:opencode:live": "RUN_LIVE_OPENCODE_COMPATIBILITY=1 bun test --cwd apps/web src/lib/opencode-live-compatibility.test.ts",
     "verify:toolchains:live": "RUN_LIVE_TOOLCHAIN_ARTIFACTS=1 bun scripts/verify-toolchain-artifacts.ts",
+    "verify:packaged-backend": "bun scripts/verify-packaged-backend.ts",
     "verify:codex:protocol": "CODEX_PROTOCOL_CHECK_ALLOW_MISSING_BINARY=0 bun scripts/generate-codex-app-server-protocol.ts --check",
     "docker:build": "docker build -t orkestrator-v2:latest -f docker/Dockerfile .",
     "docker:build:dev": "bun apps/desktop/scripts/dev-build-image.ts",
@@ -132,8 +133,8 @@
         ]
       },
       {
-        "from": "apps/backend/dist/node_modules/@img",
-        "to": "backend/vendor/@img",
+        "from": "apps/backend/dist/node_modules",
+        "to": "backend/node_modules",
         "filter": [
           "**/*"
         ]
